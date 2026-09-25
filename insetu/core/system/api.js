@@ -174,24 +174,19 @@ window.inSetu.api = {
         return this.workspace(path, { ...options, method: 'POST', headers, body });
     }
 };
+window.inSetu.api.delete = function(path, options = {}) {
+    return this.workspace(path, { ...options, method: 'DELETE' });
+};
 
-window.inSetu.api.workspace.get = function(path, options = {}) {
-    return window.inSetu.api.workspace(path, { ...options, method: 'GET' });
-};
-window.inSetu.api.workspace.post = function(path, payload, options = {}) {
-    const isFD = payload instanceof FormData;
-    const headers = isFD ? { ...(options.headers || {}) } : { 'Content-Type': 'application/json', ...(options.headers || {}) };
-    const body = isFD ? payload : JSON.stringify(payload);
-    return window.inSetu.api.workspace(path, { ...options, method: 'POST', headers, body });
-};
+window.inSetu.api.workspace.get = window.inSetu.api.get.bind(window.inSetu.api);
+window.inSetu.api.workspace.post = window.inSetu.api.post.bind(window.inSetu.api);
+window.inSetu.api.workspace.delete = window.inSetu.api.delete.bind(window.inSetu.api);
+
 window.inSetu.api.system.get = function(path, options = {}) {
     return window.inSetu.api.workspace.get(`system/${path.replace(/^\/+/, '')}`, options);
 };
 window.inSetu.api.system.post = function(path, payload, options = {}) {
     return window.inSetu.api.workspace.post(`system/${path.replace(/^\/+/, '')}`, payload, options);
-};
-window.inSetu.api.workspace.delete = function(path, options = {}) {
-    return window.inSetu.api.workspace(path, { ...options, method: 'DELETE' });
 };
 window.inSetu.api.system.delete = function(path, options = {}) {
     return window.inSetu.api.workspace.delete(`system/${path.replace(/^\/+/, '')}`, options);
@@ -290,34 +285,8 @@ window.inSetu.sse = new SSEPipeline();
 
 const networkManager = new NetworkHysteresisManager('/?t={t}', 3);
 let lastCacheCheck = 0;
-
-setInterval(async () => {
+const attemptReconciliation = async () => {
     const appState = window.inSetu?.stores?.App?.getState();
-
-    // LRU Cache Eviction Sweep
-    if (Date.now() - lastCacheCheck > 60000) {
-        lastCacheCheck = Date.now();
-        if (navigator.storage && navigator.storage.estimate) {
-            try {
-                const est = await navigator.storage.estimate();
-                // Enforce the 250MB baseline limit defined in the core OS schema
-                const limitMB = 250; 
-                const limitBytes = limitMB * 1024 * 1024;
-
-                // If usage exceeds explicit limit or 80% of hard browser quota
-                if (est.usage > limitBytes || (est.quota && est.usage > est.quota * 0.8)) {
-                    // Free down to 80% of our limit to give breathing room
-                    const targetFree = Math.max(est.usage - (limitBytes * 0.8), est.usage * 0.2); 
-                    window.inSetu?.offlineLog?.(`Storage threshold reached. Evicting ${Math.round(targetFree/1024/1024)}MB of old cache...`, 'warning');
-                    await SutramDB.pruneCache(targetFree);
-                    if (window.inSetu?.stores?.Offline?.getState()?.fetchOfflineState) {
-                        window.inSetu.stores.Offline.getState().fetchOfflineState();
-                    }
-                }
-            } catch(e) {}
-        }
-    }
-
     if (appState && appState.isOffline && !appState.isReconciling) {
         await networkManager.check(async () => {
             window.inSetu.stores.App.setState({ isOffline: false, isReconciling: true });
@@ -376,4 +345,38 @@ setInterval(async () => {
     } else if (appState && !appState.isOffline) {
         networkManager.reset();
     }
+};
+
+// Trigger instantly on native online events
+window.addEventListener('online', () => {
+    window.inSetu?.offlineLog?.('Network connection restored (browser event). Verifying stability...', 'info');
+    attemptReconciliation();
+});
+
+setInterval(async () => {
+    // LRU Cache Eviction Sweep
+    if (Date.now() - lastCacheCheck > 60000) {
+        lastCacheCheck = Date.now();
+        if (navigator.storage && navigator.storage.estimate) {
+            try {
+                const est = await navigator.storage.estimate();
+                // Enforce the 250MB baseline limit defined in the core OS schema
+                const limitMB = 250; 
+                const limitBytes = limitMB * 1024 * 1024;
+
+                // If usage exceeds explicit limit or 80% of hard browser quota
+                if (est.usage > limitBytes || (est.quota && est.usage > est.quota * 0.8)) {
+                    // Free down to 80% of our limit to give breathing room
+                    const targetFree = Math.max(est.usage - (limitBytes * 0.8), est.usage * 0.2); 
+                    window.inSetu?.offlineLog?.(`Storage threshold reached. Evicting ${Math.round(targetFree/1024/1024)}MB of old cache...`, 'warning');
+                    await SutramDB.pruneCache(targetFree);
+                    if (window.inSetu?.stores?.Offline?.getState()?.fetchOfflineState) {
+                        window.inSetu.stores.Offline.getState().fetchOfflineState();
+                    }
+                }
+            } catch(e) {}
+        }
+    }
+
+    await attemptReconciliation();
 }, 5000);

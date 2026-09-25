@@ -57,7 +57,6 @@ class BridgeHistoryResponse(TypedDict):
 @bridge_bp.route('history', methods=['GET'], response_schema=BridgeHistoryResponse, docstring="Returns up to 100 historical patch and transaction receipts from the bridge ledger.")
 def bridge_history(ctx):
     """Phase C: Returns the ephemeral ledger history for the UI."""
-    from flask import jsonify
     # Explicitly exclude the 'compressed_state' BLOB to prevent JSON serialization crashes
     records = ctx.db.execute("SELECT patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, timestamp, ttl_expires_at, patch_count, chunks_json FROM bridge_ledger ORDER BY timestamp DESC LIMIT 100").fetchall()
     return jsonify({"history": [dict(r) for r in records]})
@@ -71,7 +70,6 @@ class BridgeRevertPayload(TypedDict, total=False):
 @bridge_bp.route('revert', methods=['POST'], request_schema=BridgeRevertPayload, docstring="Reverts a single patch or entire transaction to a specific state ('initial' or 'final').")
 def bridge_revert(ctx):
     """Phase 5: Forward-replay reversion. Handles both single-file and multi-file atomic transactions."""
-    from flask import jsonify
     data = ctx.req.json or {}
     patch_id = data.get("patch_id")
     transaction_id = data.get("transaction_id")
@@ -91,7 +89,7 @@ def bridge_revert(ctx):
             if r['filepath'] not in seen:
                 targets.append(r)
                 seen.add(r['filepath'])
-    import uuid, time, hashlib, zlib, json
+    import time, hashlib, zlib
     from akasa.vfs import VFSTransaction
     from insetu.core.bridge.bridge_fuzzy import apply_block_in_memory
 
@@ -204,7 +202,6 @@ def _background_bridge_sync(job_id, workspace_id, **kwargs):
         # Execute the pure operational logic
         sync_output_json = execute_bridge_sync(workspace_id, kwargs)
 
-        import json
         try:
             sync_data = json.loads(sync_output_json)
 

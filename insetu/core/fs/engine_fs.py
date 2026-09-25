@@ -184,9 +184,8 @@ def api_fs_upload(ctx):
     import time
     from akasa.db import get_connection
     from akasa.hooks import hooks
-    from pathlib import Path
     from akasa.utils import resolve_sandbox_path
-    
+
     db_conn = get_connection("workers", workspace_id=workspace_id)
     uploaded_paths = []
     mutations = []
@@ -196,10 +195,8 @@ def api_fs_upload(ctx):
 
             filename = werkzeug.utils.secure_filename(file.filename)
             filepath = f"{dest_dir}/{filename}".strip('/') if dest_dir else filename
-
             resolved_path = resolve_physical_path(filepath, workspace_id)
 
-            import os
             is_new = not os.path.exists(resolved_path)
             os.makedirs(Path(resolved_path).parent, exist_ok=True)
 

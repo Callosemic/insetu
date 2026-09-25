@@ -589,12 +589,10 @@ def generate_context_file(workspace_id=None, target_repos=None):
     declarations = []
     for res in ctx.emit('gather_declare_topology', target_repos=target_repos):
         if res: declarations.extend(res)
-
     # Granular Delta Enforcement: Start with a clean dictionary. 
     # If target_repos is populated, we only want to save the deltas.
     manifest = {}
     expected_artifacts = set()
-    from insetu.core.utils_core import InSetuURI
 
     # 2. Execute generators in parallel
     def process_declaration(decl):
@@ -673,10 +671,8 @@ def _pack_selection_worker(ctx, items=None, job_id=None, **kwargs):
     
     if not items:
         return {"message": "No valid files selected for compilation."}
-        
     ctx.jobs.update_progress("Compiling selected files into context payload...")
     files = ctx.expand_selection(items)
-    from insetu.core.utils_core import InSetuURI
     clean_tree_files = []
     for f in files:
         f_uri = InSetuURI(f)

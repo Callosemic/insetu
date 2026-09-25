@@ -78,7 +78,7 @@ def core_system_settings_updated(workspace_id=None, **kwargs):
 def host_identity_handshake(request=None, client_ip=None, config=None, **kwargs):
     """Tier 2 Core OS: Evaluates daemon-level host identity protocols (e.g., Tailscale WHOIS)."""
     if not request or not client_ip or not config: return None
-    import os, socket, json
+    import socket
 
     user_email = request.headers.get('Tailscale-User-Login')
 
@@ -106,12 +106,10 @@ def host_identity_handshake(request=None, client_ip=None, config=None, **kwargs)
                     user_email = profile.get("UserProfile", {}).get("LoginName")
             except Exception:
                 pass
-
     if user_email:
         allowed_emails = config.get("allowed_dev_emails", [])
         # Trust On First Use (TOFU)
         if not allowed_emails:
-            from akasa.utils import get_workspace_physics, load_json_config, save_json_config
             cfg_path, _ = get_workspace_physics()
             raw_cfg = load_json_config(cfg_path, {})
             raw_cfg["allowed_dev_emails"] = [user_email]
@@ -229,7 +227,6 @@ def api_system_openapi():
             # Extract path parameters from Werkzeug rule string (e.g. /api/<workspace_id>/...)
             path_vars = re.findall(r'<([^>:]+:)?([^>]+)>', url_rule)
             openapi_url = re.sub(r'<([^>:]+:)?([^>]+)>', r'{\2}', url_rule)
-
             for method, meta in method_schemas.items():
                 method_lower = method.lower()
                 if method_lower == "options": continue
@@ -237,8 +234,9 @@ def api_system_openapi():
                 is_async_mutation = "[sync]" not in raw_doc
                 clean_doc = raw_doc.replace("[sync]", "").strip()
 
+                url_base_name = url_rule.rsplit('/', 1)[1] if '/' in url_rule else url_rule
                 op_data = {
-                    "summary": f"{bp_name} {url_rule.split('/')[-1].replace('<', '').replace('>', '').replace(':', '_')}",
+                    "summary": f"{bp_name} {url_base_name.replace('<', '').replace('>', '').replace(':', '_')}",
                     "description": clean_doc,
                     "responses": {}
                 }
@@ -253,7 +251,7 @@ def api_system_openapi():
                             }
                         }
                     }
-                elif method_lower == "get" and url_rule.split('/')[-1] in ["fetch", "resolve"]:
+                elif method_lower == "get" and url_base_name in ["fetch", "resolve"]:
                     # Prevent JSON parse crashes for raw text endpoints
                     op_data["responses"]["200"] = {
                         "description": "Returns raw text/markdown content.",
@@ -388,7 +386,6 @@ class PipelineSubmitPayload(TypedDict, total=False):
     force_full: bool
     target_repos: List[str]
     start_step: str
-
 @system_bp.route('pipeline/submit', methods=['POST'], request_schema=PipelineSubmitPayload, docstring="Triggers the background context compilation sequence. Handles differential deltas or full sweeps via the Akasa DAG Orchestrator.")
 def api_system_pipeline_submit(ctx):
     data = ctx.req.get_json(force=True, silent=True) or {}
@@ -396,7 +393,6 @@ def api_system_pipeline_submit(ctx):
     from akasa.db import get_connection
     w_conn = get_connection("workers", workspace_id=ctx.workspace_id)
     # Reattach check: Attach to any active stage of the compilation pipeline to prevent concurrent chain collisions.
-    import time
     cutoff = time.time() - 300.0
     from akasa.workers import resolve_dag_chain
     ordered_steps = resolve_dag_chain(ctx, 'register_compilation_steps')
@@ -414,7 +410,6 @@ def api_system_pipeline_submit(ctx):
             upstream_worker_names = [s.get('worker_name') for s in ordered_steps if s.get('worker_name')]
     else:
         upstream_worker_names = [s.get('worker_name') for s in ordered_steps if s.get('worker_name')]
-
     if upstream_worker_names:
         placeholders = ", ".join(["?"] * len(upstream_worker_names))
         existing_job = w_conn.execute(
@@ -423,7 +418,6 @@ def api_system_pipeline_submit(ctx):
         ).fetchone()
 
         if existing_job:
-            import json
             try:
                 job_args = json.loads(existing_job['args_json'])
                 # Safely merge if the active job satisfies our force_full requirement
@@ -450,7 +444,6 @@ def api_system_pipeline_submit(ctx):
 def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=None, **kwargs):
     if data and data.get("is_new_repo") and data.get("repo_dir"):
         repo_dir = data.get("repo_dir")
-        from akasa.utils import load_json_config, get_workspace_physics, save_json_config
         from insetu.core.utils_core import sanitize_workspace_config, get_default_repo_template
         cfg_path, _ = get_workspace_physics(workspace_id)
         cfg = load_json_config(cfg_path, {})
@@ -495,7 +488,6 @@ def get_system_config(workspace_id):
                             title = ext_name.replace('_', ' ').title()
                             desc = ""
                             # Extract metadata from the mounted extension
-                            import sys
                             err = None
                             mod = sys.modules.get(f"insetu.extensions.{ext_name}.engine_{ext_name}") or \
                                         sys.modules.get(f"insetu.extensions.engine_{ext_name}") or \
@@ -571,14 +563,11 @@ def save_system_config(workspace_id, payload):
     save_json_config(cfg_path, merged_cfg, workspace_id)
 
     # Emits a globally decoupled config invalidation event
-    from akasa.hooks import hooks
     hooks.emit('config_mutated', workspace_id=workspace_id)
 @system_bp.route('reboot', methods=['POST'], docstring="[sync] Clean in-place process replacement to restart the OS daemon.")
 def api_system_reboot(ctx):
     """Clean in-place process replacement to restart the OS daemon."""
-    import os, sys, threading, time
     def restart():
-        from akasa.hooks import hooks
         try: hooks.emit('system_shutdown')
         except Exception: pass
         time.sleep(0.5)
@@ -626,13 +615,10 @@ class TopologyResponse(TypedDict):
     tab_order: List[str]
     hidden_outputs: List[str]
     config_missing: bool
-
 @system_bp.route('topology', methods=['GET'], response_schema=TopologyResponse, docstring="Retrieves current workspace bounds, registered repository paths, UI category ordering, and active ports.")
 def api_system_topology(ctx):
     try:
         from insetu.core.utils_core import get_sister_repos
-        import os
-        from pathlib import Path
         cfg = load_config(ctx.workspace_id)
         target_repos = cfg.get("target_repos", [])
         cfg_path, ws_root = get_workspace_physics(ctx.workspace_id)
@@ -690,7 +676,6 @@ def api_create_workspace(ctx):
         if not ws_id or ws_id in ['default', 'none']:
             return jsonify({"error": "A unique, valid alphanumeric workspace ID is required"}), 400
         index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
-        from akasa.utils import load_json_config, save_json_config
 
         w_data = load_json_config(index_path, {"workspaces": {"default": {"config_path": "config.json"}}})
         if "workspaces" not in w_data:
@@ -728,10 +713,8 @@ def api_create_workspace(ctx):
         from akasa.extension import SettingsManager
         settings = SettingsManager('system', ws_id)
         settings.set("instance_title", f"inSetu Workspace: {ws_id}")
-
         # 4. Provision databases and trigger the boot sequence for the new workspace
         from akasa.db import apply_declarative_schema, _REGISTERED_SCHEMAS
-        from akasa.hooks import hooks
         for ext_name, schema in _REGISTERED_SCHEMAS.items():
             apply_declarative_schema(ext_name, schema, ws_id)
         hooks.emit('workspace_boot', workspace_id=ws_id)
@@ -751,7 +734,6 @@ def api_delete_workspace(ctx):
         if ws_id == 'default':
             return jsonify({"error": "The root system default workspace framework cannot be deleted."}), 400
         index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
-        from akasa.utils import load_json_config, save_json_config
 
         w_data = load_json_config(index_path, {"workspaces": {"default": {"config_path": "config.json"}}})
         if "workspaces" not in w_data:
@@ -837,7 +819,6 @@ def api_system_config_test_bucketing(ctx):
         data = ctx.req.get_json(silent=True) or {}
         repo_cfg = data.get("repo_cfg", {})
 
-        from akasa.utils import get_workspace_physics
         cfg_path, ws_root, _ = get_workspace_physics(ctx.workspace_id)
         repo_dir = repo_cfg.get("repo_dir")
         if not repo_dir:

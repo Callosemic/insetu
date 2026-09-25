@@ -216,11 +216,8 @@ def get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True):
     return result
 _TOPOLOGY_RAM_QUEUE = queue.Queue()
 _TOPOLOGY_SLEW_THREAD = None
-
 def _topology_slew_limiter_loop():
-    from akasa.db import get_connection
     from akasa.utils import fold_vfs_events
-    from akasa.workers import submit_immediate_job
     try:
         from akasa.events import sse_bus
     except ImportError:
@@ -261,7 +258,6 @@ def _topology_slew_limiter_loop():
                     import traceback
                     print(f"⚠️ [Topology Slew] Bulk DB insert failed for {ws_id}: {e}")
                     try:
-                        from akasa.hooks import hooks
                         hooks.emit_background('system_error', source="Topology:Slew_Insert", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=f"Workspace: {ws_id}, Events: {len(folded)}", workspace_id=ws_id)
                     except Exception: pass
                 # Trigger macro-resolution worker FIRST (as a silent background task)
@@ -276,7 +272,6 @@ def _topology_slew_limiter_loop():
             import traceback
             print(f"⚠️ [Topology Slew] Worker loop error: {e}")
             try:
-                from akasa.hooks import hooks
                 hooks.emit_background('system_error', source="Topology:Slew_Loop", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload="", workspace_id="default")
             except Exception: pass
 
@@ -490,7 +485,6 @@ def mount_topology_volumes_dynamically(cfg, workspace_id=None, **kwargs):
     """Dynamically remounts VFS volumes whenever the configuration changes."""
     from akasa.vfs import mount_volume
     from akasa.utils import get_workspace_physics
-    from pathlib import Path
 
     _, ws_root = get_workspace_physics(workspace_id)
     mount_volume(workspace_id, 'vfs', '', ws_root)
@@ -523,7 +517,6 @@ def init_topology_on_boot(workspace_id=None, **kwargs):
 def _background_boot_scan(ctx, job_id=None, **kwargs):
     ctx.jobs.update_progress("Initializing workspace topology...")
     force_topology_scan(workspace_id=ctx.workspace_id)
-    from akasa.hooks import hooks
     # Flush dirty tracking to ensure clean boot UI state
     hooks.emit('topology_resolved', workspace_id=ctx.workspace_id, dirty_repos=[], dirty_buckets=[], events=[], clear_all=True)
     hooks.emit('topology_boot_complete', workspace_id=ctx.workspace_id)
@@ -555,7 +548,6 @@ def _background_resolve_topology(ctx, job_id=None, **kwargs):
     return {"message": f"Topology settled. Resolved {total_resolved} events."}
 def get_valid_workspace_files(repo_path, config, workspace_id=None):
     import os
-    from pathlib import Path
     from akasa.utils import load_config
     from insetu.core.utils_core import execute_binary
 
@@ -680,7 +672,6 @@ def resolve_owning_workspaces(event_name, **kwargs):
 
     from akasa.utils import get_all_workspace_ids, get_workspace_physics, load_config
     from akasa.vfs import _resolve_physical_path
-    from pathlib import Path
 
     all_ws_ids = get_all_workspace_ids()
 

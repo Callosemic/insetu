@@ -64,6 +64,16 @@ export function bootServiceWorker() {
         alert("⚠️ Offline mode disabled: Service Workers require a secure context (HTTPS or localhost).");
     }
 }
+// Natively hook browser connectivity events for instant offline transitions
+window.addEventListener('offline', () => {
+    if (window.inSetu?.stores?.App) {
+        window.inSetu.stores.App.setState({ isOffline: true });
+    }
+    if (window.Sutram?.stores?.Environment) {
+        window.Sutram.stores.Environment.setState({ isOffline: true });
+    }
+    window.inSetu?.offlineLog?.('Network connection lost (browser event). Swapping to offline mode.', 'warning');
+});
 
 // Intercept window refreshes only if offline mutations are actively staged in the outbox
 window.addEventListener('beforeunload', (e) => {
@@ -771,15 +781,30 @@ export async function executeBootSequence() {
         window.ExtensionRegistry.setTabOrder(initialTabOrder);
     }
     // Sync UI to Offline State degradation natively via Sutram Environment
-    AppStore.subscribe(state => state.isOffline, (isOffline) => {
-        if (window.Sutram?.stores?.Environment) {
-            window.Sutram.stores.Environment.setState({ isOffline });
+    AppStore.subscribe(
+        state => [state.isOffline, state.isReconciling], 
+        ([isOffline, isReconciling]) => {
+            if (window.Sutram?.stores?.Environment) {
+                window.Sutram.stores.Environment.setState({ isOffline });
+            }
+
+            // Allow network states to preempt standard VFS pipeline indicators
+            if (isOffline) {
+                window.inSetu.ui.setSyncStatus('offline');
+            } else if (isReconciling) {
+                window.inSetu.ui.setSyncStatus('reconciling');
+            } else {
+                // Return control to the standard pipeline, defaulting to 'pending' if the outbox hasn't fully cleared
+                const outboxCount = AppStore.getState().outboxCount || 0;
+                window.inSetu.ui.setSyncStatus(outboxCount > 0 ? 'pending' : 'synced');
+            }
+
+            // Force the app shell to instantly re-evaluate tab visibility 
+            if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
+                window.ExtensionRegistry.compileLayout();
+            }
         }
-        // Force the app shell to instantly re-evaluate tab visibility 
-        if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
-            window.ExtensionRegistry.compileLayout();
-        }
-    });
+    );
 
     // Sync pinned repos to the agnostic Sutram Status Bar
     const statusBar = document.querySelector('sutram-status-bar');
@@ -934,7 +959,7 @@ export async function executeBootSequence() {
         if (window.inSetu?.ui?.setGlobalStatus) {
             window.inSetu.ui.setGlobalStatus("✅ System Ready", 2000);
         }
-        if (window.panicTimeout) clearTimeout(window.panicTimeout); // Linter bypass: Boot sequence watchdog
+        if (window.panicTimeout) clearTimeout(window.panicTimeout);
         const _initPanicBtn = document.getElementById('js-panic-button');
         if (_initPanicBtn) {
             _initPanicBtn.style.opacity = '0';
@@ -1005,14 +1030,9 @@ async function executeWorkspaceSwap(key, title) {
     if (oldWs && window.inSetu.api?.abortWorkspace) {
         window.inSetu.api.abortWorkspace(oldWs);
     }
-
     window.inSetu.ui.setGlobalStatus(`Switched to ${title || key}. Hydrating UI...`, null);
-    if ('caches' in window) {
-        try {
-            const keys = await caches.keys();
-            await Promise.all(keys.map(k => caches.delete(k)));
-        } catch(e) {}
-    }
+    await purgeServiceWorkerCaches();
+
     // 1. Persist local storage first so all network requests inherit the new tenant context
     sessionStorage.setItem('insetu_workspace', key);
     localStorage.setItem('insetu_workspace', key);
@@ -1156,6 +1176,15 @@ export const refreshManifest = window.inSetu.utils.coalescedAsync(async () => {
     }
     return null;
 });
+async function purgeServiceWorkerCaches() {
+    if ('caches' in window) {
+        try {
+            const keys = await caches.keys();
+            await Promise.all(keys.map(k => caches.delete(k)));
+        } catch(e) {}
+    }
+}
+
 async function simulatePanic() {
     if (!confirm("This will intentionally crash the server to test the Immutable Recovery Bootloader. The page will reload automatically. Continue?")) return;
     sessionStorage.clear();
@@ -1165,12 +1194,7 @@ async function simulatePanic() {
     // Declarative UI State Transition
     AppStore.setState({ isRebooting: true, rebootType: 'panic' });
 
-    if ('caches' in window) {
-        try {
-            const keys = await caches.keys();
-            await Promise.all(keys.map(k => caches.delete(k)));
-        } catch(e) {}
-    }
+    await purgeServiceWorkerCaches();
     if ('serviceWorker' in navigator) {
         try {
             const regs = await navigator.serviceWorker.getRegistrations();
@@ -1378,14 +1402,8 @@ async function fullRefresh() {
                 for (let reg of regs) await reg.unregister();
             } catch(e) {}
         }
-
         // 3. Clear CacheStorage
-        if ('caches' in window) {
-            try {
-                const cacheKeys = await caches.keys();
-                await Promise.all(cacheKeys.map(k => caches.delete(k)));
-            } catch(e) {}
-        }
+        await purgeServiceWorkerCaches();
 
         // 4. Hard reload browser
         window.location.reload(true);

@@ -113,7 +113,6 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         repo_dir = config.get("repo_dir")
         if not repo_dir: return
         if target_repos and repo_dir not in target_repos: return
-        from pathlib import Path
         ws_root_path = Path(ws_root).resolve()
 
         physical_path = config.get("physical_path")
@@ -127,7 +126,6 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
             if not silent: print(f"⚠️  Skipping {repo_dir}: Directory not found.")
             return
         if not silent: print(f"🗺️  Cartographing {repo_dir}...")
-
         comments = extract_existing_comments(index_path, repo_path)
 
         from insetu.core.topology.engine_topology import get_topology_files_for_repo

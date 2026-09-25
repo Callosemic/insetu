@@ -142,15 +142,8 @@ export async function fetchAndCopy(filePath, explicitUrl = null) {
         await ensureFreshContext(filePath);
         let res;
         const activeWs = window.inSetu.utils.getActiveWorkspace();
-        if (explicitUrl) {
-            res = await window.inSetu.api.request(explicitUrl, {}, activeWs);
-        } else {
-            const overrideUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', filePath);
-            if (overrideUrl) res = await window.inSetu.api.request(overrideUrl, {}, activeWs);
-            if (!res) {
-                res = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(filePath)}`);
-            }
-        }
+        const fetchUrl = explicitUrl || resolveFileFetchUrl(filePath, true);
+        res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
 
         if (!res.ok) throw new Error("File not found on disk.");
         const text = await res.text();
@@ -163,20 +156,7 @@ export async function fetchAndCopy(filePath, explicitUrl = null) {
 }
 export async function fetchAndDownloadState(filePath, explicitUrl = null) {
     try {
-        let fetchUrl = explicitUrl;
-        if (!fetchUrl) {
-            if (filePath.startsWith('/download/') || filePath.startsWith('http://') || filePath.startsWith('https://')) {
-                fetchUrl = filePath;
-            } else {
-                const activeWs = window.inSetu.utils.getActiveWorkspace();
-                const isCtx = filePath.startsWith('ctx://') || filePath.endsWith('_context.txt') || filePath.endsWith('_diffs.txt');
-                fetchUrl = isCtx
-                    ? `/download/${encodeURIComponent(filePath)}`
-                    : `/api/${activeWs}/fs/fetch?file=` + encodeURIComponent(filePath);
-                const override = window.inSetu.events.emitHook('insetu:file-fetch-url', filePath);
-                if (override) fetchUrl = override;
-            }
-        }
+        const fetchUrl = explicitUrl || resolveFileFetchUrl(filePath);
         await downloadFile(fetchUrl, filePath.split('/').pop());
         window.inSetu.ui.setGlobalStatus("✅ Downloaded!", 2000);
     } catch (e) {
@@ -189,14 +169,8 @@ export async function shareFiles(baseFile, chunks = null, isFS = false) {
     const shareFilesArray = [];
     try {
         for (const filepath of filesToFetch) {
-            let fetchUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', filepath);
-
-            if (!fetchUrl) {
-                const fileIsFS = (chunks && chunks.length > 1) ? false : isFS;
-                fetchUrl = fileIsFS 
-                    ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(filepath)}`
-                    : `/download/${encodeURIComponent(filepath)}`;
-            }
+            const fileIsFS = (chunks && chunks.length > 1) ? false : isFS;
+            const fetchUrl = resolveFileFetchUrl(filepath, fileIsFS);
 
             const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
             if (!res.ok) throw new Error(`File fetch failed for ${filepath}.`);
@@ -806,15 +780,7 @@ window.ExtensionRegistry.registerExtension('fs', {
                     await copyFromModal();
                     return;
                 }
-                let fetchUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', data.filepath);
-
-                // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
-                if (!fetchUrl) {
-                    const activeWs = window.inSetu.utils.getActiveWorkspace();
-                    fetchUrl = data.isFS 
-                        ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(data.filepath)}`
-                        : `/download/${encodeURIComponent(data.filepath)}`;
-                }
+                const fetchUrl = resolveFileFetchUrl(data.filepath, data.isFS);
                 await fetchAndCopy(data.filepath, fetchUrl);
             }
         },
@@ -899,15 +865,7 @@ window.ExtensionRegistry.registerExtension('fs', {
                         await new Promise(r => setTimeout(r, 300));
                     }
                 } else {
-                    let fetchUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', data.filepath);
-
-                    // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
-                    if (!fetchUrl) {
-                        const activeWs = window.inSetu.utils.getActiveWorkspace();
-                        fetchUrl = data.isFS 
-                            ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(data.filepath)}`
-                            : `/download/${encodeURIComponent(data.filepath)}`;
-                    }
+                    const fetchUrl = resolveFileFetchUrl(data.filepath, data.isFS);
                     await window.inSetu.vfs.fetchAndDownloadState(data.filepath, fetchUrl);
                 }
             }
@@ -1499,6 +1457,21 @@ export class InSetuFileModal extends InSetuElement {
 }
 customElements.define('insetu-file-modal', InSetuFileModal);
 export const extractManifestFiles = (...args) => window.inSetu.utils.extractManifestFiles(...args);
+export function resolveFileFetchUrl(filepath, isFS = false) {
+    if (filepath.startsWith('/download/') || filepath.startsWith('http://') || filepath.startsWith('https://')) {
+        return filepath;
+    }
+    const overrideUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', filepath);
+    if (overrideUrl) return overrideUrl;
+
+    const activeWs = window.inSetu.utils.getActiveWorkspace();
+    const isCtx = !isFS && (filepath.startsWith('ctx://') || filepath.endsWith('_context.txt') || filepath.endsWith('_diffs.txt'));
+
+    return isCtx || !isFS
+        ? `/download/${encodeURIComponent(filepath)}`
+        : `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(filepath)}`;
+}
+
 export function getChunks(filepath) {
     if (!filepath) return [];
     const manifest = AppStore.getState().manifest || {};
@@ -1524,7 +1497,7 @@ export function openPartsModal(filepath) {
         });
     }
 }
-
+window.inSetu.vfs.resolveFileFetchUrl = resolveFileFetchUrl;
 window.inSetu.vfs.getChunks = getChunks;
 window.inSetu.vfs.openPartsModal = openPartsModal;
 window.inSetu.vfs.openVirtualFile = openVirtualFile;

@@ -77,7 +77,6 @@ class InSetuURI(AkasaURI):
         raw_str = str(raw).replace('\\', '/').strip()
         if not raw_str:
             return cls("")
-
         if "://" not in raw_str:
             if raw_str.startswith('ctx://') or raw_str.startswith('vfs://'):
                 pass
@@ -133,15 +132,11 @@ class InSetuURI(AkasaURI):
             except OSError:
                 return None
         return None
-
     def read(self, workspace_id: Optional[str] = None, is_absolute_artifact: bool = False) -> Optional[str]:
-        from akasa.vfs import VFSTransaction
         with VFSTransaction(workspace_id) as vfs:
             return vfs.read(str(self), is_absolute_artifact=is_absolute_artifact)
-
     def bucket(self, workspace_id=None):
         from insetu.core.topology.engine_topology import resolve_file_bucket
-        from akasa.utils import load_config
 
         cfg = load_config(workspace_id)
         for repo_cfg in cfg.get("target_repos", []):
@@ -266,7 +261,6 @@ def update_frontmatter(content, new_data):
 
     return f"---\n{formatted_yaml}\n---\n\n{body}"
 def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth=0):
-    import re
     if depth > 5:
         return text + "\n[!] INCLUSION DEPTH LIMIT EXCEEDED"
     def replacer(match):
@@ -328,14 +322,13 @@ def _get_base_step_and_diffs(lines):
 
             return best_step, diffs
     return 4, []
-
 def parse_blocks(text):
-    import re
     files = {}
     current_file = None
+    current_id = None
     state = "OUTSIDE"
     current_type = "exact"
-    search_lines, replace_lines = [], []
+    comment_lines, search_lines, replace_lines = [], [], []
 
     if "<<<<<<< FILE:" in text:
         text = "<<<<<<< FILE:" + text.split("<<<<<<< FILE:", 1)[1]
@@ -352,7 +345,13 @@ def parse_blocks(text):
         if line.startswith("<<<<<<< FILE:"):
             current_file = line.replace("<<<<<<< FILE:", "").strip()
             if current_file not in files: files[current_file] = []
+            current_id = None
             state = "OUTSIDE"
+        elif line.startswith("<<<<<<< ID:"):
+            current_id = line.replace("<<<<<<< ID:", "").strip()
+        elif line.startswith("<<<<<<< COMMENT"):
+            state = "COMMENT"
+            comment_lines = []
         elif line.startswith("<<<<<<< SEARCH"):
             state = "SEARCH"
             search_lines = []
@@ -361,7 +360,7 @@ def parse_blocks(text):
             if state == "SEARCH":
                 state = "REPLACE"
                 replace_lines = []
-            elif state == "OUTSIDE" and current_file:
+            elif state in ("OUTSIDE", "COMMENT") and current_file:
                 print(f"  [~] Warning: Missing '<<<<<<< SEARCH' tag detected for {current_file}. Auto-healing as a genesis patch.")
                 state = "REPLACE"
                 search_lines = []
@@ -369,19 +368,22 @@ def parse_blocks(text):
         elif line.startswith(">>>>>>> REPLACE"):
             if state == "REPLACE" and current_file:
                 files[current_file].append({
+                    "id": current_id,
                     "type": current_type,
+                    "comment": "\n".join(comment_lines).strip(),
                     "search": "\n".join(search_lines),
                     "replace": "\n".join(replace_lines)
                 })
+                comment_lines = []
+                current_id = None
             state = "OUTSIDE"
         else:
-            if state == "SEARCH": search_lines.append(line)
+            if state == "COMMENT": comment_lines.append(line)
+            elif state == "SEARCH": search_lines.append(line)
             elif state == "REPLACE": replace_lines.append(line)
     return files
-
 def clean_date_str(val):
     """Safely normalizes varied date inputs into a standard ISO format."""
-    from datetime import datetime, timedelta
     if val is None:
         return None
     if isinstance(val, (datetime, timedelta)):
@@ -390,10 +392,8 @@ def clean_date_str(val):
     if not s or s.lower() in ('null', 'none', '0000-00-00t00:00:00', '0000-00-00'):
         return None
     return s
-
 def get_earlier_date(d1, d2):
     """Safely compares and returns the earlier of two ISO timestamp strings."""
-    from datetime import datetime
     d1_clean = clean_date_str(d1)
     d2_clean = clean_date_str(d2)
     if not d1_clean: return d2_clean
@@ -426,9 +426,7 @@ _WATCHDOG_PENDING = {}
 _WATCHDOG_LOCK = threading.Lock()
 _WATCHDOG_DEBOUNCE_WINDOW = 2.0
 _WATCHDOG_THREAD = None
-
 def _watchdog_debouncer_loop():
-    import time
     from akasa.db import get_connection
     while True:
         time.sleep(2.0)
@@ -465,7 +463,6 @@ def _watchdog_debouncer_loop():
 def _track_intent_vfs_writes(workspace_id=None, filepath=None, resolved_path=None, **kwargs):
     """Records VFS intent BEFORE disk I/O to completely seal Watchdog race conditions."""
     if not filepath: return
-    import time
     now = time.time()
 
     # Memory Leak Prevention: Prune timestamps older than the debounce window
@@ -550,10 +547,9 @@ def start_filesystem_observer(**kwargs):
                 if not is_excepted:
                     if parts.intersection(self.ignore_dirs): return
                     if any(pattern in logical_path for pattern in self.ignore_patterns): return
-                import time
-                now = time.time()
+                    now = time.time()
 
-                logical_path_lower = logical_path.lower()
+                    logical_path_lower = logical_path.lower()
                 # Deduplication 1: Was this file recently modified natively by our own VFS?
                 abs_key = os.path.abspath(src_path).lower()
                 if now - _NATIVE_VFS_WRITES.get(abs_key, 0) < _WATCHDOG_DEBOUNCE_WINDOW:
@@ -689,10 +685,6 @@ def extract_manifest_files(manifest_data, target_key=None, domain='auto', exclud
     return sorted(list(all_files))
 def get_domain_artifact_path(workspace_id, domain_name, ext_name=None):
     """Resolves and ensures physical existence of standard .insetu/ext/<ext_name>/data/<domain_name> directory."""
-    from pathlib import Path
-    import os
-    from akasa.utils import get_workspace_physics
-
     ext = ext_name or domain_name
     try:
         cfg_path, _ = get_workspace_physics(workspace_id)
@@ -711,9 +703,6 @@ def vacuum_manifest_artifacts(ctx, domain_dir, expected_artifacts_set, exempt_ab
     Sweeps a specific VFS domain directory and deletes any .txt files
     that are not explicitly declared in the expected_artifacts_set.
     """
-    import os
-    from pathlib import Path
-
     resolved_dir = ctx.resolve_path(domain_dir)
     if not resolved_dir or not os.path.exists(resolved_dir):
         return
@@ -732,7 +721,6 @@ def reconcile_and_vacuum_domain(ctx, domain_uri_prefix, manifest_deltas, domain_
     SSOT reconciler: Identifies orphaned domain manifest entries, merges deltas,
     persists manifest state, and vacuums orphaned text artifacts on disk.
     """
-    from pathlib import Path
     current_manifest = ctx.manifest.get("ctx", {})
     expected_artifacts = set()
     active_keys = set()
@@ -790,9 +778,6 @@ def get_flattened_buckets(workspace_id=None, target_configs=None):
                     flattened.append(b_copy)
     return flattened
 def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_types=None, include_types=None):
-    from akasa.hooks import hooks
-    from akasa.utils import load_config
-
     cfg = load_config(workspace_id)
     flags = [exclusion_flags] if isinstance(exclusion_flags, str) else (exclusion_flags or [])
 
@@ -825,19 +810,14 @@ def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_type
     return expected_contexts
 def get_repo_path(repo_dir, workspace_id=None):
     """SSOT for resolving a repository's physical override or logical path."""
-    import os
-    from akasa.utils import load_config
     cfg = load_config(workspace_id)
     for c in cfg.get("target_repos", []):
         if c.get("repo_dir") == repo_dir and c.get("physical_path"):
             return os.path.abspath(os.path.expanduser(c.get("physical_path")))
 
     # Fallback to standard sandbox resolution
-    from akasa.vfs import _resolve_physical_path
-    resolved = _resolve_physical_path(f"vfs://{repo_dir}", workspace_id)
+    resolved = _vfs_resolve_physical_path(f"vfs://{repo_dir}", workspace_id)
     if not resolved:
-        from akasa.utils import get_workspace_physics
-        from pathlib import Path
         _, ws_root = get_workspace_physics(workspace_id)
         return Path(ws_root).joinpath(repo_dir).as_posix()
     return resolved
@@ -846,9 +826,6 @@ def get_sister_repos(workspace_id=None):
     cfg = load_config(workspace_id)
     return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir")]
 def resolve_logical_path(path, workspace_id=None):
-    from pathlib import Path
-    from insetu.core.utils_core import InSetuURI
-
     if not path:
         return ""
 

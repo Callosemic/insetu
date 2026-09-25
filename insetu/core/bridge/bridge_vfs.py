@@ -99,6 +99,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
 
         for b in blocks:
             patch_tel = {
+                "cell_id": b.get("id"),
                 "patch_index": patch_index,
                 "original_file": target_file,
                 "resolved_file": None,
@@ -522,10 +523,13 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             from insetu.core.utils_core import InSetuURI
             file_uri = InSetuURI(filepath)
             current_repo = file_uri.repo if file_uri.repo else (file_uri.path.partition('/')[0] if '/' in file_uri.path else "")
-
             patch_id = f"ptc_{uuid.uuid4().hex[:12]}"
             patch_count = len(file_blocks)
-            chunks_json = json.dumps([{"search": b["search"], "replace": b["replace"]} for b in file_blocks])
+            chunks_json = json.dumps([{
+                "comment": b.get("comment", ""),
+                "search": b["search"], 
+                "replace": b["replace"]
+            } for b in file_blocks])
             db_conn.execute('''
                 INSERT INTO bridge_ledger (patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, compressed_state, timestamp, ttl_expires_at, patch_count, chunks_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -546,7 +550,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
 
     return telemetry
 def execute_bridge_sync(workspace_id, data):
-    import json
     sister_repos = get_sister_repos(workspace_id)
     _, ws_root = get_workspace_physics(workspace_id)
 

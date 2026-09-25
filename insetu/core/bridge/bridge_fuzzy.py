@@ -4,7 +4,6 @@ import base64
 from insetu.core.utils_core import _get_base_step_and_diffs
 def clean_chevron_meltdown(text):
     """Phase B: Explicit Chevron Healing Loop. Trims conversational garbage trailing the final patch."""
-    import re
     # Find the last valid REPLACE block
     match = list(re.finditer(r'>>>>>>> REPLACE', text))
     if match:
@@ -163,10 +162,8 @@ def apply_block_in_memory(content, block, silent=False):
             if replace_match:
                 if not silent: print("  └─ [ℹ️] Idempotency: Target file 100% matches REPLACE block. Skipping chunk.")
                 return True, content, "idempotent"
-
         # Fallback: Regex extraction for edge-case grid desyncs
         if "{{UNTIL}}" in search_str:
-            import re
             try:
                 top, bottom = search_str.split("{{UNTIL}}", 1)
                 t_pat = r'\s*'.join(re.escape(line.strip()) for line in top.strip().split('\n') if line.strip())

@@ -59,10 +59,13 @@ export const BridgeStore = createExtensionStore('Bridge', {
             if (currentFile && !isInsideChunk) {
                 fileRawLines.push(line);
             }
-
-            if (trimmed === '<<<<<<< SEARCH') {
-                isInsideChunk = true;
-                chunkLines = ['<<<<<<< SEARCH'];
+            if (trimmed === '<<<<<<< COMMENT' || trimmed === '<<<<<<< SEARCH') {
+                if (!isInsideChunk) {
+                    isInsideChunk = true;
+                    chunkLines = [line];
+                } else {
+                    chunkLines.push(line);
+                }
                 continue;
             }
 
@@ -162,7 +165,8 @@ export const BridgeStore = createExtensionStore('Bridge', {
     getCompiledPayload: () => {
         const state = BridgeStore.getState();
         const activeCells = state.cells.filter(c => c.active);
-        return activeCells.map(c => `<<<<<<< FILE: ${c.file}\n${c.content}`).join('\n\n');
+        // Inject the deterministic cell ID into the raw payload for the backend parser
+        return activeCells.map(c => `<<<<<<< FILE: ${c.file}\n<<<<<<< ID: ${c.id}\n${c.content}`).join('\n\n');
     },
     getActiveFiles: () => {
         return Array.from(new Set(BridgeStore.getState().cells.filter(c => c.active).map(c => c.file)));
@@ -382,26 +386,6 @@ export class InSetuExtBridge extends InSetuElement {
         BridgeStore.setState({ cells: updatedCells });
         this.requestUpdate();
     }
-    _deselectSpecificPatch(file, patchIdx, resolvedFile = null) {
-        const cells = BridgeStore.getState().cells || [];
-        const fileCells = cells.filter(c => 
-            c.active && (
-            c.file === file || 
-            (resolvedFile && c.file === resolvedFile) ||
-            c.file.endsWith(file) || 
-            file.endsWith(c.file)
-            )
-        );
-        const targetCell = fileCells[patchIdx];
-        if (targetCell) {
-            const updatedCells = cells.map(c => 
-                c.id === targetCell.id ? { ...c, active: false } : c
-            );
-            BridgeStore.setState({ cells: updatedCells });
-            this.requestUpdate();
-        }
-    }
-
     _deselectAllFilePatches(file, resolvedFile = null) {
         const cells = BridgeStore.getState().cells || [];
         const updatedCells = cells.map(c => {
@@ -474,14 +458,22 @@ export class InSetuExtBridge extends InSetuElement {
         const path = e.composedPath ? e.composedPath() : [e.target];
         const btn = path.find(el => el && el.dataset && el.dataset.action);
         if (!btn) return;
-
         const action = btn.dataset.action;
         if (action === 'update-path' || action === 'confirm-candidate') {
             const oldPath = btn.dataset.old;
             const newPath = btn.dataset.new;
+            const cellId = btn.dataset.cellId;
             const cells = BridgeStore.getState().cells;
-            const target = cells.find(c => c.file === oldPath || c.file.endsWith(oldPath));
-            if (target && oldPath !== newPath) BridgeStore.getState().updateGroupFile(target.file, newPath);
+
+            if (cellId) {
+                const targetCell = cells.find(c => c.id === cellId);
+                if (targetCell && oldPath !== newPath) {
+                    BridgeStore.getState().updateCellFile(targetCell.id, newPath);
+                }
+            } else {
+                const target = cells.find(c => c.file === oldPath || c.file.endsWith(oldPath) || oldPath.endsWith(c.file));
+                if (target && oldPath !== newPath) BridgeStore.getState().updateGroupFile(target.file, newPath);
+            }
 
             this._confirmedCandidates = this._confirmedCandidates || {};
             this._confirmedCandidates[oldPath] = newPath;
@@ -507,12 +499,11 @@ export class InSetuExtBridge extends InSetuElement {
             this._getSyncAction(isDryRun, true)();
         } else if (action === 'heal-anchor') {
             const oldPath = btn.dataset.old;
-            const patchIdx = parseInt(btn.dataset.patchIdx, 10);
+            const cellId = btn.dataset.cellId;
             const actualAnchor = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.anchor), c => c.charCodeAt(0)));
 
             const cells = BridgeStore.getState().cells || [];
-            const fileCells = cells.filter(c => c.file === oldPath || c.file.endsWith(oldPath) || oldPath.endsWith(c.file));
-            const targetCell = fileCells[patchIdx];
+            const targetCell = cells.find(c => c.id === cellId);
 
             if (targetCell) {
                 const blockRegex = /^(<<<<<<< SEARCH)[ \t]*\r?\n([\s\S]*?)^(=======)/m;
@@ -521,10 +512,8 @@ export class InSetuExtBridge extends InSetuElement {
                 this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
             }
         } else if (action === 'deselect-this-patch') {
-            const oldPath = btn.dataset.old;
-            const resolvedPath = btn.dataset.resolved;
-            const patchIdx = parseInt(btn.dataset.patchIdx, 10);
-            this._deselectSpecificPatch(oldPath, patchIdx, resolvedPath);
+            const cellId = btn.dataset.cellId;
+            BridgeStore.getState().toggleCellActive(cellId);
             this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
         } else if (action === 'deselect-all-file-patches' || action === 'deselect-patch') {
             const oldPath = btn.dataset.old;
@@ -610,8 +599,8 @@ export class InSetuExtBridge extends InSetuElement {
                                                             const btnLabel = p.flags?.includes('confirm-to-overwrite') || c.match_type === 'overwrite' ? 'Confirm Overwrite' : 'Confirm Match';
                                                             return html`
                                                                 <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 8px; border: 1px solid var(--border); border-radius: 4px;">
-                                                                    <span style="font-family: monospace;">${c.filepath} ${c.score ? `(Score: ${c.score})` : ''}</span>
-                                                                    <button data-action="confirm-candidate" data-old="${p.original_file}" data-new="${c.filepath}" class="btn-sm" style="background: var(--intent-primary);">${btnLabel}</button>
+                                                                    <span style="font-family: monospace;">${c.filepath}${c.score ? `(Score: ${c.score})` : ''}</span>
+                                                                    <button data-action="confirm-candidate" data-old="${p.original_file}" data-new="${c.filepath}" data-cell-id="${p.cell_id}" class="btn-sm" style="background: var(--intent-primary);">${btnLabel}</button>
                                                                 </div>
                                                             `;
                                                         })}
@@ -622,14 +611,14 @@ export class InSetuExtBridge extends InSetuElement {
                                                         <button data-action="deep-search" class="btn-sm" style="background: var(--intent-highlight);">🔍 Run Deep Search</button>
                                                     ` : ''}
                                                     ${p.available_actions?.includes('heal_anchor') ? html`
-                                                        <button data-action="heal-anchor" data-old="${p.original_file}" data-patch-idx="${origFileIdx}" data-anchor="${p.actual_anchor}" class="btn-sm" style="background: var(--intent-success);">🩹 Auto-Heal Anchor</button>
+                                                        <button data-action="heal-anchor" data-old="${p.original_file}" data-cell-id="${p.cell_id}" data-anchor="${p.actual_anchor}" class="btn-sm" style="background: var(--intent-success);">🩹 Auto-Heal Anchor</button>
                                                     ` : ''}
                                                     ${p.available_actions?.includes('ignore_syntax_error') ? html`
                                                         <button data-action="ignore-syntax" class="btn-sm" style="background: var(--intent-danger);">⚠️ Ignore Syntax & Commit</button>
                                                     ` : ''}
                                                     ${p.available_actions?.includes('deselect_patch') ? html`
                                                         <div style="display: flex; align-items: center; gap: 6px;">
-                                                            <button data-action="deselect-this-patch" data-old="${p.original_file}" data-resolved="${p.resolved_file || ''}" data-patch-idx="${origFileIdx}" class="btn-sm" style="background: var(--intent-neutral);">Deselect Patch</button>
+                                                            <button data-action="deselect-this-patch" data-old="${p.original_file}" data-resolved="${p.resolved_file || ''}" data-cell-id="${p.cell_id}" class="btn-sm" style="background: var(--intent-neutral);">Deselect Patch</button>
                                                             <button data-action="deselect-all-file-patches" data-old="${p.original_file}" data-resolved="${p.resolved_file || ''}" class="btn-sm" style="background: var(--intent-neutral);">Deselect All File Patches</button>
                                                         </div>
                                                     ` : ''}
@@ -1028,7 +1017,11 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                             }
                             const count = record.patch_count || (Array.isArray(chunks) && chunks.length > 0 ? chunks.length : 1);
                             const patchStr = count + (count !== 1 ? ' patches' : ' patch');
-                            const descStr = patchStr + (record.is_snapshot ? ' • 💾 Snapshot' : '');
+                            let descStr = patchStr + (record.is_snapshot ? ' • 💾 Snapshot' : '');
+
+                            if (Array.isArray(chunks) && chunks.length > 0 && chunks[0].comment) {
+                                descStr = `💬 ${chunks[0].comment}`;
+                            }
                             return html`
                             <insetu-card
                                 .titleText=${record.filepath.split('/').pop()}
@@ -1066,7 +1059,11 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                             }
                             const count = record.patch_count || (Array.isArray(chunks) && chunks.length > 0 ? chunks.length : 1);
                             const patchStr = count + (count !== 1 ? ' patches' : ' patch');
-                            const descStr = patchStr + (record.is_snapshot ? ' • 💾 Snapshot' : '');
+                            let descStr = patchStr + (record.is_snapshot ? ' • 💾 Snapshot' : '');
+
+                            if (Array.isArray(chunks) && chunks.length > 0 && chunks[0].comment) {
+                                descStr = `💬 ${chunks[0].comment}`;
+                            }
                             return html`
                             <insetu-card
                                 .titleText=${"Tx: " + (record.transaction_id || 'Unknown')}
@@ -1220,12 +1217,12 @@ window.ExtensionRegistry.registerExtension('bridge', {
                 if (!chunks && data.chunks_json) {
                     try { chunks = JSON.parse(data.chunks_json); } catch(e) {}
                 }
-
                 if (Array.isArray(chunks) && chunks.length > 0) {
                     sandwich += chunks.map(c => {
+                        const commentStr = c.comment ? `<<<<<<< COMMENT\n${c.comment}\n` : '';
                         const s = c.search !== undefined ? c.search : (c.search_block || '');
                         const r = c.replace !== undefined ? c.replace : (c.replace_block || '');
-                        return `<<<<<<< SEARCH\n${s}\n=======\n${r}\n>>>>>>> REPLACE`;
+                        return `${commentStr}<<<<<<< SEARCH\n${s}\n=======\n${r}\n>>>>>>> REPLACE`;
                     }).join('\n\n');
                 } else {
                     sandwich += "<<<<<<< SEARCH\n" + (data.search_block || '') + "\n=======\n" + (data.replace_block || '') + "\n>>>>>>> REPLACE";
