@@ -120,9 +120,16 @@ inSetu runs via a local Python web server (Flask/Uvicorn). You must never paraly
 
 ## 6. The Yomama Patch Protocol (LLM Guardrails)
 When collaborating with LLMs on the inSetu codebase, all file modifications MUST use the strict Genesis/Sync Bridge protocol. JSON patches are banned.
+[new lines to insert]
+>>>>>>> REPLACE
+
+```
 * **The Format**:
 ```text
 <<<<<<< FILE: insetu/path/to/file.py
+<<<<<<< ID: cell_123456789
+<<<<<<< COMMENT
+[Optional: Architectural reasoning or intent for this specific patch]
 <<<<<<< SEARCH
 [exact lines to match, including 1-2 lines of context]
 [new lines to insert]
