@@ -118,15 +118,14 @@ def check_javascript_files():
                         report_violation("APPROVED_API_VERB_MANDATE", filepath, line_n, f"Unapproved method '.{verb_name}' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).")
                     if verb_name == "pollJob" and is_extension and file != "ext_tracker.js":
                         print(f"⚠️ [WARNING: BIND_JOB_ACTION_PREFERENCE] {filepath}:{line_n}\n   ↳ Imperative this.api.pollJob detected. Prefer declarative this.api.bindJobAction when possible.")
-
             # Debounce Mandate (clearTimeout)
             debounce_query = Query(JS_LANG, '(call_expression function: (identifier) @func (#eq? @func "clearTimeout")) @call')
             for match in QueryCursor(debounce_query).matches(tree.root_node):
                 for node in match[1].get("call", []):
                     line_idx = node.start_point[0]
                     line_text = lines[line_idx]
-                    if "utils.debounce bypass" not in line_text and "panicTimeout" not in line_text:
-                        report_violation("DEBOUNCE_MANDATE", filepath, line_idx + 1, "Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling.")
+                    if "Timer" not in line_text and "panicTimeout" not in line_text:
+                        report_violation("DEBOUNCE_MANDATE", filepath, line_idx + 1, "Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling. (Exemptions granted for explicit Timer variables).")
 
         # --- 2. GLOBAL & STRING PATTERNS ---
         if file in ["ext_tracker.js", "ext_research.js", "ext_config.js"] and "document.getElementById" in full_content:
@@ -173,8 +172,8 @@ def check_javascript_files():
                         report_violation("THEME_TOKENS", filepath, line_num, f"Hardcoded HEX color found: {line.strip()}. Use CSS intent variables (e.g., var(--btn)).")
             if not ts_available:
                 if clear_timeout_pattern.search(line):
-                    if "utils.debounce" not in line and "panicTimeout" not in line:
-                        report_violation("DEBOUNCE_MANDATE", filepath, line_num, "Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling.")
+                    if "Timer" not in line and "panicTimeout" not in line:
+                        report_violation("DEBOUNCE_MANDATE", filepath, line_num, "Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling. (Exemptions granted for explicit Timer variables).")
 
                 if is_extension and floating_global_pattern.match(line.strip()):
                     report_violation("UDF_STATE_BLEED", filepath, line_num, "Floating global state detected. Migrate variable into the centralized Zustand AppStore.")

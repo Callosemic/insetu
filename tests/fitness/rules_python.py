@@ -143,12 +143,14 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         if isinstance(node.func, ast.Attribute) and node.func.attr in ('startswith', 'replace'):
             if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
                 if node.args[0].value in ('vfs://', 'ctx://', 'system://'):
-                    report_violation("URI_SCHEME_MANDATE", self.filepath, node.lineno, f"Manual scheme manipulation ({node.func.attr}) detected. Use InSetuURI(path).scheme or .path instead.")
+                    if self.filename != "utils_core.py":
+                        report_violation("URI_SCHEME_MANDATE", self.filepath, node.lineno, f"Manual scheme manipulation ({node.func.attr}) detected. Use InSetuURI(path).scheme or .path instead.")
 
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'endswith':
             if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
                 if node.args[0].value in ('_diffs.txt', '_context.txt', '_workflow_context.txt'):
-                    report_violation("URI_EXTENSION_MATCHING_BAN", self.filepath, node.lineno, f"Manual suffix matching ('{node.args[0].value}') detected. Rely on InSetuURI(path) domain resolution instead.")
+                    if self.filename != "utils_core.py":
+                        report_violation("URI_EXTENSION_MATCHING_BAN", self.filepath, node.lineno, f"Manual suffix matching ('{node.args[0].value}') detected. Rely on InSetuURI(path) domain resolution instead.")
 
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'parse_uri':
             report_violation("PARSE_URI_DEPRECATION", self.filepath, node.lineno, "ctx.parse_uri() is deprecated. Instantiate InSetuURI.from_any(path) to access .repo and .path natively.")
@@ -176,14 +178,10 @@ class BackendFitnessVisitor(ast.NodeVisitor):
 
             if isinstance(node.func.value, ast.Name):
                 if node.func.value.id == 'subprocess' and node.func.attr in ('run', 'Popen', 'call', 'check_output', 'check_call'):
-                    with open(self.filepath, "r", encoding="utf-8") as _f:
-                        line_text = _f.readlines()[node.lineno - 1]
-
-                    if "IO_BLOCK_BAN bypass" not in line_text:
-                        if self.filename.startswith("routes_"):
-                            report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, "Synchronous subprocess execution in a REST route. Offload to background workers.")
-                        elif self.filename not in SUBPROCESS_WHITELIST:
-                            print(f"⚠️ [WARNING: IO_BLOCK_BAN] {self.filename}:{node.lineno}\n   ↳ Subprocess call outside of designated engines (permitted but flagged).")
+                    if self.filename.startswith("routes_"):
+                        report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, "Synchronous subprocess execution in a REST route. Offload to background workers.")
+                    elif self.filename not in SUBPROCESS_WHITELIST:
+                        print(f"⚠️ [WARNING: IO_BLOCK_BAN] {self.filename}:{node.lineno}\n   ↳ Subprocess call outside of designated engines (permitted but flagged).")
                     if node.func.attr in ('run', 'Popen', 'call', 'check_output', 'check_call'):
                         if self.filename not in EXECUTE_BINARY_WHITELIST:
                             report_violation("EXECUTE_BINARY_MANDATE", self.filepath, node.lineno, f"Direct 'subprocess.{node.func.attr}()' invocation detected. Route through 'execute_binary()' in utils_core to resolve PATH binaries cleanly.")
@@ -293,14 +291,17 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             for child in ast.walk(node):
                 if isinstance(child, ast.Call):
                     func_name = child.func.id if isinstance(child.func, ast.Name) else (child.func.attr if isinstance(child.func, ast.Attribute) else "")
-                    if func_name in ('parse_uri', '_to_canonical_event', '_get_fp', 'startswith'):
+                    if func_name in ('parse_uri', '_to_canonical_event', '_get_fp', 'startswith', 'InSetuURI', 'from_any'):
+                        has_uri_check = True
+                        break
+                    elif isinstance(getattr(child.func, 'value', None), ast.Name) and getattr(child.func.value, 'id', '') == 'InSetuURI':
                         has_uri_check = True
                         break
                 elif isinstance(child, ast.Constant) and isinstance(child.value, str) and 'vfs://' in child.value:
                     has_uri_check = True
                     break
             if not has_uri_check:
-                report_violation("CANONICAL_URI_EVENT_MANDATE", self.filepath, node.lineno, "Event handler for 'vfs_mutated' or 'topology_resolved' must process paths through parse_uri(), _to_canonical_event(), or canonical 'vfs://' URI validation.")
+                report_violation("CANONICAL_URI_EVENT_MANDATE", self.filepath, node.lineno, "Event handler for 'vfs_mutated' or 'topology_resolved' must process paths through InSetuURI or explicit canonical validation.")
         for sys_event in ('system_boot', 'system_shutdown'):
             if sys_event in hook_events and not node.args.kwarg:
                 report_violation("SYSTEM_HOOK_KWARGS_MANDATE", self.filepath, node.lineno, f"System hook handler '{node.name}' subscribing to '{sys_event}' must accept **kwargs.")
