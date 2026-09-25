@@ -76,15 +76,14 @@ export class InSetuExtPrompts extends InSetuElement {
                 e.inSetuResponses.push(`/api/${activeWs}/prompts/resolve?file=` + encodeURIComponent(e.detail));
             }
         });
-
         this.registerGlobalListener('insetu:global-manifest-files', window, (e) => {
             const rawPrompts = PromptsStore.getState().prompts || [];
-            if (rawPrompts.length === 0) e.inSetuResponses.push(['.insetu/prompts/.gitkeep']);
-            else e.inSetuResponses.push(rawPrompts.map(p => p.startsWith('.insetu/prompts/') ? p : `.insetu/prompts/${p.replace(/^prompts\//, '')}`));
+            if (rawPrompts.length === 0) e.inSetuResponses.push(['ctx://prompts/.gitkeep']);
+            else e.inSetuResponses.push(rawPrompts);
         });
 
         this.registerGlobalListener('insetu:global-manifest-whitelist', window, (e) => {
-            e.inSetuResponses.push(['.insetu/prompts/']);
+            e.inSetuResponses.push(['ctx://prompts/']);
         });
 
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
@@ -119,16 +118,10 @@ export class InSetuExtPrompts extends InSetuElement {
                 return;
             }
 
-            const cleanPrompts = rawPrompts.map(p => {
-                if (p.startsWith(".insetu/prompts/")) return p;
-                const corePath = p.replace(/^prompts\//, '');
-                return ".insetu/prompts/" + corePath;
-            });
-
             window.inSetu.ui.openWorkspaceBrowser({
                 mode: 'file',
                 title: 'Select Prompt to Embed',
-                files: cleanPrompts,
+                files: rawPrompts,
                 autoDrilldown: true,
                 callback: (val) => {
                     const embedString = `{{include_prompt: ${val}}}`;
@@ -141,17 +134,18 @@ export class InSetuExtPrompts extends InSetuElement {
     }
     render() {
         return html`
-            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0; position: relative;" @card-clicked=${(e) => { if(e.detail.isSource && window.inSetu.vfs.viewSourceFile) window.inSetu.vfs.viewSourceFile(e.detail.filename, true); }}>
+            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0; position: relative;">
                 ${this.loading ? html`<div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;"><sutram-spinner text="Loading prompts..."></sutram-spinner></div>` : ''}
                 <insetu-file-tree    
                     style="flex: 1; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};"
                     .files=${this.prompts} 
-                    stripPrefix=".insetu/prompts/"
-                    basePath=".insetu/prompts/"
+                    stripPrefix="ctx://prompts/"
+                    basePath="ctx://prompts/"
                     .enableSearch=${true}
                     searchPlaceholder="🔍 Fuzzy search prompts..."
                     .currentPath=${this.globalBrowsePath}
                     entityType="file:prompt"
+                    @card-clicked=${(e) => { if(e.detail.isSource && window.inSetu.vfs.viewSourceFile) window.inSetu.vfs.viewSourceFile(e.detail.filename, true); }}
                     @path-changed=${(e) => AppStore.setState({ globalBrowsePath: e.detail.path })}>
                 </insetu-file-tree>
             </div>
@@ -183,14 +177,13 @@ export class InSetuExtPromptsActions extends InSetuElement {
         if (isOffline) {
             return [{ label: 'Read-Only (Offline)', icon: '🔒', onClick: () => {} }];
         }
-
         return [
             { 
                 label: 'New Folder',  
                 icon: '📁', 
                 onClick: () => { 
                     const cpPath = this.globalBrowsePath || []; 
-                    const prefix = cpPath.length > 0 ? ".insetu/prompts/" + cpPath.join('/') + "/" : ".insetu/prompts/"; 
+                    const prefix = cpPath.length > 0 ? "ctx://prompts/" + cpPath.join('/') + "/" : "ctx://prompts/"; 
                     if (this.ui && this.ui.openNewFolderModal) this.ui.openNewFolderModal(prefix); 
                 } 
             },
@@ -199,7 +192,7 @@ export class InSetuExtPromptsActions extends InSetuElement {
                 icon: '📄', 
                 onClick: () => { 
                     const cpPath = this.globalBrowsePath || []; 
-                    const prefix = cpPath.length > 0 ? ".insetu/prompts/" + cpPath.join('/') + "/" : ".insetu/prompts/"; 
+                    const prefix = cpPath.length > 0 ? "ctx://prompts/" + cpPath.join('/') + "/" : "ctx://prompts/"; 
                     if (this.ui && this.ui.openNewFileModal) this.ui.openNewFileModal(prefix); 
                 } 
             }
@@ -224,7 +217,49 @@ window.ExtensionRegistry.registerExtension('prompts', {
     name: "Prompt Library",
     version: "2.0.0",
     offline_mode: "read_only",
-    entityActions: [],
+    entityActions: [
+        {
+            targetEntity: 'file:prompt',
+            id: 'prompt-edit',
+            label: 'Edit',
+            icon: '✏️',
+            intent: 'neutral',
+            order: 10,
+            onClick: (data) => {
+                if (window.inSetu.vfs.viewSourceFile) {
+                    window.inSetu.vfs.viewSourceFile(data.filepath, true);
+                }
+            }
+        },
+        {
+            targetEntity: 'file:prompt',
+            id: 'prompt-copy',
+            label: 'Copy',
+            icon: '📋',
+            intent: 'success',
+            order: 20,
+            asyncAction: async (data) => {
+                const activeWs = window.inSetu.utils.getActiveWorkspace();
+                const fetchUrl = `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(data.filepath)}`;
+                await window.inSetu.vfs.fetchAndCopy(data.filepath, fetchUrl);
+            }
+        },
+        {
+            targetEntity: 'file:prompt',
+            id: 'prompt-delete',
+            label: 'Delete',
+            icon: '🗑️',
+            intent: 'danger',
+            order: 30,
+            asyncAction: async (data) => {
+                if (confirm("Delete this prompt?")) {
+                    await window.inSetu.sys.executeWorkspaceMutation('fs/delete', { filepath: data.filepath }, {
+                        onSuccess: () => window.inSetu.stores.Prompts.getState().fetchPrompts()
+                    });
+                }
+            }
+        }
+    ],
     customEditors: [
         {
             match: (filepath) => window.inSetu?.stores?.App?.getState()?.isOffline && isPromptPath(filepath),

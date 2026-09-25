@@ -45,6 +45,7 @@ def set_winsize(fd, row, col, xpix=0, ypix=0):
         pass
 @term_bp.route('status', methods=['GET'], docstring="Checks if the underlying system supports PTY streams and Websocket connections.")
 def term_status(ctx):
+    """Checks if the underlying system supports PTY streams and Websocket connections."""
     return jsonify({
         "has_sock": HAS_SOCK,
         "support_pty": SUPPORT_PTY
@@ -86,7 +87,7 @@ def _run_term_stream(ws, workspace_id):
     # Preserves dynamic additions (.venv, git branches, conda) added later.
     env["PROMPT_COMMAND"] = 'if [ -z "$_INSETU_ORIG_PS1" ]; then _INSETU_ORIG_PS1="$PS1"; PS1="\\w ❯ "; elif [ "$PS1" = "$_INSETU_ORIG_PS1" ]; then PS1="\\w ❯ "; fi'
     try:
-        p = subprocess.Popen(
+        p = ctx.exec.popen(
             ["bash", "-l"],
             preexec_fn=os.setsid if os.name == 'posix' else None,
             stdin=slave_fd,
@@ -98,7 +99,7 @@ def _run_term_stream(ws, workspace_id):
     except FileNotFoundError:
         try:
             # Fallback to sh if bash is missing (e.g., Alpine Linux Docker containers)
-            p = subprocess.Popen(
+            p = ctx.exec.popen(
                 ["sh", "-l"],
                 preexec_fn=os.setsid if os.name == 'posix' else None,
                 stdin=slave_fd,

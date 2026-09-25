@@ -134,9 +134,9 @@ def extract_markdown_from_url(target_url, method="jina"):
 class IngestUrlPayload(TypedDict, total=False):
     url: str
     method: Optional[str]
-
 @ingest_bp.route('url', methods=['POST'], request_schema=IngestUrlPayload, docstring="Fetches content from a URL and converts it into clean Markdown.")
 def api_ingest_url(ctx):
+    """Fetches content from a URL and converts it into clean Markdown."""
     data = ctx.req.json or {}
     target_url = data.get("url", "").strip()
     if not target_url: return jsonify({"error": "URL is required"}), 400

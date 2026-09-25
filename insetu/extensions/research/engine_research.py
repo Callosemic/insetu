@@ -186,7 +186,7 @@ class GooglePlaywrightProvider(SearchProvider):
                 # Drop an audit log of the raw SERP DOM to debug layout changes or CAPTCHAs
                 try:
                     from akasa.utils import get_workspace_physics
-                    import time, os
+                    import time
                     cfg_path, _ = get_workspace_physics()
                     log_dir = Path(cfg_path).parent / "data" / "logs" / "research_dumps"
                     os.makedirs(log_dir.as_posix(), exist_ok=True)
@@ -391,9 +391,9 @@ class ResearchStartPayload(TypedDict, total=False):
     date_range: str
     parser: str
     target_dir: str
-
 @research_bp.route('start', methods=['POST'], request_schema=ResearchStartPayload, docstring="Starts a new asynchronous research and scraping job.")
 def start_job(ctx):
+    """Starts a new asynchronous research and scraping job."""
     workspace_id = ctx.workspace_id
     data = ctx.req.json
     query = data.get('query', '').strip()
@@ -433,9 +433,9 @@ def start_job(ctx):
 class ResearchActionPayload(TypedDict, total=False):
     action: str
     meta: dict
-
 @research_bp.route('<job_id>/action', methods=['POST'], request_schema=ResearchActionPayload, docstring="Performs lifecycle actions (pause, resume, cancel, retry, delete) on a specific research job.")
 def job_action(ctx, job_id):
+    """Performs lifecycle actions (pause, resume, cancel, retry, delete) on a specific research job."""
     workspace_id = ctx.workspace_id
     data = ctx.req.json
     action = data.get('action') # 'pause', 'resume', 'cancel'
@@ -511,10 +511,12 @@ def job_action(ctx, job_id):
     return jsonify({"error": f"Invalid transition from {current_status} to {action}"}), 400
 @research_bp.route('jobs', methods=['GET'], docstring="Retrieves the history of active and past research jobs.")
 def list_jobs(ctx):
+    """Retrieves the history of active and past research jobs."""
     jobs = ctx.db.get_all("research_jobs", order_by="created_at DESC")
     return jsonify({"jobs": jobs})
 @research_bp.route('inbox', methods=['GET'], docstring="Retrieves scraped research links currently awaiting triage in the inbox.")
 def list_inbox(ctx):
+    """Retrieves scraped research links currently awaiting triage in the inbox."""
     status_filter = ctx.req.args.get('status', 'pending')
     statuses = tuple(status_filter.split(','))
     conn = ctx.db
@@ -559,15 +561,19 @@ def _background_export_context(ctx, research_job_id, **kwargs):
         artifacts.append({"filename": filename, "download_url": f"/download/{filename}"})
 
     return {"message": "Context packed.", "artifact": {"files": artifacts}}
-@research_bp.route('<job_id>/export_context', methods=['POST'], docstring="Packs all scraped content for a job into plain text artifacts suitable for LLM injection.")
+class ExportContextPayload(TypedDict, total=False):
+    pass
+
+@research_bp.route('<job_id>/export_context', methods=['POST'], request_schema=ExportContextPayload, docstring="Packs all scraped content for a job into plain text artifacts suitable for LLM injection.")
 def export_context(ctx, job_id):
+    """Packs all scraped content for a job into plain text artifacts suitable for LLM injection."""
     jid = ctx.jobs.submit("export_context_task", research_job_id=job_id, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": jid}), 202
 class InboxDispositionPayload(TypedDict):
     status: str
-
 @research_bp.route('inbox/<inbox_id>/disposition', methods=['POST'], request_schema=InboxDispositionPayload, docstring="Applies a triage decision (accepted, rejected, force_scrape) to an item in the inbox.")
 def inbox_disposition(ctx, inbox_id):
+    """Applies a triage decision (accepted, rejected, force_scrape) to an item in the inbox."""
     workspace_id = ctx.workspace_id
     data = ctx.req.json
     status = data.get('status')

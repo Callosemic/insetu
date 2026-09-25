@@ -51,9 +51,9 @@ def _background_compile(ctx, filepath, target_format, job_id=None, **kwargs):
 class CompileDocumentPayload(TypedDict, total=False):
     filepath: str
     format: Optional[str]
-
 @publish_bp.route('compile-document', methods=['POST'], request_schema=CompileDocumentPayload, docstring="Compiles a Markdown document into a target format (PDF, DOCX, HTML) using Pandoc.")
 def api_publish_compile_document(ctx):
+    """Compiles a Markdown document into a target format (PDF, DOCX, HTML) using Pandoc."""
     data = ctx.req.json or {}
     filepath = data.get('filepath')
     if not filepath:

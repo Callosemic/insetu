@@ -149,6 +149,7 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
             )
 @hooks_bp.route('list', methods=['GET'], docstring="Lists all configured automation rules.")
 def list_rules(ctx):
+    """Lists all configured automation rules."""
     rules = ctx.db.get_all("hooks_rules", order_by="created_at DESC")
     return jsonify({"rules": rules})
 class HookSavePayload(TypedDict, total=False):
@@ -158,9 +159,9 @@ class HookSavePayload(TypedDict, total=False):
     command: str
     id: Optional[str]
     enabled: Optional[bool]
-
 @hooks_bp.route('save', methods=['POST'], request_schema=HookSavePayload, docstring="Creates or updates a local automation rule.")
 def save_rule(ctx):
+    """Creates or updates a local automation rule."""
     data = ctx.req.json or {}
     rule_id = data.get('id') or f"rule_{uuid.uuid4().hex[:8]}"
     name = data.get('name', '').strip()
@@ -186,9 +187,9 @@ def save_rule(ctx):
 class HookTogglePayload(TypedDict):
     id: str
     enabled: bool
-
 @hooks_bp.route('toggle', methods=['POST'], request_schema=HookTogglePayload, docstring="Enables or disables an automation rule.")
 def toggle_rule(ctx):
+    """Enables or disables an automation rule."""
     data = ctx.req.json or {}
     rule_id = data.get('id')
     enabled = 1 if data.get('enabled') else 0
@@ -201,9 +202,9 @@ def toggle_rule(ctx):
     return jsonify({"status": "success"})
 class HookIdPayload(TypedDict):
     id: str
-
 @hooks_bp.route('execute', methods=['POST'], request_schema=HookIdPayload, docstring="Manually executes an automation rule.")
 def execute_rule_manual(ctx):
+    """Manually executes an automation rule."""
     data = ctx.req.json or {}
     rule_id = data.get('id')
     if not rule_id:
@@ -222,6 +223,7 @@ def execute_rule_manual(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @hooks_bp.route('delete', methods=['POST'], request_schema=HookIdPayload, docstring="Permanently deletes an automation rule.")
 def delete_rule(ctx):
+    """Permanently deletes an automation rule."""
     data = ctx.req.json or {}
     rule_id = data.get('id')
 
@@ -230,8 +232,9 @@ def delete_rule(ctx):
 
     ctx.db.delete("hooks_rules", "id", rule_id)
     return jsonify({"status": "success"})
-@hooks_bp.route('logs', methods=['GET'])
+@hooks_bp.route('logs', methods=['GET'], docstring="Retrieves logs for executed automation rules.")
 def get_logs(ctx):
+    """Retrieves logs for executed automation rules."""
     import akasa.db as kernel_db
     # Use the central workers ledger, not the extension's local DB
     conn = kernel_db.get_connection('workers', workspace_id=ctx.workspace_id)

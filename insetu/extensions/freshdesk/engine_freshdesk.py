@@ -233,36 +233,44 @@ def _background_resolve_ticket(ctx, ticket_id=None, **kwargs):
     ctx.jobs.update_progress('Marking ticket as resolved...')
     updated_ticket = _fd_request(ctx, f"tickets/{ticket_id}", method='PUT', payload={"status": 4})
     return {"message": "Ticket resolved.", "artifact": {"ticket": updated_ticket}}
-@freshdesk_bp.route('tickets/<int:ticket_id>/resolve', methods=['POST'], docstring="Marks a specific Freshdesk ticket as resolved.")
+class FreshdeskTicketPayload(TypedDict, total=False):
+    pass
+
+@freshdesk_bp.route('tickets/<int:ticket_id>/resolve', methods=['POST'], request_schema=FreshdeskTicketPayload, docstring="Marks a specific Freshdesk ticket as resolved.")
 def resolve_freshdesk_ticket(ctx, ticket_id):
+    """Marks a specific Freshdesk ticket as resolved."""
     job_id = ctx.jobs.submit("resolve_ticket_task", ticket_id=ticket_id, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 class FreshdeskReplyPayload(TypedDict):
     body: str
-
 @freshdesk_bp.route('tickets/<int:ticket_id>/reply', methods=['POST'], request_schema=FreshdeskReplyPayload, docstring="Posts a reply to a specific Freshdesk ticket.")
 def post_freshdesk_reply(ctx, ticket_id):
+    """Posts a reply to a specific Freshdesk ticket."""
     data = ctx.req.json or {}
     body = data.get("body", "")
     job_id = ctx.jobs.submit("post_reply_task", ticket_id=ticket_id, body=body, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-@freshdesk_bp.route('tickets/<int:ticket_id>/take', methods=['POST'], docstring="Assigns the specified Freshdesk ticket to the current authenticated agent.")
+@freshdesk_bp.route('tickets/<int:ticket_id>/take', methods=['POST'], request_schema=FreshdeskTicketPayload, docstring="Assigns the specified Freshdesk ticket to the current authenticated agent.")
 def take_freshdesk_ticket(ctx, ticket_id):
+    """Assigns the specified Freshdesk ticket to the current authenticated agent."""
     job_id = ctx.jobs.submit("take_ticket_task", ticket_id=ticket_id, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-@freshdesk_bp.route('tickets/<int:ticket_id>/conversations', methods=['POST'], docstring="Fetches the conversation thread for a specific ticket.")
+@freshdesk_bp.route('tickets/<int:ticket_id>/conversations', methods=['POST'], request_schema=FreshdeskTicketPayload, docstring="Fetches the conversation thread for a specific ticket.")
 def get_freshdesk_conversations(ctx, ticket_id):
+    """Fetches the conversation thread for a specific ticket."""
     job_id = ctx.jobs.submit("fetch_conversations_task", ticket_id=ticket_id, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @freshdesk_bp.route('tickets/ignored', methods=['GET'], docstring="Retrieves a list of ticket IDs that the user has chosen to ignore.")
 def get_ignored_tickets(ctx):
+    """Retrieves a list of ticket IDs that the user has chosen to ignore."""
     try:
         rows = ctx.db.get_all("freshdesk_ignored")
         return jsonify([r['ticket_id'] for row in rows])
     except Exception:
         return jsonify([])
-@freshdesk_bp.route('tickets/<int:ticket_id>/ignore', methods=['POST'], docstring="Marks a specific ticket as ignored so it no longer appears in the UI.")
+@freshdesk_bp.route('tickets/<int:ticket_id>/ignore', methods=['POST'], request_schema=FreshdeskTicketPayload, docstring="Marks a specific ticket as ignored so it no longer appears in the UI.")
 def ignore_freshdesk_ticket(ctx, ticket_id):
+    """Marks a specific ticket as ignored so it no longer appears in the UI."""
     ctx.db.insert_or_replace("freshdesk_ignored", {"ticket_id": ticket_id})
     return jsonify({"status": "success"})
 class FreshdeskFetchPayload(TypedDict, total=False):

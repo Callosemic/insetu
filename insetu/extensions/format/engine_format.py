@@ -59,6 +59,7 @@ class FormatCodePayload(TypedDict):
 
 @format_bp.route('format-code', methods=['POST'], request_schema=FormatCodePayload, docstring="Formats the specified source code file using standard beautifiers (e.g. autopep8, black, jsbeautifier).")
 def api_format_code(ctx):
+    """Formats the specified source code file using standard beautifiers (e.g. autopep8, black, jsbeautifier)."""
     data = ctx.req.json or {}
     filepath = data.get('filepath')
     if not filepath:

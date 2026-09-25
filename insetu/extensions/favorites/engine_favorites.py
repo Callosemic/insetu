@@ -20,6 +20,7 @@ favorites_bp = InSetuExtension('favorites', __name__, title="Favorites Bar", des
 __depends__ = []
 @favorites_bp.route('list', methods=['GET'], docstring="Lists all favorited files, folders, and resources.")
 def list_favorites(ctx):
+    """Lists all favorited files, folders, and resources."""
     try:
         items = ctx.db.get_all(table="favorites", order_by="created_at DESC")
         return jsonify({"favorites": items})
@@ -31,9 +32,9 @@ class FavoriteAddPayload(TypedDict, total=False):
     path: str
     type: str
     name: str
-
 @favorites_bp.route('add', methods=['POST'], request_schema=FavoriteAddPayload, docstring="Pins a new file or folder to the favorites bar.")
 def add_favorite(ctx):
+    """Pins a new file or folder to the favorites bar."""
     data = ctx.req.json or {}
 
     # Support both legacy paths and the new explicit folderpath/filepath paradigm
@@ -60,8 +61,12 @@ def add_favorite(ctx):
         return jsonify({"status": "success", "id": fav_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@favorites_bp.route('delete/<fav_id>', methods=['DELETE', 'POST'], docstring="Removes a pinned item from the favorites bar.")
+class FavoriteDeletePayload(TypedDict, total=False):
+    pass
+
+@favorites_bp.route('delete/<fav_id>', methods=['DELETE', 'POST'], request_schema=FavoriteDeletePayload, docstring="Removes a pinned item from the favorites bar.")
 def delete_favorite(ctx, fav_id):
+    """Removes a pinned item from the favorites bar."""
     try:
         ctx.db.delete("favorites", "id", fav_id)
         return jsonify({"status": "success"})

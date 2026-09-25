@@ -135,6 +135,7 @@ def get_metadata_index(ctx):
         return jsonify({"publications": [], "authors": []})
 @citations_bp.route('list', methods=['GET'], docstring="Retrieves all stored academic citations with their associated attachment metadata.")
 def get_citations(ctx):
+    """Retrieves all stored academic citations with their associated attachment metadata."""
     try:
         rows = ctx.db.get_all(table="citations", order_by="id ASC")
         items = []
@@ -147,9 +148,9 @@ def get_citations(ctx):
         return jsonify({"error": str(e)}), 500
 class AttachCitationPayload(TypedDict):
     attachments: List[dict]
-
 @citations_bp.route('<path:csl_id>/attach', methods=['POST'], request_schema=AttachCitationPayload, docstring="Attaches files or metadata pointers to a specific citation ID.")
 def attach_citation(ctx, csl_id):
+    """Attaches files or metadata pointers to a specific citation ID."""
     data = ctx.req.json
     attachments = data.get("attachments", [])
     try:
@@ -250,9 +251,9 @@ class SearchCitationsPayload(TypedDict, total=False):
     field: str
     category: str
     page: int
-
 @citations_bp.route('search', methods=['POST'], request_schema=SearchCitationsPayload, docstring="Queries global academic catalogs for citations matching the criteria.")
 def search_global_citations(ctx):
+    """Queries global academic catalogs for citations matching the criteria."""
     data = ctx.req.json or {}
     query = data.get('q', '').strip()
     source = data.get('source', 'openalex').strip()
@@ -270,9 +271,9 @@ def search_global_citations(ctx):
 class ImportCitationsPayload(TypedDict, total=False):
     citations: List[dict]
     strategy: str
-
 @citations_bp.route('import', methods=['POST'], request_schema=ImportCitationsPayload, docstring="Imports an array of CSL-JSON citation objects into the global library, resolving conflicts based on the chosen strategy.")
 def import_citations(ctx):
+    """Imports an array of CSL-JSON citation objects into the global library, resolving conflicts based on the chosen strategy."""
     data = ctx.req.json
     if not data:
         return jsonify({"error": "Missing JSON payload"}), 400
@@ -320,8 +321,12 @@ def import_citations(ctx):
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@citations_bp.route('<path:csl_id>', methods=['DELETE'], docstring="Permanently removes a citation from the global library.")
+class DeleteCitationPayload(TypedDict, total=False):
+    pass
+
+@citations_bp.route('<path:csl_id>', methods=['DELETE'], request_schema=DeleteCitationPayload, docstring="Permanently removes a citation from the global library.")
 def delete_citation(ctx, csl_id):
+    """Permanently removes a citation from the global library."""
     try:
         conn = ctx.db
         cursor = conn.execute("DELETE FROM citations WHERE id = ?", (csl_id,))

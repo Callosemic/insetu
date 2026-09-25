@@ -441,8 +441,12 @@ def pre_warm_git_sweep(workspace_id=None, **kwargs):
     """Pre-warms the Git sweepable state silently in the background after the topology settles."""
     ctx = git_bp.get_context(workspace_id)
     ctx.jobs.submit_one_shot("sweep_status_task", 5000, job_category="system_background")
-@git_bp.route('sweep/status', methods=['POST'], docstring="Scans workspaces for untracked files or metadata ready to be swept into VCS.")
+class GitSweepStatusPayload(TypedDict, total=False):
+    pass
+
+@git_bp.route('sweep/status', methods=['POST'], request_schema=GitSweepStatusPayload, docstring="Scans workspaces for untracked files or metadata ready to be swept into VCS.")
 def api_git_sweep_status(ctx):
+    """Scans workspaces for untracked files or metadata ready to be swept into VCS."""
     job_id = ctx.jobs.submit("sweep_status_task", coalesce=True, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.worker("sweep_push_task")
@@ -499,9 +503,9 @@ def _background_sweep_push(ctx, selections, message, **kwargs):
 class GitSweepPushPayload(TypedDict):
     selections: dict
     message: str
-
 @git_bp.route('sweep/push', methods=['POST'], request_schema=GitSweepPushPayload, docstring="Commits and pushes selected untracked/swept files to their respective repositories.")
 def api_git_sweep_push(ctx):
+    """Commits and pushes selected untracked/swept files to their respective repositories."""
     data = ctx.req.json
     job_id = ctx.jobs.submit(
         "sweep_push_task", 
@@ -630,9 +634,9 @@ class GitPushPayload(TypedDict, total=False):
     repo: str
     message: str
     diff_file: Optional[str]
-
 @git_bp.route('push', methods=['POST'], request_schema=GitPushPayload, docstring="Commits and pushes staged changes to the remote repository. Requires 'repo' and commit 'message'.")
 def api_git_push(ctx):
+    """Commits and pushes staged changes to the remote repository. Requires 'repo' and commit 'message'."""
     data = ctx.req.json
     repo = data.get('repo')
     message = data.get('message')
@@ -669,6 +673,7 @@ def provide_available_diffs(workspace_id=None, **kwargs):
     return list(expected_diffs)
 @git_bp.route('status', methods=['GET'], docstring="Retrieves the Git working tree status, active branches, and conflict state for all tracked repositories.")
 def api_git_status(ctx):
+    """Retrieves the Git working tree status, active branches, and conflict state for all tracked repositories."""
     repos_status = {}
     for c in ctx.config.get("target_repos", []):
         repo_dir = c.get("repo_dir")
@@ -782,9 +787,9 @@ def _background_resolve_state(ctx, repo, action, **kwargs):
 class GitResolveStatePayload(TypedDict):
     repo: str
     action: str
-
 @git_bp.route('resolve_state', methods=['POST'], request_schema=GitResolveStatePayload, docstring="Continues or aborts an active rebase/merge state.")
 def api_git_resolve_state(ctx):
+    """Continues or aborts an active rebase/merge state."""
     data = ctx.req.json or {}
     repo = data.get('repo')
     action = data.get('action')
@@ -807,9 +812,9 @@ def _background_git_init(ctx, repo, branch, **kwargs):
 class GitInitPayload(TypedDict, total=False):
     repo: str
     branch: Optional[str]
-
 @git_bp.route('init', methods=['POST'], request_schema=GitInitPayload, docstring="Initializes a new Git repository locally on a specified branch.")
 def api_git_init(ctx):
+    """Initializes a new Git repository locally on a specified branch."""
     repo = ctx.req.json.get('repo')
     branch = ctx.req.json.get('branch', 'main')
     if not repo: return jsonify({"error": "Repo required"}), 400
@@ -878,6 +883,7 @@ def _background_git_fetch_preview(ctx, repo, **kwargs):
         raise RuntimeError(err_str)
 @git_bp.route('fetch_preview', methods=['POST'], request_schema=GitRepoPayload, docstring="Fetches the remote repository and previews incoming commits and changes without pulling.")
 def api_git_fetch_preview(ctx):
+    """Fetches the remote repository and previews incoming commits and changes without pulling."""
     repo = ctx.req.json.get('repo')
     if not repo: return jsonify({"error": "Repo required"}), 400
     job_id = ctx.jobs.submit("fetch_preview_task", repo=repo, job_category="ui_blocking")
@@ -932,9 +938,9 @@ def _background_git_pull(ctx, repo, strategy=None, **kwargs):
 class GitPullPayload(TypedDict, total=False):
     repo: str
     strategy: Optional[str]
-
 @git_bp.route('pull', methods=['POST'], request_schema=GitPullPayload, docstring="Pulls incoming changes from the remote repository using the specified strategy (rebase, merge, ff_only).")
 def api_git_pull(ctx):
+    """Pulls incoming changes from the remote repository using the specified strategy (rebase, merge, ff_only)."""
     data = ctx.req.json or {}
     repo = data.get('repo')
     strategy = data.get('strategy')
@@ -987,9 +993,9 @@ class GitRemoteAddPayload(TypedDict, total=False):
     repo: str
     url: str
     resolution: Optional[str]
-
 @git_bp.route('remote/add', methods=['POST'], request_schema=GitRemoteAddPayload, docstring="Connects a local repository to a remote Git URL and pushes.")
 def api_git_remote_add(ctx):
+    """Connects a local repository to a remote Git URL and pushes."""
     repo = ctx.req.json.get('repo')
     url = ctx.req.json.get('url')
     resolution = ctx.req.json.get('resolution')
@@ -1013,9 +1019,9 @@ class GitCheckoutPayload(TypedDict, total=False):
     repo: str
     branch: str
     create_new: Optional[bool]
-
 @git_bp.route('checkout', methods=['POST'], request_schema=GitCheckoutPayload, docstring="Checks out an existing branch or creates a new one.")
 def api_git_checkout(ctx):
+    """Checks out an existing branch or creates a new one."""
     repo = ctx.req.json.get('repo')
     branch = ctx.req.json.get('branch')
     create_new = ctx.req.json.get('create_new', False)

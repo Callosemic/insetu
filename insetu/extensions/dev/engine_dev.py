@@ -3,6 +3,7 @@ from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from akasa.hooks import hooks
+from insetu.core.utils_core import InSetuURI
 
 __depends__ = []
 
@@ -45,7 +46,6 @@ dev_bp = InSetuExtension(
 def log_vfs_telemetry(mutations=None, workspace_id="default", **kwargs):
     if not mutations: return
     try:
-        from insetu.core.utils_core import InSetuURI
         ctx = dev_bp.get_context(workspace_id)
         conn = ctx.db
         now = time.time()
@@ -101,9 +101,9 @@ class CmdExecResponse(TypedDict):
     exit_code: int
     stdout: str
     stderr: str
-
 @dev_bp.route('exec', methods=['POST'], request_schema=CmdExecPayload, response_schema=CmdExecResponse, docstring="Executes an arbitrary shell command within the workspace sandbox for testing and verification.")
 def api_dev_exec(ctx):
+    """Executes an arbitrary shell command within the workspace sandbox for testing and verification."""
     data = ctx.req.json or {}
     cmd = data.get("command", "").strip()
     if not cmd:
@@ -127,6 +127,7 @@ def api_dev_exec(ctx):
         }), 500
 @dev_bp.route('metrics', methods=['GET'], docstring="Retrieves system telemetry metrics, including file thrashing limits and bridge errors.")
 def get_dev_metrics(ctx):
+    """Retrieves system telemetry metrics, including file thrashing limits and bridge errors."""
     now = time.time()
     cutoff = now - 3600  
     # Fetch all telemetry in the last hour from the correct workers ledger
@@ -253,10 +254,11 @@ def execute_sql_query(ctx):
         }), 400
 @dev_bp.route('logs', methods=['GET'], docstring="Retrieves the systemd journal logs for the background backend daemon.")
 def get_backend_logs(ctx):
+    """Retrieves the systemd journal logs for the background backend daemon."""
     from insetu.core.utils_core import execute_binary
     try:
         # Query the systemd journal for the user service if running in background
-        res = execute_binary(  # IO_BLOCK_BAN bypass
+        res = execute_binary(
             ["journalctl", "--user", "-u", "insetu.service", "-n", "200", "--no-pager"], 
             capture_output=True, text=True, timeout=5
         )
@@ -278,7 +280,7 @@ def download_boot_logs_worker(ctx, **kwargs):
     ctx.jobs.update_progress("Extracting current invocation systemd logs...")
     try:
         # 1. Retrieve the unique InvocationID for the current service run
-        inv_res = execute_binary(  # IO_BLOCK_BAN bypass
+        inv_res = execute_binary(
             ["systemctl", "--user", "show", "-p", "InvocationID", "--value", "insetu.service"],
             capture_output=True, text=True, timeout=5
         )
@@ -290,7 +292,7 @@ def download_boot_logs_worker(ctx, **kwargs):
         else:
             cmd = ["journalctl", "--user", "-u", "insetu.service", "-n", "5000", "--no-pager"]
 
-        res = execute_binary(  # IO_BLOCK_BAN bypass
+        res = execute_binary(
             cmd, capture_output=True, text=True, timeout=15
         )
         log_content = res.stdout.strip() if (res.returncode == 0 and res.stdout.strip()) else "No systemd logs found for current invocation of 'insetu.service'."
@@ -311,8 +313,12 @@ def download_boot_logs_worker(ctx, **kwargs):
             "url": f"/download/{out_file}"
         }
     }
-@dev_bp.route('logs/download', methods=['POST'], docstring="Exports the current backend daemon invocation logs to a downloadable text file.")
+class DownloadLogsPayload(TypedDict, total=False):
+    pass
+
+@dev_bp.route('logs/download', methods=['POST'], request_schema=DownloadLogsPayload, docstring="Exports the current backend daemon invocation logs to a downloadable text file.")
 def api_download_logs(ctx):
+    """Exports the current backend daemon invocation logs to a downloadable text file."""
     job_id = ctx.jobs.submit("download_boot_logs_task", job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 

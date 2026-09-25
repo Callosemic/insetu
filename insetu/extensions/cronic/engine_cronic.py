@@ -73,16 +73,19 @@ def _sync_system_crontab(ctx):
     ctx.exec.run(["crontab", "-"], input=new_crontab, check=True)
 @cronic_bp.route('status', methods=['GET'], docstring="Checks if the underlying OS environment supports crontab scheduling.")
 def get_status(ctx):
+    """Checks if the underlying OS environment supports crontab scheduling."""
     return jsonify({"has_crontab": has_crontab()})
+
 @cronic_bp.route('list', methods=['GET'], docstring="Lists all configured cronic jobs and their current execution status.")
 def list_jobs(ctx):
+    """Lists all configured cronic jobs and their current execution status."""
     return jsonify({"jobs": ctx.db.get_all("cronic_jobs")})
 class CronicSchedulePayload(TypedDict):
     filepath: str
     schedule: str
-
 @cronic_bp.route('schedule', methods=['POST'], request_schema=CronicSchedulePayload, docstring="Schedules a script file to execute periodically via the system crontab.")
 def schedule_job(ctx):
+    """Schedules a script file to execute periodically via the system crontab."""
     data = ctx.req.json or {}
     filepath = data.get("filepath", "").strip()
     schedule = data.get("schedule", "0 * * * *").strip()
@@ -104,9 +107,9 @@ def schedule_job(ctx):
 class CronicTogglePayload(TypedDict):
     job_id: str
     enabled: bool
-
 @cronic_bp.route('toggle', methods=['POST'], request_schema=CronicTogglePayload, docstring="Enables or disables an existing scheduled job.")
 def toggle_job(ctx):
+    """Enables or disables an existing scheduled job."""
     data = ctx.req.json or {}
     job_id = data.get("job_id")
     enabled = 1 if data.get("enabled") else 0
@@ -116,9 +119,9 @@ def toggle_job(ctx):
     return jsonify({"status": "success"})
 class CronicIdPayload(TypedDict):
     job_id: str
-
 @cronic_bp.route('delete', methods=['POST'], request_schema=CronicIdPayload, docstring="Permanently removes a job from the schedule.")
 def delete_job(ctx):
+    """Permanently removes a job from the schedule."""
     data = ctx.req.json or {}
     job_id = data.get("job_id")
 
@@ -127,6 +130,7 @@ def delete_job(ctx):
     return jsonify({"status": "success"})
 @cronic_bp.route('logs', methods=['GET'], docstring="Retrieves the recent execution logs for a specified job ID.")
 def get_logs(ctx):
+    """Retrieves the recent execution logs for a specified job ID."""
     job_id = ctx.req.args.get("job_id")
     if not job_id:
         return jsonify({"logs": "No job ID supplied."}), 400
@@ -171,6 +175,7 @@ def _run_manual_worker(ctx, job_id=None, **kwargs):
     return {"message": "Job dispatched to OS background."}
 @cronic_bp.route('run_now', methods=['POST'], request_schema=CronicIdPayload, docstring="Manually dispatches a cronic job to run immediately in the background.")
 def run_now(ctx):
+    """Manually dispatches a cronic job to run immediately in the background."""
     data = ctx.req.json or {}
     job_id = ctx.jobs.submit("run_manual_task", cronic_job_id=data.get("job_id"), job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
@@ -206,6 +211,7 @@ def _kill_task_worker(ctx, job_id=None, **kwargs):
         return {"message": "No active processes found for this job."}
 @cronic_bp.route('kill', methods=['POST'], request_schema=CronicIdPayload, docstring="Terminates any currently running processes executing the specified cronic job script.")
 def kill_job(ctx):
+    """Terminates any currently running processes executing the specified cronic job script."""
     data = ctx.req.json or {}
     job_id = ctx.jobs.submit("kill_task", cronic_job_id=data.get("job_id"), job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202

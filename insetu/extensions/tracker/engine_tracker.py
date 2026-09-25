@@ -153,12 +153,13 @@ def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
     if not mutations: return
 
     ctx = tracker_bp.get_context(workspace_id)
-
     for m in mutations:
         filepath = m.get("filepath", "")
         op = m.get("operation") or m.get("mutation_type")
 
         uri = InSetuURI.from_any(filepath)
+        if uri.scheme != 'vfs':
+            continue
         repo_dir, clean_rel = uri.repo, uri.path
         canonical_rel_path = f"{repo_dir}/{clean_rel}" if repo_dir else clean_rel
         if ".tracker/" in canonical_rel_path and canonical_rel_path.endswith(".md"):
@@ -484,7 +485,6 @@ def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
                 yaml_data, body, _ = parse_frontmatter(content)
                 yaml_data['type'] = new_type
                 # Recalculate target path
-                from pathlib import Path
                 filename = Path(old_rel_path).name
                 new_rel_path = Path(get_tracker_path(repo, new_type, status)).joinpath(filename).as_posix()
                 # Reconstruct MaC payload (preserving structure, updating type)
@@ -522,7 +522,6 @@ def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
     if new_status in ["closed", "logged", "archived"]:
         # Evaluate Blockers
         depends_str = parse_list_field(yaml_data.get('depends_on', '[]'))
-        import json
         for dep in json.loads(depends_str):
             d_repo, d_id = dep.split("/", 1) if "/" in dep else (repo, dep)
             dep_row = ctx.db.execute("SELECT status FROM tracker_tickets WHERE id=? AND repo=?", (d_id, d_repo)).fetchone()
@@ -914,9 +913,9 @@ class TrackerSpawnPayload(TypedDict, total=False):
     target_repo: str
     template_id: str
     variables: dict
-
 @tracker_bp.route('spawn_template', methods=['POST'], request_schema=TrackerSpawnPayload, docstring="Spawns a new ticket tree from an existing template.")
 def api_tracker_spawn_template(ctx):
+    """Spawns a new ticket tree from an existing template."""
     data = ctx.req.json
     target_repo = data.get('target_repo')
     template_id = data.get('template_id')
@@ -1052,9 +1051,9 @@ class TrackerNewPayload(TypedDict, total=False):
     priority: str
     size: str
     tier: int
-
 @tracker_bp.route('new', methods=['POST'], request_schema=TrackerNewPayload, docstring="Creates a new markdown-based Kanban ticket.")
 def api_tracker_new(ctx):
+    """Creates a new markdown-based Kanban ticket."""
     data = ctx.req.json
     try:
         new_path = create_ticket(
@@ -1114,9 +1113,9 @@ def api_tracker_index(ctx):
         return jsonify({"tags": [], "sub_buckets": [], "status_counts": {}})
 class TrackerFilesResponse(TypedDict):
     tasks: list
-
 @tracker_bp.route('files', methods=['GET'], response_schema=TrackerFilesResponse, docstring="Returns a JSON array of all active Kanban tickets across the workspace.")
 def api_tracker_files(ctx):
+    """Returns a JSON array of all active Kanban tickets across the workspace."""
     try:
         conn = ctx.db
         # True CQRS Mandate: Perform an initial seed walk only if the cache index is completely blank.
@@ -1171,8 +1170,12 @@ def _background_restore_metadata(ctx, **kwargs):
     ctx.jobs.update_progress("Scanning Git history for wiped ticket metadata...")
     restored_count = restore_ticket_metadata_from_git(workspace_id=ctx.workspace_id)
     return f"Restored metadata for {restored_count} tickets from Git history."
-@tracker_bp.route('restore_metadata', methods=['POST'], docstring="Scans Git history to restore wiped metadata (e.g. creation dates) for all tickets.")
+class TrackerRestorePayload(TypedDict, total=False):
+    pass
+
+@tracker_bp.route('restore_metadata', methods=['POST'], request_schema=TrackerRestorePayload, docstring="Scans Git history to restore wiped metadata (e.g. creation dates) for all tickets.")
 def api_tracker_restore_metadata(ctx):
+    """Scans Git history to restore wiped metadata (e.g. creation dates) for all tickets."""
     job_id = ctx.jobs.submit("restore_metadata_task", job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 def restore_ticket_metadata_from_git(workspace_id=None):
@@ -1331,9 +1334,9 @@ class TrackerTransitionPayload(TypedDict, total=False):
     filepath: str
     new_status: str
     new_type: str
-
 @tracker_bp.route('transition', methods=['POST'], request_schema=TrackerTransitionPayload, docstring="Transitions a Kanban ticket to a new status or type, automatically relocating the markdown file on disk.")
 def api_tracker_transition(ctx):
+    """Transitions a Kanban ticket to a new status or type, automatically relocating the markdown file on disk."""
     data = ctx.req.json
     try:
         new_path = transition_ticket(

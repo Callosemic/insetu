@@ -68,7 +68,6 @@ def _background_compile_workflows(ctx, **kwargs):
     current_manifest = full_manifest.get("ctx", {})
     manifest_deltas = {}
     def process_batch(batch):
-        from insetu.core.utils_core import InSetuURI
         batch_id = batch.get("id")
         if not batch_id: return None, None
         includes = batch.get("includes", [])
@@ -148,7 +147,7 @@ def _background_compile_workflows(ctx, **kwargs):
                 active_repos.update(target_repos)
             for e in ledger_events:
                 fp = e.get("filepath", "") if isinstance(e, dict) else str(e)
-                r, _ = ctx.parse_uri(fp)
+                r = InSetuURI.from_any(fp).repo
                 if r: active_repos.add(r)
             # If the batch includes raw VFS files from repositories that just triggered an event, assume they changed and recompile.
             has_targeted_raw_files = False
@@ -184,7 +183,6 @@ def _background_compile_workflows(ctx, **kwargs):
         filename, entry = process_batch(b)
         if entry:
             manifest_deltas[filename] = entry
-    from insetu.core.utils_core import reconcile_and_vacuum_domain
     reconcile_and_vacuum_domain(
         ctx,
         domain_uri_prefix="ctx://workflows/workflow_",
@@ -203,6 +201,7 @@ def _background_compile_workflows(ctx, **kwargs):
     }
 @flow_bp.route('batches', methods=['GET'], docstring="Retrieves compiled workflow batches and available contexts.")
 def api_flow_batches(ctx):
+    """Retrieves compiled workflow batches and available contexts."""
     batches = ctx.store.get("workflows.json", "context_batches", [])
 
     # Auto-migrate IDs to match titles to prevent legacy recursion
@@ -307,9 +306,9 @@ class FlowBatchSavePayload(TypedDict, total=False):
     include_prompt: Optional[str]
     response_path: Optional[str]
     archive_path: Optional[str]
-
 @flow_bp.route('batches/save', methods=['POST'], request_schema=FlowBatchSavePayload, docstring="Creates or updates a workflow batch configuration.")
 def api_flow_batches_save(ctx):
+    """Creates or updates a workflow batch configuration."""
     data = ctx.req.json
     batches = ctx.store.get("workflows.json", "context_batches", [])
     original_id = data.get("original_id")
@@ -337,9 +336,9 @@ def api_flow_batches_save(ctx):
     return jsonify({"status": "success", "manifest": ctx.manifest})
 class FlowBatchDeletePayload(TypedDict):
     id: str
-
 @flow_bp.route('batches/delete', methods=['POST'], request_schema=FlowBatchDeletePayload, docstring="Deletes a workflow batch configuration.")
 def api_flow_batches_delete(ctx):
+    """Deletes a workflow batch configuration."""
     data = ctx.req.json
     batch_id = data.get("id")
     batches = ctx.store.get("workflows.json", "context_batches", [])

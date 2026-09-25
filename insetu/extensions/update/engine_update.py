@@ -122,9 +122,6 @@ def _clean_semantic_release_logs(log_text):
 @update_bp.worker("bump_task")
 def _background_bump_task(ctx, repo, prerelease=False, **kwargs):
     """Phase 1: Validates tree integrity, calculates versions, and updates the changelog."""
-    import shutil
-    from pathlib import Path
-
     repo_path = _get_valid_repo_path(ctx, repo)
 
     ctx.jobs.update_progress("Validating working tree integrity...")
@@ -188,10 +185,6 @@ def _background_bump_task(ctx, repo, prerelease=False, **kwargs):
     return {"message": "Version bumped successfully.", "artifact": {"output": output}}
 def _execute_twine_upload(ctx, repo, repo_path, base_env):
     """Helper function to standardize PyPI distribution via Twine."""
-    import sys
-    import os
-    import subprocess
-
     ctx.jobs.update_progress("Uploading to PyPI via twine...")
     env = base_env.copy()
 
@@ -206,10 +199,8 @@ def _execute_twine_upload(ctx, repo, repo_path, base_env):
         raise RuntimeError(f"PyPI upload failed:\n{upload_res.stderr or upload_res.stdout}")
 
     return log
-
 def _build_and_validate_distribution(ctx, repo_path):
-    import sys, zipfile, shutil
-    from pathlib import Path
+    import zipfile
 
     dist_dir = Path(repo_path) / "dist"
     if dist_dir.exists():
@@ -247,7 +238,6 @@ def _background_first_release_task(ctx, repo, **kwargs):
     """Initial Release: Builds distribution, validates wheel contents, uploads to PyPI, and tags baseline version."""
     import zipfile
     import tarfile
-    from pathlib import Path
 
     repo_path = _get_valid_repo_path(ctx, repo)
     log_lines = []
@@ -286,9 +276,6 @@ def _background_first_release_task(ctx, repo, **kwargs):
     return {"message": f"Successfully {msg_suffix}!", "artifact": {"version": version_str, "output": full_output}}
 @update_bp.worker("preview_first_release_task")
 def _background_preview_first_release_task(ctx, repo, **kwargs):
-    import os
-    from pathlib import Path
-
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
@@ -320,6 +307,7 @@ def _background_preview_first_release_task(ctx, repo, **kwargs):
     return {"message": "Initial release preview generated.", "artifact": {"output": output}}
 @update_bp.route('preview_first_release', methods=['POST'], request_schema=UpdateRepoPayload, docstring="Evaluates a dry-run of an initial semantic release and PyPI distribution.")
 def api_update_preview_first_release(ctx):
+    """Evaluates a dry-run of an initial semantic release and PyPI distribution."""
     repo = ctx.req.json.get('repo')
     if not repo:
         return jsonify({"error": "Repository target is required."}), 400
@@ -381,8 +369,6 @@ def _background_publish_task(ctx, repo, **kwargs):
         raise RuntimeError(f"Semantic Release Publish Failed:\n{err_msg}")
 @update_bp.worker("preview_bump_task")
 def _background_preview_bump_task(ctx, repo, prerelease=False, **kwargs):
-    import subprocess
-    import os
     import re
 
     repo_path = get_repo_path(repo, ctx.workspace_id)
@@ -430,9 +416,9 @@ def _background_preview_bump_task(ctx, repo, prerelease=False, **kwargs):
     except subprocess.CalledProcessError as e:
         err_msg = e.stderr.strip() if e.stderr else e.stdout.strip()
         raise RuntimeError(f"Semantic Release Preview Failed:\n{err_msg}")
-
 @update_bp.route('preview_bump', methods=['POST'], request_schema=UpdatePreviewBumpPayload, docstring="Evaluates a dry-run semantic version bump based on commit logs.")
 def api_update_preview_bump(ctx):
+    """Evaluates a dry-run semantic version bump based on commit logs."""
     data = ctx.req.get_json(silent=True) or {}
     repo = data.get('repo')
     prerelease = data.get('prerelease', False)
@@ -443,6 +429,7 @@ def api_update_preview_bump(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.route('bump', methods=['POST'], request_schema=UpdatePreviewBumpPayload, docstring="Calculates semantic version, bumps pyproject.toml, generates changelog, and pushes the release tag.")
 def api_update_bump(ctx):
+    """Calculates semantic version, bumps pyproject.toml, generates changelog, and pushes the release tag."""
     data = ctx.req.get_json(silent=True) or {}
     repo = data.get('repo')
     prerelease = data.get('prerelease', False)
@@ -453,8 +440,6 @@ def api_update_bump(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("preview_publish_task")
 def _background_preview_publish_task(ctx, repo, **kwargs):
-    import subprocess
-    import os
     import re
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
@@ -486,6 +471,7 @@ def _background_preview_publish_task(ctx, repo, **kwargs):
         raise RuntimeError(f"Semantic Release Publish Preview Failed:\n{err_msg}")
 @update_bp.route('preview_publish', methods=['POST'], request_schema=UpdateRepoPayload, docstring="Evaluates a dry-run distribution publish sequence.")
 def api_update_preview_publish(ctx):
+    """Evaluates a dry-run distribution publish sequence."""
     repo = ctx.req.json.get('repo')
     if not repo: 
         return jsonify({"error": "Repository target is required."}), 400
@@ -494,6 +480,7 @@ def api_update_preview_publish(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.route('first_release', methods=['POST'], request_schema=UpdateRepoPayload, docstring="Builds and distributes the initial baseline release and pushes Git tags.")
 def api_update_first_release(ctx):
+    """Builds and distributes the initial baseline release and pushes Git tags."""
     repo = ctx.req.json.get('repo')
     if not repo:
         return jsonify({"error": "Repository target is required."}), 400
@@ -502,6 +489,7 @@ def api_update_first_release(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.route('publish', methods=['POST'], request_schema=UpdateRepoPayload, docstring="Distributes the compiled package to configured registries (e.g. PyPI).")
 def api_update_publish(ctx):
+    """Distributes the compiled package to configured registries (e.g. PyPI)."""
     repo = ctx.req.json.get('repo')
     if not repo: 
         return jsonify({"error": "Repository target is required."}), 400
@@ -511,8 +499,6 @@ def api_update_publish(ctx):
 @update_bp.worker("status_task")
 def _background_status_task(ctx, repo, **kwargs):
     """Runs the semantic-release CLI off-thread to retrieve the current version."""
-    import os
-    from pathlib import Path
     dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
     repo_path = get_repo_path(repo, ctx.workspace_id)
 
@@ -653,9 +639,7 @@ def _background_status_task(ctx, repo, **kwargs):
     }}
 @update_bp.worker("update_toml_config_task")
 def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=None, prerelease_token=None, **kwargs):
-    import os
     import re
-    from pathlib import Path
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
@@ -686,7 +670,6 @@ def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=No
     ctx.vfs.save(logical_pyproject, new_content)
     ctx.sync_vfs_barrier()
 
-    from insetu.extensions.git.engine_git import execute_git
     execute_git(repo_path, ['add', 'pyproject.toml'], check=False)
     status_res = execute_git(repo_path, ['status', '--porcelain', 'pyproject.toml'], check=False)
     if status_res.stdout.strip():
@@ -698,9 +681,9 @@ class UpdateTomlPayload(TypedDict, total=False):
     build_command: Optional[str]
     vcs_release: Optional[bool]
     prerelease_token: Optional[str]
-
 @update_bp.route('update_toml_config', methods=['POST'], request_schema=UpdateTomlPayload, docstring="Updates semantic release configuration natively in pyproject.toml.")
 def api_update_toml_config(ctx):
+    """Updates semantic release configuration natively in pyproject.toml."""
     data = ctx.req.get_json(silent=True) or {}
     repo = data.get('repo')
     build_command = data.get('build_command')
@@ -713,8 +696,6 @@ def api_update_toml_config(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("manual_build_task")
 def _background_manual_build(ctx, repo, build_command, **kwargs):
-    import os
-    from insetu.core.utils_core import execute_binary
     import shlex
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
@@ -743,9 +724,9 @@ def _background_manual_build(ctx, repo, build_command, **kwargs):
 class UpdateManualBuildPayload(TypedDict):
     repo: str
     build_command: str
-
 @update_bp.route('manual_build', methods=['POST'], request_schema=UpdateManualBuildPayload, docstring="Executes a manual packaging build via the configured build command.")
 def api_update_manual_build(ctx):
+    """Executes a manual packaging build via the configured build command."""
     repo = ctx.req.json.get('repo')
     build_command = ctx.req.json.get('build_command')
     if not repo:
@@ -755,6 +736,7 @@ def api_update_manual_build(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.route('status', methods=['POST'], request_schema=UpdateRepoPayload, docstring="Retrieves the current semantic versioning and build status of a repository.")
 def api_update_status(ctx):
+    """Retrieves the current semantic versioning and build status of a repository."""
     repo = ctx.req.json.get('repo')
     if not repo: 
         return jsonify({"error": "Repo required"}), 400
@@ -763,9 +745,7 @@ def api_update_status(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("force_version_task")
 def _background_force_version(ctx, repo, new_version, **kwargs):
-    import os
     import re
-    from pathlib import Path
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
@@ -795,9 +775,9 @@ def _background_force_version(ctx, repo, new_version, **kwargs):
 class UpdateForceVersionPayload(TypedDict):
     repo: str
     version: str
-
 @update_bp.route('force_version', methods=['POST'], request_schema=UpdateForceVersionPayload, docstring="Forces an explicit version bump and Git tag.")
 def api_update_force_version(ctx):
+    """Forces an explicit version bump and Git tag."""
     repo = ctx.req.json.get('repo')
     version = ctx.req.json.get('version')
     if not repo or not version: 
@@ -807,9 +787,7 @@ def api_update_force_version(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("scaffold_task")
 def _background_scaffold_task(ctx, repo, initial_version, **kwargs):
-    import os
     import re
-    from pathlib import Path
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError("Target repository path not found.")
@@ -861,9 +839,6 @@ exclude_commit_patterns = [
     return {"message": f"Successfully initialized at v{initial_version}. Ready for distribution."}
 @update_bp.worker("create_dummy_toml_task")
 def _background_create_dummy_toml(ctx, repo, initial_version, **kwargs):
-    import os
-    from pathlib import Path
-
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError("Target repository path not found.")
@@ -899,9 +874,9 @@ prerelease_token = "rc"
 class UpdateInitPayload(TypedDict, total=False):
     repo: str
     initial_version: Optional[str]
-
 @update_bp.route('create_dummy_toml', methods=['POST'], request_schema=UpdateInitPayload, docstring="Creates a basic pyproject.toml to establish semantic versioning baseline.")
 def api_update_create_dummy_toml(ctx):
+    """Creates a basic pyproject.toml to establish semantic versioning baseline."""
     repo = ctx.req.json.get('repo')
     initial_version = ctx.req.json.get('initial_version', '0.1.0')
     if not repo: return jsonify({"error": "Repo required"}), 400
@@ -909,8 +884,7 @@ def api_update_create_dummy_toml(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.route('eligible_repos', methods=['GET'], docstring="Returns a mapping of repositories eligible for semantic updates based on the presence of a pyproject.toml file.")
 def api_update_eligible_repos(ctx):
-    import os
-    from pathlib import Path
+    """Returns a mapping of repositories eligible for semantic updates based on the presence of a pyproject.toml file."""
     eligibility = {}
     for r in ctx.config.get("target_repos", []):
         repo = r.get("repo_dir")

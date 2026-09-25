@@ -63,11 +63,10 @@ export class InSetuExtTerm extends InSetuElement {
             this._latestX = cx;
             this._latestY = cy;
         }
-
         if (e.type === 'touchstart' && e.touches.length === 1) {
             this._touchStartX = cx;
             this._touchStartY = cy;
-            clearTimeout(this._longPressTimer); // utils.debounce bypass
+            clearTimeout(this._longPressTimer);
             this._longPressTimer = setTimeout(() => {
                 // Explicitly pass the cached touch coordinates to avoid event recycling
                 this._openContextMenu(cx, cy);
@@ -81,18 +80,16 @@ export class InSetuExtTerm extends InSetuElement {
             this._latestX = cx;
             this._latestY = cy;
         }
-
         if (this._touchStartX !== null && e.type === 'touchmove') {
             const dx = cx - this._touchStartX;
             const dy = cy - this._touchStartY;
             if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
-                clearTimeout(this._longPressTimer); // utils.debounce bypass
+                clearTimeout(this._longPressTimer);
             }
         }
     };
-
     _trackPointerUp = (e) => {
-        clearTimeout(this._longPressTimer); // utils.debounce bypass
+        clearTimeout(this._longPressTimer);
         if (e.type === 'touchend' && this._touchStartX !== null) {
             const cx = e.changedTouches && e.changedTouches.length > 0 ? e.changedTouches[0].clientX : this._latestX;
             const cy = e.changedTouches && e.changedTouches.length > 0 ? e.changedTouches[0].clientY : this._latestY;
