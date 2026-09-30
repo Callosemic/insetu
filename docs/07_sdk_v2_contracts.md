@@ -30,7 +30,7 @@ Route handlers (`@my_ext_bp.route('path')`) and background workers (`@my_ext_bp.
 * **`ctx.workspace_id`** *(String)*: The active multi-tenant tracking scope.
 * **`ctx.config`** *(Dict)*: Lazy configuration access to the active workspace configuration map.
 * **`ctx.paths`** *(Dict)*: Platform paths directory mappings (e.g., `ctx.paths['workspace_root']`).
-* **`ctx.resolve_path(filepath)`** *(Method)*: Safely anchors a relative path to the physical workspace bounds.
+* **`ctx.resolve_path(filepath, is_absolute_artifact=False, must_exist=False)`** *(Method)*: Safely anchors a relative path to physical workspace bounds; returns `None` if `must_exist=True` and path does not exist on disk.
 * **`ctx.settings.get(key)`** *(Method)*: Retrieves configuration values from the extension's isolated settings UI.
 * **`ctx.get_manifest_files(target_key)`** *(Method)*: SSOT helper to extract polymorphic lists of files or chunks from the active manifest.
 * **`ctx.expand_selection(items)`** *(Method)*: SSOT helper to expand polymorphic selection payloads (files, folders, virtual URIs) into deduplicated physical/logical paths.
@@ -70,7 +70,7 @@ Extensions are strictly forbidden from relative-importing OS chassis functions. 
 * **`this.ui`**: `.openWorkspaceBrowser(options)`, `.openFolderBrowser(cb)`, `.setGlobalStatus(msg)`, `.viewTextBlob(title, content, suggestedFilename)`
 * **`this.sys`**: `.executeWorkspaceMutation(path, payload)`, `.executeSystemCompile()`, `.switchTab(tabId)`, `.refreshManifest()`
 * **`this.editor`**: `.getEditorContent()`, `.setEditorContent(text)`, `.insertTextAtCursor(text)`
-* **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.copyRawText(text)`, `.normalizeEntityData(data)`, `.extractManifestFiles(manifest, targetKey, domain)`, `.debounce(fn, ms)`, `.formatArtifactSize(meta)`, `.getScopedStorage(key, defaultVal, wsId)`, `.setScopedStorage(key, value, wsId)`, `.removeScopedStorage(key, wsId)`, `BucketAddress.fromFilepath(path, meta)`
+* **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.copyRawText(text)`, `.normalizeEntityData(data)`, `.extractManifestFiles(manifest, targetKey, domain)`, `.debounce(fn, ms)`, `.formatArtifactSize(meta)`, `.getScopedStorage(key, defaultVal, wsId)`, `.setScopedStorage(key, value, wsId)`, `.removeScopedStorage(key, wsId)`, `.nativeShareFiles(files)`, `BucketAddress.fromFilepath(path, meta)`
 * **`.getOfflineMode(extName)`**: Retrieves the declarative offline mode capability (`"full"`, `"read_only"`, `"none"`) for a targeted extension.
 ### 3.2 Client Network Gateway (ADR 0016)
 
@@ -81,6 +81,7 @@ Network synchronization must route through the client API abstraction to inherit
 * `this.api.post(path, payload, options)`
 * `this.api.delete(path, options)`
 * `this.api.getJson(path, options)` / `postJson` / `deleteJson`
+* `this.api.fetchImmutableText(path, options)`
 * `this.api.bindJobAction(endpoint, payloadGetter, options)`
 * `this.api.pollJob(jobId, { interval, onProgress, onComplete, onError })`
 
