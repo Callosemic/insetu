@@ -50,10 +50,9 @@ def download_file(filename):
     """Universal download gateway for contexts, artifacts, and vault files."""
     from akasa.utils import sniff_tenant_id
     workspace_id = sniff_tenant_id()
-
     uri = InSetuURI.from_any(filename)
-    resolved_path = uri.resolve(workspace_id)
-    if not resolved_path or not os.path.exists(resolved_path):
+    resolved_path = uri.resolve_if_exists(workspace_id)
+    if not resolved_path:
         return jsonify({"error": "File object not found"}), 404
 
     safe_basename = Path(resolved_path).name

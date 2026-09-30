@@ -107,10 +107,13 @@ class InSetuURI(AkasaURI):
     def resolve_physical(self, workspace_id: Optional[str] = None) -> Optional[str]:
         # Backward compatibility alias
         return self.resolve(workspace_id)
-
     def exists(self, workspace_id: Optional[str] = None) -> bool:
         phys = self.resolve(workspace_id)
         return bool(phys and os.path.exists(phys))
+
+    def resolve_if_exists(self, workspace_id: Optional[str] = None) -> Optional[str]:
+        phys = self.resolve(workspace_id)
+        return phys if (phys and os.path.exists(phys)) else None
 
     def is_dir_physical(self, workspace_id: Optional[str] = None) -> bool:
         if self.is_dir or self.path.endswith('/'):
@@ -703,12 +706,12 @@ def vacuum_manifest_artifacts(ctx, domain_dir, expected_artifacts_set, exempt_ab
     Sweeps a specific VFS domain directory and deletes any .txt files
     that are not explicitly declared in the expected_artifacts_set.
     """
-    resolved_dir = ctx.resolve_path(domain_dir)
-    if not resolved_dir or not os.path.exists(resolved_dir):
+    resolved_dir = ctx.resolve_path(domain_dir, must_exist=True)
+    if not resolved_dir:
         return
     exemptions = exempt_abs_paths or set()
     for ws_rel_path in ctx.vfs.walk(domain_dir, exts=['.txt']):
-        f_path = ctx.resolve_path(ws_rel_path)
+        f_path = ctx.resolve_path(ws_rel_path, must_exist=True)
         f_basename = InSetuURI(ws_rel_path).basename
 
         if f_path not in exemptions and f_basename not in expected_artifacts_set and f_basename != "manifest.json":

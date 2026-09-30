@@ -54,8 +54,8 @@ def compile_context_payload(workspace_id, output_dir, base_uri, header_block, te
     existing_entry = ctx.manifest.get("ctx", {}).get(base_uri)
     if existing_entry and existing_entry.get("meta", {}).get("content_hash") == content_hash:
         # Physical disk guardrail: Heal the context if it was deleted or misrouted by a previous bug
-        resolved_disk_path = ctx.resolve_path(base_uri)
-        if resolved_disk_path and os.path.exists(resolved_disk_path):
+        resolved_disk_path = ctx.resolve_path(base_uri, must_exist=True)
+        if resolved_disk_path:
             return existing_entry  # Skip all disk I/O. The content hasn't changed and file physically exists.
 
     vfs = VFSTransaction(workspace_id)
