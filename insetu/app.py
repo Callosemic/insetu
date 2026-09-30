@@ -474,7 +474,8 @@ def index():
     instance_title = settings.get("instance_title", "inSetu Developer OS")
     instance_emoji = settings.get("instance_emoji", "⚙️")
     extensions = cfg.get("extensions", [])
-    return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=extensions)
+    mounted_extensions = [ext for ext in extensions if ext == "config" or ext in app.blueprints]
+    return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=mounted_extensions)
 
 # Ignite active workspace feature components JIT at application startup
 load_workspace_extensions()
