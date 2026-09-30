@@ -1,7 +1,7 @@
 // insetu/insetu/static/js/core/sdk.js
 // Tier 1A: inSetu Local OS SDK Wrapper
 import { SutramElement, createSutramStore, ExtensionRegistry as SutramRegistry, bindStoreInput } from '/static/vendor/sutram/js/sdk.js';
-import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, coalescedAsync, formatDate, timeAgo } from '/static/vendor/sutram/js/utils.js';
+import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, coalescedAsync, formatDate, timeAgo, nativeShareFiles } from '/static/vendor/sutram/js/utils.js';
 import * as jsYaml from '/static/vendor/js-yaml/js-yaml.min.js';
 
 export { bindStoreInput };
@@ -152,6 +152,7 @@ export class InSetuElement extends SutramElement {
             clone: window.inSetu.utils.clone,
             debounce: window.ExtensionRegistry.utils.debounce,
             coalescedAsync: window.inSetu.utils.coalescedAsync,
+            nativeShareFiles: window.inSetu.utils.nativeShareFiles,
             parseURI: window.inSetu.utils.parseURI,
             formatArtifactSize: window.inSetu.utils.formatArtifactSize,
             extractManifestFiles: window.inSetu.utils.extractManifestFiles,
@@ -219,6 +220,9 @@ export class InSetuElement extends SutramElement {
                 }
                 const cleanPath = path.startsWith('/') ? path.substring(1) : path;
                 return window.inSetu.api.workspace.delete(`${this.extName}/${cleanPath}`, options);
+            },
+            fetchImmutableText: async (path, options = {}) => {
+                return window.inSetu.api.fetchImmutableText(path, options, this.workspaceId);
             },
             getJson: async (path, options = {}) => {
                 const res = await this.api.get(path, options);
@@ -503,6 +507,7 @@ window.inSetu.utils.normalizeAccentText = normalizeAccentText;
 window.inSetu.utils.formatDate = formatDate;
 window.inSetu.utils.timeAgo = timeAgo;
 window.inSetu.utils.coalescedAsync = coalescedAsync;
+window.inSetu.utils.nativeShareFiles = nativeShareFiles;
 
 window.inSetu.utils.formatArtifactSize = function(meta) {
     if (!meta) return "";

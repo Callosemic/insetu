@@ -303,12 +303,17 @@ async function checkManifestVersion() {
         if (sigs.ctx) {
             const activeWs = window.inSetu.utils.getActiveWorkspace();
             for (const [path, ts] of Object.entries(sigs.ctx)) {
-                const fetchUrl = `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(path)}`;
+                const fetchUrl = window.inSetu.vfs?.resolveFileFetchUrl ? window.inSetu.vfs.resolveFileFetchUrl(path, false) : `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(path)}`;
                 if (ts === null) {
                     delete currentManifest.ctx[path];
                     delete localCtxSignatures[path];
                     SutramDB.deleteVFSBlob(activeWs, fetchUrl).catch(()=>{});
                     manifestUpdated = true;
+                    AppStore.setState(s => {
+                        const newQ = new Set(s.warmingQueue);
+                        const filtered = new Set(Array.from(newQ).filter(u => !u.startsWith(fetchUrl)));
+                        return { warmingQueue: filtered };
+                    });
                 } else if (localCtxSignatures[path] !== ts) {
                     const entryRes = await window.inSetu.api.workspace.get(`gather/manifest/entry?path=${encodeURIComponent(path)}`);
                     if (window.inSetu.utils.getActiveWorkspace() !== activeWs) return;
@@ -317,7 +322,8 @@ async function checkManifestVersion() {
                         if (entryData.entry) {
                             currentManifest.ctx[path] = entryData.entry;
                             SutramDB.deleteVFSBlob(activeWs, fetchUrl).catch(()=>{});
-                            pathsToWarm.push(`${fetchUrl}&t=${Date.now()}`);
+                            const sep = fetchUrl.includes('?') ? '&' : '?';
+                            pathsToWarm.push(`${fetchUrl}${sep}t=${Date.now()}`);
                         } else {
                             delete currentManifest.ctx[path];
                             SutramDB.deleteVFSBlob(activeWs, fetchUrl).catch(()=>{});
@@ -338,7 +344,6 @@ async function checkManifestVersion() {
 
             // Phase 4: Hash-Delta Cache Warmer (Queue Injection)
             const activeWs = window.inSetu.utils.getActiveWorkspace();
-
             // Map offline-capable VFS files dynamically
             const targetConfigs = AppStore.getState().targetConfigs || [];
             const offlineRepos = targetConfigs.filter(c => c.offline_capable).map(c => c.repo_dir);
@@ -348,9 +353,10 @@ async function checkManifestVersion() {
                     const currentSig = sigs.vfs[repo];
                     if (offlineRepos.includes(repo) && currentSig && warmedVfsSignatures[repo] !== currentSig) {
                         (bucket.files || []).forEach(f => {
-                            const cacheKeyUrl = `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(f)}`;
+                            const cacheKeyUrl = window.inSetu.vfs?.resolveFileFetchUrl ? window.inSetu.vfs.resolveFileFetchUrl(f, true) : `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(f)}`;
                             SutramDB.deleteVFSBlob(activeWs, cacheKeyUrl).catch(()=>{});
-                            pathsToWarm.push(`/api/${activeWs}/fs/fetch?file=${encodeURIComponent(f)}&t=${Date.now()}`);
+                            const sep = cacheKeyUrl.includes('?') ? '&' : '?';
+                            pathsToWarm.push(`${cacheKeyUrl}${sep}t=${Date.now()}`);
                         });
                         warmedVfsSignatures[repo] = currentSig;
                     }
@@ -639,7 +645,7 @@ export async function executeBootSequence() {
             if (confStr) {
                 const data = JSON.parse(confStr);
                 const config = data.config || {};
-                window.ACTIVE_EXTENSIONS = config.extensions || [];
+                window.ACTIVE_EXTENSIONS = data.meta?.mounted_extensions || config.extensions || [];
                 window.inSetu.serverSchemas = data.meta?.settings_schemas || {};
                 if (data.meta?.core_modules) {
                     window.inSetu.CORE_MODULES = new Set(data.meta.core_modules);
@@ -697,7 +703,7 @@ export async function executeBootSequence() {
                 const data = await cRes.json();
                 window.inSetu.utils.setScopedStorage('offline_config', JSON.stringify(data)); // Save for offline boot
                 const config = data.config || {};
-                window.ACTIVE_EXTENSIONS = config.extensions || [];
+                window.ACTIVE_EXTENSIONS = data.meta?.mounted_extensions || config.extensions || [];
                 window.inSetu.serverSchemas = data.meta?.settings_schemas || {};
                 if (data.meta?.core_modules) {
                     window.inSetu.CORE_MODULES = new Set(data.meta.core_modules);
@@ -764,6 +770,8 @@ export async function executeBootSequence() {
             if (requiresSync && window.inSetu.ui && window.inSetu.ui.setSyncStatus) {
                 window.inSetu.ui.setSyncStatus('pending');
             }
+            // Rely strictly on the SSE heartbeat (checkManifestVersion) to pull confirmed state
+            // to avoid race conditions with the asynchronous VFS write queue.
         }
     });
     // Declarative Tab Ordering: AppStore syncs tabOrder directly to Sutram
@@ -1264,7 +1272,7 @@ async function performSoftRefresh() {
             const data = await cRes.json();
             window.inSetu.utils.setScopedStorage('offline_config', JSON.stringify(data));
             const config = data.config || {};
-            window.ACTIVE_EXTENSIONS = config.extensions || [];
+            window.ACTIVE_EXTENSIONS = data.meta?.mounted_extensions || config.extensions || [];
             window.inSetu.serverSchemas = data.meta?.settings_schemas || {};
             if (data.meta?.core_modules) {
                 window.inSetu.CORE_MODULES = new Set(data.meta.core_modules);

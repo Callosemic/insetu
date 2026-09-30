@@ -541,9 +541,13 @@ def get_system_config(workspace_id):
             except Exception: evaluated_schemas[ext_id] = []
         else:
             evaluated_schemas[ext_id] = schema_spec
+    from flask import current_app
+    mounted_extensions = [ext for ext in data.get("extensions", []) if ext == "config" or ext in current_app.blueprints]
+
     return {
         "config": data,
         "meta": {
+            "mounted_extensions": mounted_extensions,
             "available_extensions": sorted(available, key=lambda x: x.get('title') or ""),
             "settings_schemas": evaluated_schemas,
             "core_modules": list(CORE_MODULES)

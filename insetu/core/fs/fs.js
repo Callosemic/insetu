@@ -86,6 +86,20 @@ window.inSetu.stores = window.inSetu.stores || {};
 window.inSetu.vfs = window.inSetu.vfs || {};
 window.inSetu.ui = window.inSetu.ui || {};
 window.inSetu.stores.Fs = FsStore;
+window.inSetu.vfs.shareTextCache = new Map();
+
+document.addEventListener('yenvui-overlay-opened', (e) => {
+    const card = e.detail?.source;
+    if (!card || !card.entityType || !card.entityData) return;
+
+    // Formal Pre-fetch Boundary: Delegate to the Extension Registry
+    const actions = window.ExtensionRegistry?.getEntityActions?.(card.entityType, card.entityData) || [];
+    actions.forEach(act => {
+        if (typeof act.onReveal === 'function') {
+            act.onReveal(card.entityData);
+        }
+    });
+});
 
 function loadFullModalText() {
     const state = FsStore.getState().fileModal;
@@ -163,57 +177,76 @@ export async function fetchAndDownloadState(filePath, explicitUrl = null) {
         window.inSetu.ui.setGlobalStatus("❌ Error: " + e.message, 3000, true);
     }
 }
-export async function shareFiles(baseFile, chunks = null, isFS = false) {
+export function shareFiles(baseFile, chunks = null, isFS = false) {
     const activeWs = window.inSetu.utils.getActiveWorkspace();
     const filesToFetch = (chunks && chunks.length > 1) ? chunks : [baseFile];
-    const shareFilesArray = [];
-    try {
-        for (const filepath of filesToFetch) {
-            const fileIsFS = (chunks && chunks.length > 1) ? false : isFS;
-            const fetchUrl = resolveFileFetchUrl(filepath, fileIsFS);
 
-            const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
-            if (!res.ok) throw new Error(`File fetch failed for ${filepath}.`);
+    // Synchronous Fast-Path
+    if (filesToFetch.every(fp => window.inSetu.vfs.shareTextCache.has(fp))) {
+        try {
+            const fileObjects = filesToFetch.map(filepath => ({
+                content: window.inSetu.vfs.shareTextCache.get(filepath),
+                filename: filepath.split('/').pop()
+            }));
 
-            const blob = await res.blob();
-            const filename = filepath.split('/').pop();
-            const ext = filename.split('.').pop().toLowerCase();
-
-            let mime = blob.type;
-            if (ext === 'md') mime = 'text/markdown';
-            else if (ext === 'txt') mime = 'text/plain';
-            else if (ext === 'json') mime = 'application/json';
-            else if (ext === 'py') mime = 'text/x-python';
-            else if (ext === 'js') mime = 'text/javascript';
-            else if (!mime || mime === 'application/octet-stream') mime = 'text/plain';
-            shareFilesArray.push(new File([blob], filename, { type: mime }));
-        }
-
-        if (navigator.canShare && navigator.canShare({ files: shareFilesArray })) {
-            await navigator.share({ files: shareFilesArray });
-        } else {
-            throw new Error("File sharing not supported by this browser.");
-        }
-    } catch (err) {
-        if (err.name === 'AbortError') return;
-
-        if (err.name === 'NotAllowedError' || err.message.includes('Permission') || err.message.includes('activation')) {
-            if (window.inSetu?.ui?.setGlobalStatus) {
-                window.inSetu.ui.setGlobalStatus("⚠️ Files ready. Please click Share again.", 4000);
-            }
+            window.inSetu.utils.nativeShareFiles(fileObjects).catch(err => {
+                if (err.name !== 'AbortError' && window.inSetu?.ui?.setGlobalStatus) {
+                    window.inSetu.ui.setGlobalStatus(`❌ Share Error: ${err.message}`, 3000, true);
+                }
+            });
+            return;
+        } catch (err) {
+            if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`❌ Share Error: ${err.message}`, 3000, true);
             return;
         }
-
-        if (window.inSetu?.ui?.setGlobalStatus) {
-            window.inSetu.ui.setGlobalStatus(`❌ Share Error: ${err.message}`, 3000, true);
-        }
     }
+    // Asynchronous Pre-Warm Fallback
+    (async () => {
+        try {
+            const fileObjects = [];
+
+            for (const filepath of filesToFetch) {
+                const fileIsFS = (chunks && chunks.length > 1) ? false : isFS;
+                const fetchUrl = resolveFileFetchUrl(filepath, fileIsFS);
+
+                const textContent = await window.inSetu.api.fetchImmutableText(fetchUrl, { onlyIfMissing: true }, activeWs);
+                window.inSetu.vfs.shareTextCache.set(filepath, textContent);
+
+                fileObjects.push({
+                    content: textContent,
+                    filename: filepath.split('/').pop()
+                });
+            }
+
+            try {
+                await window.inSetu.utils.nativeShareFiles(fileObjects);
+            } catch (err) {
+                if (err.name === 'NotAllowedError' || err.message?.includes('Permission') || err.message?.includes('activation')) {
+                    if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚠️ Files ready. Please click Share again.", 4000);
+                    return;
+                }
+                throw err;
+            }
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`❌ Share Error: ${err.message}`, 3000, true);
+        }
+    })();
 }
 export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}) {
-    if (!fetchOptions.headers && window.inSetu?.api?._getHeaders) {
-        fetchOptions.headers = window.inSetu.api._getHeaders(true);
+    const activeWs = window.inSetu.utils.getActiveWorkspace();
+    const res = await window.inSetu.api.request(fetchUrl, fetchOptions, activeWs);
+    if (!res.ok) throw new Error('Download failed from server.');
+    const blob = await res.blob();
+
+    let dlName = fallbackFilename;
+    const disposition = res.headers.get('Content-Disposition');
+    if (disposition && disposition.indexOf('attachment') !== -1) {
+        const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+        if (matches != null && matches[1]) dlName = matches[1].replace(/['"]/g, '');
     }
-    await sutramDownloadFile(fetchUrl, fallbackFilename, fetchOptions);
+
+    downloadBlob(blob, dlName);
 }
 export async function viewAndCopy(filename) {
     await ensureFreshContext(filename);
@@ -255,99 +288,115 @@ export async function viewAndCopy(filename) {
     }
 }
 function refreshActiveFileViews(oldPath, newPath = null) {
-    updateManifestState(oldPath, newPath);
     const mutations = [{ filepath: oldPath, operation: 'delete' }];
     if (newPath) mutations.push({ filepath: newPath, operation: 'save' });
+
+    if (oldPath) AppStore.getState().setResolvingLock(oldPath, newPath ? 'move_source' : 'delete');
+    if (newPath) AppStore.getState().setResolvingLock(newPath, oldPath ? 'move_dest' : 'create');
+
     window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations });
 }
-function updateManifestState(oldPath, newPath = null) {
+
+export function updateManifestState(mutations) {
     const { manifest } = AppStore.getState();
     let changed = false;
     const newManifest = { vfs: { ...(manifest?.vfs || {}) }, ctx: { ...(manifest?.ctx || {}) } };
     const cleanPath = (p) => p ? p.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/^\.\//, '') : '';
-    const normOldPath = cleanPath(oldPath);
-    const normNewPath = cleanPath(newPath);
 
-    if (normOldPath) AppStore.getState().setResolvingLock(normOldPath, newPath ? 'move_source' : 'delete');
-    if (normNewPath) AppStore.getState().setResolvingLock(normNewPath, oldPath ? 'move_dest' : 'create');
-
-    const _replacePathInArray = (arr) => {
-        let mutated = false;
-        for (let i = arr.length - 1; i >= 0; i--) {
-            const f = cleanPath(arr[i]);
-            if (f === normOldPath) {
-                arr.splice(i, 1);
-                if (normNewPath && !arr.includes(normNewPath)) arr.push(normNewPath);
-                mutated = true;
-            } else if (f.startsWith(normOldPath + '/')) {
-                const suffix = f.substring(normOldPath.length);
-                arr.splice(i, 1);
-                if (normNewPath) {
-                    const newChildPath = normNewPath + suffix;
-                    if (!arr.includes(newChildPath)) arr.push(newChildPath);
-                }
-                mutated = true;
-            }
+    // Detect move/rename logic directly from the payload
+    let moveSource = null;
+    let moveDest = null;
+    if (mutations.length === 2) {
+        const delMut = mutations.find(m => m.operation === 'delete');
+        const savMut = mutations.find(m => m.operation === 'save');
+        if (delMut && savMut) {
+            moveSource = cleanPath(delMut.filepath);
+            moveDest = cleanPath(savMut.filepath);
         }
-        return mutated;
-    };
-
-    if (normOldPath) {
-        // Stage 1 Isolation: Optimistically mutate Stage 1 VFS manifest only.
-        ['vfs'].forEach(manifestKey => {
-            Object.keys(newManifest[manifestKey]).forEach(key => {
-                const obj = newManifest[manifestKey][key];
-                if (obj.files) {
-                    let newFiles = [...obj.files];
-                    if (_replacePathInArray(newFiles)) {
-                        newManifest[manifestKey][key] = { ...obj, files: newFiles };
-                        changed = true;
-                    }
-                }
-            });
-        });
     }
+    (mutations || []).forEach(m => {
+        const normPath = cleanPath(m.filepath);
+        if (!normPath) return;
 
-    if (normNewPath && !normOldPath) {
-        const alreadyInManifest = Object.values(newManifest.vfs).some(obj => obj.files && obj.files.some(f => cleanPath(f) === normNewPath));
+        // Centralized Cache Invalidation
+        if (window.inSetu?.vfs?.shareTextCache?.has(m.filepath)) {
+            window.inSetu.vfs.shareTextCache.delete(m.filepath);
+        }
 
-        if (!alreadyInManifest) {
-            const repoDir = normNewPath.split('/')[0];
-            let added = false;
-
-            for (const key of Object.keys(newManifest.vfs)) {
-                if (key.startsWith(repoDir + '::')) {
-                    newManifest.vfs[key] = {
-                        ...newManifest.vfs[key],
-                        files: [...(newManifest.vfs[key].files || []), normNewPath]
-                    };
-                    changed = true;
-                    added = true;
-                    break;
-                }
-            }
-            if (!added) {
-                const firstKey = Object.keys(newManifest.vfs)[0] || `${repoDir}::main`;
-                newManifest.vfs[firstKey] = {
-                    ...newManifest.vfs[firstKey],
-                    meta: newManifest.vfs[firstKey]?.meta || { type: "vfs_bucket", repo: repoDir, bucket_id: "main" },
-                    files: [...(newManifest.vfs[firstKey]?.files || []), normNewPath]
-                };
+        if (m.operation === 'delete') {
+            ['vfs', 'ctx'].forEach(manifestKey => {
+                Object.keys(newManifest[manifestKey]).forEach(key => {
+                    const obj = newManifest[manifestKey][key];
+                    if (obj.files) {
+                        const origLen = obj.files.length;
+                        const newFiles = [];
+                        obj.files.forEach(f => {
+                            const fClean = cleanPath(f);
+                            if (fClean === normPath) {
+                                if (moveDest && !newFiles.includes(moveDest)) newFiles.push(moveDest);
+                                changed = true;
+                            } else if (fClean.startsWith(normPath + '/')) {
+                                if (moveDest) {
+                                    const newChild = moveDest + fClean.substring(normPath.length);
+                                    if (!newFiles.includes(newChild)) newFiles.push(newChild);
+                                }
+                                changed = true;
+                            } else {
+                                newFiles.push(f);
+                            }
+                        });
+                        if (newFiles.length !== origLen || changed) {
+                            newManifest[manifestKey][key] = { ...obj, files: newFiles };
+                        }
+                    }
+                });
+            });
+            if (newManifest.ctx[normPath]) {
+                if (moveDest) newManifest.ctx[moveDest] = newManifest.ctx[normPath];
+                delete newManifest.ctx[normPath];
                 changed = true;
             }
+        } else if (m.operation === 'save') {
+            if (moveSource) return;
+
+            const alreadyInManifest = Object.values(newManifest.vfs).some(obj => obj.files && obj.files.some(f => cleanPath(f) === normPath));
+            if (!alreadyInManifest) {
+                const repoDir = normPath.split('/')[0] || 'global';
+                let added = false;
+                for (const key of Object.keys(newManifest.vfs)) {
+                    if (key.startsWith(repoDir + '::')) {
+                        newManifest.vfs[key] = {
+                            ...newManifest.vfs[key],
+                            files: [...(newManifest.vfs[key].files || []), normPath]
+                        };
+                        changed = true;
+                        added = true;
+                        break;
+                    }
+                }
+                if (!added) {
+                    const firstKey = Object.keys(newManifest.vfs)[0] || `${repoDir}::main`;
+                    newManifest.vfs[firstKey] = {
+                        ...newManifest.vfs[firstKey],
+                        meta: newManifest.vfs[firstKey]?.meta || { type: "vfs_bucket", repo: repoDir, bucket_id: "main" },
+                        files: [...(newManifest.vfs[firstKey]?.files || []), normPath]
+                    };
+                    changed = true;
+                }
+            }
         }
-    }
+    });
+
     if (changed) {
-        AppStore.setState({ manifest: newManifest || { vfs: {}, ctx: {} } });
-    }
-    if (FsStore.getState().modals.browser?.open) {
-        const mState = FsStore.getState().modals.browser;
-        let updatedManifest = [...mState.manifest];
-        if (_replacePathInArray(updatedManifest)) {
-            FsStore.getState().setModal('browser', { manifest: updatedManifest });
-        }
+        AppStore.setState({ manifest: newManifest });
     }
 }
+window.addEventListener('insetu:vfs-mutated', (e) => {
+    const payload = e.detail;
+    if (payload && payload.mutations) {
+        updateManifestState(payload.mutations);
+    }
+});
 async function saveModalFile(autoSave = false) {
     if (autoSave !== true) autoSave = false;
     const state = FsStore.getState().fileModal;
@@ -805,24 +854,33 @@ window.ExtensionRegistry.registerExtension('fs', {
             order: 95,
             match: (data) => {
                 if (data.isSkeleton) return false;
-                // Only render if the device natively supports Web Sharing
                 return !!navigator.share && !!navigator.canShare;
             },
-            onClick: async (data, e) => {
+            onReveal: (data) => {
+                if (data.fromModal) return;
+                window.inSetu.vfs.shareTextCache.clear();
+                const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, data.filepath);
+                const filesToFetch = (chunks && chunks.length > 1) ? chunks : [data.filepath];
+                filesToFetch.forEach(filepath => {
+                    const fileIsFS = (chunks && chunks.length > 1) ? false : data.isFS;
+                    const fetchUrl = resolveFileFetchUrl(filepath, fileIsFS);
+                    const activeWs = window.inSetu.utils.getActiveWorkspace();
+
+                    window.inSetu.api.fetchImmutableText(fetchUrl, { onlyIfMissing: true }, activeWs)
+                        .then(textContent => window.inSetu.vfs.shareTextCache.set(filepath, textContent))
+                        .catch(() => {});
+                });
+            },
+            onClick: (data, e) => {
+                if (e) e.stopPropagation();
                 if (data.fromModal) {
                     const state = FsStore.getState().fileModal;
-                    const blob = new Blob([state.content], { type: 'text/plain' });
                     const filename = state.filename ? state.filename.split('/').pop() : 'shared_file.txt';
-                    const file = new File([blob], filename, { type: 'text/plain' });
-                    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                        await navigator.share({ files: [file] });
-                    }
+                    window.inSetu.utils.nativeShareFiles([{ content: state.content || '', filename }]).catch(()=>{});
                     return;
                 }
-
                 const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, data.filepath);
-
-                await shareFiles(data.filepath, chunks, data.isFS);
+                shareFiles(data.filepath, chunks, data.isFS);
             }
         },
         {
@@ -1310,6 +1368,10 @@ export class InSetuFileModal extends InSetuElement {
                 }
             }
         }
+        // Modal Header Share Injection
+        if (this.fileModal?.open && this.fileModal.content) {
+            window.inSetu.vfs.shareTextCache.set(this.fileModal.filename, this.fileModal.content);
+        }
 
         if (this.fileModal?.open && this.fileModal.filename !== this._activeFileForPref) {
             this._activeFileForPref = this.fileModal.filename;
@@ -1463,11 +1525,10 @@ export function resolveFileFetchUrl(filepath, isFS = false) {
     }
     const overrideUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', filepath);
     if (overrideUrl) return overrideUrl;
-
     const activeWs = window.inSetu.utils.getActiveWorkspace();
     const isCtx = !isFS && (filepath.startsWith('ctx://') || filepath.endsWith('_context.txt') || filepath.endsWith('_diffs.txt'));
 
-    return isCtx || !isFS
+    return !isFS && !isCtx
         ? `/download/${encodeURIComponent(filepath)}`
         : `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(filepath)}`;
 }

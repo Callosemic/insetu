@@ -91,6 +91,42 @@ window.inSetu.api = {
         }
         return null;
     },
+    fetchImmutableText: async function(url, options = {}, scopeId = 'default') {
+        // ADR 0042: Direct-Pipe Immutable Text Extraction
+        // Bypasses OfflineHttpProvider proxy streams to guarantee Safari GC stability for native OS intents.
+        // Natively manages the offline cache while enforcing immutable string primitives.
+        const isOffline = window.inSetu?.stores?.App?.getState()?.isOffline;
+        const cacheKeyUrl = url.replace(/([?&])t=\d+&?/, '$1').replace(/[?&]$/, '');
+
+        if (isOffline) {
+            const blob = await SutramDB.getVFSBlob(scopeId, cacheKeyUrl);
+            if (!blob) throw new Error(`File not in offline cache: ${url}`);
+            return await blob.text();
+        }
+
+        const headers = options.headers instanceof Headers ? options.headers : new Headers(options.headers || {});
+        const baseHeaders = this._getHeaders(scopeId !== 'default');
+        baseHeaders.forEach((value, key) => {
+            if (!headers.has(key)) headers.set(key, value);
+        });
+
+        let res = await fetch(url, { ...options, headers });
+
+        if (res.status === 401) {
+            const retryRes = await this._attemptReAuthAndRetry(url, { ...options, headers }, scopeId !== 'default');
+            if (retryRes) res = retryRes;
+        }
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const textContent = await res.text();
+        const type = res.headers.get('content-type') || 'text/plain';
+
+        // Quietly warm the cache for free
+        SutramDB.cacheVFSBlob(scopeId, cacheKeyUrl, new Blob([textContent], { type })).catch(()=>{});
+
+        return textContent;
+    },
     request: async function(url, options = {}, scopeId = 'default') {
         const method = options.method ? options.method.toUpperCase() : 'GET';
 
@@ -202,9 +238,9 @@ class SSEPipeline {
         if (this.source) return;
         const token = window.inSetu.stores?.App?.getState()?.authToken || sessionStorage.getItem('insetu_boot_token');
         this.source = new EventSource(`/api/system/stream?token=${token}`);
-
         this.source.onopen = () => {
             this.isConnected = true;
+            console.log("🟢 [SSE TELEMETRY] Connected to real-time system stream. Fallback polling relaxed.");
         };
         this.source.addEventListener('vfs_mutated', (e) => {
             const data = JSON.parse(e.data);
@@ -272,10 +308,11 @@ class SSEPipeline {
                 }
             }
         });
-        this.source.onerror = () => {
+        this.source.onerror = (err) => {
             this.isConnected = false;
             this.source.close();
             this.source = null;
+            console.warn("🔴 [SSE TELEMETRY] Stream disconnected. Degrading to 3s fallback polling. Reconnecting in 5s...");
             if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
             this.reconnectTimer = setTimeout(() => this.connect(), 5000);
         };

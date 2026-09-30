@@ -638,15 +638,18 @@ def generate_context_file(workspace_id=None, target_repos=None):
     for f_path in active_ephemerals:
         if f_path.startswith(paths["contexts_dir"]) and f_path not in restored_ephemerals:
             f_name = Path(f_path).name
-            size_bytes = os.path.getsize(f_path) if os.path.exists(f_path) else 0
-            is_quickpack = f_name.startswith(('quickpack_', 'selection_'))
-            domain_name = "Quickpacks" if is_quickpack else "Exported Contexts"
-            title_name = "⚡ Quickpack" if is_quickpack else f"📦 {f_name.replace('.txt','')}"
             uri_key = f"ctx://contexts/{f_name}"
-            manifest[uri_key] = {
-                "files": [uri_key],
-                "meta": {"type": "gather", "title": title_name, "domain": domain_name, "desc": "Ephemeral context payload.", "size_bytes": size_bytes}
-            }
+            if uri_key in old_manifest:
+                manifest[uri_key] = old_manifest[uri_key]
+            else:
+                size_bytes = os.path.getsize(f_path) if os.path.exists(f_path) else 0
+                is_quickpack = f_name.startswith(('quickpack_', 'selection_'))
+                domain_name = "Quickpacks" if is_quickpack else "Exported Contexts"
+                title_name = "⚡ Quickpack" if is_quickpack else f"📦 {f_name.replace('.txt','')}"
+                manifest[uri_key] = {
+                    "files": [uri_key],
+                    "meta": {"type": "gather", "title": title_name, "domain": domain_name, "desc": "Ephemeral context payload.", "size_bytes": size_bytes}
+                }
     # Add tombstones and execute targeted physical vacuum for orphaned contexts 
     # to prevent Targeted Sweeps from leaking empty bucket artifacts.
     for k, v in old_manifest.items():
@@ -663,16 +666,17 @@ def generate_context_file(workspace_id=None, target_repos=None):
     ctx.save_manifest(manifest, is_full_compile=False)
     ctx.sync_vfs_barrier()
     return [k for k, v in manifest.items() if v is not None]
-
 @gather_bp.worker("pack_selection_task")
-def _pack_selection_worker(ctx, items=None, job_id=None, **kwargs):
+def _pack_selection_worker(ctx, items=None, gather_only=True, job_id=None, **kwargs):
     if items is None:
         items = kwargs.get('items', [])
-    
+    if 'gather_only' in kwargs:
+        gather_only = kwargs['gather_only']
+
     if not items:
         return {"message": "No valid files selected for compilation."}
     ctx.jobs.update_progress("Compiling selected files into context payload...")
-    files = ctx.expand_selection(items)
+    files = ctx.expand_selection(items, gather_only=gather_only)
     clean_tree_files = []
     for f in files:
         f_uri = InSetuURI(f)
@@ -757,18 +761,19 @@ def api_clear_quickpacks(ctx):
     conn.commit()
 
     return jsonify({"status": "success", "message": f"Cleared {len(keys_to_delete)} quickpacks."})
-from typing import TypedDict, List, Dict, Any
-
-class PackSelectionPayload(TypedDict):
+from typing import TypedDict, List, Dict, Any, Optional
+class PackSelectionPayload(TypedDict, total=False):
     items: List[Dict[str, str]]
+    gather_only: Optional[bool]
 
 @gather_bp.route('pack_selection', methods=['POST'], request_schema=PackSelectionPayload, docstring="Compiles a specific list of files into a downloadable Quickpack context. 'items' should be a list of dicts with a 'filepath' key.")
 def api_gather_pack_selection(ctx):
     data = ctx.req.json or {}
     items = data.get('items', [])
+    gather_only = data.get('gather_only', True)
     if not items:
         return jsonify({"error": "Items list required."}), 400
-    job_id = ctx.jobs.submit("pack_selection_task", job_category="ui_blocking", items=items)
+    job_id = ctx.jobs.submit("pack_selection_task", job_category="ui_blocking", items=items, gather_only=gather_only)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @gather_bp.worker("compile_contexts")
 def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=None, job_id=None, **kwargs):

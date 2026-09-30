@@ -154,6 +154,14 @@ if (typeof window !== 'undefined') {
     window.inSetu.utils.getFlattenedBuckets = getFlattenedBuckets;
     window.inSetu.sys.getFlattenedBuckets = getFlattenedBuckets;
 }
+let _lastPackSelection = null;
+let _lastPackItemsHash = '';
+
+window.addEventListener('insetu:vfs-mutated', () => {
+    _lastPackSelection = null;
+    _lastPackItemsHash = '';
+});
+
 const packSelectionPayload = async (items) => {
     const payloadItems = items.map(i => {
         const d = i.data || i;
@@ -161,15 +169,37 @@ const packSelectionPayload = async (items) => {
         if (d?.filepath) return { filepath: d.filepath };
         return null;
     }).filter(i => i !== null);
-
     if (payloadItems.length === 0) throw new Error("No valid items to pack.");
+
+    // Stateful Hash: Incorporate the live VFS/CTX manifest timestamps into the hash.
+    // If a file is edited, its timestamp changes, naturally busting this cache statelessly.
+    const manifest = window.inSetu?.stores?.App?.getState()?.manifest || { vfs: {}, ctx: {} };
+    const statefulItems = payloadItems.map(p => {
+        const fp = p.filepath || p.folderpath;
+        let ts = 0;
+        if (manifest.ctx && manifest.ctx[fp]) ts = manifest.ctx[fp].meta?.timestamp || 0;
+        return `${fp}@${ts}`;
+    });
+
+    const itemsHash = JSON.stringify(statefulItems);
+    if (_lastPackItemsHash === itemsHash && _lastPackSelection) {
+        return _lastPackSelection;
+    }
     const res = await window.inSetu.api.workspace.post('gather/pack_selection', { items: payloadItems });
     if (!res.ok) throw new Error("Failed to queue compilation.");
     const data = await res.json();
+    if (data.job_id === 'offline_queue') {
+        throw new Error("Quickpack compilation requires an active network connection.");
+    }
     return new Promise((resolve, reject) => {
         window.inSetu.utils.pollJob(data.job_id, {
             onProgress: (msg) => { if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null); },
             onComplete: async (statusData) => {
+                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
+                    await window.inSetu.sys.refreshManifest();
+                }
+                _lastPackItemsHash = itemsHash;
+                _lastPackSelection = statusData.artifact;
                 resolve(statusData.artifact);
             },
             onError: (err) => reject(err)
@@ -266,7 +296,7 @@ export class InSetuExtGather extends InSetuElement {
         };
         this.registerGlobalListener('insetu:gather-compile-completed', window, (e) => handleGatherCompleted(e.detail || {}));
         this.registerGlobalListener('insetu:compile-step-complete', window, (e) => {
-            if (e.detail && e.detail.ext_name === 'gather' && (e.detail.artifact?.step_id === 'gather_base' || e.detail.artifact?.step_id === 'compile_contexts')) {
+            if (e.detail && e.detail.ext_name === 'gather') {
                 handleGatherCompleted(e.detail.artifact || {});
             }
         });
@@ -280,7 +310,7 @@ export class InSetuExtGather extends InSetuElement {
         super.disconnectedCallback();
     }
     onForceRefresh() {
-        this.loadContext(true);
+        this.loadContext(false);
     }
     async loadContext(forceFull = false) {
         GatherStore.setState({ loading: true });
@@ -406,13 +436,15 @@ export class InSetuExtGather extends InSetuElement {
                                         this.requestUpdate();
                                     }}
                                     style="--title-weight: bold; --title-size: 1.05rem; color: var(--text); background: transparent; border-left: none; border-right: none; border-radius: 0; box-shadow: none;">
-
                                     ${cat === 'Quickpacks' ? html`
                                         <sutram-async-btn slot="actions" label="Clear" intent="danger" .onClick=${async () => {
                                             try {
                                                 const res = await window.inSetu.api.workspace.post('gather/clear_quickpacks', {});
                                                 if (res.ok) {
                                                     const data = await res.json();
+                                                    if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
+                                                        await window.inSetu.sys.refreshManifest();
+                                                    }
                                                     if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message, 2000);
                                                 }
                                             } catch(e) {
@@ -574,16 +606,37 @@ window.ExtensionRegistry.registerExtension('gather', {
                 const d = i.data || i;
                 return d?.filepath || d?.folderpath;
             }),
-            asyncAction: async (items) => {
-                try {
-                    const artifact = await packSelectionPayload(items);
+            onClick: (items, e) => {
+                if (e) e.stopPropagation();
+
+                const payloadItems = items.map(i => {
+                    const d = i.data || i;
+                    if (d?.folderpath) return { folderpath: d.folderpath };
+                    if (d?.filepath) return { filepath: d.filepath };
+                    return null;
+                }).filter(i => i !== null);
+
+                const itemsHash = JSON.stringify(payloadItems);
+
+                // Synchronous Fast-Path if Quickpack already exists
+                if (_lastPackItemsHash === itemsHash && _lastPackSelection) {
                     window.inSetu.stores.Selection.getState().clearSelection();
-                    if (window.inSetu.vfs.shareFiles) {
-                        await window.inSetu.vfs.shareFiles(artifact.base_filename, artifact.chunks);
-                    }
-                } catch (err) {
-                    alert("Packing failed: " + err.message);
+                    window.inSetu.vfs.shareFiles(_lastPackSelection.base_filename, _lastPackSelection.chunks);
+                    return;
                 }
+
+                // First Tap: Execute background compilation and cache warm
+                if (window.inSetu.ui?.setGlobalStatus) {
+                    window.inSetu.ui.setGlobalStatus("⏳ Compiling Quickpack...", null);
+                }
+                packSelectionPayload(items).then(artifact => {
+                    _lastPackItemsHash = itemsHash;
+                    _lastPackSelection = artifact;
+                    window.inSetu.stores.Selection.getState().clearSelection();
+                    window.inSetu.vfs.shareFiles(artifact.base_filename, artifact.chunks);
+                }).catch(err => {
+                    alert("Packing failed: " + err.message);
+                });
             }
         }
     ]

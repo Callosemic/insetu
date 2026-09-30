@@ -876,7 +876,7 @@ def resolve_logical_path(path, workspace_id=None):
     # Fallback to standard sandbox resolution
     return ws_root_path.joinpath(clean_fallback).resolve().as_posix()
 @hooks.on('expand_selection')
-def hook_expand_selection(items=None, workspace_id=None, **kwargs):
+def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kwargs):
     if not items:
         return []
 
@@ -890,10 +890,40 @@ def hook_expand_selection(items=None, workspace_id=None, **kwargs):
             is_folder = uri.is_dir_physical(workspace_id) or uri.is_dir
 
             if is_folder or (uri.scheme == 'vfs' and uri.is_dir):
-                target_walk = str(uri)
-                for f in vfs.walk(target_walk):
-                    f_uri = InSetuURI.from_any(f)
-                    files.append(str(f_uri))
+                if gather_only:
+                    repo_dir = uri.repo
+                    folder_rel_path = uri.path.strip('/')
+
+                    gather_files = []
+                    if repo_dir:
+                        from insetu.core.topology.engine_topology import get_topology_files_for_repo as _get_topology_files_for_repo
+                        gather_files = _get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=False)
+                        if not gather_files:
+                            repo_path = get_repo_path(repo_dir, workspace_id)
+                            if os.path.exists(repo_path):
+                                cfg = load_config(workspace_id)
+                                target_configs = cfg.get("target_repos", [])
+                                repo_cfg = next((c for c in target_configs if c and c.get("repo_dir") == repo_dir), None)
+                                if repo_cfg:
+                                    from insetu.core.topology.engine_topology import get_valid_workspace_files as _get_valid_workspace_files
+                                    rel_valid = _get_valid_workspace_files(repo_path, repo_cfg, workspace_id)
+                                    gather_files = [f"{repo_dir}/{f}" for f in rel_valid]
+                    else:
+                        from akasa.db import get_connection as _get_connection
+                        conn = _get_connection("topology", workspace_id=workspace_id)
+                        rows = conn.execute("SELECT filepath FROM topology_ledger").fetchall()
+                        gather_files = [r['filepath'] for r in rows]
+
+                    for g_file in gather_files:
+                        g_uri = InSetuURI.from_any(g_file)
+                        g_rel_path = g_uri.path
+                        if not folder_rel_path or g_rel_path == folder_rel_path or g_rel_path.startswith(folder_rel_path + '/'):
+                            files.append(str(g_uri))
+                else:
+                    target_walk = str(uri)
+                    for f in vfs.walk(target_walk):
+                        f_uri = InSetuURI.from_any(f)
+                        files.append(str(f_uri))
             else:
                 if uri.scheme == 'ctx':
                     responses = hooks.emit('resolve_payload_chunks', uri=str(uri), workspace_id=workspace_id)

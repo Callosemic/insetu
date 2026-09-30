@@ -540,7 +540,11 @@ export class InSetuExtBridge extends InSetuElement {
                     ${(() => {
                         const safePatches = t.patches || [];
                         if (safePatches.length === 0) {
-                            return html`<div style="padding: 15px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text-muted); font-style: italic;">No patch data available for this transaction.</div>`;
+                            return html`
+                                <div style="padding: 15px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text-muted); font-style: italic;">
+                                    ${t.message ? html`<span style="color: var(--intent-danger); font-weight: bold; white-space: pre-wrap;">[Backend Error] ${t.message}</span>` : 'No patch data available for this transaction.'}
+                                </div>
+                            `;
                         }
                         const groupedPatches = safePatches.reduce((acc, p) => {
                             const file = p.resolved_file || p.original_file || 'Unknown File';

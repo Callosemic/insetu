@@ -14,6 +14,7 @@ from pathlib import Path
 from akasa.utils import get_workspace_physics
 from insetu.core.utils_core import get_sister_repos, parse_blocks
 from insetu.core.topology.engine_topology import get_omniscient_workspace_files
+from akasa.hooks import hooks
 from akasa.vfs import VFSTransaction
 from .bridge_fuzzy import apply_block_in_memory, clean_chevron_meltdown, expand_macros, is_effectively_identical
 def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
@@ -168,9 +169,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
 
                 if not cand_list and len(allowed_repos) == 1:
                     cand_list.append({"filepath": f"{allowed_repos[0]}/{norm_target}", "score": 1.0, "match_type": "genesis_pinned"})
-
                 if cand_list:
-                    confirmed = data.get("confirmed_candidates", {}).get(target_file)
+                    confirmed = (data.get("confirmed_candidates") or {}).get(target_file)
                     if confirmed and any(c["filepath"] == confirmed for c in cand_list):
                         pctx.resolved_path = confirmed
                         pctx.resolution_type = "confirmed_candidate"
@@ -187,9 +187,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     telemetry["can_commit"] = False
                     pctx.handled = True
                     return
-
                 if get_file_content(pctx.resolved_path) is not None:
-                    if target_file not in data.get("confirmed_candidates", {}):
+                    if target_file not in (data.get("confirmed_candidates") or {}):
                         patch_tel.update({
                             "status": "needs_confirmation", "error_message": f"File '{pctx.resolved_path}' already exists on disk. Confirm to overwrite.",
                             "candidates": [{"filepath": pctx.resolved_path, "score": 1.0, "match_type": "overwrite"}]
@@ -255,7 +254,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                         telemetry["summary"]["auto_skipped"] += 1
                     pctx.handled = True
                 elif best_search_cand or best_replace_cand:
-                    confirmed = data.get("confirmed_candidates", {}).get(target_file)
+                    confirmed = (data.get("confirmed_candidates") or {}).get(target_file)
                     if confirmed and any(c["filepath"] == confirmed for c in cand_list):
                         pctx.resolved_path = confirmed
                         pctx.resolution_type = "confirmed_candidate"
@@ -316,7 +315,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                             if ok_search and s_status != "idempotent":
                                 cand_list.append({"filepath": cand_rel, "score": 1.0, "match_type": "deep_search"})
                     if cand_list:
-                        confirmed = data.get("confirmed_candidates", {}).get(target_file)
+                        confirmed = (data.get("confirmed_candidates") or {}).get(target_file)
                         if confirmed and any(c["filepath"] == confirmed for c in cand_list):
                             pctx.resolved_path = confirmed
                             pctx.resolution_type = "confirmed_candidate"
@@ -558,12 +557,13 @@ def execute_bridge_sync(workspace_id, data):
             telemetry = _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root)
             return json.dumps(telemetry)
     except Exception as e:
+        import traceback
         return json.dumps({
             "transaction_id": "tx_aborted",
             "mode": "live",
             "status": "failed",
             "can_commit": False,
-            "message": f"System processing fault: {str(e)}",
+            "message": f"System processing fault:\n{traceback.format_exc()}",
             "summary": {"total_patches": 0, "resolved": 0, "auto_skipped": 0, "action_required": 0, "failed": 1},
             "patches": []
         })
