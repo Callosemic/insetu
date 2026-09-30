@@ -126,6 +126,10 @@ class BackendFitnessVisitor(ast.NodeVisitor):
 
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         if is_ext:
+            if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'os' and node.func.attr in ('exists', 'isfile', 'isdir'):
+                if len(node.args) > 0 and isinstance(node.args[0], ast.Call) and getattr(node.args[0].func, 'attr', '') == 'resolve_path':
+                    report_violation("RESOLVE_PATH_MUST_EXIST_MANDATE", self.filepath, node.lineno, "Manual os.path.exists(ctx.resolve_path(...)) detected. Pass must_exist=True to ctx.resolve_path() instead.")
+
             if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'os' and node.func.attr == 'walk':
                 report_violation("SDK_VFS_WALK_MANDATE", self.filepath, node.lineno, "Raw os.walk() detected in extension. Use ctx.vfs.walk() instead.")
             if isinstance(node.func, ast.Name) and node.func.id == 'open':
