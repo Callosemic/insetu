@@ -164,8 +164,8 @@ def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
         canonical_rel_path = f"{repo_dir}/{clean_rel}" if repo_dir else clean_rel
         if ".tracker/" in canonical_rel_path and canonical_rel_path.endswith(".md"):
             if op in ("save", "added", "modified", "create", "created"):
-                abs_path = ctx.resolve_path(canonical_rel_path)
-                if abs_path and os.path.exists(abs_path):
+                abs_path = ctx.resolve_path(canonical_rel_path, must_exist=True)
+                if abs_path:
                     _parse_and_upsert_ticket(abs_path, canonical_rel_path, workspace_id)
                     # Offload single-file AST enforcement to prevent synchronous write-blocking
                     ctx.jobs.submit("enforce_tickets_task", specific_file=canonical_rel_path, job_category="system_background")
@@ -244,7 +244,7 @@ def _sync_disk_to_db(workspace_id=None):
         repo_files = get_topology_files_for_repo(workspace_id, repo, strip_prefix=False)
         tracker_files = [f for f in repo_files if '.tracker/' in f and f.endswith('.md')]
         for ws_rel_path in tracker_files:
-            abs_path = ctx.resolve_path(ws_rel_path)
+            abs_path = ctx.resolve_path(ws_rel_path, must_exist=True)
             if abs_path:
                 _parse_and_upsert_ticket(abs_path, ws_rel_path, workspace_id)
 
@@ -765,9 +765,9 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                 intended_filename = f"{decl_id}.md"
                 intended_rel_path = f"{intended_dir}/{intended_filename}"
                 current_rel_path = ws_rel_path
-                intended_path = ctx.resolve_path(intended_rel_path)
+                intended_path = ctx.resolve_path(intended_rel_path, must_exist=True)
                 # Self-Healing: Duplicate / Ghost File Detection
-                if intended_path and current_rel_path.lower() != intended_rel_path.lower() and Path(intended_path).exists():
+                if intended_path and current_rel_path.lower() != intended_rel_path.lower():
                     current_mtime = Path(filepath).stat().st_mtime
                     intended_mtime = Path(intended_path).stat().st_mtime
 

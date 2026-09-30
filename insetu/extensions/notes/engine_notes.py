@@ -72,7 +72,7 @@ def mount_notes_volumes(workspace_id=None, **kwargs):
 
     try:
         for rel_path in ctx.vfs.walk("ctx://notes", exts=['.md']):
-            abs_path = ctx.resolve_path(rel_path)
+            abs_path = ctx.resolve_path(rel_path, must_exist=True)
             if abs_path:
                 _parse_and_upsert_note(abs_path, rel_path, workspace_id)
     except Exception:
@@ -120,8 +120,8 @@ def handle_notes_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
         filepath = m.get("filepath", "")
         if filepath.startswith("ctx://notes/") and filepath.endswith(".md"):
             if m.get("operation") == "save":
-                abs_path = ctx.resolve_path(filepath)
-                if abs_path and os.path.exists(abs_path):
+                abs_path = ctx.resolve_path(filepath, must_exist=True)
+                if abs_path:
                     _parse_and_upsert_note(abs_path, filepath, workspace_id)
             elif m.get("operation") == "delete":
                 ctx.db.delete("notes_ledger", "filepath", filepath)
@@ -131,7 +131,7 @@ def api_notes_list(ctx):
     count_check = ctx.db.execute("SELECT count(*) FROM notes_ledger").fetchone()[0]
     if count_check == 0:
         for rel_path in ctx.vfs.walk("ctx://notes", exts=['.md']):
-            abs_path = ctx.resolve_path(rel_path)
+            abs_path = ctx.resolve_path(rel_path, must_exist=True)
             if abs_path:
                 _parse_and_upsert_note(abs_path, rel_path, ctx.workspace_id)
     
