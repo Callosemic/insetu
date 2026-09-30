@@ -19,7 +19,7 @@ def _background_format_code(ctx, filepath=None, **kwargs):
         raise ValueError("Filepath is required for code formatting.")
 
     abs_path = ctx.resolve_path(filepath)
-    if not os.path.exists(abs_path):
+    if not abs_path or not os.path.exists(abs_path):
         raise FileNotFoundError(f"Target file not found: {filepath}")
 
     ext = Path(filepath).suffix.lower()

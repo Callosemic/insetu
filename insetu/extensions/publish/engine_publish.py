@@ -75,11 +75,12 @@ def compile_document_payload(workspace_id, filepath, target_format):
         c_text = ctx.vfs.read(c, is_absolute_artifact=is_sys)
         if c_text:
             content += c_text + "\n\n"
-
     if not content.strip():
         raise FileNotFoundError("File not found or empty.")
 
     resolved_path = ctx.resolve_path(chunks[0] if chunks else filepath)
+    if not resolved_path:
+        raise FileNotFoundError("Target file path could not be resolved.")
 
     temp_files = {}
     compiler_flags = []
