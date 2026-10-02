@@ -443,15 +443,25 @@ def api_emergency_dump():
             
             buckets = {
                 "akasa.txt": [],
-                "vendor.txt": [],
                 "extensions.txt": [],
                 "core.txt": [],
                 "misc.txt": []
             }
             
             for rel_path, filepath in matched_entries:
-                if "/vendor/" in rel_path or "vendor.json" in rel_path:
-                    buckets["vendor.txt"].append((rel_path, filepath))
+                if "/vendor/" in rel_path:
+                    try:
+                        vendor_name = rel_path.split('/vendor/')[1].split('/')[0]
+                    except IndexError:
+                        vendor_name = "misc"
+                    bucket_key = f"vendor_{vendor_name}.txt"
+                    if bucket_key not in buckets:
+                        buckets[bucket_key] = []
+                    buckets[bucket_key].append((rel_path, filepath))
+                elif "vendor.json" in rel_path:
+                    if "vendor_config.txt" not in buckets:
+                        buckets["vendor_config.txt"] = []
+                    buckets["vendor_config.txt"].append((rel_path, filepath))
                 elif rel_path.startswith("akasa/"):
                     buckets["akasa.txt"].append((rel_path, filepath))
                 elif rel_path.startswith("insetu/insetu/extensions/"):

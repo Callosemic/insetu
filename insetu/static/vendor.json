@@ -94,6 +94,11 @@
             "path": "vendor/codemirror/lang-css.js",
             "version": "6.0.0",
             "range": ">=6.0.0 && <7.0.0"
+        },
+        "lucide": {
+            "path": "https://unpkg.com/lucide@latest",
+            "version": "latest",
+            "range": ">=0.0.0"
         }
     }
 }
