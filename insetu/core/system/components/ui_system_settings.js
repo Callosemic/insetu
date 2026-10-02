@@ -13,17 +13,28 @@ export class InSetuSystemSettings extends InSetuElement {
         workspaces: { type: Object },
         emoji: { type: String },
         currentTheme: { type: String },
+        layoutCapacity: { type: Number },
         _sysConfigForm: { type: Object },
         _sysConfigMeta: { type: Object }
     };
     static styles = [sharedStyles, css`
-        :host { display: contents; }
+        :host { display: flex; align-items: stretch; height: 100%; }
+        .menu-btn { transition: background 0.2s, border-color 0.2s; }
+        .menu-btn:hover { background: color-mix(in srgb, var(--text) 8%, transparent) !important; }
+        .menu-btn.active { background: color-mix(in srgb, var(--text) 15%, transparent) !important; border: 1px solid var(--border) !important; }
+
+        :host-context([data-theme="light"]) .menu-btn:hover { background: color-mix(in srgb, var(--text) 3%, transparent) !important; }
+        :host-context([data-theme="light"]) .menu-btn.active { background: color-mix(in srgb, var(--text) 4%, transparent) !important; }
         :host-context([data-theme="e-ink"]) .menu-btn {
             border: 1px solid transparent !important;
             box-shadow: none !important;
         }
+        :host-context([data-theme="e-ink"]) .menu-btn:hover {
+            background: transparent !important;
+        }
         :host-context([data-theme="e-ink"]) .menu-btn.active {
-            border: 2px solid #000 !important;
+            background: transparent !important;
+            border: 2px solid var(--intent-primary) !important;
         }
     `];
     constructor() {
@@ -35,8 +46,9 @@ export class InSetuSystemSettings extends InSetuElement {
         this._docsStatus = null;
         this.activeTab = 'system';
         this.workspaces = {};
-        this.emoji = '⚙️';
+        this.emoji = '⚙️️';
         this.currentTheme = document.body.getAttribute('data-theme') || 'dark';
+        this.layoutCapacity = 3;
         this._sysConfigForm = {};
         this._sysConfigMeta = {};
         this._handleOutsideClick = this._handleOutsideClick.bind(this);
@@ -86,11 +98,20 @@ export class InSetuSystemSettings extends InSetuElement {
             this.workspaces = state.workspaces || {};
             this.emoji = state.instanceEmoji || '⚙️';
         });
+        this.subscribe('Layout', state => {
+            this.layoutCapacity = state.capacity || 3;
+        });
         this.registerGlobalListener('click', document, this._handleOutsideClick);
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
+    }
+
+    updated(changedProperties) {
+        super.updated(changedProperties);
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons({ root: this.shadowRoot });
+        }
     }
 
     _handleOutsideClick(e) {
@@ -104,6 +125,12 @@ export class InSetuSystemSettings extends InSetuElement {
         this.currentTheme = theme;
         document.body.setAttribute('data-theme', theme);
         localStorage.setItem('insetu_theme', theme);
+        this.menuOpen = false;
+    }
+    _setLayoutCapacity(cap) {
+        if (window.Sutram?.stores?.Layout) {
+            window.Sutram.stores.Layout.getState().setCapacity(cap);
+        }
         this.menuOpen = false;
     }
     async _openSettings() {
@@ -224,49 +251,90 @@ export class InSetuSystemSettings extends InSetuElement {
                 <span>${label}</span>
             </button>
         `;
-
         return html`
-            <div style="position: relative; display: inline-block;">
-                <button class="system-action-btn" @click=${() => this.menuOpen = !this.menuOpen}>${this.emoji}</button>
+            <div style="position: relative; display: flex; align-items: stretch; height: 100%;">
+                <button class="masthead-action-rail-cell" @click=${() => this.menuOpen = !this.menuOpen} style="border: none; margin: 0; border-left: 1px solid var(--border); border-radius: 0; height: 100%; width: 44px; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
+                    <i data-lucide="settings" style="width: 16px; height: 16px;"></i>
+                </button>
                 ${this.menuOpen ? html`
-                    <div style="position: absolute; top: 100%; right: 0; margin-top: 10px; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); width: 280px; z-index: 2000; overflow: hidden; padding: 15px;">
-                        <h4 style="margin: 0 0 10px 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; font-size: 1.05rem; color: var(--text);">System</h4>
-                        <div style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px;">
-                            <button class="menu-btn" @click=${() => this._openSettings()} style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 6px; border: 1px solid transparent; border-radius: 4px; cursor: pointer; font-weight: normal; display: flex; align-items: center; gap: 8px; transition: background 0.2s;" onmouseover="this.style.background='var(--input-bg)'" onmouseout="this.style.background='transparent'">
-                                <span style="font-size: 1.1rem;">⚙️</span> <span>Settings Hub</span>
-                            </button>
-                            <button class="menu-btn" @click=${() => this._openDocsModal()} style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 6px; border: 1px solid transparent; border-radius: 4px; cursor: pointer; font-weight: normal; display: flex; align-items: center; gap: 8px; transition: background 0.2s;" onmouseover="this.style.background='var(--input-bg)'" onmouseout="this.style.background='transparent'">
-                                <span style="font-size: 1.1rem;">📖</span> <span>Documentation</span>
-                            </button>
-                            <button class="menu-btn" @click=${() => { this.menuOpen = false; if(window.inSetu.sys.fullRefresh) window.inSetu.sys.fullRefresh(); }} style="margin: 0; background: transparent; color: #ef4444; text-align: left; padding: 6px; border: 1px solid transparent; border-radius: 4px; cursor: pointer; font-weight: normal; display: flex; align-items: center; gap: 8px; transition: background 0.2s;" onmouseover="this.style.background='var(--input-bg)'" onmouseout="this.style.background='transparent'">
-                                <span style="font-size: 1.1rem;">🔄</span> <span>Full UI Refresh</span>
-                            </button>
+                    <div style="position: absolute; top: 100%; right: 0; margin-top: 5px; background: var(--pane-bg); background: color-mix(in srgb, var(--pane-bg) 95%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--overlay-shadow); width: 280px; z-index: 2000; max-height: calc(100dvh - 85px); overflow-y: auto; box-sizing: border-box; padding: 15px; display: flex; flex-direction: column; gap: 18px;">
+                        <div style="display: flex; flex-direction: column; gap: 6px;">
+                            <div style="display: flex; align-items: center; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--intent-primary); border-bottom: 1px solid color-mix(in srgb, var(--intent-primary) 30%, transparent); padding: 0 14px 4px 14px;">System</div>
+                            <div style="display: flex; flex-direction: column; gap: 2px;">
+                                <button class="menu-btn" @click=${() => this._openSettings()} style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 8px 14px; border: 1px solid transparent; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-family: var(--font-mono, monospace); font-weight: normal; display: flex; align-items: center; gap: 8px;">
+                                    <div style="display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex-shrink: 0;"><i data-lucide="settings-2" style="width: 14px; height: 14px; color: var(--text-muted);"></i></div> <span>Settings Hub</span>
+                                </button>
+                                <button class="menu-btn" @click=${() => this._openDocsModal()} style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 8px 14px; border: 1px solid transparent; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-family: var(--font-mono, monospace); font-weight: normal; display: flex; align-items: center; gap: 8px;">
+                                    <div style="display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex-shrink: 0;"><i data-lucide="book" style="width: 14px; height: 14px; color: var(--text-muted);"></i></div> <span>Documentation</span>
+                                </button>
+                                <button class="menu-btn" @click=${() => { this.menuOpen = false; if(window.inSetu.sys.fullRefresh) window.inSetu.sys.fullRefresh(); }} style="margin: 0; background: transparent; color: #ef4444; text-align: left; padding: 8px 14px; border: 1px solid transparent; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-family: var(--font-mono, monospace); font-weight: normal; display: flex; align-items: center; gap: 8px;">
+                                    <div style="display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex-shrink: 0;"><i data-lucide="refresh-cw" style="width: 14px; height: 14px; color: #ef4444;"></i></div> <span>Force UI Refresh</span>
+                                </button>
+                            </div>
                         </div>
 
                         ${Object.keys(this.workspaces).length > 1 ? html`
-                            <h4 style="margin: 0 0 10px 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; font-size: 1.05rem; color: var(--text);">Workspace: <span style="color: var(--intent-primary);">${this.workspaces[activeWs]?.title || activeWs}</span></h4>
-                            <div style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px;">
-                                ${Object.entries(this.workspaces).filter(([key, _]) => key !== activeWs).map(([key, ws]) => html`
-                                    <button class="menu-btn" style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; border-radius: 4px; font-weight: normal; transition: background 0.2s;"
-                                        onmouseover="this.style.background='var(--input-bg)'" onmouseout="this.style.background='transparent'"
-                                        @click=${(e) => { 
-                                            e.stopPropagation(); 
-                                            this.menuOpen = false; 
-                                            if (window.inSetu.sys.executeWorkspaceSwap) {
-                                                window.inSetu.sys.executeWorkspaceSwap(key, ws.title);
-                                            }
-                                        }}>
-                                        📁 ${ws.title || key}
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <div style="display: flex; align-items: center; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); border-bottom: 1px solid var(--border); padding: 0 14px 4px 14px;">Workspace</div>
+                                <div style="display: flex; flex-direction: column; gap: 2px;">
+                                    <button class="menu-btn active" style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 8px 14px; border: 1px solid transparent; border-radius: 6px; cursor: default; font-size: 0.85rem; font-family: var(--font-mono, monospace); font-weight: normal; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <div style="display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex-shrink: 0;"><i data-lucide="package" style="width: 14px; height: 14px; color: var(--intent-primary);"></i></div>
+                                            <span>${this.workspaces[activeWs]?.title || activeWs}</span>
+                                        </div>
+                                        <i data-lucide="check" style="width: 14px; height: 14px; color: var(--intent-primary);"></i>
                                     </button>
-                                `)}
+                                    ${Object.entries(this.workspaces).filter(([key, _]) => key !== activeWs).map(([key, ws]) => html`
+                                        <button class="menu-btn" style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 8px 14px; border: 1px solid transparent; cursor: pointer; border-radius: 6px; font-size: 0.85rem; font-family: var(--font-mono, monospace); font-weight: normal; display: flex; align-items: center; gap: 8px;"
+                                            @click=${(e) => { 
+                                                e.stopPropagation(); 
+                                                this.menuOpen = false; 
+                                                if (window.inSetu.sys.executeWorkspaceSwap) {
+                                                    window.inSetu.sys.executeWorkspaceSwap(key, ws.title);
+                                                }
+                                            }}>
+                                            <div style="display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex-shrink: 0;"><i data-lucide="layout-grid" style="width: 14px; height: 14px; color: var(--text-muted);"></i></div>
+                                            <span>${ws.title || key}</span>
+                                        </button>
+                                    `)}
+                                </div>
                             </div>
                         ` : ''}
 
-                        <h4 style="margin: 0 0 10px 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; font-size: 1.05rem; color: var(--text);">Theme: <span style="color: var(--intent-primary); text-transform: capitalize;">${this.currentTheme}</span></h4>
-                        <div style="display: flex; flex-direction: column; gap: 5px;">
-                            ${this.currentTheme !== 'light' ? html`<button class="menu-btn" style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: normal; border-radius: 4px; transition: background 0.2s;" onmouseover="this.style.background='var(--input-bg)'" onmouseout="this.style.background='transparent'" @click=${() => this._setTheme('light')}>☀️ Light</button>` : ''}
-                            ${this.currentTheme !== 'dark' ? html`<button class="menu-btn" style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: normal; border-radius: 4px; transition: background 0.2s;" onmouseover="this.style.background='var(--input-bg)'" onmouseout="this.style.background='transparent'" @click=${() => this._setTheme('dark')}>🌙 Dark</button>` : ''}
-                            ${this.currentTheme !== 'e-ink' ? html`<button class="menu-btn" style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: normal; border-radius: 4px; transition: background 0.2s;" onmouseover="this.style.background='var(--input-bg)'" onmouseout="this.style.background='transparent'" @click=${() => this._setTheme('e-ink')}>📖 E-Ink</button>` : ''}
+                        <div style="display: flex; flex-direction: column; gap: 6px;">
+                            <div style="display: flex; align-items: center; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); border-bottom: 1px solid var(--border); padding: 0 14px 4px 14px;">Display Theme</div>
+                            <div style="display: flex; gap: 4px;">
+                                <button class="menu-btn ${this.currentTheme === 'dark' ? 'active' : ''}" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; margin: 0; background: transparent; color: var(--text); padding: 8px; border: 1px solid transparent; cursor: pointer; border-radius: 6px; font-size: 0.8rem; font-family: var(--font-mono, monospace);" @click=${() => this._setTheme('dark')}>
+                                    <i data-lucide="moon" style="width: 16px; height: 16px; color: ${this.currentTheme === 'dark' ? 'var(--intent-primary)' : 'var(--text-muted)'};"></i>
+                                    Dark
+                                </button>
+                                <button class="menu-btn ${this.currentTheme === 'light' ? 'active' : ''}" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; margin: 0; background: transparent; color: var(--text); padding: 8px; border: 1px solid transparent; cursor: pointer; border-radius: 6px; font-size: 0.8rem; font-family: var(--font-mono, monospace);" @click=${() => this._setTheme('light')}>
+                                    <i data-lucide="sun" style="width: 16px; height: 16px; color: ${this.currentTheme === 'light' ? 'var(--intent-primary)' : 'var(--text-muted)'};"></i>
+                                    Light
+                                </button>
+                                <button class="menu-btn ${this.currentTheme === 'e-ink' ? 'active' : ''}" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; margin: 0; background: transparent; color: var(--text); padding: 8px; border: 1px solid transparent; cursor: pointer; border-radius: 6px; font-size: 0.8rem; font-family: var(--font-mono, monospace);" @click=${() => this._setTheme('e-ink')}>
+                                    <i data-lucide="book-open" style="width: 16px; height: 16px; color: ${this.currentTheme === 'e-ink' ? 'var(--intent-primary)' : 'var(--text-muted)'};"></i>
+                                    E-Ink
+                                </button>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; flex-direction: column; gap: 6px;">
+                            <div style="display: flex; align-items: center; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); border-bottom: 1px solid var(--border); padding: 0 14px 4px 14px;">Viewport Grid</div>
+                            <div style="display: flex; gap: 4px;">
+                                <button class="menu-btn ${this.layoutCapacity === 1 ? 'active' : ''}" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; margin: 0; background: transparent; color: var(--text); padding: 8px; border: 1px solid transparent; cursor: pointer; border-radius: 6px; font-size: 0.8rem; font-family: var(--font-mono, monospace);" @click=${() => this._setLayoutCapacity(1)}>
+                                    <i data-lucide="smartphone" style="width: 16px; height: 16px; color: ${this.layoutCapacity === 1 ? 'var(--intent-primary)' : 'var(--text-muted)'};"></i>
+                                    1-Col
+                                </button>
+                                <button class="menu-btn ${this.layoutCapacity === 2 ? 'active' : ''}" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; margin: 0; background: transparent; color: var(--text); padding: 8px; border: 1px solid transparent; cursor: pointer; border-radius: 6px; font-size: 0.8rem; font-family: var(--font-mono, monospace);" @click=${() => this._setLayoutCapacity(2)}>
+                                    <i data-lucide="tablet" style="width: 16px; height: 16px; color: ${this.layoutCapacity === 2 ? 'var(--intent-primary)' : 'var(--text-muted)'};"></i>
+                                    2-Col
+                                </button>
+                                <button class="menu-btn ${this.layoutCapacity === 3 ? 'active' : ''}" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; margin: 0; background: transparent; color: var(--text); padding: 8px; border: 1px solid transparent; cursor: pointer; border-radius: 6px; font-size: 0.8rem; font-family: var(--font-mono, monospace);" @click=${() => this._setLayoutCapacity(3)}>
+                                    <i data-lucide="monitor" style="width: 16px; height: 16px; color: ${this.layoutCapacity === 3 ? 'var(--intent-primary)' : 'var(--text-muted)'};"></i>
+                                    3-Col
+                                </button>
+                            </div>
                         </div>
                     </div>
                 ` : ''}
@@ -657,13 +725,20 @@ window.addEventListener('sutram-settings-action', async (e) => {
 window.addEventListener('sutram-settings-save', async (e) => {
     const { extName, formData, btn, origText } = e.detail;
     const schema = window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas?.[extName] || window.ExtensionRegistry?._manifests?.get(extName)?.settingsSchema || [];
-
     try {
         const payload = {};
 
         schema.forEach(f => {
             if (f.type !== 'hidden') {
-                payload[f.id] = formData[f.id] !== undefined ? formData[f.id] : f.default;
+                let val = formData[f.id] !== undefined ? formData[f.id] : f.default;
+                if ((f.type === 'object' || f.type === 'json') && typeof val === 'string') {
+                    try {
+                        val = JSON.parse(val);
+                    } catch(err) {
+                        throw new Error(`Invalid JSON format in field: ${f.label || f.id}`);
+                    }
+                }
+                payload[f.id] = val;
             }
         });
 

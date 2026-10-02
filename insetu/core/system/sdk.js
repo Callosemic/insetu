@@ -508,15 +508,15 @@ window.inSetu.utils.formatDate = formatDate;
 window.inSetu.utils.timeAgo = timeAgo;
 window.inSetu.utils.coalescedAsync = coalescedAsync;
 window.inSetu.utils.nativeShareFiles = nativeShareFiles;
-
 window.inSetu.utils.formatArtifactSize = function(meta) {
     if (!meta) return "";
-    if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
-        const sizes = meta.chunk_sizes.map(s => Math.round(s / 1024));
-        return sizes.join(' + ') + " kb";
-    } else if (meta.size_bytes !== undefined) {
+    if (meta.size_bytes !== undefined) {
         const kb = Math.round(meta.size_bytes / 1024);
-        return kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
+        let sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
+        if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
+            sizeStr += ` / ${meta.chunk_sizes.length}`;
+        }
+        return sizeStr;
     }
     return "";
 };

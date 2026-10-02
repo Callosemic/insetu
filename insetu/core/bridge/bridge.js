@@ -189,6 +189,17 @@ export class InSetuExtBridge extends InSetuElement {
         sharedStyles,
         css`
             :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; }
+            .bridge-group-container {
+                padding: 15px 20px;
+                display: flex;
+                flex-direction: column;
+                border-bottom: 1px solid var(--border);
+            }
+            @container (max-width: 480px) {
+                .bridge-group-container {
+                    padding: 0;
+                }
+            }
         `
     ];
     constructor() {
@@ -281,6 +292,30 @@ export class InSetuExtBridge extends InSetuElement {
         });
         this.registerGlobalListener('insetu:bridge:cell-swap', window, (e) => this._handleSwap(e.detail.id));
 
+        // Listen for saves from the agnostic Editor Projection
+        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
+            const mutations = e.detail?.mutations || [];
+            mutations.forEach(m => {
+                if (m.operation === 'save' && m.filepath && m.filepath.startsWith('yomama://')) {
+                    const cellId = m.filepath.replace('yomama://', '');
+                    const buffer = window.inSetu.stores.Fs.getState().activeBuffers[m.filepath];
+                    if (buffer && buffer.content) {
+                        const text = buffer.content;
+                        const fileMatch = text.match(/^<<<<<<< FILE:\s*(.+)$/m);
+                        const newFile = fileMatch ? fileMatch[1].trim() : this._editCellOriginalFile;
+                        const rawContent = text.replace(/^<<<<<<< FILE:.*\n?/m, '').trim();
+
+                        BridgeStore.getState().updateCellFile(cellId, newFile);
+                        BridgeStore.getState().updateCellContent(cellId, rawContent);
+
+                        if (window.inSetu.ui?.setGlobalStatus) {
+                            window.inSetu.ui.setGlobalStatus("✅ Patch chunk updated", 2000);
+                        }
+                    }
+                }
+            });
+        });
+
         // Initial sync
         const bState = BridgeStore.getState();
         this.cells = bState.cells || [];
@@ -321,12 +356,41 @@ export class InSetuExtBridge extends InSetuElement {
             alert("Could not cleanly parse SEARCH/REPLACE blocks to swap. Ensure '=======' is on its own line.");
         }
     }
-
     _openEditorModal(cell) {
         this._editCellId = cell.id;
         this._editCellOriginalFile = cell.file;
-        this._editContent = `<<<<<<< FILE: ${cell.file}\n${cell.content}`;
-        this.requestUpdate();
+        const virtualUri = `yomama://${cell.id}`;
+
+        // Push the chunk into the agnostic multi-buffer store
+        window.inSetu.stores.Fs.getState().openBuffer(virtualUri, {
+            filename: virtualUri,
+            content: `<<<<<<< FILE: ${cell.file}\n${cell.content}`,
+            originalContent: `<<<<<<< FILE: ${cell.file}\n${cell.content}`,
+            fullText: `<<<<<<< FILE: ${cell.file}\n${cell.content}`,
+            isFS: false, // Prevents actual disk writes
+            forceEdit: true,
+            isMemoryOnly: true,
+            isSupportedEditor: true,
+            ext: 'js',
+            codeMode: 'javascript'
+        });
+
+        // Route the editor to the Center column
+        if (window.Sutram?.stores?.Layout) {
+            const layout = window.Sutram.stores.Layout.getState();
+            layout.pinToColumn('center', {
+                id: virtualUri,
+                component: 'insetu-editor-projection',
+                label: `Patch: ${cell.file.split('/').pop()}`,
+                extName: 'bridge',
+                targetParent: 'center'
+            });
+            layout.setFocusedColumn('center');
+            window.dispatchEvent(new CustomEvent('shell-subtab-changed', {
+                detail: { tabId: 'center', subId: virtualUri, isAlreadyActive: false },
+                bubbles: true, composed: true
+            }));
+        }
     }
     _navigateChunk(direction) {
         if (!this._editCellId) return;
@@ -648,41 +712,6 @@ export class InSetuExtBridge extends InSetuElement {
 
         return html`
             <div style="display: flex; flex-direction: column; flex: 1; overflow: hidden; background: var(--bg); height: 100%;">
-                <!-- EDITOR MODAL -->
-                ${(() => {
-                    const allCells = this.cells;
-                    const chunkIndex = allCells.findIndex(c => c.id === this._editCellId) + 1;
-                    const shortFile = this._editCellOriginalFile ? this._editCellOriginalFile.split('/').pop() : '';
-                    return html`
-                        <sutram-modal ?open=${!!this._editCellId} ?fullscreen=${true} ?flush=${true} titleText="Patch for ${shortFile}" @sutram-modal-closed=${() => this._editCellId = null}>
-                            <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--bg);">
-                                <div style="display: flex; align-items: stretch; background: var(--pane-bg); border-bottom: 1px solid var(--border); flex-shrink: 0; padding: 0;"
-                                    @touchstart=${this._handleHeaderTouchStart}
-                                    @touchend=${this._handleHeaderTouchEnd}>
-                                    ${allCells.length > 1 ? html`
-                                        <button @click=${() => this._navigateChunk(-1)} ?disabled=${chunkIndex === 1} style="width: 26px; padding: 0; background: ${chunkIndex === 1 ? 'var(--input-bg)' : 'var(--intent-highlight)'}; border: none; color: ${chunkIndex === 1 ? 'var(--text-muted)' : 'white'}; cursor: ${chunkIndex === 1 ? 'not-allowed' : 'pointer'}; font-size: 1.6rem; font-weight: bold; transition: filter 0.2s; display: flex; align-items: center; justify-content: center; opacity: ${chunkIndex === 1 ? '0.5' : '1'};" onmouseover="if(!this.disabled) this.style.filter='brightness(1.2)'" onmouseout="this.style.filter='none'">‹</button>
-                                    ` : ''}
-                                    <div style="flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 15px 20px;">
-                                        <span style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold; text-align: center;">Chunk ${chunkIndex} of ${allCells.length}</span>
-                                        <sutram-entity-actions entityType="yomama" .entityData=${{ id: this._editCellId, file: this._editCellOriginalFile, content: this._editContent }} style="justify-content: center;"></sutram-entity-actions>
-                                    </div>
-                                    ${allCells.length > 1 ? html`
-                                        <button @click=${() => this._navigateChunk(1)} ?disabled=${chunkIndex === allCells.length} style="width: 26px; padding: 0; background: ${chunkIndex === allCells.length ? 'var(--input-bg)' : 'var(--intent-highlight)'}; border: none; color: ${chunkIndex === allCells.length ? 'var(--text-muted)' : 'white'}; cursor: ${chunkIndex === allCells.length ? 'not-allowed' : 'pointer'}; font-size: 1.6rem; font-weight: bold; transition: filter 0.2s; display: flex; align-items: center; justify-content: center; opacity: ${chunkIndex === allCells.length ? '0.5' : '1'};" onmouseover="if(!this.disabled) this.style.filter='brightness(1.2)'" onmouseout="this.style.filter='none'">›</button>
-                                    ` : ''}
-                                </div>
-                                <sutram-editor 
-                                    .value=${this._editContent}
-                                    language="javascript"
-                                    @editor-changed=${e => { this._editContent = e.detail.value; this.requestUpdate(); }}>
-                                </sutram-editor>
-                            </div>
-                            <div slot="footer" style="display: flex; width: 100%; align-items: center; gap: 12px;">
-                                <button class="btn-sm" @click=${() => this._editCellId = null} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 1.05rem; font-weight: bold; background: var(--intent-neutral); color: white; border: none; cursor: pointer;">❌ Cancel</button>
-                                <sutram-async-btn label="💾 Save & Close" intent="primary" .onClick=${() => this._saveEditModal()} style="flex: 1; margin: 0; --btn-padding: 12px; --btn-font-size: 1.05rem;"></sutram-async-btn>
-                            </div>
-                        </sutram-modal>
-                    `;
-                })()}
                 <!-- INPUT VIEW -->
                 <div style="display: ${this.viewMode === 'input' ? 'flex' : 'none'}; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; padding: 0; background: var(--bg);" @paste=${e => {
                     const text = e.clipboardData.getData('text');
@@ -706,15 +735,15 @@ export class InSetuExtBridge extends InSetuElement {
                             const selectedCount = groupCells.filter(c => c.active).length;
                             const totalCount = groupCells.length;
                             return html`
-                            <div style="padding: 20px; display: flex; flex-direction: column; border-bottom: 1px solid var(--border);">
-                                <sutram-card-group ?stacked=${true} ?accordion=${true}>
+                                <div class="bridge-group-container">
+                                    <sutram-card-group ?stacked=${true} ?accordion=${true}>
                                     <!-- Target File Card (Top of Stack) -->
                                     <insetu-card
                                         .titleText=${"Target File:"}
                                         .descriptionText=${this._fileVerificationCache[file] === false ? "⚠️ Target file not found in workspace." : ""}
-                                        .detailText=${`${selectedCount} of ${totalCount} patches selected`}
-                                        icon="📄"
-                                        intentColor=${this._fileVerificationCache[file] === false ? 'var(--intent-danger)' : 'var(--intent-primary)'}
+                                        .detailText=${""}
+                                        icon='<i data-lucide="file-code-2" style="width: 14px; height: 14px;"></i>'
+                                        intentColor=${this._fileVerificationCache[file] === false ? 'var(--intent-danger)' : '#06b6d4'}
                                         entityType="file"
                                         .entityData=${{ filepath: file, isFS: true, suppress: ['file-browse'] }}
                                         selectionStoreKey="none"
@@ -722,12 +751,9 @@ export class InSetuExtBridge extends InSetuElement {
                                         @sutram-card-select-toggled=${(e) => { e.stopPropagation(); this._handleParentToggle(file); }}
                                         style="display: block;">
 
-                                        <div style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
-                                            <sutram-input inline .value=${file} style="flex: 1; margin: 0; --bg-input: var(--bg);" @sutram-input-changed=${(e) => {
-                                                BridgeStore.getState().updateGroupFile(file, e.detail.value);
-                                                window.inSetu.stores.Fs.getState().verifyFiles([e.detail.value], true);
-                                            }}></sutram-input>
-                                            <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; flex-shrink: 0;" @click=${() => {
+                                        <div slot="header-actions">
+                                            <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 4px 10px; font-size: 0.8rem;" @click=${(e) => {
+                                                e.stopPropagation();
                                                 if (this.ui && this.ui.openWorkspaceBrowser) {
                                                     this.ui.openWorkspaceBrowser({
                                                         mode: 'file',
@@ -739,6 +765,17 @@ export class InSetuExtBridge extends InSetuElement {
                                                     });
                                                 }
                                             }}>📁 Remap</button>
+                                        </div>
+
+                                        <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 5px;">
+                                            <sutram-input ?flush=${true} .value=${file} style="width: 100%; margin: 0; --bg-input: var(--bg);" @sutram-input-changed=${(e) => {
+                                                BridgeStore.getState().updateGroupFile(file, e.detail.value);
+                                                window.inSetu.stores.Fs.getState().verifyFiles([e.detail.value], true);
+                                            }}></sutram-input>
+
+                                            <div style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--intent-highlight);">
+                                                ${selectedCount} of ${totalCount} patches selected
+                                            </div>
                                         </div>
                                         ${this._autoSwaps[file] ? html`
                                             <div style="font-size: 0.8rem; color: var(--intent-success); margin-top: 10px; font-weight: bold; display: flex; align-items: center; justify-content: space-between; padding-top: 8px; border-top: 1px dashed var(--border);">
@@ -801,7 +838,7 @@ export class InSetuExtBridge extends InSetuElement {
                                         <insetu-card
                                             .titleText=${typeStr}
                                             .detailText=${`Patch ${i + 1} of ${groupCells.length}`}
-                                            icon="🧩"
+                                            icon='<i data-lucide="git-commit" style="width: 14px; height: 14px;"></i>'
                                             ?selected=${c.active}
                                             intentColor=${c.active ? "var(--intent-success)" : "var(--intent-neutral)"}
                                             selectionStoreKey="none"
@@ -816,10 +853,9 @@ export class InSetuExtBridge extends InSetuElement {
                         `;})}
                     `}
                 </div>
-
                 <!-- CONSOLE VIEW -->
-                <div style="display: ${this.viewMode === 'console' ? 'flex' : 'none'}; flex: 1; flex-direction: column; min-height: 0; padding: 20px; overflow-y: auto; background: var(--bg);">
-                    <div @click=${this._handleConsoleClick} style="display: contents;">
+                <div style="display: ${this.viewMode === 'console' ? 'flex' : 'none'}; flex: 1; flex-direction: column; min-height: 0; padding: 20px; box-sizing: border-box; overflow-y: auto; background: var(--bg);">
+                    <div @click=${this._handleConsoleClick} style="display: flex; flex-direction: column; width: 100%; padding-bottom: 20px;">
                         ${this._renderTelemetry()}
                     </div>
                 </div>
@@ -857,7 +893,9 @@ customElements.define('insetu-ext-bridge', InSetuExtBridge);
 export class InSetuExtBridgeHistoryActions extends InSetuElement {
     static get extensionName() { return 'bridge'; }
     static properties = { _viewMode: { type: String } };
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`
+        :host { display: flex; align-items: stretch; height: 100%; }
+    `];
 
     constructor() {
         super();
@@ -883,13 +921,14 @@ export class InSetuExtBridgeHistoryActions extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-bridge-history-actions', InSetuExtBridgeHistoryActions);
-
 export class InSetuExtBridgeActions extends InSetuElement {
     static get extensionName() { return 'bridge'; }
     static properties = {
         _pinnedRepos: { type: Object }
     };
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`
+        :host { display: flex; align-items: stretch; height: 100%; }
+    `];
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(window.inSetu.stores.App, (state) => {
@@ -907,9 +946,8 @@ export class InSetuExtBridgeActions extends InSetuElement {
             btnText = `Filters: ${active.slice(0, 2).join(', ')}${active.length > 2 ? '...' : ''}`;
             hasF = true;
         }
-
         return html`
-            <sutram-filter-dropdown .filterText=${btnText} .hasFilters=${hasF}>
+            <sutram-filter-dropdown .filterText=${btnText} .hasFilters=${hasF} style="height: 100%; display: flex; align-items: stretch;">
                 <div style="min-width: 200px;">
                     <insetu-repo-filter
                         .repos=${this.ecosystem.allRepos}
@@ -981,7 +1019,7 @@ export class InSetuExtBridgeHistory extends InSetuElement {
 
         return html`
             <sutram-toolbar
-                searchPlaceholder="🔍 Fuzzy search receipts..."
+                searchPlaceholder="Fuzzy search receipts..."
                 .searchQuery=${this.searchQuery}
                 @search-changed=${(e) => this.searchQuery = e.detail.value}
                 .enableFilterDropdown=${true}
@@ -1008,8 +1046,8 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                             .titleText=${"Tx: " + (txId || 'Unknown')}
                             .descriptionText=${countStr}
                             .detailText=${this.utils.timeAgo(txData.timestamp * 1000)}
-                            icon="🗂️"
-                            intentColor="var(--intent-primary)"
+                            icon='<i data-lucide="git-merge" style="width: 14px; height: 14px;"></i>'
+                            intentColor="var(--intent-highlight)"
                             entityType="yomama-turn"
                             .entityData=${{ transaction_id: txId, records: txData.records }}
                             style="display: block;">
@@ -1031,10 +1069,15 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                                 .titleText=${record.filepath.split('/').pop()}
                                 .descriptionText=${descStr}
                                 .detailText=${record.filepath}
-                                icon=${record.is_snapshot ? '💾' : '📄'}
+                                icon=${record.is_snapshot ? '<i data-lucide="save" style="width: 14px; height: 14px;"></i>' : '<i data-lucide="file-text" style="width: 14px; height: 14px;"></i>'}
                                 intentColor=${record.is_snapshot ? 'var(--intent-highlight)' : 'var(--intent-neutral)'}
                                 entityType="patch-receipt"
                                 .entityData=${record}
+                                @card-clicked=${() => {
+                                    if (window.inSetu.vfs.viewSourceFile) {
+                                        window.inSetu.vfs.viewSourceFile(record.filepath, true);
+                                    }
+                                }}
                                 style="display: block;">
                             </insetu-card>
                             `;
@@ -1050,10 +1093,15 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                             .titleText=${filename}
                             .descriptionText=${repo ? "Repo: " + repo : ""}
                             .detailText=${filepath}
-                            icon="📄"
-                            intentColor="var(--intent-primary)"
+                            icon='<i data-lucide="file-code-2" style="width: 14px; height: 14px;"></i>'
+                            intentColor="#06b6d4"
                             entityType="file"
                             .entityData=${{ filepath: filepath, isFS: true, suppress: ['file-browse'] }}
+                            @card-clicked=${() => {
+                                if (window.inSetu.vfs.viewSourceFile) {
+                                    window.inSetu.vfs.viewSourceFile(filepath, true);
+                                }
+                            }}
                             style="display: block;">
                         </insetu-card>
                         ${fileData.records.map((record, idx) => {
@@ -1073,10 +1121,15 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                                 .titleText=${"Tx: " + (record.transaction_id || 'Unknown')}
                                 .descriptionText=${descStr}
                                 .detailText=${`Turn ${idx + 1} of ${fileData.records.length} • ${this.utils.timeAgo(record.timestamp * 1000)}`}
-                                icon=${record.is_snapshot ? '💾' : '🧩'}
+                                icon=${record.is_snapshot ? '<i data-lucide="save" style="width: 14px; height: 14px;"></i>' : '<i data-lucide="git-commit" style="width: 14px; height: 14px;"></i>'}
                                 intentColor=${record.is_snapshot ? 'var(--intent-highlight)' : 'var(--intent-neutral)'}
                                 entityType="patch-receipt"
                                 .entityData=${record}
+                                @card-clicked=${() => {
+                                    if (window.inSetu.vfs.viewSourceFile) {
+                                        window.inSetu.vfs.viewSourceFile(record.filepath, true);
+                                    }
+                                }}
                                 style="display: block;">
                             </insetu-card>
                             `;
@@ -1244,6 +1297,8 @@ window.ExtensionRegistry.registerExtension('bridge', {
             targetParent: "edit",
             id: "bridge",
             label: "Yomama",
+            icon: "git-pull-request",
+            intent: "highlight",
             order: 1,
             component: "insetu-ext-bridge"
         },
@@ -1252,6 +1307,8 @@ window.ExtensionRegistry.registerExtension('bridge', {
             targetParent: "edit",
             id: "history",
             label: "Receipts",
+            icon: "history",
+            intent: "neutral",
             order: 2,
             component: "insetu-ext-bridge-history"
         },

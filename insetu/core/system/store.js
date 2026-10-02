@@ -13,7 +13,6 @@ window.inSetu.utils.getActiveWorkspace = function() {
         return sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
     } catch(e) { return 'default'; }
 };
-
 window.inSetu.stores.Status = StatusStore;
 window.inSetu.stores.Toast = ToastStore;
 window.inSetu.stores.Selection = SelectionStore;
@@ -42,7 +41,6 @@ export const AppStore = createExtensionStore('App', {
     globalBrowsePath: [],
     currentBrowsePath: [],
     browserConfig: { mode: 'view', callback: null },
-    blobViewer: { open: false, title: '', content: '', suggestedFilename: '' },
     warmingQueue: new Set(),
     enqueueWarming: (urls) => AppStore.setState(s => {
         const q = new Set(s.warmingQueue);

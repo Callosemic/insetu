@@ -95,6 +95,16 @@ export const GatherStore = createExtensionStore('Gather', {
     quickPacks: [],
     activeQuickPack: null,
     gatherOptions: { contexts: [], diffs: [], prompts: [], artifactsDir: "", profileDir: "" },
+    domainColors: {},
+    fetchSettings: async () => {
+        try {
+            const res = await window.inSetu.api.workspace.get('gather/settings?t=' + Date.now());
+            if (res.ok) {
+                const data = await res.json();
+                if (data.domain_colors) GatherStore.setState({ domainColors: data.domain_colors });
+            }
+        } catch(e) {}
+    },
     setSearchQuery: (q) => GatherStore.setState({ searchQuery: q }),
     // Proxy legacy API calls to the App Shell to prevent extension breakage
     setPinnedRepos: (repos) => {
@@ -206,16 +216,6 @@ const packSelectionPayload = async (items) => {
         });
     });
 };
-
-export class InSetuExtGatherActions extends InSetuElement {
-    static get extensionName() { return 'gather'; }
-    static styles = [sharedStyles];
-    render() {
-        return html``;
-    }
-}
-customElements.define('insetu-ext-gather-actions', InSetuExtGatherActions);
-
 export class InSetuExtGather extends InSetuElement {
     static properties = {
         loading: { type: Boolean },
@@ -236,6 +236,14 @@ export class InSetuExtGather extends InSetuElement {
         sharedStyles,
         css`
             :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
+            .gather-cards-container {
+                display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 20px 12px;
+            }
+            @container (max-width: 480px) {
+                .gather-cards-container {
+                    padding: 0; gap: 0;
+                }
+            }
         `
     ];
     constructor() {
@@ -249,6 +257,7 @@ export class InSetuExtGather extends InSetuElement {
         this._syncState = 'synced';
     }
     onWorkspaceLoad(workspaceId) {
+        GatherStore.getState().fetchSettings();
         const ctxManifest = AppStore.getState().manifest?.ctx || {};
         this.manifestFiles = Object.keys(ctxManifest);
         this.requestUpdate();
@@ -260,6 +269,7 @@ export class InSetuExtGather extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
+        GatherStore.getState().fetchSettings();
         this.subscribe(GatherStore, state => {
             this.loading = state.loading;
             this.searchQuery = state.searchQuery;
@@ -382,7 +392,7 @@ export class InSetuExtGather extends InSetuElement {
                 : repoFilteredFiles;
         return html`
             <sutram-toolbar
-                searchPlaceholder="🔍 Fuzzy search contexts..."
+                searchPlaceholder="Fuzzy search contexts..."
                 .searchQuery=${this.searchQuery}
                 @search-changed=${(e) => GatherStore.getState().setSearchQuery(e.detail.value)}
                 .enableFilterDropdown=${true}
@@ -430,14 +440,12 @@ export class InSetuExtGather extends InSetuElement {
                                     titleText=${cat} 
                                     intent="neutral" 
                                     .open=${isOpen}
-                                    ?flush=${true}
                                     @sutram-collapsible-toggled=${(e) => {
                                         this._expandedCats = { ...this._expandedCats, [cat]: e.detail.open };
                                         this.requestUpdate();
-                                    }}
-                                    style="--title-weight: bold; --title-size: 1.05rem; color: var(--text); background: transparent; border-left: none; border-right: none; border-radius: 0; box-shadow: none;">
+                                    }}>
                                     ${cat === 'Quickpacks' ? html`
-                                        <sutram-async-btn slot="actions" label="Clear" intent="danger" .onClick=${async () => {
+                                        <sutram-async-btn slot="actions" label="Clear" intent="danger" style="--btn-padding: 4px 10px; --btn-font-size: 0.75rem;" .onClick=${async () => {
                                             try {
                                                 const res = await window.inSetu.api.workspace.post('gather/clear_quickpacks', {});
                                                 if (res.ok) {
@@ -452,7 +460,7 @@ export class InSetuExtGather extends InSetuElement {
                                             }
                                         }}></sutram-async-btn>
                                     ` : ''}
-                                    <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px 20px 20px 20px;">
+                                    <div class="gather-cards-container">
                                         ${groups[cat].map(f => {
                                             const isDirty = (() => {
                                                 const manifestObj = AppStore.getState().manifest?.ctx?.[f.filename];
@@ -460,6 +468,25 @@ export class InSetuExtGather extends InSetuElement {
                                                 return (AppStore.getState().dirtyBuckets || new Set()).has(addr.key);
                                             })();
                                             const isLocked = f.isSkeleton || (isGatherLoading && isDirty);
+                                            let baseIntent = 'primary';
+                                            const dColors = GatherStore.getState().domainColors || {};
+                                            const testStr = `${f.finalTitle || ''} ${f.finalCat || ''}`.toLowerCase();
+                                            for (const [intent, keywords] of Object.entries(dColors)) {
+                                                if (Array.isArray(keywords)) {
+                                                    if (keywords.some(kw => testStr.includes(kw.toLowerCase()))) {
+                                                        baseIntent = intent;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            if (f.finalCat === 'Quickpacks') baseIntent = 'warning';
+                                            const isQuickpack = f.finalCat === 'Quickpacks';
+                                            const iconColor = isDirty ? "var(--intent-warning)" : `var(--intent-${baseIntent})`;
+                                            let displayIcon = isQuickpack ? `<i data-lucide="zap" style="width: 14px; height: 14px; color: ${iconColor};"></i>` :
+                                                (isLocked ? `<i data-lucide="loader" style="width: 14px; height: 14px; color: ${iconColor};"></i>` : 
+                                                (isDirty ? `<i data-lucide="alert-triangle" style="width: 14px; height: 14px; color: ${iconColor};"></i>` : 
+                                                `<i data-lucide="package" style="width: 14px; height: 14px; color: ${iconColor};"></i>`));
+
                                             return html`
                                             <insetu-card
                                                 style="opacity: ${isLocked ? '0.6' : '1'}; pointer-events: ${isLocked ? 'none' : 'auto'}; transition: opacity 0.2s ease;"
@@ -469,8 +496,8 @@ export class InSetuExtGather extends InSetuElement {
                                                 .detailPrefix=${f.repoDir ? `[${f.repoDir}] ` : ''}
                                                 .detailText=${f.filename.includes('/') ? f.filename.split('/').pop() : f.filename}
                                                 .detailSuffix=${f.sizeStr ? ` | ${f.sizeStr}` : ''}
-                                                icon=${isLocked ? "⏳" : (isDirty ? "⚠️" : "📦")}
-                                                intentColor=${isDirty ? "var(--intent-warning)" : "var(--intent-highlight)"}
+                                                .icon=${displayIcon}
+                                                .intentColor=${iconColor}
                                                 entityType="file:context"
                                                 .entityData=${{ 
                                                     filepath: f.filename, 
@@ -478,7 +505,7 @@ export class InSetuExtGather extends InSetuElement {
                                                     isFS: false, 
                                                     isSkeleton: f.isSkeleton,
                                                     needs_recompile: isDirty,
-                                                    suppress: ['file-copy', 'file-browse', 'file-edit'],
+                                                    suppress: ['file-browse', 'file-edit'],
                                                     chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, f.filename) : [f.filename]
                                                 }}
                                                 @card-clicked=${() => {
@@ -550,15 +577,10 @@ window.ExtensionRegistry.registerExtension('gather', {
             targetParent: "context",
             id: "gather",
             label: "Gather",
+            icon: "hexagon",
+            intent: "primary",
             order: 1,
             component: "insetu-ext-gather"
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "context",
-            targetSub: "gather",
-            component: "insetu-ext-gather-actions",
-            order: 1
         }
     ],
     batchActions: [

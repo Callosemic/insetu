@@ -38,6 +38,22 @@ GATHER_SETTINGS_SCHEMA = [
         "scope": "workspace",
         "default": 0,
         "description": "Set to 0 to disable chunking. Context files exceeding this limit will be cleanly split into numbered parts."
+    },
+    {
+        "id": "domain_colors",
+        "label": "Domain Intent Colors",
+        "type": "object",
+        "scope": "workspace",
+        "default": {
+            "primary": ["sutram"],
+            "success": [],
+            "warning": ["quickpack"],
+            "danger": [],
+            "highlight": ["doc", "yenvui"],
+            "neutral": []
+        },
+        "description": "Map semantic intent colors to arrays of title keywords.",
+        "html_desc": "Map semantic intent colors to arrays of title keywords. <div style='margin-top: 6px; display: flex; flex-wrap: wrap; gap: 10px; font-family: var(--font-mono); font-weight: bold;'><span style='color: var(--intent-primary);'>● primary</span> <span style='color: var(--intent-success);'>● success</span> <span style='color: var(--intent-warning);'>● warning</span> <span style='color: var(--intent-danger);'>● danger</span> <span style='color: var(--intent-highlight);'>● highlight</span> <span style='color: var(--intent-neutral);'>● neutral</span></div>"
     }
 ]
 gather_bp = InSetuExtension('gather', __name__, core=True, settings_schema=GATHER_SETTINGS_SCHEMA)
@@ -645,7 +661,7 @@ def generate_context_file(workspace_id=None, target_repos=None):
                 size_bytes = os.path.getsize(f_path) if os.path.exists(f_path) else 0
                 is_quickpack = f_name.startswith(('quickpack_', 'selection_'))
                 domain_name = "Quickpacks" if is_quickpack else "Exported Contexts"
-                title_name = "⚡ Quickpack" if is_quickpack else f"📦 {f_name.replace('.txt','')}"
+                title_name = "Quickpack" if is_quickpack else f"{f_name.replace('.txt','')}"
                 manifest[uri_key] = {
                     "files": [uri_key],
                     "meta": {"type": "gather", "title": title_name, "domain": domain_name, "desc": "Ephemeral context payload.", "size_bytes": size_bytes}
@@ -706,7 +722,7 @@ def _pack_selection_worker(ctx, items=None, gather_only=True, job_id=None, **kwa
         header_str,
         text_blocks,
         files,
-        {"type": "gather", "title": "⚡ Quickpack", "domain": "Quickpacks", "desc": "Ad-hoc context export."}
+        {"type": "gather", "title": "Quickpack", "domain": "Quickpacks", "desc": "Ad-hoc context export."}
     )
 
     # Pure Granular Routing: Only save the specific quickpack to the ledger

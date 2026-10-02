@@ -22,7 +22,10 @@ export class InSetuFileTree extends InSetuElement {
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; min-height: 0; width: 100%; container-type: inline-size; }
-        .tree-container { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; }
+        .tree-container { flex: 1; overflow-y: auto; padding: 10px 12px 20px 12px; display: flex; flex-direction: column; gap: 8px; }
+        @container (max-width: 480px) {
+            .tree-container { padding: 0; gap: 0; }
+        }
     `];
 constructor() {
         super();
@@ -159,7 +162,7 @@ constructor() {
                             .titleText=${key}
                             descriptionText=""
                             intentColor="var(--intent-primary)"
-                            icon=${this._pendingMutations.has(fullFilepath) ? '🌩️' : '📄'}
+                            icon=${this._pendingMutations.has(fullFilepath) ? '<i data-lucide="cloud-upload" style="width: 14px; height: 14px;"></i>' : '<i data-lucide="file-code-2" style="width: 14px; height: 14px;"></i>'}
                             .entityType=${this.entityType || 'file'}
                             .entityData=${{ filepath: fullFilepath, isFS: true }}>
                         </insetu-card>
@@ -174,7 +177,7 @@ constructor() {
                         return html`
                             <insetu-card
                                 .titleText=${key}
-                                icon="📁"
+                                icon='<i data-lucide="folder" style="width: 14px; height: 14px;"></i>'
                                 intentColor="var(--intent-warning)"
                                 .entityType=${'folder'}
                                 .entityData=${{ id: folderPath, folderpath: folderPath, isDir: true }}
@@ -192,7 +195,7 @@ constructor() {
                             .titleText=${key}
                             descriptionText=""
                             intentColor="var(--intent-primary)"
-                            icon=${this._pendingMutations.has(filepath) ? '🌩️' : '📄'}
+                            icon=${this._pendingMutations.has(filepath) ? '<i data-lucide="cloud-upload" style="width: 14px; height: 14px;"></i>' : '<i data-lucide="file-code-2" style="width: 14px; height: 14px;"></i>'}
                             .entityType=${this.entityType || 'file'}
                             .entityData=${{ filepath, isFS: true, is_dirty: this._pendingMutations.has(filepath) }}>
                         </insetu-card>

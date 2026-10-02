@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 import sys
 import json
+import socket
 import threading
 import time
 from typing import TypedDict, Optional, List, Dict, Any
@@ -78,7 +79,6 @@ def core_system_settings_updated(workspace_id=None, **kwargs):
 def host_identity_handshake(request=None, client_ip=None, config=None, **kwargs):
     """Tier 2 Core OS: Evaluates daemon-level host identity protocols (e.g., Tailscale WHOIS)."""
     if not request or not client_ip or not config: return None
-    import socket
 
     user_email = request.headers.get('Tailscale-User-Login')
 

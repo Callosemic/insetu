@@ -125,61 +125,32 @@ export class InSetConfigBanner extends InSetuElement {
     }
 }
 customElements.define('insetu-config-banner', InSetConfigBanner);
-export class InSetuBlobViewer extends InSetuElement {
-    static properties = { blobState: { type: Object } };
-    static styles = [sharedStyles, css`
-        :host { display: contents; }
-    `];
+window.inSetu.ui = window.inSetu.ui || {};
+window.inSetu.ui.viewTextBlob = (title, content, suggestedFilename = '') => {
+    const filename = suggestedFilename || ('blob_' + Date.now() + '.txt');
+    const virtualUri = `virtual://${filename}`;
 
-    constructor() {
-        super();
-        this.blobState = { open: false, title: '', content: '', suggestedFilename: '' };
+    if (window.inSetu.stores?.Fs) {
+        const ext = filename.split('.').pop().toLowerCase();
+        window.inSetu.stores.Fs.setState(s => ({
+            fileModal: {
+                ...s.fileModal,
+                open: true,
+                filename: virtualUri,
+                content: content,
+                originalContent: content,
+                fullText: content,
+                isTruncated: false,
+                isFS: false,
+                forceEdit: false,
+                isMemoryOnly: true,
+                isSupportedEditor: true,
+                ext: ext,
+                codeMode: ext === 'diff' ? 'markdown' : 'markdown'
+            }
+        }));
     }
-
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(window.inSetu.stores.App, state => {
-            this.blobState = state.blobViewer || { open: false, title: '', content: '', suggestedFilename: '' };
-        });
-        window.inSetu.ui = window.inSetu.ui || {};
-        window.inSetu.ui.viewTextBlob = (title, content, suggestedFilename = '') => {
-            window.inSetu.stores.App.setState({
-                blobViewer: { open: true, title, content, suggestedFilename }
-            });
-        };
-    }
-    render() {
-        return html`
-            <sutram-modal 
-                ?open=${this.blobState.open} 
-                ?fullscreen=${true}
-                ?flush=${true}
-                titleText=${this.blobState.title || "Text Viewer"}
-                @sutram-modal-closed=${() => window.inSetu.stores.App.setState({ blobViewer: { ...this.blobState, open: false } })}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; height: 100%;">
-                    <textarea readonly wrap="off" style="flex: 1; width: 100%; height: 100%; padding: 15px; box-sizing: border-box; background: var(--bg); color: var(--text); border: none; font-family: monospace; font-size: 0.85rem; resize: none; white-space: pre; overflow-x: auto;" .value=${this.blobState.content}></textarea>
-                </div>
-                <div slot="footer" style="width: 100%; display: flex; justify-content: flex-end;">
-                    <sutram-entity-actions 
-                        ?scrollable=${true}
-                        style="justify-content: flex-end;"
-                        .entityType=${'text_blob'} 
-                        .entityData=${{ 
-                            textContent: this.blobState.content,
-                            suggestedFilename: this.blobState.suggestedFilename || ('export_' + Date.now() + '.txt')
-                        }}>
-                    </sutram-entity-actions>
-                </div>
-            </sutram-modal>
-        `;
-    }
-}
-customElements.define('insetu-blob-viewer', InSetuBlobViewer);
-if (!document.getElementById('insetu-blob-viewer-root')) {
-    const blobRoot = document.createElement('insetu-blob-viewer');
-    blobRoot.id = 'insetu-blob-viewer-root';
-    document.body.appendChild(blobRoot);
-}
+};
 
 // --- LEGACY INSETU COMPATIBILITY ALIASES ---
 // Maps legacy <insetu-*> tags directly to Sutram primitives to prevent 

@@ -317,6 +317,17 @@ class SSEPipeline {
             this.reconnectTimer = setTimeout(() => this.connect(), 5000);
         };
     }
+    disconnect() {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        if (this.source) {
+            this.source.close();
+            this.source = null;
+        }
+        this.isConnected = false;
+    }
 }
 window.inSetu.sse = new SSEPipeline();
 

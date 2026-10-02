@@ -562,6 +562,8 @@ window.ExtensionRegistry.registerExtension('offline', {
             targetParent: "offline",
             id: "ledger",
             label: "Ledger",
+            icon: "database",
+            intent: "neutral",
             order: 1,
             component: "insetu-core-offline-ledger"
         },
@@ -570,6 +572,8 @@ window.ExtensionRegistry.registerExtension('offline', {
             targetParent: "offline",
             id: "log",
             label: "Log",
+            icon: "terminal",
+            intent: "neutral",
             order: 2,
             component: "insetu-core-offline-log"
         }
