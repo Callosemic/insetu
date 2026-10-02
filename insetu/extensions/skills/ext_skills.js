@@ -709,6 +709,8 @@ window.ExtensionRegistry.registerExtension('skills', {
             slot: "slots:primary-navigation",
             id: "skills",
             label: "Practice",
+            icon: "target",
+            intent: "success",
             order: 5
         },
         {
@@ -716,6 +718,8 @@ window.ExtensionRegistry.registerExtension('skills', {
             targetParent: "skills",
             id: "active",
             label: "Active Queue",
+            icon: "target",
+            intent: "primary",
             order: 0,
             component: "insetu-ext-skills"
         },
@@ -724,6 +728,8 @@ window.ExtensionRegistry.registerExtension('skills', {
             targetParent: "skills",
             id: "repertoire",
             label: "Full Repertoire",
+            icon: "music",
+            intent: "neutral",
             order: 1,
             component: "insetu-ext-skills"
         },
@@ -732,6 +738,8 @@ window.ExtensionRegistry.registerExtension('skills', {
             targetParent: "skills",
             id: "groups",
             label: "Groups",
+            icon: "folder",
+            intent: "highlight",
             order: 2,
             component: "insetu-ext-skills"
         }

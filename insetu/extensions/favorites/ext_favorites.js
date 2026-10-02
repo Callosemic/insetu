@@ -239,7 +239,9 @@ window.ExtensionRegistry.registerExtension('favorites', {
             slot: "slots:sub-navigation",
             targetParent: "edit",
             id: "favorites",
-            label: "⭐ Faves",
+            label: "Faves",
+            icon: "star",
+            intent: "warning",
             order: 0,
             component: "insetu-ext-favorites"
         }

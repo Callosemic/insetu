@@ -777,9 +777,9 @@ window.ExtensionRegistry.registerExtension('citations', {
         }
     ],
     layoutSlots: [
-        { slot: "slots:primary-navigation", id: "library", label: "Library", order: 4 },
-        { slot: "slots:sub-navigation", targetParent: "library", id: "lib-main", label: "Main", order: 1, component: "insetu-ext-citations" },
-        { slot: "slots:sub-navigation", targetParent: "library", id: "lib-explore", label: "Explore", order: 2, component: "insetu-ext-citations" },
-        { slot: "slots:sub-navigation", targetParent: "library", id: "lib-import", label: "Import", order: 3, component: "insetu-ext-citations" }
+        { slot: "slots:primary-navigation", id: "library", label: "Library", icon: "book-open", intent: "highlight", order: 4 },
+        { slot: "slots:sub-navigation", targetParent: "library", id: "lib-main", label: "Main", icon: "book", intent: "primary", order: 1, component: "insetu-ext-citations" },
+        { slot: "slots:sub-navigation", targetParent: "library", id: "lib-explore", label: "Explore", icon: "compass", intent: "highlight", order: 2, component: "insetu-ext-citations" },
+        { slot: "slots:sub-navigation", targetParent: "library", id: "lib-import", label: "Import", icon: "download", intent: "neutral", order: 3, component: "insetu-ext-citations" }
     ]
 });

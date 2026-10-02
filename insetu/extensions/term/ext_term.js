@@ -578,6 +578,8 @@ window.ExtensionRegistry.registerExtension('term', {
             targetParent: "ctrl",
             id: "term",
             label: "Terminal",
+            icon: "terminal",
+            intent: "danger",
             order: 1,
             component: "insetu-ext-term"
         },

@@ -1000,6 +1000,8 @@ window.ExtensionRegistry.registerExtension('git', {
             targetParent: "ctrl",
             id: "git",
             label: "Git",
+            icon: "git-branch",
+            intent: "primary",
             order: 2,
             component: "insetu-ext-git-ctrl"
         },
@@ -1008,6 +1010,8 @@ window.ExtensionRegistry.registerExtension('git', {
             targetParent: "context",
             id: "diffs",
             label: "Diffs",
+            icon: "git-pull-request",
+            intent: "warning",
             order: 2,
             component: "insetu-ext-git-diffs"
         }

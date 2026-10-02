@@ -415,6 +415,8 @@ window.ExtensionRegistry.registerExtension('hooks', {
             targetParent: "ctrl",
             id: "hooks",
             label: "Hooks",
+            icon: "webhook",
+            intent: "highlight",
             order: 3,
             component: "insetu-ext-hooks"
         },

@@ -1045,6 +1045,8 @@ window.ExtensionRegistry.registerExtension('update', {
             targetParent: "ctrl",
             id: "update",
             label: "Update",
+            icon: "arrow-up-circle",
+            intent: "success",
             order: 4,
             component: "insetu-ext-update"
         }

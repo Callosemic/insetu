@@ -2871,6 +2871,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
             targetParent: "tasks",
             id: "todos",
             label: "To-Dos",
+            icon: "check-square",
+            intent: "primary",
             order: 1,
             component: "insetu-ext-tracker"
         },
@@ -2879,6 +2881,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
             targetParent: "tasks",
             id: "bugs",
             label: "Bugs",
+            icon: "bug",
+            intent: "danger",
             order: 2,
             component: "insetu-ext-tracker"
         },
@@ -2887,6 +2891,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
             targetParent: "tasks",
             id: "queue",
             label: "Queue",
+            icon: "list",
+            intent: "highlight",
             order: 3,
             component: "insetu-ext-tracker"
         },
@@ -2895,6 +2901,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
             targetParent: "tasks",
             id: "log",
             label: "Log",
+            icon: "history",
+            intent: "neutral",
             order: 4,
             component: "insetu-ext-tracker"
         },

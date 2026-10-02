@@ -543,6 +543,8 @@ window.ExtensionRegistry.registerExtension('dev', {
             targetParent: "dev",
             id: "dash",
             label: "Dashboard",
+            icon: "activity",
+            intent: "success",
             order: 1,
             component: "insetu-ext-dev-dash"
         },
@@ -551,6 +553,8 @@ window.ExtensionRegistry.registerExtension('dev', {
             targetParent: "dev",
             id: "logs",
             label: "Daemon Logs",
+            icon: "terminal",
+            intent: "neutral",
             order: 2,
             component: "insetu-ext-dev-logs"
         },
@@ -566,6 +570,8 @@ window.ExtensionRegistry.registerExtension('dev', {
             targetParent: "dev",
             id: "sql",
             label: "SQL Console",
+            icon: "database",
+            intent: "highlight",
             order: 3,
             component: "insetu-ext-dev-sql"
         }

@@ -539,6 +539,8 @@ window.ExtensionRegistry.registerExtension('research', {
             targetParent: "edit",
             id: "research",
             label: "Research",
+            icon: "search",
+            intent: "highlight",
             order: 4,
             component: "insetu-ext-research"
         }

@@ -506,6 +506,8 @@ window.ExtensionRegistry.registerExtension('notes', {
             targetParent: "edit",
             id: "notes",
             label: "Notes",
+            icon: "file-text",
+            intent: "highlight",
             order: 4,
             component: "insetu-ext-notes"
         },

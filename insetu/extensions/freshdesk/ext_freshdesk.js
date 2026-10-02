@@ -500,6 +500,8 @@ window.ExtensionRegistry.registerExtension('freshdesk', {
             targetParent: "edit",
             id: "freshdesk",
             label: "Freshdesk",
+            icon: "headphones",
+            intent: "highlight",
             order: 5,
             component: "insetu-ext-freshdesk"
         }

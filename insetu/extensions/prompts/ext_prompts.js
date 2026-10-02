@@ -284,6 +284,8 @@ window.ExtensionRegistry.registerExtension('prompts', {
             targetParent: "context",
             id: "prompts",
             label: "Prompts",
+            icon: "terminal",
+            intent: "neutral",
             order: 3,
             component: "insetu-ext-prompts"
         },

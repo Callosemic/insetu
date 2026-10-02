@@ -251,6 +251,8 @@ window.ExtensionRegistry.registerExtension('cronic', {
             slot: "slots:primary-navigation",
             id: "cronic",
             label: "Cronic",
+            icon: "clock",
+            intent: "warning",
             order: 85
         },
         {
@@ -258,6 +260,8 @@ window.ExtensionRegistry.registerExtension('cronic', {
             targetParent: "cronic",
             id: "main",
             label: "Scheduled Scripts",
+            icon: "clock",
+            intent: "warning",
             order: 1,
             component: "insetu-ext-cronic"
         }

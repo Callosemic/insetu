@@ -838,6 +838,8 @@ window.ExtensionRegistry.registerExtension('flow', {
             targetParent: "context",
             id: "flow",
             label: "Flow",
+            icon: "workflow",
+            intent: "primary",
             order: 2,
             component: "insetu-ext-flow"
         },
