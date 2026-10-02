@@ -34,9 +34,10 @@ Extensions must expose a static configuration payload using the Declarative Sche
 
 ### 3.1 Declarative Layout Slots & Entity Actions
 Extensions declare their spatial footprint and contextual actions statelessly using the schema registration object:
-
 * **Layout Slots (`layoutSlots`):**
     * **`slot`**: Target layout zone (e.g., `primary-navigation`, `sub-navigation`, `global`).
+    * **`icon`**: Lucide icon or emoji identifier for the navigation tab.
+    * **`intent`**: Visual intent theme token (e.g., `"primary"`, `"warning"`, `"highlight"`, `"neutral"`, `"danger"`).
     * **`order`**: Integer dictating left-to-right visual sequence.
     * **`component`**: Custom Web Component tag to mount (e.g., `"insetu-ext-tracker"`). Omit for parent container tabs that only house sub-tabs.
 

@@ -14,9 +14,8 @@ All UI components extending the platform must inherit from `SutramElement`. This
 ## II. The Extension Registry Configuration
 
 Extensions must register their UI topology via `window.ExtensionRegistry.registerExtension(name: String, config: Object)`. The `config` object accepts the following declarative arrays:
-
 *   **`layoutSlots`**: Projects components into the `<sutram-app-shell>`.
-    *   Schema: `{ slot: "slots:sub-navigation", targetParent: "tab_id", id: "sub_id", label: "Label", order: 1, component: "custom-tag" }`
+    *   Schema: `{ slot: "slots:sub-navigation", targetParent: "tab_id", id: "sub_id", label: "Label", icon: "icon-name", intent: "primary", order: 1, component: "custom-tag" }`
 *   **`entityActions`**: Defines buttons for the `<sutram-entity-actions>` broker.
     *   Schema: `{ targetEntity: "type", id: "str", label: "str" | (data) => "str", icon: "str" | (data) => "str", intent: "primary", order: 1, match: (data) => bool, emitEvent: (data) => ({name, detail}), asyncAction: async (data, e) => {...}, onClick: (data, e) => {...} }`
 *   **`settingsActions`**: Injects buttons into the host's settings UI.

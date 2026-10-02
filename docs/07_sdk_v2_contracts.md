@@ -133,6 +133,8 @@ window.ExtensionRegistry.registerExtension('my_ext', {
         targetParent: "edit",
         id: "my_tab",
         label: "My Feature",
+        icon: "star",
+        intent: "primary",
         order: 10,
         component: "insetu-ext-component" // Exclude 'component' if defining a parent container tab
     }],
