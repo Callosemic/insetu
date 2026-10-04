@@ -18,6 +18,8 @@ window.ExtensionRegistry.registerExtension('format', {
             label: 'Format Code',
             icon: '🧹',
             intent: 'primary',
+            group: 'edit',
+            vfsBound: true,
             order: 45,
             match: (data) => {
                 if (!data) return false;

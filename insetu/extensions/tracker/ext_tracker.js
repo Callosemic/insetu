@@ -2747,6 +2747,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
             label: 'Start',
             icon: '▶️',
             intent: 'warning',
+            group: 'edit',
+            vfsBound: true,
             order: 10,
             match: (data) => data.status === 'open' && !(data.ticket_type || '').toLowerCase().includes('queue'),
             asyncAction: async (data, e) => {
@@ -2759,6 +2761,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
             label: (data) => (data.ticket_type || '').toLowerCase().includes('queue') ? 'Resolve' : 'Close',
             icon: '✅',
             intent: (data) => (data.ticket_type || '').toLowerCase().includes('queue') ? 'neutral' : 'success',
+            group: 'file',
+            vfsBound: true,
             order: 20,
             match: (data) => data.status !== 'closed' && data.status !== 'archived' && data.status !== 'template',
             asyncAction: async (data, e) => {
@@ -2771,6 +2775,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
             label: 'Convert Type',
             icon: '🔄',
             intent: 'highlight',
+            group: 'tools',
+            vfsBound: true,
             order: 30,
             match: (data) => data.status !== 'closed' && data.status !== 'archived',
             emitEvent: (data) => ({ name: 'insetu:tracker:open-convert', detail: { task: data } })
@@ -2781,6 +2787,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
             label: 'Hierarchy',
             icon: '🌳',
             intent: 'neutral',
+            group: 'tools',
+            vfsBound: false,
             order: 35,
             match: (data) => data.tier < 3 && data.status !== 'template',
             emitEvent: (data) => ({ name: 'insetu:tracker:open-hierarchy', detail: { task: data } })
@@ -2791,6 +2799,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
             label: 'Focus',
             icon: '🎯',
             intent: 'highlight',
+            group: 'tools',
+            vfsBound: false,
             order: 36,
             match: (data) => data.tier < 3 && data.status !== 'template',
             onClick: (data, e) => {
@@ -2803,6 +2813,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
             label: 'New Child',
             icon: '➕',
             intent: 'primary',
+            group: 'tools',
+            vfsBound: false,
             order: 40,
             match: (data) => data.tier < 3 && data.status !== 'closed' && data.status !== 'archived' && data.status !== 'template',
             emitEvent: (data) => {
@@ -2822,6 +2834,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
             label: 'Re-open',
             icon: '🔄',
             intent: 'highlight',
+            group: 'edit',
+            vfsBound: true,
             order: 50,
             match: (data) => data.status === 'closed',
             asyncAction: async (data, e) => {
@@ -2834,6 +2848,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
             label: 'Pause',
             icon: '⏸️',
             intent: 'neutral',
+            group: 'edit',
+            vfsBound: true,
             order: 60,
             match: (data) => data.status === 'active' && !(data.ticket_type || '').toLowerCase().includes('queue'),
             asyncAction: async (data, e) => {
@@ -2846,6 +2862,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
             label: 'Spawn Instance',
             icon: '🚀',
             intent: 'primary',
+            group: 'tools',
+            vfsBound: true,
             order: 70,
             match: (data) => data.status === 'template',
             emitEvent: (data) => ({ name: 'insetu:tracker:open-spawn', detail: { task: data } })
@@ -2941,19 +2959,14 @@ window.ExtensionRegistry.registerExtension('tracker', {
             onOpen: (filepath) => {
                 if (window.inSetu.ui && window.inSetu.ui.closeFileModal) window.inSetu.ui.closeFileModal(true);
 
-                const appState = AppStore.getState();
                 const trackerState = KanbanStore.getState();
-                const parentTabs = trackerState.parentTabs && trackerState.parentTabs.length > 0 
-                    ? trackerState.parentTabs.map(t => t.id) 
-                    : ['tasks'];
+                const targetSub = trackerState.customViews && trackerState.customViews.length > 0 
+                    ? trackerState.customViews[0].id 
+                    : 'todos';
 
-                if (!parentTabs.includes(appState.activeTab)) {
-                    const targetParent = parentTabs[0];
-                    const targetSub = trackerState.customViews && trackerState.customViews.length > 0 
-                        ? trackerState.customViews[0].id 
-                        : 'todos';
-                    AppStore.getState().setActiveRoute(targetParent, targetSub);
-                }
+                // Ensure the tracker board is visible in the center spatial column
+                const ws = window.inSetu.utils.getActiveWorkspace();
+                window.location.hash = `#/${encodeURIComponent(ws)}/center/${encodeURIComponent(targetSub)}`;
 
                 window.inSetu.events.emit('insetu:tracker:open-edit-task', { filepath });
             }

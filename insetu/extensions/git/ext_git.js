@@ -862,6 +862,8 @@ window.ExtensionRegistry.registerExtension('git', {
             label: 'Push',
             icon: '🚀',
             intent: 'highlight',
+            group: 'share',
+            vfsBound: true,
             order: 10,
             emitEvent: (data) => ({ name: 'insetu:git:open-push-modal', detail: { diffFile: data.filepath, repo: data.repoDir } })
         },
@@ -871,6 +873,8 @@ window.ExtensionRegistry.registerExtension('git', {
             label: 'Sweep Repo',
             icon: '🚀',
             intent: 'highlight',
+            group: 'share',
+            vfsBound: true,
             order: 10,
             emitEvent: (data) => ({ name: 'insetu:git:sweep-repo', detail: { repoDir: data.repoDir } })
         },
@@ -880,6 +884,8 @@ window.ExtensionRegistry.registerExtension('git', {
             label: 'Continue',
             icon: '▶️',
             intent: 'success',
+            group: 'tools',
+            vfsBound: false,
             order: 6,
             match: (data) => {
                 const status = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir];
@@ -908,6 +914,8 @@ window.ExtensionRegistry.registerExtension('git', {
             label: 'Abort',
             icon: '🛑',
             intent: 'danger',
+            group: 'tools',
+            vfsBound: false,
             order: 7,
             match: (data) => {
                 const status = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir];
@@ -938,6 +946,8 @@ window.ExtensionRegistry.registerExtension('git', {
             label: 'Resolve Conflicts',
             icon: '⚠️',
             intent: 'danger',
+            group: 'edit',
+            vfsBound: false,
             order: 5,
             match: (data) => {
                 const status = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir];

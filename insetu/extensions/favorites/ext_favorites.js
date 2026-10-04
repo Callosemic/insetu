@@ -174,7 +174,9 @@ export class InSetuExtFavorites extends InSetuElement {
             }
         } else if (item.type === 'folder') {
             const parts = item.path.replace(/^vfs:\/\//, '').split('/').filter(p => p);
-            AppStore.getState().setActiveRoute('edit', 'files', parts);
+            const ws = window.inSetu.utils.getActiveWorkspace();
+            const deepPath = parts.length > 0 ? '/' + parts.map(encodeURIComponent).join('/') : '';
+            window.location.hash = `#/${encodeURIComponent(ws)}/left/files${deepPath}`;
         }
     }
     render() {

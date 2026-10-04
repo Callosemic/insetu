@@ -744,6 +744,8 @@ window.ExtensionRegistry.registerExtension('citations', {
             label: 'Notes',
             icon: '📝',
             intent: 'highlight',
+            group: 'edit',
+            vfsBound: false,
             order: 10,
             emitEvent: (data) => ({ name: 'insetu:citations:notes', detail: { id: data.id } })
         },
@@ -753,6 +755,8 @@ window.ExtensionRegistry.registerExtension('citations', {
             label: 'Edit',
             icon: '✏️',
             intent: 'warning',
+            group: 'edit',
+            vfsBound: false,
             order: 20,
             emitEvent: (data) => ({ name: 'insetu:citations:edit', detail: { data } })
         },
@@ -762,6 +766,8 @@ window.ExtensionRegistry.registerExtension('citations', {
             label: 'Pin to Repo',
             icon: '📌',
             intent: 'primary',
+            group: 'share',
+            vfsBound: false,
             order: 30,
             emitEvent: (data) => ({ name: 'insetu:citations:pin', detail: { data } })
         },
@@ -771,6 +777,8 @@ window.ExtensionRegistry.registerExtension('citations', {
             label: (data) => data.alreadyExists ? 'Force Import' : 'Import',
             icon: (data) => data.alreadyExists ? '⚠️' : '📥',
             intent: (data) => data.alreadyExists ? 'warning' : 'success',
+            group: 'file',
+            vfsBound: false,
             order: 10,
             match: (data) => !data.isImporting,
             emitEvent: (data) => ({ name: 'insetu:citations:import', detail: { data } })

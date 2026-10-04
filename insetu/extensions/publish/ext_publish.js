@@ -117,6 +117,8 @@ window.ExtensionRegistry.registerExtension('publish', {
             label: 'Publish',
             icon: '📄',
             intent: 'primary',
+            group: 'share',
+            vfsBound: true,
             order: 40,
             match: (data) => {
                 if (!data) return false;

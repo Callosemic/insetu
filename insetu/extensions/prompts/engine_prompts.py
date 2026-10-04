@@ -11,6 +11,14 @@ prompts_bp = InSetuExtension(
     description="Prompt template management and embedding."
 )
 __depends__ = []
+
+@hooks.on('coerce_naked_uri')
+def coerce_prompts_uris(raw_uri=None, **kwargs):
+    if raw_uri and (raw_uri.startswith('prompts/') or raw_uri.startswith('.insetu/prompts/')):
+        clean_p = raw_uri.replace('.insetu/prompts/', '').replace('prompts/', '')
+        return f"ctx://prompts/{clean_p}"
+    return None
+
 @hooks.on('request_paths')
 def hook_prompts_request_paths(workspace_id=None, **kwargs):
     """Dynamically injects the prompts directory into the ecosystem path dictionary."""

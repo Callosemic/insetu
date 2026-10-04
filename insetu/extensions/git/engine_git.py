@@ -64,6 +64,14 @@ GIT_SETTINGS_SCHEMA = [
 ]
 git_bp = InSetuExtension('git', __name__, title="Version Control", description="Version control integration, diff generation, and workspace sweeping.", settings_schema=GIT_SETTINGS_SCHEMA)
 __depends__ = ['gather']
+
+@hooks.on('coerce_naked_uri')
+def coerce_git_uris(raw_uri=None, **kwargs):
+    if raw_uri and (raw_uri.endswith('_diffs.txt') or raw_uri.startswith('diffs/') or raw_uri.startswith('.insetu/ext/git/data/diffs/')):
+        clean_d = raw_uri.replace('.insetu/ext/git/data/diffs/', '').replace('diffs/', '')
+        return f"ctx://diffs/{clean_d}"
+    return None
+
 @hooks.on('request_paths')
 def hook_git_request_paths(workspace_id=None, **kwargs):
     from insetu.core.utils_core import get_domain_artifact_path

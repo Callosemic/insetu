@@ -687,6 +687,8 @@ window.ExtensionRegistry.registerExtension('skills', {
             label: 'Train',
             icon: '⏱️',
             intent: 'primary',
+            group: 'tools',
+            vfsBound: false,
             order: 10,
             onClick: (data, e) => {
                 SkillsStore.getState().selectItem(data, 'train');
@@ -698,6 +700,8 @@ window.ExtensionRegistry.registerExtension('skills', {
             label: 'Edit',
             icon: '✏️',
             intent: 'neutral',
+            group: 'tools',
+            vfsBound: false,
             order: 20,
             onClick: (data, e) => {
                 SkillsStore.getState().selectItem(data, 'edit');

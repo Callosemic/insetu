@@ -2,9 +2,57 @@
 import { html, css } from 'lit';
 import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
-
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
+
+const syncPromptsState = window.inSetu.utils.coalescedAsync(async () => {
+    if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('prompts')) return;
+    try {
+        const res = await window.inSetu.api.get('prompts/list?t=' + Date.now(), { cache: 'no-store' });
+        if (res.ok) {
+            const data = await res.json();
+            const rawPrompts = data.prompts || [];
+            const cleanPrompts = rawPrompts.map(p => {
+                const match = p.match(/\.insetu\/prompts\/(.+)$/) || p.match(/prompts\/(.+)$/);
+                return match ? match[1] : p.split('/').pop();
+            });
+            const currentPrompts = PromptsStore.getState().prompts;
+            if (JSON.stringify(currentPrompts) !== JSON.stringify(cleanPrompts)) {
+                PromptsStore.setState({ prompts: cleanPrompts });
+            }
+            // Offline Cache Warming: Pre-fetch fully resolved prompt blobs silently
+            const activeWs = window.inSetu.utils.getActiveWorkspace();
+            const urlsToWarm = cleanPrompts.map(p => {
+                const fullPath = p.startsWith('.insetu/prompts/') ? p : `.insetu/prompts/${p}`;
+                return `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(fullPath)}`;
+            });
+            if (urlsToWarm.length > 0 && window.inSetu?.stores?.App) {
+                const currentQueue = window.inSetu.stores.App.getState().warmingQueue || new Set();
+                const hasNew = urlsToWarm.some(u => !currentQueue.has(u));
+                if (hasNew) {
+                    window.inSetu.stores.App.getState().enqueueWarming(urlsToWarm);
+                }
+            }
+
+            const gatherStore = window.inSetu?.stores?.Gather;
+            if (gatherStore && typeof gatherStore.setState === 'function') {
+                const currentOpts = gatherStore.getState().gatherOptions || {};
+                if (JSON.stringify(currentOpts.prompts) !== JSON.stringify(rawPrompts)) {
+                    gatherStore.setState(state => ({
+                        gatherOptions: {
+                            ...(state?.gatherOptions || {}),
+                            prompts: rawPrompts,
+                            profileDir: data.profile_dir || ".insetu/profiles/default"
+                        }
+                    }));
+                }
+            }
+        }
+    } catch (e) {
+        console.warn("Headless prompt sync failed:", e);
+    }
+});
+
 export const PromptsStore = createExtensionStore('Prompts', {
     prompts: [],
     loading: false,
@@ -297,51 +345,4 @@ window.ExtensionRegistry.registerExtension('prompts', {
             order: 3
         }
     ]
-});
-const syncPromptsState = window.inSetu.utils.coalescedAsync(async () => {
-    if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('prompts')) return;
-    try {
-        const res = await window.inSetu.api.get('prompts/list?t=' + Date.now(), { cache: 'no-store' });
-        if (res.ok) {
-            const data = await res.json();
-            const rawPrompts = data.prompts || [];
-            const cleanPrompts = rawPrompts.map(p => {
-                const match = p.match(/\.insetu\/prompts\/(.+)$/) || p.match(/prompts\/(.+)$/);
-                return match ? match[1] : p.split('/').pop();
-            });
-            const currentPrompts = PromptsStore.getState().prompts;
-            if (JSON.stringify(currentPrompts) !== JSON.stringify(cleanPrompts)) {
-                PromptsStore.setState({ prompts: cleanPrompts });
-            }
-            // Offline Cache Warming: Pre-fetch fully resolved prompt blobs silently
-            const activeWs = window.inSetu.utils.getActiveWorkspace();
-            const urlsToWarm = cleanPrompts.map(p => {
-                const fullPath = p.startsWith('.insetu/prompts/') ? p : `.insetu/prompts/${p}`;
-                return `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(fullPath)}`;
-            });
-            if (urlsToWarm.length > 0 && window.inSetu?.stores?.App) {
-                const currentQueue = window.inSetu.stores.App.getState().warmingQueue || new Set();
-                const hasNew = urlsToWarm.some(u => !currentQueue.has(u));
-                if (hasNew) {
-                    window.inSetu.stores.App.getState().enqueueWarming(urlsToWarm);
-                }
-            }
-
-            const gatherStore = window.inSetu?.stores?.Gather;
-            if (gatherStore && typeof gatherStore.setState === 'function') {
-                const currentOpts = gatherStore.getState().gatherOptions || {};
-                if (JSON.stringify(currentOpts.prompts) !== JSON.stringify(rawPrompts)) {
-                    gatherStore.setState(state => ({
-                        gatherOptions: {
-                            ...(state?.gatherOptions || {}),
-                            prompts: rawPrompts,
-                            profileDir: data.profile_dir || ".insetu/profiles/default"
-                        }
-                    }));
-                }
-            }
-        }
-    } catch (e) {
-        console.warn("Headless prompt sync failed:", e);
-    }
 });

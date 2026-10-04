@@ -828,6 +828,8 @@ window.ExtensionRegistry.registerExtension('flow', {
             label: 'Edit',
             icon: '✏️',
             intent: 'primary',
+            group: 'edit',
+            vfsBound: false,
             order: 10,
             emitEvent: (data) => ({ name: 'insetu:flow:edit-batch', detail: data })
         }
