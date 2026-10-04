@@ -196,10 +196,9 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                         <h3 style="margin: 0; color: var(--text);">Offline Ledger (IndexedDB)</h3>
                         <span style="font-size: 0.85rem; color: var(--text-muted);">Inspect the VFS blob cache and pending mutation outbox.</span>
                     </div>
-                    <button class="btn-sm" style="background: var(--intent-primary); color: white; border: none; margin: 0; padding: 6px 12px; font-weight: bold; cursor: pointer;"
-                        @click=${() => this.onForceRefresh()}>
+                    <sutram-btn intent="primary" style="--btn-padding: 6px 12px; margin: 0;" @click=${() => this.onForceRefresh()}>
                         🔄 Refresh
-                    </button>
+                    </sutram-btn>
                 </div>
 
                 <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 15px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; justify-content: space-between;">
@@ -217,7 +216,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                             ${this.storagePersisted ? '🔒 Persisted (Safe from Eviction)' : '⚠️ Best Effort (At risk of eviction)'}
                         </div>
                         ${!this.storagePersisted ? html`
-                            <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; font-weight: bold;" @click=${this._requestPersistentStorage}>Request Rights</button>
+                            <sutram-btn intent="highlight" style="margin: 0; font-weight: bold;" @click=${this._requestPersistentStorage}>Request Rights</sutram-btn>
                         ` : ''}
                     </div>
                 </div>
@@ -267,8 +266,8 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                                     </div>
                                     <pre style="margin: 0; font-size: 0.75rem; padding: 6px; max-height: 100px; overflow-y: auto;">${item.bodyString ? (item.bodyString.startsWith('{') || item.bodyString.startsWith('[') ? JSON.stringify(JSON.parse(item.bodyString), null, 2) : item.bodyString) : 'Empty Payload'}</pre>
                                     <div style="display: flex; gap: 8px; margin-top: 8px;">
-                                        <button class="btn-sm" style="background: var(--intent-warning); color: #000; margin: 0;" @click=${() => this._retryDeadLetter(item)}>🔄 Retry</button>
-                                        <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-danger); color: var(--intent-danger); margin: 0;" @click=${() => this._discardDeadLetter(item)}>🗑️ Discard</button>
+                                        <sutram-btn intent="warning" style="--btn-padding: 6px 12px; margin: 0; color: #000;" @click=${() => this._retryDeadLetter(item)}>🔄 Retry</sutram-btn>
+                                        <sutram-btn intent="danger" variant="tinted" style="--btn-padding: 6px 12px; margin: 0;" @click=${() => this._discardDeadLetter(item)}>🗑️ Discard</sutram-btn>
                                     </div>
                                 </div>
                             `)}
@@ -486,10 +485,9 @@ export class InSetuCoreOfflineLog extends InSetuElement {
                         <span style="font-size: 0.85rem; color: var(--text-muted);">Real-time inspection of caching, reads, outbox mutations, and sync events.</span>
                     </div>
                     <div style="display: flex; gap: 8px;">
-                        <button class="btn-sm" style="background: var(--intent-danger); color: white; border: none; margin: 0; padding: 6px 12px; font-weight: bold; cursor: pointer;"
-                            @click=${() => OfflineStore.getState().clearLogs()}>
+                        <sutram-btn intent="danger" @click=${() => OfflineStore.getState().clearLogs()}>
                             🗑️ Clear Logs
-                        </button>
+                        </sutram-btn>
                     </div>
                 </div>
 

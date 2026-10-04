@@ -129,6 +129,12 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     self.handled = False
 
             pctx = ResolutionContext()
+            def resolve_confirmed():
+                confirmed = (data.get("confirmed_candidates") or {}).get(target_file)
+                if confirmed:
+                    pctx.resolved_path = confirmed
+                    pctx.resolution_type = "confirmed_candidate"
+                    pctx.handled = True
 
             def resolve_noop():
                 if is_effectively_identical(search_str.split('\n'), replace_str.split('\n')):
@@ -170,17 +176,11 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 if not cand_list and len(allowed_repos) == 1:
                     cand_list.append({"filepath": f"{allowed_repos[0]}/{norm_target}", "score": 1.0, "match_type": "genesis_pinned"})
                 if cand_list:
-                    confirmed = (data.get("confirmed_candidates") or {}).get(target_file)
-                    if confirmed and any(c["filepath"] == confirmed for c in cand_list):
-                        pctx.resolved_path = confirmed
-                        pctx.resolution_type = "confirmed_candidate"
-                        pctx.handled = True
-                    else:
-                        patch_tel.update({"status": "needs_confirmation", "resolution_type": "genesis_guess", "candidates": cand_list})
-                        patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
-                        telemetry["can_commit"] = False
-                        telemetry["summary"]["action_required"] += 1
-                        pctx.handled = True
+                    patch_tel.update({"status": "needs_confirmation", "resolution_type": "genesis_guess", "candidates": cand_list})
+                    patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["action_required"] += 1
+                    pctx.handled = True
                 else:
                     patch_tel.update({"status": "failed", "error_message": "Genesis patch missing valid repository anchor, and path fragment could not be uniquely matched."})
                     telemetry["summary"]["failed"] += 1
@@ -188,14 +188,13 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     pctx.handled = True
                     return
                 if get_file_content(pctx.resolved_path) is not None:
-                    if target_file not in (data.get("confirmed_candidates") or {}):
-                        patch_tel.update({
-                            "status": "needs_confirmation", "error_message": f"File '{pctx.resolved_path}' already exists on disk. Confirm to overwrite.",
-                            "candidates": [{"filepath": pctx.resolved_path, "score": 1.0, "match_type": "overwrite"}]
-                        })
-                        patch_tel["flags"].append("confirm-to-overwrite")
-                        patch_tel["available_actions"].append("confirm_candidate")
-                        telemetry["can_commit"] = False
+                    patch_tel.update({
+                        "status": "needs_confirmation", "error_message": f"File '{pctx.resolved_path}' already exists on disk. Confirm to overwrite.",
+                        "candidates": [{"filepath": pctx.resolved_path, "score": 1.0, "match_type": "overwrite"}]
+                    })
+                    patch_tel["flags"].append("confirm-to-overwrite")
+                    patch_tel["available_actions"].append("confirm_candidate")
+                    telemetry["can_commit"] = False
 
             def resolve_direct_match():
                 if content is not None:
@@ -225,7 +224,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                                 pctx.resolved_path = cand
                                 pctx.resolution_type = "pinned_shortcut"
                             pctx.handled = True
-
             def resolve_fuzzy_path():
                 raw_candidates = ctx.find_path_candidates(target_file, allowed_repos=allowed_repos)
                 candidates = [c["filepath"] for c in raw_candidates if c["score"] >= 0.8]
@@ -254,18 +252,12 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                         telemetry["summary"]["auto_skipped"] += 1
                     pctx.handled = True
                 elif best_search_cand or best_replace_cand:
-                    confirmed = (data.get("confirmed_candidates") or {}).get(target_file)
-                    if confirmed and any(c["filepath"] == confirmed for c in cand_list):
-                        pctx.resolved_path = confirmed
-                        pctx.resolution_type = "confirmed_candidate"
-                        pctx.handled = True
-                    else:
-                        patch_tel.update({"status": "needs_confirmation", "resolution_type": "scored_path", "candidates": cand_list})
-                        if best_replace_cand: patch_tel["flags"].append("already_applied")
-                        patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
-                        telemetry["can_commit"] = False
-                        telemetry["summary"]["action_required"] += 1
-                        pctx.handled = True
+                    patch_tel.update({"status": "needs_confirmation", "resolution_type": "scored_path", "candidates": cand_list})
+                    if best_replace_cand: patch_tel["flags"].append("already_applied")
+                    patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["action_required"] += 1
+                    pctx.handled = True
             def resolve_anchor_failure():
                 if content is not None and not data.get("allow_deep_search"):
                     import difflib
@@ -275,9 +267,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     match = matcher.find_longest_match(0, len(file_lines), 0, len(search_lines))
                     start_idx = max(0, match.a - match.b)
                     end_idx = min(len(file_lines), start_idx + len(search_lines))
-
                     actual_lines = file_lines[start_idx:end_idx]
-                    diff = list(difflib.ndiff(actual_lines, search_lines))
+                    diff = list(difflib.ndiff(search_lines, actual_lines))
                     err_b64 = base64.b64encode(("\n".join(diff)).encode('utf-8')).decode('utf-8')
                     anchor_b64 = base64.b64encode(("\n".join(actual_lines)).encode('utf-8')).decode('utf-8')
 
@@ -313,22 +304,16 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                         if cand_content and longest_line in cand_content:
                             ok_search, _, s_status = apply_block_in_memory(cand_content, b, silent=True)
                             if ok_search and s_status != "idempotent":
-                                cand_list.append({"filepath": cand_rel, "score": 1.0, "match_type": "deep_search"})
+                                cand_list.append({"filepath": f"vfs://{cand_rel}", "score": 1.0, "match_type": "deep_search"})
                     if cand_list:
-                        confirmed = (data.get("confirmed_candidates") or {}).get(target_file)
-                        if confirmed and any(c["filepath"] == confirmed for c in cand_list):
-                            pctx.resolved_path = confirmed
-                            pctx.resolution_type = "confirmed_candidate"
-                            pctx.handled = True
-                        else:
-                            patch_tel.update({"status": "needs_confirmation", "resolution_type": "deep_search", "candidates": cand_list})
-                            patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
-                            telemetry["can_commit"] = False
-                            telemetry["summary"]["action_required"] += 1
-                            pctx.handled = True
+                        patch_tel.update({"status": "needs_confirmation", "resolution_type": "deep_search", "candidates": cand_list})
+                        patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
+                        telemetry["can_commit"] = False
+                        telemetry["summary"]["action_required"] += 1
+                        pctx.handled = True
 
             # Execute the Chain of Responsibility
-            for resolver in [resolve_noop, resolve_genesis, resolve_direct_match, resolve_pinned_shortcut, resolve_fuzzy_path, resolve_anchor_failure, resolve_deep_search]:
+            for resolver in [resolve_confirmed, resolve_noop, resolve_genesis, resolve_direct_match, resolve_pinned_shortcut, resolve_fuzzy_path, resolve_anchor_failure, resolve_deep_search]:
                 resolver()
                 if pctx.handled:
                     break

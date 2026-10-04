@@ -607,7 +607,62 @@ async function executeSecurityHandshake() {
 }
 export async function executeBootSequence() {
     console.log("[BOOT] Starting sequence...");
-    if (window.ExtensionRegistry) window.ExtensionRegistry.isBooting = true;
+
+    // Pre-emptively extract workspace from URL hash to prevent boot-time layout swapping and 404 fetches
+    const initialHash = window.location.hash.replace(/^#\/?/, '');
+    const hashParts = initialHash.split('/').map(decodeURIComponent);
+    if (hashParts[0]) {
+        try {
+            sessionStorage.setItem('insetu_workspace', hashParts[0]);
+            localStorage.setItem('insetu_workspace', hashParts[0]);
+        } catch(e) {}
+    }
+
+    if (window.ExtensionRegistry) {
+        window.ExtensionRegistry.isBooting = true;
+        // ADR 0104: Global Action Middleware Pipeline (VFS Parity Gatekeeper)
+        window.ExtensionRegistry.registerActionMiddleware(async (action, data) => {
+            if (action.vfsBound && data) {
+                let isDirty = data.isDirty;
+                const dirtyFiles = [];
+
+                // Dynamically cross-reference the VFS multi-buffer store to catch out-of-context actions
+                const activeBuffers = window.inSetu?.stores?.Fs?.getState()?.activeBuffers || {};
+
+                // Handle single files, Gather batches (Arrays), or Bridge turns (data.records)
+                const targets = Array.isArray(data) ? data : (data.records || [data]);
+
+                targets.forEach(t => {
+                    const fp = t.filepath || t.folderpath || t;
+                    const buffer = activeBuffers[fp];
+                    // A buffer is only physically dirty if it represents a real VFS file and its content differs
+                    if (buffer && buffer.isFS && buffer.content !== buffer.originalContent) {
+                        isDirty = true;
+                        if (!dirtyFiles.includes(fp)) dirtyFiles.push(fp);
+                    }
+                });
+
+                if (isDirty) {
+                    const label = typeof action.label === 'function' ? action.label(data) : (action.label || action.id);
+                    if (confirm(`You have unsaved changes. To execute '${label}', these changes must be saved to the filesystem.\n\nClick OK to Save and continue, or Cancel to abort.`)) {
+                        if (window.inSetu?.ui?.saveBufferFile) {
+                            // Auto-save all explicitly detected dirty files
+                            for (const fp of dirtyFiles) {
+                                await window.inSetu.ui.saveBufferFile(fp);
+                            }
+                            // Also save the generic filepath if it was passed natively
+                            if (data.filepath && !dirtyFiles.includes(data.filepath)) {
+                                await window.inSetu.ui.saveBufferFile(data.filepath);
+                            }
+                            if (data.isDirty !== undefined) data.isDirty = false;
+                        }
+                    } else {
+                        throw new Error(`Action '${label}' aborted by user due to unsaved changes.`);
+                    }
+                }
+            }
+        });
+    }
     updateBootProgress("Security Handshake...");
     const authenticated = await executeSecurityHandshake();
     console.log("[BOOT] Security Handshake completed:", authenticated);
@@ -830,132 +885,107 @@ export async function executeBootSequence() {
         }
     }
     // Initialize Zero-Bundler SPA Router (Native Hash Routing)
-    let lastRouteHash = window.location.hash;
     const handleHashChange = () => {
         const hash = window.location.hash.replace(/^#\/?/, '');
         const parts = hash.split('/').map(decodeURIComponent);
 
         const activeWs = window.inSetu.utils.getActiveWorkspace();
         const ws = parts[0] || activeWs;
-        const tab = parts[1] || 'context';
-        const sub = parts[2] || '';
+        let colId = parts[1] || 'center';
+        let subId = parts[2] || '';
         const deepPath = parts.slice(3);
+        // Legacy Hash Migration Guardrail
+        let validColumns = ['left', 'center', 'right'];
+        if (window.Sutram?.stores?.Layout) {
+            validColumns = Object.keys(window.Sutram.stores.Layout.getState().columns);
+        }
+
+        if (!validColumns.includes(colId)) {
+            subId = parts[2] || colId; 
+            colId = 'center';
+            
+            // Silently rewrite the URL to the new format
+            const deepStr = deepPath.length > 0 ? '/' + deepPath.map(encodeURIComponent).join('/') : '';
+            const newHash = `#/${encodeURIComponent(ws)}/${colId}/${encodeURIComponent(subId)}${deepStr}`;
+            history.replaceState(null, '', newHash);
+        }
+
         if (ws && ws !== activeWs) {
             if (window.inSetu.sys.executeWorkspaceSwap) {
                 window.inSetu.sys.executeWorkspaceSwap(ws);
             }
         }
 
-        const state = AppStore.getState();
-        const prevTab = state.activeTab;
-        const prevSub = state.activeSubTabs[tab];
+        if (deepPath.length > 0) {
+            AppStore.setState({ globalBrowsePath: deepPath });
+        }
 
-        let resolvedSub = sub;
-        if (!resolvedSub && window.ExtensionRegistry) {
-            const slots = window.ExtensionRegistry.getLayoutSlots().filter(s => s.slot === 'slots:sub-navigation' && s.targetParent === tab);
-            if (slots.length > 0) {
-                slots.sort((a, b) => (a.order || 50) - (b.order || 50));
-                resolvedSub = slots[0].id;
+        if (window.Sutram?.stores?.Layout) {
+            const layout = window.Sutram.stores.Layout.getState();
+
+            if (colId && layout.columns[colId]) {
+                layout.setFocusedColumn(colId);
+            }
+
+            if (subId) {
+                const colState = layout.columns[colId];
+                const isPinned = colState && colState.pinned.some(p => p.id === subId);
+
+                if (!isPinned && window.ExtensionRegistry) {
+                    const slots = window.ExtensionRegistry.getLayoutSlots();
+                    const slot = slots.find(s => s.id === subId);
+
+                    if (slot) {
+                        layout.pinToColumn(colId, {
+                            id: slot.id,
+                            component: slot.component,
+                            label: slot.label,
+                            extName: slot.extName,
+                            targetParent: slot.targetParent || colId,
+                            icon: slot.icon,
+                            intent: slot.intent
+                        });
+                    }
+                }
             }
         }
-
-        AppStore.getState().setActiveRoute(tab, resolvedSub, deepPath.length > 0 ? deepPath : null);
-        // Emit standard non-refresh events upon actual navigation
-        if (tab !== prevTab) {
-            window.inSetu.events.emitHook('insetu:tab-changed', tab);
-        }
-        if (resolvedSub && resolvedSub !== prevSub) {
-            window.inSetu.events.emitHook('insetu:subtab-changed', { parentId: tab, subId: resolvedSub, forceRefresh: false });
-        }
-        lastRouteHash = window.location.hash;
     };
 
     window.addEventListener('hashchange', handleHashChange);
     // Bootstrap initial route from URL or set default
     const currentWs = window.inSetu.utils.getActiveWorkspace();
-    console.log(`[BOOT TELEMETRY] Bootstrapping Hash Route. Current WS: ${currentWs}, Hash: ${window.location.hash}`);
     if (!window.location.hash || window.location.hash === '#/' || window.location.hash === '#') {
-        window.location.hash = `#/${encodeURIComponent(currentWs)}/context/`;
-        console.log(`[BOOT TELEMETRY] Set default hash: ${window.location.hash}`);
+        window.location.hash = `#/${encodeURIComponent(currentWs)}/center/`;
     }
-    // Always trigger handleHashChange on startup to populate activeTab in AppStore
+
+    // Always trigger handleHashChange on startup to populate layout state
     handleHashChange();
-    console.log(`[BOOT TELEMETRY] AppStore state after handleHashChange:`, {
-        activeTab: AppStore.getState().activeTab,
-        activeSubTabs: AppStore.getState().activeSubTabs
-    });
-    // UDF Subscription: State -> URL mapping
-    AppStore.subscribe(
-        state => [state.activeWorkspace, state.activeTab, state.activeSubTabs, state.globalBrowsePath],
-        ([ws, tab, subs, deep]) => {
-            if (!ws || !tab) return;
-            const currentSub = subs[tab] || '';
-            const deepStr = (deep && deep.length > 0) ? '/' + deep.map(encodeURIComponent).join('/') : '';
-            const newHash = `#/${encodeURIComponent(ws)}/${encodeURIComponent(tab)}/${encodeURIComponent(currentSub)}${deepStr}`;
 
-            // Persist the active tab layout per-workspace so it hydrates correctly on swap
-            localStorage.setItem(`insetu_active_tab_${ws}`, tab);
-            if (currentSub) localStorage.setItem(`insetu_active_subtab_${ws}_${tab}`, currentSub);
-
-            // Silently update URL without triggering a hashchange event reload loop
-            if (window.location.hash !== newHash && window.location.hash !== newHash.replace(/\/$/, '')) {
-                history.replaceState(null, '', newHash);
-            }
-            // Sync declarative layout state to the Tier 0 App Shell
-            window.dispatchEvent(new CustomEvent('sutram-route-changed', {
-                detail: { tab, subTabs: subs }
-            }));
-        }
-    );
+    // Map shell events to extension lifecycle hooks
     window.addEventListener('shell-tab-changed', (e) => {
         const { tabId, isAlreadyActive } = e.detail;
-        const state = AppStore.getState();
-
-        let activeSub = state.activeSubTabs[tabId];
-        // If there's no saved subtab state, dynamically resolve the default first subtab from the layout topology
-        if (!activeSub && window.ExtensionRegistry) {
-            const slots = window.ExtensionRegistry.getLayoutSlots().filter(s => s.slot === 'slots:sub-navigation' && s.targetParent === tabId);
-            if (slots.length > 0) {
-                slots.sort((a, b) => (a.order || 50) - (b.order || 50));
-                activeSub = slots[0].id;
-                // Silently patch the AppStore so the URL hash aligns with reality
-                AppStore.setState({ activeSubTabs: { ...state.activeSubTabs, [tabId]: activeSub } });
-            }
-        }
-
         if (isAlreadyActive) {
-            window.inSetu.events.emitHook('insetu:force-refresh', { parentId: tabId, subId: activeSub });
+            window.inSetu.events.emitHook('insetu:force-refresh', { parentId: tabId });
         } else {
-            AppStore.getState().setActiveRoute(tabId, activeSub || null);
             window.inSetu.events.emitHook('insetu:tab-changed', tabId);
-            if (activeSub) {
-                window.inSetu.events.emitHook('insetu:subtab-changed', { parentId: tabId, subId: activeSub });
-            }
         }
     });
 
     window.addEventListener('shell-subtab-changed', (e) => {
         const { tabId, subId, isAlreadyActive } = e.detail;
-
         if (isAlreadyActive) {
             window.inSetu.events.emitHook('insetu:force-refresh', { parentId: tabId, subId });
         } else {
-            AppStore.getState().setActiveRoute(tabId, subId);
             window.inSetu.events.emitHook('insetu:subtab-changed', { parentId: tabId, subId });
         }
     });
-    try {
-        // Hydrate the declarative shell with the initial route state
-        const state = AppStore.getState();
-        window.dispatchEvent(new CustomEvent('sutram-route-changed', {
-            detail: { tab: state.activeTab, subTabs: state.activeSubTabs }
-        }));
 
-        if (state.activeTab) {
-            window.inSetu.events.emitHook('insetu:tab-changed', state.activeTab);
-            const activeSub = state.activeSubTabs[state.activeTab];
-            if (activeSub) {
-                window.inSetu.events.emitHook('insetu:subtab-changed', { parentId: state.activeTab, subId: activeSub, forceRefresh: true });
+    try {
+        // Re-emit generic boot view activation events based on the focused column
+        if (window.Sutram?.stores?.Layout) {
+            const focused = window.Sutram.stores.Layout.getState().focusedColumn;
+            if (focused) {
+                window.inSetu.events.emitHook('insetu:tab-changed', focused);
             }
         }
     } catch (bootErr) {
@@ -1062,11 +1092,8 @@ async function executeWorkspaceSwap(key, title) {
         resolvingLocks: {},
         warmingQueue: new Set()
     });
-
     // Explicitly update location hash to keep router and location bar synchronized
-    const savedTab = localStorage.getItem(`insetu_active_tab_${key}`) || 'context';
-    const savedSub = localStorage.getItem(`insetu_active_subtab_${key}_${savedTab}`) || '';
-    window.location.hash = `#/${encodeURIComponent(key)}/${encodeURIComponent(savedTab)}/${encodeURIComponent(savedSub)}`;
+    window.location.hash = `#/${encodeURIComponent(key)}/center/`;
     // 4. Notify backend of the swap
     await window.inSetu.api.workspace.post('system/workspaces', { active_workspace: key });
 
@@ -1372,12 +1399,10 @@ async function performSoftRefresh() {
         }
         // 4. Hydrate active DOM views using native routing
         window.inSetu.events.emitHook('insetu:soft-refresh', currentWs);
-        const state = AppStore.getState();
-        const activeTab = state.activeTab || 'context';
-        const activeSub = state.activeSubTabs[activeTab];
-        window.inSetu.events.emitHook('insetu:tab-changed', activeTab);
-        if (activeSub) {
-            window.inSetu.events.emitHook('insetu:subtab-changed', { parentId: activeTab, subId: activeSub, forceRefresh: true });
+        if (window.Sutram?.stores?.Layout) {
+            const layoutState = window.Sutram.stores.Layout.getState();
+            const activeCol = layoutState.focusedColumn || 'center';
+            window.inSetu.events.emitHook('insetu:tab-changed', activeCol);
         }
 
         window.inSetu.ui.setGlobalStatus("✅ Workspace Hydrated", 2000);

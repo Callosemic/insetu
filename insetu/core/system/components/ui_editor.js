@@ -1,6 +1,5 @@
 import { LitElement, html, css } from 'lit';
 import { InSetuElement } from '/static/extensions/system/sdk.js';
-import { FsStore } from '/static/extensions/fs/fs.js';
 import { AppStore } from '/static/extensions/system/store.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
@@ -15,58 +14,89 @@ export function resolveEditorMode(filename) {
     };
     return { ext, mode: modeMap[ext], isSupported: !!modeMap[ext], isMarkdown: ext === 'md' };
 }
+export function getActiveEditorPath() {
+    const layout = window.Sutram?.stores?.Layout?.getState();
+    if (!layout) return null;
+    const activeCol = layout.focusedColumn;
+    const appState = AppStore.getState();
+    const activeTabId = appState.activeTab;
 
-export function getEditorContent() {
-    return FsStore.getState().fileModal.content;
-}
-export function setEditorContent(text) {
-    FsStore.setState(s => ({ fileModal: { ...s.fileModal, content: text } }));
-}
-export function insertTextAtCursor(textToInsert) {
-    const state = FsStore.getState().fileModal;
-    const modalEl = document.querySelector('insetu-file-modal');
+    // Check if the current layout column corresponds to a mapped subtab/buffer
+    let subId = appState.activeSubTabs[activeCol] || appState.activeSubTabs[activeTabId];
+    if (subId && window.inSetu.stores.Fs?.getState()?.activeBuffers[subId]) {
+        return subId;
+    }
 
-    if (modalEl && modalEl.shadowRoot) {
-        const cmEditor = modalEl.shadowRoot.querySelector('insetu-markdown-editor');
-        const textarea = modalEl.shadowRoot.querySelector('textarea');
-
-        if (state.isSupportedEditor && cmEditor) {
-            cmEditor.insertAtCursor(textToInsert);
-            return; 
-        } else if (textarea) {
-            const insertPos = textarea.selectionStart;
-            const newContent = state.content.substring(0, insertPos) + textToInsert + state.content.substring(insertPos);
-            const st = textarea.scrollTop;
-
-            textarea.value = newContent;
-            textarea.selectionStart = textarea.selectionEnd = insertPos + textToInsert.length;
-            textarea.scrollTop = st;
-
-            FsStore.setState({ fileModal: { ...state, content: newContent } });
-            return;
+    // Fallback: Check if there's any active projection matching an active buffer
+    if (activeCol && layout.columns[activeCol]) {
+        const activeSub = appState.activeSubTabs[activeCol];
+        if (activeSub && window.inSetu.stores.Fs?.getState()?.activeBuffers[activeSub]) {
+            return activeSub;
         }
     }
 
-    FsStore.setState({ fileModal: { ...state, content: state.content + "\n" + textToInsert } });
+    // Fallback 2: Iterate DOM for focused element
+    let activeEl = document.activeElement;
+    while (activeEl && activeEl.shadowRoot && activeEl.shadowRoot.activeElement) {
+        activeEl = activeEl.shadowRoot.activeElement;
+    }
+
+    const projEl = activeEl ? activeEl.closest('insetu-editor-projection') : null;
+    if (projEl && projEl.filepath) {
+        return projEl.filepath;
+    }
+
+    // Fallback 3: Return the most recently updated buffer if only one is open
+    const bufs = Object.keys(window.inSetu.stores.Fs?.getState()?.activeBuffers || {});
+    if (bufs.length > 0) return bufs[0];
+
+    return null;
 }
+
+export function getEditorContent() {
+    const activePath = getActiveEditorPath();
+    if (!activePath) return '';
+    return window.inSetu.stores.Fs?.getState()?.activeBuffers[activePath]?.content || '';
+}
+
+export function setEditorContent(text) {
+    const activePath = getActiveEditorPath();
+    if (activePath) {
+        window.inSetu.stores.Fs?.getState()?.updateBuffer(activePath, { content: text });
+    }
+}
+export function insertTextAtCursor(textToInsert) {
+    const activePath = getActiveEditorPath();
+    if (!activePath) return;
+
+    const state = window.inSetu.stores.Fs?.getState()?.activeBuffers[activePath];
+    if (!state) return;
+
+    window.dispatchEvent(new CustomEvent('insetu:editor-insert-text', {
+        detail: { filepath: activePath, text: textToInsert },
+        bubbles: true,
+        composed: true
+    }));
+}
+
 export function insertLinkToEditor(path, name) {
     let finalPath = path;
-    const currentModalFile = FsStore.getState().fileModal.filename;
-    if (currentModalFile) {
+    const currentActiveFile = getActiveEditorPath();
+    if (currentActiveFile) {
         const targetConfigs = AppStore.getState().targetConfigs || [];
         const getRepo = (p) => {
             const match = targetConfigs.find(c => p.startsWith(c.repo_dir + '/'));
             return match ? match.repo_dir : p.split('/')[0];
         };
 
-        const currentRepo = getRepo(currentModalFile);
+        const currentRepo = getRepo(currentActiveFile);
         const targetRepo = getRepo(path);
 
         if (currentRepo !== targetRepo) {
             const targetPathWithinRepo = path.substring(targetRepo.length + 1);
             finalPath = `${targetRepo}::${targetPathWithinRepo}`;
         } else {
-            const currentParts = currentModalFile.split('/');
+            const currentParts = currentActiveFile.split('/');
             currentParts.pop();
             const targetParts = path.split('/');
             let commonLength = 0;
@@ -82,7 +112,7 @@ export function insertLinkToEditor(path, name) {
     const linkText = `[${name}](${finalPath})`;
     insertTextAtCursor(linkText);
 
-    FsStore.getState().setModal('linkInsert', { open: false });
+    window.inSetu.stores.Fs?.getState()?.setModal('linkInsert', { open: false });
 }
 window.inSetu.editor = window.inSetu.editor || {};
 window.inSetu.editor.getEditorContent = getEditorContent;
@@ -379,10 +409,9 @@ export class InSetuFrontmatterEditor extends InSetuElement {
             }
         });
     }
-
     render() {
         if (this._loading) {
-            return html`<div class="spinner" style="display:block; padding: 20px;">Loading file...</div>`;
+            return html`<div style="padding: 20px;"><yenvui-spinner text="Loading file..."></yenvui-spinner></div>`;
         }
         return html`
             <div style="display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg);"
@@ -398,15 +427,21 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                     <div class="action-bar-scroll">
                         <slot name="action-bar-extra"></slot>
                         <sutram-entity-actions 
+                            variant="menu-bar"
                             ?scrollable=${true}
                             .entityType=${'file'} 
                             .entityData=${{ 
                                 filepath: this.filepath, 
                                 isFS: true,
+                                isDirty: this._isDirty,
+                                getTransientState: () => this._content,
                                 suppress: ['file-edit']
                             }}>
                         </sutram-entity-actions>
                     </div>
+                    <sutram-btn variant="tinted" intent="neutral" style="margin: 0; --btn-padding: 4px 8px;" title="Toggle Prose Mode" @click=${() => this._writingMode = !this._writingMode}>
+                        ${this._writingMode ? '✍' : '💻'}
+                    </sutram-btn>
                     <button class="meta-btn ${this._metadataExpanded ? 'active' : ''}"
                         @click=${() => this._metadataExpanded = !this._metadataExpanded}
                         title="Toggle Metadata">

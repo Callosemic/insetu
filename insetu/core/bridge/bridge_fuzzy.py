@@ -154,14 +154,21 @@ def apply_block_in_memory(content, block, silent=False):
 
     # Abstracted Anchor Search on SEARCH Block
     search_match = find_block_anchor(file_lines, search_lines)
-
     if not search_match:
         # Check if REPLACE block matches 100% contiguously in file (Idempotency Check)
         if replace_lines and any(l.strip() for l in replace_lines if l.strip().upper() != '{{UNTIL}}'):
-            replace_match = find_block_anchor(file_lines, replace_lines)
-            if replace_match:
-                if not silent: print("  └─ [ℹ️] Idempotency: Target file 100% matches REPLACE block. Skipping chunk.")
-                return True, content, "idempotent"
+            search_str_clean = "\n".join([l.strip() for l in search_lines if l.strip()])
+            replace_str_clean = "\n".join([l.strip() for l in replace_lines if l.strip()])
+
+            # Guardrail: If the REPLACE block is just a strict subset of the SEARCH block (e.g., a pure deletion where only the surrounding context remains), 
+            # finding it in the file doesn't guarantee the deletion occurred, as that context might just exist natively.
+            is_subset_deletion = replace_str_clean and (replace_str_clean in search_str_clean)
+
+            if not is_subset_deletion:
+                replace_match = find_block_anchor(file_lines, replace_lines)
+                if replace_match:
+                    if not silent: print("  └─ [ℹ️] Idempotency: Target file 100% matches REPLACE block. Skipping chunk.")
+                    return True, content, "idempotent"
         # Fallback: Regex extraction for edge-case grid desyncs
         if "{{UNTIL}}" in search_str:
             try:
@@ -187,9 +194,8 @@ def apply_block_in_memory(content, block, silent=False):
             start_idx = max(0, match.a - match.b)
             end_idx = min(len(file_lines), start_idx + len(search_lines))
             actual_lines = file_lines[start_idx:end_idx]
-
             # Use ndiff to show exact character-level discrepancies (indicated by ? and ^)
-            diff = list(difflib.ndiff(actual_lines, search_lines))
+            diff = list(difflib.ndiff(search_lines, actual_lines))
             diff_str = "\n".join(diff)
 
             err_b64 = base64.b64encode(diff_str.encode('utf-8')).decode('utf-8')

@@ -61,7 +61,7 @@ export class InSetuJobTracker extends InSetuElement {
     render() {
         if (this._status === 'idle' || this._status === 'completed') return html``;
         if (this._status === 'failed') return html`<div style="color: var(--intent-danger); font-weight: bold; margin-top: 10px;">❌ Error: ${this._error}</div>`;
-        return html`<div class="spinner" style="display: block; margin-top: 10px;">${this._message || 'Processing...'}</div>`;
+        return html`<div style="margin-top: 10px;"><yenvui-spinner .text=${this._message || 'Processing...'}></yenvui-spinner></div>`;
     }
 }
 customElements.define('insetu-job-tracker', InSetuJobTracker);
@@ -128,27 +128,8 @@ customElements.define('insetu-config-banner', InSetConfigBanner);
 window.inSetu.ui = window.inSetu.ui || {};
 window.inSetu.ui.viewTextBlob = (title, content, suggestedFilename = '') => {
     const filename = suggestedFilename || ('blob_' + Date.now() + '.txt');
-    const virtualUri = `virtual://${filename}`;
-
-    if (window.inSetu.stores?.Fs) {
-        const ext = filename.split('.').pop().toLowerCase();
-        window.inSetu.stores.Fs.setState(s => ({
-            fileModal: {
-                ...s.fileModal,
-                open: true,
-                filename: virtualUri,
-                content: content,
-                originalContent: content,
-                fullText: content,
-                isTruncated: false,
-                isFS: false,
-                forceEdit: false,
-                isMemoryOnly: true,
-                isSupportedEditor: true,
-                ext: ext,
-                codeMode: ext === 'diff' ? 'markdown' : 'markdown'
-            }
-        }));
+    if (window.inSetu.vfs?.viewVirtualInWindow) {
+        window.inSetu.vfs.viewVirtualInWindow(filename, content);
     }
 };
 

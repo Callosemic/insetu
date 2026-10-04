@@ -924,6 +924,12 @@ def mount_gather_volumes(workspace_id=None, **kwargs):
     ctx = gather_bp.get_context(workspace_id)
     mount_volume(workspace_id, 'ctx', 'contexts', ctx.paths.get("contexts_dir"))
 from akasa.utils import thread_safe_cache
+@hooks.on('coerce_naked_uri')
+def coerce_gather_uris(raw_uri=None, **kwargs):
+    if raw_uri and (raw_uri.endswith('_context.txt') or raw_uri.startswith('contexts/') or raw_uri.startswith('.insetu/ext/gather/data/contexts/')):
+        clean_c = raw_uri.replace('.insetu/ext/gather/data/contexts/', '').replace('contexts/', '')
+        return f"ctx://contexts/{clean_c}"
+    return None
 
 @hooks.on('manifest_mutated')
 def _invalidate_gather_manifest(workspace_id=None, **kwargs):

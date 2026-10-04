@@ -35,9 +35,6 @@ export const AppStore = createExtensionStore('App', {
     deletedMutations: new Set(),
     activeModules: [],
     pendingModules: [],
-
-    activeTab: 'context',
-    activeSubTabs: {},
     globalBrowsePath: [],
     currentBrowsePath: [],
     browserConfig: { mode: 'view', callback: null },
@@ -55,26 +52,13 @@ export const AppStore = createExtensionStore('App', {
     virtualContexts: [],
     categoryOrder: [],
     hiddenOutputs: [],
-    pinnedRepos: new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${window.inSetu.utils.getActiveWorkspace()}`)) || ["ALL"]),
+    pinnedRepos: new Set(["ALL"]),
     setPinnedRepos: (repos) => {
-        const ws = AppStore.getState().activeWorkspace || 'default';
-        localStorage.setItem(`insetu_pinned_repos_${ws}`, JSON.stringify(Array.from(repos)));
         AppStore.setState({ pinnedRepos: repos });
-    },
-    setActiveRoute: (tab, subTab, deepPath = null) => {
-        const state = AppStore.getState();
-        const updates = { activeTab: tab };
-        if (subTab) {
-            updates.activeSubTabs = { ...state.activeSubTabs, [tab]: subTab };
-        }
-        if (deepPath !== null) {
-            updates.globalBrowsePath = deepPath;
-        } else {
-            updates.globalBrowsePath = [];
-        }
-        AppStore.setState(updates);
     }
     // resetState is injected by the factory automatically
+}, {
+    localSync: ['pinnedRepos']
 });
 window.inSetu.stores.App = AppStore;
 // Centralized Invalidation Listener (ADR 0103)

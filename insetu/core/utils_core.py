@@ -80,17 +80,14 @@ class InSetuURI(AkasaURI):
         if "://" not in raw_str:
             if raw_str.startswith('ctx://') or raw_str.startswith('vfs://'):
                 pass
-            elif raw_str.endswith('_context.txt') or '/contexts/' in raw_str:
-                clean_c = raw_str.replace('.insetu/ext/gather/data/contexts/', '').replace('contexts/', '')
-                raw_str = f"ctx://contexts/{clean_c}"
-            elif raw_str.endswith('_diffs.txt') or '/diffs/' in raw_str:
-                clean_d = raw_str.replace('.insetu/ext/git/data/diffs/', '').replace('diffs/', '')
-                raw_str = f"ctx://diffs/{clean_d}"
-            elif 'prompts/' in raw_str or raw_str.startswith('.insetu/prompts/'):
-                clean_p = raw_str.replace('.insetu/prompts/', '').replace('prompts/', '')
-                raw_str = f"ctx://prompts/{clean_p}"
             else:
-                raw_str = f"vfs://{raw_str.lstrip('/')}"
+                from akasa.hooks import hooks
+                # Inversion of Control: Extensions explicitly claim their own URI namespaces
+                coerced = next((r for r in hooks.emit('coerce_naked_uri', raw_uri=raw_str) if r), None)
+                if coerced:
+                    raw_str = coerced
+                else:
+                    raw_str = f"vfs://{raw_str.lstrip('/')}"
 
         return cls(raw_str)
 
@@ -961,14 +958,13 @@ def find_path_candidates(query_path=None, workspace_id=None, allowed_repos=None,
     for cand_basename, cand_rel in omniscient:
         cand_basename_lower = cand_basename.lower()
         cand_rel_lower = cand_rel.lower()
-
         if cand_rel_lower == clean_query.lower():
-            candidates.append({"filepath": cand_rel, "score": 1.0, "match_type": "exact_match"})
+            candidates.append({"filepath": f"vfs://{cand_rel}", "score": 1.0, "match_type": "exact_match"})
         elif cand_basename_lower == query_basename:
             score = 0.9 if clean_query.lower() in cand_rel_lower else 0.8
-            candidates.append({"filepath": cand_rel, "score": score, "match_type": "basename_match"})
+            candidates.append({"filepath": f"vfs://{cand_rel}", "score": score, "match_type": "basename_match"})
         elif clean_query.lower() in cand_rel_lower or cand_rel_lower.endswith(clean_query.lower()):
-            candidates.append({"filepath": cand_rel, "score": 0.7, "match_type": "subpath_match"})
+            candidates.append({"filepath": f"vfs://{cand_rel}", "score": 0.7, "match_type": "subpath_match"})
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
     return candidates

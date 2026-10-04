@@ -36,6 +36,15 @@ export class InSetuSystemSettings extends InSetuElement {
             background: transparent !important;
             border: 2px solid var(--intent-primary) !important;
         }
+        .masthead-action-rail-cell {
+            width: 44px; height: 100%; border-radius: 0; border: none; border-left: 1px solid var(--border);
+            background: var(--rail-bg, rgba(255,255,255,0.02)); display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: background 0.15s ease, color 0.15s ease; box-sizing: border-box; color: var(--text-muted);
+        }
+        .masthead-action-rail-cell:hover {
+            background: var(--rail-hover, rgba(99, 102, 241, 0.22)); color: var(--text);
+        }
+        .masthead-action-rail-cell i { color: currentColor !important; }
     `];
     constructor() {
         super();
@@ -344,18 +353,11 @@ export class InSetuSystemSettings extends InSetuElement {
                 ?fullscreen=${true} 
                 titleText="OS Settings Hub" 
                 @sutram-modal-closed=${() => this.modalOpen = false}>
-
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: hidden;">
                     <div style="display: flex; gap: 8px; margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 8px; flex-shrink: 0; overflow-x: auto; scrollbar-width: none;">
-                        <button class="btn-sm" style="background: ${this.activeTab === 'system' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.activeTab === 'system' ? '#fff' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; font-weight: bold; padding: 8px 16px; cursor: pointer; white-space: nowrap;" @click=${() => this.activeTab = 'system'}>
-                            ⚙️ System
-                        </button>
-                        <button class="btn-sm" style="background: ${this.activeTab === 'core' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.activeTab === 'core' ? '#fff' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; font-weight: bold; padding: 8px 16px; cursor: pointer; white-space: nowrap;" @click=${() => this.activeTab = 'core'}>
-                            🛠️ Core
-                        </button>
-                        <button class="btn-sm" style="background: ${this.activeTab === 'extensions' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.activeTab === 'extensions' ? '#fff' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; font-weight: bold; padding: 8px 16px; cursor: pointer; white-space: nowrap;" @click=${() => this.activeTab = 'extensions'}>
-                            🧩 Extensions
-                        </button>
+                        <sutram-btn intent=${this.activeTab === 'system' ? 'primary' : 'neutral'} ?active=${this.activeTab === 'system'} style="--btn-padding: 8px 16px; white-space: nowrap;" @click=${() => this.activeTab = 'system'}>⚙️ System</sutram-btn>
+                        <sutram-btn intent=${this.activeTab === 'core' ? 'primary' : 'neutral'} ?active=${this.activeTab === 'core'} style="--btn-padding: 8px 16px; white-space: nowrap;" @click=${() => this.activeTab = 'core'}>🛠️ Core</sutram-btn>
+                        <sutram-btn intent=${this.activeTab === 'extensions' ? 'primary' : 'neutral'} ?active=${this.activeTab === 'extensions'} style="--btn-padding: 8px 16px; white-space: nowrap;" @click=${() => this.activeTab = 'extensions'}>🧩 Extensions</sutram-btn>
                     </div>
                     <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-bottom: 20px;">
                         ${this.activeTab === 'system' ? html`
@@ -428,7 +430,7 @@ export class InSetuSystemSettings extends InSetuElement {
                 @sutram-modal-closed=${() => this.docsModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     ${!this._docsStatus ? html`
-                        <div class="spinner" style="display: block; padding: 20px;">Scanning for documentation...</div>
+                        <div style="padding: 20px;"><yenvui-spinner text="Scanning for documentation..."></yenvui-spinner></div>
                     ` : html`
                         <div style="display: flex; flex-direction: column; gap: 20px;">
                             <div>
@@ -438,7 +440,7 @@ export class InSetuSystemSettings extends InSetuElement {
                                         <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
                                             <span style="font-weight: bold; color: var(--text);">${doc.title}</span>
                                             ${doc.exists ? html`
-                                                <button class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${() => this._readDoc(doc)}>Read</button>
+                                                <sutram-btn intent="success" @click=${() => this._readDoc(doc)}>Read</sutram-btn>
                                             ` : html`
                                                 <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
                                             `}
@@ -453,7 +455,7 @@ export class InSetuSystemSettings extends InSetuElement {
                                         <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
                                             <span style="font-weight: bold; color: var(--text);">${doc.title}</span>
                                             ${doc.exists ? html`
-                                                <button class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${() => this._readDoc(doc)}>Read</button>
+                                                <sutram-btn intent="primary" @click=${() => this._readDoc(doc)}>Read</sutram-btn>
                                             ` : html`
                                                 <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
                                             `}
@@ -468,7 +470,7 @@ export class InSetuSystemSettings extends InSetuElement {
                                         <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
                                             <span style="font-weight: bold; color: var(--text);">${doc.title}</span>
                                             ${doc.exists ? html`
-                                                <button class="btn-sm" style="background: var(--intent-highlight); margin: 0;" @click=${() => this._readDoc(doc)}>Read</button>
+                                                <sutram-btn intent="highlight" @click=${() => this._readDoc(doc)}>Read</sutram-btn>
                                             ` : html`
                                                 <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
                                             `}
@@ -618,12 +620,11 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                 <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0; overflow-y: auto;">
                     <form @submit=${this._handleCreateWorkspace} style="display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; background: transparent; border: none; box-shadow: none;">
                         <sutram-input label="Workspace Unique Name / ID" placeholder="e.g. guitar_academy" .value=${this._newWsId} @sutram-input-changed=${e => this._newWsId = e.detail.value} ?flush=${true}></sutram-input>
-
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 6px; color: var(--text-muted);">Workspace Root Directory Path</label>
                             <div style="display: flex; gap: 8px; align-items: flex-start;">
                                 <sutram-input placeholder="e.g. ~/Documents/GuitarRepertoire" .value=${this._newWsRoot} @sutram-input-changed=${e => this._newWsRoot = e.detail.value} ?flush=${true} style="flex: 1; margin: 0;"></sutram-input>
-                                <button type="button" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 14px; height: 38px;" @click=${this._openHostBrowser}>...</button>
+                                <sutram-btn intent="highlight" style="margin: 0; --btn-padding: 8px 14px;" @click=${this._openHostBrowser}>...</sutram-btn>
                             </div>
                         </div>
                         <sutram-async-btn btntype="submit" label="➕ Provision & Mount Isolated Workspace" intent="success" style="width: 100%; display: block;" .onClick=${(e) => {
@@ -638,8 +639,8 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                     <sutram-modal ?open=${this._showHostBrowser} ?fullscreen=${true} titleText="📁 Select Local System Directory" @sutram-modal-closed=${() => this._showHostBrowser = false}>
                         <div slot="body" style="display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow-y: auto;">
                             <div style="display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-shrink: 0;">
-                                <button type="button" class="btn-sm" style="background: var(--intent-neutral); margin:0;" @click=${this._goUpHostDir}>Parent Dir</button>
-                                <span style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-primary); word-break: break-all; flex: 1;">${this._hostCurrentPath}</span>
+                                <sutram-btn intent="neutral" @click=${this._goUpHostDir}>Parent Dir</sutram-btn>
+                                <yenvui-scrub-track style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-primary); flex: 1;">${this._hostCurrentPath}</yenvui-scrub-track>
                             </div>
                             <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;">
                                 ${this._hostDirs.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.9rem;">No subdirectories found.</div>` : this._hostDirs.map(d => html`
@@ -653,7 +654,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                                 `)}
                             </div>
                         </div>
-                        <button slot="footer" type="button" style="background: var(--intent-success); color: white;" @click=${this._confirmHostDir}>✅ Select This Path</button>
+                        <sutram-btn slot="footer" intent="success" @click=${this._confirmHostDir}>✅ Select This Path</sutram-btn>
                     </sutram-modal>
 
                     <div>
@@ -670,7 +671,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                                             </span>
                                         </div>
                                         ${wsId !== 'default' ? html`
-                                            <button class="btn-sm" style="background: var(--intent-danger); color: white; padding: 4px 10px; margin: 0; font-size: 0.8rem;" @click=${() => this._handleDeleteWorkspace(wsId)}>Remove</button>
+                                            <sutram-btn intent="danger" style="--btn-padding: 4px 10px; --btn-font-size: 0.8rem;" @click=${() => this._handleDeleteWorkspace(wsId)}>Remove</sutram-btn>
                                         ` : html`<span style="font-size:0.8rem; color: var(--text-muted); font-style:italic;">System Protected</span>`}
                                     </div>
                                 `;

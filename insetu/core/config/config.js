@@ -220,18 +220,18 @@ export class InSetuExtConfig extends InSetuElement {
                     }}>
                     <div slot="actions" style="display: flex; gap: 8px;">
                         ${!isImplicit ? html`
-                            <button class="btn-sm" style="background: var(--input-bg); border: 1px solid var(--border); color: var(--text); margin: 0; padding: 2px 8px; font-size: 0.75rem;"
+                            <sutram-btn intent="neutral" style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.75rem;"
                                 @click=${(e) => {
                                     e.stopPropagation();
                                     this._testRepoBucketing(rIdx, b.id);
-                                }}>🧪 Test</button>
+                                }}>🧪 Test</sutram-btn>
                         ` : ''}
-                        <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-danger); color: var(--intent-danger); margin: 0; padding: 2px 8px; font-size: 0.75rem;"
+                        <sutram-btn intent="danger" variant="text" style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.75rem;"
                             @click=${(e) => {
                                 e.stopPropagation();
                                 this.configForm.target_repos[rIdx].sub_buckets.splice(bIdx, 1);
                                 this.requestUpdate();
-                            }}>🗑️ Remove</button>
+                            }}>🗑️ Remove</sutram-btn>
                     </div>
                     <div style="display: flex; flex-direction: column; gap: 10px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
@@ -273,12 +273,12 @@ export class InSetuExtConfig extends InSetuElement {
                         <div style="border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                                 <label style="font-size: 0.85rem; font-weight: bold; color:var(--text-muted);">Meta Map (Folder Overrides)</label>
-                                <button class="btn-sm" style="background: var(--intent-primary); color: white; border: none; font-weight: bold; border-radius: 4px;" @click=${() => {
+                                <sutram-btn intent="primary" @click=${() => {
                                     if (!b.meta_map) b.meta_map = {};
                                     const nextIdx = Object.keys(b.meta_map).filter(k => k.startsWith('new_folder_')).length + 1;
                                     b.meta_map[`new_folder_${nextIdx}`] = { title: '', domain: '' };
                                     this.requestUpdate();
-                                }}>➕ Folder Meta</button>
+                                }}>➕ Folder Meta</sutram-btn>
                             </div>
                             <div style="display: flex; flex-direction: column; gap: 8px;">
                                 ${Object.keys(b.meta_map || {}).map(dirKey => {
@@ -295,10 +295,10 @@ export class InSetuExtConfig extends InSetuElement {
                                             }} ?flush=${true} style="flex: 1; min-width: 120px;"></sutram-input>
                                             <sutram-input .value=${meta.title || ''} placeholder="Title" @sutram-input-changed=${(e) => { meta.title = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 120px;"></sutram-input>
                                             <sutram-input .value=${meta.domain || ''} placeholder="Domain" @sutram-input-changed=${(e) => { meta.domain = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 120px;"></sutram-input>
-                                            <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; font-size: 1.2rem; padding: 0 8px; flex-shrink: 0; cursor: pointer;" @click=${() => {
+                                            <sutram-btn intent="danger" variant="text" style="--btn-font-size: 1.2rem; --btn-padding: 0 8px; flex-shrink: 0;" @click=${() => {
                                                 delete b.meta_map[dirKey];
                                                 this.requestUpdate();
-                                            }}>✕</button>
+                                            }}>✕</sutram-btn>
                                         </div>
                                     `;
                                 })}
@@ -351,19 +351,19 @@ export class InSetuExtConfig extends InSetuElement {
                                 this._isNewRepo = false;
                             }}>
                             <div slot="actions" style="display: flex; gap: 8px;">
-                                <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => { 
+                                <sutram-btn intent="primary" style="--btn-padding: 4px 10px; margin: 0;" @click=${(e) => { 
                                     e.stopPropagation(); 
                                     this._repoBackup = JSON.parse(JSON.stringify(repo)); 
                                     this._editingRepoIdx = idx; 
                                     this._isNewRepo = false;
-                                }}>✏️ Edit</button>
-                                <button class="btn-sm" style="background: var(--intent-danger);" @click=${(e) => {
+                                }}>✏️ Edit</sutram-btn>
+                                <sutram-btn intent="danger" style="--btn-padding: 4px 10px; margin: 0;" @click=${(e) => {
                                     e.stopPropagation();
                                     if(confirm("Remove this repository from tracking?")) {
                                         this.configForm.target_repos.splice(idx, 1);
                                         this.requestUpdate();
                                     }
-                                }}>🗑️ Remove</button>
+                                }}>🗑️ Remove</sutram-btn>
                             </div>
                         </insetu-card>
                     `)}
@@ -388,17 +388,16 @@ export class InSetuExtConfig extends InSetuElement {
                         <span style="font-size: 1.4rem;">📦</span>
                         <sutram-input .value=${repo.title || ''} placeholder="Display Title (e.g. My Repository)" style="flex: 1; margin: 0; --bg-input: var(--input-bg);" @sutram-input-changed=${(e) => { repo.title = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>
                     </div>
-
                     <sutram-collapsible   
                         titleText="Bucket 0 (Base Pipeline)" 
                         intent="primary"
                         .open=${this._repoSettingsExpanded}
                         @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoSettingsExpanded = e.detail.open; }}>
                         <div slot="actions" style="display: flex; gap: 8px;">
-                            <button class="btn-sm" style="background: var(--input-bg); border: 1px solid var(--border); color: var(--text); margin: 0; padding: 4px 10px; font-size: 0.75rem;" @click=${(e) => {
+                            <sutram-btn intent="neutral" style="margin: 0; --btn-padding: 4px 10px; --btn-font-size: 0.75rem;" @click=${(e) => {
                                 e.stopPropagation();
                                 this._testRepoBucketing(idx);
-                            }}>🧪 Test All Buckets</button>
+                            }}>🧪 Test All Buckets</sutram-btn>
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 15px;">
                             <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 0;">Files not captured by explicit sub-buckets automatically fall into this baseline group.</p>
@@ -469,12 +468,12 @@ export class InSetuExtConfig extends InSetuElement {
                         .open=${this._repoBucketsExpanded}
                         @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoBucketsExpanded = e.detail.open; }}>
                         <div slot="actions" style="display: flex; gap: 8px;">
-                            <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 4px 10px; font-size: 0.75rem;" @click=${(e) => {
+                            <sutram-btn intent="highlight" style="margin: 0; --btn-padding: 4px 10px; --btn-font-size: 0.75rem;" @click=${(e) => {
                                 e.stopPropagation();
                                 if (!repo.sub_buckets) repo.sub_buckets = [];
                                 repo.sub_buckets.push({ id: `bucket_${Date.now()}`, title: '', match_prefixes: [] });
                                 this.requestUpdate();
-                            }}>➕ Add Bucket</button>
+                            }}>➕ Add Bucket</sutram-btn>
                         </div>
                         <div style="display: flex; flex-direction: column;">
                             ${this.renderSubBuckets(repo, idx)}
@@ -483,9 +482,9 @@ export class InSetuExtConfig extends InSetuElement {
                     ` : ''}
                 </div>
                 ${repo ? html`
-                    <button slot="footer" style="background: var(--intent-neutral); color: white;" @click=${() => this._cancelRepoEditor()}>
+                    <sutram-btn slot="footer" intent="neutral" @click=${() => this._cancelRepoEditor()}>
                         ❌ Cancel
-                    </button>
+                    </sutram-btn>
                     <sutram-async-btn 
                         slot="footer" 
                         label="${this._isNewRepo ? '➕ Create' : '✅ Keep Edits'}" 
@@ -499,7 +498,7 @@ export class InSetuExtConfig extends InSetuElement {
 
     render() {
         const bodyContent = !this.configForm 
-            ? html`<div class="spinner" style="display:block; padding: 20px;">Loading configuration...</div>`
+            ? html`<div style="padding: 20px;"><yenvui-spinner text="Loading configuration..."></yenvui-spinner></div>`
             : html`
                 <div style="display: flex; flex-direction: column;">
                     <sutram-collapsible 
@@ -542,7 +541,7 @@ export class InSetuExtConfig extends InSetuElement {
                         .open=${this._reposExpanded}
                         @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._reposExpanded = e.detail.open; }}>
                         <div slot="actions">
-                            <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 4px 10px; font-size: 0.75rem;"
+                            <sutram-btn intent="primary" style="margin: 0; --btn-padding: 4px 10px; --btn-font-size: 0.75rem;"
                                 @click=${async () => {
                                     if (!this.configForm.target_repos) this.configForm.target_repos = [];
                                     let newRepo = {    
@@ -560,7 +559,7 @@ export class InSetuExtConfig extends InSetuElement {
                                     this._isNewRepo = true;
                                     this._createDirIfNeeded = true;
                                     this.requestUpdate();
-                                }}>➕ Add Repository</button>
+                                }}>➕ Add Repository</sutram-btn>
                         </div>
                         <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>
                         ${this.renderRepos()}
@@ -655,6 +654,8 @@ window.ExtensionRegistry.registerExtension('config', {
             label: 'Refresh Files',
             icon: '⚙️',
             intent: 'primary',
+            group: 'tools',
+            vfsBound: false,
             order: 10,
             asyncAction: async (data, e) => {
                 if (window.inSetu?.stores?.Gather) {
@@ -668,6 +669,8 @@ window.ExtensionRegistry.registerExtension('config', {
             label: 'Reboot',
             icon: '🔄',
             intent: 'success',
+            group: 'tools',
+            vfsBound: false,
             order: 20,
             asyncAction: async (data, e) => {
                 if (!confirm("Reboot the inSetu OS daemon?")) return;
@@ -693,6 +696,8 @@ window.ExtensionRegistry.registerExtension('config', {
             label: 'Lifeboat',
             icon: '⚠️',
             intent: 'warning',
+            group: 'tools',
+            vfsBound: false,
             order: 30,
             onClick: (data, e) => {
                 if (data && data.closeModal) data.closeModal();

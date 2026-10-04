@@ -1,6 +1,5 @@
 import { html, css } from 'lit';
 import { AppStore } from '/static/extensions/system/store.js';
-import { fetchAndDownloadState, fetchAndCopy, getGlobalManifest, viewAndCopy, FsStore } from '/static/extensions/fs/fs.js';
 import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 let compilePromise = null;
@@ -237,11 +236,11 @@ export class InSetuExtGather extends InSetuElement {
         css`
             :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
             .gather-cards-container {
-                display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 20px 12px;
+                display: flex; flex-direction: column; padding: 0 12px 20px 12px;
             }
             @container (max-width: 480px) {
                 .gather-cards-container {
-                    padding: 0; gap: 0;
+                    padding: 0;
                 }
             }
         `
@@ -510,10 +509,10 @@ export class InSetuExtGather extends InSetuElement {
                                                 }}
                                                 @card-clicked=${() => {
                                                     if (f.isSkeleton) return;
-                                                    if (window.inSetu?.vfs?.viewAndCopy) {
+                                                    if (window.inSetu?.vfs?.viewInWindow) {
+                                                        window.inSetu.vfs.viewInWindow(f.filename);
+                                                    } else if (window.inSetu?.vfs?.viewAndCopy) {
                                                         window.inSetu.vfs.viewAndCopy(f.filename);
-                                                    } else if (typeof viewAndCopy === 'function') {
-                                                        viewAndCopy(f.filename);
                                                     }
                                                 }}>
 
@@ -589,6 +588,9 @@ window.ExtensionRegistry.registerExtension('gather', {
             label: 'Download',
             icon: '⬇️',
             intent: 'primary',
+            variant: 'tinted',
+            group: 'share',
+            vfsBound: true,
             order: 20,
             match: (items) => items.length > 0 && items.every(i => {
                 const d = i.data || i;
@@ -620,9 +622,13 @@ window.ExtensionRegistry.registerExtension('gather', {
         },
         {
             id: 'batch-share',
-            label: 'Share',
-            icon: '📤',
-            intent: 'neutral',
+            label: 'Compile Pack',
+            icon: '✨',
+            intent: 'warning',
+            variant: 'tinted',
+            emphasis: true,
+            group: 'share',
+            vfsBound: true,
             order: 30,
             match: (items) => !!navigator.share && !!navigator.canShare && items.length > 0 && items.every(i => {
                 const d = i.data || i;

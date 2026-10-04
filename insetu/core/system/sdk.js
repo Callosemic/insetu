@@ -5,9 +5,9 @@ import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, coalescedAs
 import * as jsYaml from '/static/vendor/js-yaml/js-yaml.min.js';
 
 export { bindStoreInput };
-export function createExtensionStore(name, initialState, persistKeys = []) {
+export function createExtensionStore(name, initialState, persistenceSchema = {}) {
     const getWs = () => window.inSetu.utils.getActiveWorkspace();
-    const store = createSutramStore(name, initialState, persistKeys, getWs, 'insetu');
+    const store = createSutramStore(name, initialState, persistenceSchema, getWs, 'insetu');
     window.inSetu = window.inSetu || {};
     window.inSetu.stores = window.inSetu.stores || {};
     window.inSetu.stores[name] = store;
@@ -362,6 +362,7 @@ export const CORE_MODULES = window.inSetu.CORE_MODULES;
 
 // Explicit list of Core OS modules that require frontend UI payloads to be mounted on boot
 export const CORE_UI_SCRIPTS = [
+    '/static/extensions/fs/fs.js',
     '/static/extensions/bridge/bridge.js',
     '/static/extensions/gather/gather.js',
     '/static/extensions/config/config.js',
@@ -697,6 +698,8 @@ window.ExtensionRegistry.registerExtension('system', {
             label: 'Copy',
             icon: '📋',
             intent: 'neutral',
+            group: 'edit',
+            vfsBound: false,
             order: 10,
             onClick: async (data) => {
                 if (data.textContent && window.inSetu.utils) {
@@ -711,6 +714,8 @@ window.ExtensionRegistry.registerExtension('system', {
             label: 'Save to VFS',
             icon: '💾',
             intent: 'neutral',
+            group: 'file',
+            vfsBound: false,
             order: 20,
             onClick: (data) => {
                 if (data.textContent && window.inSetu.ui && window.inSetu.ui.openFolderBrowser) {
@@ -734,6 +739,8 @@ window.ExtensionRegistry.registerExtension('system', {
             label: 'Download',
             icon: '⬇️',
             intent: 'neutral',
+            group: 'file',
+            vfsBound: false,
             order: 30,
             onClick: (data) => {
                 if (data.textContent) {

@@ -26,6 +26,12 @@ export class InSetuFileTree extends InSetuElement {
         @container (max-width: 480px) {
             .tree-container { padding: 0; gap: 0; }
         }
+        .toolbar-row { 
+            display: flex; align-items: center; gap: 10px; padding: 5px 20px; height: 44px; box-sizing: border-box; 
+        }
+        @container (max-width: 50rem) {
+            .toolbar-row { padding: 5px 10px; }
+        }
     `];
 constructor() {
         super();
@@ -137,16 +143,20 @@ constructor() {
                     @search-changed=${(e) => this._searchQuery = e.detail.value}
                     ?bottomBorder=${(!isSearching && this.currentPath.length > 0 && !this.hidePath)}>
                     ${(!isSearching && this.currentPath.length > 0 && !this.hidePath) ? html`
-                        <div slot="bottom-row" class="toolbar-row" style="background: var(--input-bg); border-top: 1px solid var(--border);">
-                            <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => this._setPath(this.currentPath.slice(0, -1))}>⬆️ Up</button>
-                            <span style="font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem; word-break: break-all;">/${this.currentPath.join('/')}</span>
+                        <div slot="bottom-row" class="toolbar-row" style="background: var(--input-bg); border-top: 1px solid var(--border); overflow: hidden;">
+                            <sutram-btn intent="neutral" @click=${() => this._setPath(this.currentPath.slice(0, -1))} style="margin-right: 8px;">⬆️ Up</sutram-btn>
+                            <yenvui-scrub-track style="flex: 1; min-width: 0; font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem;">
+                                /${this.currentPath.join('/')}
+                            </yenvui-scrub-track>
                         </div>
                     ` : ''}
                 </sutram-toolbar>
             ` : ((!isSearching && this.currentPath.length > 0 && !this.hidePath) ? html`
-                <div class="toolbar-row" style="background: var(--input-bg); border-bottom: 1px solid var(--border);">
-                    <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => this._setPath(this.currentPath.slice(0, -1))}>⬆️ Up</button>
-                    <span style="font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem; word-break: break-all;">/${this.currentPath.join('/')}</span>
+                <div class="toolbar-row" style="background: var(--input-bg); border-bottom: 1px solid var(--border); overflow: hidden;">
+                    <sutram-btn intent="neutral" @click=${() => this._setPath(this.currentPath.slice(0, -1))} style="margin-right: 8px;">⬆️ Up</sutram-btn>
+                    <yenvui-scrub-track style="flex: 1; min-width: 0; font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem;">
+                        /${this.currentPath.join('/')}
+                    </yenvui-scrub-track>
                 </div>
             ` : '')}
             <div class="tree-container">
