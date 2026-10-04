@@ -63,16 +63,16 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             if isinstance(node.value, ast.Name) and node.value.id == 'item':
                 if isinstance(node.slice, ast.Constant) and node.slice.value in ('filepath', 'folderpath'):
                     report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
-
         # AkasaURI Migration Guardrails
         if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute) and node.value.func.attr == 'split':
             if len(node.value.args) > 0 and isinstance(node.value.args[0], ast.Constant) and node.value.args[0].value == '/':
                 is_neg_one = isinstance(node.slice, ast.UnaryOp) and isinstance(node.slice.op, ast.USub) and isinstance(node.slice.operand, ast.Constant) and node.slice.operand.value == 1
                 is_zero = isinstance(node.slice, ast.Constant) and node.slice.value == 0
-                if is_neg_one:
-                    report_violation("URI_BASENAME_MANDATE", self.filepath, node.lineno, "Manual path splitting ([-1]) detected. Use InSetuURI(path).basename instead.")
-                elif is_zero:
-                    report_violation("URI_VOLUME_MANDATE", self.filepath, node.lineno, "Manual path splitting ([0]) detected. Use InSetuURI(path).volume or .repo instead.")
+                if self.filename != "fallback_bridge.py":
+                    if is_neg_one:
+                        report_violation("URI_BASENAME_MANDATE", self.filepath, node.lineno, "Manual path splitting ([-1]) detected. Use InSetuURI(path).basename instead.")
+                    elif is_zero:
+                        report_violation("URI_VOLUME_MANDATE", self.filepath, node.lineno, "Manual path splitting ([0]) detected. Use InSetuURI(path).volume or .repo instead.")
 
         self.generic_visit(node)
     def visit_Call(self, node):

@@ -61,6 +61,9 @@ def check_javascript_files():
     banned_has_actions_pattern = re.compile(r'\bhas-actions\b')
     unscoped_offline_storage_pattern = re.compile(r"localStorage\.(?:set|get)Item\(['\"]insetu_offline_(?:config|topology|workspaces)['\"]")
     domain_store_config_mirror_pattern = re.compile(r'(?:targetConfigs|allRepos)\s*:\s*AppStore\.getState\(\)\.(?:targetConfigs|allRepos)')
+    singleton_modal_ban_pattern = re.compile(r'\b(?:FsStore\.getState\(\)\.fileModal|insetu-file-modal)\b')
+    legacy_routing_ban_pattern = re.compile(r'\bAppStore\.getState\(\)\.(?:activeTab|activeSubTabs|setActiveRoute)\b')
+    udf_editor_intent_mandate_pattern = re.compile(r'document\.querySelectorAll\([\'"]insetu-editor-projection[\'"]\)')
 
     # Initialize Tree-sitter for Hybrid Parsing
     ts_available = False
@@ -268,9 +271,19 @@ def check_javascript_files():
 
             if unscoped_offline_storage_pattern.search(line):
                 report_violation("UNSCOPED_PERSISTENT_STORAGE", filepath, line_num, "Un-scoped persistent storage call detected on offline state. Consume window.inSetu.utils.getScopedStorage/setScopedStorage instead.")
-
             if domain_store_config_mirror_pattern.search(line):
                 report_violation("DOMAIN_STORE_TOPOLOGY_MIRROR_BAN", filepath, line_num, "Domain store mirrors AppStore topology properties (targetConfigs/allRepos). Read topology reactively from AppStore or this.ecosystem instead.")
+            if singleton_modal_ban_pattern.search(line):
+                report_violation("SINGLETON_MODAL_BAN", filepath, line_num, "References to FsStore.fileModal or <insetu-file-modal> are banned. Use activeBuffers maps and agnostic projections instead.")
+
+            if is_extension and is_lit_component and re.search(r'<button\b[^>]*class=["\'][^"\'\n]*\bbtn-sm\b', line):
+                report_violation("SUTRAM_BUTTON_MANDATE", filepath, line_num, "Raw <button class=\"btn-sm\"> detected in Lit extension template. Use <sutram-btn> or <sutram-async-btn> primitives instead.")
+
+            if legacy_routing_ban_pattern.search(line):
+                report_violation("LEGACY_ROUTING_BAN", filepath, line_num, "References to AppStore activeTab, activeSubTabs, or setActiveRoute are banned. Rely on Sutram LayoutStore or URL hash routing.")
+
+            if udf_editor_intent_mandate_pattern.search(line):
+                report_violation("UDF_EDITOR_INTENT_MANDATE", filepath, line_num, "Direct DOM querying for <insetu-editor-projection> is banned. Dispatch the 'insetu:editor-insert-text' intent over the Event Bus instead.")
 
             if is_extension and subtab_leak_pattern.search(line):
                 report_violation("SHARED_STORAGE_SUBTAB_LEAK", filepath, line_num, "Hardcoded subtab 'localStorage' state tracking discovered. Validate active layouts statelessly using DOM tree boundary context metrics instead (e.g., this.closest('.sub-tab-content')?.classList.contains('active')).")
