@@ -98,12 +98,7 @@ button:hover { background: var(--btn-hover); }
     white-space: pre-wrap;
 }
 [data-theme="e-ink"] .yaml-frontmatter { border: 1px dashed #000; color: #000; background: transparent; font-weight: bold; }
-@media (max-width: 1024px), (max-aspect-ratio: 1/1) {
-    #tab-term { padding-bottom: env(safe-area-inset-bottom, 15px); box-sizing: border-box; }
-    .top-bar, .sub-tabs-bar { padding: 0 10px; }
-    .theme-text { display: none; }
-    .tab { padding: 6px 10px; font-size: 0.95rem; }
-}
+
 /* --- Universal Header & Light Mode Polishing --- */
 h1, h2, h3, h4, h5, h6 { 
     color: var(--text); 
