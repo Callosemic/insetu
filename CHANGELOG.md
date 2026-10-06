@@ -2,6 +2,77 @@
 
 <!-- version list -->
 
+## v0.22.0 (2026-10-06)
+
+### Bug Fixes
+
+- **extensions**: Add defensive null checks for ctx.resolve_path across extension engines
+  ([`bdf4c26`](https://github.com/Callosemic/insetu/commit/bdf4c26935e290096fcef870ff132455a4661456))
+
+- **shell**: Bypass service worker in popouts and remove deprecated file modal
+  ([`23b364b`](https://github.com/Callosemic/insetu/commit/23b364bde238e37ee6e7cc7ca4c427fc92193740))
+
+### Documentation
+
+- **extensions**: Declare OpenAPI 3.0 schemas, prompt entity actions, and hoist substrate imports
+  ([`4db469a`](https://github.com/Callosemic/insetu/commit/4db469aeed6e887121538b1cfa77df2136237313))
+
+### Features
+
+- **core**: Fast-path web share pre-warming, quickpack caching, and VFS manifest state
+  synchronization
+  ([`0fba110`](https://github.com/Callosemic/insetu/commit/0fba110434428316306425b604daf05d5a90a56a))
+
+- **core**: Multi-column viewport projections, Lucide iconography, and domain color settings
+  ([`0665da4`](https://github.com/Callosemic/insetu/commit/0665da424d6ca7b16ab1bd0b2cb17e4cfdeaee13))
+
+- **core**: Update system sdk namespace, spatial grid projection routing, and tree-sitter syntax
+  fallback
+  ([`1025a10`](https://github.com/Callosemic/insetu/commit/1025a10347d3bfa2dc793f2e8a126e33ce125d8c))
+
+### Refactoring
+
+- Optimize app.py imports, align extension template with Sutram primitives, and harden JS fitness
+  linter
+  ([`455621f`](https://github.com/Callosemic/insetu/commit/455621fc1fd97d818c474bdd2e7fb91321a2703a))
+
+- Standardize ctx.resolve_path must_exist parameter across extension engines
+  ([`45c55d4`](https://github.com/Callosemic/insetu/commit/45c55d4213c34742f5e0dba1c7923b7a282bab55))
+
+- **bridge**: Align fallback_bridge block parser with Yomama comment spec and refine fitness rules
+  ([`b25a78a`](https://github.com/Callosemic/insetu/commit/b25a78a3d6b8bdb7dab6b4600e744c3f6cfa92f0))
+
+- **bridge**: Align fallback_bridge block parser with Yomama comment spec and refine fitness rules
+  ([`343f742`](https://github.com/Callosemic/insetu/commit/343f742a30ac1e2017b05dfef11b1f5675032248))
+
+- **core**: Filter mounted extensions in app shell and add path resolution linter rule
+  ([`31928e3`](https://github.com/Callosemic/insetu/commit/31928e3f1f44706980a69f4837a32fe7d587115c))
+
+- **core**: Filter mounted extensions in app shell and add path resolution linter rule
+  ([`98eff05`](https://github.com/Callosemic/insetu/commit/98eff05cf01274d5b710f9f9f3b053a44d268db0))
+
+- **core**: Hoist substrate imports, streamline SW cache purging, and add Yomama cell-id and comment
+  tracking
+  ([`a63e3b8`](https://github.com/Callosemic/insetu/commit/a63e3b818784a5616f954e29158f354057ad85fd))
+
+- **core**: VFS parity action middleware, singleton file modal deprecation, and Sutram UI primitive
+  standardization
+  ([`1a90c5f`](https://github.com/Callosemic/insetu/commit/1a90c5fc5601710cf2f4e8e5d851c2ec546eca72))
+
+- **extensions**: Align entity action metadata, hash routing, and URI coercion hooks
+  ([`9b6217b`](https://github.com/Callosemic/insetu/commit/9b6217b94cc7466c49f507fe24a0429f1cb98105))
+
+- **extensions**: Standardize layoutSlots icon and intent metadata across extensions
+  ([`756be11`](https://github.com/Callosemic/insetu/commit/756be11f80b0e421f6b062315140c5da33f1c81a))
+
+- **extensions**: Standardize Sutram UI primitives, Lucide iconography, SDK imports, and modal
+  scrolling
+  ([`ec80164`](https://github.com/Callosemic/insetu/commit/ec80164ed636306dbf41ed335d828402c66c55d4))
+
+- **sdk**: Extend ExtensionContext.resolve_path with must_exist defensive path resolution
+  ([`4b84699`](https://github.com/Callosemic/insetu/commit/4b84699f2b9f81ca454f09e7a180e8f261d95c55))
+
+
 ## v0.21.0 (2026-09-24)
 
 ### Bug Fixes
