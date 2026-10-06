@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 
 const AppStore = window.inSetu.stores.App;
 
@@ -432,8 +432,8 @@ export class InSetuExtSkills extends InSetuElement {
                                             .titleText=${item.name}
                                             .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage: ${item.status}`}
                                             .detailText=${item.filepath}
-                                            icon="🎵"
-                                            intentColor="var(--intent-neutral)"
+                                            icon="music"
+                                            intent="neutral"
                                             style="cursor: pointer;"
                                             @click=${() => SkillsStore.getState().selectItem(item, 'train')}
                                             entityType="skill"
@@ -460,7 +460,7 @@ export class InSetuExtSkills extends InSetuElement {
                 ${this.loading ? html`<sutram-spinner text="Sweeping session items..."></sutram-spinner>` : ''}
                 <div style="display: flex; flex-direction: column; gap: 20px; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
                 <div style="display: flex; justify-content: flex-end; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-top: -10px;">
-                    <button class="btn-sm" style="background: var(--intent-success); font-weight: bold;" @click=${() => { this._newSkillDomain = Object.keys(this.domainConfig)[0] || ''; SkillsStore.setState({ newSkillModalOpen: true }); }}>➕ New Skill Item</button>
+                    <sutram-btn size="sm" intent="success" @click=${() => { this._newSkillDomain = Object.keys(this.domainConfig)[0] || ''; SkillsStore.setState({ newSkillModalOpen: true }); }}>➕ New Skill Item</sutram-btn>
                 </div>
 
                 ${viewMode === 'active' ? html`
@@ -478,8 +478,8 @@ export class InSetuExtSkills extends InSetuElement {
                                             .titleText=${item.name}
                                             .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage: ${item.status}`}
                                             .detailText=${item.filepath}
-                                            icon="🎯"
-                                            intentColor="var(--intent-primary)"
+                                            icon="target"
+                                            intent="primary"
                                             style="cursor: pointer;"
                                             @click=${() => SkillsStore.getState().selectItem(item, 'train')}
                                             entityType="skill"
@@ -506,15 +506,15 @@ export class InSetuExtSkills extends InSetuElement {
                                             .titleText=${item.name}
                                             .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage: ${item.status}`}
                                             .detailText=${item.filepath}
-                                            icon="🗂️"
-                                            intentColor="var(--intent-neutral)"
+                                            icon="folder"
+                                            intent="neutral"
                                             style="cursor: pointer;"
                                             @click=${() => SkillsStore.getState().selectItem(item, 'train')}
                                             @card-clicked=${() => SkillsStore.getState().selectItem(item, 'train')}>
                                             <insetu-file-actions slot="actions" .filepath=${item.filepath} .isFS=${true}></insetu-file-actions>
                                             <div slot="actions" style="display: flex; gap: 6px;">
-                                                <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'train'); }}>⏱️ Train</button>
-                                                <button class="btn-sm" style="background: var(--intent-neutral);" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'edit'); }}>✏️ Edit</button>
+                                                <sutram-btn size="sm" intent="primary" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'train'); }}>⏱️ Train</sutram-btn>
+                                                <sutram-btn size="sm" intent="neutral" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'edit'); }}>✏️ Edit</sutram-btn>
                                             </div>
                                         </insetu-card>
                                     `;
@@ -530,7 +530,7 @@ export class InSetuExtSkills extends InSetuElement {
                 ?fullscreen=${true}
                 titleText="⏱️ Practice Session: ${this.selectedItem?.name}"
                 @sutram-modal-closed=${() => SkillsStore.setState({ selectedItem: null })}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
+                <div slot="body" style="display: contents;">
                     <div>
                         <sutram-select label="Quality Rating Scale (SM-2 Algorithm)" .value=${this.formScore} .options=${[
                             {value: 5, label: '5 - Perfect execution (Immediate retention)'},
@@ -573,7 +573,7 @@ export class InSetuExtSkills extends InSetuElement {
                 ?fullscreen=${true}
                 titleText="✏️ Edit Skill Architecture & Structure"
                 @sutram-modal-closed=${() => SkillsStore.setState({ selectedItem: null })}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
+                <div slot="body" style="display: contents;">
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                         <sutram-input label="Track / Skill Title" .value=${this._editName || ''} @sutram-input-changed=${(e) => this._editName = e.detail.value}></sutram-input>
                         <div>
@@ -592,7 +592,7 @@ export class InSetuExtSkills extends InSetuElement {
                 ?fullscreen=${true}
                 titleText="Add New Training Skill Item"
                 @sutram-modal-closed=${() => SkillsStore.setState({ newSkillModalOpen: false })}>
-                <form slot="body" @submit=${this._handleCreateSkill} style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
+                <form slot="body" @submit=${this._handleCreateSkill} style="display: contents;">
                     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
                         <sutram-input label="Item Name / Track Title" placeholder="e.g. Stairway to Heaven" .value=${this._newSkillForm.name || ''} @sutram-input-changed=${e => this._newSkillForm.name = e.detail.value}></sutram-input>
                         <div>

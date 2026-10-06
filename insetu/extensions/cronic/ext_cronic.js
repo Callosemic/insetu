@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
@@ -60,7 +60,8 @@ export class InSetuExtCronic extends InSetuElement {
     static styles = [
         sharedStyles,
         css`
-            :host { display: flex; flex-direction: column; height: 100%; padding: 20px; box-sizing: border-box; background: var(--bg); overflow-y: auto; }
+            :host { display: flex; flex-direction: column; height: 100%; width: 100%; box-sizing: border-box; background: var(--bg); overflow: hidden; }
+            .header-wrap { padding: 0 var(--mobile-edge-padding); padding-top: var(--mobile-edge-padding); }
             .job-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
             .log-box { font-family: var(--font-mono); background: var(--input-bg); border: 1px solid var(--border); padding: 12px; border-radius: 6px; white-space: pre-wrap; font-size: 0.85rem; max-height: 250px; overflow-y: auto; margin-top: 10px; }
         `
@@ -150,14 +151,13 @@ export class InSetuExtCronic extends InSetuElement {
                 </div>
             `;
         }
-
         if (this.loading && this.jobs.length === 0) {
-            return html`<sutram-spinner text="Loading scheduled jobs..."></sutram-spinner>`;
+            return html`<sutram-scroll-view><sutram-spinner text="Loading scheduled jobs..."></sutram-spinner></sutram-scroll-view>`;
         }
 
         return html`
-            <div style="display: flex; flex-direction: column; gap: 15px;">
-                <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 5px;">
+            <sutram-scroll-view style="gap: 15px;">
+                <div class="header-wrap" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 5px;">
                     <h3 style="margin: 0; color: var(--text);">⏰ Scheduled System Tasks</h3>
                     <span style="font-size: 0.85rem; color: var(--text-muted);">Manage crontab bindings and manual script executions.</span>
                 </div>
@@ -170,25 +170,24 @@ export class InSetuExtCronic extends InSetuElement {
                             .titleText=${job.filepath.split('/').pop()}
                             .descriptionText=${`Schedule: ${job.schedule} • Status: ${job.last_status || 'pending'}`}
                             .detailText=${job.filepath}
-                            icon="⏰"
-                            intentColor=${job.enabled ? 'var(--intent-success)' : 'var(--intent-neutral)'}>
+                            icon="clock"
+                            intent=${job.enabled ? 'success' : 'neutral'}>
                             <div slot="actions" class="job-actions">
-                                <sutram-async-btn label="▶️ Run Now" intent="primary" style="margin: 0;" .onClick=${this._getRunNowAction(job.id)}></sutram-async-btn>
-                                <sutram-async-btn label="⏹️ Stop" intent="neutral" style="margin: 0;" .onClick=${this._getKillAction(job.id)}></sutram-async-btn>
-                                <sutram-async-btn label=${job.enabled ? '⏸️ Pause' : '▶️ Resume'} intent="warning" style="margin: 0;" .onClick=${async () => this._toggleJob(job)}></sutram-async-btn>
-                                <button class="btn-sm" style="background: var(--input-bg); border: 1px solid var(--border); color: var(--text);" @click=${() => CronicStore.getState().fetchLogs(job.id)}>📜 Logs</button>
-                                <sutram-async-btn label="🗑️ Remove" intent="danger" style="margin: 0;" .onClick=${async () => this._deleteJob(job.id)}></sutram-async-btn>
+                                <sutram-async-btn size="sm" label="▶️ Run Now" intent="primary" style="margin: 0;" .onClick=${this._getRunNowAction(job.id)}></sutram-async-btn>
+                                <sutram-async-btn size="sm" label="⏹️ Stop" intent="neutral" style="margin: 0;" .onClick=${this._getKillAction(job.id)}></sutram-async-btn>
+                                <sutram-async-btn size="sm" label=${job.enabled ? '⏸️ Pause' : '▶️ Resume'} intent="warning" style="margin: 0;" .onClick=${async () => this._toggleJob(job)}></sutram-async-btn>
+                                <sutram-btn size="sm" intent="neutral" @click=${() => CronicStore.getState().fetchLogs(job.id)}>📜 Logs</sutram-btn>
+                                <sutram-async-btn size="sm" label="🗑️ Remove" intent="danger" style="margin: 0;" .onClick=${async () => this._deleteJob(job.id)}></sutram-async-btn>
                             </div>
                         </insetu-card>
                     `)}
                 </sutram-card-group>
-
                 ${this.selectedJobId ? html`
                     <sutram-collapsible titleText="📜 Execution Output Log" .open=${true} style="margin-top: 10px;">
                         <div class="log-box">${this.selectedLog || 'No logs recorded.'}</div>
                     </sutram-collapsible>
                 ` : ''}
-            </div>
+            </sutram-scroll-view>
         `;
     }
 }

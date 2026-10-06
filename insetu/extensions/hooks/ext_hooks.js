@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement, bindStoreInput } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement, bindStoreInput } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
@@ -196,8 +196,8 @@ export class InSetuExtHooks extends InSetuElement {
                             .filename=${rule.id}
                             .titleText=${rule.name}
                             .descriptionText=${`IF: ${rule.trigger_type} [Target: ${rule.trigger_target}]`}
-                            icon=${rule.enabled ? '🟢' : '⚪'}
-                            intentColor=${rule.enabled ? 'var(--intent-success)' : 'var(--intent-neutral)'}
+                            icon=${rule.enabled ? 'play-circle' : 'circle'}
+                            intent=${rule.enabled ? 'success' : 'neutral'}
                             entityType="hook_rule"
                             .entityData=${rule}
                             style="opacity: ${rule.enabled ? '1' : '0.6'}; display: block;">
@@ -251,7 +251,7 @@ export class InSetuExtHooks extends InSetuElement {
                 titleText=${this.editingRule ? 'Edit Automation Rule' : 'New Automation Rule'}
                 @sutram-modal-closed=${() => HooksStore.setState({ ruleModalOpen: false })}>
 
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
+                <div slot="body" style="display: contents;">
                     <div>
                         <label style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Rule Friendly Title</label>
                         ${bindStoreInput(HooksStore, 'ruleForm.name', this.ruleForm.name, { placeholder: 'e.g., Auto-Compile UI Assets on Save' })}

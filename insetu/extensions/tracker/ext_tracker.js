@@ -1,4 +1,4 @@
-import { createExtensionStore, InSetuElement, bindStoreInput } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement, bindStoreInput } from '/static/extensions/system/insetu_sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
@@ -229,9 +229,8 @@ export class InSetuTrackerTicket extends InSetuElement {
         const typeStr = (t.ticket_type || '').toLowerCase();
         const isDanger = typeStr.includes('bug') || typeStr.includes('error') || typeStr.includes('hotfix');
         const isHighlight = typeStr.includes('queue') || typeStr.includes('review') || typeStr.includes('draft');
-
-        const intentColor = isDanger ? 'var(--intent-danger)' : (isHighlight ? 'var(--intent-highlight)' : 'var(--intent-success)');
-        const icon = t.tier === 1 ? '🎯' : (t.tier === 2 ? '📦' : (isDanger ? '🐛' : '✨'));
+        const activeIntent = isDanger ? 'danger' : (isHighlight ? 'highlight' : 'success');
+        const icon = t.tier === 1 ? 'target' : (t.tier === 2 ? 'package' : (isDanger ? 'bug' : 'sparkles'));
         const isOverdue = t.deliveryDate && new Date(t.deliveryDate) < new Date() && t.status !== 'closed';
         const displayTitle = t.title ? t.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
 
@@ -241,7 +240,7 @@ export class InSetuTrackerTicket extends InSetuElement {
                 .filename=${t.filepath}
                 .titleText=${displayTitle}
                 .descriptionText=${descText}
-                .intentColor=${intentColor}
+                intent=${activeIntent}
                 .icon=${icon}
                 entityType="file:task"
                 .entityData=${{ ...t, isFS: true, repoDir: t.repo, suppressCopy: true, suppressDownload: true }}
@@ -322,8 +321,7 @@ export class InSetuExtTracker extends InSetuElement {
 static styles = [
     sharedStyles,
     css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-        .tracker-body { flex: 1; overflow-y: auto; padding: 20px; }
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
     `
 ];
 constructor() {
@@ -522,8 +520,8 @@ constructor() {
                                 .descriptionText=${`${closedCount}/${childTasks.length} Completed | Status: ${parent.status}`}
                                 .detailPrefix=${`[${parent.repo}] ${tierLabel}: `}
                                 .detailText=${parent.filepath}
-                                icon=${targetTier === 1 ? '🎯' : '📦'}
-                                intentColor="var(--intent-primary)"
+                                icon=${targetTier === 1 ? 'target' : 'package'}
+                                intent="primary"
                                 entityType="file:task"
                                 .entityData=${{ ...parent, isFS: true, suppressCopy: true, suppressDownload: true }}
                                 @card-clicked=${() => this.vfs.viewSourceFile(parent.filepath, true)}>
@@ -847,7 +845,7 @@ constructor() {
                         ` : ''}
                 </div>
             </sutram-toolbar>
-            <div class="tracker-body" style="${currentView?.layout === 'log' ? 'padding: 0;' : ''}">
+            <sutram-scroll-view padding="${currentView?.layout === 'log' ? 'none' : '20px'}">
                 ${activeFocusId ? html`
                     <div style="background: var(--intent-highlight); color: white; padding: 10px 15px; border-radius: 6px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                         <div style="display: flex; align-items: center; gap: 10px;">
@@ -884,7 +882,7 @@ constructor() {
                         return this._renderColumns(currentView.filters, textFilteredTasks);
                     }
                 })()}
-            </div>
+            </sutram-scroll-view>
         `;
     }
     _generateHistoricalChangelog(allRepos = false) {
@@ -1535,7 +1533,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                             <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, parentId: '' } }))}>×</span>
                                         </sutram-tag>
                                     ` : ''}
-                                    <sutram-async-btn label="🔗 Pick Parent" intent="neutral" style="--btn-padding: 6px 10px; --btn-font-size: 0.8rem;" .onClick=${() => this._openPicker('parentId', 'new')}></sutram-async-btn>
+                                    <sutram-async-btn size="sm" label="🔗 Pick Parent" intent="neutral" .onClick=${() => this._openPicker('parentId', 'new')}></sutram-async-btn>
                                 </div>
                             </div>
                             <div style="display: flex; flex-direction: column; gap: 6px;">
@@ -1547,7 +1545,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                             <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => this._removeDependency(dep, 'new')}>×</span>
                                         </sutram-tag>
                                     `)}
-                                    <sutram-async-btn label="🔗 Add Dep" intent="neutral" style="--btn-padding: 6px 10px; --btn-font-size: 0.8rem;" .onClick=${() => this._openPicker('dependsOn', 'new')}></sutram-async-btn>
+                                    <sutram-async-btn size="sm" label="🔗 Add Dep" intent="neutral" .onClick=${() => this._openPicker('dependsOn', 'new')}></sutram-async-btn>
                                 </div>
                             </div>
                         </div>
@@ -1644,7 +1642,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                                     <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, parentId: '' } }))}>×</span>
                                                 </sutram-tag>
                                             ` : ''}
-                                            <sutram-async-btn label="🔗 Pick Parent" intent="neutral" style="--btn-padding: 6px 10px; --btn-font-size: 0.8rem;" .onClick=${() => this._openPicker('parentId', 'edit')}></sutram-async-btn>
+                                            <sutram-async-btn size="sm" label="🔗 Pick Parent" intent="neutral" .onClick=${() => this._openPicker('parentId', 'edit')}></sutram-async-btn>
                                         </div>
                                     </div>
                                     <div style="display: flex; flex-direction: column; gap: 6px;">
@@ -1656,7 +1654,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                                     <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => this._removeDependency(dep, 'edit')}>×</span>
                                                 </sutram-tag>
                                             `)}
-                                            <sutram-async-btn label="🔗 Add Dep" intent="neutral" style="--btn-padding: 6px 10px; --btn-font-size: 0.8rem;" .onClick=${() => this._openPicker('dependsOn', 'edit')}></sutram-async-btn>
+                                            <sutram-async-btn size="sm" label="🔗 Add Dep" intent="neutral" .onClick=${() => this._openPicker('dependsOn', 'edit')}></sutram-async-btn>
                                         </div>
                                     </div>
                                 </div>
@@ -1683,7 +1681,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 ?open=${this._spawnModalOpen}
                 titleText="Spawn Template: ${this._spawnDisplayName}"
                 @sutram-modal-closed=${() => { this._spawnModalOpen = false; this._spawnTask = null; }}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+                <div slot="body" style="display: contents;">
                     <sutram-select 
                         label="Target Repository"
                         .value=${this._spawnTargetRepo}
@@ -1733,7 +1731,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 ?open=${this._convertOpen}
                 titleText="Convert Type"
                 @sutram-modal-closed=${() => { this._convertOpen = false; this._convertTask = null; }}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 10px;">
+                <div slot="body" style="display: contents;">
                     ${(() => {
                         if (!this._convertTask) return '';
                         const schema = KanbanStore.getState().getSchemaForRepo(this._convertTask.repo);
@@ -1762,7 +1760,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 maxWidth="650px"
                 titleText=${this._pickerMode === 'parentId' ? '🔗 Select Parent Ticket' : '🔗 Select Dependency Ticket'}
                 @sutram-modal-closed=${() => this._pickerOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+                <div slot="body" style="display: contents;">
                     <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                         <sutram-select 
                             label="Filter Repo Scope"
@@ -1816,11 +1814,11 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                         ?compact=${true}
                                         .titleText=${targetString + ' - ' + displayTitle}
                                         .detailText=${detailStr}
-                                        icon="📄"
-                                        intentColor="var(--intent-primary)"
+                                        icon="file-text"
+                                        intent="primary"
                                         @click=${() => this._selectPickerItem(targetString)}>
                                         <div slot="actions">
-                                            <sutram-async-btn label="Select" intent="primary" style="--btn-padding: 6px 12px; --btn-font-size: 0.8rem;" .onClick=${() => this._selectPickerItem(targetString)}></sutram-async-btn>
+                                            <sutram-async-btn size="sm" label="Select" intent="primary" .onClick=${() => this._selectPickerItem(targetString)}></sutram-async-btn>
                                         </div>
                                     </sutram-card>
                                 `;
@@ -1835,7 +1833,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 ?fullscreen=${true}
                 titleText="🧬 Template Library"
                 @sutram-modal-closed=${() => { this._templatesBrowserOpen = false; this._activeTemplateRoot = null; }}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; padding: 10px;">
+                <div slot="body" style="display: contents;">
                     ${this._renderTemplatesView()}
                 </div>
                 ${!this._activeTemplateRoot ? html`
@@ -1863,7 +1861,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 ?fullscreen=${true}
                 titleText="🌳 Task Hierarchy"
                 @sutram-modal-closed=${() => { this._hierarchyModalOpen = false; this._hierarchyTask = null; }}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; padding: 10px;">
+                <div slot="body" style="display: contents;">
                     ${this._renderHierarchyView()}
                 </div>
             </sutram-modal>
@@ -1874,7 +1872,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 ?fullscreen=${true}
                 titleText=${this._depsMode === 'upstream' ? '🔒 Blocked By (Upstream)' : '🚧 Blocking (Downstream)'}
                 @sutram-modal-closed=${() => { this._depsModalOpen = false; this._depsTask = null; }}>
-                <div slot="body" style="display: flex; flex-direction: column; padding: 10px; gap: 15px;">
+                <div slot="body" style="display: contents;">
                     ${(() => {
                         if (!this._depsTask) return '';
                         const allTasks = KanbanStore.getState().tasks || [];
@@ -1980,8 +1978,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                 <div style="position: relative; display: flex; flex-direction: column; padding-left: 30px; padding-bottom: 12px;">
                                     <div style="position: absolute; left: 10px; top: -15px; height: 35px; width: 2px; background: var(--border); z-index: 1;"></div>
                                     <div style="position: absolute; left: 10px; top: 18px; width: 20px; height: 2px; background: var(--border); z-index: 1;"></div>
-
-                                    <button class="btn-sm" style="background: var(--input-bg); color: var(--text-muted); border: 1px dashed var(--border); width: fit-content; margin: 0; z-index: 2;"
+                                    <sutram-btn size="sm" variant="tinted" intent="neutral" style="width: fit-content; z-index: 2;"
                                         @click=${() => {
                                             const prefill = { parentId: task.id, tier: nextTier, repo: task.repo };
                                             if (isTemplate) prefill.status = 'template';
@@ -1991,7 +1988,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                             });
                                         }}>
                                         ➕ New ${nextTierLabel}
-                                    </button>
+                                    </sutram-btn>
                                 </div>
                             ` : ''}
                         </div>
@@ -2076,7 +2073,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
             return html`
                 <div style="display: flex; flex-direction: column; gap: 20px;">
                     <div style="display: flex; align-items: center; gap: 15px; border-bottom: 1px solid var(--border); padding-bottom: 15px;">
-                        <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => this._activeTemplateRoot = null}>🔙 Back</button>
+                        <sutram-btn size="sm" intent="neutral" @click=${() => this._activeTemplateRoot = null}>🔙 Back</sutram-btn>
                         <h3 style="margin: 0; color: var(--text);">Template Editor: ${rootDisplayTitle}</h3>
                     </div>
                     <div>
@@ -2531,7 +2528,7 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                     <div style="display: flex; gap: 10px; align-items: center;">
                                         <sutram-input label="Tab Label" .value=${t.label} @sutram-input-changed=${e => this._updateParentTab(i, 'label', e.detail.value)} style="flex: 1;" ?flush=${true}></sutram-input>
                                         <sutram-input label="Tab ID" .value=${t.id} @sutram-input-changed=${e => this._updateParentTab(i, 'id', e.detail.value)} style="flex: 1;" ?flush=${true}></sutram-input>
-                                        <button class="btn-sm" style="background: var(--intent-danger); margin: 0; margin-top: 18px;" @click=${() => this._removeParentTab(i)}>✕</button>
+                                        <sutram-btn size="sm" intent="danger" style="margin-top: 18px;" @click=${() => this._removeParentTab(i)}>✕</sutram-btn>
                                     </div>
                                 `)}
                                 <div style="display: flex; justify-content: flex-start; margin-top: 5px;">

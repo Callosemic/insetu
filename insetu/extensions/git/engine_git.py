@@ -469,16 +469,15 @@ def _background_sweep_push(ctx, selections, message, **kwargs):
 
         repo_path = get_repo_path(repo, ctx.workspace_id)
         if not os.path.exists(repo_path): continue
-
         try:
             # Guarantee topology is perfectly mapped before staging
             from insetu.core.cartographer.cartographer import map_repositories
             map_repositories(ctx.workspace_id)
-            execute_git(repo_path, ['add'] + files)
+            execute_git(repo_path, ['add', '-A', '--'] + files)
 
             # Ensure we only commit if there are actually staged files to prevent empty-commit crashes
-            status_res = execute_git(repo_path, ['status', '--porcelain'], check=False)
-            if status_res.stdout.strip():
+            staged_res = execute_git(repo_path, ['diff', '--cached', '--name-only'], check=False)
+            if staged_res.stdout.strip():
                 execute_git(repo_path, ['commit', '-m', message])
             try:
                 execute_git(repo_path, ['push'])
@@ -603,11 +602,11 @@ def _background_git_push(ctx, repo, message, diff_file, **kwargs):
         map_repositories(ctx.workspace_id)
 
         ctx.jobs.update_progress(f"Committing and pushing {repo}...")
-        execute_git(repo_path, ['add'] + list(files_to_stage))
+        execute_git(repo_path, ['add', '-A', '--'] + list(files_to_stage))
 
         committed = False
-        status_res = execute_git(repo_path, ['status', '--porcelain'], check=False)
-        if status_res.stdout.strip():
+        staged_res = execute_git(repo_path, ['diff', '--cached', '--name-only'], check=False)
+        if staged_res.stdout.strip():
             execute_git(repo_path, ['commit', '-m', message])
             committed = True
         try:

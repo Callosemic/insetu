@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
 export const PublishStore = createExtensionStore('Publish', {
@@ -51,7 +51,7 @@ export class InSetuExtPublishModals extends InSetuElement {
     render() {
         return html`
             <sutram-modal ?open=${this.publishModalOpen} ?fullscreen=${true} titleText="Publish Document" @sutram-modal-closed=${() => PublishStore.setState({ publishModalOpen: false })}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
+                <div slot="body" style="display: contents;">
                     <sutram-select 
                         label="Target Format"
                         .value=${this.publishMode}

@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 
 const AppStore = window.inSetu.stores.App;
 
@@ -129,8 +129,8 @@ export class InSetuExtFavorites extends InSetuElement {
         loading: { type: Boolean }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-        .favorites-body { flex: 1; overflow-y: auto; padding: 20px; }
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+        p.empty-msg { padding: 20px; margin: 0; }
     `];
 
     constructor() {
@@ -180,10 +180,10 @@ export class InSetuExtFavorites extends InSetuElement {
         }
     }
     render() {
-        if (this.items.length === 0 && !this.loading) return html`<div class="favorites-body"><p style="color: var(--text-muted); font-style: italic; margin: 0;">No favorited nodes pinned yet. Pin nodes from the file tree views!</p></div>`;
+        if (this.items.length === 0 && !this.loading) return html`<sutram-scroll-view><p class="empty-msg" style="color: var(--text-muted); font-style: italic;">No favorited nodes pinned yet. Pin nodes from the file tree views!</p></sutram-scroll-view>`;
 
         return html`
-            <div class="favorites-body" style="display: flex; flex-direction: column; gap: 8px;">
+            <sutram-scroll-view style="gap: 8px;">
                 ${this.loading ? html`<sutram-spinner text="Loading bookmarks..."></sutram-spinner>` : ''}
                 <div style="display: flex; flex-direction: column; gap: 8px; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
                 ${this.items.map(item => {
@@ -196,8 +196,8 @@ export class InSetuExtFavorites extends InSetuElement {
                         .filename=${displayPath}
                         .titleText=${item.name}
                         .descriptionText=${item.path}
-                        icon=${item.type === 'folder' ? '📁' : (isContext ? '📦' : '📄')}
-                        intentColor="var(--intent-highlight)"
+                        icon=${item.type === 'folder' ? 'folder' : (isContext ? 'package' : 'file-text')}
+                        intent="highlight"
                         entityType=${eType}
                         .entityData=${{ filepath: item.path, repoDir: repo, isFS: !isContext }}
                         @card-clicked=${() => this._navigateToFavorite(item)}>
@@ -205,7 +205,7 @@ export class InSetuExtFavorites extends InSetuElement {
                     `;
                 })}
                 </div>
-            </div>
+            </sutram-scroll-view>
         `;
     }
 }

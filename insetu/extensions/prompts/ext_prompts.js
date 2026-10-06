@@ -1,6 +1,6 @@
 // ext_prompts.js - Prompt Library Extension
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
@@ -267,7 +267,7 @@ window.ExtensionRegistry.registerExtension('prompts', {
     offline_mode: "read_only",
     entityActions: [
         {
-            targetEntity: 'file:prompt',
+            targetEntity: 'prompt',
             id: 'prompt-edit',
             label: 'Edit',
             icon: '✏️',
@@ -280,7 +280,7 @@ window.ExtensionRegistry.registerExtension('prompts', {
             }
         },
         {
-            targetEntity: 'file:prompt',
+            targetEntity: 'prompt',
             id: 'prompt-copy',
             label: 'Copy',
             icon: '📋',
@@ -293,7 +293,7 @@ window.ExtensionRegistry.registerExtension('prompts', {
             }
         },
         {
-            targetEntity: 'file:prompt',
+            targetEntity: 'prompt',
             id: 'prompt-delete',
             label: 'Delete',
             icon: '🗑️',

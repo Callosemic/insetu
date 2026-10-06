@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement, bindStoreInput } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement, bindStoreInput } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
@@ -287,13 +287,13 @@ export class InSetuExtResearch extends InSetuElement {
         if (!job) return '';
 
         const meta = job.meta || {};
-        const statusColor = (() => {
-            if (job.status === 'running') return 'var(--intent-primary)';
-            if (job.status === 'gathering') return 'var(--intent-highlight)';
-            if (job.status === 'completed') return 'var(--intent-primary)';
-            if (job.status === 'reviewed') return 'var(--intent-success)';
-            if (job.status === 'failed') return 'var(--intent-danger)';
-            return 'var(--text-muted)';
+        const activeIntent = (() => {
+            if (job.status === 'running') return 'primary';
+            if (job.status === 'gathering') return 'highlight';
+            if (job.status === 'completed') return 'primary';
+            if (job.status === 'reviewed') return 'success';
+            if (job.status === 'failed') return 'danger';
+            return 'neutral';
         })();
         const safeDate = this.utils.formatDate(job.created_at);
         const cardStatusExtra = job.status === 'gathering'  
@@ -309,7 +309,7 @@ export class InSetuExtResearch extends InSetuElement {
                     <sutram-async-btn style="flex-shrink: 0;" label="📋 Copy" intent="neutral" .onClick=${() => this.utils.copyRawText(job.query)}></sutram-async-btn>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                    <span style="font-size: 0.95rem;"><b>Status:</b> <span style="color: ${statusColor}; font-weight: bold;">${job.status.toUpperCase()}</span> <span style="color: var(--text-muted);">${cardStatusExtra}</span></span>
+                    <span style="font-size: 0.95rem;"><b>Status:</b> <span style="color: var(--intent-${activeIntent}); font-weight: bold;">${job.status.toUpperCase()}</span> <span style="color: var(--text-muted);">${cardStatusExtra}</span></span>
                 </div>
                 <div style="display: flex; gap: 15px; font-size: 0.85rem; color: var(--text-muted); flex-wrap: wrap; margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border);">
                     <span><b>Provider:</b> <span style="color: var(--text);">${job.provider}</span></span>
@@ -318,12 +318,12 @@ export class InSetuExtResearch extends InSetuElement {
                 </div>
             </div>
             <div id="rs-job-actions-row" style="margin-bottom: 15px; display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap;">
-                ${job.status === 'running' ? html`<button class="btn-sm" style="background: var(--intent-warning); margin: 0; padding: 6px 12px; font-weight: bold;" @click=${() => this.handleJobAction(job.id, 'pause')}>⏸️ Pause</button>` : ''}
-                ${job.status === 'paused' ? html`<button class="btn-sm" style="background: var(--intent-success); margin: 0; padding: 6px 12px; font-weight: bold;" @click=${() => this.handleJobAction(job.id, 'resume')}>▶️ Resume</button>` : ''}
-                ${job.status === 'failed' ? html`<button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 6px 12px; font-weight: bold;" @click=${() => this.handleJobAction(job.id, 'retry')}>🔄 Retry</button>` : ''}
-                ${['running', 'paused', 'gathering', 'failed'].includes(job.status) ? html`<button class="btn-sm" style="background: var(--intent-neutral); margin: 0; padding: 6px 12px; font-weight: bold;" @click=${() => this.handleJobAction(job.id, 'cancel')}>⏹️ Cancel</button>` : ''}
-                <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-danger); color: var(--intent-danger); margin: 0; padding: 6px 12px; font-weight: bold;" @click=${() => this.handleJobAction(job.id, 'delete')}>🗑️ Delete</button>
-                <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 6px 12px; font-weight: bold;" @click=${() => ResearchStore.setState({ aiTriageMode: !this.aiTriageMode })}>${this.aiTriageMode ? '🔙 Back to Manual Triage' : '🤖 AI-Assisted Batch Triage'}</button>
+                ${job.status === 'running' ? html`<sutram-btn size="sm" intent="warning" @click=${() => this.handleJobAction(job.id, 'pause')}>⏸️ Pause</sutram-btn>` : ''}
+                ${job.status === 'paused' ? html`<sutram-btn size="sm" intent="success" @click=${() => this.handleJobAction(job.id, 'resume')}>▶️ Resume</sutram-btn>` : ''}
+                ${job.status === 'failed' ? html`<sutram-btn size="sm" intent="highlight" @click=${() => this.handleJobAction(job.id, 'retry')}>🔄 Retry</sutram-btn>` : ''}
+                ${['running', 'paused', 'gathering', 'failed'].includes(job.status) ? html`<sutram-btn size="sm" intent="neutral" @click=${() => this.handleJobAction(job.id, 'cancel')}>⏹️ Cancel</sutram-btn>` : ''}
+                <sutram-btn size="sm" variant="tinted" intent="danger" @click=${() => this.handleJobAction(job.id, 'delete')}>🗑️ Delete</sutram-btn>
+                <sutram-btn size="sm" intent="highlight" @click=${() => ResearchStore.setState({ aiTriageMode: !this.aiTriageMode })}>${this.aiTriageMode ? '🔙 Back to Manual Triage' : '🤖 AI-Assisted Batch Triage'}</sutram-btn>
             </div>
 
             ${this.aiTriageMode ? html`
@@ -353,9 +353,9 @@ export class InSetuExtResearch extends InSetuElement {
                                         .titleText=${`${statusBadge} ${item.title || 'Untitled'}`}
                                         .descriptionText=${item.url}
                                         .detailText=${`ID: ${item.id}`}
-                                        icon="📄"
+                                        icon="file-text"
                                         ?selected=${isSelected}
-                                        intentColor="var(--intent-primary)"
+                                        intent="primary"
                                         @card-clicked=${() => ResearchStore.setState({ selectedItemId: item.id })}>
                                         ${item.status === 'duplicate' ? html`<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;"><span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold;">⚠️ Already Scraped</span><button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-warning); color: var(--intent-warning); padding: 2px 8px; margin: 0; font-size: 0.7rem;" @click=${(e) => { e.stopPropagation(); this.handleDisposition(item.id, 'force_scrape'); }}>Force Scrape Anyway</button></div>` : ''}
                                         ${item.status === 'in_library' ? html`<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;"><span style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold;">📚 In Library</span><button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-highlight); color: var(--intent-highlight); padding: 2px 8px; margin: 0; font-size: 0.7rem;" @click=${(e) => { e.stopPropagation(); this.handleDisposition(item.id, 'force_scrape'); }}>Force Scrape Anyway</button></div>` : ''}
@@ -378,7 +378,7 @@ export class InSetuExtResearch extends InSetuElement {
                     <div class="rs-view active" style="overflow-y: auto; padding-right: 5px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
                             <h4 style="margin: 0; color: var(--text);">Active & Past Jobs</h4>
-                            <button class="btn-sm" style="background: var(--intent-success); font-weight: bold;" @click=${() => ResearchStore.setState({ newJobModalOpen: true })}>➕ New Job</button>
+                            <sutram-btn size="sm" intent="success" @click=${() => ResearchStore.setState({ newJobModalOpen: true })}>➕ New Job</sutram-btn>
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 10px;">
                             ${(this.jobs || []).map(job => this._renderJobCard(job))}
@@ -391,7 +391,7 @@ export class InSetuExtResearch extends InSetuElement {
                 `}
             </div>
             <sutram-modal ?open=${!!activeItem} titleText="Research Item Preview" ?fullscreen=${true} @sutram-modal-closed=${() => ResearchStore.setState({ selectedItemId: null })}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; height: 100%; padding: 0;">
+                <div slot="body" style="display: contents;">
                     ${activeItem ? html`
                         <div style="padding: 15px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; background: var(--input-bg);">
                             <div>
@@ -414,7 +414,7 @@ export class InSetuExtResearch extends InSetuElement {
                 </div>
             </sutram-modal>
             <sutram-modal ?open=${this.newJobModalOpen} ?fullscreen=${true} titleText="New Research Job" @sutram-modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
+                <div slot="body" style="display: contents;">
                     ${bindStoreInput(ResearchStore, 'searchForm.query', this.searchForm.query, { placeholder: 'Search Query...', style: 'width: 100%;' })}
                     <div style="display: flex; gap: 10px;">
                         ${bindStoreInput(ResearchStore, 'searchForm.provider', this.searchForm.provider || 'serper', { type: 'select', style: 'flex: 1;', selectOptions: [{value: 'serper', label: 'Google (Serper.dev API)'}, {value: 'google', label: 'Google (Playwright)'}, {value: 'duckduckgo', label: 'DuckDuckGo'}] })}

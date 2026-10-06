@@ -1,4 +1,4 @@
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
 export const CitationStore = createExtensionStore('Citations', {
@@ -400,8 +400,8 @@ export class InSetuExtCitations extends InSetuElement {
                 .filename=${c.id}
                 .titleText=${c.title || 'Untitled'}
                 .descriptionText=${`${authors} (${year})`}
-                icon="📄"
-                intentColor="var(--intent-highlight)"
+                icon="file-text"
+                intent="highlight"
                 entityType=${isExplore ? 'explore_citation' : 'citation'}
                 .entityData=${{ ...c, isImporting, isExplore, alreadyExists }}>
                 <div style="font-size: 0.8rem; margin-top: 4px; color: var(--text-muted);">
@@ -550,7 +550,7 @@ export class InSetuExtCitations extends InSetuElement {
         return html`
             <!-- Attach Modal -->
             <sutram-modal ?open=${!!this.activeAttachCitation} ?fullscreen=${true} titleText="Pin to Repo: [@${this.activeAttachCitation?.id}]" @sutram-modal-closed=${() => CitationStore.setState({ activeAttachCitation: null })}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
+                <div slot="body" style="display: contents;">
                     <div style="display: flex; gap: 10px; margin-bottom: 15px;">
                         <sutram-select style="flex:1; margin:0;" .value=${this.attachForm.repo} .options=${this.allRepos.map(r => ({value: r, label: r}))} @sutram-input-changed=${e => { CitationStore.setState(s => ({ attachForm: { ...s.attachForm, repo: e.detail.value, bucket: 'None' } })); }}></sutram-select>
                         <sutram-select style="flex:1; margin:0;" .value=${this.attachForm.bucket} .options=${[{value: 'None', label: 'No Bucket'}, ...(this.attachForm.repo ? this.sys.getFlattenedBuckets(this.attachForm.repo).map(b => ({value: b.id, label: b.title})) : [])]} @sutram-input-changed=${e => CitationStore.setState(s => ({ attachForm: { ...s.attachForm, bucket: e.detail.value } }))}></sutram-select>
@@ -573,7 +573,7 @@ export class InSetuExtCitations extends InSetuElement {
             </sutram-modal>
             <!-- Edit Modal -->
             <sutram-modal ?open=${!!this.activeEditCitation} ?fullscreen=${true} titleText="Edit: [@${this.activeEditCitation?.id}]" @sutram-modal-closed=${() => CitationStore.setState({ activeEditCitation: null })}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
+                <div slot="body" style="display: contents;">
                     <div style="display: flex; gap: 10px; margin-bottom: 12px;">
                         <div style="flex: 1;">
                             <sutram-select label="Type" .value=${this.editForm.type} .options=${[
@@ -670,7 +670,7 @@ export class InSetuExtCitationsModals extends InSetuElement {
         const results = q ? window.inSetu.utils.fuzzyFilterObjects(this.citationLibraryCache, q, c => `${c.title || ''} ${c.id || ''} ${c.author ? c.author.map(a => a.family).join(" ") : ''}`).slice(0, 30) : [];
         return html`
             <sutram-modal ?open=${this.citationModalOpen} ?fullscreen=${true} titleText="Insert Citation" @sutram-modal-closed=${() => CitationStore.setState({ citationModalOpen: false })}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
+                <div slot="body" style="display: contents;">
                     <sutram-input placeholder="Search library by author, title, or ID..." .value=${this.citationSearchQuery} @sutram-input-changed=${(e) => CitationStore.setState({ citationSearchQuery: e.detail.value })}></sutram-input>
                     <div style="display: flex; flex-direction: column; overflow-y: auto; flex: 1; gap: 5px;">
                         ${!q ? html`<span style="color:var(--text-muted); font-style:italic;">Type to search...</span>` : results.length === 0 ? html`<span style="color:var(--text-muted); font-style:italic;">No citations found.</span>` : results.map(c => {
@@ -681,8 +681,8 @@ export class InSetuExtCitationsModals extends InSetuElement {
                                     .filename=${c.id}
                                     .titleText=${c.title || 'Untitled'}
                                     .descriptionText=${`${authors} (${year})`}
-                                    icon="📄"
-                                    intentColor="var(--intent-primary)"
+                                    icon="file-text"
+                                    intent="primary"
                                     @card-clicked=${() => this._insertCitationToEditor(c)}>
                                 </insetu-card>
                             `;

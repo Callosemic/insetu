@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
@@ -136,7 +136,7 @@ export class InSetuExtNotesModals extends InSetuElement {
                 ?fullscreen=${true}
                 titleText="Create New Note"
                 @sutram-modal-closed=${() => NotesStore.setState({ newNoteModalOpen: false })}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 5px;">
+                <div slot="body" style="display: contents;">
                     <sutram-input label="Note Title" .value=${this.noteForm.title} placeholder="e.g., API Architectural Decision" @sutram-input-changed=${(e) => NotesStore.setState(state => ({ noteForm: { ...state.noteForm, title: e.detail.value }}))}></sutram-input>
                     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                         <div style="flex: 1; min-width: 150px;">
@@ -256,7 +256,7 @@ export class InSetuExtNotesEditor extends InSetuElement {
                 ?flush=${true}
                 @sutram-modal-closed=${() => NotesStore.setState({ editNoteFilepath: null })}>
 
-                <div slot="body" style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
+                <div slot="body" style="display: contents;">
                     ${this.filepath ? html`
                         <insetu-frontmatter-editor
                             id="fm-editor"
@@ -299,13 +299,13 @@ export class InSetuExtNotesEditor extends InSetuElement {
                 </div>
                 ${this.filepath ? html`
                 <div slot="footer" style="display: flex; justify-content: space-between; width: 100%;">
-                    <button class="btn-sm" style="background: var(--intent-danger); color: white; margin: 0;" @click=${this._deleteNote}>🗑️ Delete</button>
+                    <sutram-btn size="sm" intent="danger" @click=${this._deleteNote}>🗑️ Delete</sutram-btn>
                     <div style="display: flex; gap: 10px;">
-                        <button class="btn-sm" style="background: var(--intent-warning); color: black; margin: 0;" @click=${() => {
+                        <sutram-btn size="sm" intent="warning" @click=${() => {
                             const fp = this.filepath;
                             NotesStore.setState({ editNoteFilepath: null });
                             if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(fp, true, true);
-                        }}>📝 Raw Edit</button>
+                        }}>📝 Raw Edit</sutram-btn>
                         ${this._isDirty ? html`<sutram-async-btn style="margin: 0;" label="💾 Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor')._handleSave()}></sutram-async-btn>` : ''}
                     </div>
                 </div>
@@ -327,7 +327,7 @@ export class InSetuExtNotes extends InSetuElement {
         allRepos: { type: Array }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
     `];
 
     constructor() {
@@ -403,7 +403,7 @@ export class InSetuExtNotes extends InSetuElement {
                     @repo-filter-changed=${(e) => NotesStore.setState({ pinnedRepos: new Set(e.detail.activeRepos) })}>
                 </insetu-repo-filter>
             </sutram-toolbar>
-            <div style="flex: 1; overflow-y: auto; padding: 20px;">
+            <sutram-scroll-view>
                 ${this.loading ? html`<sutram-spinner text="Loading notes..."></sutram-spinner>` : ''}
 
                 <div style="display: flex; flex-direction: column; gap: 10px; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
@@ -415,8 +415,8 @@ export class InSetuExtNotes extends InSetuElement {
                             .titleText=${n.title}
                             .descriptionText=${`Repo: ${n.repo}${n.sub_bucket !== 'None' ? ` | Bucket: ${n.sub_bucket}` : ''}`}
                             .detailText=${this.utils.formatDate(n.updated_at)}
-                            icon="📝"
-                            intentColor="var(--intent-highlight)"
+                            icon="file-edit"
+                            intent="highlight"
                             entityType="file:note"
                             .entityData=${{ filepath: n.filepath, isFS: true, repoDir: n.repo }}
                             @card-clicked=${() => NotesStore.setState({ editNoteFilepath: n.filepath })}>
@@ -427,7 +427,7 @@ export class InSetuExtNotes extends InSetuElement {
                         </insetu-card>
                     `)}
                 </div>
-            </div>
+            </sutram-scroll-view>
         `;
     }
 }

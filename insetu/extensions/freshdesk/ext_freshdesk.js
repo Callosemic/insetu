@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { InSetuElement, createExtensionStore } from '/static/extensions/system/sdk.js';
+import { InSetuElement, createExtensionStore } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 const AppStore = window.inSetu.stores.App;
@@ -313,7 +313,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
     render() {
         return html`
             <sutram-modal ?open=${this.isModalOpen} titleText="Ticket #${this.selectedTicket?.id || ''}" ?fullscreen=${true} @sutram-modal-closed=${() => FreshdeskStore.setState({ isModalOpen: false })}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; height: 100%;">
+                <div slot="body" style="display: contents;">
                     <!-- Metadata Header -->
                     <details style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; font-size: 0.95rem; flex-shrink: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
                         <summary style="padding: 15px; cursor: pointer; outline: none; user-select: none; font-weight: bold;">
@@ -325,10 +325,10 @@ export class InSetuExtFreshdesk extends InSetuElement {
                                 <div><b>Assigned Agent:</b> <span style="color: ${this.selectedTicket?.responder_id === this.myAgentId ? 'var(--intent-success)' : 'var(--intent-highlight)'}; font-weight: ${this.selectedTicket?.responder_id === this.myAgentId ? 'bold' : 'normal'};">${this.selectedTicket?.responder_id === this.myAgentId ? 'You' : (this.selectedTicket?.responder_name || 'Unassigned')}</span></div>
                             </div>
                             <div style="display: flex; gap: 8px;">
-                                <button class="btn-sm" style="background: var(--intent-primary); color: white; margin: 0;" @click=${() => this.copyThread()}>📋 Copy Thread</button>
-                                ${(!this.myAgentId || this.selectedTicket?.responder_id !== this.myAgentId) ? html`<button class="btn-sm" style="background: var(--intent-success); color: white; margin: 0;" @click=${() => this.takeTicket(this.selectedTicket?.id)}>🙋 Take</button>` : ''}
-                                ${(this.selectedTicket?.status !== 4 && this.selectedTicket?.status !== 5) ? html`<button class="btn-sm" style="background: var(--intent-neutral); color: white; margin: 0;" @click=${() => this.resolveTicket(this.selectedTicket?.id)}>✅ Resolve</button>` : ''}
-                                <button class="btn-sm" style="background: var(--intent-danger); color: white; margin: 0;" @click=${() => { this.ignoreTicket(this.selectedTicket?.id); FreshdeskStore.setState({ isModalOpen: false }); }}>🚫 Ignore</button>
+                                <sutram-btn size="sm" intent="primary" @click=${() => this.copyThread()}>📋 Copy Thread</sutram-btn>
+                                ${(!this.myAgentId || this.selectedTicket?.responder_id !== this.myAgentId) ? html`<sutram-btn size="sm" intent="success" @click=${() => this.takeTicket(this.selectedTicket?.id)}>🙋 Take</sutram-btn>` : ''}
+                                ${(this.selectedTicket?.status !== 4 && this.selectedTicket?.status !== 5) ? html`<sutram-btn size="sm" intent="neutral" @click=${() => this.resolveTicket(this.selectedTicket?.id)}>✅ Resolve</sutram-btn>` : ''}
+                                <sutram-btn size="sm" intent="danger" @click=${() => { this.ignoreTicket(this.selectedTicket?.id); FreshdeskStore.setState({ isModalOpen: false }); }}>🚫 Ignore</sutram-btn>
                             </div>
                         </div>
                     </details>
@@ -429,8 +429,8 @@ export class InSetuExtFreshdesk extends InSetuElement {
                         .titleText=${t.subject}
                         .descriptionText=${`Assignee: ${assigneeText} | Status: ${statusMap[t.status] || t.status} | Priority: ${prioMap[t.priority] || t.priority}`}
                         .detailText=${this.utils.formatDate(t.created_at)}
-                        icon="🎫"
-                        intentColor="var(--intent-highlight)"
+                        icon="ticket"
+                        intent="highlight"
                         entityType="freshdesk_ticket"
                         .entityData=${t}
                         @card-clicked=${() => {
@@ -441,9 +441,9 @@ export class InSetuExtFreshdesk extends InSetuElement {
                 `})}
                 </div>
                 ${(!this.activeJobId && this.tickets.length > 0) ? html`
-                    <button class="btn-sm" style="background: var(--intent-primary); width: 100%; margin-top: 10px; padding: 12px; font-weight: bold;" @click=${() => this.fetchTickets(true)}>
+                    <sutram-btn intent="primary" style="width: 100%; margin-top: 10px; padding: 12px;" @click=${() => this.fetchTickets(true)}>
                         ⬇️ Load Older Tickets (Pages ${Math.max((this.lastFetchedPage || 0) + 1, Math.floor(this.contiguousCount / 100) + 1)} & ${Math.max((this.lastFetchedPage || 0) + 1, Math.floor(this.contiguousCount / 100) + 1) + 1})
-                    </button>
+                    </sutram-btn>
                 ` : ''}
             </div>
         `;

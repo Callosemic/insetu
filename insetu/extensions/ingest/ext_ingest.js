@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 
 const AppStore = window.inSetu.stores.App;
 
@@ -101,7 +101,7 @@ export class InSetuExtIngestModals extends InSetuElement {
     render() {
         return html`
             <sutram-modal ?open=${this.ingestModalOpen} titleText="Import from URL" @sutram-modal-closed=${() => IngestStore.setState({ ingestModalOpen: false })}>
-                <div slot="body">
+                <div slot="body" style="display: contents;">
                     <sutram-input label="Target URL:" placeholder="https://..." .value=${this.ingestUrl} @sutram-input-changed=${e => IngestStore.setState({ ingestUrl: e.detail.value })}></sutram-input>
 
                     <sutram-select 

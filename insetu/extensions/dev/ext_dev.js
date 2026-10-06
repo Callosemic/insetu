@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { InSetuElement, createExtensionStore } from '/static/extensions/system/sdk.js';
+import { InSetuElement, createExtensionStore } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 export const DevStore = createExtensionStore('Dev', {
     thrashingFiles: [],
@@ -18,9 +18,8 @@ export class InSetuExtDevDash extends InSetuElement {
         lastUpdate: { type: String },
         _expandedGraphs: { type: Object }
     };
-
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; overflow-y: auto; padding: 20px; box-sizing: border-box; background: var(--bg); }
+        :host { display: flex; flex-direction: column; height: 100%; overflow: hidden; box-sizing: border-box; background: var(--bg); }
     `];
     constructor() {
         super();
@@ -91,11 +90,11 @@ export class InSetuExtDevDash extends InSetuElement {
             DevStore.setState({ lastUpdate: 'Network Error' });
         }
     }
-
     render() {
         return html`
-            <div style="max-width: 1200px; margin: 0 auto; width: 100%;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <sutram-scroll-view>
+                <div style="max-width: 1200px; margin: 0 auto; width: 100%;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                     <h2 style="margin: 0; color: var(--text);">Developer Dashboard</h2>
                     <span style="font-size: 0.8rem; color: var(--text-muted);">Last Updated: ${this.lastUpdate || '...'}</span>
                 </div>
@@ -103,8 +102,8 @@ export class InSetuExtDevDash extends InSetuElement {
                     <insetu-card
                         titleText="File Thrashing (Last 1 Hour)"
                         descriptionText="Files mutated more than 3 times in the past hour."
-                        icon="🔥"
-                        intentColor="var(--intent-danger)"
+                        icon="flame"
+                        intent="danger"
                         ?disableSelection=${true}
                         style="margin-bottom: 20px;">
                         
@@ -152,8 +151,8 @@ export class InSetuExtDevDash extends InSetuElement {
                     <insetu-card
                         titleText="System Error Ledger"
                         descriptionText="Background worker crashes, VFS write failures, and unhandled exceptions."
-                        icon="🚨"
-                        intentColor="var(--intent-danger)"
+                        icon="alert-triangle"
+                        intent="danger"
                         ?disableSelection=${true}
                         style="margin-bottom: 20px;">
 
@@ -194,12 +193,11 @@ export class InSetuExtDevDash extends InSetuElement {
                             `)}
                         </div>
                     </insetu-card>
-
                     <insetu-card
                         titleText="Bridge Error Ledger"
                         descriptionText="AST validation and patch diff failures for LLM analysis."
-                        icon="🌉"
-                        intentColor="var(--intent-warning)"
+                        icon="layout"
+                        intent="warning"
                         ?disableSelection=${true}>
                         
                         <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
@@ -235,9 +233,10 @@ export class InSetuExtDevDash extends InSetuElement {
                         </div>
                     </insetu-card>
                 </sutram-card-group>
-            </div>
+                    </div>
+                </sutram-scroll-view>
         `;
-    }
+}
 }
 customElements.define('insetu-ext-dev-dash', InSetuExtDevDash);
 export class InSetuExtDevLogs extends InSetuElement {
@@ -362,7 +361,7 @@ export class InSetuExtDevSql extends InSetuElement {
     static styles = [
         sharedStyles,
         css`
-            :host { display: flex; flex-direction: column; height: 100%; padding: 20px; box-sizing: border-box; background: var(--bg); overflow-y: auto; }
+            :host { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; background: var(--bg); overflow: hidden; }
             .sql-controls { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
             .presets { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
             .preset-btn { background: var(--input-bg); border: 1px solid var(--border); color: var(--text); padding: 4px 10px; border-radius: 4px; font-size: 0.8rem; cursor: pointer; font-family: var(--font-mono); }
@@ -434,11 +433,11 @@ export class InSetuExtDevSql extends InSetuElement {
         this.query = queryStr;
         this.requestUpdate();
     }
-
     render() {
         return html`
-            <div style="display: flex; flex-direction: column; height: 100%; max-width: 1200px; margin: 0 auto; width: 100%;">
-                <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+            <sutram-scroll-view>
+                <div style="display: flex; flex-direction: column; height: 100%; max-width: 1200px; margin: 0 auto; width: 100%;">
+                    <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
                     <div>
                         <h3 style="margin: 0; color: var(--text);">SQL Console</h3>
                         <span style="font-size: 0.85rem; color: var(--text-muted);">Execute queries directly against workspace SQLite databases.</span>
@@ -522,9 +521,10 @@ export class InSetuExtDevSql extends InSetuElement {
                         </div>
                     ` : ''}
                 ` : ''}
-            </div>
+                    </div>
+                </sutram-scroll-view>
         `;
-    }
+}
 }
 customElements.define('insetu-ext-dev-sql', InSetuExtDevSql);
 

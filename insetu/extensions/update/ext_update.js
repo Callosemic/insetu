@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { debounce } from '/static/vendor/sutram/js/utils.js';
 
@@ -716,7 +716,7 @@ export class InSetuExtUpdate extends InSetuElement {
                     ${!this.repoLoading && !this.hasPyproject ? html`
                         <div style="background: var(--bg); border: 1px dashed var(--intent-warning); border-radius: 4px; padding: 8px 12px; margin-bottom: 10px; color: var(--intent-warning); font-size: 0.85rem; font-weight: bold; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px;">
                             <span>⚠️ Missing pyproject.toml in this repository.</span>
-                            <button class="btn-sm" style="background: var(--intent-warning); color: black; border: none; padding: 4px 10px; font-weight: bold; font-size: 0.75rem; border-radius: 4px; cursor: pointer;"
+                            <sutram-btn size="sm" intent="warning"
                                 @click=${() => {
                                     const initVer = prompt("Enter initial semantic version (e.g., 0.1.0):", "0.1.0");
                                     if (initVer) {
@@ -724,7 +724,7 @@ export class InSetuExtUpdate extends InSetuElement {
                                     }
                                 }}>
                                 📄 Create Basic TOML and Tag
-                            </button>
+                            </sutram-btn>
                             <span style="font-size: 0.7rem; font-weight: normal; font-style: italic; opacity: 0.9;">The TOML file will be initialized with Python build disabled to accommodate versioning for all project types. This action will also instantly create a Git tag to establish your baseline version. Update manually as needed.</span>
                         </div>
                     ` : ''}
@@ -937,7 +937,7 @@ export class InSetuExtUpdate extends InSetuElement {
                 ` : ''}
                 ${this.lastReleaseLog ? html`
                     <div style="margin-top: 15px; display: flex; justify-content: flex-end;">
-                        <button class="btn-sm" style="background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 8px 14px; font-weight: bold; cursor: pointer;"
+                        <sutram-btn size="sm" intent="neutral"
                             @click=${() => {
                                 UpdateStore.setState({
                                     previewOutput: this.lastReleaseLog,
@@ -949,12 +949,12 @@ export class InSetuExtUpdate extends InSetuElement {
                                 });
                             }}>
                             👁️ View Last Release Log
-                        </button>
+                        </sutram-btn>
                     </div>
                 ` : ''}
             </div>
             <sutram-modal ?open=${this.previewModalOpen} ?fullscreen=${true} titleText=${this.previewActionType === 'log_view' ? 'Release Execution Log' : 'Release Preview'} @sutram-modal-closed=${() => UpdateStore.setState({ previewModalOpen: false })}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+                <div slot="body" style="display: contents;">
                     <p style="font-size: 0.9rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">
                         ${this.previewCaption}
                     </p>
@@ -988,9 +988,8 @@ export class InSetuExtUpdate extends InSetuElement {
                     </div>
                 </div>
                 <div slot="footer" style="display: flex; width: 100%; gap: 10px;">
-                    <button class="btn-sm" style="flex: 1; background: var(--intent-neutral); color: white; border: none; padding: 10px 15px; font-weight: bold; border-radius: 4px; cursor: pointer;" @click=${() => UpdateStore.setState({ previewModalOpen: false })}>
-                        ${this.previewActionType === 'log_view' ? '❌ Close' : '❌ Cancel'}
-                    </button>
+                    <sutram-btn size="sm" intent="neutral" style="flex: 1; --btn-padding: 10px 15px;" @click=${() => UpdateStore.setState({ previewModalOpen: false })}>${this.previewActionType === 'log_view' ? '❌ Close' : '❌ Cancel'}
+                    </sutram-btn>
                     ${this.previewActionType !== 'log_view' ? html`
                         <sutram-async-btn label="${this.previewActionType === 'publish' ? '⚡ Confirm & Execute Publish' : (this.previewActionType === 'first_release' ? '⚡ Confirm & Initial Release' : '⚡ Confirm & Execute Bump')}" intent="success" style="flex: 1; margin: 0; --btn-padding: 10px 15px;" .onClick=${async () => {
                             UpdateStore.setState({ previewModalOpen: false });

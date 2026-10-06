@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 
 const AppStore = window.inSetu.stores.App;
 export const GitStore = createExtensionStore('Git', {
@@ -85,7 +85,7 @@ export class InSetuExtGitDiffs extends InSetuElement {
         _showFilters: { type: Boolean }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
     `];
     constructor() {
         super();
@@ -365,17 +365,15 @@ disconnectedCallback() {
                     @repo-filter-changed=${(e) => window.inSetu.stores.Gather.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
             </sutram-toolbar>
-            <div style="flex: 1; overflow-y: auto; padding: 0;">
-            ${this.diffJobError ? html`<div style="color: var(--intent-danger); padding: 10px 20px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
+            <sutram-scroll-view padding="none">
+            ${this.diffJobError ? html`<div style="color: var(--intent-danger); padding: 10px var(--content-padding-x, 20px);">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
             <div style="display: flex; flex-direction: column;">
                 ${sortedCats.map(catName => html`
                     <sutram-collapsible 
                         titleText=${catName} 
                         intent="neutral" 
-                        ?open=${true}
-                        ?flush=${true}
-                        style="--title-weight: bold; --title-size: 1.05rem; color: var(--text); background: transparent; border-left: none; border-right: none; border-radius: 0; box-shadow: none;">
-                        <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px 20px 20px 20px;">
+                        ?open=${true}>
+                        <div style="display: flex; flex-direction: column; gap: 8px;">
                             ${categories[catName].map(f => {
                                 const descText = f.branch ? `🌿 Branch: ${f.branch}` : f.description;
                                 const repoStr = f.repoDir ? `[${f.repoDir}] ` : '';
@@ -396,8 +394,8 @@ disconnectedCallback() {
                                     .detailPrefix=${repoStr}
                                     .detailText=${f.filename}
                                     .detailSuffix=${sizeStr ? ` | ${sizeStr}` : ''}
-                                    icon=${isLocked ? "⏳" : (isDirty ? "⚠️" : "📦")}
-                                    intentColor=${isDirty ? "var(--intent-warning)" : "var(--intent-highlight)"}
+                                    icon=${isLocked ? "loader" : (isDirty ? "alert-triangle" : "package")}
+                                    intent=${isDirty ? "warning" : "highlight"}
                                     entityType="file:diff"
                                     .entityData=${{ 
                                         filepath: f.filename, 
@@ -412,17 +410,15 @@ disconnectedCallback() {
                         </div>
                     </sutram-collapsible>
                 `)}
-                ${!isGitLoading && diffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px; padding: 0 20px;">Diffs automatically map when this tab is opened.</p>` : ''}
+                ${!isGitLoading && diffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px; padding: 0 var(--content-padding-x, 20px);">Diffs automatically map when this tab is opened.</p>` : ''}
                 ${!isGitLoading && Object.keys(this.sweepFiles).some(r => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)) ? html`
                     <sutram-collapsible 
                         titleText="🧹 Sweepable State" 
                         intent="neutral" 
-                        ?open=${true}
-                        ?flush=${true}
-                        style="--title-weight: bold; --title-size: 1.05rem; color: var(--text); background: transparent; border-left: none; border-right: none; border-radius: 0; box-shadow: none;">
+                        ?open=${true}>
                         <sutram-async-btn slot="actions" label="🚀 Sweep All" intent="primary" style="margin: 0;" .onClick=${this._getSweepAllAction()}></sutram-async-btn>
 
-                        <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px 20px 20px 20px;">
+                        <div style="display: flex; flex-direction: column; gap: 8px;">
                             <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
                             ${Object.entries(this.sweepFiles).filter(([r, _]) => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)).map(([repo, files]) => {
                                 const isLocked = this.sweepLoading;
@@ -434,8 +430,8 @@ disconnectedCallback() {
                                     .filename=${repo}
                                     .titleText=${repo}
                                     .descriptionText=${descText}
-                                    icon=${isLocked ? "⏳" : "📦"}
-                                    intentColor="var(--intent-neutral)"
+                                    icon=${isLocked ? "loader" : "package"}
+                                    intent="neutral"
                                     entityType="repo"
                                     .entityData=${{ 
                                         repoDir: repo, 
@@ -484,7 +480,7 @@ disconnectedCallback() {
                         <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0;">No diffs or untracked metadata detected.</p>
                     </div>
                 ` : ''}
-            </div>
+            </sutram-scroll-view>
             </div>
             <sutram-modal ?open=${this.pushModalOpen} ?fullscreen=${true} titleText="🚀 Commit & Push" @sutram-modal-closed=${() => this.pushModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
@@ -532,7 +528,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
         _repoStrategies: { type: Object }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; overflow-y: auto; }
+        :host { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
     `];
     constructor() {
         super();
@@ -707,10 +703,9 @@ export class InSetuExtGitCtrl extends InSetuElement {
             }
         });
     }
-
     render() {
         return html`
-            <div style="display: flex; flex-direction: column; gap: 15px; padding: 15px;">
+            <sutram-scroll-view padding="15px" style="gap: 15px;">
                 ${this.activePullJobId ? html`<div class="spinner" style="display: block;">${this.pullMessage || 'Pulling from remote...'}</div>` : ''}
 
                 ${this.ecosystem.allRepos.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic;">No repositories tracked.</div>` : ''}
@@ -718,12 +713,12 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     const status = this.reposStatus[repo] || {};
                     if (status.is_git === false) {
                         return html`
-                            <insetu-card titleText=${repo} descriptionText="Not a Git repository." icon="📁" intentColor="var(--intent-neutral)">
+                            <insetu-card titleText=${repo} descriptionText="Not a Git repository." icon="folder" intent="neutral">
                                 <div slot="actions" style="display: flex; align-items: center; gap: 5px;">
                                     <sutram-input .value=${"main"} placeholder="main" style="width: 100px; margin: 0;" @sutram-input-changed=${(e) => this.newBranchName = e.detail.value}></sutram-input>
-                                    <button class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${() => {
+                                    <sutram-btn size="sm" intent="success" @click=${() => {
                                         this._initRepo(repo, this.newBranchName || 'main');
-                                    }}>✨ Initialize</button>
+                                    }}>✨ Initialize</sutram-btn>
                                 </div>
                             </insetu-card>
                         `;
@@ -736,36 +731,36 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     const conflictBadge = conflicts.length > 0 ? html`<span slot="header-tags" class="task-tag" style="background: var(--intent-danger); color: white; border: 1px solid var(--intent-danger); margin-left: 5px;">⚠️ ${conflicts.length} Conflict${conflicts.length > 1 ? 's' : ''}</span>` : '';
 
                     return html`
-                        <insetu-card titleText=${repo} descriptionText=${descText} icon="📦" intentColor="${conflicts.length > 0 ? 'var(--intent-danger)' : 'var(--intent-neutral)'}">
+                        <insetu-card titleText=${repo} descriptionText=${descText} icon="package" intent="${conflicts.length > 0 ? 'danger' : 'neutral'}">
                             ${conflictBadge}
                             ${status.has_remote === false ? html`
-                                <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0 5px 0 0;" @click=${() => {
+                                <sutram-btn slot="actions" size="sm" intent="primary" style="margin-right: 5px;" @click=${() => {
                                     this.activeRemoteRepo = repo;
                                     this.remoteUrlInput = '';
                                     this.remoteConflict = false;
                                     this.remoteModalOpen = true;
-                                }}>☁️ Connect Remote</button>
+                                }}>☁️ Connect Remote</sutram-btn>
                             ` : status.sync_status === '☁️ Local Only' ? html`
-                                <button slot="actions" class="btn-sm" style="background: var(--intent-warning); margin: 0 5px 0 0;" @click=${() => {
+                                <sutram-btn slot="actions" size="sm" intent="warning" style="margin-right: 5px;" @click=${() => {
                                     this.activeRemoteRepo = repo;
                                     this.remoteUrlInput = '';
                                     this.remoteConflict = false;
                                     this.remoteModalOpen = true;
-                                }}>⬆️ Publish / Fix Remote</button>
+                                }}>⬆️ Publish / Fix Remote</sutram-btn>
                             ` : html`
-                                <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0 5px 0 0;" @click=${() => this._previewPull(repo)}>⬇️ Fetch & Pull...</button>
+                                <sutram-btn slot="actions" size="sm" intent="primary" style="margin-right: 5px;" @click=${() => this._previewPull(repo)}>⬇️ Fetch & Pull...</sutram-btn>
                             `}
-                            <button slot="actions" class="btn-sm" style="background: var(--intent-highlight); margin: 0;" @click=${() => {
+                            <sutram-btn slot="actions" size="sm" intent="highlight" @click=${() => {
                                 this.activeRepo = repo;
                                 this.newBranchName = '';
                                 this.branchModalOpen = true;
-                            }}>🌿 Switch Branch</button>
+                            }}>🌿 Switch Branch</sutram-btn>
                         </insetu-card>
                     `;
                 })}
-            </div>
+            </sutram-scroll-view>
             <sutram-modal ?open=${this.branchModalOpen} ?fullscreen=${true} titleText="Branch Management: ${this.activeRepo}" @sutram-modal-closed=${() => this.branchModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
+                <div slot="body" style="display: contents;">
                     <div>
                         <sutram-select 
                             label="Switch to Existing Branch"
@@ -780,15 +775,15 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     <div>
                         <div style="display: flex; gap: 10px; align-items: flex-end;">
                             <sutram-input label="Create New Branch" placeholder="new-feature-branch" .value=${this.newBranchName} @sutram-input-changed=${e => this.newBranchName = e.detail.value} style="flex: 1; margin: 0;"></sutram-input>
-                            <button class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${() => {
+                            <sutram-btn size="sm" intent="success" @click=${() => {
                                 if(this.newBranchName) this._checkoutBranch(this.activeRepo, this.newBranchName, true);
-                            }}>➕ Create & Switch</button>
+                            }}>➕ Create & Switch</sutram-btn>
                         </div>
                     </div>
                 </div>
             </sutram-modal>
             <sutram-modal ?open=${this.previewModalOpen} ?fullscreen=${true} titleText="Incoming Changes: ${this.previewRepo}" @sutram-modal-closed=${() => this.previewModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
+                <div slot="body" style="display: contents;">
                     <pre style="margin: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 10px; border-radius: 4px; overflow-y: auto; max-height: 40vh; white-space: pre-wrap; font-size: 0.85rem;">${this.previewMessage}</pre>
 
                     ${(() => {
@@ -816,7 +811,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
                 <sutram-async-btn slot="footer" label="⬇️ Confirm & Pull" intent="primary" .onClick=${this._getExecutePullAction()}></sutram-async-btn>
             </sutram-modal>
             <sutram-modal ?open=${this.remoteModalOpen} ?fullscreen=${true} titleText="Connect Remote: ${this.activeRemoteRepo}" @sutram-modal-closed=${() => this.remoteModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
+                <div slot="body" style="display: contents;">
                     ${this.remoteConflict ? html`
                         <div style="background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 6px; padding: 15px;">
                             <h4 style="margin: 0 0 10px 0; color: var(--intent-danger);">⚠️ Remote Contains Unmerged Work</h4>
