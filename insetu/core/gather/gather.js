@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
 import { AppStore } from '/static/extensions/system/store.js';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 let compilePromise = null;
 let compilePromiseWs = null;
@@ -234,15 +234,7 @@ export class InSetuExtGather extends InSetuElement {
     static styles = [
         sharedStyles,
         css`
-            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-            .gather-cards-container {
-                display: flex; flex-direction: column; padding: 0 12px 20px 12px;
-            }
-            @container (max-width: 480px) {
-                .gather-cards-container {
-                    padding: 0;
-                }
-            }
+            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
         `
     ];
     constructor() {
@@ -257,11 +249,6 @@ export class InSetuExtGather extends InSetuElement {
     }
     onWorkspaceLoad(workspaceId) {
         GatherStore.getState().fetchSettings();
-        const ctxManifest = AppStore.getState().manifest?.ctx || {};
-        this.manifestFiles = Object.keys(ctxManifest);
-        this.requestUpdate();
-    }
-    onViewActivated() {
         const ctxManifest = AppStore.getState().manifest?.ctx || {};
         this.manifestFiles = Object.keys(ctxManifest);
         this.requestUpdate();
@@ -404,10 +391,9 @@ export class InSetuExtGather extends InSetuElement {
                     @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
             </sutram-toolbar>
-            <div style="flex: 1; overflow-y: auto; padding: 0;">
-                <div style="display: flex; flex-direction: column;">
-                    ${(() => {
-                        const groups = {};
+            <sutram-scroll-view padding="none">
+                ${(() => {
+                    const groups = {};
                         filteredFiles.forEach(f => {
                             if (!groups[f.finalCat]) groups[f.finalCat] = [];
                             groups[f.finalCat].push(f);
@@ -444,7 +430,7 @@ export class InSetuExtGather extends InSetuElement {
                                         this.requestUpdate();
                                     }}>
                                     ${cat === 'Quickpacks' ? html`
-                                        <sutram-async-btn slot="actions" label="Clear" intent="danger" style="--btn-padding: 4px 10px; --btn-font-size: 0.75rem;" .onClick=${async () => {
+                                        <sutram-async-btn slot="actions" label="Clear" intent="danger" size="sm" .onClick=${async () => {
                                             try {
                                                 const res = await window.inSetu.api.workspace.post('gather/clear_quickpacks', {});
                                                 if (res.ok) {
@@ -459,7 +445,6 @@ export class InSetuExtGather extends InSetuElement {
                                             }
                                         }}></sutram-async-btn>
                                     ` : ''}
-                                    <div class="gather-cards-container">
                                         ${groups[cat].map(f => {
                                             const isDirty = (() => {
                                                 const manifestObj = AppStore.getState().manifest?.ctx?.[f.filename];
@@ -480,23 +465,23 @@ export class InSetuExtGather extends InSetuElement {
                                             }
                                             if (f.finalCat === 'Quickpacks') baseIntent = 'warning';
                                             const isQuickpack = f.finalCat === 'Quickpacks';
-                                            const iconColor = isDirty ? "var(--intent-warning)" : `var(--intent-${baseIntent})`;
-                                            let displayIcon = isQuickpack ? `<i data-lucide="zap" style="width: 14px; height: 14px; color: ${iconColor};"></i>` :
-                                                (isLocked ? `<i data-lucide="loader" style="width: 14px; height: 14px; color: ${iconColor};"></i>` : 
-                                                (isDirty ? `<i data-lucide="alert-triangle" style="width: 14px; height: 14px; color: ${iconColor};"></i>` : 
-                                                `<i data-lucide="package" style="width: 14px; height: 14px; color: ${iconColor};"></i>`));
+                                            const activeIntent = isDirty ? "warning" : baseIntent;
+                                            let displayIcon = isQuickpack ? "zap" :
+                                                (isLocked ? "loader" : 
+                                                (isDirty ? "alert-triangle" : "package"));
 
                                             return html`
                                             <insetu-card
-                                                style="opacity: ${isLocked ? '0.6' : '1'}; pointer-events: ${isLocked ? 'none' : 'auto'}; transition: opacity 0.2s ease;"
+                                                ?stale=${isLocked}
                                                 .filename=${f.filename}
                                                 .titleText=${f.finalTitle || (f.filename.includes('/') ? f.filename.split('/').pop() : f.filename)}
                                                 .descriptionText=${f.finalDesc || ''}
+                                                .statusText=${f.isSkeleton ? 'Pending Compilation...' : ''}
                                                 .detailPrefix=${f.repoDir ? `[${f.repoDir}] ` : ''}
                                                 .detailText=${f.filename.includes('/') ? f.filename.split('/').pop() : f.filename}
                                                 .detailSuffix=${f.sizeStr ? ` | ${f.sizeStr}` : ''}
                                                 .icon=${displayIcon}
-                                                .intentColor=${iconColor}
+                                                intent=${activeIntent}
                                                 entityType="file:context"
                                                 .entityData=${{ 
                                                     filepath: f.filename, 
@@ -515,19 +500,13 @@ export class InSetuExtGather extends InSetuElement {
                                                         window.inSetu.vfs.viewAndCopy(f.filename);
                                                     }
                                                 }}>
-
-                                                ${f.isSkeleton ? html`
-                                                    <span slot="actions" style="font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-right: 10px;">Pending Compilation...</span>
-                                                ` : ''}
                                             </insetu-card>
                                         `;})}
-                                    </div>
                                 </sutram-collapsible>
                             `;
                         });
                     })()}
-                </div>
-            </div>
+            </sutram-scroll-view>
         `;
     }
 }

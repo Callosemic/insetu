@@ -389,10 +389,21 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                                 # Tree-sitter >=0.22.0 bindings
                                 parser = Parser(Language(lang_mod.language()))
                                 tree = parser.parse(bytes(new_content, "utf8"))
-
                                 if tree.root_node.has_error:
-                                    syntax_error = True
-                                    err_str = "Tree-sitter detected a syntax error in the modified AST."
+                                    # Fallback verification: Tree-sitter language injections frequently panic on valid Lit template literals.
+                                    if ext in ['.js', '.ts', '.mjs']:
+                                        from insetu.core.utils_core import execute_binary
+                                        try:
+                                            res = execute_binary(['node', '--input-type=module', '-c'], input=new_content, capture_output=True, text=True, encoding='utf-8', timeout=5.0)
+                                            if res.returncode != 0:
+                                                syntax_error = True
+                                                err_str = res.stderr.strip()
+                                        except Exception:
+                                            syntax_error = True
+                                            err_str = "Tree-sitter detected a syntax error, and node fallback verification failed."
+                                    else:
+                                        syntax_error = True
+                                        err_str = "Tree-sitter detected a syntax error in the modified AST."
                             else:
                                 raise ImportError("Language not mapped for Tree-sitter.")
                         except ImportError:

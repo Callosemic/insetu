@@ -83,20 +83,19 @@ window.addEventListener('beforeunload', (e) => {
         e.returnValue = '';
     }
 });
-import { CORE_UI_SCRIPTS } from '/static/extensions/system/sdk.js';
+import { CORE_UI_SCRIPTS } from '/static/extensions/system/insetu_sdk.js';
 import { initShortcutRouter } from '/static/vendor/sutram/js/shortcuts.js';
 import '/static/vendor/sutram/js/primitives.js';
 import '/static/vendor/sutram/js/inputs.js';
-
 // --- CENTRALIZED SHORTCUT ROUTER ---
 initShortcutRouter(window.ExtensionRegistry, () => {
     const contexts = ['global'];
 
-    // 1. Active Tab Hierarchy
-    const { activeTab, activeSubTabs } = AppStore.getState();
-    if (activeTab) {
-        contexts.unshift('tab:' + activeTab);
-        const activeSub = activeSubTabs[activeTab];
+    // 1. Active Spatial Focus Hierarchy
+    const layout = window.Sutram?.stores?.Layout?.getState();
+    if (layout && layout.focusedColumn) {
+        contexts.unshift('tab:' + layout.focusedColumn);
+        const activeSub = layout.columns[layout.focusedColumn]?.active;
         if (activeSub) contexts.unshift('subtab:' + activeSub);
     }
     // 2. Active Element (Piercing Shadow DOM)
@@ -110,14 +109,9 @@ initShortcutRouter(window.ExtensionRegistry, () => {
         if (activeEl.id) contexts.unshift('element-id:' + activeEl.id);
     }
     // 3. Active Modal (Highest Priority)
-    const openModals = Array.from(document.querySelectorAll('sutram-modal[open], insetu-file-modal, dialog[open]'));
+    const openModals = Array.from(document.querySelectorAll('sutram-modal[open], dialog[open]'));
     openModals.forEach(m => {
-        if (m.tagName.toLowerCase() === 'insetu-file-modal') {
-            const state = window.inSetu?.stores?.Fs?.getState()?.fileModal;
-            if (state && state.open) {
-                contexts.unshift('modal:file-modal');
-            }
-        } else if (m.id) {
+        if (m.id) {
             contexts.unshift('modal:' + m.id);
         }
     });
@@ -915,9 +909,21 @@ export async function executeBootSequence() {
                 window.inSetu.sys.executeWorkspaceSwap(ws);
             }
         }
-
         if (deepPath.length > 0) {
-            AppStore.setState({ globalBrowsePath: deepPath });
+            AppStore.setState(s => ({ 
+                globalBrowsePath: deepPath,
+                tabBrowsePaths: { ...(s.tabBrowsePaths || {}), [subId]: deepPath }
+            }));
+        } else {
+            const savedPath = AppStore.getState().tabBrowsePaths?.[subId];
+            if (savedPath && savedPath.length > 0) {
+                const deepStr = '/' + savedPath.map(encodeURIComponent).join('/');
+                const newHash = `#/${encodeURIComponent(ws)}/${colId}/${encodeURIComponent(subId)}${deepStr}`;
+                history.replaceState(null, '', newHash);
+                AppStore.setState({ globalBrowsePath: savedPath });
+            } else {
+                AppStore.setState({ globalBrowsePath: [] });
+            }
         }
 
         if (window.Sutram?.stores?.Layout) {
@@ -930,7 +936,6 @@ export async function executeBootSequence() {
             if (subId) {
                 const colState = layout.columns[colId];
                 const isPinned = colState && colState.pinned.some(p => p.id === subId);
-
                 if (!isPinned && window.ExtensionRegistry) {
                     const slots = window.ExtensionRegistry.getLayoutSlots();
                     const slot = slots.find(s => s.id === subId);
@@ -947,63 +952,34 @@ export async function executeBootSequence() {
                         });
                     }
                 }
+
+                if (typeof layout.setActiveProjection === 'function') {
+                    layout.setActiveProjection(colId, subId);
+                }
             }
         }
     };
-
     window.addEventListener('hashchange', handleHashChange);
     // Bootstrap initial route from URL or set default
     const currentWs = window.inSetu.utils.getActiveWorkspace();
     if (!window.location.hash || window.location.hash === '#/' || window.location.hash === '#') {
         window.location.hash = `#/${encodeURIComponent(currentWs)}/center/`;
     }
-
     // Always trigger handleHashChange on startup to populate layout state
     handleHashChange();
 
-    // Map shell events to extension lifecycle hooks
-    window.addEventListener('shell-tab-changed', (e) => {
-        const { tabId, isAlreadyActive } = e.detail;
-        if (isAlreadyActive) {
-            window.inSetu.events.emitHook('insetu:force-refresh', { parentId: tabId });
-        } else {
-            window.inSetu.events.emitHook('insetu:tab-changed', tabId);
-        }
-    });
-
-    window.addEventListener('shell-subtab-changed', (e) => {
-        const { tabId, subId, isAlreadyActive } = e.detail;
-        if (isAlreadyActive) {
-            window.inSetu.events.emitHook('insetu:force-refresh', { parentId: tabId, subId });
-        } else {
-            window.inSetu.events.emitHook('insetu:subtab-changed', { parentId: tabId, subId });
-        }
-    });
-
-    try {
-        // Re-emit generic boot view activation events based on the focused column
-        if (window.Sutram?.stores?.Layout) {
-            const focused = window.Sutram.stores.Layout.getState().focusedColumn;
-            if (focused) {
-                window.inSetu.events.emitHook('insetu:tab-changed', focused);
-            }
-        }
-    } catch (bootErr) {
-        console.error("⚠️ [BOOT] Non-fatal error during layout/topology hydration:", bootErr);
-    } finally {
-        // Everything is fully booted, topologies mapped, and extensions mounted.
-        updateBootProgress("System Ready!");
-        window.BOOT_COMPLETE = true;
-        if (window.inSetu?.ui?.setGlobalStatus) {
-            window.inSetu.ui.setGlobalStatus("✅ System Ready", 2000);
-        }
-        if (window.panicTimeout) clearTimeout(window.panicTimeout);
-        const _initPanicBtn = document.getElementById('js-panic-button');
-        if (_initPanicBtn) {
-            _initPanicBtn.style.opacity = '0';
-            _initPanicBtn.style.transition = 'opacity 0.3s ease';
-            setTimeout(() => { _initPanicBtn.style.display = 'none'; }, 300);
-        }
+    // Everything is fully booted, topologies mapped, and extensions mounted.
+    updateBootProgress("System Ready!");
+    window.BOOT_COMPLETE = true;
+    if (window.inSetu?.ui?.setGlobalStatus) {
+        window.inSetu.ui.setGlobalStatus("✅ System Ready", 2000);
+    }
+    if (window.panicTimeout) clearTimeout(window.panicTimeout);
+    const _initPanicBtn = document.getElementById('js-panic-button');
+    if (_initPanicBtn) {
+        _initPanicBtn.style.opacity = '0';
+        _initPanicBtn.style.transition = 'opacity 0.3s ease';
+        setTimeout(() => { _initPanicBtn.style.display = 'none'; }, 300);
     }
 }
 // --- FAIL-SAFE EXTENSION ERROR GATEWAY ---
@@ -1275,12 +1251,7 @@ async function performSoftRefresh() {
             const d = await rRes.json();
             window.inSetu.utils.setScopedStorage('offline_topology', JSON.stringify(d));
             const tabOrder = d.tab_order || [];
-
-            // Layout Guardrail: If the restored tab is no longer valid (e.g. extension disabled), fallback to the first available tab
-            if (tabOrder.length > 0 && !tabOrder.includes(AppStore.getState().activeTab)) {
-                AppStore.getState().setActiveRoute(tabOrder[0], null);
-            }
-            AppStore.setState({ 
+            AppStore.setState({  
                 allRepos: d.repos,
                 targetConfigs: d.target_repos || [],
                 virtualContexts: d.virtual_contexts || [],
@@ -1346,13 +1317,6 @@ async function performSoftRefresh() {
             if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
                 window.ExtensionRegistry.compileLayout();
             }
-            // Re-render subtab navigation lists natively from scratch using the fresh registry state
-            const state = AppStore.getState();
-            if (state.activeTab) {
-                window.dispatchEvent(new CustomEvent('sutram-route-changed', {
-                    detail: { tab: state.activeTab, subTabs: state.activeSubTabs }
-                }));
-            }
         }
         // 3. Hydrate the workspace instantly from cache, falling back to compile only if unbuilt
         const currentWsSafe = window.inSetu.utils.getActiveWorkspace();
@@ -1399,11 +1363,6 @@ async function performSoftRefresh() {
         }
         // 4. Hydrate active DOM views using native routing
         window.inSetu.events.emitHook('insetu:soft-refresh', currentWs);
-        if (window.Sutram?.stores?.Layout) {
-            const layoutState = window.Sutram.stores.Layout.getState();
-            const activeCol = layoutState.focusedColumn || 'center';
-            window.inSetu.events.emitHook('insetu:tab-changed', activeCol);
-        }
 
         window.inSetu.ui.setGlobalStatus("✅ Workspace Hydrated", 2000);
     } catch (e) {

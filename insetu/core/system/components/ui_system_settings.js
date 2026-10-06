@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { InSetuElement } from '/static/extensions/system/sdk.js';
+import { InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { AppStore } from '/static/extensions/system/store.js';
 export class InSetuSystemSettings extends InSetuElement {
@@ -389,98 +389,89 @@ export class InSetuSystemSettings extends InSetuElement {
                 titleText="Manage Workspace Extensions" 
                 ?fullscreen=${true} 
                 @sutram-modal-closed=${() => this.manageExtOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
-                    <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Enable or disable optional tools for this specific workspace ecosystem.</p>
-                    ${(this._sysConfigMeta?.available_extensions || []).map(ext => {
-                        const isConfig = ext.id === 'config';
-                        const isChecked = (this._sysConfigForm.extensions || []).includes(ext.id) || isConfig;
-                        return html`
-                            <div style="display: flex; align-items: flex-start; gap: 12px; background: var(--input-bg); padding: 12px 15px; border: 1px solid var(--border); border-radius: 6px;">
-                                <sutram-toggle .checked=${isChecked} ?disabled=${isConfig} @sutram-input-changed=${(e) => {
-                                    const current = this._sysConfigForm.extensions || [];
-                                    const newExts = e.detail.value 
-                                        ? (current.includes(ext.id) ? current : [...current, ext.id])
-                                        : current.filter(x => x !== ext.id);
-                                    this._sysConfigForm = { ...this._sysConfigForm, extensions: newExts };
-                                    this.requestUpdate();
-                                }} ?flush=${true} style="margin-top: 2px;"></sutram-toggle>
-                                <div style="display: flex; flex-direction: column; gap: 2px; flex: 1;">
-                                    <span style="font-size: 0.95rem; color: ${isConfig ? 'var(--text-muted)' : 'var(--text)'}; font-weight: bold; margin: 0;">
-                                        ${ext.title} <span style="font-weight: normal; color: var(--text-muted); font-size: 0.8rem;">(${ext.id})</span>
+                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Enable or disable optional tools for this specific workspace ecosystem.</p>
+                ${(this._sysConfigMeta?.available_extensions || []).map(ext => {
+                    const isConfig = ext.id === 'config';
+                    const isChecked = (this._sysConfigForm.extensions || []).includes(ext.id) || isConfig;
+                    return html`
+                        <div style="display: flex; align-items: flex-start; gap: 12px; background: var(--input-bg); padding: 12px 15px; border: 1px solid var(--border); border-radius: 6px;">
+                            <sutram-toggle .checked=${isChecked} ?disabled=${isConfig} @sutram-input-changed=${(e) => {
+                                const current = this._sysConfigForm.extensions || [];
+                                const newExts = e.detail.value 
+                                    ? (current.includes(ext.id) ? current : [...current, ext.id])
+                                    : current.filter(x => x !== ext.id);
+                                this._sysConfigForm = { ...this._sysConfigForm, extensions: newExts };
+                                this.requestUpdate();
+                            }} ?flush=${true} style="margin-top: 2px;"></sutram-toggle>
+                            <div style="display: flex; flex-direction: column; gap: 2px; flex: 1;">
+                                <span style="font-size: 0.95rem; color: ${isConfig ? 'var(--text-muted)' : 'var(--text)'}; font-weight: bold; margin: 0;">
+                                    ${ext.title} <span style="font-weight: normal; color: var(--text-muted); font-size: 0.8rem;">(${ext.id})</span>
+                                </span>
+                                ${ext.description ? html`
+                                    <span style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.3;">
+                                        ${ext.description}
                                     </span>
-                                    ${ext.description ? html`
-                                        <span style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.3;">
-                                            ${ext.description}
-                                        </span>
-                                    ` : ''}
-                                </div>
+                                ` : ''}
                             </div>
-                        `;
-                    })}
-                </div>
+                        </div>
+                    `;
+                })}
                 <div slot="footer" style="width: 100%;">
                     <sutram-async-btn style="width: 100%; display: block;" label="💾 Save Active Extensions" intent="success" .onClick=${() => this._saveActiveExtensions()}></sutram-async-btn>
                 </div>
             </sutram-modal>
-
             <sutram-modal 
                 ?open=${this.docsModalOpen} 
                 titleText="📖 Documentation Hub" 
                 ?fullscreen=${true} 
-                @sutram-modal-closed=${() => this.docsModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
-                    ${!this._docsStatus ? html`
-                        <div style="padding: 20px;"><yenvui-spinner text="Scanning for documentation..."></yenvui-spinner></div>
-                    ` : html`
-                        <div style="display: flex; flex-direction: column; gap: 20px;">
-                            <div>
-                                <h4 style="margin: 0 0 10px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 5px;">Primary OS</h4>
-                                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">
-                                    ${this._docsStatus.filter(d => d.type === 'root').map(doc => html`
-                                        <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
-                                            <span style="font-weight: bold; color: var(--text);">${doc.title}</span>
-                                            ${doc.exists ? html`
-                                                <sutram-btn intent="success" @click=${() => this._readDoc(doc)}>Read</sutram-btn>
-                                            ` : html`
-                                                <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
-                                            `}
-                                        </div>
-                                    `)}
-                                </div>
-                            </div>
-                            <div>
-                                <h4 style="margin: 0 0 10px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 5px;">Core Modules</h4>
-                                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">
-                                    ${this._docsStatus.filter(d => d.type === 'core').map(doc => html`
-                                        <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
-                                            <span style="font-weight: bold; color: var(--text);">${doc.title}</span>
-                                            ${doc.exists ? html`
-                                                <sutram-btn intent="primary" @click=${() => this._readDoc(doc)}>Read</sutram-btn>
-                                            ` : html`
-                                                <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
-                                            `}
-                                        </div>
-                                    `)}
-                                </div>
-                            </div>
-                            <div>
-                                <h4 style="margin: 0 0 10px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 5px;">Extensions</h4>
-                                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">
-                                    ${this._docsStatus.filter(d => d.type === 'ext').map(doc => html`
-                                        <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
-                                            <span style="font-weight: bold; color: var(--text);">${doc.title}</span>
-                                            ${doc.exists ? html`
-                                                <sutram-btn intent="highlight" @click=${() => this._readDoc(doc)}>Read</sutram-btn>
-                                            ` : html`
-                                                <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
-                                            `}
-                                        </div>
-                                    `)}
-                                </div>
+                @sutram-modal-closed=${() => this.docsModalOpen = false}>${!this._docsStatus ? html`
+                    <div style="padding: 20px;"><yenvui-spinner text="Scanning for documentation..."></yenvui-spinner></div>
+                ` : html`
+                    <div style="display: contents;">
+                        <div>
+                            <h4 style="margin: 0 0 10px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 5px;">Primary OS</h4>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">
+                                ${this._docsStatus.filter(d => d.type === 'root').map(doc => html`
+                                    <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
+                                        <span style="font-weight: bold; color: var(--text);">${doc.title}</span>${doc.exists ? html`
+                                            <sutram-btn intent="success" @click=${() => this._readDoc(doc)}>Read</sutram-btn>
+                                        ` : html`
+                                            <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
+                                        `}
+                                    </div>
+                                `)}
                             </div>
                         </div>
-                    `}
-                </div>
+                        <div>
+                            <h4 style="margin: 0 0 10px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 5px;">Core Modules</h4>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">
+                                ${this._docsStatus.filter(d => d.type === 'core').map(doc => html`
+                                    <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
+                                        <span style="font-weight: bold; color: var(--text);">${doc.title}</span>${doc.exists ? html`
+                                            <sutram-btn intent="primary" @click=${() => this._readDoc(doc)}>Read</sutram-btn>
+                                        ` : html`
+                                            <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
+                                        `}
+                                    </div>
+                                `)}
+                            </div>
+                        </div>
+                        <div>
+                            <h4 style="margin: 0 0 10px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 5px;">Extensions</h4>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">
+                                ${this._docsStatus.filter(d => d.type === 'ext').map(doc => html`
+                                    <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
+                                        <span style="font-weight: bold; color: var(--text);">${doc.title}</span>${doc.exists ? html`
+                                            <sutram-btn intent="highlight" @click=${() => this._readDoc(doc)}>Read</sutram-btn>
+                                        ` : html`
+                                            <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
+                                        `}
+                                    </div>
+                                `)}
+                            </div>
+                        </div>
+                    </div>
+                `}
             </sutram-modal>
         `;
     }

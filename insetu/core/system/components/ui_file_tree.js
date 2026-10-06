@@ -2,7 +2,7 @@ import { html, css } from 'lit';
 import { buildFileTree } from '../../../vendor/sutram/js/utils.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { SutramCard } from '../../../vendor/sutram/js/primitives.js';
-import { InSetuElement } from '/static/extensions/system/sdk.js';
+import { InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 
 export class InSetuCard extends SutramCard {}
 export class InSetuFileTree extends InSetuElement {
@@ -21,12 +21,8 @@ export class InSetuFileTree extends InSetuElement {
         _deletedMutations: { type: Object }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; min-height: 0; width: 100%; container-type: inline-size; }
-        .tree-container { flex: 1; overflow-y: auto; padding: 10px 12px 20px 12px; display: flex; flex-direction: column; gap: 8px; }
-        @container (max-width: 480px) {
-            .tree-container { padding: 0; gap: 0; }
-        }
-        .toolbar-row { 
+        :host { display: flex; flex-direction: column; height: 100%; min-height: 0; width: 100%; }
+        .toolbar-row {  
             display: flex; align-items: center; gap: 10px; padding: 5px 20px; height: 44px; box-sizing: border-box; 
         }
         @container (max-width: 50rem) {
@@ -159,7 +155,7 @@ constructor() {
                     </yenvui-scrub-track>
                 </div>
             ` : '')}
-            <div class="tree-container">
+            <sutram-scroll-view padding="10px 12px 20px 12px" style="gap: 8px;">
                 <sutram-card-group>
                 ${isSearching ? flatResults.map(filepath => {
                     const key = filepath.split('/').pop();
@@ -171,8 +167,8 @@ constructor() {
                             .detailText=${fullFilepath}
                             .titleText=${key}
                             descriptionText=""
-                            intentColor="var(--intent-primary)"
-                            icon=${this._pendingMutations.has(fullFilepath) ? '<i data-lucide="cloud-upload" style="width: 14px; height: 14px;"></i>' : '<i data-lucide="file-code-2" style="width: 14px; height: 14px;"></i>'}
+                            intent="primary"
+                            icon=${this._pendingMutations.has(fullFilepath) ? 'cloud-upload' : 'file-code-2'}
                             .entityType=${this.entityType || 'file'}
                             .entityData=${{ filepath: fullFilepath, isFS: true }}>
                         </insetu-card>
@@ -187,8 +183,8 @@ constructor() {
                         return html`
                             <insetu-card
                                 .titleText=${key}
-                                icon='<i data-lucide="folder" style="width: 14px; height: 14px;"></i>'
-                                intentColor="var(--intent-warning)"
+                                icon="folder"
+                                intent="warning"
                                 .entityType=${'folder'}
                                 .entityData=${{ id: folderPath, folderpath: folderPath, isDir: true }}
                                 @card-clicked=${(e) => { e.stopPropagation(); this._setPath([...this.currentPath, key]); }}>
@@ -204,15 +200,15 @@ constructor() {
                             .detailText=${filepath}
                             .titleText=${key}
                             descriptionText=""
-                            intentColor="var(--intent-primary)"
-                            icon=${this._pendingMutations.has(filepath) ? '<i data-lucide="cloud-upload" style="width: 14px; height: 14px;"></i>' : '<i data-lucide="file-code-2" style="width: 14px; height: 14px;"></i>'}
+                            intent="primary"
+                            icon=${this._pendingMutations.has(filepath) ? 'cloud-upload' : 'file-code-2'}
                             .entityType=${this.entityType || 'file'}
                             .entityData=${{ filepath, isFS: true, is_dirty: this._pendingMutations.has(filepath) }}>
                         </insetu-card>
                     `;
                 })}
                 </sutram-card-group>
-            </div>
+            </sutram-scroll-view>
         `;
     }
 }

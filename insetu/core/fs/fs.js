@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
-import { InSetuElement, createExtensionStore } from '/static/extensions/system/sdk.js';
+import { InSetuElement, createExtensionStore } from '/static/extensions/system/insetu_sdk.js';
 import { resolveEditorMode } from '/static/extensions/system/components/ui_editor.js';
 import { AppStore } from '/static/extensions/system/store.js';
 import { buildFileTree, downloadFile as sutramDownloadFile, downloadBlob, bindGhostDrag } from '../../vendor/sutram/js/utils.js';
@@ -96,7 +96,6 @@ function injectTextToBuffer(filepath, text, isSupportedEditor, isMarkdown, isFS,
         isTruncated = true;
         content = text.substring(0, TRUNCATE_LIMIT) + '\n\n... [CONTENT TRUNCATED FOR PERFORMANCE] ...';
     }
-
     FsStore.getState().updateBuffer(filepath, {
         content,
         originalContent: content,
@@ -105,6 +104,52 @@ function injectTextToBuffer(filepath, text, isSupportedEditor, isMarkdown, isFS,
         forceEdit: forceAllowEdit
     });
 }
+
+export function routeToSpatialGrid(filepath, label = null) {
+    if (!window.Sutram?.stores?.Layout) return;
+    const layout = window.Sutram.stores.Layout.getState();
+    const safeLabel = label || filepath.split('/').pop();
+
+    let existingCol = null;
+    ['left', 'center', 'right'].forEach(col => {
+        if (layout.columns[col] && layout.columns[col].pinned.some(p => p.id === filepath)) {
+            existingCol = col;
+        }
+    });
+    if (existingCol) {
+        layout.setFocusedColumn(existingCol);
+        if (typeof layout.setActiveProjection === 'function') {
+            layout.setActiveProjection(existingCol, filepath);
+        }
+        return;
+    }
+
+    if (layout.windows && layout.windows.some(w => w.id === filepath)) {
+        if (typeof layout.focusWindow === 'function') {
+            layout.focusWindow(filepath);
+        }
+        return;
+    }
+
+    const entity = {
+        id: filepath,
+        component: 'insetu-editor-projection',
+        label: safeLabel,
+        extName: 'fs',
+        targetParent: 'center'
+    };
+
+    if (layout.capacity === 1) {
+        layout.openWindow(entity, layout.focusedColumn || 'center', 1);
+    } else {
+        layout.pinToColumn('center', entity);
+        layout.setFocusedColumn('center');
+        if (typeof layout.setActiveProjection === 'function') {
+            layout.setActiveProjection('center', filepath);
+        }
+    }
+}
+
 export async function ensureFreshContext(filePath) {
     if (!filePath) return;
     const appState = AppStore.getState();
@@ -228,36 +273,12 @@ export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}
 
     downloadBlob(blob, dlName);
 }
-export function viewVirtualInWindow(filename, content) {
-    const virtualUri = `virtual://${filename}`;
-    const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(filename);
-
-    FsStore.getState().openBuffer(virtualUri, {
-        filename: virtualUri,
-        content: content,
-        originalContent: content,
-        fullText: content,
-        isTruncated: false,
-        isFS: false,
-        forceEdit: true,
-        isMemoryOnly: true,
-        isMarkdown: true,
-        isSupportedEditor: true,
-        ext: ext || 'txt',
-        codeMode: codeMode || 'markdown'
-    });
-
-    FsStore.getState().setModal('viewer', { open: true, filepath: virtualUri });
-    closeBrowseModal();
-}
-
 export async function viewInWindow(filename) {
     await ensureFreshContext(filename);
     const chunks = getChunks(filename);
     const targetFile = (chunks && chunks.length > 0 && !chunks.includes(filename)) ? chunks[0] : filename;
 
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(targetFile);
-
     FsStore.getState().openBuffer(targetFile, {
         filename: targetFile,
         content: 'Loading...',
@@ -273,22 +294,7 @@ export async function viewInWindow(filename) {
         codeMode
     });
 
-    if (window.Sutram?.stores?.Layout) {
-        const layout = window.Sutram.stores.Layout.getState();
-        layout.pinToColumn('center', {
-            id: targetFile,
-            component: 'insetu-editor-projection',
-            label: targetFile.split('/').pop(),
-            extName: 'fs',
-            targetParent: 'edit'
-        });
-        layout.setFocusedColumn('center');
-        window.dispatchEvent(new CustomEvent('shell-subtab-changed', {
-            detail: { tabId: 'edit', subId: targetFile, isAlreadyActive: false },
-            bubbles: true, composed: true
-        }));
-    }
-
+    routeToSpatialGrid(targetFile);
     closeBrowseModal();
 
     try {
@@ -310,7 +316,6 @@ export async function viewAndCopy(filename) {
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(targetFile);
     const browserState = AppStore.getState().browserConfig;
     const isParts = browserState && browserState.isParts;
-
     FsStore.getState().openBuffer(targetFile, {
         filename: targetFile,
         content: 'Loading...',
@@ -326,21 +331,7 @@ export async function viewAndCopy(filename) {
         codeMode
     });
 
-    if (window.Sutram?.stores?.Layout) {
-        const layout = window.Sutram.stores.Layout.getState();
-        layout.pinToColumn('center', {
-            id: targetFile,
-            component: 'insetu-editor-projection',
-            label: targetFile.split('/').pop(),
-            extName: 'fs',
-            targetParent: 'edit'
-        });
-        layout.setFocusedColumn('center');
-        window.dispatchEvent(new CustomEvent('shell-subtab-changed', {
-            detail: { tabId: 'edit', subId: targetFile, isAlreadyActive: false },
-            bubbles: true, composed: true
-        }));
-    }
+    routeToSpatialGrid(targetFile);
 
     if (!isParts) {
         closeBrowseModal();
@@ -520,8 +511,8 @@ export function createFileCard(fileInfo, container) {
     card.titleText = fileInfo.displayName || fileInfo.filename;
     card.descriptionText = fileInfo.description || '';
     card.detailText = fileInfo.sizeStr ? `${fileInfo.filename} | ${fileInfo.sizeStr}` : fileInfo.filename;
-    card.icon = fileInfo.isSource ? '<i data-lucide="file-code-2" style="width: 14px; height: 14px;"></i>' : '<i data-lucide="package" style="width: 14px; height: 14px;"></i>';
-    card.intentColor = fileInfo.isSource ? 'var(--intent-primary)' : 'var(--intent-highlight)';
+    card.icon = fileInfo.isSource ? 'file-code-2' : 'package';
+    card.intent = fileInfo.isSource ? 'primary' : 'highlight';
 
     card.entityType = fileInfo.isSource ? 'file' : 'file:context';
     card.entityData = { filepath: fileInfo.filename, repoDir: fileInfo.repoDir, isFS: fileInfo.isFS };
@@ -1192,7 +1183,6 @@ export async function viewSourceFile(filepath, isFS = false, bypassHook = false)
         }
     }
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(cleanPath);
-
     FsStore.getState().openBuffer(cleanPath, {
         filename: cleanPath,
         content: 'Loading...',
@@ -1208,38 +1198,7 @@ export async function viewSourceFile(filepath, isFS = false, bypassHook = false)
         codeMode
     });
 
-    if (window.Sutram?.stores?.Layout) {
-        const layout = window.Sutram.stores.Layout.getState();
-
-        let existingCol = null;
-        ['left', 'center', 'right'].forEach(col => {
-            if (layout.columns[col] && layout.columns[col].pinned.some(p => p.id === cleanPath)) {
-                existingCol = col;
-            }
-        });
-
-        if (existingCol) {
-            layout.setFocusedColumn(existingCol);
-            window.dispatchEvent(new CustomEvent('shell-subtab-changed', {
-                detail: { tabId: existingCol, subId: cleanPath, isAlreadyActive: false },
-                bubbles: true, composed: true
-            }));
-        } else {
-            layout.pinToColumn('center', {
-                id: cleanPath,
-                component: 'insetu-editor-projection',
-                label: cleanPath.split('/').pop(),
-                extName: 'fs',
-                targetParent: 'edit'
-            });
-            layout.setFocusedColumn('center');
-            window.dispatchEvent(new CustomEvent('shell-subtab-changed', {
-                detail: { tabId: 'edit', subId: cleanPath, isAlreadyActive: false },
-                bubbles: true, composed: true
-            }));
-        }
-    }
-
+    routeToSpatialGrid(cleanPath);
     closeBrowseModal();
     try {
         let text = null;
@@ -1360,22 +1319,7 @@ export function openVirtualFile(filename, content) {
         codeMode: 'markdown'
     });
 
-    if (window.Sutram?.stores?.Layout) {
-        const layout = window.Sutram.stores.Layout.getState();
-        layout.pinToColumn('center', {
-            id: virtualUri,
-            component: 'insetu-editor-projection',
-            label: filename,
-            extName: 'fs',
-            targetParent: 'edit'
-        });
-        layout.setFocusedColumn('center');
-        window.dispatchEvent(new CustomEvent('shell-subtab-changed', {
-            detail: { tabId: 'edit', subId: virtualUri, isAlreadyActive: false },
-            bubbles: true, composed: true
-        }));
-    }
-
+    routeToSpatialGrid(virtualUri, filename);
     closeBrowseModal();
     injectTextToBuffer(virtualUri, content, true, true, false, true);
 }
@@ -1384,18 +1328,34 @@ export class InSetuEditorProjection extends InSetuElement {
         filepath: { type: String },
         _buffer: { type: Object },
         _writingMode: { type: Boolean },
-        _editorFocused: { type: Boolean }
+        _editorFocused: { type: Boolean },
+        zenMode: { type: Boolean, reflect: true, attribute: 'zen-mode' }
     };
 
     static styles = [sharedStyles, css`
+        :host([zen-mode]) {
+            position: fixed !important; inset: 0 !important;
+            width: 100vw !important; height: 100dvh !important;
+            z-index: 99999 !important; background: var(--bg-deep, #05070a) !important;
+        }
+        :host([zen-mode]) .editor-header, :host([zen-mode]) .editor-footer {
+            display: none !important;
+        }
+        .zen-exit-btn {
+            position: fixed; top: 20px; right: 20px; z-index: 100000;
+            background: var(--input-bg); color: var(--text-muted); border: 1px solid var(--border); border-radius: 50%;
+            width: 44px; height: 44px; display: none; align-items: center; justify-content: center;
+            cursor: pointer; opacity: 0.1; transition: opacity 0.3s ease, color 0.3s ease;
+        }
+        @media (hover: none) {
+            .zen-exit-btn { opacity: 0.6; }
+        }
+        :host([zen-mode]) .zen-exit-btn { display: flex; }
+        :host([zen-mode]) .zen-exit-btn:hover { opacity: 1; color: var(--intent-danger); border-color: var(--intent-danger); }
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); overflow: hidden; }
         .editor-header {
-            display: flex; justify-content: space-between; align-items: center; 
+            display: flex; justify-content: flex-end; align-items: center; 
             padding: 8px 15px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0;
-        }
-        .editor-title {
-            margin: 0; font-size: 0.95rem; font-family: var(--font-mono); color: var(--text);
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         .editor-footer {
             padding: 10px 15px; gap: 10px; border-top: 1px solid var(--border); 
@@ -1411,16 +1371,60 @@ export class InSetuEditorProjection extends InSetuElement {
         :host([is-focused]) .zen-reveal-btn { opacity: 0.5; visibility: visible; pointer-events: auto; }
         :host([is-focused]) .zen-reveal-btn:hover { opacity: 1; }
     `];
-
     constructor() {
         super();
         this.filepath = '';
         this._buffer = null;
         this._writingMode = false;
         this._editorFocused = false;
+        this.zenMode = false;
     }
+
+    async _toggleWritingMode() {
+        this._writingMode = !this._writingMode;
+        if (this._buffer && this._buffer.isFS) {
+            try {
+                await window.inSetu.api.workspace.post('editor/preference', {
+                    filepath: this.filepath,
+                    writing_mode: this._writingMode
+                });
+            } catch(e) {}
+        }
+    }
+    async _toggleZenMode() {
+        if (this.zenMode) {
+            if (document.fullscreenElement) {
+                try { document.exitFullscreen(); } catch(e) {}
+            } else if (document.webkitFullscreenElement) {
+                try { document.webkitExitFullscreen(); } catch(e) {}
+            }
+            this.zenMode = false;
+        } else {
+            try {
+                if (this.requestFullscreen) {
+                    await this.requestFullscreen();
+                } else if (this.webkitRequestFullscreen) {
+                    await this.webkitRequestFullscreen();
+                } else {
+                    this.zenMode = true;
+                }
+            } catch (e) {
+                this.zenMode = true;
+            }
+        }
+    }
+
     connectedCallback() {
         super.connectedCallback();
+        this._fsListener = () => { 
+            if (document.fullscreenElement === this || document.webkitFullscreenElement === this) {
+                this.zenMode = true;
+            } else if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                this.zenMode = false;
+            }
+        };
+        document.addEventListener('fullscreenchange', this._fsListener);
+        document.addEventListener('webkitfullscreenchange', this._fsListener);
         if (!this.filepath) this.filepath = this.dataset.subId; // Inherit identity from spatial viewport router
         this.subscribe('Fs', state => {
             this._buffer = state.activeBuffers[this.filepath] || null;
@@ -1497,13 +1501,15 @@ export class InSetuEditorProjection extends InSetuElement {
 
         return html`
             <div class="editor-header">
-                <h3 class="editor-title" title="${m.filename}">${m.filename.split('/').pop()} ${this.isDirty ? '*' : ''}</h3>
                 <div style="display: flex; align-items: center; gap: 8px;">
                     ${m.isMarkdown ? html`
-                        <button class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; padding: 4px 8px; font-weight: bold;" title="Toggle Prose Mode" @click=${() => this._writingMode = !this._writingMode}>
-                            ${this._writingMode ? '✍️️' : '💻'}
+                        <button class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; padding: 4px 8px; font-weight: bold;" title="Toggle Prose Mode" @click=${() => this._toggleWritingMode()}>
+                            ${this._writingMode ? '✍' : '💻'}
                         </button>
                     ` : ''}
+                    <button class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; padding: 4px 8px; font-weight: bold;" title="Focus Mode" @click=${() => this._toggleZenMode()}>
+                        ⛶
+                    </button>
                     <sutram-entity-actions 
                         variant="menu-bar"
                         .entityType=${'file'} 
@@ -1545,13 +1551,22 @@ export class InSetuEditorProjection extends InSetuElement {
                     </textarea>
                 `}
             </div>
-
             ${this.isDirty ? html`
                 <div class="editor-footer">
                     <sutram-async-btn label="💾 Save Changes" intent="warning" style="width: 100%; display: block;" .onClick=${() => window.inSetu.ui.saveBufferFile(this.filepath)}></sutram-async-btn>
                 </div>
             ` : ''}
+            <button class="zen-exit-btn" title="Exit Focus Mode (Esc)" @click=${() => this._toggleZenMode()}>
+                <i data-lucide="minimize-2" style="width: 20px; height: 20px;"></i>
+            </button>
         `;
+    }
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        if (this._fsListener) {
+            document.removeEventListener('fullscreenchange', this._fsListener);
+            document.removeEventListener('webkitfullscreenchange', this._fsListener);
+        }
     }
 }
 customElements.define('insetu-editor-projection', InSetuEditorProjection);
@@ -1608,7 +1623,6 @@ window.inSetu.vfs.uploadFileToWorkspace = uploadFileToWorkspace;
 window.inSetu.vfs.viewSourceFile = viewSourceFile;
 window.inSetu.vfs.viewAndCopy = viewAndCopy;
 window.inSetu.vfs.viewInWindow = viewInWindow;
-window.inSetu.vfs.viewVirtualInWindow = viewVirtualInWindow;
 window.inSetu.vfs.deleteEmptyFolder = deleteEmptyFolder;
 window.inSetu.vfs.buildFileTree = buildFileTree;
 window.inSetu.vfs.getGlobalManifest = getGlobalManifest;

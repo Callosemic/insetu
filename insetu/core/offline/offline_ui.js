@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { InSetuElement, createExtensionStore } from '/static/extensions/system/sdk.js';
+import { InSetuElement, createExtensionStore } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { SutramDB } from '../../vendor/sutram/js/offline.js';
 
@@ -167,7 +167,6 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
             alert("Failed to re-queue record.");
         }
     }
-    onViewActivated() { OfflineStore.getState().fetchOfflineState(); }
     async _requestPersistentStorage() {
         if (navigator.storage && navigator.storage.persist) {
             const granted = await navigator.storage.persist();
@@ -229,7 +228,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                         titleText="Outbox Mutations (${this.outboxItems.length})"
                         descriptionText="Pending API transactions waiting for network reconnection."
                         icon="🌩️"
-                        intentColor="var(--intent-warning)"
+                        intent="warning"
                         ?disableSelection=${true}
                         style="margin-bottom: 20px;">
                         <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
@@ -254,7 +253,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                         titleText="Dead Letter Queue (${this.deadLetters.length})"
                         descriptionText="Failed offline transactions (Poison Pills)."
                         icon="☠️"
-                        intentColor="var(--intent-danger)"
+                        intent="danger"
                         ?disableSelection=${true}
                         style="margin-bottom: 20px;">
                         <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
@@ -279,7 +278,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                         titleText="VFS Blob Cache (${this.cachedBlobs.length})"
                         descriptionText="Stale-While-Revalidate GET requests mirrored for offline viewing."
                         icon="🗄️"
-                        intentColor="var(--intent-primary)"
+                        intent="primary"
                         ?disableSelection=${true}>
                         <sutram-search-bar 
                             placeholder="Filter cache keys..." 
@@ -397,40 +396,38 @@ export class InSetuCoreOfflineSettings extends InSetuElement {
     render() {
         return html`
             <sutram-modal ?open=${this.storageModalOpen} ?fullscreen=${true} titleText="🗄️ Offline Storage Management" @sutram-modal-closed=${() => OfflineStore.setState({ storageModalOpen: false })}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
-                    <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Manage offline cache capabilities per-repository.</p>
+                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Manage offline cache capabilities per-repository.</p>
 
-                    ${this.targetConfigs.map(repo => html`
-                        <div style="display: flex; gap: 10px; flex-wrap: wrap; padding: 15px; background: var(--input-bg); border-radius: 6px; border: 1px solid var(--border); align-items: center; justify-content: space-between;">
-                            <div style="display: flex; flex-direction: column; flex: 1; min-width: 250px;">
-                                <span style="font-weight: bold; color: var(--intent-primary); font-size: 1.1rem;">📁 ${repo.repo_dir}</span>
-                                <span style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">${repo.title || 'No Display Title'}</span>
-                            </div>
-                            <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
-                                <sutram-toggle 
-                                    label="Offline Capable" 
-                                    .checked=${!!repo.offline_capable} 
-                                    @sutram-input-changed=${(e) => this._toggleOffline(repo.repo_dir, e.detail.value)} 
-                                    ?flush=${true}>
-                                </sutram-toggle>
-
-                                <sutram-async-btn 
-                                    label="⬇️ Pre-Cache Repository" 
-                                    intent="neutral" 
-                                    ?disabled=${!repo.offline_capable}
-                                    style="margin: 0;" 
-                                    .onClick=${() => this._preCacheRepo(repo.repo_dir)}>
-                                </sutram-async-btn>
-                            </div>
+                ${this.targetConfigs.map(repo => html`
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap; padding: 15px; background: var(--input-bg); border-radius: 6px; border: 1px solid var(--border); align-items: center; justify-content: space-between;">
+                        <div style="display: flex; flex-direction: column; flex: 1; min-width: 250px;">
+                            <span style="font-weight: bold; color: var(--intent-primary); font-size: 1.1rem;">📁 ${repo.repo_dir}</span>
+                            <span style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">${repo.title || 'No Display Title'}</span>
                         </div>
-                    `)}
+                        <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
+                            <sutram-toggle 
+                                label="Offline Capable" 
+                                .checked=${!!repo.offline_capable} 
+                                @sutram-input-changed=${(e) => this._toggleOffline(repo.repo_dir, e.detail.value)} 
+                                ?flush=${true}>
+                            </sutram-toggle>
 
-                    ${this.targetConfigs.length === 0 ? html`
-                        <div style="color: var(--text-muted); font-style: italic; padding: 20px; text-align: center; background: var(--input-bg); border-radius: 6px; border: 1px dashed var(--border);">
-                            No repositories mapped to this workspace yet.
+                            <sutram-async-btn 
+                                label="⬇️ Pre-Cache Repository" 
+                                intent="neutral" 
+                                ?disabled=${!repo.offline_capable}
+                                style="margin: 0;" 
+                                .onClick=${() => this._preCacheRepo(repo.repo_dir)}>
+                            </sutram-async-btn>
                         </div>
-                    ` : ''}
-                </div>
+                    </div>
+                `)}
+
+                ${this.targetConfigs.length === 0 ? html`
+                    <div style="color: var(--text-muted); font-style: italic; padding: 20px; text-align: center; background: var(--input-bg); border-radius: 6px; border: 1px dashed var(--border);">
+                        No repositories mapped to this workspace yet.
+                    </div>
+                ` : ''}
             </sutram-modal>
         `;
     }
@@ -463,7 +460,6 @@ export class InSetuCoreOfflineLog extends InSetuElement {
 
     onWorkspaceLoad() { this.requestUpdate(); }
     onForceRefresh() { this.setStatus("🔄 Refreshed Telemetry Log", 1500); this.requestUpdate(); }
-    onViewActivated() { this.requestUpdate(); }
 
     _getIntentColor(type) {
         if (type === 'success') return 'var(--intent-success)';

@@ -1,7 +1,7 @@
 // config.js - Core OS Workspace Configuration Editor
 import { html, css } from 'lit';
 import { AppStore } from '/static/extensions/system/store.js';
-import { InSetuElement } from '/static/extensions/system/sdk.js';
+import { InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 export class InSetuExtConfig extends InSetuElement {
@@ -342,7 +342,7 @@ export class InSetuExtConfig extends InSetuElement {
                             descriptionText=${repo.repo_dir ? `Directory: ${repo.repo_dir}` : 'No Directory Specified'}
                             detailText=${repo.domain || 'Workspaces'}
                             icon="📦"
-                            intentColor="var(--intent-highlight)"
+                            intent="highlight"
                             ?disableSelection=${true}
                             style="cursor: pointer;"
                             @click=${() => { 

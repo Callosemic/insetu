@@ -1,5 +1,5 @@
 import { LitElement, html, css } from 'lit';
-import { InSetuElement } from '/static/extensions/system/sdk.js';
+import { InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { AppStore } from '/static/extensions/system/store.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
@@ -18,24 +18,16 @@ export function getActiveEditorPath() {
     const layout = window.Sutram?.stores?.Layout?.getState();
     if (!layout) return null;
     const activeCol = layout.focusedColumn;
-    const appState = AppStore.getState();
-    const activeTabId = appState.activeTab;
 
-    // Check if the current layout column corresponds to a mapped subtab/buffer
-    let subId = appState.activeSubTabs[activeCol] || appState.activeSubTabs[activeTabId];
-    if (subId && window.inSetu.stores.Fs?.getState()?.activeBuffers[subId]) {
-        return subId;
-    }
-
-    // Fallback: Check if there's any active projection matching an active buffer
-    if (activeCol && layout.columns[activeCol]) {
-        const activeSub = appState.activeSubTabs[activeCol];
+    // Direct UDF lookup: Check if the active projection in the focused column matches a buffer
+    if (activeCol && layout.columns[activeCol] && layout.columns[activeCol].active) {
+        const activeSub = layout.columns[activeCol].active;
         if (activeSub && window.inSetu.stores.Fs?.getState()?.activeBuffers[activeSub]) {
             return activeSub;
         }
     }
 
-    // Fallback 2: Iterate DOM for focused element
+    // Fallback 1: Iterate DOM for focused element
     let activeEl = document.activeElement;
     while (activeEl && activeEl.shadowRoot && activeEl.shadowRoot.activeElement) {
         activeEl = activeEl.shadowRoot.activeElement;
@@ -182,7 +174,8 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         _loading: { type: Boolean },
         _isDirty: { type: Boolean },
         _metadataExpanded: { type: Boolean },
-        _writingMode: { type: Boolean }
+        _writingMode: { type: Boolean },
+        zenMode: { type: Boolean, reflect: true, attribute: 'zen-mode' }
     };
     static styles = [
         sharedStyles,
@@ -211,10 +204,6 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                 color: var(--intent-primary);
             }
             @container (max-width: 480px) {
-                .meta-btn-text { display: none; }
-                .meta-btn { padding: 4px 6px; }
-            }
-            @media (max-width: 480px) {
                 .meta-btn-text { display: none; }
                 .meta-btn { padding: 4px 6px; }
             }
@@ -266,6 +255,22 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                 overflow: hidden;
                 text-overflow: ellipsis;
             }
+            :host([zen-mode]) {
+                position: fixed !important; inset: 0 !important;
+                width: 100vw !important; height: 100dvh !important;
+                z-index: 99999 !important; background: var(--bg-deep, #05070a) !important;
+            }
+            :host([zen-mode]) .action-bar-row, :host([zen-mode]) slot[name="title-control"] {
+                display: none !important;
+            }
+            .zen-exit-btn {
+                position: fixed; top: 20px; right: 20px; z-index: 100000;
+                background: var(--input-bg); color: var(--text-muted); border: 1px solid var(--border); border-radius: 50%;
+                width: 44px; height: 44px; display: none; align-items: center; justify-content: center;
+                cursor: pointer; opacity: 0.1; transition: opacity 0.3s ease, color 0.3s ease;
+            }
+            :host([zen-mode]) .zen-exit-btn { display: flex; }
+            :host([zen-mode]) .zen-exit-btn:hover { opacity: 1; color: var(--intent-danger); border-color: var(--intent-danger); }
         `
     ];
 
@@ -281,6 +286,32 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         this.defaultExpanded = false;
         this._metadataExpanded = false;
         this._writingMode = false;
+        this.zenMode = false;
+    }
+
+    _toggleWritingMode() {
+        this._writingMode = !this._writingMode;
+        this._yamlData = { ...this._yamlData, writing_mode: this._writingMode };
+        this._checkDirty();
+    }
+
+    async _toggleZenMode() {
+        if (!document.fullscreenElement) {
+            try { await this.requestFullscreen(); } catch (e) { this.zenMode = true; }
+        } else {
+            document.exitFullscreen();
+        }
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this._fsListener = () => { this.zenMode = !!document.fullscreenElement; };
+        document.addEventListener('fullscreenchange', this._fsListener);
+    }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        if (this._fsListener) document.removeEventListener('fullscreenchange', this._fsListener);
     }
 
     updated(changedProperties) {
@@ -439,8 +470,11 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                             }}>
                         </sutram-entity-actions>
                     </div>
-                    <sutram-btn variant="tinted" intent="neutral" style="margin: 0; --btn-padding: 4px 8px;" title="Toggle Prose Mode" @click=${() => this._writingMode = !this._writingMode}>
+                    <sutram-btn variant="tinted" intent="neutral" style="margin: 0; --btn-padding: 4px 8px;" title="Toggle Prose Mode" @click=${() => this._toggleWritingMode()}>
                         ${this._writingMode ? '✍' : '💻'}
+                    </sutram-btn>
+                    <sutram-btn variant="tinted" intent="neutral" style="margin: 0; --btn-padding: 4px 8px;" title="Focus Mode" @click=${() => this._toggleZenMode()}>
+                        ⛶
                     </sutram-btn>
                     <button class="meta-btn ${this._metadataExpanded ? 'active' : ''}"
                         @click=${() => this._metadataExpanded = !this._metadataExpanded}
@@ -478,6 +512,9 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                         }}>
                     </insetu-markdown-editor>
                 </div>
+                <button class="zen-exit-btn" title="Exit Focus Mode (Esc)" @click=${() => this._toggleZenMode()}>
+                    <i data-lucide="minimize-2" style="width: 20px; height: 20px;"></i>
+                </button>
             </div>
         `;
     }

@@ -1,7 +1,7 @@
 // insetu/static/js/store.js
 // Strict Unidirectional Data Flow (UDF) State Manager
-import { createExtensionStore } from '/static/extensions/system/sdk.js';
-import { StatusStore, ToastStore, SelectionStore } from '../../vendor/sutram/js/sdk.js';
+import { createExtensionStore } from '/static/extensions/system/insetu_sdk.js';
+import { StatusStore, ToastStore, SelectionStore } from '../../vendor/sutram/js/sutram_sdk.js';
 
 export { StatusStore, ToastStore, SelectionStore };
 
@@ -36,6 +36,7 @@ export const AppStore = createExtensionStore('App', {
     activeModules: [],
     pendingModules: [],
     globalBrowsePath: [],
+    tabBrowsePaths: {},
     currentBrowsePath: [],
     browserConfig: { mode: 'view', callback: null },
     warmingQueue: new Set(),
@@ -58,7 +59,7 @@ export const AppStore = createExtensionStore('App', {
     }
     // resetState is injected by the factory automatically
 }, {
-    localSync: ['pinnedRepos']
+    localSync: ['pinnedRepos', 'tabBrowsePaths']
 });
 window.inSetu.stores.App = AppStore;
 // Centralized Invalidation Listener (ADR 0103)

@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
-import { InSetuElement } from '/static/extensions/system/sdk.js';
+import { InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 
 export class InSetuJobTracker extends InSetuElement {
     static properties = {
@@ -128,8 +128,8 @@ customElements.define('insetu-config-banner', InSetConfigBanner);
 window.inSetu.ui = window.inSetu.ui || {};
 window.inSetu.ui.viewTextBlob = (title, content, suggestedFilename = '') => {
     const filename = suggestedFilename || ('blob_' + Date.now() + '.txt');
-    if (window.inSetu.vfs?.viewVirtualInWindow) {
-        window.inSetu.vfs.viewVirtualInWindow(filename, content);
+    if (window.inSetu.vfs?.openVirtualFile) {
+        window.inSetu.vfs.openVirtualFile(filename, content);
     }
 };
 

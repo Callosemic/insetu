@@ -126,9 +126,9 @@ def provide_vfs_ignores(workspace_id=None, **kwargs):
 @system_bp.bp.route('/api/system/openapi.json', methods=['GET'])
 def api_system_openapi():
     """Phase 3 Tool Calling: Generates a real-time OpenAPI 3.0 specification from mounted SDK routes."""
-    from flask import current_app
-    from akasa.utils import typeddict_to_openapi
-    import re
+    from flask import current_app as _current_app
+    from akasa.utils import typeddict_to_openapi as _typeddict_to_openapi
+    import re as _re
 
     paths = {}
     # 1. Manually inject the bootstrap route since it lives outside the standard extension SDK
@@ -216,17 +216,15 @@ def api_system_openapi():
             }
         }
     }
-
     # 2. Iterate through all registered Blueprints looking for our Akasa SDK 'route_schemas'
-    for bp_name, bp in current_app.blueprints.items():
+    for bp_name, bp in _current_app.blueprints.items():
         if not hasattr(bp, 'route_schemas'):
             continue
         for url_rule, method_schemas in bp.route_schemas.items():
             path_item = {}
-
             # Extract path parameters from Werkzeug rule string (e.g. /api/<workspace_id>/...)
-            path_vars = re.findall(r'<([^>:]+:)?([^>]+)>', url_rule)
-            openapi_url = re.sub(r'<([^>:]+:)?([^>]+)>', r'{\2}', url_rule)
+            path_vars = _re.findall(r'<([^>:]+:)?([^>]+)>', url_rule)
+            openapi_url = _re.sub(r'<([^>:]+:)?([^>]+)>', r'{\2}', url_rule)
             for method, meta in method_schemas.items():
                 method_lower = method.lower()
                 if method_lower == "options": continue
@@ -247,7 +245,7 @@ def api_system_openapi():
                         "description": "Successful operation.",
                         "content": {
                             "application/json": {
-                                "schema": typeddict_to_openapi(meta["response_schema"])
+                                "schema": _typeddict_to_openapi(meta["response_schema"])
                             }
                         }
                     }
@@ -306,7 +304,7 @@ def api_system_openapi():
                     })
                 # Hydrate Request Schema if bound
                 if meta.get("request_schema"):
-                    schema_dict = typeddict_to_openapi(meta["request_schema"])
+                    schema_dict = _typeddict_to_openapi(meta["request_schema"])
                     if method_lower == "get":
                         for prop_name, prop_details in schema_dict.get("properties", {}).items():
                             parameters.append({
@@ -390,12 +388,12 @@ class PipelineSubmitPayload(TypedDict, total=False):
 def api_system_pipeline_submit(ctx):
     data = ctx.req.get_json(force=True, silent=True) or {}
     force_full = data.get("force_full", False)
-    from akasa.db import get_connection
-    w_conn = get_connection("workers", workspace_id=ctx.workspace_id)
+    from akasa.db import get_connection as _get_connection
+    w_conn = _get_connection("workers", workspace_id=ctx.workspace_id)
     # Reattach check: Attach to any active stage of the compilation pipeline to prevent concurrent chain collisions.
     cutoff = time.time() - 300.0
-    from akasa.workers import resolve_dag_chain
-    ordered_steps = resolve_dag_chain(ctx, 'register_compilation_steps')
+    from akasa.workers import resolve_dag_chain as _resolve_dag_chain
+    ordered_steps = _resolve_dag_chain(ctx, 'register_compilation_steps')
 
     start_step = data.get("start_step")
     upstream_worker_names = []
@@ -444,17 +442,17 @@ def api_system_pipeline_submit(ctx):
 def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=None, **kwargs):
     if data and data.get("is_new_repo") and data.get("repo_dir"):
         repo_dir = data.get("repo_dir")
-        from insetu.core.utils_core import sanitize_workspace_config, get_default_repo_template
+        from insetu.core.utils_core import sanitize_workspace_config as _sanitize_workspace_config, get_default_repo_template as _get_default_repo_template
         cfg_path, _ = get_workspace_physics(workspace_id)
         cfg = load_json_config(cfg_path, {})
-        cfg = sanitize_workspace_config(cfg)
+        cfg = _sanitize_workspace_config(cfg)
 
         targets = cfg.get("target_repos", [])
         if not any(r.get("repo_dir") == repo_dir for r in targets):
             ext_str = data.get("repo_exts", "")
             exts = [e.strip() for e in ext_str.split(",") if e.strip()] if ext_str else None
 
-            new_repo = get_default_repo_template(
+            new_repo = _get_default_repo_template(
                 repo_dir=repo_dir,
                 title=data.get("repo_title"),
                 domain=data.get("repo_domain"),
@@ -467,7 +465,7 @@ def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=
 def get_system_config(workspace_id):
     data = load_config(workspace_id)
     script_dir = Path(__file__).resolve().parent.as_posix()
-    from akasa.utils import _CORE_MODULES as CORE_MODULES
+    from akasa.utils import _CORE_MODULES as _CORE_MODULES
     available_ids = set()
     available = []
     extensions_dir = Path(script_dir).parent.parent.joinpath("extensions").as_posix()
@@ -483,7 +481,7 @@ def get_system_config(workspace_id):
                     elif item.startswith("engine_") and item.endswith(".py"):
                             # Legacy flat topology
                             ext_name = item.replace("engine_", "").replace(".py", "")
-                    if ext_name and ext_name not in CORE_MODULES and ext_name not in available_ids:
+                    if ext_name and ext_name not in _CORE_MODULES and ext_name not in available_ids:
                             available_ids.add(ext_name)
                             title = ext_name.replace('_', ' ').title()
                             desc = ""
@@ -494,10 +492,10 @@ def get_system_config(workspace_id):
                                         sys.modules.get(f"insetu.engine_{ext_name}")
 
                             if not mod:
-                                    import importlib
+                                    import importlib as _importlib
                                     def safe_import(target):
                                             try:
-                                                    return importlib.import_module(target), None
+                                                    return _importlib.import_module(target), None
                                             except ModuleNotFoundError as e:
                                                     if e.name == target.split('.')[-1] or e.name == target or (e.name and target.startswith(f"{e.name}.")):
                                                             return None, None
@@ -522,37 +520,37 @@ def get_system_config(workspace_id):
                                             title = getattr(bp_obj, 'title', title)
                                             desc = getattr(bp_obj, 'description', desc)
                                     for dep in getattr(mod, '__external_depends__', []):
-                                            import importlib.util
-                                            if importlib.util.find_spec(dep) is None:
+                                            import importlib.util as _importlib_util
+                                            if _importlib_util.find_spec(dep) is None:
                                                     missing_exts.append(dep)
 
                                     missing_bins = []
                                     for binary in getattr(mod, '__external_binaries__', []):
-                                            import shutil
-                                            if not shutil.which(binary):
+                                            import shutil as _shutil
+                                            if not _shutil.which(binary):
                                                     missing_bins.append(binary)
                             available.append({"id": ext_name, "title": title, "description": desc, "missing_externals": missing_exts, "missing_binaries": missing_bins})
-    from akasa.extension import _REGISTERED_SETTINGS_SCHEMAS
+            from akasa.extension import _REGISTERED_SETTINGS_SCHEMAS as _REGISTERED_SETTINGS_SCHEMAS
 
-    evaluated_schemas = {}
-    for ext_id, schema_spec in _REGISTERED_SETTINGS_SCHEMAS.items():
-        if callable(schema_spec):
-            try: evaluated_schemas[ext_id] = schema_spec(workspace_id)
-            except Exception: evaluated_schemas[ext_id] = []
-        else:
-            evaluated_schemas[ext_id] = schema_spec
-    from flask import current_app
-    mounted_extensions = [ext for ext in data.get("extensions", []) if ext == "config" or ext in current_app.blueprints]
+            evaluated_schemas = {}
+            for ext_id, schema_spec in _REGISTERED_SETTINGS_SCHEMAS.items():
+                if callable(schema_spec):
+                    try: evaluated_schemas[ext_id] = schema_spec(workspace_id)
+                    except Exception: evaluated_schemas[ext_id] = []
+                else:
+                    evaluated_schemas[ext_id] = schema_spec
+            from flask import current_app as _current_app
+            mounted_extensions = [ext for ext in data.get("extensions", []) if ext == "config" or ext in _current_app.blueprints]
 
-    return {
-        "config": data,
-        "meta": {
-            "mounted_extensions": mounted_extensions,
-            "available_extensions": sorted(available, key=lambda x: x.get('title') or ""),
-            "settings_schemas": evaluated_schemas,
-            "core_modules": list(CORE_MODULES)
-        }
-    }
+            return {
+                "config": data,
+                "meta": {
+                    "mounted_extensions": mounted_extensions,
+                    "available_extensions": sorted(available, key=lambda x: x.get('title') or ""),
+                    "settings_schemas": evaluated_schemas,
+                    "core_modules": list(_CORE_MODULES)
+                }
+            }
 def save_system_config(workspace_id, payload):
     cfg_path, _ = get_workspace_physics(workspace_id)
     existing_cfg = load_json_config(cfg_path, {})
@@ -561,9 +559,9 @@ def save_system_config(workspace_id, payload):
     # Security Guardrail: Enforce the core config UI is never locked out
     if "extensions" in merged_cfg and "config" not in merged_cfg["extensions"]:
         merged_cfg["extensions"].insert(0, "config")
-    from insetu.core.utils_core import sanitize_workspace_config
+    from insetu.core.utils_core import sanitize_workspace_config as _sanitize_workspace_config
 
-    merged_cfg = sanitize_workspace_config(merged_cfg)
+    merged_cfg = _sanitize_workspace_config(merged_cfg)
     save_json_config(cfg_path, merged_cfg, workspace_id)
 
     # Emits a globally decoupled config invalidation event
@@ -593,10 +591,10 @@ def api_system_config(ctx):
         else:
             payload = ctx.req.get_json(silent=True) or {}
 
-            from flask import current_app
+            from flask import current_app as _current_app
             requires_reboot = False
             for ext in payload.get("extensions", []):
-                if ext != "config" and ext not in current_app.blueprints:
+                if ext != "config" and ext not in _current_app.blueprints:
                     requires_reboot = True
 
             save_system_config(ctx.workspace_id, payload)
@@ -622,7 +620,7 @@ class TopologyResponse(TypedDict):
 @system_bp.route('topology', methods=['GET'], response_schema=TopologyResponse, docstring="Retrieves current workspace bounds, registered repository paths, UI category ordering, and active ports.")
 def api_system_topology(ctx):
     try:
-        from insetu.core.utils_core import get_sister_repos
+        from insetu.core.utils_core import get_sister_repos as _get_sister_repos
         cfg = load_config(ctx.workspace_id)
         target_repos = cfg.get("target_repos", [])
         cfg_path, ws_root = get_workspace_physics(ctx.workspace_id)
@@ -641,7 +639,7 @@ def api_system_topology(ctx):
                                 if module not in b["meta_map"]:
                                     b["meta_map"][module] = {"title": module.replace('_', ' ').title()}
         return jsonify({
-            "repos": get_sister_repos(ctx.workspace_id),
+            "repos": _get_sister_repos(ctx.workspace_id),
             "port": int(os.environ.get("INSETU_PORT", cfg.get("port", 5005))),
             "term_port": cfg.get("term_port", 8181),
             "target_repos": target_repos or [],
@@ -714,13 +712,13 @@ def api_create_workspace(ctx):
         # 2. Save the pure topology mapping
         save_json_config(config_abs_path, starter_config, workspace_id=ws_id)
         # 3. Seed the Tier 2 Workspace Settings safely
-        from akasa.extension import SettingsManager
-        settings = SettingsManager('system', ws_id)
+        from akasa.extension import SettingsManager as _SettingsManager
+        settings = _SettingsManager('system', ws_id)
         settings.set("instance_title", f"inSetu Workspace: {ws_id}")
         # 4. Provision databases and trigger the boot sequence for the new workspace
-        from akasa.db import apply_declarative_schema, _REGISTERED_SCHEMAS
+        from akasa.db import apply_declarative_schema as _apply_declarative_schema, _REGISTERED_SCHEMAS as _REGISTERED_SCHEMAS
         for ext_name, schema in _REGISTERED_SCHEMAS.items():
-            apply_declarative_schema(ext_name, schema, ws_id)
+            _apply_declarative_schema(ext_name, schema, ws_id)
         hooks.emit('workspace_boot', workspace_id=ws_id)
 
         return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
@@ -834,14 +832,14 @@ def api_system_config_test_bucketing(ctx):
         if not repo_path.exists():
             return jsonify({"error": f"Path not found: {repo_path}"}), 404
 
-        from insetu.core.topology.engine_topology import get_valid_workspace_files, resolve_file_bucket
-        valid_files = get_valid_workspace_files(repo_path.as_posix(), repo_cfg, ctx.workspace_id)
+        from insetu.core.topology.engine_topology import get_valid_workspace_files as _get_valid_workspace_files, resolve_file_bucket as _resolve_file_bucket
+        valid_files = _get_valid_workspace_files(repo_path.as_posix(), repo_cfg, ctx.workspace_id)
 
         sub_buckets = repo_cfg.get("sub_buckets", [])
         buckets_map = {}
 
         for f in valid_files:
-            b, module = resolve_file_bucket(f, sub_buckets, repo_dir=repo_dir)
+            b, module = _resolve_file_bucket(f, sub_buckets, repo_dir=repo_dir)
             bucket_id = module if (b and module) else (b.get("id") if b else "main")
 
             if bucket_id not in buckets_map:

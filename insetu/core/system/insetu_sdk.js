@@ -1,6 +1,6 @@
 // insetu/insetu/static/js/core/sdk.js
 // Tier 1A: inSetu Local OS SDK Wrapper
-import { SutramElement, createSutramStore, ExtensionRegistry as SutramRegistry, bindStoreInput } from '/static/vendor/sutram/js/sdk.js';
+import { SutramElement, createSutramStore, ExtensionRegistry as SutramRegistry, bindStoreInput } from '/static/vendor/sutram/js/sutram_sdk.js';
 import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, coalescedAsync, formatDate, timeAgo, nativeShareFiles } from '/static/vendor/sutram/js/utils.js';
 import * as jsYaml from '/static/vendor/js-yaml/js-yaml.min.js';
 
@@ -285,31 +285,8 @@ export class InSetuElement extends SutramElement {
             if (typeof this.onWorkspaceLoad === 'function') {
                 this.onWorkspaceLoad(ws);
             }
-            if (typeof this.onViewActivated === 'function') {
-                this.onViewActivated();
-            }
             this.requestUpdate();
         });
-        // Wire up the lazy-load visibility lifecycle method
-        this.registerGlobalListener('insetu:tab-changed', window, (e) => {
-            if (typeof this.onViewActivated === 'function') {
-                const tabId = e.detail;
-                if (tabId === this.extName && !this.dataset.subId) {
-                    this.onViewActivated();
-                }
-            }
-        });
-
-        this.registerGlobalListener('insetu:subtab-changed', window, (e) => {
-            if (typeof this.onViewActivated === 'function') {
-                const { parentId, subId } = e.detail || {};
-                const mySubId = this.dataset.subId || this.extName;
-                if (subId === mySubId || (!subId && parentId === this.extName)) {
-                    this.onViewActivated();
-                }
-            }
-        });
-
         const appStore = window.inSetu?.stores?.App;
         if (appStore) {
             this.subscribe(appStore, state => state.activeWorkspace, (ws) => {
@@ -347,7 +324,6 @@ export class InSetuElement extends SutramElement {
         }
     }
     onWorkspaceLoad(workspaceId) {}
-    onViewActivated() {}
 }
 window.inSetu = window.inSetu || {};
 // Pre-seed foundational OS chassis modules to protect against offline cache misses or backend latency
@@ -691,6 +667,71 @@ window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = nu
 window.ExtensionRegistry.registerExtension('system', {
     name: "System Core Actions",
     version: "1.0.0",
+    shortcuts: [
+        { id: 'layout-focus-col-left', context: 'global', key: 'ctrl+1', label: 'Focus Left Column', action: () => { const l = window.Sutram?.stores?.Layout?.getState(); if(l) l.setFocusedColumn('left'); } },
+        { id: 'layout-focus-col-center', context: 'global', key: 'ctrl+2', label: 'Focus Center Column', action: () => { const l = window.Sutram?.stores?.Layout?.getState(); if(l) l.setFocusedColumn('center'); } },
+        { id: 'layout-focus-col-right', context: 'global', key: 'ctrl+3', label: 'Focus Right Column', action: () => { const l = window.Sutram?.stores?.Layout?.getState(); if(l) l.setFocusedColumn('right'); } },
+        { id: 'layout-focus-col-prev', context: 'global', key: 'ctrl+shift+arrowleft', label: 'Focus Previous Column', action: () => { 
+            const l = window.Sutram?.stores?.Layout?.getState(); 
+            if(l) {
+                const cols = ['left', 'center', 'right'];
+                let idx = cols.indexOf(l.focusedColumn || 'center');
+                while (idx > 0) {
+                    idx--;
+                    if (l.columns[cols[idx]] && l.columns[cols[idx]].pinned && l.columns[cols[idx]].pinned.length > 0) {
+                        l.setFocusedColumn(cols[idx]);
+                        break;
+                    }
+                }
+            }
+        } },
+        { id: 'layout-focus-col-next', context: 'global', key: 'ctrl+shift+arrowright', label: 'Focus Next Column', action: () => { 
+            const l = window.Sutram?.stores?.Layout?.getState(); 
+            if(l) {
+                const cols = ['left', 'center', 'right'];
+                let idx = cols.indexOf(l.focusedColumn || 'center');
+                while (idx < 2) {
+                    idx++;
+                    if (l.columns[cols[idx]] && l.columns[cols[idx]].pinned && l.columns[cols[idx]].pinned.length > 0) {
+                        l.setFocusedColumn(cols[idx]);
+                        break;
+                    }
+                }
+            }
+        } },
+        { id: 'layout-focus-tab-prev', context: 'global', key: 'ctrl+shift+arrowup', label: 'Focus Previous Tab', action: () => {
+            const l = window.Sutram?.stores?.Layout?.getState();
+            if(l && l.focusedColumn) {
+                const col = l.columns[l.focusedColumn];
+                if (!col || !col.pinned || col.pinned.length <= 1) return;
+                const idx = col.pinned.findIndex(p => p.id === col.active);
+                let targetId;
+                if (idx > 0) targetId = col.pinned[idx - 1].id;
+                else targetId = col.pinned[col.pinned.length - 1].id;
+
+                const activeWs = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';
+                const deepPath = window.inSetu?.stores?.App?.getState()?.tabBrowsePaths?.[targetId];
+                const deepStr = deepPath && deepPath.length > 0 ? '/' + deepPath.map(encodeURIComponent).join('/') : '';
+                window.location.hash = `#/${encodeURIComponent(activeWs)}/${l.focusedColumn}/${encodeURIComponent(targetId)}${deepStr}`;
+            }
+        } },
+        { id: 'layout-focus-tab-next', context: 'global', key: 'ctrl+shift+arrowdown', label: 'Focus Next Tab', action: () => {
+            const l = window.Sutram?.stores?.Layout?.getState();
+            if(l && l.focusedColumn) {
+                const col = l.columns[l.focusedColumn];
+                if (!col || !col.pinned || col.pinned.length <= 1) return;
+                const idx = col.pinned.findIndex(p => p.id === col.active);
+                let targetId;
+                if (idx !== -1 && idx < col.pinned.length - 1) targetId = col.pinned[idx + 1].id;
+                else targetId = col.pinned[0].id;
+
+                const activeWs = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';
+                const deepPath = window.inSetu?.stores?.App?.getState()?.tabBrowsePaths?.[targetId];
+                const deepStr = deepPath && deepPath.length > 0 ? '/' + deepPath.map(encodeURIComponent).join('/') : '';
+                window.location.hash = `#/${encodeURIComponent(activeWs)}/${l.focusedColumn}/${encodeURIComponent(targetId)}${deepStr}`;
+            }
+        } }
+    ],
     entityActions: [
         {
             targetEntity: 'text_blob',

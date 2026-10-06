@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { AppStore } from '/static/extensions/system/store.js';
 
@@ -187,17 +187,16 @@ export class InSetuExtBridge extends InSetuElement {
     static styles = [
         sharedStyles,
         css`
-            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; }
+            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; container-type: inline-size; }
             .bridge-group-container {
                 padding: 15px 20px;
                 display: flex;
                 flex-direction: column;
                 border-bottom: 1px solid var(--border);
             }
+            .console-header-text { padding: 0 var(--mobile-edge-padding); padding-top: var(--mobile-edge-padding); }
             @container (max-width: 480px) {
-                .bridge-group-container {
-                    padding: 0;
-                }
+                .bridge-group-container { padding: 0; }
             }
             .btn-sm { margin: 0; padding: 8px 14px; font-size: 14px; }
         `
@@ -260,10 +259,6 @@ export class InSetuExtBridge extends InSetuElement {
     onWorkspaceLoad(workspaceId) {
         BridgeStore.setState({ cells: [], activeBridgeJobId: null, telemetry: null, consoleOutput: 'Ready...' });
         window.inSetu.stores.Fs?.setState({ fileVerificationCache: {} });
-        BridgeStore.getState().fetchHistory();
-        this.requestUpdate();
-    }
-    onViewActivated() {
         BridgeStore.getState().fetchHistory();
         this.requestUpdate();
     }
@@ -540,11 +535,13 @@ export class InSetuExtBridge extends InSetuElement {
                 if (target && oldPath !== newPath) BridgeStore.getState().updateGroupFile(target.file, newPath);
             }
 
-            // We explicitly do NOT populate _confirmedCandidates with oldPath -> newPath here.
-            // Updating the cell file directly in the store ensures getCompiledPayload() 
-            // sends the correct target_file to the backend natively, preventing cross-contamination 
-            // of other patches that share the same oldPath.
             this._confirmedCandidates = this._confirmedCandidates || {};
+
+            // If the path is identical, the UI state update skips. We MUST populate confirmed_candidates 
+            // so the backend knows the user explicitly bypassed the anchor failure natively.
+            if (oldPath === newPath) {
+                this._confirmedCandidates[oldPath] = newPath;
+            }
 
             this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich, {
                 confirmed_candidates: this._confirmedCandidates
@@ -592,16 +589,18 @@ export class InSetuExtBridge extends InSetuElement {
     }
     _renderTelemetry() {
         const t = this.telemetry;
-        if (!t) return html`<div id="status-box" style="width: 100%; font-family: var(--font-mono); white-space: pre-wrap; color: var(--text);" .innerHTML=${this.consoleOutput}></div>`;
+        if (!t) return html`<div id="status-box" class="console-header-text" style=${`width: 100%; font-family: var(--font-mono); white-space: pre-wrap; color: var(--text);`} .innerHTML=${this.consoleOutput}></div>`;
 
         return html`
             <div style="width: 100%; display: flex; flex-direction: column;">
-                <h3 style="color: ${t.can_commit ? 'var(--intent-success)' : 'var(--intent-warning)'}; margin-top: 0;">
-                    ${t.can_commit ? (t.mode === 'live' ? '✅ Transaction Committed' : '✅ Dry Run Verified') : '⚠️ Action Required'}
-                </h3>
+                <div class="console-header-text">
+                    <h3 style=${`color: ${t.can_commit ? 'var(--intent-success)' : 'var(--intent-warning)'}; margin-top: 0;`}>
+                        ${t.can_commit ? (t.mode === 'live' ? '✅ Transaction Committed' : '✅ Dry Run Verified') : '⚠️ Action Required'}
+                    </h3>
                 <p style="color: var(--text-muted); font-size: 0.9rem;">
-                    Total: ${t.summary?.total_patches || 0} | Resolved: ${t.summary?.resolved || 0} | Skipped: ${t.summary?.auto_skipped || 0} | Failed: ${t.summary?.failed || 0}
+                    Total: ${t.summary?.total_patches ?? 0} &bull; Resolved: ${t.summary?.resolved ?? 0} &bull; Skipped: ${t.summary?.auto_skipped ?? 0} &bull; Failed: ${t.summary?.failed ?? 0}
                 </p>
+                </div>
                 <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 20px;">
                     ${(() => {
                         const safePatches = t.patches || [];
@@ -743,8 +742,8 @@ export class InSetuExtBridge extends InSetuElement {
                                         .titleText=${"Target File:"}
                                         .descriptionText=${this._fileVerificationCache[file] === false ? "⚠️ Target file not found in workspace." : ""}
                                         .detailText=${""}
-                                        icon='<i data-lucide="file-code-2" style="width: 14px; height: 14px;"></i>'
-                                        intentColor=${this._fileVerificationCache[file] === false ? 'var(--intent-danger)' : '#06b6d4'}
+                                        icon="file-code-2"
+                                        intent=${this._fileVerificationCache[file] === false ? 'danger' : 'highlight'}
                                         entityType="file"
                                         .entityData=${{ filepath: file, isFS: true, suppress: ['file-browse'] }}
                                         selectionStoreKey="none"
@@ -845,9 +844,9 @@ export class InSetuExtBridge extends InSetuElement {
                                         <insetu-card
                                             .titleText=${typeStr}
                                             .descriptionText=${descStr}
-                                            icon='<i data-lucide="git-commit" style="width: 14px; height: 14px;"></i>'
+                                            icon="git-commit"
                                             ?selected=${c.active}
-                                            intentColor=${c.active ? "var(--intent-success)" : "var(--intent-neutral)"}
+                                            intent=${c.active ? "success" : "neutral"}
                                             selectionStoreKey="none"
                                             entityType="yomama"
                                             .entityData=${{...c, suppress: ['yomama-swap']}}
@@ -861,11 +860,8 @@ export class InSetuExtBridge extends InSetuElement {
                     `}
                 </div>
                 <!-- CONSOLE VIEW -->
-                <div style="display: ${this.viewMode === 'console' ? 'flex' : 'none'}; flex: 1; flex-direction: column; min-height: 0; padding: 20px; box-sizing: border-box; overflow-y: auto; background: var(--bg);">
-                    <div @click=${this._handleConsoleClick} style="display: flex; flex-direction: column; width: 100%; padding-bottom: 20px;">
-                        ${this._renderTelemetry()}
-                    </div>
-                </div>
+                <sutram-scroll-view style=${`display: ${this.viewMode === 'console' ? 'flex' : 'none'}; background: var(--bg);`} @click=${this._handleConsoleClick}>${this._renderTelemetry()}
+                </sutram-scroll-view>
                 <!-- FOOTER -->
                 <div style="padding: 12px 20px; gap: 12px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0; width: 100%; box-sizing: border-box;">
                     ${this.cells.length === 0 && this.viewMode === 'input' ? html`
@@ -1032,7 +1028,6 @@ export class InSetuExtBridgeHistory extends InSetuElement {
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); box-sizing: border-box; }
-        .history-body { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; width: 100%; box-sizing: border-box; }
     `];
 
     constructor() {
@@ -1096,9 +1091,9 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                 </insetu-repo-filter>
             </sutram-toolbar>
 
-            <div class="history-body">
-                ${this.historyRecords.length === 0 ? html`<p style="color: var(--text-muted); font-style: italic;">No ledger receipts available.</p>` : ''}
-                ${repoFilteredRecords.length === 0 && this.historyRecords.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic;">No ledger receipts match criteria.</p>` : ''}
+            <sutram-scroll-view style="gap: 15px;">
+                ${this.historyRecords.length === 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin: 0;">No ledger receipts available.</p>` : ''}
+                ${repoFilteredRecords.length === 0 && this.historyRecords.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin: 0;">No ledger receipts match criteria.</p>` : ''}
                 ${this._viewMode === 'transaction' ? sortedTxs.map(([txId, txData]) => {
                     const repos = Array.from(new Set(txData.records.map(r => r.repo || r.filepath?.split('/')[0]).filter(Boolean)));
                     const repoStr = repos.length > 0 ? ' in ' + repos.join(', ') : '';
@@ -1109,8 +1104,8 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                             .titleText=${"Tx: " + (txId || 'Unknown')}
                             .descriptionText=${countStr}
                             .detailText=${this.utils.timeAgo(txData.timestamp * 1000)}
-                            icon='<i data-lucide="git-merge" style="width: 14px; height: 14px;"></i>'
-                            intentColor="var(--intent-highlight)"
+                            icon="git-merge"
+                            intent="highlight"
                             entityType="yomama-turn"
                             .entityData=${{ transaction_id: txId, records: txData.records }}
                             style="display: block;">
@@ -1132,8 +1127,8 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                                 .titleText=${record.filepath.split('/').pop()}
                                 .descriptionText=${descStr}
                                 .detailText=${record.filepath}
-                                icon=${record.is_snapshot ? '<i data-lucide="save" style="width: 14px; height: 14px;"></i>' : '<i data-lucide="file-text" style="width: 14px; height: 14px;"></i>'}
-                                intentColor=${record.is_snapshot ? 'var(--intent-highlight)' : 'var(--intent-neutral)'}
+                                icon=${record.is_snapshot ? 'save' : 'file-text'}
+                                intent=${record.is_snapshot ? 'highlight' : 'neutral'}
                                 entityType="patch-receipt"
                                 .entityData=${record}
                                 @card-clicked=${() => {
@@ -1156,8 +1151,8 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                             .titleText=${filename}
                             .descriptionText=${repo ? "Repo: " + repo : ""}
                             .detailText=${filepath}
-                            icon='<i data-lucide="file-code-2" style="width: 14px; height: 14px;"></i>'
-                            intentColor="#06b6d4"
+                            icon="file-code-2"
+                            intent="highlight"
                             entityType="file"
                             .entityData=${{ filepath: filepath, isFS: true, suppress: ['file-browse'] }}
                             @card-clicked=${() => {
@@ -1184,8 +1179,8 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                                 .titleText=${"Tx: " + (record.transaction_id || 'Unknown')}
                                 .descriptionText=${descStr}
                                 .detailText=${`Turn ${idx + 1} of ${fileData.records.length} • ${this.utils.timeAgo(record.timestamp * 1000)}`}
-                                icon=${record.is_snapshot ? '<i data-lucide="save" style="width: 14px; height: 14px;"></i>' : '<i data-lucide="git-commit" style="width: 14px; height: 14px;"></i>'}
-                                intentColor=${record.is_snapshot ? 'var(--intent-highlight)' : 'var(--intent-neutral)'}
+                                icon=${record.is_snapshot ? 'save' : 'git-commit'}
+                                intent=${record.is_snapshot ? 'highlight' : 'neutral'}
                                 entityType="patch-receipt"
                                 .entityData=${record}
                                 @card-clicked=${() => {
@@ -1199,7 +1194,7 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                         })}
                     </sutram-card-group>
                 `;})}
-            </div>
+            </sutram-scroll-view>
         `;
     }
 }
