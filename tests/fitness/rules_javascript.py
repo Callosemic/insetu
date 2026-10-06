@@ -64,6 +64,7 @@ def check_javascript_files():
     singleton_modal_ban_pattern = re.compile(r'\b(?:FsStore\.getState\(\)\.fileModal|insetu-file-modal)\b')
     legacy_routing_ban_pattern = re.compile(r'\bAppStore\.getState\(\)\.(?:activeTab|activeSubTabs|setActiveRoute)\b')
     udf_editor_intent_mandate_pattern = re.compile(r'document\.querySelectorAll\([\'"]insetu-editor-projection[\'"]\)')
+    legacy_sdk_import_ban_pattern = re.compile(r'from\s+[\'"][^\'"]*/static/extensions/system/sdk\.js[\'"]')
 
     # Initialize Tree-sitter for Hybrid Parsing
     ts_available = False
@@ -281,9 +282,11 @@ def check_javascript_files():
 
             if legacy_routing_ban_pattern.search(line):
                 report_violation("LEGACY_ROUTING_BAN", filepath, line_num, "References to AppStore activeTab, activeSubTabs, or setActiveRoute are banned. Rely on Sutram LayoutStore or URL hash routing.")
-
             if udf_editor_intent_mandate_pattern.search(line):
                 report_violation("UDF_EDITOR_INTENT_MANDATE", filepath, line_num, "Direct DOM querying for <insetu-editor-projection> is banned. Dispatch the 'insetu:editor-insert-text' intent over the Event Bus instead.")
+
+            if legacy_sdk_import_ban_pattern.search(line):
+                report_violation("LEGACY_SDK_IMPORT_BAN", filepath, line_num, "Importing from deprecated '/static/extensions/system/sdk.js' detected. Import from '/static/extensions/system/insetu_sdk.js' instead.")
 
             if is_extension and subtab_leak_pattern.search(line):
                 report_violation("SHARED_STORAGE_SUBTAB_LEAK", filepath, line_num, "Hardcoded subtab 'localStorage' state tracking discovered. Validate active layouts statelessly using DOM tree boundary context metrics instead (e.g., this.closest('.sub-tab-content')?.classList.contains('active')).")

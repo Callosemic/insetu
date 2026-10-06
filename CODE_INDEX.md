@@ -63,7 +63,8 @@ insetu/
 │       ├── 0052-polymorphic-uri-coercion-bucket-address-refinement-and-sse-step-telemetry.md # Polymorphic InSetuURI coercion, BucketAddress SSOT refinement, and un-blocked SSE step telemetry.
 │       ├── 0053-git-state-resolution-autostash-pulls-and-non-fast-forward-resilience.md # Git rebase/merge state resolution, autostash pulls, and multi-repo sweep isolation.
 │       ├── 0054-multi-column-viewport-projections-and-virtual-buffer-editing.md # Multi-column viewport projections and virtual buffer editing.
-│       ├── 0055-vfs-parity-action-middleware-and-singleton-modal-deprecation.md # [comment required]
+│       ├── 0055-vfs-parity-action-middleware-and-singleton-modal-deprecation.md # VFS parity gatekeeper action middleware, singleton file modal deprecation, and InSetuURI coercion hooks.
+│       ├── 0056-system-sdk-module-renaming-spatial-grid-routing-and-syntax-fallback.md # [comment required]
 │       └── archived/               # Superseded and historical ADR documents.
 │           ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │           ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -116,8 +117,8 @@ insetu/
 │   │   │   │   ├── ui_primitives.js # Base primitives like job trackers and loading spinners.
 │   │   │   │   └── ui_system_settings.js # The 3-Tier Configuration Editor and OS Settings Hub.
 │   │   │   ├── engine_system.py    # System topology, deltas, and lifecycle REST endpoints.
+│   │   │   ├── insetu_sdk.js       # The InSetuElement base class and Zustand store factory.
 │   │   │   ├── legacy.py           # Self-healing database recovery and legacy sandbox migration.
-│   │   │   ├── sdk.js              # The InSetuElement base class and Zustand store factory.
 │   │   │   ├── shared_styles.js    # Proxy export pointing to the Sutram micro-kernel.
 │   │   │   ├── store.js            # [Zustand Unified Data Flow (UDF) Store]
 │   │   │   ├── system.js           # System settings UI, SSE pipeline listeners, and recovery triggers.
