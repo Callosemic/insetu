@@ -90,7 +90,6 @@ Network synchronization must route through the client API abstraction to inherit
 * `this.registerInterval(callback, delayMs)`: Tracked scheduling mechanism dismantled automatically on component destruction.
 * `this.registerGlobalListener(type, target, callback)`: Base-managed event routing wrapper preventing global namespace contamination.
 * `this.onWorkspaceLoad(workspaceId)`: Class lifecycle hook invoked reactively when the active workspace context hot-swaps.
-* `this.onViewActivated()`: Class lifecycle hook invoked reactively when the component's primary tab or sub-tab becomes active.
 * `this.onForceRefresh()`: Class lifecycle hook invoked reactively when the active tab/sub-tab is re-selected or force-refreshed by the user.
 
 ---

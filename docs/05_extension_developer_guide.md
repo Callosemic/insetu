@@ -117,9 +117,8 @@ When subscribing to OS lifecycle events via `@hooks.on()`, always cross-referenc
 All UI components must extend the `InSetuElement` Lit wrapper. 
 ### Unidirectional Data Flow (UDF) & State
 Never import `createStore` from `zustand` directly. Use `createExtensionStore`, which automatically scopes `localStorage` keys by `workspace_id` to prevent cross-tenant bleeding. To create scoped, reactive boundaries for individual store keys without binding entire data structures, utilize the `createIsolatedSlice(store, sliceKey)` utility.
-
 ```javascript
-import { createExtensionStore, createIsolatedSlice, InSetuElement } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, createIsolatedSlice, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 
 export const MyStore = createExtensionStore('MyExt', {
     items: [],
