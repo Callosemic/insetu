@@ -10,12 +10,17 @@ if os.environ.get("INSETU_SIMULATE_PANIC") == "1" or os.path.exists(".panic_lock
     if "INSETU_SIMULATE_PANIC" in os.environ: del os.environ["INSETU_SIMULATE_PANIC"]
     if os.path.exists(".panic_lock"): os.remove(".panic_lock")
     raise SyntaxError("Simulated Kernel Panic (Triggered via UI Fire Drill)")
-
 import io
 import random
 import datetime
+import json
+import importlib
+import queue
+import threading
+import time
+import logging
 from contextlib import redirect_stdout
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, Response
 from werkzeug.middleware.proxy_fix import ProxyFix
 import akasa.workers # Initializes the metronome listeners
 app = Flask(__name__)
@@ -67,34 +72,32 @@ def enforce_token_gate():
         return jsonify({"error": "401 Unauthorized: Invalid or missing execution credentials."}), 401
 # --- INSETU EXTENSION ARCHITECTURE ROUTINE ---
 def load_workspace_extensions():
-    from akasa.utils import load_config, _cwd
-    import importlib
-    import json
+    from akasa.utils import load_config as _load_config, _cwd as __cwd
 
     raw_extensions = set()
 
     # 0. Check global preload preference
     preload_all = False
     try:
-        cfg = load_config()
+        cfg = _load_config()
         preload_all = cfg.get("preload_all_extensions", False)
     except Exception:
         pass
     # 1. Sweep system.json for a Union of all required extensions globally
-    index_path = Path(_cwd).joinpath(".insetu", "system.json").as_posix()
+    index_path = Path(__cwd).joinpath(".insetu", "system.json").as_posix()
     if os.path.exists(index_path):
         try:
             with open(index_path, 'r', encoding='utf-8') as f:
                 w_data = json.load(f)
             for ws_id in w_data.get("workspaces", {}).keys():
-                cfg = load_config(workspace_id=ws_id)
+                cfg = _load_config(workspace_id=ws_id)
                 for ext in cfg.get("extensions", []):
                     raw_extensions.add(ext)
         except Exception as e:
             print(f"Warning: Failed to parse workspaces for extensions: {e}")
     # Fallback to default active config if switchboard is empty/missing
     if not raw_extensions:
-        cfg = load_config()
+        cfg = _load_config()
         for ext in cfg.get("extensions", []):
             raw_extensions.add(ext)
 
@@ -235,8 +238,6 @@ def satisfies_range(version_str, range_str):
     return all(eval_single_clause(v_tuple, clause) for clause in clauses)
 def resolve_python_vendors(active_exts):
     """Statelessly scans core and extension vendor.json manifests to resolve and inject Python dependencies."""
-    import json
-
     candidates = {}
     resolved_paths = {}
 
@@ -345,9 +346,8 @@ def root_readme():
     return "Not found", 404
 @app.route('/' + 'manifest.json')
 def manifest():
-    import json
-    from akasa.utils import load_config
-    from akasa.extension import SettingsManager
+    from akasa.utils import load_config as _load_config
+    from akasa.extension import SettingsManager as _SettingsManager
 
     # Load the base blueprint manifest map
     base_manifest_path = Path(app.static_folder).joinpath(*['manifest', 'json']).as_posix()
@@ -356,8 +356,8 @@ def manifest():
             manifest_data = json.load(f)
     except Exception:
         manifest_data = {}
-    cfg = load_config()
-    settings = SettingsManager('system', "default")
+    cfg = _load_config()
+    settings = _SettingsManager('system', "default")
     instance_title = settings.get("instance_title", "inSetu Developer OS")
     # Inject the instance title cleanly into the PWA footprint
     manifest_data["name"] = instance_title
@@ -366,8 +366,8 @@ def manifest():
     pwa_scope = cfg.get("instance_pwa_scope", "default")
     manifest_data["id"] = f"/pwa-{pwa_scope}"
     manifest_data["start_url"] = f"/?node={pwa_scope}"
-    from akasa.utils import get_workspace_physics
-    cfg_path, _ = get_workspace_physics()
+    from akasa.utils import get_workspace_physics as _get_workspace_physics
+    cfg_path, _ = _get_workspace_physics()
     # Append a cache-busting timestamp query parameter so browsers re-evaluate the custom icons
     ts = int(os.path.getmtime(cfg_path)) if os.path.exists(cfg_path) else 1
     if "icons" in manifest_data:
@@ -412,12 +412,10 @@ def favicon():
 @app.route('/api/system/stream', methods=['GET'])
 def api_system_stream():
     """Push-driven Server-Sent Events (SSE) stream for zero-latency UI updates."""
-    from akasa.events import sse_bus
-    import queue
-    from flask import Response
+    from akasa.events import sse_bus as _sse_bus
 
     def event_stream():
-        q = sse_bus.subscribe()
+        q = _sse_bus.subscribe()
         try:
             yield "event: connected\ndata: {\"status\": \"ok\"}\n\n"
             while True:
@@ -428,7 +426,7 @@ def api_system_stream():
                 except queue.Empty:
                     yield ": heartbeat\n\n"
         finally:
-            sse_bus.unsubscribe(q)
+            _sse_bus.unsubscribe(q)
     return Response(event_stream(), content_type='text/event-stream', headers={
         'Cache-Control': 'no-cache',
         'X-Accel-Buffering': 'no'
@@ -436,8 +434,6 @@ def api_system_stream():
 @app.route('/api/system/panic', methods=['POST'])
 def api_system_panic():
     """Hard reboot of the OS process, setting the simulated panic flag."""
-    import threading
-    import time
     def crash_and_restart():
         try: hooks.emit('system_shutdown')
         except Exception: pass
@@ -495,8 +491,7 @@ if is_werkzeug_worker or not is_cli_serve:
     except Exception as e:
         print(f"Warning: system_boot failed: {e}")
 def run_app():
-    from akasa.utils import load_config
-    import logging
+    from akasa.utils import load_config as _load_config
 
     class QuietPollingFilter(logging.Filter):
         def filter(self, record):
@@ -507,10 +502,9 @@ def run_app():
             if any(p in msg for p in ['/system/deltas', '/system/jobs/', '/gather/manifest/entry', '/git/sweep/status']):
                 return False
             return True
-
     logging.getLogger('werkzeug').addFilter(QuietPollingFilter())
 
-    cfg = load_config()
+    cfg = _load_config()
     if "INSETU_PORT" not in os.environ:
         os.environ["INSETU_PORT"] = str(cfg.get("port", 5005))
 
