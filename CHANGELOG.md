@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.23.0 (2026-10-08)
+
+### Bug Fixes
+
+- Enforce pre-swap layout eviction and purge legacy UI component aliases
+  ([`fdf630e`](https://github.com/Callosemic/insetu/commit/fdf630e37cec585e6c916ad8fc235d8cd44450c1))
+
+### Features
+
+- **core**: Add user-space extension discovery, Lucide icon vendorization, and vendor bundle updates
+  ([`b1c8713`](https://github.com/Callosemic/insetu/commit/b1c8713c827a821c6d1bfbdacf8f033f10dffe9c))
+
+- **core**: Add user-space extension discovery, Lucide icon vendorization, and vendor bundle updates
+  ([`7c6007f`](https://github.com/Callosemic/insetu/commit/7c6007fec8b5f57b42e95b4443a8c0dde4a72f00))
+
+
 ## v0.22.0 (2026-10-06)
 
 ### Bug Fixes
