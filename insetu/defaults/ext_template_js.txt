@@ -57,7 +57,7 @@ export class InSetuExt{{cap_name}} extends InSetuElement {
                 <sutram-card-group>
                     ${this.items.length === 0 ? html`<sutram-empty-state text="No items yet."></sutram-empty-state>` : ''}
                     ${this.items.map(item => html`
-                        <insetu-card .titleText=${item.name} intent="primary"></insetu-card>
+                        <sutram-card .titleText=${item.name} intent="primary"></sutram-card>
                     `)}
                 </sutram-card-group>
             </sutram-category-section>

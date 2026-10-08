@@ -50,8 +50,8 @@ WantedBy=default.target
         subprocess.run(["systemctl", "--user", "enable", service_name], check=True)
         subprocess.run(["systemctl", "--user", "start", service_name], check=True)
 
-        from akasa.utils import load_config
-        cfg = load_config()
+        from akasa.utils import load_config as _load_config
+        cfg = _load_config()
         port = int(os.environ.get("INSETU_PORT", cfg.get("port", 5005)))
 
         print(f"✅ inSetu daemon installed and anchored to: {cwd} (Port {port})")
@@ -70,8 +70,8 @@ WantedBy=default.target
             print("⚠️  No inSetu service found to uninstall.")
 
     elif action == "status":
-        from akasa.utils import load_config
-        cfg = load_config()
+        from akasa.utils import load_config as _load_config
+        cfg = _load_config()
         port = int(os.environ.get("INSETU_PORT", cfg.get("port", 5005)))
         print(f"⚙️  inSetu Service Telemetry:")
         print(f"   ├─ Anchored Directory: {cwd}")
@@ -186,34 +186,34 @@ def check_daemon_alive(port):
 def launch_gui(cwd):
     """Launches pywebview desktop shell, attaching to an active daemon or starting an embedded server."""
     try:
-        import webview
+        import webview as _webview
     except ImportError:
         print("❌ Desktop GUI requires pywebview. Install with: pip install pywebview (or pip install insetu[gui])")
         sys.exit(1)
 
-    from akasa.utils import load_config
-    from insetu.app import run_app
+    from akasa.utils import load_config as _load_config
+    from insetu.app import run_app as _run_app
 
     scaffold_profiles(cwd)
-    cfg = load_config()
+    cfg = _load_config()
     port = int(os.environ.get("INSETU_PORT", cfg.get("port", 5005)))
 
     if check_daemon_alive(port):
         print(f"🔗 Attaching GUI to active inSetu daemon on http://127.0.0.1:{port}...")
     else:
         print(f"🚀 No active daemon detected. Booting embedded server on port {port}...")
-        server_thread = threading.Thread(target=run_app, daemon=True)
+        server_thread = threading.Thread(target=_run_app, daemon=True)
         server_thread.start()
 
     title = cfg.get("instance_title", "inSetu Developer OS")
-    webview.create_window(
+    _webview.create_window(
         title=title,
         url=f"http://127.0.0.1:{port}",
         width=1280,
         height=800,
         resizable=True
     )
-    webview.start()
+    _webview.start()
 
 def create_desktop_shortcut(cwd):
     """Generates a native OS application shortcut for inSetu GUI."""

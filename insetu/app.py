@@ -100,12 +100,22 @@ def load_workspace_extensions():
         cfg = _load_config()
         for ext in cfg.get("extensions", []):
             raw_extensions.add(ext)
-
     # If preload is enabled, aggressively scan and add all available extensions
     ext_dir = Path(__file__).parent.joinpath("extensions")
     if preload_all and ext_dir.exists() and ext_dir.is_dir():
         for item in os.listdir(ext_dir):
             if os.path.isdir(ext_dir.joinpath(item)) and not item.startswith("__"):
+                raw_extensions.add(item)
+
+    # Scan local workspace .insetu/extensions/ for user-space extensions
+    from akasa.utils import get_workspace_physics as _get_workspace_physics
+    _, ws_root = _get_workspace_physics()
+    local_ext_dir = Path(ws_root).joinpath(".insetu", "extensions")
+    if local_ext_dir.exists() and local_ext_dir.is_dir():
+        if local_ext_dir.as_posix() not in sys.path:
+            sys.path.insert(0, local_ext_dir.as_posix())
+        for item in os.listdir(local_ext_dir):
+            if os.path.isdir(local_ext_dir.joinpath(item)) and not item.startswith("__"):
                 raw_extensions.add(item)
 
     # Inject Tier 2 Core Modules into the DAG automatically
@@ -295,8 +305,8 @@ def resolve_python_vendors(active_exts):
 @app.route('/static/extensions/<ext_name>/<path:filename>')
 def serve_extension_static(ext_name, filename):
     """Serves static assets and vendored dependencies directly from an extension directory."""
-    from akasa.utils import is_core_module
-    if is_core_module(ext_name):
+    from akasa.utils import is_core_module as _is_core_module
+    if _is_core_module(ext_name):
         ext_dir = Path(app.root_path).joinpath("core", ext_name).resolve()
     else:
         ext_dir = Path(app.root_path).joinpath("extensions", ext_name).resolve()
@@ -320,7 +330,7 @@ def serve_extension_static(ext_name, filename):
 @app.route('/static/js/extensions/ext_<ext_name>.js')
 def serve_extension_js(ext_name):
     """ADR 0012: Dynamically serve frontend JS from the bundled extension subdirectory."""
-    from flask import Response
+    from flask import Response as _Response
 
     # 1. Try bundled topology
     bundled_path = Path(app.root_path).joinpath("extensions", ext_name, f"ext_{ext_name}.js").as_posix()
@@ -333,7 +343,7 @@ def serve_extension_js(ext_name):
         return send_file(legacy_path, mimetype='application/javascript')
 
     # 3. Virtual fallback for Python-only declarative extensions
-    return Response("export default {};", mimetype='application/javascript')
+    return _Response("export default {};", mimetype='application/javascript')
 @app.route('/sw.js')
 def sw():
     return send_file(Path(app.static_folder).joinpath('sw.js').as_posix(), mimetype='application/javascript')
@@ -384,12 +394,12 @@ def intercept_local_static_assets():
     Intercepts standard static asset routing routes before Flask's native 
     static file engine serves them, checking the local environment first.
     """
-    from akasa.utils import get_workspace_physics
+    from akasa.utils import get_workspace_physics as _get_workspace_physics
     path = request.path
     if path in ['/static/icon-192.png', '/static/icon-512.png']:
         filename = Path(path).name
         # Anchor to the absolute instance directory to survive os.chdir() hijacking
-        cfg_path, _ = get_workspace_physics()
+        cfg_path, _ = _get_workspace_physics()
         instance_dir = Path(cfg_path).parent.as_posix()
         local_path = Path(instance_dir).joinpath("static", filename).as_posix()
         if os.path.exists(local_path):
