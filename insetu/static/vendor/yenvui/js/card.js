@@ -404,4 +404,4 @@ import{html as a,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
                     </div>
                 </div>
             </div>
-        `}updated(t){super.updated(t),t.has("_overlayActive")&&this._overlayActive&&this.dispatchEvent(new CustomEvent("yenvui-overlay-opened",{bubbles:!0,composed:!0,detail:{source:this}})),(t.has("entityData")||t.has("filename")||t.has("titleText"))&&this._overlayActive&&(this._overlayActive=!1)}}customElements.define("yenvui-card",YenvuiCard);
+        `}}customElements.define("yenvui-card",YenvuiCard);
