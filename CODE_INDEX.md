@@ -65,6 +65,7 @@ insetu/
 │       ├── 0054-multi-column-viewport-projections-and-virtual-buffer-editing.md # Multi-column viewport projections and virtual buffer editing.
 │       ├── 0055-vfs-parity-action-middleware-and-singleton-modal-deprecation.md # VFS parity gatekeeper action middleware, singleton file modal deprecation, and InSetuURI coercion hooks.
 │       ├── 0056-system-sdk-module-renaming-spatial-grid-routing-and-syntax-fallback.md # [comment required]
+│       ├── 0057-workspace-swap-layout-eviction-and-yv-icon-migration.md # [comment required]
 │       └── archived/               # Superseded and historical ADR documents.
 │           ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │           ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -115,7 +116,7 @@ insetu/
 │   │   │   │   ├── ui_file_tree.js # Recursive file tree browser with fuzzy search.
 │   │   │   │   ├── ui_filter_pills.js # Repository and tag filtering arrays.
 │   │   │   │   ├── ui_primitives.js # Base primitives like job trackers and loading spinners.
-│   │   │   │   └── ui_system_settings.js # The 3-Tier Configuration Editor and OS Settings Hub.
+│   │   │   │   └── ui_system_settings.js # The 3-Tier Configuration Editor and Settings Hub.
 │   │   │   ├── engine_system.py    # System topology, deltas, and lifecycle REST endpoints.
 │   │   │   ├── insetu_sdk.js       # The InSetuElement base class and Zustand store factory.
 │   │   │   ├── legacy.py           # Self-healing database recovery and legacy sandbox migration.
@@ -208,6 +209,7 @@ insetu/
 │   ├── static/                     # Web server static assets and frontend bundles.
 │   │   ├── css/                    # Global CSS stylesheets.
 │   │   │   └── style.css           # Global theme variables, utility classes, and layout rules.
+│   │   ├── icons.js                # Global Lucide SVG icon dictionary.
 │   │   ├── js/                     # [Frontend JavaScript Payloads]
 │   │   │   ├── app.js              # [Frontend Bootloader & Core Setup]
 │   │   │   └── types.js            # Root JSDoc type definitions entry point.
@@ -216,19 +218,15 @@ insetu/
 │   │   └── vendor.json             # Map of core third-party UI dependencies (Lit, CodeMirror).
 │   └── templates/                  # Jinja2 HTML templates.
 │       └── index.html              # The master SPA entry point containing the OS crash shell.
-├── insetu.egg-info/                # [comment required]
-│   ├── SOURCES.txt                 # [comment required]
-│   ├── dependency_links.txt        # [comment required]
-│   ├── entry_points.txt            # [comment required]
-│   ├── requires.txt                # [comment required]
-│   └── top_level.txt               # [comment required]
 ├── pyproject.toml                  # Python package definition and semantic-release configurations.
 ├── scripts/                        # Build, vendorization, and utility shell scripts.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── vendor_codemirror.sh        # Bundles CodeMirror 6 core and language modules locally via esbuild.
 │   ├── vendor_jsyaml.sh            # [comment required]
 │   ├── vendor_lit.sh               # Local esbuild vendorization script for Lit library.
-│   └── vendor_zustand.sh           # Local esbuild vendorization script for Zustand modules.
+│   ├── vendor_lucide.sh            # [comment required]
+│   ├── vendor_zustand.sh           # Local esbuild vendorization script for Zustand modules.
+│   └── x-ray-dom-nodes-and-events.js # DOM node and event listener X-Ray diagnostic tool.
 └── tests/                          # Automated testing suite.
     ├── fitness/                    # The AST and Regex architectural linter rules.
     │   ├── __init__.py             # Module initialization.

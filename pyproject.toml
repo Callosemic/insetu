@@ -1,11 +1,10 @@
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
-
 [project]
 name = "insetu"
 version = "0.22.0"
-description = "A local-first AI Developer OS, Context Gatherer, and Kanban Tracker."
+description = "A local-first AI Workbench, Context Gatherer, and Kanban Tracker."
 readme = "README.md"
 authors = [{ name = "inSetu Contributors", email = "hello@insetu.dev" }]
 license = "Apache-2.0"

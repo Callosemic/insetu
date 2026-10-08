@@ -1,7 +1,7 @@
-# 🌉 inSetu: AI Developer OS
+# 🌉 inSetu: AI Workbench
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-**inSetu** (from *in situ*, meaning "in position" or "on site", and *Setu* [सेतु], Sanskrit for "bridge") is a local-first AI Developer OS, Context Gatherer, and Kanban Tracker.  
+**inSetu** (from *in situ*, meaning "in position" or "on site", and *Setu* [सेतु], Sanskrit for "bridge") is a local-first AI Workbench, Context Gatherer, and Kanban Tracker.  
 It bridges the gap between Large Language Models (LLMs) and your local file system by treating your codebase as the ultimate source of truth. Instead of pasting code snippets back and forth, inSetu compiles massive, repository-wide context payloads for your LLM, and uses a deterministic "Sync Bridge" to apply the LLM's structural patches directly to your disk.
 
 DEMO: https://youtu.be/FDgL6jveMHo?si=h35FuW_WC0VO1Wox
@@ -49,10 +49,9 @@ DEMO: https://youtu.be/FDgL6jveMHo?si=h35FuW_WC0VO1Wox
 * **Node.js** (Optional: Enables pre-flight JavaScript/TypeScript AST syntax validation in the Yomama Sync Bridge)
 * **Pandoc & LaTeX** (Optional: Enables document compilation to PDF/DOCX via the `publish` extension)
 * **Tailscale** (Optional: Enables zero-trust HTTPS network binding over private Tailnets)
-
 ## 🚀 Installation
 
-The inSetu Developer OS (v0.17.0+) is distributed officially via PyPI. You can install it directly into your environment using standard Python packaging tools:
+The inSetu Workbench (v0.17.0+) is distributed officially via PyPI. You can install it directly into your environment using standard Python packaging tools:
 
 ```bash
 pip install insetu
@@ -95,10 +94,12 @@ playwright install
 ## 💻 Usage & CLI Reference
 
 Once installed, the `insetu` command is available anywhere on your system.
-### 1. Boot the Developer OS (`serve`)
+
+### 1. Boot the Workbench (`serve`)
 
 ```bash
 insetu serve
+
 ```
 
 Executing `insetu serve` treats your current working directory (`cwd`) as the active workspace root, reading configuration from `cwd/.insetu/config.json` (and automatically scaffolding local `.insetu/` configuration files if initialized in a fresh directory for the first time). The web daemon boots on `http://127.0.0.1:5005`.
@@ -190,10 +191,9 @@ In the event of a fatal kernel panic or syntax corruption in core modules, inSet
 * **Core Context Dump:** Generates an emergency single-file context payload of the inSetu kernel for AI debugging.
 
 ---
-
 ## 🌍 Remote Access & Proxies
 
-inSetu is designed to be a local-first tool, natively binding to `127.0.0.1:5005` to protect your filesystem. If you want to access your Developer OS remotely (e.g., from an iPad or a different workstation), we recommend using a secure tunneling service rather than opening router ports.
+inSetu is designed to be a local-first tool, natively binding to `127.0.0.1:5005` to protect your filesystem. If you want to access your Workbench remotely (e.g., from an iPad or a different workstation), we recommend using a secure tunneling service rather than opening router ports.
 
 **Using Tailscale (Recommended):**
 Tailscale provides a zero-config VPN. You can securely serve the inSetu port over your private Tailnet using Tailscale Serve:

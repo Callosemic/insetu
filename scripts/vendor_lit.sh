@@ -14,11 +14,10 @@ mkdir -p "$TARGET_DIR"
 BUILD_DIR=$(mktemp -d)
 echo "📁 Created temporary build environment in $BUILD_DIR"
 cd "$BUILD_DIR"
-
-# 4. Install Lit and esbuild
-echo "📦 Installing Lit and esbuild..."
+# 4. Install Lit, Virtualizer, and esbuild
+echo "📦 Installing Lit, Virtualizer, and esbuild..."
 npm init -y > /dev/null
-npm install lit@3.1.0 esbuild --silent
+npm install lit@3.1.0 @lit-labs/virtualizer esbuild --silent
 
 # 5. Bundle core into a single deduplicated ESM file
 echo "🔨 Bundling lit-core.min.js..."
@@ -27,6 +26,12 @@ npx esbuild node_modules/lit/index.js \
   --format=esm \
   --minify \
   --outfile="$TARGET_DIR/lit-core.min.js"
+echo "🔨 Bundling lit-virtualizer.min.js..."
+npx esbuild @lit-labs/virtualizer \
+  --bundle \
+  --format=esm \
+  --minify \
+  --outfile="$TARGET_DIR/lit-virtualizer.min.js"
 
 # 6. Clean up
 cd "$SCRIPT_DIR"

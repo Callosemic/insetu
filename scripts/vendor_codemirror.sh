@@ -34,6 +34,7 @@ npm install \
   @codemirror/lang-yaml \
   @codemirror/lang-html \
   @codemirror/lang-css \
+  @codemirror/merge \
   esbuild --silent
 
 # 5. Create entry point re-exporting the full core API & utilities
@@ -45,13 +46,13 @@ export * from "@codemirror/language";
 export * from "@codemirror/autocomplete";
 export * from "@codemirror/commands";
 export * from "@codemirror/lint";
+export * from "@codemirror/merge";
 export { basicSetup } from "codemirror";
 export { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 EOF
-
 # 6. Bundle core into a single deduplicated ESM file
 echo "🔨 Bundling codemirror-core.js..."
-npx esbuild entry.js --bundle --format=esm --outfile="$TARGET_DIR/codemirror-core.js"
+npx esbuild entry.js --bundle --minify --format=esm --outfile="$TARGET_DIR/codemirror-core.js"
 
 # 7. Bundle each language pack into a standalone ESM module
 LANGUAGES=("markdown" "python" "javascript" "json" "yaml" "html" "css")
@@ -60,6 +61,7 @@ for LANG in "${LANGUAGES[@]}"; do
     echo "🔨 Bundling lang-${LANG}.js..."
     npx esbuild "node_modules/@codemirror/lang-${LANG}/dist/index.js" \
         --bundle \
+        --minify \
         --format=esm \
         --external:@codemirror/* \
         --external:codemirror \
