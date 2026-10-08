@@ -278,7 +278,7 @@ export class InSetuExtConfig extends InSetuElement {
                                     const nextIdx = Object.keys(b.meta_map).filter(k => k.startsWith('new_folder_')).length + 1;
                                     b.meta_map[`new_folder_${nextIdx}`] = { title: '', domain: '' };
                                     this.requestUpdate();
-                                }}>➕ Folder Meta</sutram-btn>
+                                }}>Folder Meta</sutram-btn>
                             </div>
                             <div style="display: flex; flex-direction: column; gap: 8px;">
                                 ${Object.keys(b.meta_map || {}).map(dirKey => {
@@ -337,11 +337,11 @@ export class InSetuExtConfig extends InSetuElement {
             <div style="padding: 15px;">
                 <sutram-card-group>
                     ${repos.map((repo, idx) => html`
-                        <insetu-card
+                        <sutram-card
                             titleText=${repo.title || repo.repo_dir || 'New Repository'}
                             descriptionText=${repo.repo_dir ? `Directory: ${repo.repo_dir}` : 'No Directory Specified'}
                             detailText=${repo.domain || 'Workspaces'}
-                            icon="📦"
+                            icon="package"
                             intent="highlight"
                             ?disableSelection=${true}
                             style="cursor: pointer;"
@@ -356,16 +356,16 @@ export class InSetuExtConfig extends InSetuElement {
                                     this._repoBackup = JSON.parse(JSON.stringify(repo)); 
                                     this._editingRepoIdx = idx; 
                                     this._isNewRepo = false;
-                                }}>✏️ Edit</sutram-btn>
+                                }}>Edit</sutram-btn>
                                 <sutram-btn intent="danger" style="--btn-padding: 4px 10px; margin: 0;" @click=${(e) => {
                                     e.stopPropagation();
                                     if(confirm("Remove this repository from tracking?")) {
                                         this.configForm.target_repos.splice(idx, 1);
                                         this.requestUpdate();
                                     }
-                                }}>🗑️ Remove</sutram-btn>
+                                }}>Remove</sutram-btn>
                             </div>
-                        </insetu-card>
+                        </sutram-card>
                     `)}
                 </sutram-card-group>
             </div>
@@ -375,9 +375,10 @@ export class InSetuExtConfig extends InSetuElement {
         const idx = this._editingRepoIdx;
         const repo = (idx !== null && this.configForm) ? this.configForm.target_repos[idx] : null;
         const isOpen = idx !== null && repo !== null;
+        if (!isOpen) return html``;
         return html`
             <sutram-modal 
-                ?open=${isOpen} 
+                ?open=${true} 
                 titleText="${this._isNewRepo ? 'Add Repository' : 'Edit Repository'}: ${repo ? (repo.title || repo.repo_dir || 'New') : ''}" 
                 ?fullscreen=${true}
                 ?flush=${true}
@@ -397,7 +398,7 @@ export class InSetuExtConfig extends InSetuElement {
                             <sutram-btn intent="neutral" style="margin: 0; --btn-padding: 4px 10px; --btn-font-size: 0.75rem;" @click=${(e) => {
                                 e.stopPropagation();
                                 this._testRepoBucketing(idx);
-                            }}>🧪 Test All Buckets</sutram-btn>
+                            }}>Test All Buckets</sutram-btn>
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 15px;">
                             <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 0;">Files not captured by explicit sub-buckets automatically fall into this baseline group.</p>
@@ -473,7 +474,7 @@ export class InSetuExtConfig extends InSetuElement {
                                 if (!repo.sub_buckets) repo.sub_buckets = [];
                                 repo.sub_buckets.push({ id: `bucket_${Date.now()}`, title: '', match_prefixes: [] });
                                 this.requestUpdate();
-                            }}>➕ Add Bucket</sutram-btn>
+                            }}>Add Bucket</sutram-btn>
                         </div>
                         <div style="display: flex; flex-direction: column;">
                             ${this.renderSubBuckets(repo, idx)}
@@ -483,11 +484,11 @@ export class InSetuExtConfig extends InSetuElement {
                 </div>
                 ${repo ? html`
                     <sutram-btn slot="footer" intent="neutral" @click=${() => this._cancelRepoEditor()}>
-                        ❌ Cancel
+                        Cancel
                     </sutram-btn>
                     <sutram-async-btn 
                         slot="footer" 
-                        label="${this._isNewRepo ? '➕ Create' : '✅ Keep Edits'}" 
+                        label="${this._isNewRepo ? 'Create' : 'Keep Edits'}" 
                         intent="success" 
                         .onClick=${async () => await this._handleConfirmRepo()}>
                     </sutram-async-btn>
@@ -559,25 +560,26 @@ export class InSetuExtConfig extends InSetuElement {
                                     this._isNewRepo = true;
                                     this._createDirIfNeeded = true;
                                     this.requestUpdate();
-                                }}>➕ Add Repository</sutram-btn>
+                                }}>Add Repository</sutram-btn>
                         </div>
                         <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>
                         ${this.renderRepos()}
                     </sutram-collapsible>
                 </div>
             `;
-
         return html`
             ${this.renderRepoEditorModal()}
-            <sutram-modal 
-                ?open=${this._isOpen} 
-                titleText="Workspace Manager" 
-                ?fullscreen=${true} 
-                ?flush=${true}
-                @sutram-modal-closed=${() => { this._isOpen = false; AppStore.setState({ isConfigOpen: false }); }}>
-                <div slot="body">${bodyContent}</div>
-                <sutram-async-btn slot="footer" label="💾 Save & Remap Disk" intent="primary" .onClick=${this._saveConfig.bind(this)}></sutram-async-btn>
-            </sutram-modal>
+            ${this._isOpen ? html`
+                <sutram-modal 
+                    ?open=${true} 
+                    titleText="Workspace Manager" 
+                    ?fullscreen=${true} 
+                    ?flush=${true}
+                    @sutram-modal-closed=${() => { this._isOpen = false; AppStore.setState({ isConfigOpen: false }); }}>
+                    <div slot="body">${bodyContent}</div>
+                    <sutram-async-btn slot="footer" label="Save & Remap Disk" intent="primary" .onClick=${this._saveConfig.bind(this)}></sutram-async-btn>
+                </sutram-modal>
+            ` : ''}
         `;
     }
     async _saveConfig() {
@@ -652,7 +654,7 @@ window.ExtensionRegistry.registerExtension('config', {
             targetEntity: 'system_control',
             id: 'sys-refresh-files',
             label: 'Refresh Files',
-            icon: '⚙️',
+            icon: 'refresh-cw',
             intent: 'primary',
             group: 'tools',
             vfsBound: false,
@@ -667,7 +669,7 @@ window.ExtensionRegistry.registerExtension('config', {
             targetEntity: 'system_control',
             id: 'sys-reboot',
             label: 'Reboot',
-            icon: '🔄',
+            icon: 'power',
             intent: 'success',
             group: 'tools',
             vfsBound: false,
@@ -694,7 +696,7 @@ window.ExtensionRegistry.registerExtension('config', {
             targetEntity: 'system_control',
             id: 'sys-lifeboat',
             label: 'Lifeboat',
-            icon: '⚠️',
+            icon: 'life-buoy',
             intent: 'warning',
             group: 'tools',
             vfsBound: false,
@@ -709,7 +711,7 @@ window.ExtensionRegistry.registerExtension('config', {
         {
             id: 'workspaces_editor',
             label: 'Add / Remove Workspaces',
-            icon: '🗃️',
+            icon: 'layers',
             onClick: () => {
                 AppStore.setState({ isWorkspaceEditorOpen: true });
             }
@@ -717,7 +719,7 @@ window.ExtensionRegistry.registerExtension('config', {
         {
             id: 'config_editor',
             label: 'Configure Current Workspace',
-            icon: '🛠️',
+            icon: 'settings',
             onClick: () => {
                 AppStore.setState({ isConfigOpen: true });
             }

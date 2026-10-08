@@ -2,7 +2,6 @@ import { html, css } from 'lit';
 import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { AppStore } from '/static/extensions/system/store.js';
-
 // --- VFS BRIDGE STATE STORE (UDF LAYER) ---
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 window.addEventListener('beforeunload', (e) => {
@@ -10,6 +9,12 @@ window.addEventListener('beforeunload', (e) => {
     if (state && state.cells && state.cells.length > 0) {
         e.preventDefault();
         e.returnValue = '';
+    }
+});
+
+window.addEventListener('sutram-evict-projection', (e) => {
+    if (e.detail && e.detail.id === 'bridge') {
+        BridgeStore.getState().clearPayload();
     }
 });
 
@@ -110,9 +115,8 @@ export const BridgeStore = createExtensionStore('Bridge', {
         }
 
         flushFileFallback();
-
         if (newCells.length > 0) {
-            BridgeStore.setState(state => ({ cells: [...state.cells, ...newCells] }));
+            BridgeStore.setState(state => ({ cells: [...state.cells, ...newCells], viewMode: 'input' }));
         }
     },
     updateCellFile: (id, file) => {
@@ -257,7 +261,7 @@ export class InSetuExtBridge extends InSetuElement {
         if (swapped) this.requestUpdate();
     }
     onWorkspaceLoad(workspaceId) {
-        BridgeStore.setState({ cells: [], activeBridgeJobId: null, telemetry: null, consoleOutput: 'Ready...' });
+        BridgeStore.setState({ cells: [], activeBridgeJobId: null, telemetry: null, consoleOutput: 'Ready...', viewMode: 'input' });
         window.inSetu.stores.Fs?.setState({ fileVerificationCache: {} });
         BridgeStore.getState().fetchHistory();
         this.requestUpdate();
@@ -311,7 +315,6 @@ export class InSetuExtBridge extends InSetuElement {
                 }
             });
         });
-
         // Initial sync
         const bState = BridgeStore.getState();
         this.cells = bState.cells || [];
@@ -492,11 +495,12 @@ export class InSetuExtBridge extends InSetuElement {
                                 }
                             });
                         }
-
                         if (tel.can_commit && tel.mode === 'live') {
                             // Extract the true OS-resolved paths from the telemetry payload
                             const safePatches = tel.patches || [];
                             const resolvedFiles = Array.from(new Set(safePatches.map(p => p.resolved_file).filter(Boolean)));
+
+                            // Retain console view and telemetry to show the success receipt, but clear the staging cells
                             BridgeStore.setState({ cells: [] });
 
                             // The backend Event Bus natively handles RAG RAG compilation and RAG RAG diffs via the Topology Slew Limiter.
@@ -594,11 +598,12 @@ export class InSetuExtBridge extends InSetuElement {
         return html`
             <div style="width: 100%; display: flex; flex-direction: column;">
                 <div class="console-header-text">
-                    <h3 style=${`color: ${t.can_commit ? 'var(--intent-success)' : 'var(--intent-warning)'}; margin-top: 0;`}>
-                        ${t.can_commit ? (t.mode === 'live' ? '✅ Transaction Committed' : '✅ Dry Run Verified') : '⚠️ Action Required'}
+                    <h3 style=${`color: ${t.can_commit ? 'var(--intent-success)' : 'var(--intent-warning)'}; margin-top: 0; display: flex; align-items: center; gap: 8px;`}>
+                        <yv-icon name=${t.can_commit ? "check-circle-2" : "alert-triangle"} style="width: 20px; height: 20px;"></yv-icon>
+                        ${t.can_commit ? (t.mode === 'live' ? 'Transaction Committed' : 'Dry Run Verified') : 'Action Required'}
                     </h3>
                 <p style="color: var(--text-muted); font-size: 0.9rem;">
-                    Total: ${t.summary?.total_patches ?? 0} &bull; Resolved: ${t.summary?.resolved ?? 0} &bull; Skipped: ${t.summary?.auto_skipped ?? 0} &bull; Failed: ${t.summary?.failed ?? 0}
+                    Total: ${t.summary?.total_patches ?? 0} &bull; Resolved: ${t.summary?.resolved ?? 0} &bull; Skipped: ${t.summary?.auto_skipped ?? 0} &bull; Confirm: ${t.summary?.action_required ?? 0} &bull; Failed: ${t.summary?.failed ?? 0}
                 </p>
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 20px;">
@@ -624,17 +629,17 @@ export class InSetuExtBridge extends InSetuElement {
                             const hasError = filePatches.some(p => p.status === 'failed' || p.status === 'syntax_error');
                             const hasWarning = filePatches.some(p => p.status === 'needs_confirmation' || p.status === 'offer_deep_search');
                             const isSkipped = filePatches.every(p => p.status === 'auto_skipped');
-
                             let intentColor = 'var(--intent-success)';
-                            let icon = '✅';
-                            if (hasError) { intentColor = 'var(--intent-danger)'; icon = '❌'; }
-                            else if (hasWarning) { intentColor = 'var(--intent-warning)'; icon = '⚠️'; }
-                            else if (isSkipped) { intentColor = 'var(--intent-neutral)'; icon = '⏭️'; }
+                            let icon = 'check-circle-2';
+                            if (hasError) { intentColor = 'var(--intent-danger)'; icon = 'x-circle'; }
+                            else if (hasWarning) { intentColor = 'var(--intent-warning)'; icon = 'alert-triangle'; }
+                            else if (isSkipped) { intentColor = 'var(--intent-neutral)'; icon = 'skip-forward'; }
 
                             const targetEntityFile = file;
                             return html`
-                                <insetu-card 
-                                    titleText="${icon} ${file}" 
+                                <sutram-card 
+                                    titleText="${file}" 
+                                    icon="${icon}"
                                     detailText="${filePatches.length} Patch${filePatches.length !== 1 ? 'es' : ''}" 
                                     intentColor="${intentColor}"
                                     entityType="file"
@@ -658,7 +663,7 @@ export class InSetuExtBridge extends InSetuElement {
                                                 ${p.error_message ? html`<p style="color: ${p.status === 'auto_skipped' ? 'var(--intent-warning)' : 'var(--intent-danger)'}; margin: 6px 0 0 0;">${p.error_message}</p>` : ''}
                                                 ${p.syntax_error ? html`
                                                     <div style="display: flex; gap: 10px; margin-top: 8px;">
-                                                        <sutram-btn data-action="view-diff" data-b64="${p.syntax_error}" intent="danger" style="--btn-padding: 4px 10px;">👁️ View Syntax Error Diff</sutram-btn>
+                                                        <sutram-btn data-action="view-diff" data-b64="${p.syntax_error}" intent="danger" style="--btn-padding: 4px 10px;">View Syntax Error Diff</sutram-btn>
                                                     </div>
                                                 ` : ''}
                                                 ${p.candidates && p.candidates.length > 0 ? html`
@@ -676,13 +681,13 @@ export class InSetuExtBridge extends InSetuElement {
                                                 ` : ''}
                                                 <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; align-items: center;">
                                                     ${p.available_actions?.includes('offer_deep_search') ? html`
-                                                        <sutram-btn data-action="deep-search" intent="highlight" style="--btn-padding: 4px 10px;">🔍 Run Deep Search</sutram-btn>
+                                                        <sutram-btn data-action="deep-search" intent="highlight" style="--btn-padding: 4px 10px;">Run Deep Search</sutram-btn>
                                                     ` : ''}
                                                     ${p.available_actions?.includes('heal_anchor') ? html`
-                                                        <sutram-btn data-action="heal-anchor" data-old="${p.original_file}" data-cell-id="${p.cell_id}" data-anchor="${p.actual_anchor}" intent="success" style="--btn-padding: 4px 10px;">🩹 Auto-Heal Anchor</sutram-btn>
+                                                        <sutram-btn data-action="heal-anchor" data-old="${p.original_file}" data-cell-id="${p.cell_id}" data-anchor="${p.actual_anchor}" intent="success" style="--btn-padding: 4px 10px;">Auto-Heal Anchor</sutram-btn>
                                                     ` : ''}
                                                     ${p.available_actions?.includes('ignore_syntax_error') ? html`
-                                                        <sutram-btn data-action="ignore-syntax" intent="danger" style="--btn-padding: 4px 10px;">⚠️ Ignore Syntax & Commit</sutram-btn>
+                                                        <sutram-btn data-action="ignore-syntax" intent="danger" style="--btn-padding: 4px 10px;">Ignore Syntax & Commit</sutram-btn>
                                                     ` : ''}
                                                     ${p.available_actions?.includes('deselect_patch') ? html`
                                                         <div style="display: flex; align-items: center; gap: 6px;">
@@ -695,7 +700,7 @@ export class InSetuExtBridge extends InSetuElement {
                                         `;
                                         })}
                                     </div>
-                                </insetu-card>
+                                </sutram-card>
                             `;
                         });
                     })()}
@@ -725,7 +730,7 @@ export class InSetuExtBridge extends InSetuElement {
                                 const text = e.dataTransfer.getData('text');
                                 if (text) BridgeStore.getState().parseAndAppendCells(text);
                             }}>
-                            <div style="font-size: 3rem; margin-bottom: 10px;">🌉</div>
+                            <yv-icon name="bridge" style="width: 48px; height: 48px; color: var(--intent-highlight); margin-bottom: 12px;"></yv-icon>
                             <h3 style="margin: 0 0 10px 0; color: var(--text);">Yomama Sync Bridge</h3>
                             <p style="color: var(--text-muted); margin-bottom: 20px; text-align: center; max-width: 400px;">Paste a patch sandwich from your LLM to begin parsing individual file blocks.</p>
                             <textarea style="opacity: 0.01; position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; z-index: 1; resize: none;" autofocus></textarea>
@@ -738,7 +743,7 @@ export class InSetuExtBridge extends InSetuElement {
                                 <div class="bridge-group-container">
                                     <sutram-card-group ?stacked=${true} ?accordion=${true}>
                                     <!-- Target File Card (Top of Stack) -->
-                                    <insetu-card
+                                    <sutram-card
                                         .titleText=${"Target File:"}
                                         .descriptionText=${this._fileVerificationCache[file] === false ? "⚠️ Target file not found in workspace." : ""}
                                         .detailText=${""}
@@ -763,7 +768,7 @@ export class InSetuExtBridge extends InSetuElement {
                                                         }
                                                     });
                                                 }
-                                            }}>📁 Remap</sutram-btn>
+                                            }}>Remap</sutram-btn>
                                         </div>
 
                                         <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 5px;">
@@ -779,7 +784,7 @@ export class InSetuExtBridge extends InSetuElement {
                                         ${this._autoSwaps[file] ? html`
                                             <div style="font-size: 0.8rem; color: var(--intent-success); margin-top: 10px; font-weight: bold; display: flex; align-items: center; justify-content: space-between; padding-top: 8px; border-top: 1px dashed var(--border);">
                                                 <span>✨ Auto-mapped from: <span style="font-family: monospace; opacity: 0.8;">${this._autoSwaps[file]}</span></span>
-                                                <sutram-btn variant="tinted" intent="neutral" style="--btn-padding: 2px 8px; margin: 0;" @click=${(e) => {
+                                                <sutram-btn intent="neutral" style="--btn-padding: 2px 8px; margin: 0;" @click=${(e) => {
                                                     e.stopPropagation();
                                                     const original = this._autoSwaps[file];
                                                     this._rejectedAutoSwaps.add(original);
@@ -828,7 +833,7 @@ export class InSetuExtBridge extends InSetuElement {
                                             }
                                             return '';
                                         })() : ''}
-                                    </insetu-card>
+                                    </sutram-card>
                                     <!-- Patches (Subsequent Stacked Chunks) -->
                                     ${groupCells.map((c, i) => {
                                         const isGenesis = !!c.content.match(/<<<<<<< SEARCH\s*=======/);
@@ -839,9 +844,8 @@ export class InSetuExtBridge extends InSetuElement {
                                             commentText = commentMatch[1].trim();
                                         }
                                         const descStr = commentText ? `${i + 1} of ${groupCells.length} • "${commentText}"` : `${i + 1} of${groupCells.length}`;
-
                                         return html`
-                                        <insetu-card
+                                        <sutram-card
                                             .titleText=${typeStr}
                                             .descriptionText=${descStr}
                                             icon="git-commit"
@@ -852,7 +856,7 @@ export class InSetuExtBridge extends InSetuElement {
                                             .entityData=${{...c, suppress: ['yomama-swap']}}
                                             @sutram-card-select-toggled=${(e) => BridgeStore.getState().toggleCellActive(c.id)}
                                             @card-clicked=${() => this._openEditorModal(c)}>
-                                        </insetu-card>
+                                        </sutram-card>
                                     `})}
                                 </sutram-card-group>
                             </div>
@@ -876,15 +880,15 @@ export class InSetuExtBridge extends InSetuElement {
                             } catch(e) { 
                                 alert('Clipboard access denied.\\n\\nPlease press Ctrl+V (or Cmd+V) anywhere on this screen to paste.'); 
                             }
-                        }}>📋 Paste from Clipboard</sutram-btn>
+                        }}><yv-icon name="clipboard-paste" style="width: 16px; height: 16px; margin-right: 6px;"></yv-icon> Paste from Clipboard</sutram-btn>
                     ` : this.viewMode === 'input' ? html`
-                        <sutram-btn intent="danger" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-font-size: 0.95rem; width: 100%;" @click=${() => BridgeStore.getState().clearPayload()}>🗑️ Clear</sutram-btn>
-                        <sutram-async-btn label="🧪 Test" intent="warning" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; width: 100%; color: #000;" .onClick=${this._getSyncAction(true)}></sutram-async-btn>
-                        <sutram-async-btn label="⚡ Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; width: 100%; color: white;" .onClick=${this._getSyncAction(false)}></sutram-async-btn>
+                        <sutram-btn intent="danger" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-font-size: 0.95rem; width: 100%;" @click=${() => BridgeStore.getState().clearPayload()}><yv-icon name="trash-2" style="width: 16px; height: 16px; margin-right: 6px;"></yv-icon> Clear</sutram-btn>
+                        <sutram-async-btn .label=${html`<yv-icon name="flask-conical" style="width: 16px; height: 16px; margin-right: 6px;"></yv-icon> Test`} intent="warning" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; width: 100%; color: #000;" .onClick=${this._getSyncAction(true)}></sutram-async-btn>
+                        <sutram-async-btn .label=${html`<yv-icon name="zap" style="width: 16px; height: 16px; margin-right: 6px;"></yv-icon> Patch`} intent="success" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; width: 100%; color: white;" .onClick=${this._getSyncAction(false)}></sutram-async-btn>
                     ` : html`
-                        <sutram-btn intent="neutral" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-font-size: 0.95rem; width: 100%;" @click=${() => BridgeStore.setState({ viewMode: 'input' })}>🔙 Back to Edit</sutram-btn>
+                        <sutram-btn intent="neutral" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-font-size: 0.95rem; width: 100%;" @click=${() => BridgeStore.setState({ viewMode: 'input' })}><yv-icon name="arrow-left" style="width: 16px; height: 16px; margin-right: 6px;"></yv-icon> Back to Edit</sutram-btn>
                         ${this.telemetry && this.telemetry.can_commit && this.telemetry.mode !== 'live' ? html`
-                            <sutram-async-btn label="⚡ Apply Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; width: 100%; color: white;" .onClick=${this._getSyncAction(false, true, { force: true, ignore_syntax_errors: true, confirmed_candidates: Object.fromEntries(BridgeStore.getState().getActiveFiles().map(f => [f, f])) })}></sutram-async-btn>
+                            <sutram-async-btn .label=${html`<yv-icon name="check-circle-2" style="width: 16px; height: 16px; margin-right: 6px;"></yv-icon> Apply Patch`} intent="success" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; width: 100%; color: white;" .onClick=${this._getSyncAction(false, true, { force: true, ignore_syntax_errors: true, confirmed_candidates: Object.fromEntries(BridgeStore.getState().getActiveFiles().map(f => [f, f])) })}></sutram-async-btn>
                         ` : ''}
                     `}
                 </div>
@@ -912,7 +916,7 @@ export class InSetuExtBridge extends InSetuElement {
                             this._editContent = buffer.content;
                             this._saveEditModal();
                         }
-                    }}>💾 Save Patch</sutram-btn>
+                    }}>Save Patch</sutram-btn>
                 </div>
             </sutram-modal>
 
@@ -944,16 +948,6 @@ export class InSetuExtBridgeHistoryActions extends InSetuElement {
     static properties = { _viewMode: { type: String } };
     static styles = [sharedStyles, css`
         :host { display: flex; align-items: stretch; height: 100%; }
-        .system-action-btn {
-            width: 44px !important; height: auto !important; align-self: stretch !important; flex-shrink: 0 !important;
-            border-radius: 0 !important; border: none !important; border-left: 1px solid var(--border) !important;
-            background: var(--rail-bg, rgba(255,255,255,0.02)) !important; display: flex; align-items: center; justify-content: center;
-            cursor: pointer; transition: background 0.15s ease, color 0.15s ease; color: var(--text-muted) !important;
-            margin: 0 !important; padding: 0 !important; box-sizing: border-box;
-        }
-        .system-action-btn:hover {
-            background: var(--rail-hover, rgba(99, 102, 241, 0.22)) !important; color: var(--text) !important;
-        }
     `];
 
     constructor() {
@@ -1024,7 +1018,8 @@ export class InSetuExtBridgeHistory extends InSetuElement {
     static properties = {
         historyRecords: { type: Array },
         searchQuery: { type: String },
-        _viewMode: { type: String }
+        _viewMode: { type: String },
+        _renderLimit: { type: Number }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); box-sizing: border-box; }
@@ -1035,6 +1030,31 @@ export class InSetuExtBridgeHistory extends InSetuElement {
         this.historyRecords = [];
         this.searchQuery = '';
         this._viewMode = 'transaction';
+        this._renderLimit = 15;
+    }
+
+    updated(changedProperties) {
+        super.updated(changedProperties);
+        if (changedProperties.has('searchQuery') || changedProperties.has('_viewMode')) {
+            this._renderLimit = 15;
+        }
+    }
+
+    firstUpdated() {
+        super.firstUpdated();
+        this._observer = new IntersectionObserver((entries) => {
+            if (entries[0].isIntersecting) {
+                this._renderLimit += 15;
+            }
+        }, { rootMargin: '200px' });
+
+        const sentinel = this.shadowRoot.querySelector('#history-sentinel');
+        if (sentinel) this._observer.observe(sentinel);
+    }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        if (this._observer) this._observer.disconnect();
     }
 
     connectedCallback() {
@@ -1090,110 +1110,118 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                     @repo-filter-changed=${(e) => window.inSetu.stores.App.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
             </sutram-toolbar>
-
             <sutram-scroll-view style="gap: 15px;">
                 ${this.historyRecords.length === 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin: 0;">No ledger receipts available.</p>` : ''}
                 ${repoFilteredRecords.length === 0 && this.historyRecords.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin: 0;">No ledger receipts match criteria.</p>` : ''}
-                ${this._viewMode === 'transaction' ? sortedTxs.map(([txId, txData]) => {
+
+                ${this._viewMode === 'transaction' ? sortedTxs.slice(0, this._renderLimit).map(([txId, txData]) => {
                     const repos = Array.from(new Set(txData.records.map(r => r.repo || r.filepath?.split('/')[0]).filter(Boolean)));
                     const repoStr = repos.length > 0 ? ' in ' + repos.join(', ') : '';
                     const countStr = txData.records.length + (txData.records.length !== 1 ? ' files' : ' file') + ' modified' + repoStr;
                     return html`
-                    <sutram-card-group ?stacked=${true} ?accordion=${true}>
-                        <insetu-card
-                            .titleText=${"Tx: " + (txId || 'Unknown')}
-                            .descriptionText=${countStr}
-                            .detailText=${this.utils.timeAgo(txData.timestamp * 1000)}
-                            icon="git-merge"
-                            intent="highlight"
-                            entityType="yomama-turn"
-                            .entityData=${{ transaction_id: txId, records: txData.records }}
-                            style="display: block;">
-                        </insetu-card>
-                        ${txData.records.map((record, idx) => {
-                            let chunks = record.chunks || record.patches;
-                            if (!chunks && record.chunks_json) {
-                                try { chunks = JSON.parse(record.chunks_json); } catch(e){}
-                            }
-                            const count = record.patch_count || (Array.isArray(chunks) && chunks.length > 0 ? chunks.length : 1);
-                            const patchStr = count + (count !== 1 ? ' patches' : ' patch');
-                            let descStr = patchStr + (record.is_snapshot ? ' • 💾 Snapshot' : '');
-
-                            if (Array.isArray(chunks) && chunks.length > 0 && chunks[0].comment) {
-                                descStr = `💬 ${chunks[0].comment}`;
-                            }
-                            return html`
-                            <insetu-card
-                                .titleText=${record.filepath.split('/').pop()}
-                                .descriptionText=${descStr}
-                                .detailText=${record.filepath}
-                                icon=${record.is_snapshot ? 'save' : 'file-text'}
-                                intent=${record.is_snapshot ? 'highlight' : 'neutral'}
-                                entityType="patch-receipt"
-                                .entityData=${record}
-                                @card-clicked=${() => {
-                                    if (window.inSetu.vfs.viewSourceFile) {
-                                        window.inSetu.vfs.viewSourceFile(record.filepath, true);
-                                    }
-                                }}
+                    <div style="padding-bottom: 15px; width: 100%; box-sizing: border-box;">
+                        <sutram-card-group ?stacked=${true} ?accordion=${true}>
+                            <sutram-card
+                                .titleText=${"Tx: " + (txId || 'Unknown')}
+                                .descriptionText=${countStr}
+                                .detailText=${this.utils.timeAgo(txData.timestamp * 1000)}
+                                icon="git-merge"
+                                intent="highlight"
+                                entityType="yomama-turn"
+                                .entityData=${{ transaction_id: txId, records: txData.records }}
                                 style="display: block;">
-                            </insetu-card>
-                            `;
-                        })}
-                    </sutram-card-group>
+                            </sutram-card>
+                            ${txData.records.map((record, idx) => {
+                                let chunks = record.chunks || record.patches;
+                                if (!chunks && record.chunks_json) {
+                                    try { chunks = JSON.parse(record.chunks_json); } catch(e){}
+                                }
+                                const count = record.patch_count || (Array.isArray(chunks) && chunks.length > 0 ? chunks.length : 1);
+                                const patchStr = count + (count !== 1 ? ' patches' : ' patch');
+                                let descStr = patchStr + (record.is_snapshot ? ' • 💾 Snapshot' : '');
+
+                                if (Array.isArray(chunks) && chunks.length > 0 && chunks[0].comment) {
+                                    descStr = "💬 " + chunks[0].comment;
+                                }
+                                return html`
+                                <sutram-card
+                                    .titleText=${record.filepath.split('/').pop()}
+                                    .descriptionText=${descStr}
+                                    .detailText=${record.filepath}
+                                    icon=${record.is_snapshot ? 'save' : 'file-text'}
+                                    intent=${record.is_snapshot ? 'highlight' : 'neutral'}
+                                    entityType="patch-receipt"
+                                    .entityData=${record}
+                                    @card-clicked=${() => {
+                                        if (window.inSetu.vfs.viewSourceFile) {
+                                            window.inSetu.vfs.viewSourceFile(record.filepath, true);
+                                        }
+                                    }}
+                                    style="display: block;">
+                                </sutram-card>
+                                `;
+                            })}
+                        </sutram-card-group>
+                    </div>
                     `;
-                }) : sortedFiles.map(([filepath, fileData]) => {
+                }) : sortedFiles.slice(0, this._renderLimit).map(([filepath, fileData]) => {
                     const filename = filepath.split('/').pop();
                     const repo = fileData.records[0]?.repo || '';
                     return html`
-                    <sutram-card-group ?stacked=${true} ?accordion=${true}>
-                        <insetu-card
-                            .titleText=${filename}
-                            .descriptionText=${repo ? "Repo: " + repo : ""}
-                            .detailText=${filepath}
-                            icon="file-code-2"
-                            intent="highlight"
-                            entityType="file"
-                            .entityData=${{ filepath: filepath, isFS: true, suppress: ['file-browse'] }}
-                            @card-clicked=${() => {
-                                if (window.inSetu.vfs.viewSourceFile) {
-                                    window.inSetu.vfs.viewSourceFile(filepath, true);
-                                }
-                            }}
-                            style="display: block;">
-                        </insetu-card>
-                        ${fileData.records.map((record, idx) => {
-                            let chunks = record.chunks || record.patches;
-                            if (!chunks && record.chunks_json) {
-                                try { chunks = JSON.parse(record.chunks_json); } catch(e){}
-                            }
-                            const count = record.patch_count || (Array.isArray(chunks) && chunks.length > 0 ? chunks.length : 1);
-                            const patchStr = count + (count !== 1 ? ' patches' : ' patch');
-                            let descStr = patchStr + (record.is_snapshot ? ' • 💾 Snapshot' : '');
-
-                            if (Array.isArray(chunks) && chunks.length > 0 && chunks[0].comment) {
-                                descStr = `💬 ${chunks[0].comment}`;
-                            }
-                            return html`
-                            <insetu-card
-                                .titleText=${"Tx: " + (record.transaction_id || 'Unknown')}
-                                .descriptionText=${descStr}
-                                .detailText=${`Turn ${idx + 1} of ${fileData.records.length} • ${this.utils.timeAgo(record.timestamp * 1000)}`}
-                                icon=${record.is_snapshot ? 'save' : 'git-commit'}
-                                intent=${record.is_snapshot ? 'highlight' : 'neutral'}
-                                entityType="patch-receipt"
-                                .entityData=${record}
+                    <div style="padding-bottom: 15px; width: 100%; box-sizing: border-box;">
+                        <sutram-card-group ?stacked=${true} ?accordion=${true}>
+                            <sutram-card
+                                .titleText=${filename}
+                                .descriptionText=${repo ? "Repo: " + repo : ""}
+                                .detailText=${filepath}
+                                icon="file-code-2"
+                                intent="highlight"
+                                entityType="file"
+                                .entityData=${{ filepath: filepath, isFS: true, suppress: ['file-browse'] }}
                                 @card-clicked=${() => {
                                     if (window.inSetu.vfs.viewSourceFile) {
-                                        window.inSetu.vfs.viewSourceFile(record.filepath, true);
+                                        window.inSetu.vfs.viewSourceFile(filepath, true);
                                     }
                                 }}
                                 style="display: block;">
-                            </insetu-card>
-                            `;
-                        })}
-                    </sutram-card-group>
-                `;})}
+                            </sutram-card>
+                            ${fileData.records.map((record, idx) => {
+                                let chunks = record.chunks || record.patches;
+                                if (!chunks && record.chunks_json) {
+                                    try { chunks = JSON.parse(record.chunks_json); } catch(e){}
+                                }
+                                const count = record.patch_count || (Array.isArray(chunks) && chunks.length > 0 ? chunks.length : 1);
+                                const patchStr = count + (count !== 1 ? ' patches' : ' patch');
+                                let descStr = patchStr + (record.is_snapshot ? ' • 💾 Snapshot' : '');
+
+                                if (Array.isArray(chunks) && chunks.length > 0 && chunks[0].comment) {
+                                    descStr = "💬 " + chunks[0].comment;
+                                }
+                                return html`
+                                <sutram-card
+                                    .titleText=${"Tx: " + (record.transaction_id || 'Unknown')}
+                                    .descriptionText=${descStr}
+                                    .detailText=${'Turn ' + (idx + 1) + ' of ' + fileData.records.length + ' • ' + this.utils.timeAgo(record.timestamp * 1000)}
+                                    icon=${record.is_snapshot ? 'save' : 'git-commit'}
+                                    intent=${record.is_snapshot ? 'highlight' : 'neutral'}
+                                    entityType="patch-receipt"
+                                    .entityData=${record}
+                                    @card-clicked=${() => {
+                                        if (window.inSetu.vfs.viewSourceFile) {
+                                            window.inSetu.vfs.viewSourceFile(record.filepath, true);
+                                        }
+                                    }}
+                                    style="display: block;">
+                                </sutram-card>
+                                `;
+                            })}
+                        </sutram-card-group>
+                    </div>
+                    `;
+                })}
+                ${((this._viewMode === 'transaction' && sortedTxs.length > this._renderLimit) || (this._viewMode !== 'transaction' && sortedFiles.length > this._renderLimit)) ? html`
+                    <div id="history-sentinel" style="height: 20px; width: 100%;"></div>
+                ` : ''}
             </sutram-scroll-view>
         `;
     }
@@ -1208,7 +1236,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             targetEntity: 'yomama-turn',
             id: 'yomama-turn-undo',
             label: 'Undo Turn (Pre-Tx)',
-            icon: '⏪',
+            icon: 'rewind',
             intent: 'danger',
             group: 'edit',
             vfsBound: true,
@@ -1229,7 +1257,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             targetEntity: 'yomama-turn',
             id: 'yomama-turn-restore',
             label: 'Restore Turn (Post-Tx)',
-            icon: '🎯',
+            icon: 'target',
             intent: 'warning',
             group: 'edit',
             vfsBound: true,
@@ -1250,8 +1278,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             targetEntity: 'yomama',
             id: 'yomama-copy',
             label: 'Copy',
-            icon: '📋',
-            intent: 'neutral',
+            icon: 'clipboard',
             group: 'edit',
             vfsBound: false,
             order: 10,
@@ -1266,7 +1293,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             targetEntity: 'yomama',
             id: 'yomama-delete',
             label: 'Delete',
-            icon: '🗑️',
+            icon: 'trash-2',
             intent: 'danger',
             group: 'file',
             vfsBound: false,
@@ -1282,7 +1309,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             targetEntity: 'yomama',
             id: 'yomama-swap',
             label: 'Swap',
-            icon: '🔄',
+            icon: 'refresh-cw',
             intent: 'warning',
             group: 'edit',
             vfsBound: false,
@@ -1295,7 +1322,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             targetEntity: 'patch-receipt',
             id: 'patch-receipt-undo',
             label: 'Revert Pre-Patch',
-            icon: '⏪',
+            icon: 'rewind',
             intent: 'danger',
             group: 'edit',
             vfsBound: true,
@@ -1316,7 +1343,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             targetEntity: 'patch-receipt',
             id: 'patch-receipt-restore',
             label: 'Revert Post-Patch',
-            icon: '🎯',
+            icon: 'target',
             intent: 'warning',
             group: 'edit',
             vfsBound: true,
@@ -1337,7 +1364,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             targetEntity: 'patch-receipt',
             id: 'patch-receipt-copy',
             label: 'Copy Sandwich',
-            icon: '📋',
+            icon: 'clipboard',
             intent: 'neutral',
             group: 'share',
             vfsBound: false,
@@ -1371,7 +1398,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             targetParent: "edit",
             id: "bridge",
             label: "Yomama",
-            icon: "git-pull-request",
+            icon: "bridge",
             intent: "highlight",
             order: 1,
             component: "insetu-ext-bridge"

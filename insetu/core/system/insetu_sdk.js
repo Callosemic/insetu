@@ -7,7 +7,13 @@ import * as jsYaml from '/static/vendor/js-yaml/js-yaml.min.js';
 export { bindStoreInput };
 export function createExtensionStore(name, initialState, persistenceSchema = {}) {
     const getWs = () => window.inSetu.utils.getActiveWorkspace();
-    const store = createSutramStore(name, initialState, persistenceSchema, getWs, 'insetu');
+    const processedState = { ...initialState };
+    Object.keys(processedState).forEach(key => {
+        if (key.startsWith('fetch') && typeof processedState[key] === 'function') {
+            processedState[key] = coalescedAsync(processedState[key]);
+        }
+    });
+    const store = createSutramStore(name, processedState, persistenceSchema, getWs, 'insetu');
     window.inSetu = window.inSetu || {};
     window.inSetu.stores = window.inSetu.stores || {};
     window.inSetu.stores[name] = store;
@@ -737,8 +743,7 @@ window.ExtensionRegistry.registerExtension('system', {
             targetEntity: 'text_blob',
             id: 'blob-copy',
             label: 'Copy',
-            icon: '📋',
-            intent: 'neutral',
+            icon: 'clipboard',
             group: 'edit',
             vfsBound: false,
             order: 10,
@@ -753,7 +758,7 @@ window.ExtensionRegistry.registerExtension('system', {
             targetEntity: 'text_blob',
             id: 'blob-save-vfs',
             label: 'Save to VFS',
-            icon: '💾',
+            icon: 'save',
             intent: 'neutral',
             group: 'file',
             vfsBound: false,
@@ -778,8 +783,7 @@ window.ExtensionRegistry.registerExtension('system', {
             targetEntity: 'text_blob',
             id: 'blob-download',
             label: 'Download',
-            icon: '⬇️',
-            intent: 'neutral',
+            icon: 'download',
             group: 'file',
             vfsBound: false,
             order: 30,

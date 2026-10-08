@@ -477,6 +477,62 @@ export async function saveBufferFile(filepath, autoSave = false) {
         }
     });
 }
+export function renameFileTracking(oldPath, newPath) {
+    const fsState = window.inSetu.stores.Fs.getState();
+    const oldBuf = fsState.activeBuffers[oldPath];
+    if (oldBuf) {
+        fsState.openBuffer(newPath, { ...oldBuf, filename: newPath });
+        fsState.closeBuffer(oldPath);
+    }
+
+    const layoutStore = window.Sutram?.stores?.Layout;
+    if (layoutStore) {
+        const layout = layoutStore.getState();
+        const newCols = JSON.parse(JSON.stringify(layout.columns));
+        let changed = false;
+
+        ['left', 'center', 'right'].forEach(col => {
+            const colState = newCols[col];
+            if (colState && colState.pinned) {
+                colState.pinned = colState.pinned.map(p => {
+                    if (p.id === oldPath) {
+                        changed = true;
+                        return { ...p, id: newPath, label: newPath.split('/').pop() };
+                    }
+                    return p;
+                });
+                if (colState.active === oldPath) {
+                    colState.active = newPath;
+                    changed = true;
+                }
+            }
+        });
+
+        const newWindows = (layout.windows || []).map(w => {
+            if (w.id === oldPath) {
+                changed = true;
+                return { ...w, id: newPath, label: newPath.split('/').pop(), titleText: newPath.split('/').pop() };
+            }
+            return w;
+        });
+
+        if (changed) {
+            layoutStore.setState({ columns: newCols, windows: newWindows });
+
+            const activeWs = window.inSetu.utils.getActiveWorkspace();
+            const focused = layout.focusedColumn || 'center';
+            if (newCols[focused] && newCols[focused].active === newPath) {
+                const deepPath = window.inSetu.stores.App?.getState()?.tabBrowsePaths?.[newPath];
+                const deepStr = deepPath && deepPath.length > 0 ? '/' + deepPath.map(encodeURIComponent).join('/') : '';
+                const hash = `#/${activeWs}/${focused}/${newPath}${deepStr}`;
+                if (window.location.hash !== hash) {
+                    window.history.replaceState(null, '', hash);
+                }
+            }
+        }
+    }
+}
+
 async function executeMove() {
     const { currentFile, destPath } = FsStore.getState().modals.move;
     if (!destPath || destPath === currentFile) return alert("Please enter a valid new destination path.");
@@ -487,6 +543,7 @@ async function executeMove() {
         loadingText: 'Moving...',
         onSuccess: () => {
             FsStore.getState().setModal('move', { open: false });
+            renameFileTracking(currentFile, destPath);
             refreshActiveFileViews(currentFile, destPath);
         }
     });
@@ -504,9 +561,8 @@ export async function deleteEmptyFolder(dirPath) {
         }
     });
 }
-
 export function createFileCard(fileInfo, container) {
-    const card = document.createElement('insetu-card');
+    const card = document.createElement('sutram-card');
     card.filename = fileInfo.filename;
     card.titleText = fileInfo.displayName || fileInfo.filename;
     card.descriptionText = fileInfo.description || '';
@@ -563,7 +619,7 @@ export class InSetuVFSExplorer extends InSetuElement {
                 loading: { type: Boolean }
         };
         static styles = [sharedStyles, css`
-                :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+                :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
                 .vfs-body { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0; }
         `];
         constructor() {
@@ -672,17 +728,6 @@ export class InSetuVFSExplorerActions extends InSetuElement {
     };
     static styles = [sharedStyles, css`
         :host { display: flex; align-items: stretch; height: 100%; }
-        .system-action-btn {
-            width: 44px !important; height: auto !important; align-self: stretch !important; flex-shrink: 0 !important;
-            border-radius: 0 !important; border: none !important; border-left: 1px solid var(--border) !important;
-            background: var(--rail-bg, rgba(255,255,255,0.02)) !important; display: flex; align-items: center; justify-content: center;
-            cursor: pointer; transition: background 0.15s ease, color 0.15s ease; color: var(--text-muted) !important;
-            margin: 0 !important; padding: 0 !important; box-sizing: border-box;
-        }
-        .system-action-btn:hover {
-            background: var(--rail-hover, rgba(99, 102, 241, 0.22)) !important; color: var(--text) !important;
-        }
-        .system-action-btn i { color: currentColor !important; }
     `];
 
     constructor() {
@@ -700,31 +745,23 @@ export class InSetuVFSExplorerActions extends InSetuElement {
         this.globalBrowsePath = AppStore.getState().globalBrowsePath || [];
         this._rebuildMenu();
     }
-
-    updated(changedProperties) {
-        super.updated(changedProperties);
-        if (window.lucide && typeof window.lucide.createIcons === 'function') {
-            window.lucide.createIcons({ root: this.shadowRoot });
-        }
-    }
-
     _rebuildMenu() {
         const currentPath = this.globalBrowsePath.join('/');
         const items = [];
         if (!currentPath) {
-            items.push({ label: 'New Repository', icon: '📦', onClick: () => openNewFolderModal() });
+            items.push({ label: 'New Repository', icon: 'package', onClick: () => openNewFolderModal() });
         } else {
             const prefix = currentPath + '/';
-            items.push({ label: 'New Folder', icon: '📁', onClick: () => openNewFolderModal(prefix) });
-            items.push({ label: 'New File', icon: '📄', onClick: () => openNewFileModal(prefix) });
-            items.push({ label: 'Upload File', icon: '📤', onClick: () => uploadFileToWorkspace(currentPath) });
+            items.push({ label: 'New Folder', icon: 'folder-plus', onClick: () => openNewFolderModal(prefix) });
+            items.push({ label: 'New File', icon: 'file-plus', onClick: () => openNewFileModal(prefix) });
+            items.push({ label: 'Upload File', icon: 'upload', onClick: () => uploadFileToWorkspace(currentPath) });
 
             const manifestFiles = getGlobalManifest();
             const prefixWithSlash = currentPath + '/';
             const hasFiles = manifestFiles.some(f => f.startsWith(prefixWithSlash) && !f.endsWith('.gitkeep'));
             if (!hasFiles) {
                 items.push({ divider: true });
-                items.push({ label: 'Delete Folder', icon: '🗑️', onClick: () => deleteEmptyFolder(currentPath) });
+                items.push({ label: 'Delete Folder', icon: 'trash-2', onClick: () => deleteEmptyFolder(currentPath) });
             }
         }
         window.inSetu.events.emitHook('insetu:fs-dropdown-menu', { currentPath, menuItems: items });
@@ -735,7 +772,7 @@ export class InSetuVFSExplorerActions extends InSetuElement {
         return html`
             <sutram-dropdown align="right" .items=${this._menuItems} style="height: 100%; display: flex; align-items: stretch;">
                 <button slot="trigger" class="system-action-btn" title="Actions" style="border: none; border-left: 1px solid var(--border); border-radius: 0; height: 100%; width: 44px; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
-                    <i data-lucide="menu" style="width: 14px; height: 14px;"></i>
+                    <yv-icon name="menu" style="width: 14px; height: 14px;"></yv-icon>
                 </button>
             </sutram-dropdown>
         `;
@@ -760,7 +797,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             targetEntity: 'file',
             id: 'file-move',
             label: 'Move',
-            icon: '🚚',
+            icon: 'truck',
             group: 'file',
             vfsBound: true,
             intent: 'neutral',
@@ -776,7 +813,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             targetEntity: 'file',
             id: 'file-rename',
             label: 'Rename',
-            icon: '✏️',
+            icon: 'edit-3',
             group: 'file',
             vfsBound: true,
             intent: 'neutral',
@@ -795,8 +832,7 @@ window.ExtensionRegistry.registerExtension('fs', {
                     deletedMutations: [data.filepath],
                     loadingText: 'Renaming...',
                     onSuccess: () => {
-                        window.inSetu.stores.Fs.getState().closeBuffer(data.filepath);
-                        if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().evictProjection(data.filepath);
+                        renameFileTracking(data.filepath, destPath);
                         window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: [{ filepath: data.filepath, operation: 'delete' }, { filepath: destPath, operation: 'save' }] });
                     }
                 });
@@ -806,7 +842,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             targetEntity: 'file',
             id: 'file-archive',
             label: 'Archive',
-            icon: '📦',
+            icon: 'archive',
             group: 'file',
             vfsBound: true,
             intent: 'warning',
@@ -829,7 +865,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             targetEntity: 'file',
             id: 'file-delete',
             label: 'Delete',
-            icon: '🗑️',
+            icon: 'trash-2',
             group: 'file',
             vfsBound: true,
             intent: 'danger',
@@ -852,7 +888,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             targetEntity: 'file',
             id: 'file-edit',
             label: 'Edit',
-            icon: '✏️',
+            icon: 'edit-3',
             group: 'edit',
             vfsBound: false,
             intent: 'neutral',
@@ -868,7 +904,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             targetEntity: 'file',
             id: 'file-copy',
             label: 'Copy',
-            icon: '📋',
+            icon: 'clipboard',
             group: 'edit',
             vfsBound: false,
             intent: 'success',
@@ -887,15 +923,18 @@ window.ExtensionRegistry.registerExtension('fs', {
             }
         },
         {
-            targetEntity: 'context',
+            targetEntity: 'file',
             id: 'file-browse',
             label: 'Browse',
-            icon: '📁',
+            icon: 'folder',
             group: 'tools',
             vfsBound: false,
             intent: 'neutral',
-            order: 80,
-            match: (data) => !data.isSkeleton,
+            order: 14,
+            match: (data) => {
+                if (data.isSkeleton) return false;
+                return data.filepath && (data.filepath.startsWith('ctx://') || data.filepath.endsWith('_context.txt') || data.filepath.endsWith('_diffs.txt'));
+            },
             onClick: (data, e) => {
                 if (window.inSetu.ui.openBrowseModal) window.inSetu.ui.openBrowseModal(data.filepath);
             }
@@ -904,7 +943,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             targetEntity: 'file',
             id: 'file-share',
             label: 'Share',
-            icon: '📤',
+            icon: 'share',
             group: 'share',
             vfsBound: false,
             intent: 'primary',
@@ -944,7 +983,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             targetEntity: 'file',
             id: 'file-view-parts',
             label: 'View Parts',
-            icon: '🧩',
+            icon: 'puzzle',
             group: 'tools',
             vfsBound: false,
             intent: 'neutral',
@@ -963,7 +1002,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             targetEntity: 'file',
             id: 'file-download',
             label: 'Download',
-            icon: '⬇️',
+            icon: 'download',
             group: 'file',
             vfsBound: false,
             intent: 'primary',
@@ -1335,17 +1374,17 @@ export class InSetuEditorProjection extends InSetuElement {
     static styles = [sharedStyles, css`
         :host([zen-mode]) {
             position: fixed !important; inset: 0 !important;
-            width: 100vw !important; height: 100dvh !important;
+            width: 100% !important; height: 100% !important;
             z-index: 99999 !important; background: var(--bg-deep, #05070a) !important;
-        }
-        :host([zen-mode]) .editor-header, :host([zen-mode]) .editor-footer {
-            display: none !important;
+            margin: 0 !important; max-width: none !important; max-height: none !important;
+            border: none !important; padding: 0 !important; box-sizing: border-box !important;
         }
         .zen-exit-btn {
             position: fixed; top: 20px; right: 20px; z-index: 100000;
             background: var(--input-bg); color: var(--text-muted); border: 1px solid var(--border); border-radius: 50%;
             width: 44px; height: 44px; display: none; align-items: center; justify-content: center;
             cursor: pointer; opacity: 0.1; transition: opacity 0.3s ease, color 0.3s ease;
+            pointer-events: auto;
         }
         @media (hover: none) {
             .zen-exit-btn { opacity: 0.6; }
@@ -1378,6 +1417,8 @@ export class InSetuEditorProjection extends InSetuElement {
         this._writingMode = false;
         this._editorFocused = false;
         this.zenMode = false;
+        this._transientCursorPos = 0;
+        this._transientScrollTop = 0;
     }
 
     async _toggleWritingMode() {
@@ -1392,39 +1433,42 @@ export class InSetuEditorProjection extends InSetuElement {
         }
     }
     async _toggleZenMode() {
+        this.zenMode = !this.zenMode;
         if (this.zenMode) {
-            if (document.fullscreenElement) {
-                try { document.exitFullscreen(); } catch(e) {}
-            } else if (document.webkitFullscreenElement) {
-                try { document.webkitExitFullscreen(); } catch(e) {}
+            if (typeof this.showPopover === 'function') {
+                this.setAttribute('popover', 'manual');
+                try { this.showPopover(); } catch(e) {}
             }
-            this.zenMode = false;
-        } else {
             try {
-                if (this.requestFullscreen) {
-                    await this.requestFullscreen();
-                } else if (this.webkitRequestFullscreen) {
-                    await this.webkitRequestFullscreen();
-                } else {
-                    this.zenMode = true;
+                if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
+                else if (document.documentElement.webkitRequestFullscreen) await document.documentElement.webkitRequestFullscreen();
+            } catch(e) {}
+            this._escListener = (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    this._toggleZenMode();
                 }
-            } catch (e) {
-                this.zenMode = true;
+            };
+            window.addEventListener('keydown', this._escListener);
+        } else {
+            if (typeof this.hidePopover === 'function') {
+                if (this.matches(':popover-open')) {
+                    try { this.hidePopover(); } catch(e) {}
+                }
+                this.removeAttribute('popover');
+            }
+            try {
+                if (document.exitFullscreen && document.fullscreenElement) await document.exitFullscreen();
+                else if (document.webkitExitFullscreen && document.webkitFullscreenElement) document.webkitExitFullscreen();
+            } catch(e) {}
+            if (this._escListener) {
+                window.removeEventListener('keydown', this._escListener);
+                this._escListener = null;
             }
         }
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this._fsListener = () => { 
-            if (document.fullscreenElement === this || document.webkitFullscreenElement === this) {
-                this.zenMode = true;
-            } else if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-                this.zenMode = false;
-            }
-        };
-        document.addEventListener('fullscreenchange', this._fsListener);
-        document.addEventListener('webkitfullscreenchange', this._fsListener);
         if (!this.filepath) this.filepath = this.dataset.subId; // Inherit identity from spatial viewport router
         this.subscribe('Fs', state => {
             this._buffer = state.activeBuffers[this.filepath] || null;
@@ -1472,6 +1516,23 @@ export class InSetuEditorProjection extends InSetuElement {
         if (changedProperties.has('filepath') && this.filepath) {
             this._buffer = window.inSetu.stores.Fs?.getState()?.activeBuffers[this.filepath] || null;
             this._loadPreference(this.filepath);
+
+            if (this._buffer) {
+                this._transientCursorPos = this._buffer.cursorPos || 0;
+                this._transientScrollTop = this._buffer.scrollTop || 0;
+
+                requestAnimationFrame(() => {
+                    const cmEditor = this.shadowRoot.querySelector('insetu-markdown-editor');
+                    if (cmEditor) {
+                        if (this._buffer.cursorPos !== undefined && cmEditor.setCursor) {
+                            cmEditor.setCursor(this._buffer.cursorPos);
+                        }
+                        if (this._buffer.scrollTop !== undefined && cmEditor.setScrollInfo) {
+                            cmEditor.setScrollInfo(this._buffer.scrollTop);
+                        }
+                    }
+                });
+            }
         }
     }
 
@@ -1504,13 +1565,13 @@ export class InSetuEditorProjection extends InSetuElement {
                 <div style="display: flex; align-items: center; gap: 8px;">
                     ${m.isMarkdown ? html`
                         <button class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; padding: 4px 8px; font-weight: bold;" title="Toggle Prose Mode" @click=${() => this._toggleWritingMode()}>
-                            ${this._writingMode ? '✍' : '💻'}
+                            <yv-icon name="${this._writingMode ? 'pen-tool' : 'code'}" style="width: 14px; height: 14px; pointer-events: none;"></yv-icon>
                         </button>
                     ` : ''}
                     <button class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; padding: 4px 8px; font-weight: bold;" title="Focus Mode" @click=${() => this._toggleZenMode()}>
-                        ⛶
+                        <yv-icon name="maximize-2" style="width: 14px; height: 14px; pointer-events: none;"></yv-icon>
                     </button>
-                    <sutram-entity-actions 
+                    <sutram-entity-actions   
                         variant="menu-bar"
                         .entityType=${'file'} 
                         .entityData=${{ 
@@ -1540,7 +1601,9 @@ export class InSetuEditorProjection extends InSetuElement {
                         .language=${m.codeMode} 
                         .readOnly=${shouldBeReadOnly}
                         ?writingMode=${this._writingMode}
-                        @content-changed=${(e) => window.inSetu.stores.Fs?.getState()?.updateBuffer(this.filepath, { content: e.detail.value })}>
+                        @content-changed=${(e) => window.inSetu.stores.Fs?.getState()?.updateBuffer(this.filepath, { content: e.detail.value })}
+                        @yenvui-editor-selection=${(e) => this._transientCursorPos = e.detail.cursor}
+                        @yenvui-editor-scroll=${(e) => this._transientScrollTop = e.detail.top}>
                     </insetu-markdown-editor>
                 ` : html`
                     <textarea 
@@ -1553,19 +1616,28 @@ export class InSetuEditorProjection extends InSetuElement {
             </div>
             ${this.isDirty ? html`
                 <div class="editor-footer">
-                    <sutram-async-btn label="💾 Save Changes" intent="warning" style="width: 100%; display: block;" .onClick=${() => window.inSetu.ui.saveBufferFile(this.filepath)}></sutram-async-btn>
+                    <sutram-async-btn label="Save Changes" intent="warning" style="width: 100%; display: block;" .onClick=${() => window.inSetu.ui.saveBufferFile(this.filepath)}></sutram-async-btn>
                 </div>
             ` : ''}
-            <button class="zen-exit-btn" title="Exit Focus Mode (Esc)" @click=${() => this._toggleZenMode()}>
-                <i data-lucide="minimize-2" style="width: 20px; height: 20px;"></i>
+            <button class="zen-exit-btn" title="Exit Focus Mode (Esc)" 
+                @pointerdown=${(e) => { e.preventDefault(); e.stopPropagation(); this._toggleZenMode(); }}
+                @click=${(e) => { e.preventDefault(); e.stopPropagation(); this._toggleZenMode(); }}>
+                <yv-icon name="minimize-2" style="width: 20px; height: 20px; pointer-events: none;"></yv-icon>
             </button>
         `;
     }
     disconnectedCallback() {
         super.disconnectedCallback();
-        if (this._fsListener) {
-            document.removeEventListener('fullscreenchange', this._fsListener);
-            document.removeEventListener('webkitfullscreenchange', this._fsListener);
+        if (this._escListener) {
+            window.removeEventListener('keydown', this._escListener);
+        }
+
+        // Stateless UX Teardown
+        if (this.filepath && this._buffer) {
+            window.inSetu.stores.Fs?.getState()?.updateBuffer(this.filepath, { 
+                cursorPos: this._transientCursorPos, 
+                scrollTop: this._transientScrollTop 
+            });
         }
     }
 }
@@ -1798,7 +1870,8 @@ export class InSetuVFSModals extends InSetuElement {
         const m = this.modals;
         if (!m) return '';
         return html`
-            <sutram-modal ?open=${m.move?.open} ?fullscreen=${true} titleText="Move File to..." @sutram-modal-closed=${() => FsStore.getState().setModal('move', { open: false })}>
+            ${m.move?.open ? html`
+            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Move File to..." @sutram-modal-closed=${() => FsStore.getState().setModal('move', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1; min-height: 0;">
                     <input type="text" .value=${m.move?.destPath || ''} @input=${e => {
                         const newDest = e.target.value;
@@ -1816,9 +1889,11 @@ export class InSetuVFSModals extends InSetuElement {
                         }}></sutram-folder-browser>
                     </div>
                 </div>
-                <sutram-async-btn slot="footer" label="🚚 Move File" intent="primary" .onClick=${executeMove}></sutram-async-btn>
+                <sutram-async-btn slot="footer" label="Move File" intent="primary" .onClick=${executeMove}></sutram-async-btn>
             </sutram-modal>
-            <sutram-modal ?open=${m.newFile?.open} ?fullscreen=${true} ?flush=${true} titleText="Create New Workspace File" @sutram-modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
+            ` : ''}
+            ${m.newFile?.open ? html`
+            <sutram-modal ?open=${true} ?fullscreen=${true} ?flush=${true} titleText="Create New Workspace File" @sutram-modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%;">
                     <div style="padding: 10px 20px; display: flex; flex-direction: column; gap: 6px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0;">
                         <div style="font-size: 0.85rem; color: var(--text-muted); word-break: break-all;">
@@ -1840,9 +1915,11 @@ export class InSetuVFSModals extends InSetuElement {
                         </insetu-markdown-editor>
                     </div>
                 </div>
-                <sutram-async-btn slot="footer" label="💾 Create & Save File" intent="primary" .onClick=${saveNewFile}></sutram-async-btn>
+                <sutram-async-btn slot="footer" label="Create & Save File" intent="primary" .onClick=${saveNewFile}></sutram-async-btn>
             </sutram-modal>
-            <sutram-modal ?open=${m.newFolder?.open} ?fullscreen=${true} titleText=${m.newFolder?.basePath === '' ? 'Create New Repository' : 'Create New Folder'} @sutram-modal-closed=${() => FsStore.getState().setModal('newFolder', { open: false })}>
+            ` : ''}
+            ${m.newFolder?.open ? html`
+            <sutram-modal ?open=${true} ?fullscreen=${true} titleText=${m.newFolder?.basePath === '' ? 'Create New Repository' : 'Create New Folder'} @sutram-modal-closed=${() => FsStore.getState().setModal('newFolder', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text); word-break: break-all;">Path: <span style="font-family: monospace; color: var(--intent-highlight);">${m.newFolder?.basePath}</span></label>
                     <input type="text" placeholder="Directory name..." .value=${m.newFolder?.folderName || ''} @input=${e => FsStore.getState().setModal('newFolder', { folderName: e.target.value })} style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box; min-width: 0;">
@@ -1869,9 +1946,11 @@ export class InSetuVFSModals extends InSetuElement {
                         </div>
                     ` : ''}
                 </div>
-                <sutram-async-btn slot="footer" label="${m.newFolder?.basePath === '' ? '📦 Initialize Repository' : '📁 Create Folder'}" intent="primary" .onClick=${saveNewFolder}></sutram-async-btn>
+                <sutram-async-btn slot="footer" label="${m.newFolder?.basePath === '' ? 'Initialize Repository' : 'Create Folder'}" intent="primary" .onClick=${saveNewFolder}></sutram-async-btn>
             </sutram-modal>
-            <sutram-modal ?open=${m.linkInsert?.open} ?fullscreen=${true} titleText="Insert Link" @sutram-modal-closed=${() => FsStore.getState().setModal('linkInsert', { open: false })}>
+            ` : ''}
+            ${m.linkInsert?.open ? html`
+            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Insert Link" @sutram-modal-closed=${() => FsStore.getState().setModal('linkInsert', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
                     <div style="height: 40px; flex-shrink: 0; margin-bottom: 15px; border-bottom: 1px solid var(--border);">
                         <div class="sub-tabs">
@@ -1896,11 +1975,10 @@ export class InSetuVFSModals extends InSetuElement {
                                 ${(!m.linkInsert?.searchQuery) ? 'Type to search...' : 'No files found.'}
                             </span>
                         ` : ''}
-
                         ${m.linkInsert?.searchResults?.map(item => {
                             const name = item.path.split('/').pop();
                             return html`
-                                <insetu-card
+                                <sutram-card
                                     .filename=${item.path}
                                     .titleText=${name}
                                     .detailText=${item.path}
@@ -1913,13 +1991,15 @@ export class InSetuVFSModals extends InSetuElement {
                                             Score: ${item.score}
                                         </span>
                                     ` : ''}
-                                </insetu-card>
+                                </sutram-card>
                             `;
                         })}
                     </div>
                 </div>
             </sutram-modal>
-<sutram-modal .open=${m.browser?.open} ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} ?fullscreen=${true} ?flush=${true} @sutram-modal-closed=${closeBrowseModal}>
+            ` : ''}
+${m.browser?.open ? html`
+<sutram-modal ?open=${true} titleText=${m.browser?.title || 'Browse'} ?fullscreen=${true} ?flush=${true} @sutram-modal-closed=${closeBrowseModal}>
     <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1; padding: 0;">
         ${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:')) ? html`
             <div style="display: flex; flex-direction: column; overflow-y: auto; flex: 1;">
@@ -1930,7 +2010,7 @@ export class InSetuVFSModals extends InSetuElement {
                     const baseCleanName = baseFile.includes('/') ? baseFile.split('/').pop() : baseFile;
                     return html`
                         <div style="display: flex; align-items: center; gap: 10px; background: var(--input-bg); border-bottom: 1px solid var(--border); padding: 15px 20px; flex-shrink: 0;">
-                            <span style="font-size: 1.2rem; flex-shrink: 0;">📦</span>
+                            <yv-icon name="package" style="width: 18px; height: 18px; color: var(--intent-highlight); flex-shrink: 0;"></yv-icon>
                             <span style="font-weight: bold; color: var(--intent-highlight); word-break: break-all;">${baseCleanName}</span>
                         </div>
                         <div style="display: flex; flex-direction: column;">
@@ -1938,16 +2018,15 @@ export class InSetuVFSModals extends InSetuElement {
                                 const fetchUrl = `/download/${encodeURIComponent(f)}`;
                                 const partMatch = f.match(/_part(\d+)/i);
                                 const displayTitle = partMatch ? `Part ${partMatch[1]}` : `Part ${idx + 1}`;
-
                                 return html`
                                     <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg); border-bottom: 1px solid var(--border); padding: 12px 20px;">
                                         <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
-                                            <span style="font-size: 1.2rem; flex-shrink: 0;">🧩</span>
+                                            <yv-icon name="puzzle" style="width: 18px; height: 18px; color: var(--text-muted); flex-shrink: 0;"></yv-icon>
                                             <span style="font-weight: bold; color: var(--text);">${displayTitle}</span>
                                         </div>
                                         <div style="display: flex; gap: 8px; flex-shrink: 0;">
                                             <sutram-async-btn
-                                                label="👁️ View"
+                                                label="View"
                                                 intent="neutral"
                                                 style="margin: 0; padding: 6px 12px; font-size: 0.85rem;"
                                                 .onClick=${async () => {
@@ -1957,7 +2036,7 @@ export class InSetuVFSModals extends InSetuElement {
                                                 }}>
                                             </sutram-async-btn>
                                             <sutram-async-btn
-                                                label="⬇️ Download"
+                                                label="Download"
                                                 intent="primary"
                                                 style="margin: 0; padding: 6px 12px; font-size: 0.85rem;"
                                                 .onClick=${async () => {
@@ -1989,7 +2068,7 @@ export class InSetuVFSModals extends InSetuElement {
     ${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:')) ? html`
         <sutram-async-btn
             slot="footer"
-            label="⬇️ Download All"
+            label="Download All"
             intent="primary"
             .onClick=${async () => {
                 const manifestFiles = m.browser?.manifest || [];
@@ -2003,7 +2082,7 @@ export class InSetuVFSModals extends InSetuElement {
         ${!!navigator.share && !!navigator.canShare ? html`
             <sutram-async-btn
                 slot="footer"
-                label="📤 Share All"
+                label="Share All"
                 intent="neutral"
                 .onClick=${async () => {
                     const manifestFiles = m.browser?.manifest || [];
@@ -2016,12 +2095,13 @@ export class InSetuVFSModals extends InSetuElement {
             </sutram-async-btn>
         ` : ''}
     ` : (this.browserConfig?.mode === 'folder' ? html`
-        <sutram-async-btn slot="footer" label="✅ Select This Folder" intent="success" .onClick=${confirmFolderSelection}></sutram-async-btn>
+        <sutram-async-btn slot="footer" label="Select This Folder" intent="success" .onClick=${confirmFolderSelection}></sutram-async-btn>
     ` : '')}
-</sutram-modal>
+    </sutram-modal>
+    ` : ''}
         `;
     }
-}
+    }
 customElements.define('insetu-vfs-modals', InSetuVFSModals);
 function mountVFSModals() {
     if (!document.querySelector('insetu-vfs-modals')) {

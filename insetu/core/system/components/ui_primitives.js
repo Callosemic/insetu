@@ -132,15 +132,6 @@ window.inSetu.ui.viewTextBlob = (title, content, suggestedFilename = '') => {
         window.inSetu.vfs.openVirtualFile(filename, content);
     }
 };
-
-// --- LEGACY INSETU COMPATIBILITY ALIASES ---
-// Maps legacy <insetu-*> tags directly to Sutram primitives to prevent 
-// template crashes in un-migrated views without polluting Sutram.
-import { SutramCard, SutramModal, SutramAsyncBtn } from '../../../vendor/sutram/js/primitives.js';
-if (!customElements.get('insetu-card')) customElements.define('insetu-card', class extends SutramCard {});
-if (!customElements.get('insetu-modal')) customElements.define('insetu-modal', class extends SutramModal {});
-if (!customElements.get('insetu-async-btn')) customElements.define('insetu-async-btn', class extends SutramAsyncBtn {});
-
 export class InSetuSpinner extends LitElement {
     static properties = { text: { type: String } };
     static styles = css`

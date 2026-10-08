@@ -115,14 +115,6 @@ export class InSetuSystemSettings extends InSetuElement {
     disconnectedCallback() {
         super.disconnectedCallback();
     }
-
-    updated(changedProperties) {
-        super.updated(changedProperties);
-        if (window.lucide && typeof window.lucide.createIcons === 'function') {
-            window.lucide.createIcons({ root: this.shadowRoot });
-        }
-    }
-
     _handleOutsideClick(e) {
         if (!this.menuOpen) return;
         const path = e.composedPath();
@@ -159,7 +151,6 @@ export class InSetuSystemSettings extends InSetuElement {
         this.docsModalOpen = true;
         this._docsStatus = null;
         this.requestUpdate();
-
         const checks = [];
         const checkUrl = async (id, title, url, type) => {
             try {
@@ -170,7 +161,7 @@ export class InSetuSystemSettings extends InSetuElement {
             }
         };
 
-        checks.push(checkUrl('insetu', 'inSetu Developer OS', '/README.md', 'root'));
+        checks.push(checkUrl('insetu', 'inSetu Workbench', '/README.md', 'root'));
 
         ['bridge', 'cartographer', 'editor', 'gather', 'sdk', 'topology'].forEach(ext => {
             const title = ext.charAt(0).toUpperCase() + ext.slice(1);
@@ -251,34 +242,35 @@ export class InSetuSystemSettings extends InSetuElement {
                 extList.push({ id: ext, title });
             }
         });
-
         const renderBtn = (icon, label, onClick) => html`
-            <button style="background: var(--input-bg); color: var(--text); padding: 12px 15px; border: 1px solid var(--border); border-radius: 6px; font-weight: bold; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 10px; transition: background 0.2s; width: 100%;"
-                onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background='var(--input-bg)'"
+            <sutram-btn 
+                intent="neutral" 
+                class="yv-interactive-row" 
+                style="width: 100%; justify-content: flex-start; --btn-padding: 12px 15px; --btn-font-size: 0.95rem; margin: 0;"
                 @click=${onClick}>
-                <span style="font-size: 1.2rem;">${icon}</span>
+                ${icon ? (/^[a-zA-Z0-9-]+$/.test(icon) ? html`<yv-icon name="${icon}" style="width: 18px; height: 18px; color: var(--intent-primary);"></yv-icon>` : html`<span style="font-size: 1.2rem;">${icon}</span>`) : ''}
                 <span>${label}</span>
-            </button>
+            </sutram-btn>
         `;
         return html`
             <div style="position: relative; display: flex; align-items: stretch; height: 100%;">
                 <button class="masthead-action-rail-cell" @click=${() => this.menuOpen = !this.menuOpen} style="border: none; margin: 0; border-left: 1px solid var(--border); border-radius: 0; height: 100%; width: 44px; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
-                    <i data-lucide="settings" style="width: 16px; height: 16px;"></i>
+                    <yv-icon name="settings" style="width: 16px; height: 16px;"></yv-icon>
                 </button>
                 ${this.menuOpen ? html`
                     <div style="position: absolute; top: 100%; right: 0; margin-top: 5px; background: var(--pane-bg); background: color-mix(in srgb, var(--pane-bg) 95%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--overlay-shadow); width: 280px; z-index: 2000; max-height: calc(100dvh - 85px); overflow-y: auto; box-sizing: border-box; padding: 15px; display: flex; flex-direction: column; gap: 18px;">
                         <div style="display: flex; flex-direction: column; gap: 6px;">
                             <div style="display: flex; align-items: center; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--intent-primary); border-bottom: 1px solid color-mix(in srgb, var(--intent-primary) 30%, transparent); padding: 0 14px 4px 14px;">System</div>
                             <div style="display: flex; flex-direction: column; gap: 2px;">
-                                <button class="menu-btn" @click=${() => this._openSettings()} style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 8px 14px; border: 1px solid transparent; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-family: var(--font-mono, monospace); font-weight: normal; display: flex; align-items: center; gap: 8px;">
-                                    <div style="display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex-shrink: 0;"><i data-lucide="settings-2" style="width: 14px; height: 14px; color: var(--text-muted);"></i></div> <span>Settings Hub</span>
-                                </button>
-                                <button class="menu-btn" @click=${() => this._openDocsModal()} style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 8px 14px; border: 1px solid transparent; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-family: var(--font-mono, monospace); font-weight: normal; display: flex; align-items: center; gap: 8px;">
-                                    <div style="display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex-shrink: 0;"><i data-lucide="book" style="width: 14px; height: 14px; color: var(--text-muted);"></i></div> <span>Documentation</span>
-                                </button>
-                                <button class="menu-btn" @click=${() => { this.menuOpen = false; if(window.inSetu.sys.fullRefresh) window.inSetu.sys.fullRefresh(); }} style="margin: 0; background: transparent; color: #ef4444; text-align: left; padding: 8px 14px; border: 1px solid transparent; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-family: var(--font-mono, monospace); font-weight: normal; display: flex; align-items: center; gap: 8px;">
-                                    <div style="display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex-shrink: 0;"><i data-lucide="refresh-cw" style="width: 14px; height: 14px; color: #ef4444;"></i></div> <span>Force UI Refresh</span>
-                                </button>
+                                <sutram-btn intent="neutral" class="yv-interactive-row" @click=${() => this._openSettings()} style="width: 100%; justify-content: flex-start; --btn-padding: 8px 14px; --btn-font-size: 0.85rem; margin: 0; font-family: var(--font-mono, monospace); font-weight: normal;">
+                                    <yv-icon name="settings-2" style="width: 14px; height: 14px; color: var(--text-muted); margin-right: 8px;"></yv-icon> <span>Settings Hub</span>
+                                </sutram-btn>
+                                <sutram-btn intent="neutral" class="yv-interactive-row" @click=${() => this._openDocsModal()} style="width: 100%; justify-content: flex-start; --btn-padding: 8px 14px; --btn-font-size: 0.85rem; margin: 0; font-family: var(--font-mono, monospace); font-weight: normal;">
+                                    <yv-icon name="book" style="width: 14px; height: 14px; color: var(--text-muted); margin-right: 8px;"></yv-icon> <span>Documentation</span>
+                                </sutram-btn>
+                                <sutram-btn intent="danger" class="yv-interactive-row" @click=${() => { this.menuOpen = false; if(window.inSetu.sys.fullRefresh) window.inSetu.sys.fullRefresh(); }} style="width: 100%; justify-content: flex-start; --btn-padding: 8px 14px; --btn-font-size: 0.85rem; margin: 0; font-family: var(--font-mono, monospace); font-weight: normal;">
+                                    <yv-icon name="refresh-cw" style="width: 14px; height: 14px; margin-right: 8px;"></yv-icon> <span>Force UI Refresh</span>
+                                </sutram-btn>
                             </div>
                         </div>
 
@@ -286,15 +278,15 @@ export class InSetuSystemSettings extends InSetuElement {
                             <div style="display: flex; flex-direction: column; gap: 6px;">
                                 <div style="display: flex; align-items: center; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); border-bottom: 1px solid var(--border); padding: 0 14px 4px 14px;">Workspace</div>
                                 <div style="display: flex; flex-direction: column; gap: 2px;">
-                                    <button class="menu-btn active" style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 8px 14px; border: 1px solid transparent; border-radius: 6px; cursor: default; font-size: 0.85rem; font-family: var(--font-mono, monospace); font-weight: normal; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                                    <sutram-btn intent="primary" ?active=${true} style="width: 100%; justify-content: space-between; --btn-padding: 8px 14px; --btn-font-size: 0.85rem; margin: 0; font-family: var(--font-mono, monospace); font-weight: normal;">
                                         <div style="display: flex; align-items: center; gap: 8px;">
-                                            <div style="display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex-shrink: 0;"><i data-lucide="package" style="width: 14px; height: 14px; color: var(--intent-primary);"></i></div>
+                                            <yv-icon name="package" style="width: 14px; height: 14px; color: var(--intent-primary); margin-right: 8px;"></yv-icon>
                                             <span>${this.workspaces[activeWs]?.title || activeWs}</span>
                                         </div>
-                                        <i data-lucide="check" style="width: 14px; height: 14px; color: var(--intent-primary);"></i>
-                                    </button>
+                                        <yv-icon name="check" style="width: 14px; height: 14px; color: var(--intent-primary);"></yv-icon>
+                                    </sutram-btn>
                                     ${Object.entries(this.workspaces).filter(([key, _]) => key !== activeWs).map(([key, ws]) => html`
-                                        <button class="menu-btn" style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 8px 14px; border: 1px solid transparent; cursor: pointer; border-radius: 6px; font-size: 0.85rem; font-family: var(--font-mono, monospace); font-weight: normal; display: flex; align-items: center; gap: 8px;"
+                                        <sutram-btn intent="neutral" class="yv-interactive-row" style="width: 100%; justify-content: flex-start; --btn-padding: 8px 14px; --btn-font-size: 0.85rem; margin: 0; font-family: var(--font-mono, monospace); font-weight: normal;"
                                             @click=${(e) => { 
                                                 e.stopPropagation(); 
                                                 this.menuOpen = false; 
@@ -302,9 +294,9 @@ export class InSetuSystemSettings extends InSetuElement {
                                                     window.inSetu.sys.executeWorkspaceSwap(key, ws.title);
                                                 }
                                             }}>
-                                            <div style="display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex-shrink: 0;"><i data-lucide="layout-grid" style="width: 14px; height: 14px; color: var(--text-muted);"></i></div>
+                                            <yv-icon name="layout-grid" style="width: 14px; height: 14px; color: var(--text-muted); margin-right: 8px;"></yv-icon>
                                             <span>${ws.title || key}</span>
-                                        </button>
+                                        </sutram-btn>
                                     `)}
                                 </div>
                             </div>
@@ -313,58 +305,71 @@ export class InSetuSystemSettings extends InSetuElement {
                         <div style="display: flex; flex-direction: column; gap: 6px;">
                             <div style="display: flex; align-items: center; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); border-bottom: 1px solid var(--border); padding: 0 14px 4px 14px;">Display Theme</div>
                             <div style="display: flex; gap: 4px;">
-                                <button class="menu-btn ${this.currentTheme === 'dark' ? 'active' : ''}" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; margin: 0; background: transparent; color: var(--text); padding: 8px; border: 1px solid transparent; cursor: pointer; border-radius: 6px; font-size: 0.8rem; font-family: var(--font-mono, monospace);" @click=${() => this._setTheme('dark')}>
-                                    <i data-lucide="moon" style="width: 16px; height: 16px; color: ${this.currentTheme === 'dark' ? 'var(--intent-primary)' : 'var(--text-muted)'};"></i>
-                                    Dark
-                                </button>
-                                <button class="menu-btn ${this.currentTheme === 'light' ? 'active' : ''}" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; margin: 0; background: transparent; color: var(--text); padding: 8px; border: 1px solid transparent; cursor: pointer; border-radius: 6px; font-size: 0.8rem; font-family: var(--font-mono, monospace);" @click=${() => this._setTheme('light')}>
-                                    <i data-lucide="sun" style="width: 16px; height: 16px; color: ${this.currentTheme === 'light' ? 'var(--intent-primary)' : 'var(--text-muted)'};"></i>
-                                    Light
-                                </button>
-                                <button class="menu-btn ${this.currentTheme === 'e-ink' ? 'active' : ''}" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; margin: 0; background: transparent; color: var(--text); padding: 8px; border: 1px solid transparent; cursor: pointer; border-radius: 6px; font-size: 0.8rem; font-family: var(--font-mono, monospace);" @click=${() => this._setTheme('e-ink')}>
-                                    <i data-lucide="book-open" style="width: 16px; height: 16px; color: ${this.currentTheme === 'e-ink' ? 'var(--intent-primary)' : 'var(--text-muted)'};"></i>
-                                    E-Ink
-                                </button>
+                                <sutram-btn intent="${this.currentTheme === 'dark' ? 'primary' : 'neutral'}" class="yv-interactive-row" ?active=${this.currentTheme === 'dark'} style="flex: 1; justify-content: center; --btn-padding: 8px; margin: 0; font-family: var(--font-mono, monospace); font-weight: normal; font-size: 0.8rem;" @click=${() => this._setTheme('dark')}>
+                                    <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+                                        <yv-icon name="moon" style="width: 16px; height: 16px; color: ${this.currentTheme === 'dark' ? 'var(--intent-primary)' : 'var(--text-muted)'};"></yv-icon>
+                                        Dark
+                                    </div>
+                                </sutram-btn>
+                                <sutram-btn intent="${this.currentTheme === 'light' ? 'primary' : 'neutral'}" class="yv-interactive-row" ?active=${this.currentTheme === 'light'} style="flex: 1; justify-content: center; --btn-padding: 8px; margin: 0; font-family: var(--font-mono, monospace); font-weight: normal; font-size: 0.8rem;" @click=${() => this._setTheme('light')}>
+                                    <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+                                        <yv-icon name="sun" style="width: 16px; height: 16px; color: ${this.currentTheme === 'light' ? 'var(--intent-primary)' : 'var(--text-muted)'};"></yv-icon>
+                                        Light
+                                    </div>
+                                </sutram-btn>
+                                <sutram-btn intent="${this.currentTheme === 'e-ink' ? 'primary' : 'neutral'}" class="yv-interactive-row" ?active=${this.currentTheme === 'e-ink'} style="flex: 1; justify-content: center; --btn-padding: 8px; margin: 0; font-family: var(--font-mono, monospace); font-weight: normal; font-size: 0.8rem;" @click=${() => this._setTheme('e-ink')}>
+                                    <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+                                        <yv-icon name="book-open" style="width: 16px; height: 16px; color: ${this.currentTheme === 'e-ink' ? 'var(--intent-primary)' : 'var(--text-muted)'};"></yv-icon>
+                                        E-Ink
+                                    </div>
+                                </sutram-btn>
                             </div>
                         </div>
 
                         <div style="display: flex; flex-direction: column; gap: 6px;">
                             <div style="display: flex; align-items: center; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); border-bottom: 1px solid var(--border); padding: 0 14px 4px 14px;">Viewport Grid</div>
                             <div style="display: flex; gap: 4px;">
-                                <button class="menu-btn ${this.layoutCapacity === 1 ? 'active' : ''}" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; margin: 0; background: transparent; color: var(--text); padding: 8px; border: 1px solid transparent; cursor: pointer; border-radius: 6px; font-size: 0.8rem; font-family: var(--font-mono, monospace);" @click=${() => this._setLayoutCapacity(1)}>
-                                    <i data-lucide="smartphone" style="width: 16px; height: 16px; color: ${this.layoutCapacity === 1 ? 'var(--intent-primary)' : 'var(--text-muted)'};"></i>
-                                    1-Col
-                                </button>
-                                <button class="menu-btn ${this.layoutCapacity === 2 ? 'active' : ''}" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; margin: 0; background: transparent; color: var(--text); padding: 8px; border: 1px solid transparent; cursor: pointer; border-radius: 6px; font-size: 0.8rem; font-family: var(--font-mono, monospace);" @click=${() => this._setLayoutCapacity(2)}>
-                                    <i data-lucide="tablet" style="width: 16px; height: 16px; color: ${this.layoutCapacity === 2 ? 'var(--intent-primary)' : 'var(--text-muted)'};"></i>
-                                    2-Col
-                                </button>
-                                <button class="menu-btn ${this.layoutCapacity === 3 ? 'active' : ''}" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; margin: 0; background: transparent; color: var(--text); padding: 8px; border: 1px solid transparent; cursor: pointer; border-radius: 6px; font-size: 0.8rem; font-family: var(--font-mono, monospace);" @click=${() => this._setLayoutCapacity(3)}>
-                                    <i data-lucide="monitor" style="width: 16px; height: 16px; color: ${this.layoutCapacity === 3 ? 'var(--intent-primary)' : 'var(--text-muted)'};"></i>
-                                    3-Col
-                                </button>
+                                <sutram-btn intent="${this.layoutCapacity === 1 ? 'primary' : 'neutral'}" class="yv-interactive-row" ?active=${this.layoutCapacity === 1} style="flex: 1; justify-content: center; --btn-padding: 8px; margin: 0; font-family: var(--font-mono, monospace); font-weight: normal; font-size: 0.8rem;" @click=${() => this._setLayoutCapacity(1)}>
+                                    <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+                                        <yv-icon name="smartphone" style="width: 16px; height: 16px; color: ${this.layoutCapacity === 1 ? 'var(--intent-primary)' : 'var(--text-muted)'};"></yv-icon>
+                                        1-Col
+                                    </div>
+                                </sutram-btn>
+                                <sutram-btn intent="${this.layoutCapacity === 2 ? 'primary' : 'neutral'}" class="yv-interactive-row" ?active=${this.layoutCapacity === 2} style="flex: 1; justify-content: center; --btn-padding: 8px; margin: 0; font-family: var(--font-mono, monospace); font-weight: normal; font-size: 0.8rem;" @click=${() => this._setLayoutCapacity(2)}>
+                                    <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+                                        <yv-icon name="tablet" style="width: 16px; height: 16px; color: ${this.layoutCapacity === 2 ? 'var(--intent-primary)' : 'var(--text-muted)'};"></yv-icon>
+                                        2-Col
+                                    </div>
+                                </sutram-btn>
+                                <sutram-btn intent="${this.layoutCapacity === 3 ? 'primary' : 'neutral'}" class="yv-interactive-row" ?active=${this.layoutCapacity === 3} style="flex: 1; justify-content: center; --btn-padding: 8px; margin: 0; font-family: var(--font-mono, monospace); font-weight: normal; font-size: 0.8rem;" @click=${() => this._setLayoutCapacity(3)}>
+                                    <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+                                        <yv-icon name="monitor" style="width: 16px; height: 16px; color: ${this.layoutCapacity === 3 ? 'var(--intent-primary)' : 'var(--text-muted)'};"></yv-icon>
+                                        3-Col
+                                    </div>
+                                </sutram-btn>
                             </div>
                         </div>
                     </div>
                 ` : ''}
             </div>
+            ${this.modalOpen ? html`
             <sutram-modal 
-                ?open=${this.modalOpen} 
+                ?open=${true} 
                 ?fullscreen=${true} 
                 titleText="OS Settings Hub" 
                 @sutram-modal-closed=${() => this.modalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: hidden;">
                     <div style="display: flex; gap: 8px; margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 8px; flex-shrink: 0; overflow-x: auto; scrollbar-width: none;">
-                        <sutram-btn intent=${this.activeTab === 'system' ? 'primary' : 'neutral'} ?active=${this.activeTab === 'system'} style="--btn-padding: 8px 16px; white-space: nowrap;" @click=${() => this.activeTab = 'system'}>⚙️ System</sutram-btn>
-                        <sutram-btn intent=${this.activeTab === 'core' ? 'primary' : 'neutral'} ?active=${this.activeTab === 'core'} style="--btn-padding: 8px 16px; white-space: nowrap;" @click=${() => this.activeTab = 'core'}>🛠️ Core</sutram-btn>
-                        <sutram-btn intent=${this.activeTab === 'extensions' ? 'primary' : 'neutral'} ?active=${this.activeTab === 'extensions'} style="--btn-padding: 8px 16px; white-space: nowrap;" @click=${() => this.activeTab = 'extensions'}>🧩 Extensions</sutram-btn>
+                        <sutram-btn intent=${this.activeTab === 'system' ? 'primary' : 'neutral'} ?active=${this.activeTab === 'system'} style="--btn-padding: 8px 16px; white-space: nowrap;" @click=${() => this.activeTab = 'system'}>System</sutram-btn>
+                        <sutram-btn intent=${this.activeTab === 'core' ? 'primary' : 'neutral'} ?active=${this.activeTab === 'core'} style="--btn-padding: 8px 16px; white-space: nowrap;" @click=${() => this.activeTab = 'core'}>Core</sutram-btn>
+                        <sutram-btn intent=${this.activeTab === 'extensions' ? 'primary' : 'neutral'} ?active=${this.activeTab === 'extensions'} style="--btn-padding: 8px 16px; white-space: nowrap;" @click=${() => this.activeTab = 'extensions'}>Extensions</sutram-btn>
                     </div>
                     <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-bottom: 20px;">
                         ${this.activeTab === 'system' ? html`
-                            ${renderBtn('⚙️', 'System Preferences', () => this._openGenericSettings('system'))}
-                            ${renderBtn('🗃️', 'Add / Remove Workspaces', () => AppStore.setState({ isWorkspaceEditorOpen: true }))}
-                            ${renderBtn('📂', 'Configure Current Workspace', () => AppStore.setState({ isConfigOpen: true }))}
-                            ${renderBtn('🧩', 'Manage Workspace Extensions', () => this.manageExtOpen = true)}
+                            ${renderBtn('settings', 'System Preferences', () => this._openGenericSettings('system'))}
+                            ${renderBtn('layers', 'Add / Remove Workspaces', () => AppStore.setState({ isWorkspaceEditorOpen: true }))}
+                            ${renderBtn('folder-cog', 'Configure Current Workspace', () => AppStore.setState({ isConfigOpen: true }))}
+                            ${renderBtn('blocks', 'Manage Workspace Extensions', () => this.manageExtOpen = true)}
                         ` : ''}
                         ${this.activeTab === 'core' ? html`
                             ${coreList.map(ext => this._renderExtensionActions(ext, renderBtn))}
@@ -384,9 +389,11 @@ export class InSetuSystemSettings extends InSetuElement {
                     </sutram-entity-actions>
                 </div>
             </sutram-modal>
+            ` : ''}
+            ${this.manageExtOpen ? html`
             <sutram-modal 
-                ?open=${this.manageExtOpen} 
-                titleText="Manage Workspace Extensions" 
+                ?open=${true} 
+                titleText="Manage Workspace Extensions"  
                 ?fullscreen=${true} 
                 @sutram-modal-closed=${() => this.manageExtOpen = false}>
                 <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Enable or disable optional tools for this specific workspace ecosystem.</p>
@@ -417,12 +424,14 @@ export class InSetuSystemSettings extends InSetuElement {
                     `;
                 })}
                 <div slot="footer" style="width: 100%;">
-                    <sutram-async-btn style="width: 100%; display: block;" label="💾 Save Active Extensions" intent="success" .onClick=${() => this._saveActiveExtensions()}></sutram-async-btn>
+                    <sutram-async-btn style="width: 100%; display: block;" label="Save Active Extensions" intent="success" .onClick=${() => this._saveActiveExtensions()}></sutram-async-btn>
                 </div>
             </sutram-modal>
+            ` : ''}
+            ${this.docsModalOpen ? html`
             <sutram-modal 
-                ?open=${this.docsModalOpen} 
-                titleText="📖 Documentation Hub" 
+                ?open=${true} 
+                titleText="📖 Documentation Hub"  
                 ?fullscreen=${true} 
                 @sutram-modal-closed=${() => this.docsModalOpen = false}>${!this._docsStatus ? html`
                     <div style="padding: 20px;"><yenvui-spinner text="Scanning for documentation..."></yenvui-spinner></div>
@@ -473,8 +482,9 @@ export class InSetuSystemSettings extends InSetuElement {
                     </div>
                 `}
             </sutram-modal>
+            ` : ''}
         `;
-    }
+}
 }
 customElements.define('insetu-system-settings', InSetuSystemSettings);
 export class InSetuWorkspaceEditor extends InSetuElement {
@@ -607,7 +617,8 @@ export class InSetuWorkspaceEditor extends InSetuElement {
     }
     render() {
         return html`
-            <sutram-modal ?open=${this.open} ?fullscreen=${true} titleText="🗃️ Add / Remove Workspaces" @sutram-modal-closed=${(e) => { if (e.target !== e.currentTarget) return; this.open = false; AppStore.setState({ isWorkspaceEditorOpen: false }); }}>
+            ${this.open ? html`
+            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="🗃️ Add / Remove Workspaces" @sutram-modal-closed=${(e) => { if (e.target !== e.currentTarget) return; this.open = false; AppStore.setState({ isWorkspaceEditorOpen: false }); }}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0; overflow-y: auto;">
                     <form @submit=${this._handleCreateWorkspace} style="display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; background: transparent; border: none; box-shadow: none;">
                         <sutram-input label="Workspace Unique Name / ID" placeholder="e.g. guitar_academy" .value=${this._newWsId} @sutram-input-changed=${e => this._newWsId = e.detail.value} ?flush=${true}></sutram-input>
@@ -618,7 +629,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                                 <sutram-btn intent="highlight" style="margin: 0; --btn-padding: 8px 14px;" @click=${this._openHostBrowser}>...</sutram-btn>
                             </div>
                         </div>
-                        <sutram-async-btn btntype="submit" label="➕ Provision & Mount Isolated Workspace" intent="success" style="width: 100%; display: block;" .onClick=${(e) => {
+                        <sutram-async-btn btntype="submit" label="Provision & Mount Isolated Workspace" intent="success" style="width: 100%; display: block;" .onClick=${(e) => {
                             if (!this._newWsId || !this._newWsRoot) {
                                 e.preventDefault();
                                 alert("Workspace ID and Root Path are required.");
@@ -627,7 +638,8 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                             return this._handleCreateWorkspace(e);
                         }}></sutram-async-btn>
                     </form>
-                    <sutram-modal ?open=${this._showHostBrowser} ?fullscreen=${true} titleText="📁 Select Local System Directory" @sutram-modal-closed=${() => this._showHostBrowser = false}>
+                    ${this._showHostBrowser ? html`
+                    <sutram-modal ?open=${true} ?fullscreen=${true} titleText="📁 Select Local System Directory" @sutram-modal-closed=${() => this._showHostBrowser = false}>
                         <div slot="body" style="display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow-y: auto;">
                             <div style="display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-shrink: 0;">
                                 <sutram-btn intent="neutral" @click=${this._goUpHostDir}>Parent Dir</sutram-btn>
@@ -635,18 +647,17 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                             </div>
                             <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;">
                                 ${this._hostDirs.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.9rem;">No subdirectories found.</div>` : this._hostDirs.map(d => html`
-                                    <div style="padding: 8px 12px; cursor: pointer; display: flex; align-items: center; border-radius: 4px; transition: background 0.2s;"
-                                        onmouseover="this.style.background='var(--input-bg)'"
-                                        onmouseout="this.style.background='transparent'"
+                                    <div class="yv-interactive-row" style="padding: 8px 12px; cursor: pointer; display: flex; align-items: center; border-radius: 4px;"
                                         @click=${() => this._selectHostDir(d)}>
-                                        <span style="margin-right: 8px;">📁</span>
+                                        <yv-icon name="folder" style="width: 16px; height: 16px; color: var(--intent-warning); margin-right: 8px;"></yv-icon>
                                         <span style="font-weight: bold; font-size: 0.9rem;">${d}</span>
                                     </div>
                                 `)}
                             </div>
                         </div>
-                        <sutram-btn slot="footer" intent="success" @click=${this._confirmHostDir}>✅ Select This Path</sutram-btn>
+                        <sutram-btn slot="footer" intent="success" @click=${this._confirmHostDir}><yv-icon name="check-circle-2" style="width: 16px; height: 16px; margin-right: 6px;"></yv-icon> Select This Path</sutram-btn>
                     </sutram-modal>
+                    ` : ''}
 
                     <div>
                         <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 8px; color: var(--intent-primary);">Registered Workspaces Index</label>
@@ -656,7 +667,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                                 return html`
                                     <div style="display: flex; justify-content: space-between; align-items: center; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px;">
                                         <div style="display: flex; align-items: center; gap: 10px;">
-                                            <span style="font-size: 1.1rem;">${wsId === 'default' ? '🏛️' : '📁'}</span>
+                                            <yv-icon name="${wsId === 'default' ? 'landmark' : 'folder'}" style="width: 16px; height: 16px; color: ${wsId === 'default' ? 'var(--intent-highlight)' : 'var(--intent-warning)'};"></yv-icon>
                                             <span style="font-weight: bold; color: ${isActive ? 'var(--intent-success)' : 'var(--text)'};">
                                                 ${wsId} ${isActive ? '(Active)' : ''}
                                             </span>
@@ -671,8 +682,9 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                     </div>
                 </div>
             </sutram-modal>
+            ` : ''}
         `;
-    }
+}
 }
 customElements.define('insetu-workspace-editor', InSetuWorkspaceEditor);
 if (!document.getElementById('insetu-workspace-editor-root')) {

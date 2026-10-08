@@ -44,7 +44,7 @@ SYSTEM_SETTINGS_SCHEMA = [
         "label": "Workspace Title",
         "type": "text",
         "scope": "workspace",
-        "default": "inSetu Developer OS",
+        "default": "inSetu Workbench",
         "description": "The display title for this workspace."
     },
     {
@@ -342,7 +342,7 @@ def api_system_openapi():
     spec = {
         "openapi": "3.0.0",
         "info": {
-            "title": "inSetu Developer OS API",
+            "title": "inSetu Workbench API",
             "version": "1.0.0",
             "description": "Automated LLM Tool Calling Specification"
         },

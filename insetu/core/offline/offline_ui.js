@@ -88,7 +88,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
         storagePersisted: { type: Boolean }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; overflow-y: auto; padding: 20px; box-sizing: border-box; background: var(--bg); }
+        :host { display: flex; flex-direction: column; height: 100%; overflow-y: auto; padding: 20px; box-sizing: border-box; background: var(--bg); container-type: inline-size; }
     `];
 
     constructor() {
@@ -196,7 +196,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                         <span style="font-size: 0.85rem; color: var(--text-muted);">Inspect the VFS blob cache and pending mutation outbox.</span>
                     </div>
                     <sutram-btn intent="primary" style="--btn-padding: 6px 12px; margin: 0;" @click=${() => this.onForceRefresh()}>
-                        🔄 Refresh
+                        Refresh
                     </sutram-btn>
                 </div>
 
@@ -221,10 +221,9 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                 </div>
 
                 ${this.loading ? html`<sutram-spinner text="Reading IndexedDB..."></sutram-spinner>` : ''}
-                
                 <div style="display: flex; flex-direction: column; opacity: ${this.loading ? '0.5' : '1'}; transition: opacity 0.2s ease;">
                 <sutram-card-group>
-                    <insetu-card
+                    <sutram-card
                         titleText="Outbox Mutations (${this.outboxItems.length})"
                         descriptionText="Pending API transactions waiting for network reconnection."
                         icon="🌩️"
@@ -246,10 +245,10 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                                 </div>
                             `)}
                         </div>
-                    </insetu-card>
-                    
+                    </sutram-card>
+
                     ${this.deadLetters.length > 0 ? html`
-                    <insetu-card
+                    <sutram-card
                         titleText="Dead Letter Queue (${this.deadLetters.length})"
                         descriptionText="Failed offline transactions (Poison Pills)."
                         icon="☠️"
@@ -265,16 +264,16 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                                     </div>
                                     <pre style="margin: 0; font-size: 0.75rem; padding: 6px; max-height: 100px; overflow-y: auto;">${item.bodyString ? (item.bodyString.startsWith('{') || item.bodyString.startsWith('[') ? JSON.stringify(JSON.parse(item.bodyString), null, 2) : item.bodyString) : 'Empty Payload'}</pre>
                                     <div style="display: flex; gap: 8px; margin-top: 8px;">
-                                        <sutram-btn intent="warning" style="--btn-padding: 6px 12px; margin: 0; color: #000;" @click=${() => this._retryDeadLetter(item)}>🔄 Retry</sutram-btn>
-                                        <sutram-btn intent="danger" variant="tinted" style="--btn-padding: 6px 12px; margin: 0;" @click=${() => this._discardDeadLetter(item)}>🗑️ Discard</sutram-btn>
+                                        <sutram-btn intent="warning" style="--btn-padding: 6px 12px; margin: 0; color: #000;" @click=${() => this._retryDeadLetter(item)}>Retry</sutram-btn>
+                                        <sutram-btn intent="danger" style="--btn-padding: 6px 12px; margin: 0;" @click=${() => this._discardDeadLetter(item)}>Discard</sutram-btn>
                                     </div>
                                 </div>
                             `)}
                         </div>
-                    </insetu-card>
+                    </sutram-card>
                     ` : ''}
 
-                    <insetu-card
+                    <sutram-card
                         titleText="VFS Blob Cache (${this.cachedBlobs.length})"
                         descriptionText="Stale-While-Revalidate GET requests mirrored for offline viewing."
                         icon="🗄️"
@@ -286,18 +285,23 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                             @search-changed=${e => this.searchQuery = e.detail.value}
                             style="margin-top: 10px; margin-bottom: 10px;">
                         </sutram-search-bar>
-                        <div style="display: flex; flex-direction: column; gap: 4px; max-height: 400px; overflow-y: auto;">
+                        <div style="display: flex; flex-direction: column; gap: 4px; height: 400px;">
                             ${filteredBlobs.length === 0 ? html`
                                 <div style="color: var(--text-muted); font-style: italic; font-size: 0.9rem;">
                                     No cached blobs found.
                                 </div>
-                            ` : filteredBlobs.map(key => html`
-                                <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); padding: 6px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; word-break: break-all;">
-                                    ${key}
-                                </div>
-                            `)}
+                            ` : html`
+                                <sutram-virtual-list
+                                    .items=${filteredBlobs}
+                                    .renderItem=${key => html`
+                                        <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); padding: 6px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; word-break: break-all; margin-bottom: 4px;">
+                                            ${key}
+                                        </div>
+                                    `}>
+                                </sutram-virtual-list>
+                            `}
                         </div>
-                    </insetu-card>
+                    </sutram-card>
                 </sutram-card-group>
                 </div>
             </div>
@@ -392,10 +396,10 @@ export class InSetuCoreOfflineSettings extends InSetuElement {
             alert(`Failed to cache repository: ${e.message}`);
         }
     }
-
     render() {
+        if (!this.storageModalOpen) return html``;
         return html`
-            <sutram-modal ?open=${this.storageModalOpen} ?fullscreen=${true} titleText="🗄️ Offline Storage Management" @sutram-modal-closed=${() => OfflineStore.setState({ storageModalOpen: false })}>
+            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="🗄️ Offline Storage Management" @sutram-modal-closed=${() => OfflineStore.setState({ storageModalOpen: false })}>
                 <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Manage offline cache capabilities per-repository.</p>
 
                 ${this.targetConfigs.map(repo => html`
@@ -411,9 +415,8 @@ export class InSetuCoreOfflineSettings extends InSetuElement {
                                 @sutram-input-changed=${(e) => this._toggleOffline(repo.repo_dir, e.detail.value)} 
                                 ?flush=${true}>
                             </sutram-toggle>
-
                             <sutram-async-btn 
-                                label="⬇️ Pre-Cache Repository" 
+                                label="Pre-Cache Repository" 
                                 intent="neutral" 
                                 ?disabled=${!repo.offline_capable}
                                 style="margin: 0;" 
@@ -482,7 +485,7 @@ export class InSetuCoreOfflineLog extends InSetuElement {
                     </div>
                     <div style="display: flex; gap: 8px;">
                         <sutram-btn intent="danger" @click=${() => OfflineStore.getState().clearLogs()}>
-                            🗑️ Clear Logs
+                            Clear Logs
                         </sutram-btn>
                     </div>
                 </div>
@@ -534,7 +537,7 @@ window.ExtensionRegistry.registerExtension('offline', {
         {
             id: 'offline_storage_management',
             label: 'Offline Storage Management',
-            icon: '🗄️',
+            icon: 'hard-drive',
             onClick: () => {
                 OfflineStore.setState({ storageModalOpen: true });
             }

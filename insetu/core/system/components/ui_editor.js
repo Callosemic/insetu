@@ -143,13 +143,23 @@ export class InSetuMarkdownEditor extends InSetuElement {
         }));
         this.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
     }
-
     insertAtCursor(text) {
         const editor = this.shadowRoot.querySelector('sutram-editor');
         if (editor && editor.insertAtCursor) {
             editor.insertAtCursor(text);
         }
     }
+
+    setCursor(pos) {
+        const editor = this.shadowRoot.querySelector('sutram-editor');
+        if (editor && editor.setCursor) editor.setCursor(pos);
+    }
+
+    setScrollInfo(top) {
+        const editor = this.shadowRoot.querySelector('sutram-editor');
+        if (editor && editor.setScrollInfo) editor.setScrollInfo(top);
+    }
+
     render() {
         return html`
             <sutram-editor 
@@ -257,20 +267,21 @@ export class InSetuFrontmatterEditor extends InSetuElement {
             }
             :host([zen-mode]) {
                 position: fixed !important; inset: 0 !important;
-                width: 100vw !important; height: 100dvh !important;
+                width: 100% !important; height: 100% !important;
                 z-index: 99999 !important; background: var(--bg-deep, #05070a) !important;
-            }
-            :host([zen-mode]) .action-bar-row, :host([zen-mode]) slot[name="title-control"] {
-                display: none !important;
+                margin: 0 !important; max-width: none !important; max-height: none !important;
+                border: none !important; padding: 0 !important; box-sizing: border-box !important;
             }
             .zen-exit-btn {
-                position: fixed; top: 20px; right: 20px; z-index: 100000;
-                background: var(--input-bg); color: var(--text-muted); border: 1px solid var(--border); border-radius: 50%;
-                width: 44px; height: 44px; display: none; align-items: center; justify-content: center;
-                cursor: pointer; opacity: 0.1; transition: opacity 0.3s ease, color 0.3s ease;
+                position: absolute; top: 20px; right: 35px; z-index: 2147483647;
+                background: var(--input-bg); color: var(--text-muted); border: 2px solid var(--border); border-radius: 50%;
+                width: 48px; height: 48px; display: none; align-items: center; justify-content: center;
+                cursor: pointer; opacity: 0.9; transition: all 0.2s ease;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.5);
             }
             :host([zen-mode]) .zen-exit-btn { display: flex; }
-            :host([zen-mode]) .zen-exit-btn:hover { opacity: 1; color: var(--intent-danger); border-color: var(--intent-danger); }
+            :host([zen-mode]) .zen-exit-btn:hover { opacity: 1; color: var(--intent-danger); border-color: var(--intent-danger); transform: scale(1.05); }
+            :host([zen-mode]) .zen-exit-btn:active { transform: scale(0.95); }
         `
     ];
 
@@ -288,30 +299,55 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         this._writingMode = false;
         this.zenMode = false;
     }
-
     _toggleWritingMode() {
         this._writingMode = !this._writingMode;
         this._yamlData = { ...this._yamlData, writing_mode: this._writingMode };
         this._checkDirty();
     }
-
     async _toggleZenMode() {
-        if (!document.fullscreenElement) {
-            try { await this.requestFullscreen(); } catch (e) { this.zenMode = true; }
+        this.zenMode = !this.zenMode;
+        if (this.zenMode) {
+            if (typeof this.showPopover === 'function') {
+                this.setAttribute('popover', 'manual');
+                try { this.showPopover(); } catch(e) {}
+            }
+            try {
+                if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
+                else if (document.documentElement.webkitRequestFullscreen) await document.documentElement.webkitRequestFullscreen();
+            } catch(e) {}
+            this._escListener = (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    this._toggleZenMode();
+                }
+            };
+            window.addEventListener('keydown', this._escListener);
         } else {
-            document.exitFullscreen();
+            if (typeof this.hidePopover === 'function') {
+                if (this.matches(':popover-open')) {
+                    try { this.hidePopover(); } catch(e) {}
+                }
+                this.removeAttribute('popover');
+            }
+            try {
+                if (document.exitFullscreen && document.fullscreenElement) await document.exitFullscreen();
+                else if (document.webkitExitFullscreen && document.webkitFullscreenElement) document.webkitExitFullscreen();
+            } catch(e) {}
+            if (this._escListener) {
+                window.removeEventListener('keydown', this._escListener);
+                this._escListener = null;
+            }
         }
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this._fsListener = () => { this.zenMode = !!document.fullscreenElement; };
-        document.addEventListener('fullscreenchange', this._fsListener);
-    }
 
+    }
     disconnectedCallback() {
         super.disconnectedCallback();
-        if (this._fsListener) document.removeEventListener('fullscreenchange', this._fsListener);
+        if (this._escListener) {
+            window.removeEventListener('keydown', this._escListener);
+        }
     }
 
     updated(changedProperties) {
@@ -433,9 +469,8 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                 this.dispatchEvent(new CustomEvent('editor-dirty', { detail: { isDirty: false }, bubbles: true, composed: true }));
                 this.requestUpdate();
                 window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: [{ filepath: this.filepath, operation: 'save' }] });
-
                 if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                    window.inSetu.ui.setGlobalStatus("💾 File Saved Successfully", 2000);
+                    window.inSetu.ui.setGlobalStatus("File Saved Successfully", 2000);
                 }
             }
         });
@@ -445,7 +480,7 @@ export class InSetuFrontmatterEditor extends InSetuElement {
             return html`<div style="padding: 20px;"><yenvui-spinner text="Loading file..."></yenvui-spinner></div>`;
         }
         return html`
-            <div style="display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg);"
+            <div style="display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); position: relative;"
                 @input=${() => this._checkDirty()}
                 @sutram-input-changed=${() => this._checkDirty()}>
                 <!-- Full-Width Title Control Header -->
@@ -470,16 +505,16 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                             }}>
                         </sutram-entity-actions>
                     </div>
-                    <sutram-btn variant="tinted" intent="neutral" style="margin: 0; --btn-padding: 4px 8px;" title="Toggle Prose Mode" @click=${() => this._toggleWritingMode()}>
-                        ${this._writingMode ? '✍' : '💻'}
+                    <sutram-btn intent="neutral" style="margin: 0; --btn-padding: 4px 8px;" title="Toggle Prose Mode" @click=${() => this._toggleWritingMode()}>
+                        <yv-icon name="${this._writingMode ? 'pen-tool' : 'code'}" style="width: 14px; height: 14px; pointer-events: none;"></yv-icon>
                     </sutram-btn>
-                    <sutram-btn variant="tinted" intent="neutral" style="margin: 0; --btn-padding: 4px 8px;" title="Focus Mode" @click=${() => this._toggleZenMode()}>
-                        ⛶
+                    <sutram-btn intent="neutral" style="margin: 0; --btn-padding: 4px 8px;" title="Focus Mode" @click=${() => this._toggleZenMode()}>
+                        <yv-icon name="maximize-2" style="width: 14px; height: 14px; pointer-events: none;"></yv-icon>
                     </sutram-btn>
                     <button class="meta-btn ${this._metadataExpanded ? 'active' : ''}"
                         @click=${() => this._metadataExpanded = !this._metadataExpanded}
                         title="Toggle Metadata">
-                        ⚙️<span class="meta-btn-text"> Metadata</span> <span style="font-size: 0.7rem; margin-left: 2px;">${this._metadataExpanded ? '▲' : '▼'}</span>
+                        <yv-icon name="settings" style="width: 14px; height: 14px;"></yv-icon><span class="meta-btn-text"> Metadata</span> <span style="font-size: 0.7rem; margin-left: 2px;">${this._metadataExpanded ? '▲' : '▼'}</span>
                     </button>
                 </div>
 
@@ -501,7 +536,7 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                     </div>
                 ` : ''}
                 <!-- Core Markdown / CodeMirror Canvas -->
-                <div style="flex: 1; min-height: 0; display: flex; flex-direction: column;">
+                <div style="flex: 1; min-height: 0; display: flex; flex-direction: column; z-index: 1;">
                     <insetu-markdown-editor 
                         .value=${this._content}
                         language="markdown"
@@ -512,9 +547,16 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                         }}>
                     </insetu-markdown-editor>
                 </div>
-                <button class="zen-exit-btn" title="Exit Focus Mode (Esc)" @click=${() => this._toggleZenMode()}>
-                    <i data-lucide="minimize-2" style="width: 20px; height: 20px;"></i>
-                </button>
+                ${this.zenMode ? html`
+                    <div style="position: absolute; inset: 0; pointer-events: none; z-index: 2147483647; display: flex; justify-content: flex-end; align-items: flex-start; padding: 20px 35px;">
+                        <button title="Exit Focus Mode (Esc)" 
+                            style="background: var(--intent-danger); color: white; border: none; border-radius: 6px; padding: 8px 16px; font-size: 0.9rem; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); pointer-events: auto;"
+                            @pointerdown=${(e) => { e.preventDefault(); e.stopPropagation(); this._toggleZenMode(); }}
+                            @click=${(e) => { e.preventDefault(); e.stopPropagation(); this._toggleZenMode(); }}>
+                            <yv-icon name="minimize-2" style="width: 16px; height: 16px; pointer-events: none;"></yv-icon> Exit Focus
+                        </button>
+                    </div>
+                ` : ''}
             </div>
         `;
     }

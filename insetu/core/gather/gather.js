@@ -234,7 +234,7 @@ export class InSetuExtGather extends InSetuElement {
     static styles = [
         sharedStyles,
         css`
-            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
         `
     ];
     constructor() {
@@ -391,7 +391,7 @@ export class InSetuExtGather extends InSetuElement {
                     @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
             </sutram-toolbar>
-            <sutram-scroll-view padding="none">
+            <sutram-scroll-view>
                 ${(() => {
                     const groups = {};
                         filteredFiles.forEach(f => {
@@ -445,63 +445,67 @@ export class InSetuExtGather extends InSetuElement {
                                             }
                                         }}></sutram-async-btn>
                                     ` : ''}
-                                        ${groups[cat].map(f => {
-                                            const isDirty = (() => {
-                                                const manifestObj = AppStore.getState().manifest?.ctx?.[f.filename];
-                                                const addr = window.inSetu.utils.BucketAddress.fromFilepath(f.filename, manifestObj?.meta);
-                                                return (AppStore.getState().dirtyBuckets || new Set()).has(addr.key);
-                                            })();
-                                            const isLocked = f.isSkeleton || (isGatherLoading && isDirty);
-                                            let baseIntent = 'primary';
-                                            const dColors = GatherStore.getState().domainColors || {};
-                                            const testStr = `${f.finalTitle || ''} ${f.finalCat || ''}`.toLowerCase();
-                                            for (const [intent, keywords] of Object.entries(dColors)) {
-                                                if (Array.isArray(keywords)) {
-                                                    if (keywords.some(kw => testStr.includes(kw.toLowerCase()))) {
-                                                        baseIntent = intent;
-                                                        break;
+                                        <div style="display: flex; flex-direction: column; width: 100%;">
+                                            ${isOpen ? groups[cat].map(f => {
+                                                    const isDirty = (() => {
+                                                        const manifestObj = AppStore.getState().manifest?.ctx?.[f.filename];
+                                                        const addr = window.inSetu.utils.BucketAddress.fromFilepath(f.filename, manifestObj?.meta);
+                                                        return (AppStore.getState().dirtyBuckets || new Set()).has(addr.key);
+                                                    })();
+                                                    const isLocked = f.isSkeleton || (isGatherLoading && isDirty);
+                                                    let baseIntent = 'primary';
+                                                    const dColors = GatherStore.getState().domainColors || {};
+                                                    const testStr = `${f.finalTitle || ''} ${f.finalCat || ''}`.toLowerCase();
+                                                    for (const [intent, keywords] of Object.entries(dColors)) {
+                                                        if (Array.isArray(keywords)) {
+                                                            if (keywords.some(kw => testStr.includes(kw.toLowerCase()))) {
+                                                                baseIntent = intent;
+                                                                break;
+                                                            }
+                                                        }
                                                     }
-                                                }
-                                            }
-                                            if (f.finalCat === 'Quickpacks') baseIntent = 'warning';
-                                            const isQuickpack = f.finalCat === 'Quickpacks';
-                                            const activeIntent = isDirty ? "warning" : baseIntent;
-                                            let displayIcon = isQuickpack ? "zap" :
-                                                (isLocked ? "loader" : 
-                                                (isDirty ? "alert-triangle" : "package"));
-
-                                            return html`
-                                            <insetu-card
-                                                ?stale=${isLocked}
-                                                .filename=${f.filename}
-                                                .titleText=${f.finalTitle || (f.filename.includes('/') ? f.filename.split('/').pop() : f.filename)}
-                                                .descriptionText=${f.finalDesc || ''}
-                                                .statusText=${f.isSkeleton ? 'Pending Compilation...' : ''}
-                                                .detailPrefix=${f.repoDir ? `[${f.repoDir}] ` : ''}
-                                                .detailText=${f.filename.includes('/') ? f.filename.split('/').pop() : f.filename}
-                                                .detailSuffix=${f.sizeStr ? ` | ${f.sizeStr}` : ''}
-                                                .icon=${displayIcon}
-                                                intent=${activeIntent}
-                                                entityType="file:context"
-                                                .entityData=${{ 
-                                                    filepath: f.filename, 
-                                                    repoDir: f.repoDir, 
-                                                    isFS: false, 
-                                                    isSkeleton: f.isSkeleton,
-                                                    needs_recompile: isDirty,
-                                                    suppress: ['file-browse', 'file-edit'],
-                                                    chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, f.filename) : [f.filename]
-                                                }}
-                                                @card-clicked=${() => {
-                                                    if (f.isSkeleton) return;
-                                                    if (window.inSetu?.vfs?.viewInWindow) {
-                                                        window.inSetu.vfs.viewInWindow(f.filename);
-                                                    } else if (window.inSetu?.vfs?.viewAndCopy) {
-                                                        window.inSetu.vfs.viewAndCopy(f.filename);
-                                                    }
-                                                }}>
-                                            </insetu-card>
-                                        `;})}
+                                                    if (f.finalCat === 'Quickpacks') baseIntent = 'warning';
+                                                    const isQuickpack = f.finalCat === 'Quickpacks';
+                                                    const activeIntent = isDirty ? "warning" : baseIntent;
+                                                    let displayIcon = isQuickpack ? "zap" :
+                                                        (isLocked ? "loader" : 
+                                                        (isDirty ? "alert-triangle" : "package"));
+                                                    return html`
+                                                    <div style="padding-bottom: 12px;">
+                                                        <sutram-card
+                                                            style="margin-bottom: 0;"
+                                                            ?stale=${isLocked}
+                                                            .filename=${f.filename}
+                                                            .titleText=${f.finalTitle || (f.filename.includes('/') ? f.filename.split('/').pop() : f.filename)}
+                                                            .descriptionText=${f.finalDesc || ''}
+                                                            .statusText=${f.isSkeleton ? 'Pending Compilation...' : ''}
+                                                            .detailPrefix=${f.repoDir ? `[${f.repoDir}] ` : ''}
+                                                            .detailText=${f.filename.includes('/') ? f.filename.split('/').pop() : f.filename}
+                                                            .detailSuffix=${f.sizeStr ? ` | ${f.sizeStr}` : ''}
+                                                            .icon=${displayIcon}
+                                                            intent=${activeIntent}
+                                                            entityType="file:context"
+                                                            .entityData=${{ 
+                                                                filepath: f.filename, 
+                                                                repoDir: f.repoDir, 
+                                                                isFS: false, 
+                                                                isSkeleton: f.isSkeleton,
+                                                                needs_recompile: isDirty,
+                                                                suppress: ['file-browse', 'file-edit'],
+                                                                chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, f.filename) : [f.filename]
+                                                            }}
+                                                            @card-clicked=${() => {
+                                                                if (f.isSkeleton) return;
+                                                                if (window.inSetu?.vfs?.viewInWindow) {
+                                                                    window.inSetu.vfs.viewInWindow(f.filename);
+                                                                } else if (window.inSetu?.vfs?.viewAndCopy) {
+                                                                    window.inSetu.vfs.viewAndCopy(f.filename);
+                                                                }
+                                                            }}>
+                                                        </sutram-card>
+                                                    </div>
+                                                `;}) : ''}
+                                        </div>
                                 </sutram-collapsible>
                             `;
                         });
@@ -567,7 +571,6 @@ window.ExtensionRegistry.registerExtension('gather', {
             label: 'Download',
             icon: '⬇️',
             intent: 'primary',
-            variant: 'tinted',
             group: 'share',
             vfsBound: true,
             order: 20,
@@ -604,7 +607,6 @@ window.ExtensionRegistry.registerExtension('gather', {
             label: 'Compile Pack',
             icon: '✨',
             intent: 'warning',
-            variant: 'tinted',
             emphasis: true,
             group: 'share',
             vfsBound: true,

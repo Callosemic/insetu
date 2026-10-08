@@ -3,8 +3,6 @@ import { buildFileTree } from '../../../vendor/sutram/js/utils.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { SutramCard } from '../../../vendor/sutram/js/primitives.js';
 import { InSetuElement } from '/static/extensions/system/insetu_sdk.js';
-
-export class InSetuCard extends SutramCard {}
 export class InSetuFileTree extends InSetuElement {
     static properties = {
         files: { type: Array },
@@ -21,12 +19,18 @@ export class InSetuFileTree extends InSetuElement {
         _deletedMutations: { type: Object }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; min-height: 0; width: 100%; }
-        .toolbar-row {  
+        :host { display: flex; flex-direction: column; height: 100%; min-height: 0; width: 100%; container-type: inline-size; }
+        .toolbar-row {    
             display: flex; align-items: center; gap: 10px; padding: 5px 20px; height: 44px; box-sizing: border-box; 
         }
         @container (max-width: 50rem) {
             .toolbar-row { padding: 5px 10px; }
+        }
+        .file-list-container {
+            flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 10px 12px 20px 12px;
+        }
+        @container (max-width: 480px) {
+            .file-list-container { padding-left: 0; padding-right: 0; }
         }
     `];
 constructor() {
@@ -140,7 +144,7 @@ constructor() {
                     ?bottomBorder=${(!isSearching && this.currentPath.length > 0 && !this.hidePath)}>
                     ${(!isSearching && this.currentPath.length > 0 && !this.hidePath) ? html`
                         <div slot="bottom-row" class="toolbar-row" style="background: var(--input-bg); border-top: 1px solid var(--border); overflow: hidden;">
-                            <sutram-btn intent="neutral" @click=${() => this._setPath(this.currentPath.slice(0, -1))} style="margin-right: 8px;">⬆️ Up</sutram-btn>
+                            <sutram-btn intent="neutral" @click=${() => this._setPath(this.currentPath.slice(0, -1))} style="margin-right: 8px;"><yv-icon name="corner-left-up" style="width: 14px; height: 14px; margin-right: 6px;"></yv-icon> Up</sutram-btn>
                             <yenvui-scrub-track style="flex: 1; min-width: 0; font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem;">
                                 /${this.currentPath.join('/')}
                             </yenvui-scrub-track>
@@ -149,66 +153,81 @@ constructor() {
                 </sutram-toolbar>
             ` : ((!isSearching && this.currentPath.length > 0 && !this.hidePath) ? html`
                 <div class="toolbar-row" style="background: var(--input-bg); border-bottom: 1px solid var(--border); overflow: hidden;">
-                    <sutram-btn intent="neutral" @click=${() => this._setPath(this.currentPath.slice(0, -1))} style="margin-right: 8px;">⬆️ Up</sutram-btn>
+                    <sutram-btn intent="neutral" @click=${() => this._setPath(this.currentPath.slice(0, -1))} style="margin-right: 8px;"><yv-icon name="corner-left-up" style="width: 14px; height: 14px; margin-right: 6px;"></yv-icon> Up</sutram-btn>
                     <yenvui-scrub-track style="flex: 1; min-width: 0; font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem;">
                         /${this.currentPath.join('/')}
                     </yenvui-scrub-track>
                 </div>
             ` : '')}
-            <sutram-scroll-view padding="10px 12px 20px 12px" style="gap: 8px;">
-                <sutram-card-group>
-                ${isSearching ? flatResults.map(filepath => {
-                    const key = filepath.split('/').pop();
-                    const fullFilepath = `${this.basePath}${filepath}`;
-                    if (this.hideFiles) return '';
-                    return html`
-                        <insetu-card
-                            .filename=${fullFilepath}
-                            .detailText=${fullFilepath}
-                            .titleText=${key}
-                            descriptionText=""
-                            intent="primary"
-                            icon=${this._pendingMutations.has(fullFilepath) ? 'cloud-upload' : 'file-code-2'}
-                            .entityType=${this.entityType || 'file'}
-                            .entityData=${{ filepath: fullFilepath, isFS: true }}>
-                        </insetu-card>
-                    `;
-                }) : keys.map(key => {
-                    const item = current[key];
-                    const isDir = !item._isFile;
-                    if (!isDir && (key === '.gitkeep' || key === '.keep')) return '';
-                    if (isDir) {
-                        const pathPrefix = this.currentPath.length > 0 ? this.currentPath.join('/') + '/' : '';
-                        const folderPath = `${this.basePath}${pathPrefix}${key}`;
-                        return html`
-                            <insetu-card
-                                .titleText=${key}
-                                icon="folder"
-                                intent="warning"
-                                .entityType=${'folder'}
-                                .entityData=${{ id: folderPath, folderpath: folderPath, isDir: true }}
-                                @card-clicked=${(e) => { e.stopPropagation(); this._setPath([...this.currentPath, key]); }}>
-                            </insetu-card>
-                        `;
-                    }
-                    const pathPrefix = this.currentPath.length > 0 ? this.currentPath.join('/') + '/' : '';
-                    const filepath = `${this.basePath}${pathPrefix}${key}`;
-                    if (this.hideFiles) return '';
-                    return html`
-                        <insetu-card
-                            .filename=${filepath}
-                            .detailText=${filepath}
-                            .titleText=${key}
-                            descriptionText=""
-                            intent="primary"
-                            icon=${this._pendingMutations.has(filepath) ? 'cloud-upload' : 'file-code-2'}
-                            .entityType=${this.entityType || 'file'}
-                            .entityData=${{ filepath, isFS: true, is_dirty: this._pendingMutations.has(filepath) }}>
-                        </insetu-card>
-                    `;
-                })}
-                </sutram-card-group>
-            </sutram-scroll-view>
+            <div class="file-list-container">
+                ${isSearching ? html`
+                    <sutram-virtual-list
+                        .items=${flatResults}
+                        .renderItem=${filepath => {
+                            const key = filepath.split('/').pop();
+                            const fullFilepath = `${this.basePath}${filepath}`;
+                            return html`
+                                <div style="padding-bottom: 8px; width: 100%; box-sizing: border-box;">
+                                    <sutram-card
+                                        style="margin-bottom: 0;"
+                                        .filename=${fullFilepath}
+                                        .detailText=${fullFilepath}
+                                        .titleText=${key}
+                                        descriptionText=""
+                                        intent="primary"
+                                        icon=${this._pendingMutations.has(fullFilepath) ? 'cloud-upload' : 'file-code-2'}
+                                        .entityType=${this.entityType || 'file'}
+                                        .entityData=${{ filepath: fullFilepath, isFS: true }}>
+                                    </sutram-card>
+                                </div>
+                            `;
+                        }}>
+                    </sutram-virtual-list>
+                ` : html`
+                    <sutram-virtual-list
+                        .items=${keys}
+                        .renderItem=${key => {
+                            const item = current[key];
+                            const isDir = !item._isFile;
+                            if (!isDir && (key === '.gitkeep' || key === '.keep')) return '';
+                            if (isDir) {
+                                const pathPrefix = this.currentPath.length > 0 ? this.currentPath.join('/') + '/' : '';
+                                const folderPath = `${this.basePath}${pathPrefix}${key}`;
+                                return html`
+                                    <div style="padding-bottom: 8px; width: 100%; box-sizing: border-box;">
+                                        <sutram-card
+                                            style="margin-bottom: 0;"
+                                            .titleText=${key}
+                                            icon="folder"
+                                            intent="warning"
+                                            .entityType=${'folder'}
+                                            .entityData=${{ id: folderPath, folderpath: folderPath, isDir: true }}
+                                            @card-clicked=${(e) => { e.stopPropagation(); this._setPath([...this.currentPath, key]); }}>
+                                        </sutram-card>
+                                    </div>
+                                `;
+                            }
+                            const pathPrefix = this.currentPath.length > 0 ? this.currentPath.join('/') + '/' : '';
+                            const filepath = `${this.basePath}${pathPrefix}${key}`;
+                            if (this.hideFiles) return '';
+                            return html`
+                                <div style="padding-bottom: 8px; width: 100%; box-sizing: border-box;">
+                                    <sutram-card
+                                        style="margin-bottom: 0;"
+                                        .filename=${filepath}
+                                        .detailText=${filepath}
+                                        .titleText=${key}
+                                        descriptionText=""
+                                        intent="primary"
+                                        icon=${this._pendingMutations.has(filepath) ? 'cloud-upload' : 'file-code-2'}
+                                        .entityType=${this.entityType || 'file'}
+                                        .entityData=${{ filepath, isFS: true, is_dirty: this._pendingMutations.has(filepath) }}>
+                                    </sutram-card>
+                                </div>
+                            `;
+                        }}>
+                `}
+            </div>
         `;
     }
 }

@@ -701,7 +701,7 @@ export async function executeBootSequence() {
                 }
                 AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
                 const statusBar = document.querySelector('sutram-status-bar');
-                if (statusBar) statusBar.baseTitle = config.instance_title || "inSetu Developer OS";
+                if (statusBar) statusBar.baseTitle = config.instance_title || "inSetu Workbench";
                 bootTotalSteps = 5 + window.ACTIVE_EXTENSIONS.length;
                 window.inSetu?.offlineLog?.(`[BOOT] Loaded Config (${window.ACTIVE_EXTENSIONS.length} extensions)`, 'success');
             }
@@ -761,7 +761,7 @@ export async function executeBootSequence() {
                 AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
                 const statusBar = document.querySelector('sutram-status-bar');
                 if (statusBar) {
-                    statusBar.baseTitle = config.instance_title || "inSetu Developer OS";
+                    statusBar.baseTitle = config.instance_title || "inSetu Workbench";
                 }
 
                 // Recalculate total boot steps dynamically based on discovered extension count
@@ -1047,18 +1047,13 @@ async function executeWorkspaceSwap(key, title) {
     window.inSetu.ui.setGlobalStatus(`Switched to ${title || key}. Hydrating UI...`, null);
     await purgeServiceWorkerCaches();
 
-    // 1. Persist local storage first so all network requests inherit the new tenant context
-    sessionStorage.setItem('insetu_workspace', key);
-    localStorage.setItem('insetu_workspace', key);
-
-    // 2. Temporarily clear active extensions during context transition to prevent 403 race conditions
+    // 1. Temporarily clear active extensions during context transition to prevent 403 race conditions
     window.ACTIVE_EXTENSIONS = [];
-    // 3. Set AppStore root state as the Single Source of Truth
-    const newPinned = new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${key}`)) || ["ALL"]);
 
-    // Explicitly zero out tenant-scoped infrastructure state to prevent data bleed
+    // 2. Explicitly zero out tenant-scoped infrastructure state. 
+    // DO NOT set activeWorkspace or location.hash yet to prevent layout data bleeds.
+    const newPinned = new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${key}`)) || ["ALL"]);
     AppStore.setState({ 
-        activeWorkspace: key, 
         pinnedRepos: newPinned,
         dirtyRepos: new Set(),
         dirtyBuckets: new Set(),
@@ -1068,13 +1063,12 @@ async function executeWorkspaceSwap(key, title) {
         resolvingLocks: {},
         warmingQueue: new Set()
     });
-    // Explicitly update location hash to keep router and location bar synchronized
-    window.location.hash = `#/${encodeURIComponent(key)}/center/`;
-    // 4. Notify backend of the swap
+
+    // 3. Notify backend of the swap
     await window.inSetu.api.workspace.post('system/workspaces', { active_workspace: key });
 
-    // 4. Perform top-down AppStore outward cascade
-    await performSoftRefresh();
+    // 4. Perform top-down AppStore outward cascade and hand off Identity Management
+    await performSoftRefresh(key);
     loadWorkspaces();
 }
 async function loadWorkspaces() {
@@ -1226,24 +1220,45 @@ async function simulatePanic() {
         alert("Error triggering panic.");
     }
 }
-async function performSoftRefresh() {
+async function performSoftRefresh(targetWs = null) {
     localVfsSignatures = {};
     localCtxSignatures = {};
     lastManifestSyncTs = 0;
-    // 1. Read the active tenant directly from AppStore
-    const currentWs = AppStore.getState().activeWorkspace || window.inSetu.utils.getActiveWorkspace();
+    const currentWs = targetWs || AppStore.getState().activeWorkspace || window.inSetu.utils.getActiveWorkspace();
 
-    // 2. Flush feature domain stores from AppStore outwards (exempting infrastructure)
+    // 1. Flush feature domain stores and evict layouts BEFORE changing tenant identity.
+    // This guarantees that any synchronous saves triggered by teardown hit the OLD storage keys.
     Object.entries(window.inSetu.stores).forEach(([storeName, store]) => {
         if (['App', 'Status', 'Toast', 'Selection'].includes(storeName)) return;
         if (store && typeof store.getState === 'function') {
             const state = store.getState();
             if (state) {
                 if (typeof state.clearPayload === 'function') state.clearPayload();
+                if (storeName === 'Layout') {
+                    const currentWindows = state.windows || [];
+                    currentWindows.forEach(w => window.dispatchEvent(new CustomEvent('sutram-evict-projection', { detail: { id: w.id }, bubbles: true, composed: true })));
+                    ['left', 'center', 'right'].forEach(col => {
+                        const pinned = state.columns?.[col]?.pinned || [];
+                        pinned.forEach(p => window.dispatchEvent(new CustomEvent('sutram-evict-projection', { detail: { id: p.id }, bubbles: true, composed: true })));
+                    });
+                }
                 if (typeof state.resetState === 'function') state.resetState();
             }
         }
     });
+
+    // 2. NOW switch the active workspace identity globally
+    if (targetWs) {
+        sessionStorage.setItem('insetu_workspace', targetWs);
+        localStorage.setItem('insetu_workspace', targetWs);
+        AppStore.setState({ activeWorkspace: targetWs });
+    }
+
+    // 3. Hydrate layout for the new workspace
+    const layoutStore = window.Sutram?.stores?.Layout;
+    if (layoutStore && typeof layoutStore.hydrateStore === 'function') {
+        layoutStore.hydrateStore(currentWs);
+    }
     try {
         // 1. Update routing topology for the new tenant
         const rRes = await window.inSetu.api.workspace.get('system/topology?t=' + Date.now());
@@ -1280,7 +1295,7 @@ async function performSoftRefresh() {
             AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
             const statusBar = document.querySelector('sutram-status-bar');
             if (statusBar) {
-                statusBar.baseTitle = config.instance_title || "inSetu Developer OS";
+                statusBar.baseTitle = config.instance_title || "inSetu Workbench";
             }
             // Flush old memory states only for deactivated extensions to protect core layout definitions
             if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
@@ -1361,6 +1376,12 @@ async function performSoftRefresh() {
                 await window.inSetu.stores.Gather.getState().executeCompile();
             }
         }
+
+        // FINALLY, update the URL hash so the router sees the fully constructed Layout and Extensions
+        if (targetWs) {
+            window.location.hash = `#/${encodeURIComponent(targetWs)}/center/`;
+        }
+
         // 4. Hydrate active DOM views using native routing
         window.inSetu.events.emitHook('insetu:soft-refresh', currentWs);
 
