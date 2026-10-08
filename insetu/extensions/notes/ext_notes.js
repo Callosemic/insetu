@@ -128,11 +128,11 @@ export class InSetuExtNotesModals extends InSetuElement {
             this.noteForm = state.noteForm;
         });
     }
-
     render() {
+        if (!this.newNoteModalOpen) return html``;
         return html`
             <sutram-modal 
-                ?open=${this.newNoteModalOpen} 
+                ?open=${true} 
                 ?fullscreen=${true}
                 titleText="Create New Note"
                 @sutram-modal-closed=${() => NotesStore.setState({ newNoteModalOpen: false })}>
@@ -248,9 +248,10 @@ export class InSetuExtNotesEditor extends InSetuElement {
         });
     }
     render() {
+        if (!this.filepath) return html``;
         return html`
             <sutram-modal 
-                ?open=${!!this.filepath} 
+                ?open=${true} 
                 titleText="📝 ${this.filepath || ''}"
                 ?fullscreen=${true}
                 ?flush=${true}
@@ -327,7 +328,7 @@ export class InSetuExtNotes extends InSetuElement {
         allRepos: { type: Array }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
     `];
 
     constructor() {
@@ -408,9 +409,8 @@ export class InSetuExtNotes extends InSetuElement {
 
                 <div style="display: flex; flex-direction: column; gap: 10px; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
                     ${filteredNotes.length === 0 && !this.loading ? html`<insetu-empty-state text="No notes found. Click '☰' to create one."></insetu-empty-state>` : ''}
-
                     ${filteredNotes.map(n => html`
-                        <insetu-card
+                        <sutram-card
                             .filename=${n.filepath}
                             .titleText=${n.title}
                             .descriptionText=${`Repo: ${n.repo}${n.sub_bucket !== 'None' ? ` | Bucket: ${n.sub_bucket}` : ''}`}
@@ -424,7 +424,7 @@ export class InSetuExtNotes extends InSetuElement {
                             <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px;">
                                 ${n.tags && n.tags.length > 0 ? n.tags.map(tag => html`<span class="task-tag">#${tag}</span>`) : ''}
                             </div>
-                        </insetu-card>
+                        </sutram-card>
                     `)}
                 </div>
             </sutram-scroll-view>
@@ -435,7 +435,7 @@ customElements.define('insetu-ext-notes', InSetuExtNotes);
 // 5. The Toolbar Actions
 export class InSetuExtNotesActions extends InSetuElement {
     static get extensionName() { return 'notes'; }
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`:host { display: flex; align-items: stretch; height: 100%; }`];
 
     async _preCacheNotes() {
         const notes = NotesStore.getState().notes || [];

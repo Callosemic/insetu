@@ -233,9 +233,8 @@ export class InSetuTrackerTicket extends InSetuElement {
         const icon = t.tier === 1 ? 'target' : (t.tier === 2 ? 'package' : (isDanger ? 'bug' : 'sparkles'));
         const isOverdue = t.deliveryDate && new Date(t.deliveryDate) < new Date() && t.status !== 'closed';
         const displayTitle = t.title ? t.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
-
         return html`
-            <insetu-card
+            <sutram-card
                 data-task-id=${t.id}
                 .filename=${t.filepath}
                 .titleText=${displayTitle}
@@ -515,17 +514,17 @@ constructor() {
                     const tierLabel = this._getResolvedTierLabel(parent.repo, targetTier);
                     return html`
                         <sutram-card-group ?stacked=${true} ?accordion=${true}>
-                            <insetu-card
+                            <sutram-card
                                 .titleText=${parent.title}
-                                .descriptionText=${`${closedCount}/${childTasks.length} Completed | Status: ${parent.status}`}
-                                .detailPrefix=${`[${parent.repo}] ${tierLabel}: `}
+                                .descriptionText=${`${closedCount}/${childTasks.length} Completed | Status:${parent.status}`}
+                                .detailPrefix=${`[${parent.repo}]${tierLabel}: `}
                                 .detailText=${parent.filepath}
                                 icon=${targetTier === 1 ? 'target' : 'package'}
                                 intent="primary"
                                 entityType="file:task"
                                 .entityData=${{ ...parent, isFS: true, suppressCopy: true, suppressDownload: true }}
                                 @card-clicked=${() => this.vfs.viewSourceFile(parent.filepath, true)}>
-                            </insetu-card>
+                            </sutram-card>
                             ${childTasks.map(child => html`<insetu-tracker-ticket .task=${child} .allTasks=${this.tasks} @ticket-clicked=${() => this.vfs.viewSourceFile(child.filepath, true)}></insetu-tracker-ticket>`)}
                         </sutram-card-group>
                     `;
@@ -845,7 +844,7 @@ constructor() {
                         ` : ''}
                 </div>
             </sutram-toolbar>
-            <sutram-scroll-view padding="${currentView?.layout === 'log' ? 'none' : '20px'}">
+            <sutram-scroll-view>
                 ${activeFocusId ? html`
                     <div style="background: var(--intent-highlight); color: white; padding: 10px 15px; border-radius: 6px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                         <div style="display: flex; align-items: center; gap: 10px;">
@@ -943,7 +942,7 @@ constructor() {
 customElements.define('insetu-ext-tracker', InSetuExtTracker);
 export class InSetuExtTrackerActions extends InSetuElement {
     get extName() { return 'tracker'; }
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`:host { display: flex; align-items: stretch; height: 100%; }`];
     get _menuItems() {
         const appState = window.inSetu.stores.App.getState();
         const activeSubTab = this.dataset.subId || this.parentElement?.id?.replace('sub-', '') || appState.activeSubTabs[appState.activeTab] || '';
@@ -1476,8 +1475,9 @@ export class InSetuExtTrackerModals extends InSetuElement {
 
         return html`
             <!-- New Task Modal -->
+            ${this._modals?.new ? html`
             <sutram-modal 
-                ?open=${this._modals?.new} 
+                ?open=${true} 
                 ?fullscreen=${true}
                 titleText="Create New Ticket"
                 @sutram-modal-closed=${() => {
@@ -1556,9 +1556,11 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     await this._saveNewTask();
                 }}></sutram-async-btn>
             </sutram-modal>
+            ` : ''}
             <!-- Edit Task Modal -->
+            ${this._modals?.edit ? html`
             <sutram-modal 
-                ?open=${this._modals?.edit} 
+                ?open=${true} 
                 titleText="✏️ ${editTaskForm.filepath || ''}"
                 ?fullscreen=${true}
                 ?flush=${true}
@@ -1675,10 +1677,12 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 </div>
                 ` : ''}
             </sutram-modal>
+            ` : ''}
 
             <!-- Spawn Modal -->
+            ${this._spawnModalOpen ? html`
             <sutram-modal 
-                ?open=${this._spawnModalOpen}
+                ?open=${true}
                 titleText="Spawn Template: ${this._spawnDisplayName}"
                 @sutram-modal-closed=${() => { this._spawnModalOpen = false; this._spawnTask = null; }}>
                 <div slot="body" style="display: contents;">
@@ -1726,9 +1730,11 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     }
                 }}></sutram-async-btn>
             </sutram-modal>
+            ` : ''}
             <!-- Quick Convert Modal -->
+            ${this._convertOpen ? html`
             <sutram-modal 
-                ?open=${this._convertOpen}
+                ?open=${true}
                 titleText="Convert Type"
                 @sutram-modal-closed=${() => { this._convertOpen = false; this._convertTask = null; }}>
                 <div slot="body" style="display: contents;">
@@ -1753,10 +1759,12 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     })()}
                 </div>
             </sutram-modal>
+            ` : ''}
 
             <!-- Ticket Selection Modal for Parent / Dependency Pickers -->
+            ${this._pickerOpen ? html`
             <sutram-modal 
-                ?open=${this._pickerOpen}  
+                ?open=${true}  
                 maxWidth="650px"
                 titleText=${this._pickerMode === 'parentId' ? '🔗 Select Parent Ticket' : '🔗 Select Dependency Ticket'}
                 @sutram-modal-closed=${() => this._pickerOpen = false}>
@@ -1827,9 +1835,11 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     </div>
                 </div>
             </sutram-modal>
+            ` : ''}
             <!-- Templates Browser Modal -->
+            ${this._templatesBrowserOpen ? html`
             <sutram-modal 
-                ?open=${this._templatesBrowserOpen}  
+                ?open=${true}  
                 ?fullscreen=${true}
                 titleText="🧬 Template Library"
                 @sutram-modal-closed=${() => { this._templatesBrowserOpen = false; this._activeTemplateRoot = null; }}>
@@ -1855,9 +1865,11 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     </div>
                 ` : ''}
             </sutram-modal>
+            ` : ''}
             <!-- Hierarchy Modal -->
+            ${this._hierarchyModalOpen ? html`
             <sutram-modal 
-                ?open=${this._hierarchyModalOpen}  
+                ?open=${true}  
                 ?fullscreen=${true}
                 titleText="🌳 Task Hierarchy"
                 @sutram-modal-closed=${() => { this._hierarchyModalOpen = false; this._hierarchyTask = null; }}>
@@ -1865,10 +1877,12 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     ${this._renderHierarchyView()}
                 </div>
             </sutram-modal>
+            ` : ''}
 
             <!-- Dependencies Modal -->
+            ${this._depsModalOpen ? html`
             <sutram-modal 
-                ?open=${this._depsModalOpen}  
+                ?open=${true}  
                 ?fullscreen=${true}
                 titleText=${this._depsMode === 'upstream' ? '🔒 Blocked By (Upstream)' : '🚧 Blocking (Downstream)'}
                 @sutram-modal-closed=${() => { this._depsModalOpen = false; this._depsTask = null; }}>
@@ -1928,7 +1942,8 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     })()}
                 </div>
             </sutram-modal>
-`;
+            ` : ''}
+        `;
     }
     _handleCardClick(task) {
         this.dispatch('insetu:tracker:open-edit-task', { filepath: task.filepath });
@@ -2438,6 +2453,7 @@ export class InSetuExtTrackerSettings extends InSetuElement {
         }
     }
     render() {
+        if (!this.settingsModalOpen) return html``;
         const allSchemas = this.customSchemas;
         const modalBody = this.isMigrating ? html`
             <div style="display: flex; flex-direction: column; gap: 15px; padding: 30px; margin: 20px; align-items: center; justify-content: center; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px;">
@@ -2690,9 +2706,9 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                 </sutram-tabs>
         </div>
         `;
-
+        if (!this.settingsModalOpen) return html``;
         return html`
-            <sutram-modal ?open=${this.settingsModalOpen} ?fullscreen=${true} ?flush=${true} titleText="Kanban Configuration" @sutram-modal-closed=${() => KanbanStore.setState({ settingsModalOpen: false })}>
+            <sutram-modal ?open=${true} ?fullscreen=${true} ?flush=${true} titleText="Kanban Configuration" @sutram-modal-closed=${() => KanbanStore.setState({ settingsModalOpen: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
                     ${modalBody}
                 </div>

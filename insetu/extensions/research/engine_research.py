@@ -10,6 +10,7 @@ from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from akasa.workers import submit_job, register_callback
 from akasa.hooks import hooks
+from akasa.utils import is_extension_enabled
 RESEARCH_SCHEMA = {
     "research_jobs": {
         "id": "TEXT PRIMARY KEY",
@@ -402,6 +403,8 @@ def start_job(ctx):
     date_range = data.get('date_range', '').strip()
     parser = data.get('parser', 'jina')
     target_dir = data.get('target_dir', 'research/')
+    if not is_extension_enabled('ingest', workspace_id):
+        return jsonify({"error": "Pre-flight Validation Failed: Extension 'ingest' is required but not enabled in this workspace."}), 422
 
     if not query:
         return jsonify({"error": "Query required"}), 400

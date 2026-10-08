@@ -47,10 +47,10 @@ export class InSetuExtPublishModals extends InSetuElement {
             window.inSetu.extensions.Registry.executeUnload('publish');
         }
     }
-
     render() {
+        if (!this.publishModalOpen) return html``;
         return html`
-            <sutram-modal ?open=${this.publishModalOpen} ?fullscreen=${true} titleText="Publish Document" @sutram-modal-closed=${() => PublishStore.setState({ publishModalOpen: false })}>
+            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Publish Document" @sutram-modal-closed=${() => PublishStore.setState({ publishModalOpen: false })}>
                 <div slot="body" style="display: contents;">
                     <sutram-select 
                         label="Target Format"

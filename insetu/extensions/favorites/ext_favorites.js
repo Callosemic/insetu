@@ -74,6 +74,21 @@ export const FavoritesStore = createExtensionStore('Favorites', {
         }
     }
 });
+export class InSetuFavLabel extends InSetuElement {
+    static properties = { targetPath: { type: String }, _isPinned: { type: Boolean } };
+    constructor() { super(); this._isPinned = false; }
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(FavoritesStore, state => {
+            this._isPinned = state.items.some(i => i.path === this.targetPath);
+        });
+    }
+    render() {
+        return html`${this._isPinned ? 'Unpin Favorite' : 'Pin Favorite'}`;
+    }
+}
+customElements.define('insetu-fav-label', InSetuFavLabel);
+
 export class InSetuFavBtn extends InSetuElement {
     static get extensionName() { return 'favorites'; }
     get extName() { return 'favorites'; }
@@ -116,7 +131,7 @@ export class InSetuFavBtn extends InSetuElement {
                 style="background: var(--input-bg); border: 1px solid var(--border); font-size: 1.1rem; padding: 4px 8px; margin: 0 5px 0 0; box-shadow: 0 2px 4px rgba(0,0,0,0.05); color: ${this._isPinned ? 'var(--intent-warning)' : 'var(--text-muted)'};"
                 title="${this._isPinned ? 'Unpin' : 'Pin'}"
                 @click=${this._toggle}>
-                ${this._isPinned ? '⭐' : '☆'}
+                <yv-icon name="star" style="width: 14px; height: 14px; ${this._isPinned ? 'fill: currentColor;' : ''}"></yv-icon>
             </button>
         `;
     }
@@ -129,7 +144,7 @@ export class InSetuExtFavorites extends InSetuElement {
         loading: { type: Boolean }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
         p.empty-msg { padding: 20px; margin: 0; }
     `];
 
@@ -192,7 +207,7 @@ export class InSetuExtFavorites extends InSetuElement {
                     const { repo, relativePath } = this.utils.parseURI(item.path);
                     const displayPath = repo ? `${repo}/${relativePath}` : relativePath;
                     return html`
-                    <insetu-card
+                    <sutram-card
                         .filename=${displayPath}
                         .titleText=${item.name}
                         .descriptionText=${item.path}
@@ -201,7 +216,7 @@ export class InSetuExtFavorites extends InSetuElement {
                         entityType=${eType}
                         .entityData=${{ filepath: item.path, repoDir: repo, isFS: !isContext }}
                         @card-clicked=${() => this._navigateToFavorite(item)}>
-                    </insetu-card>
+                    </sutram-card>
                     `;
                 })}
                 </div>
@@ -221,19 +236,48 @@ window.ExtensionRegistry.registerExtension('favorites', {
             targetEntity: 'file',
             id: 'fave_toggle_file',
             order: -1, // Pinned to the far left
-            component: (data) => html`<insetu-fav-btn .filepath=${data.filepath}></insetu-fav-btn>`
+            group: 'file',
+            label: (data) => html`<insetu-fav-label .targetPath=${data.filepath}></insetu-fav-label>`,
+            icon: 'star',
+            component: (data) => html`<insetu-fav-btn .filepath=${data.filepath}></insetu-fav-btn>`,
+            asyncAction: async (data) => {
+                const store = window.inSetu.stores.Favorites.getState();
+                const fav = store.items.find(i => i.path === data.filepath);
+                if (fav) await store.removeFavorite(fav.id);
+                else await store.addFavorite(data.filepath, 'file');
+            }
         },
         {
             targetEntity: 'repo',
             id: 'fave_toggle_repo',
             order: -1,
-            component: (data) => html`<insetu-fav-btn .filepath=${data.filepath || data.repoDir}></insetu-fav-btn>`
+            group: 'file',
+            label: (data) => html`<insetu-fav-label .targetPath=${data.filepath || data.repoDir}></insetu-fav-label>`,
+            icon: 'star',
+            component: (data) => html`<insetu-fav-btn .filepath=${data.filepath || data.repoDir}></insetu-fav-btn>`,
+            asyncAction: async (data) => {
+                const path = data.filepath || data.repoDir;
+                const store = window.inSetu.stores.Favorites.getState();
+                const fav = store.items.find(i => i.path === path);
+                if (fav) await store.removeFavorite(fav.id);
+                else await store.addFavorite(path, 'folder');
+            }
         },
         {
             targetEntity: 'folder',
             id: 'fave_toggle_folder',
             order: -1,
-            component: (data) => html`<insetu-fav-btn .folderpath=${data.folderpath || data.filepath}></insetu-fav-btn>`
+            group: 'file',
+            label: (data) => html`<insetu-fav-label .targetPath=${data.folderpath || data.filepath}></insetu-fav-label>`,
+            icon: 'star',
+            component: (data) => html`<insetu-fav-btn .folderpath=${data.folderpath || data.filepath}></insetu-fav-btn>`,
+            asyncAction: async (data) => {
+                const path = data.folderpath || data.filepath;
+                const store = window.inSetu.stores.Favorites.getState();
+                const fav = store.items.find(i => i.path === path);
+                if (fav) await store.removeFavorite(fav.id);
+                else await store.addFavorite(path, 'folder');
+            }
         }
     ],
     layoutSlots: [

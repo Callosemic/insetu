@@ -312,7 +312,8 @@ export class InSetuExtFreshdesk extends InSetuElement {
     }
     render() {
         return html`
-            <sutram-modal ?open=${this.isModalOpen} titleText="Ticket #${this.selectedTicket?.id || ''}" ?fullscreen=${true} @sutram-modal-closed=${() => FreshdeskStore.setState({ isModalOpen: false })}>
+            ${this.isModalOpen ? html`
+            <sutram-modal ?open=${true} titleText="Ticket #${this.selectedTicket?.id || ''}" ?fullscreen=${true} @sutram-modal-closed=${() => FreshdeskStore.setState({ isModalOpen: false })}>
                 <div slot="body" style="display: contents;">
                     <!-- Metadata Header -->
                     <details style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; font-size: 0.95rem; flex-shrink: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
@@ -372,6 +373,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
                     </div>
                 </div>
             </sutram-modal>
+            ` : ''}
             <div style="display: flex; gap: 15px; margin-top: 15px; align-items: center; background: var(--input-bg); padding: 10px; border-radius: 6px; border: 1px solid var(--border); flex-wrap: wrap;">
                 <div style="display: flex; align-items: center; gap: 8px;">
                     <sutram-select 
@@ -422,12 +424,11 @@ export class InSetuExtFreshdesk extends InSetuElement {
                     const prioMap = { 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Urgent' };
 
                     const assigneeText = t.responder_id ? ((t.responder_id === this.myAgentId) ? 'Me' : (t.responder_name || 'Someone Else')) : 'None';
-
                     return html`
-                    <insetu-card
+                    <sutram-card
                         .filename=${`Ticket #${t.id}`}
                         .titleText=${t.subject}
-                        .descriptionText=${`Assignee: ${assigneeText} | Status: ${statusMap[t.status] || t.status} | Priority: ${prioMap[t.priority] || t.priority}`}
+                        .descriptionText=${`Assignee: ${assigneeText} | Status: ${statusMap[t.status] || t.status} | Priority:${prioMap[t.priority] || t.priority}`}
                         .detailText=${this.utils.formatDate(t.created_at)}
                         icon="ticket"
                         intent="highlight"
@@ -437,7 +438,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
                             FreshdeskStore.setState({ selectedTicket: t, isModalOpen: true });
                             this.fetchConversations(t.id);
                         }}>
-                    </insetu-card>
+                    </sutram-card>
                 `})}
                 </div>
                 ${(!this.activeJobId && this.tickets.length > 0) ? html`

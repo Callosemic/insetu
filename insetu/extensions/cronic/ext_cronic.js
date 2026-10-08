@@ -60,7 +60,7 @@ export class InSetuExtCronic extends InSetuElement {
     static styles = [
         sharedStyles,
         css`
-            :host { display: flex; flex-direction: column; height: 100%; width: 100%; box-sizing: border-box; background: var(--bg); overflow: hidden; }
+            :host { display: flex; flex-direction: column; height: 100%; width: 100%; box-sizing: border-box; background: var(--bg); overflow: hidden; container-type: inline-size; }
             .header-wrap { padding: 0 var(--mobile-edge-padding); padding-top: var(--mobile-edge-padding); }
             .job-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
             .log-box { font-family: var(--font-mono); background: var(--input-bg); border: 1px solid var(--border); padding: 12px; border-radius: 6px; white-space: pre-wrap; font-size: 0.85rem; max-height: 250px; overflow-y: auto; margin-top: 10px; }
@@ -165,7 +165,7 @@ export class InSetuExtCronic extends InSetuElement {
                 <sutram-card-group>
                     ${this.jobs.length === 0 ? html`<p style="color: var(--text-muted); font-style: italic;">No active cronic jobs scheduled for this workspace.</p>` : ''}
                     ${this.jobs.map(job => html`
-                        <insetu-card
+                        <sutram-card
                             .filename=${job.filepath.split('/').pop()}
                             .titleText=${job.filepath.split('/').pop()}
                             .descriptionText=${`Schedule: ${job.schedule} • Status: ${job.last_status || 'pending'}`}
@@ -179,7 +179,7 @@ export class InSetuExtCronic extends InSetuElement {
                                 <sutram-btn size="sm" intent="neutral" @click=${() => CronicStore.getState().fetchLogs(job.id)}>📜 Logs</sutram-btn>
                                 <sutram-async-btn size="sm" label="🗑️ Remove" intent="danger" style="margin: 0;" .onClick=${async () => this._deleteJob(job.id)}></sutram-async-btn>
                             </div>
-                        </insetu-card>
+                        </sutram-card>
                     `)}
                 </sutram-card-group>
                 ${this.selectedJobId ? html`

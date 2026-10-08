@@ -81,7 +81,7 @@ export class InSetuExtPrompts extends InSetuElement {
         globalBrowsePath: { type: Array }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
     `];
     constructor() {
         super();
@@ -190,7 +190,7 @@ export class InSetuExtPrompts extends InSetuElement {
                     stripPrefix="ctx://prompts/"
                     basePath="ctx://prompts/"
                     .enableSearch=${true}
-                    searchPlaceholder="🔍 Fuzzy search prompts..."
+                    searchPlaceholder="Fuzzy search prompts..."
                     .currentPath=${this.globalBrowsePath}
                     entityType="file:prompt"
                     @card-clicked=${(e) => { if(e.detail.isSource && window.inSetu.vfs.viewSourceFile) window.inSetu.vfs.viewSourceFile(e.detail.filename, true); }}
@@ -206,7 +206,7 @@ export class InSetuExtPromptsActions extends InSetuElement {
     static properties = {
         globalBrowsePath: { type: Array }
     };
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`:host { display: flex; align-items: stretch; height: 100%; }`];
 
     constructor() {
         super();

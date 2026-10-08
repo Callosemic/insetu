@@ -99,8 +99,9 @@ export class InSetuExtIngestModals extends InSetuElement {
         });
     }
     render() {
+        if (!this.ingestModalOpen) return html``;
         return html`
-            <sutram-modal ?open=${this.ingestModalOpen} titleText="Import from URL" @sutram-modal-closed=${() => IngestStore.setState({ ingestModalOpen: false })}>
+            <sutram-modal ?open=${true} titleText="Import from URL" @sutram-modal-closed=${() => IngestStore.setState({ ingestModalOpen: false })}>
                 <div slot="body" style="display: contents;">
                     <sutram-input label="Target URL:" placeholder="https://..." .value=${this.ingestUrl} @sutram-input-changed=${e => IngestStore.setState({ ingestUrl: e.detail.value })}></sutram-input>
 

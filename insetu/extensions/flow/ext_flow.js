@@ -74,7 +74,7 @@ export class InSetuExtFlow extends InSetuElement {
         _applyVisibilityFilter: { type: Boolean }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
     `];
     constructor() {
         super();
@@ -404,7 +404,7 @@ export class InSetuExtFlow extends InSetuElement {
             try {
                 return html`
                     <sutram-toolbar
-                        searchPlaceholder="🔍 Fuzzy search workflows..."
+                        searchPlaceholder="Fuzzy search workflows..."
                     .searchQuery=${this.searchQuery}
                     @search-changed=${(e) => FlowStore.setState({ searchQuery: e.detail.value })}
                     .enableFilterDropdown=${true}
@@ -423,9 +423,9 @@ export class InSetuExtFlow extends InSetuElement {
                         </div>
                     </div>
                 </sutram-toolbar>
-            <sutram-scroll-view padding="none">
-                        ${this.batches.length === 0 ? html`<div style="padding: 20px var(--content-padding-x, 20px);"><insetu-empty-state text="No workflow batches defined."></insetu-empty-state></div>` : ''}
-                        ${this.batches.length > 0 && filteredBatches.length === 0 ? html`<div style="padding: 20px var(--content-padding-x, 20px);"><sutram-empty-state text="All workflows hidden by current filters."></sutram-empty-state></div>` : ''}
+            <sutram-scroll-view>
+                        ${this.batches.length === 0 ? html`<div style="padding: 20px 0;"><sutram-empty-state text="No workflow batches defined."></sutram-empty-state></div>` : ''}
+                        ${this.batches.length > 0 && filteredBatches.length === 0 ? html`<div style="padding: 20px 0;"><sutram-empty-state text="All workflows hidden by current filters."></sutram-empty-state></div>` : ''}
                         ${(() => {
                             const groups = {};
                             filteredBatches.forEach(b => {
@@ -468,7 +468,7 @@ export class InSetuExtFlow extends InSetuElement {
                                             const isLocked = isFlowLoading && isDirty;
                                             const statusIcon = isLocked ? '⏳' : (isDirty ? '⚠️' : '📦');
                                             return html`
-                                                <insetu-card
+                                                <sutram-card
                                                         style="opacity: ${isLocked ? '0.6' : '1'}; pointer-events: ${isLocked ? 'none' : 'auto'}; transition: opacity 0.2s ease;"
                                                         .filename=${b.id}
                                                         .titleText=${`${statusIcon} ${b.title || b.id}`}
@@ -487,7 +487,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                             chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, filename, 'ctx') : [filename]  
                                                         }}
                                                         @card-clicked=${() => this.openBatchModal(b)}>
-                                                </insetu-card>
+                                                </sutram-card>
                                             `;
                                         })}
                                     </div>
@@ -495,8 +495,9 @@ export class InSetuExtFlow extends InSetuElement {
                             `);
                         })()}
             </sutram-scroll-view>
+                    ${this._editModalOpen ? html`
                     <sutram-modal    
-                            .open=${this._editModalOpen} 
+                            ?open=${true} 
                             ?fullscreen=${true}
                             titleText=${this._editForm?.id ? `Edit Batch: ${this._editForm.title}` : 'Create New Batch'}
                             @sutram-modal-closed=${() => { this._editModalOpen = false; this._editingBatch = null; this.requestUpdate(); }}>
@@ -517,7 +518,7 @@ export class InSetuExtFlow extends InSetuElement {
                                     <div>
                                             <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">1. Includes (Contexts & Diffs)</h4>
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                                                    ${this._editForm?.includes?.length === 0 ? html`<insetu-empty-state text="No files selected."></insetu-empty-state>` : 
+                                                    ${this._editForm?.includes?.length === 0 ? html`<sutram-empty-state text="No files selected."></sutram-empty-state>` : 
                                                         this._editForm?.includes?.map((inc, idx) => {
                                                             const isSystem = inc.startsWith('ctx://');
                                                             const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
@@ -594,7 +595,7 @@ export class InSetuExtFlow extends InSetuElement {
                                             <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Visibility Prerequisites (Optional)</h4>
                                             <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if at least one of these exist:</label>
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                                                    ${!this._editForm?.showIfExists || this._editForm?.showIfExists?.length === 0 ? html`<insetu-empty-state text="No requirements."></insetu-empty-state>` : 
+                                                    ${!this._editForm?.showIfExists || this._editForm?.showIfExists?.length === 0 ? html`<sutram-empty-state text="No requirements."></sutram-empty-state>` : 
                                                         this._editForm?.showIfExists?.map((inc, idx) => {
                                                             const isSystem = inc.startsWith('ctx://');
                                                             const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
@@ -619,7 +620,7 @@ export class InSetuExtFlow extends InSetuElement {
                                             <sutram-btn size="sm" intent="neutral" style="margin: 0 0 15px 0;" @click=${() => { this._selectingFor = 'exists'; this._tempContexts = [...(this._editForm.showIfExists || [])]; this._showSelectContexts = true; }}>➕ Add Required Contexts</sutram-btn>
                                             <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if all of these are missing:</label>
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                                                    ${!this._editForm?.showIfMissing || this._editForm?.showIfMissing?.length === 0 ? html`<insetu-empty-state text="No requirements."></insetu-empty-state>` : 
+                                                    ${!this._editForm?.showIfMissing || this._editForm?.showIfMissing?.length === 0 ? html`<sutram-empty-state text="No requirements."></sutram-empty-state>` : 
                                                         this._editForm?.showIfMissing?.map((inc, idx) => {
                                                             const isSystem = inc.startsWith('ctx://');
                                                             const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
@@ -668,7 +669,9 @@ export class InSetuExtFlow extends InSetuElement {
                             ${this._editingBatch?.id ? html`<button slot="footer" style="background: var(--intent-danger); color: white;" @click=${this.deleteEditBatch}>🗑️ Delete Batch</button>` : ''}
                             <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this.saveEditBatch}>💾 Save Batch</button>
                     </sutram-modal>
-                    <sutram-modal .open=${this._showSelectContexts} titleText="Select Contexts" @sutram-modal-closed=${() => { this._showSelectContexts = false; this._contextSearchQuery = ''; }}>
+                    ` : ''}
+                    ${this._showSelectContexts ? html`
+                    <sutram-modal ?open=${true} titleText="Select Contexts" @sutram-modal-closed=${() => { this._showSelectContexts = false; this._contextSearchQuery = ''; }}>
                             <div slot="body" style="display: contents;">
                                     <sutram-input placeholder="🔍 Fuzzy search contexts..." .value=${this._contextSearchQuery} @sutram-input-changed=${(e) => { this._contextSearchQuery = e.detail.value; }}></sutram-input>
                                     <div style="display: flex; flex-direction: column; gap: 5px; overflow-y: auto; flex: 1;">
@@ -715,7 +718,9 @@ export class InSetuExtFlow extends InSetuElement {
                                 this._contextSearchQuery = '';
                             }}>✅ Confirm Selection</button>
                     </sutram-modal>
-                    <sutram-modal .open=${this._viewModalOpen} ?fullscreen=${true} titleText=${this._viewingBatch ? `Batch Workflow: ${this._viewingBatch.title}` : ''} @sutram-modal-closed=${() => { this._viewModalOpen = false; this._viewingBatch = null; this.requestUpdate(); }}>
+                    ` : ''}
+                    ${this._viewModalOpen ? html`
+                    <sutram-modal ?open=${true} ?fullscreen=${true} titleText=${this._viewingBatch ? `Batch Workflow: ${this._viewingBatch.title}` : ''} @sutram-modal-closed=${() => { this._viewModalOpen = false; this._viewingBatch = null; this.requestUpdate(); }}>
                             <div slot="body" style="display: contents;">
                                     ${this._viewingBatch ? html`
                                             <div>
@@ -778,8 +783,9 @@ export class InSetuExtFlow extends InSetuElement {
                                     ` : ''}
                             </div>
                     </sutram-modal>
+                    ` : ''}
         `;
-        } catch (err) {
+    } catch (err) {
             console.error("Flow UI Render Crash:", err);
             return html`
                 <div style="padding: 20px; color: var(--intent-danger); background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 6px; margin: 20px;">
@@ -794,7 +800,7 @@ export class InSetuExtFlow extends InSetuElement {
 customElements.define('insetu-ext-flow', InSetuExtFlow);
 export class InSetuExtFlowActions extends InSetuElement {
     static get extensionName() { return 'flow'; }
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`:host { display: flex; align-items: stretch; height: 100%; }`];
     get _menuItems() {
         return [
             { label: 'New Batch', icon: '📦', onClick: () => { 

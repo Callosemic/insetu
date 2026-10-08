@@ -427,10 +427,10 @@ export class InSetuExtSkills extends InSetuElement {
                                     const domainMeta = this.domainConfig[item.domain] || { label: item.domain };
                                     const tagsLabel = item.tags ? ` [${item.tags}]` : '';
                                     return html`
-                                        <insetu-card
+                                        <sutram-card
                                             .filename=${item.filepath}
                                             .titleText=${item.name}
-                                            .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage: ${item.status}`}
+                                            .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage:${item.status}`}
                                             .detailText=${item.filepath}
                                             icon="music"
                                             intent="neutral"
@@ -439,7 +439,7 @@ export class InSetuExtSkills extends InSetuElement {
                                             entityType="skill"
                                             .entityData=${item}
                                             @card-clicked=${() => SkillsStore.getState().selectItem(item, 'train')}>
-                                        </insetu-card>
+                                        </sutram-card>
                                     `;
                                 })}
                             </div>
@@ -473,10 +473,10 @@ export class InSetuExtSkills extends InSetuElement {
                                     const domainMeta = this.domainConfig[item.domain] || { label: item.domain };
                                     const tagsLabel = item.tags ? ` [${item.tags}]` : '';
                                     return html`
-                                        <insetu-card
+                                        <sutram-card
                                             .filename=${item.filepath}
                                             .titleText=${item.name}
-                                            .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage: ${item.status}`}
+                                            .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage:${item.status}`}
                                             .detailText=${item.filepath}
                                             icon="target"
                                             intent="primary"
@@ -485,7 +485,7 @@ export class InSetuExtSkills extends InSetuElement {
                                             entityType="skill"
                                             .entityData=${item}
                                             @card-clicked=${() => SkillsStore.getState().selectItem(item, 'train')}>
-                                        </insetu-card>
+                                        </sutram-card>
                                     `;
                                 })}
                             </div>
@@ -501,10 +501,10 @@ export class InSetuExtSkills extends InSetuElement {
                                     const domainMeta = this.domainConfig[item.domain] || { label: item.domain };
                                     const tagsLabel = item.tags ? ` [${item.tags}]` : '';
                                     return html`
-                                        <insetu-card
+                                        <sutram-card
                                             .filename=${item.filepath}
                                             .titleText=${item.name}
-                                            .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage: ${item.status}`}
+                                            .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage:${item.status}`}
                                             .detailText=${item.filepath}
                                             icon="folder"
                                             intent="neutral"
@@ -516,7 +516,7 @@ export class InSetuExtSkills extends InSetuElement {
                                                 <sutram-btn size="sm" intent="primary" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'train'); }}>⏱️ Train</sutram-btn>
                                                 <sutram-btn size="sm" intent="neutral" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'edit'); }}>✏️ Edit</sutram-btn>
                                             </div>
-                                        </insetu-card>
+                                        </sutram-card>
                                     `;
                                 })}
                             </div>
@@ -525,8 +525,9 @@ export class InSetuExtSkills extends InSetuElement {
                 ` : this._renderGroupsTab()}
             </div>
             </div>
+            ${(!!this.selectedItem && this.modalMode === 'train') ? html`
             <sutram-modal
-                ?open=${!!this.selectedItem && this.modalMode === 'train'}
+                ?open=${true}
                 ?fullscreen=${true}
                 titleText="⏱️ Practice Session: ${this.selectedItem?.name}"
                 @sutram-modal-closed=${() => SkillsStore.setState({ selectedItem: null })}>
@@ -568,8 +569,10 @@ export class InSetuExtSkills extends InSetuElement {
                 </div>
                 <button slot="footer" style="background: var(--intent-success); color: white;" @click=${this._submitPracticeSession}>💾 Flush Session Data</button>
             </sutram-modal>
+            ` : ''}
+            ${(!!this.selectedItem && this.modalMode === 'edit') ? html`
             <sutram-modal
-                ?open=${!!this.selectedItem && this.modalMode === 'edit'}
+                ?open=${true}
                 ?fullscreen=${true}
                 titleText="✏️ Edit Skill Architecture & Structure"
                 @sutram-modal-closed=${() => SkillsStore.setState({ selectedItem: null })}>
@@ -587,8 +590,10 @@ export class InSetuExtSkills extends InSetuElement {
                 <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${this._deleteSkillItem}>🗑️ Delete Item</button>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this._submitStructuralEdit}>💾 Save Structural Changes</button>
             </sutram-modal>
+            ` : ''}
+            ${this.newSkillModalOpen ? html`
             <sutram-modal
-                ?open=${this.newSkillModalOpen}
+                ?open=${true}
                 ?fullscreen=${true}
                 titleText="Add New Training Skill Item"
                 @sutram-modal-closed=${() => SkillsStore.setState({ newSkillModalOpen: false })}>
@@ -671,6 +676,7 @@ export class InSetuExtSkills extends InSetuElement {
                     <button type="submit" style="background: var(--intent-success); font-weight: bold; width: 100%; padding: 12px; margin-top: 10px;">➕ Initialize Track on Disk</button>
                 </form>
             </sutram-modal>
+            ` : ''}
         `;
     }
 }

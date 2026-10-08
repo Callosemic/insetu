@@ -953,7 +953,8 @@ export class InSetuExtUpdate extends InSetuElement {
                     </div>
                 ` : ''}
             </div>
-            <sutram-modal ?open=${this.previewModalOpen} ?fullscreen=${true} titleText=${this.previewActionType === 'log_view' ? 'Release Execution Log' : 'Release Preview'} @sutram-modal-closed=${() => UpdateStore.setState({ previewModalOpen: false })}>
+            ${this.previewModalOpen ? html`
+            <sutram-modal ?open=${true} ?fullscreen=${true} titleText=${this.previewActionType === 'log_view' ? 'Release Execution Log' : 'Release Preview'} @sutram-modal-closed=${() => UpdateStore.setState({ previewModalOpen: false })}>
                 <div slot="body" style="display: contents;">
                     <p style="font-size: 0.9rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">
                         ${this.previewCaption}
@@ -1030,6 +1031,7 @@ export class InSetuExtUpdate extends InSetuElement {
                     ` : ''}
                 </div>
             </sutram-modal>
+            ` : ''}
         `;
     }
 }

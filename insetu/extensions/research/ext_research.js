@@ -266,20 +266,19 @@ export class InSetuExtResearch extends InSetuElement {
         const cardStatusExtra = job.status === 'gathering'  
             ? `(Page ${Math.floor((meta.start_index || 0) / 10) + 1} - ${job.total_links} found)`
             : `(${job.processed_links}/${job.total_links} scraped)`;
-
         return html`
-            <insetu-card
+            <sutram-card
                 .filename=${job.id}
                 .titleText=${`🔍 ${job.query}`}
-                .descriptionText=${`Status: ${job.status.toUpperCase()} ${cardStatusExtra}`}
-                .detailText=${`Created: ${safeDate} | Range: ${meta.date_range || 'Any Time'}`}
+                .descriptionText=${`Status: ${job.status.toUpperCase()}${cardStatusExtra}`}
+                .detailText=${`Created: ${safeDate} | Range:${meta.date_range || 'Any Time'}`}
                 icon=""
                 intentColor=${statusColor}
                 entityType="research_job"
                 .entityData=${job}
                 @card-clicked=${() => ResearchStore.setState({ selectedJobId: job.id, selectedItemId: null })}>
                 ${(job.status === 'failed' && meta.error) ? html`<div style="font-size: 0.8rem; color: var(--intent-danger); background: var(--input-bg); padding: 6px 10px; border-radius: 4px; margin-top: 8px; border: 1px solid var(--intent-danger);">⚠️ <b>Error:</b> ${meta.error}</div>` : ''}
-            </insetu-card>
+            </sutram-card>
         `;
     }
     _renderJobDetailView() {
@@ -348,9 +347,9 @@ export class InSetuExtResearch extends InSetuElement {
                                 const statusBadge = item.scraped_at ? '✅' : '⏳';
                                 const isSelected = this.selectedItemId === item.id;
                                 return html`
-                                    <insetu-card
+                                    <sutram-card
                                         .filename=${item.id}
-                                        .titleText=${`${statusBadge} ${item.title || 'Untitled'}`}
+                                        .titleText=${`${statusBadge}${item.title || 'Untitled'}`}
                                         .descriptionText=${item.url}
                                         .detailText=${`ID: ${item.id}`}
                                         icon="file-text"
@@ -359,7 +358,7 @@ export class InSetuExtResearch extends InSetuElement {
                                         @card-clicked=${() => ResearchStore.setState({ selectedItemId: item.id })}>
                                         ${item.status === 'duplicate' ? html`<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;"><span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold;">⚠️ Already Scraped</span><button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-warning); color: var(--intent-warning); padding: 2px 8px; margin: 0; font-size: 0.7rem;" @click=${(e) => { e.stopPropagation(); this.handleDisposition(item.id, 'force_scrape'); }}>Force Scrape Anyway</button></div>` : ''}
                                         ${item.status === 'in_library' ? html`<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;"><span style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold;">📚 In Library</span><button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-highlight); color: var(--intent-highlight); padding: 2px 8px; margin: 0; font-size: 0.7rem;" @click=${(e) => { e.stopPropagation(); this.handleDisposition(item.id, 'force_scrape'); }}>Force Scrape Anyway</button></div>` : ''}
-                                    </insetu-card>
+                                    </sutram-card>
                                 `;
                             })}
                         </div>
@@ -390,7 +389,8 @@ export class InSetuExtResearch extends InSetuElement {
                     </div>
                 `}
             </div>
-            <sutram-modal ?open=${!!activeItem} titleText="Research Item Preview" ?fullscreen=${true} @sutram-modal-closed=${() => ResearchStore.setState({ selectedItemId: null })}>
+            ${!!activeItem ? html`
+            <sutram-modal ?open=${true} titleText="Research Item Preview" ?fullscreen=${true} @sutram-modal-closed=${() => ResearchStore.setState({ selectedItemId: null })}>
                 <div slot="body" style="display: contents;">
                     ${activeItem ? html`
                         <div style="padding: 15px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; background: var(--input-bg);">
@@ -413,7 +413,9 @@ export class InSetuExtResearch extends InSetuElement {
                     ` : ''}
                 </div>
             </sutram-modal>
-            <sutram-modal ?open=${this.newJobModalOpen} ?fullscreen=${true} titleText="New Research Job" @sutram-modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
+            ` : ''}
+            ${this.newJobModalOpen ? html`
+            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="New Research Job" @sutram-modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
                 <div slot="body" style="display: contents;">
                     ${bindStoreInput(ResearchStore, 'searchForm.query', this.searchForm.query, { placeholder: 'Search Query...', style: 'width: 100%;' })}
                     <div style="display: flex; gap: 10px;">
@@ -448,6 +450,7 @@ export class InSetuExtResearch extends InSetuElement {
                 </div>
                 <sutram-async-btn slot="footer" label="🚀 Start Scraping" loadingLabel="⏳ Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></sutram-async-btn>
             </sutram-modal>
+            ` : ''}
         `;
     }
 }

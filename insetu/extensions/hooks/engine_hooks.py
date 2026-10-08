@@ -1,6 +1,7 @@
 import os
 import subprocess
 import json
+import shlex
 import uuid
 import datetime
 from pathlib import Path
@@ -45,11 +46,15 @@ def _background_execute_rule(ctx, rule_id, rule_name, command, workspace_id=None
     # Enforce non-interactive environment
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+
+    use_shell = any(char in expanded_cmd for char in (';', '&&', '||', '|', '>', '<', '&'))
+    cmd = expanded_cmd if use_shell else shlex.split(expanded_cmd)
+
     print(f"🚀 [HOOKS WORKER] Executing command: {expanded_cmd} (cwd: {exec_cwd})")
     try:
         res = ctx.exec.run(
-            expanded_cmd, 
-            shell=True, 
+            cmd, 
+            shell=use_shell, 
             cwd=exec_cwd, 
             env=env,
             timeout=300

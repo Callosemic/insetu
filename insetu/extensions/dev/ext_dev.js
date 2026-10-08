@@ -19,7 +19,7 @@ export class InSetuExtDevDash extends InSetuElement {
         _expandedGraphs: { type: Object }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; overflow: hidden; box-sizing: border-box; background: var(--bg); }
+        :host { display: flex; flex-direction: column; height: 100%; overflow: hidden; box-sizing: border-box; background: var(--bg); container-type: inline-size; }
     `];
     constructor() {
         super();
@@ -99,14 +99,14 @@ export class InSetuExtDevDash extends InSetuElement {
                     <span style="font-size: 0.8rem; color: var(--text-muted);">Last Updated: ${this.lastUpdate || '...'}</span>
                 </div>
                 <sutram-card-group>
-                    <insetu-card
+                    <sutram-card
                         titleText="File Thrashing (Last 1 Hour)"
                         descriptionText="Files mutated more than 3 times in the past hour."
                         icon="flame"
                         intent="danger"
                         ?disableSelection=${true}
                         style="margin-bottom: 20px;">
-                        
+
                         <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
                             ${this.thrashingFiles.length === 0 ? html`
                                 <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem;">
@@ -147,8 +147,8 @@ export class InSetuExtDevDash extends InSetuElement {
                                 </div>
                             `)}
                         </div>
-                    </insetu-card>
-                    <insetu-card
+                    </sutram-card>
+                    <sutram-card
                         titleText="System Error Ledger"
                         descriptionText="Background worker crashes, VFS write failures, and unhandled exceptions."
                         icon="alert-triangle"
@@ -192,14 +192,14 @@ export class InSetuExtDevDash extends InSetuElement {
                                 </div>
                             `)}
                         </div>
-                    </insetu-card>
-                    <insetu-card
+                    </sutram-card>
+                    <sutram-card
                         titleText="Bridge Error Ledger"
                         descriptionText="AST validation and patch diff failures for LLM analysis."
                         icon="layout"
                         intent="warning"
                         ?disableSelection=${true}>
-                        
+
                         <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
                             ${this.bridgeErrors.length === 0 ? html`
                                 <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem;">
@@ -231,7 +231,7 @@ export class InSetuExtDevDash extends InSetuElement {
                                 </div>
                             `)}
                         </div>
-                    </insetu-card>
+                    </sutram-card>
                 </sutram-card-group>
                     </div>
                 </sutram-scroll-view>

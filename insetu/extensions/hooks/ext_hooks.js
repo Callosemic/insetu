@@ -190,12 +190,11 @@ export class InSetuExtHooks extends InSetuElement {
                 ${this.loading ? html`<div style="padding: 15px; color: var(--text-muted); font-style: italic;">⏳ Loading automation rules...</div>` : ''}
                 <div style="display: flex; flex-direction: column; gap: 10px;">
                     ${this.rules.length === 0 && !this.loading ? html`<p style="color: var(--text-muted); font-style: italic;">No automation rules configured. Click "+ New Rule" to create one.</p>` : ''}
-
                     ${this.rules.map(rule => html`
-                        <insetu-card
+                        <sutram-card
                             .filename=${rule.id}
                             .titleText=${rule.name}
-                            .descriptionText=${`IF: ${rule.trigger_type} [Target: ${rule.trigger_target}]`}
+                            .descriptionText=${`IF: ${rule.trigger_type} [Target:${rule.trigger_target}]`}
                             icon=${rule.enabled ? 'play-circle' : 'circle'}
                             intent=${rule.enabled ? 'success' : 'neutral'}
                             entityType="hook_rule"
@@ -203,7 +202,7 @@ export class InSetuExtHooks extends InSetuElement {
                             style="opacity: ${rule.enabled ? '1' : '0.6'}; display: block;">
 
                             <div style="font-family: var(--font-mono); background: var(--bg); border: 1px solid var(--border); padding: 8px 12px; border-radius: 4px; font-size: 0.85rem; color: var(--intent-primary); word-break: break-all; margin-top: 5px;"><b>THEN:</b> ${rule.command}</div>
-                        </insetu-card>
+                        </sutram-card>
                     `)}
                 </div>
                 <div style="margin-top: 30px; border-top: 1px solid var(--border); padding-top: 20px;">
@@ -245,8 +244,9 @@ export class InSetuExtHooks extends InSetuElement {
                     </div>
                 </div>
             </div>
+            ${this.ruleModalOpen ? html`
             <sutram-modal  
-                ?open=${this.ruleModalOpen} 
+                ?open=${true} 
                 ?fullscreen=${true}
                 titleText=${this.editingRule ? 'Edit Automation Rule' : 'New Automation Rule'}
                 @sutram-modal-closed=${() => HooksStore.setState({ ruleModalOpen: false })}>
@@ -336,28 +336,17 @@ export class InSetuExtHooks extends InSetuElement {
                 </div>
                 <sutram-async-btn slot="footer" label="💾 Save Rule" intent="primary" .onClick=${this.saveRule.bind(this)}></sutram-async-btn>
             </sutram-modal>
+            ` : ''}
         `;
     }
 }
 customElements.define('insetu-ext-hooks', InSetuExtHooks);
-
 export class InSetuExtHooksActions extends InSetuElement {
     static get extensionName() { return 'hooks'; }
-    static styles = [
-        sharedStyles,
-        css`
-            button {
-                background: transparent; color: var(--text); border: 1px solid var(--border);
-                border-radius: 4px; cursor: pointer; font-weight: bold; width: 34px; height: 34px;
-                display: flex; align-items: center; justify-content: center; padding: 0;
-                font-size: 1.1rem; transition: background 0.2s; margin: 0;
-            }
-            button:hover { background: var(--input-bg); }
-        `
-    ];
+    static styles = [sharedStyles, css`:host { display: flex; align-items: stretch; height: 100%; }`];
     render() {
         return html`
-            <button title="New Rule" @click=${() => this.dispatch('insetu:hooks:edit', { data: null })}>➕</button>
+            <button class="system-action-btn" title="New Rule" @click=${() => this.dispatch('insetu:hooks:edit', { data: null })}>➕</button>
         `;
     }
 }
