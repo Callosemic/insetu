@@ -58,10 +58,9 @@ The frontend chassis must remain a "dumb" visual grid, isolating business logic 
 *   **Form Controls & Buttons (ADR 0025, 0034)**
     *   ❌ **Noncompliant:** Using raw HTML `<input>`, `<select>`, `<textarea>`, or firing network requests from a standard `<button>`.
     *   ✅ **Gold Standard:** Enforcing the `SUTRAM_FORM_CONTROL_MANDATE` by utilizing `<sutram-input>`, `<sutram-select>`, `<sutram-textarea>`, `<sutram-tag>`, and `<sutram-label>`. Wrapping all async network actions in `<sutram-async-btn>` or `this.api.bindJobAction` to handle loading states automatically.
-
 *   **Layout Padding & Geometry Hacks**
-    *   ❌ **Noncompliant:** Using negative margins (e.g., `margin: -20px -20px 0 -20px;`) to defeat a parent container's padding, which causes layout blowouts on mobile viewports.
-    *   ✅ **Gold Standard:** Using the declarative `?flush=${true}` property on `<sutram-modal>` or `<sutram-collapsible>` to natively remove Shadow DOM padding, allowing child elements to flow cleanly edge-to-edge.
+    *   ❌ **Noncompliant:** Using negative margins (e.g., `margin: -20px -20px 0 -20px;`) to defeat a parent container's padding, or hardcoding fixed horizontal margins/padding on layout primitives to compensate for container constraints.
+    *   ✅ **Gold Standard:** Using the declarative `?flush=${true}` property on `<sutram-modal>` or `<sutram-collapsible>` to natively remove Shadow DOM padding, allowing child elements to flow cleanly edge-to-edge. Rely on the parent container (e.g., `<sutram-scroll-view>`) to establish unified bounding box padding.
 *   **API Network Gateway (ADR 0016)**
     *   ❌ **Noncompliant:** Using raw `fetch()` or manually constructing API paths like `/api/${workspaceId}/...`.
     *   ✅ **Gold Standard:** Routing entirely through `this.api.get()`, `this.api.post()`, or `this.api.postJson()`, which natively handle tenant scope isolation and security token handshakes.

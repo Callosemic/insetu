@@ -1,7 +1,7 @@
 # 01: inSetu Engineering Standards & Audit Guardrails
 
 **Identity**: The Architect.
-**Mission**: To define the strict engineering principles, performance guardrails, and architectural hygiene required to maintain the inSetu Developer OS and its Virtual File System (VFS).
+**Mission**: To define the strict engineering principles, performance guardrails, and architectural hygiene required to maintain the inSetu Workbench and its Virtual File System (VFS).
 
 ---
 ## 0. Three-Tier Architecture & Module Classification
@@ -12,8 +12,8 @@ The Kernel is a purely generic application substrate. It is strictly forbidden f
 * **`akasa` (Python Kernel Substrate):** Thread-local SQLite connection pooling (`akasa.db`), asynchronous Virtual File System queue and barrier locks (`akasa.vfs`), background worker metronome (`akasa.workers`), priority event bus (`akasa.hooks`), execution runners (`akasa.exec`), and the token gatehouse (`akasa.auth`).
 * **`sutram` & `yenvui` (Frontend Micro-Kernel & Chassis):** Universal Web Component chassis, import map synthesis, Zustand UDF state management, and declarative URL hash routing.
 
-### Tier 2: Core Substrate Engines (The inSetu OS)
-Tier 2 represents "inSetu proper." It builds the local-first AI Developer OS product on top of the agnostic Tier 1 Kernel.
+### Tier 2: Core Substrate Engines (The inSetu Workbench)
+Tier 2 represents "inSetu proper." It builds the local-first AI Workbench product on top of the agnostic Tier 1 Kernel.
 1. **Gather (`engine_gather.py`):** RAG context payload compiler, topology declaration broker, and differential context synthesizer.
 2. **Yomama Sync Bridge (`engine_bridge.py`, `bridge_vfs.py`, `bridge_fuzzy.py`):** Multi-file `SEARCH`/`REPLACE` block parser, relative indentation healer, pre-flight AST syntax bouncer, and transactional patch ledger.
 3. **VFS REST Gateway (`routes_fs.py`):** API transport layer that exposes the Kernel's VFS queue to the frontend via authenticated endpoints.
@@ -53,7 +53,7 @@ The OS kernel must never assume default namespaces or hardcode repository paths.
 * **DRY Utility Centralization**: Any structural framework logic required by multiple engines MUST be centralized in `insetu/kernel/utils.py` (Tier 1 Kernel utilities) or `insetu/core/utils_core.py` (Tier 2 Developer OS physics). Executing system commands or external CLI binaries MUST route through `execute_binary()` in `utils_core.py` or `ctx.exec.run()` to guarantee PATH, virtual environment (`sys.executable`), and desktop shell resolution.
 "Fat Controllers" copying/pasting prefix logic are architectural failures.
 * **The Artifact Parser Anti-Pattern**: Never parse generated output artifacts (e.g., compiled `.txt` diff dumps, RAG context payloads, or rendered UI strings) to determine system state or drive backend execution. Artifacts are strictly one-way projections for human or LLM consumption. Always query the underlying SSOT directly (e.g., executing `git status` via subprocess instead of reading a `_diffs.txt` file).
-* **Stateless Multi-Tenancy & Scoped Request Routing**: The inSetu Developer OS handles multiple tenant environments statelessly inside the REST layer via explicit tracking scopes.
+* **Stateless Multi-Tenancy & Scoped Request Routing**: The inSetu Workbench handles multiple tenant environments statelessly inside the REST layer via explicit tracking scopes.
 Swapping profiles dynamically must occur via frontend headers or parameterized URL paths without backend process restarts.
 All backend managers, hooks, and extensions must accept an explicit request-scoped `workspace_id` parameter and completely reject un-parameterized global state storage. All extension API endpoints must map the tenant context directly within the route template layout (`/api/<workspace_id>/ext_name/verb`) to ensure absolute path-level data isolation and eliminate leaky dependencies on header-sniffing.
 ## 2. The Data Layer & CQRS Mandate

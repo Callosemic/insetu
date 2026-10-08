@@ -7,9 +7,11 @@
 
 ## 1. The SDK Philosophy (ADR 0017)
 Extensions must never manually wire multi-tenant boundaries, write raw SQLite creation loops, or orchestrate manual DOM teardowns. The core Micro-Kernel provides an SDK that encapsulates these responsibilities. If you find yourself importing raw `os`, `sqlite3`, or `zustand/vanilla`, you are violating the architecture.
-
 ## 2. Backend: The `InSetuExtension` Contract
 All backend extensions must be instantiated using the `InSetuExtension` wrapper, not raw Flask Blueprints.
+
+### User-Space & Workspace-Isolated Extensions
+Extensions may reside either in the global distribution directory (`insetu/extensions/`) or within a specific workspace's `.insetu/extensions/` directory. During system boot, `load_workspace_extensions()` automatically scans and injects local workspace extension paths into `sys.path`. This supports zero-config extension prototyping and tenant-isolated custom workflows without modifying the core package distribution.
 
 ### The Declarative Schema
 Do not hook into `system_boot` to execute `CREATE TABLE`. Pass a `schema` dictionary to the constructor. The OS will automatically handle schema migrations via diffing on boot.

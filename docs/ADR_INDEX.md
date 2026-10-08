@@ -1,6 +1,6 @@
 # inSetu Architecture Decision Records (ADR) Index
 
-This index serves as the centralized mapping for all active architectural decisions governing the inSetu Developer OS Micro-Kernel and Extension Ecosystem.
+This index serves as the centralized mapping for all active architectural decisions governing the inSetu Workbench Micro-Kernel and Extension Ecosystem.
 ## Core Architecture & Multi-Tenancy
 * **[ADR 0001: inSetu Genesis and Extension Architecture](adrs/archived/0001-insetu-genesis-and-extension-architecture.md)** - Extracted the Developer OS into the independent `inSetu` package and introduced the dynamic Extension Architecture.
 * **[ADR 0002: Spatial Physics & Extension Architecture](adrs/archived/0002-workspace-physics-and-extensions.md)** - Anchored execution to `.insetu/config.json` via a global switchboard, formalizing domain-specific capabilities as extensions.
@@ -54,6 +54,7 @@ This index serves as the centralized mapping for all active architectural decisi
 * **[ADR 0054: Multi-Column Viewport Projections and Virtual Buffer Editing](adrs/0054-multi-column-viewport-projections-and-virtual-buffer-editing.md)** - Replaced monolithic fullscreen editing overlays with multi-projection text buffers pinned to multi-column spatial grid viewports.
 * **[ADR 0055: VFS Parity Action Middleware, Singleton File Modal Deprecation, and Inversion-of-Control URI Coercion](adrs/0055-vfs-parity-action-middleware-and-singleton-modal-deprecation.md)** - Implemented pre-flight action middleware for dirty buffer auto-saves, deprecated singleton `fileModal` overlays, and introduced `coerce_naked_uri` event bus hooks.
 * **[ADR 0056: System SDK Module Renaming, Spatial Grid Routing, and Tree-Sitter Syntax Fallback](adrs/0056-system-sdk-module-renaming-spatial-grid-routing-and-syntax-fallback.md)** - Renamed system SDK module to `insetu_sdk.js`, extracted `routeToSpatialGrid` routing physics, integrated Zen Focus Mode into editor components, and implemented Node syntax fallback for Tree-Sitter template literal validation.
+* **[ADR 0057: Workspace Swap Layout Eviction, yv-icon Component Migration, and Primitive Alias Purge](adrs/0057-workspace-swap-layout-eviction-and-yv-icon-migration.md)** - Enforced UI layout eviction prior to tenant state swapping to prevent data bleed, migrated all raw `<i data-lucide>` tags to the `<yv-icon>` primitive, and purged legacy `insetu-*` compatibility wrappers.
 
 ## Background Processing & Capabilities
 * **[ADR 0006: Tenant-Isolated Compilation Locks](adrs/0006-tenant-isolated-compilation-locks.md)** - Replaced global compilation locks with a dynamic dictionary of `_COMPILER_LOCKS` to allow parallel concurrent compilations across separate tenants.

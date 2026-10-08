@@ -1,6 +1,6 @@
 # 04: inSetu UI Design Standards & UX Guardrails
 **Identity**: The Architect.
-**Mission**: To define the visual, spatial, and user experience (UX) constraints required to maintain a clean, high-performance, and distraction-free interface across the inSetu Developer OS.
+**Mission**: To define the visual, spatial, and user experience (UX) constraints required to maintain a clean, high-performance, and distraction-free interface across the inSetu Workbench.
 
 ---
 
@@ -15,6 +15,7 @@ Because of this relationship, the baseline visual identity of the OS (the "House
 The interface must feel like a native application, not a nested web document.
 * **No Nested Scrollbars**: There should only ever be ONE scrollable area on the screen at a time. Scrollable areas inside of scrollable areas are strictly forbidden.
 * **Edge-to-Edge Canvases**: Primary workspaces (like the File Editor, Board, or Terminal) must consume the exact usable screen area. Use `100dvh` (accounting for mobile safe areas) and a `flex: 1` growing container to stretch the canvas.
+* **Block Element Normalization**: Extension views must rely on the uniform padding provided by their parent containers (e.g., `<sutram-scroll-view>`). Individual layout primitives must not hardcode their own horizontal margins or padding to compensate for container constraints, as this fractures the grid and causes double-indentation.
 ## 2. The Fullscreen View Paradigm & Factory Construction
 Avoid the "box within a box" feeling.
 * **Centralized Modal Construction (`<insetu-modal>`)**: Eradicate hardcoded HTML `<div class="fullscreen-modal">` blocks and legacy `UIFactory.createModal` calls. All interface expansions must route through the `<insetu-modal>` Web Component.

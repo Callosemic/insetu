@@ -1,6 +1,6 @@
-# inSetu Developer OS Master Index
+# inSetu Workbench Master Index
 
-This document serves as the local master index for the inSetu Developer OS, an AI-first development environment, context gatherer, and local workflow orchestrator.
+This document serves as the local master index for the inSetu Workbench, an AI-first development environment, context gatherer, and local workflow orchestrator.
 
 ---
 
