@@ -49,26 +49,19 @@ export * from "@codemirror/lint";
 export * from "@codemirror/merge";
 export { basicSetup } from "codemirror";
 export { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
+export { markdown } from "@codemirror/lang-markdown";
+export { python } from "@codemirror/lang-python";
+export { javascript } from "@codemirror/lang-javascript";
+export { json } from "@codemirror/lang-json";
+export { yaml } from "@codemirror/lang-yaml";
+export { html as htmlLang } from "@codemirror/lang-html";
+export { css as cssLang } from "@codemirror/lang-css";
 EOF
 # 6. Bundle core into a single deduplicated ESM file
 echo "🔨 Bundling codemirror-core.js..."
 npx esbuild entry.js --bundle --minify --format=esm --outfile="$TARGET_DIR/codemirror-core.js"
 
-# 7. Bundle each language pack into a standalone ESM module
-LANGUAGES=("markdown" "python" "javascript" "json" "yaml" "html" "css")
-
-for LANG in "${LANGUAGES[@]}"; do
-    echo "🔨 Bundling lang-${LANG}.js..."
-    npx esbuild "node_modules/@codemirror/lang-${LANG}/dist/index.js" \
-        --bundle \
-        --minify \
-        --format=esm \
-        --external:@codemirror/* \
-        --external:codemirror \
-        --outfile="$TARGET_DIR/lang-${LANG}.js"
-done
-
-# 8. Clean up
+# 7. Clean up
 cd "$SCRIPT_DIR"
 rm -rf "$BUILD_DIR"
 

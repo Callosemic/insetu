@@ -35,21 +35,19 @@ for (const file of files) {
         symbols.push(`  "${name}": \`${cleanPath}\``);
     }
 }
-
-// Wrap all collected symbols in a global JS dictionary
-const finalJs = `window.INSETU_ICONS = {\n${symbols.join(',\n')}\n};`;
+// Wrap all collected symbols in a global JS dictionary and expose agnostically
+const finalJs = `window.INSETU_ICONS = {\n${symbols.join(',\n')}\n};\nwindow.SutramIcons = window.INSETU_ICONS;`;
 fs.writeFileSync('icons.js', finalJs);
 EOF
 
 node build_sprite.js
-
-# Move the generated JS dictionary to the static assets directory
-TARGET_JS="$(dirname "$TARGET_FILE")/icons.js"
-mkdir -p "$(dirname "$TARGET_FILE")"
+# Move the generated JS dictionary to the strict vendor directory
+TARGET_JS="$SCRIPT_DIR/../insetu/static/vendor/lucide/icons.js"
+mkdir -p "$(dirname "$TARGET_JS")"
 mv icons.js "$TARGET_JS"
 
 # Clean up
 cd "$SCRIPT_DIR"
 rm -rf "$BUILD_DIR"
 
-echo "✅ Success! Sprite sheet generated at: $TARGET_FILE"
+echo "✅ Success! Dictionary generated at: $TARGET_JS"

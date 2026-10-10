@@ -1,9 +1,40 @@
 import os
 import re
+import json
 from pathlib import Path
 from .core import FRONTEND_DIR, BACKEND_DIR, report_violation, collect_unique_files
 
+def check_vendor_manifest_paths():
+    print("🔍 Sweeping Vendor Manifest Paths (Existence Analysis)...")
+    for vendor_file in collect_unique_files([BACKEND_DIR], ["vendor.json"]):
+        try:
+            with open(vendor_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            for domain in ("imports", "python"):
+                entries = data.get(domain, {})
+                if not isinstance(entries, dict):
+                    continue
+
+                for specifier, meta in entries.items():
+                    if isinstance(meta, dict):
+                        rel_path = meta.get("path")
+                        if rel_path and not rel_path.startswith(("http://", "https://")):
+                            abs_path = (vendor_file.parent / rel_path).resolve()
+                            if not abs_path.exists():
+                                report_violation(
+                                    "VENDOR_MANIFEST_MISSING_ASSET",
+                                    vendor_file,
+                                    1,
+                                    f"Vendor specifier '{specifier}' in [{domain}] references missing local asset: '{rel_path}'"
+                                )
+        except json.JSONDecodeError:
+            report_violation("VENDOR_MANIFEST_SYNTAX_ERROR", vendor_file, 1, "Malformed JSON syntax in vendor.json")
+        except Exception as e:
+            report_violation("VENDOR_MANIFEST_READ_ERROR", vendor_file, 1, f"Failed to parse vendor.json: {e}")
+
 def check_javascript_files():
+    check_vendor_manifest_paths()
     print("🔍 Sweeping JavaScript Frontend (Hybrid AST + Regex Analysis)...")
     shared_styles_pattern = re.compile(r'from\s+[\'"][^\'"]*shared_styles\.js[\'"]')
     dom_read_pattern = re.compile(r'document\.(?:getElementById|querySelector)\([^\)]+\)(?:\.(value|checked|classList)|\[[\'"](value|checked|classList)[\'"]\]|\.getAttribute\([\'"](value|checked|class)[\'"]\))')
@@ -276,9 +307,11 @@ def check_javascript_files():
                 report_violation("DOMAIN_STORE_TOPOLOGY_MIRROR_BAN", filepath, line_num, "Domain store mirrors AppStore topology properties (targetConfigs/allRepos). Read topology reactively from AppStore or this.ecosystem instead.")
             if singleton_modal_ban_pattern.search(line):
                 report_violation("SINGLETON_MODAL_BAN", filepath, line_num, "References to FsStore.fileModal or <insetu-file-modal> are banned. Use activeBuffers maps and agnostic projections instead.")
-
             if is_extension and is_lit_component and re.search(r'<button\b[^>]*class=["\'][^"\'\n]*\bbtn-sm\b', line):
                 report_violation("SUTRAM_BUTTON_MANDATE", filepath, line_num, "Raw <button class=\"btn-sm\"> detected in Lit extension template. Use <sutram-btn> or <sutram-async-btn> primitives instead.")
+
+            if is_lit_component and re.search(r'<sutram-btn\b(?!.*label=)[^>]*>[^<]+\S', line) and 'slot=' not in line:
+                report_violation("SUTRAM_BUTTON_DECLARATIVE_LABEL_MANDATE", filepath, line_num, "Raw text child node detected in <sutram-btn>. Use declarative label=\"...\" property attribute instead.")
 
             if legacy_routing_ban_pattern.search(line):
                 report_violation("LEGACY_ROUTING_BAN", filepath, line_num, "References to AppStore activeTab, activeSubTabs, or setActiveRoute are banned. Rely on Sutram LayoutStore or URL hash routing.")

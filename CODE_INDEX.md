@@ -64,8 +64,8 @@ insetu/
 │       ├── 0053-git-state-resolution-autostash-pulls-and-non-fast-forward-resilience.md # Git rebase/merge state resolution, autostash pulls, and multi-repo sweep isolation.
 │       ├── 0054-multi-column-viewport-projections-and-virtual-buffer-editing.md # Multi-column viewport projections and virtual buffer editing.
 │       ├── 0055-vfs-parity-action-middleware-and-singleton-modal-deprecation.md # VFS parity gatekeeper action middleware, singleton file modal deprecation, and InSetuURI coercion hooks.
-│       ├── 0056-system-sdk-module-renaming-spatial-grid-routing-and-syntax-fallback.md # [comment required]
-│       ├── 0057-workspace-swap-layout-eviction-and-yv-icon-migration.md # [comment required]
+│       ├── 0056-system-sdk-module-renaming-spatial-grid-routing-and-syntax-fallback.md # System SDK module renaming, spatial grid routing, and Tree-Sitter syntax fallback.
+│       ├── 0057-workspace-swap-layout-eviction-and-yv-icon-migration.md # Pre-swap layout eviction, yv-icon migration, and primitive alias purge.
 │       └── archived/               # Superseded and historical ADR documents.
 │           ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │           ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -209,7 +209,6 @@ insetu/
 │   ├── static/                     # Web server static assets and frontend bundles.
 │   │   ├── css/                    # Global CSS stylesheets.
 │   │   │   └── style.css           # Global theme variables, utility classes, and layout rules.
-│   │   ├── icons.js                # Global Lucide SVG icon dictionary.
 │   │   ├── js/                     # [Frontend JavaScript Payloads]
 │   │   │   ├── app.js              # [Frontend Bootloader & Core Setup]
 │   │   │   └── types.js            # Root JSDoc type definitions entry point.
@@ -218,12 +217,6 @@ insetu/
 │   │   └── vendor.json             # Map of core third-party UI dependencies (Lit, CodeMirror).
 │   └── templates/                  # Jinja2 HTML templates.
 │       └── index.html              # The master SPA entry point containing the OS crash shell.
-├── insetu.egg-info/                # [comment required]
-│   ├── SOURCES.txt                 # [comment required]
-│   ├── dependency_links.txt        # [comment required]
-│   ├── entry_points.txt            # [comment required]
-│   ├── requires.txt                # [comment required]
-│   └── top_level.txt               # [comment required]
 ├── pyproject.toml                  # Python package definition and semantic-release configurations.
 ├── scripts/                        # Build, vendorization, and utility shell scripts.
 │   ├── .gitkeep                    # Git folder retention.

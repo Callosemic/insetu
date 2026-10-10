@@ -51,10 +51,14 @@ DEMO: https://youtu.be/FDgL6jveMHo?si=h35FuW_WC0VO1Wox
 * **Tailscale** (Optional: Enables zero-trust HTTPS network binding over private Tailnets)
 ## 🚀 Installation
 
-The inSetu Workbench (v0.17.0+) is distributed officially via PyPI. You can install it directly into your environment using standard Python packaging tools:
+The inSetu Workbench is distributed officially via PyPI. Because inSetu runs as a system CLI tool and daemon, installing via **`pipx`** is recommended to isolate dependencies and prevent OS environment conflicts:
 
 ```bash
-pip install insetu
+# Recommended: Install isolated global application with all extension extras
+pipx install "insetu[all]"
+
+# Standard pip install (inside an active virtual environment)
+pip install "insetu[all]"
 ```
 
 ### Granular Extension Extras
@@ -74,22 +78,52 @@ You can install targeted dependencies for specific domain extensions:
 # If using the Research/Scraping extension, install required headless browsers:
 playwright install
 ```
+### Installing from Source & Local Development
 
-### Installing from Source
+#### Option 1: The Sibling 3-Repo Setup (Full-Stack `akasa` + `insetu` + `sutram`)
+If you are hacking across the full stack (Python micro-kernel, Python OS server, and Sutram/yenVUI presentation chassis), clone the three repos as siblings:
+
+```text
+projects/
+├── akasa/    # Tier 1 Python Kernel
+├── insetu/   # Tier 2 Developer OS Workbench
+└── sutram/   # Tier 0 Web Component Chassis & Presentation Micro-Kernel
+
+```
 
 ```bash
-# Clone the repository
+cd ~/projects
+
+# 1. Clone the three sibling repositories
+git clone https://github.com/Callosemic/akasa.git
 git clone https://github.com/Callosemic/insetu.git
-cd insetu
+git clone https://github.com/Callosemic/sutram.git
 
-# Install base OS dependencies
-pip install -e .
-# (Optional) Install full extension suite
-pip install -e .[all]
+# 2. Create and activate a shared virtual environment
+python3 -m venv venv
+source venv/bin/activate
 
-# If using the Research/Scraping extension, install the required headless browsers:
-playwright install
+# 3. Link Python packages in editable mode
+pip install -e ./akasa
+pip install -e "./insetu[all]"
+
+# 4. Sync Sutram/yenVUI UI changes into insetu
+# (sutram/build_matrix.json automatically copies live CSS/JS primitives into ../insetu)
+cd sutram
+node build.js
+
 ```
+
+#### Option 2: `pipx` Injection (Global `insetu` + Local `akasa`)
+
+If you run `insetu` globally via `pipx` but want it to consume your local development copy of `akasa`:
+
+```bash
+pipx install "insetu[all]"
+pipx inject insetu -e ~/projects/akasa
+
+```
+
 
 ## 💻 Usage & CLI Reference
 

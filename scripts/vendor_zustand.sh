@@ -20,12 +20,15 @@ echo "📦 Installing Zustand and esbuild..."
 npm init -y > /dev/null
 npm install zustand@4.5.2 esbuild --silent
 
-# 5. Bundle vanilla and middleware modules into standalone ESM files
+# 5. Create explicit entry points to preserve named exports
+echo "export { createStore } from 'zustand/vanilla';" > entry_vanilla.js
+echo "export { devtools, subscribeWithSelector } from 'zustand/middleware';" > entry_middleware.js
+
 echo "🔨 Bundling vanilla.js..."
-npx esbuild node_modules/zustand/vanilla.js --bundle --format=esm --outfile="$TARGET_DIR/vanilla.js"
+npx esbuild entry_vanilla.js --bundle --format=esm --outfile="$TARGET_DIR/vanilla.js"
 
 echo "🔨 Bundling middleware.js..."
-npx esbuild node_modules/zustand/middleware.js --bundle --format=esm --outfile="$TARGET_DIR/middleware.js"
+npx esbuild entry_middleware.js --bundle --format=esm --outfile="$TARGET_DIR/middleware.js"
 
 # 6. Clean up
 cd "$SCRIPT_DIR"
