@@ -717,9 +717,9 @@ export class InSetuExtGitCtrl extends InSetuElement {
                             <sutram-card titleText=${repo} descriptionText="Not a Git repository." icon="folder" intent="neutral">
                                 <div slot="actions" style="display: flex; align-items: center; gap: 5px;">
                                     <sutram-input .value=${"main"} placeholder="main" style="width: 100px; margin: 0;" @sutram-input-changed=${(e) => this.newBranchName = e.detail.value}></sutram-input>
-                                    <sutram-btn size="sm" intent="success" @click=${() => {
+                                    <sutram-btn size="sm" intent="success" label="✨ Initialize" @click=${() => {
                                         this._initRepo(repo, this.newBranchName || 'main');
-                                    }}>✨ Initialize</sutram-btn>
+                                    }}></sutram-btn>
                                 </div>
                             </sutram-card>
                         `;
@@ -735,27 +735,27 @@ export class InSetuExtGitCtrl extends InSetuElement {
                         <sutram-card titleText=${repo} descriptionText=${descText} icon="package" intent="${conflicts.length > 0 ? 'danger' : 'neutral'}">
                             ${conflictBadge}
                             ${status.has_remote === false ? html`
-                                <sutram-btn slot="actions" size="sm" intent="primary" style="margin-right: 5px;" @click=${() => {
+                                <sutram-btn slot="actions" size="sm" intent="primary" label="☁️ Connect Remote" style="margin-right: 5px;" @click=${() => {
                                     this.activeRemoteRepo = repo;
                                     this.remoteUrlInput = '';
                                     this.remoteConflict = false;
                                     this.remoteModalOpen = true;
-                                }}>☁️ Connect Remote</sutram-btn>
+                                }}></sutram-btn>
                             ` : status.sync_status === '☁️ Local Only' ? html`
-                                <sutram-btn slot="actions" size="sm" intent="warning" style="margin-right: 5px;" @click=${() => {
+                                <sutram-btn slot="actions" size="sm" intent="warning" label="⬆️ Publish / Fix Remote" style="margin-right: 5px;" @click=${() => {
                                     this.activeRemoteRepo = repo;
                                     this.remoteUrlInput = '';
                                     this.remoteConflict = false;
                                     this.remoteModalOpen = true;
-                                }}>⬆️ Publish / Fix Remote</sutram-btn>
+                                }}></sutram-btn>
                             ` : html`
-                                <sutram-btn slot="actions" size="sm" intent="primary" style="margin-right: 5px;" @click=${() => this._previewPull(repo)}>⬇️ Fetch & Pull...</sutram-btn>
+                                <sutram-btn slot="actions" size="sm" intent="primary" label="⬇️ Fetch & Pull..." style="margin-right: 5px;" @click=${() => this._previewPull(repo)}></sutram-btn>
                             `}
-                            <sutram-btn slot="actions" size="sm" intent="highlight" @click=${() => {
+                            <sutram-btn slot="actions" size="sm" intent="highlight" label="🌿 Switch Branch" @click=${() => {
                                 this.activeRepo = repo;
                                 this.newBranchName = '';
                                 this.branchModalOpen = true;
-                            }}>🌿 Switch Branch</sutram-btn>
+                            }}></sutram-btn>
                         </sutram-card>
                     `;
                 })}
@@ -777,9 +777,9 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     <div>
                         <div style="display: flex; gap: 10px; align-items: flex-end;">
                             <sutram-input label="Create New Branch" placeholder="new-feature-branch" .value=${this.newBranchName} @sutram-input-changed=${e => this.newBranchName = e.detail.value} style="flex: 1; margin: 0;"></sutram-input>
-                            <sutram-btn size="sm" intent="success" @click=${() => {
+                            <sutram-btn size="sm" intent="success" label="➕ Create & Switch" @click=${() => {
                                 if(this.newBranchName) this._checkoutBranch(this.activeRepo, this.newBranchName, true);
-                            }}>➕ Create & Switch</sutram-btn>
+                            }}></sutram-btn>
                         </div>
                     </div>
                 </div>

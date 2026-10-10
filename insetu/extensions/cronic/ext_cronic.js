@@ -176,7 +176,7 @@ export class InSetuExtCronic extends InSetuElement {
                                 <sutram-async-btn size="sm" label="▶️ Run Now" intent="primary" style="margin: 0;" .onClick=${this._getRunNowAction(job.id)}></sutram-async-btn>
                                 <sutram-async-btn size="sm" label="⏹️ Stop" intent="neutral" style="margin: 0;" .onClick=${this._getKillAction(job.id)}></sutram-async-btn>
                                 <sutram-async-btn size="sm" label=${job.enabled ? '⏸️ Pause' : '▶️ Resume'} intent="warning" style="margin: 0;" .onClick=${async () => this._toggleJob(job)}></sutram-async-btn>
-                                <sutram-btn size="sm" intent="neutral" @click=${() => CronicStore.getState().fetchLogs(job.id)}>📜 Logs</sutram-btn>
+                                <sutram-btn size="sm" intent="neutral" label="📜 Logs" @click=${() => CronicStore.getState().fetchLogs(job.id)}></sutram-btn>
                                 <sutram-async-btn size="sm" label="🗑️ Remove" intent="danger" style="margin: 0;" .onClick=${async () => this._deleteJob(job.id)}></sutram-async-btn>
                             </div>
                         </sutram-card>

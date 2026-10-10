@@ -127,12 +127,13 @@ export class InSetuFavBtn extends InSetuElement {
     }
     render() {
         return html`
-            <button class="btn-sm" 
-                style="background: var(--input-bg); border: 1px solid var(--border); font-size: 1.1rem; padding: 4px 8px; margin: 0 5px 0 0; box-shadow: 0 2px 4px rgba(0,0,0,0.05); color: ${this._isPinned ? 'var(--intent-warning)' : 'var(--text-muted)'};"
+            <sutram-btn 
+                intent="${this._isPinned ? 'warning' : 'neutral'}"
+                .icon=${html`<yv-icon name="star" style="width: 14px; height: 14px; ${this._isPinned ? 'fill: currentColor;' : ''}"></yv-icon>`}
+                ?active=${this._isPinned}
                 title="${this._isPinned ? 'Unpin' : 'Pin'}"
                 @click=${this._toggle}>
-                <yv-icon name="star" style="width: 14px; height: 14px; ${this._isPinned ? 'fill: currentColor;' : ''}"></yv-icon>
-            </button>
+            </sutram-btn>
         `;
     }
 }
@@ -239,6 +240,8 @@ window.ExtensionRegistry.registerExtension('favorites', {
             group: 'file',
             label: (data) => html`<insetu-fav-label .targetPath=${data.filepath}></insetu-fav-label>`,
             icon: 'star',
+            intent: (data) => window.inSetu.stores.Favorites.getState().items.some(i => i.path === data.filepath) ? 'warning' : 'neutral',
+            isActive: (data) => window.inSetu.stores.Favorites.getState().items.some(i => i.path === data.filepath),
             component: (data) => html`<insetu-fav-btn .filepath=${data.filepath}></insetu-fav-btn>`,
             asyncAction: async (data) => {
                 const store = window.inSetu.stores.Favorites.getState();
@@ -254,6 +257,8 @@ window.ExtensionRegistry.registerExtension('favorites', {
             group: 'file',
             label: (data) => html`<insetu-fav-label .targetPath=${data.filepath || data.repoDir}></insetu-fav-label>`,
             icon: 'star',
+            intent: (data) => window.inSetu.stores.Favorites.getState().items.some(i => i.path === (data.filepath || data.repoDir)) ? 'warning' : 'neutral',
+            isActive: (data) => window.inSetu.stores.Favorites.getState().items.some(i => i.path === (data.filepath || data.repoDir)),
             component: (data) => html`<insetu-fav-btn .filepath=${data.filepath || data.repoDir}></insetu-fav-btn>`,
             asyncAction: async (data) => {
                 const path = data.filepath || data.repoDir;
@@ -270,6 +275,8 @@ window.ExtensionRegistry.registerExtension('favorites', {
             group: 'file',
             label: (data) => html`<insetu-fav-label .targetPath=${data.folderpath || data.filepath}></insetu-fav-label>`,
             icon: 'star',
+            intent: (data) => window.inSetu.stores.Favorites.getState().items.some(i => i.path === (data.folderpath || data.filepath)) ? 'warning' : 'neutral',
+            isActive: (data) => window.inSetu.stores.Favorites.getState().items.some(i => i.path === (data.folderpath || data.filepath)),
             component: (data) => html`<insetu-fav-btn .folderpath=${data.folderpath || data.filepath}></insetu-fav-btn>`,
             asyncAction: async (data) => {
                 const path = data.folderpath || data.filepath;

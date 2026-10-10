@@ -460,7 +460,7 @@ export class InSetuExtSkills extends InSetuElement {
                 ${this.loading ? html`<sutram-spinner text="Sweeping session items..."></sutram-spinner>` : ''}
                 <div style="display: flex; flex-direction: column; gap: 20px; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
                 <div style="display: flex; justify-content: flex-end; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-top: -10px;">
-                    <sutram-btn size="sm" intent="success" @click=${() => { this._newSkillDomain = Object.keys(this.domainConfig)[0] || ''; SkillsStore.setState({ newSkillModalOpen: true }); }}>➕ New Skill Item</sutram-btn>
+                    <sutram-btn size="sm" intent="success" label="➕ New Skill Item" @click=${() => { this._newSkillDomain = Object.keys(this.domainConfig)[0] || ''; SkillsStore.setState({ newSkillModalOpen: true }); }}></sutram-btn>
                 </div>
 
                 ${viewMode === 'active' ? html`
@@ -513,8 +513,8 @@ export class InSetuExtSkills extends InSetuElement {
                                             @card-clicked=${() => SkillsStore.getState().selectItem(item, 'train')}>
                                             <insetu-file-actions slot="actions" .filepath=${item.filepath} .isFS=${true}></insetu-file-actions>
                                             <div slot="actions" style="display: flex; gap: 6px;">
-                                                <sutram-btn size="sm" intent="primary" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'train'); }}>⏱️ Train</sutram-btn>
-                                                <sutram-btn size="sm" intent="neutral" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'edit'); }}>✏️ Edit</sutram-btn>
+                                                <sutram-btn size="sm" intent="primary" label="⏱️ Train" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'train'); }}></sutram-btn>
+                                                <sutram-btn size="sm" intent="neutral" label="✏️ Edit" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'edit'); }}></sutram-btn>
                                             </div>
                                         </sutram-card>
                                     `;

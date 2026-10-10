@@ -716,14 +716,13 @@ export class InSetuExtUpdate extends InSetuElement {
                     ${!this.repoLoading && !this.hasPyproject ? html`
                         <div style="background: var(--bg); border: 1px dashed var(--intent-warning); border-radius: 4px; padding: 8px 12px; margin-bottom: 10px; color: var(--intent-warning); font-size: 0.85rem; font-weight: bold; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px;">
                             <span>⚠️ Missing pyproject.toml in this repository.</span>
-                            <sutram-btn size="sm" intent="warning"
+                            <sutram-btn size="sm" intent="warning" label="📄 Create Basic TOML and Tag"
                                 @click=${() => {
                                     const initVer = prompt("Enter initial semantic version (e.g., 0.1.0):", "0.1.0");
                                     if (initVer) {
                                         UpdateStore.getState().createDummyToml(this.targetRepo, initVer.trim());
                                     }
                                 }}>
-                                📄 Create Basic TOML and Tag
                             </sutram-btn>
                             <span style="font-size: 0.7rem; font-weight: normal; font-style: italic; opacity: 0.9;">The TOML file will be initialized with Python build disabled to accommodate versioning for all project types. This action will also instantly create a Git tag to establish your baseline version. Update manually as needed.</span>
                         </div>
@@ -937,7 +936,7 @@ export class InSetuExtUpdate extends InSetuElement {
                 ` : ''}
                 ${this.lastReleaseLog ? html`
                     <div style="margin-top: 15px; display: flex; justify-content: flex-end;">
-                        <sutram-btn size="sm" intent="neutral"
+                        <sutram-btn size="sm" intent="neutral" label="👁️ View Last Release Log"
                             @click=${() => {
                                 UpdateStore.setState({
                                     previewOutput: this.lastReleaseLog,
@@ -948,7 +947,6 @@ export class InSetuExtUpdate extends InSetuElement {
                                     previewCaption: 'Execution log output for the previous release action.'
                                 });
                             }}>
-                            👁️ View Last Release Log
                         </sutram-btn>
                     </div>
                 ` : ''}
@@ -989,8 +987,7 @@ export class InSetuExtUpdate extends InSetuElement {
                     </div>
                 </div>
                 <div slot="footer" style="display: flex; width: 100%; gap: 10px;">
-                    <sutram-btn size="sm" intent="neutral" style="flex: 1; --btn-padding: 10px 15px;" @click=${() => UpdateStore.setState({ previewModalOpen: false })}>${this.previewActionType === 'log_view' ? '❌ Close' : '❌ Cancel'}
-                    </sutram-btn>
+                    <sutram-btn size="sm" intent="neutral" style="flex: 1; --btn-padding: 10px 15px;" .label=${this.previewActionType === 'log_view' ? '❌ Close' : '❌ Cancel'} @click=${() => UpdateStore.setState({ previewModalOpen: false })}></sutram-btn>
                     ${this.previewActionType !== 'log_view' ? html`
                         <sutram-async-btn label="${this.previewActionType === 'publish' ? '⚡ Confirm & Execute Publish' : (this.previewActionType === 'first_release' ? '⚡ Confirm & Initial Release' : '⚡ Confirm & Execute Bump')}" intent="success" style="flex: 1; margin: 0; --btn-padding: 10px 15px;" .onClick=${async () => {
                             UpdateStore.setState({ previewModalOpen: false });

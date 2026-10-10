@@ -317,12 +317,12 @@ export class InSetuExtResearch extends InSetuElement {
                 </div>
             </div>
             <div id="rs-job-actions-row" style="margin-bottom: 15px; display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap;">
-                ${job.status === 'running' ? html`<sutram-btn size="sm" intent="warning" @click=${() => this.handleJobAction(job.id, 'pause')}>⏸️ Pause</sutram-btn>` : ''}
-                ${job.status === 'paused' ? html`<sutram-btn size="sm" intent="success" @click=${() => this.handleJobAction(job.id, 'resume')}>▶️ Resume</sutram-btn>` : ''}
-                ${job.status === 'failed' ? html`<sutram-btn size="sm" intent="highlight" @click=${() => this.handleJobAction(job.id, 'retry')}>🔄 Retry</sutram-btn>` : ''}
-                ${['running', 'paused', 'gathering', 'failed'].includes(job.status) ? html`<sutram-btn size="sm" intent="neutral" @click=${() => this.handleJobAction(job.id, 'cancel')}>⏹️ Cancel</sutram-btn>` : ''}
-                <sutram-btn size="sm" variant="tinted" intent="danger" @click=${() => this.handleJobAction(job.id, 'delete')}>🗑️ Delete</sutram-btn>
-                <sutram-btn size="sm" intent="highlight" @click=${() => ResearchStore.setState({ aiTriageMode: !this.aiTriageMode })}>${this.aiTriageMode ? '🔙 Back to Manual Triage' : '🤖 AI-Assisted Batch Triage'}</sutram-btn>
+                ${job.status === 'running' ? html`<sutram-btn size="sm" intent="warning" label="⏸️ Pause" @click=${() => this.handleJobAction(job.id, 'pause')}></sutram-btn>` : ''}
+                ${job.status === 'paused' ? html`<sutram-btn size="sm" intent="success" label="▶️ Resume" @click=${() => this.handleJobAction(job.id, 'resume')}></sutram-btn>` : ''}
+                ${job.status === 'failed' ? html`<sutram-btn size="sm" intent="highlight" label="🔄 Retry" @click=${() => this.handleJobAction(job.id, 'retry')}></sutram-btn>` : ''}
+                ${['running', 'paused', 'gathering', 'failed'].includes(job.status) ? html`<sutram-btn size="sm" intent="neutral" label="⏹️ Cancel" @click=${() => this.handleJobAction(job.id, 'cancel')}></sutram-btn>` : ''}
+                <sutram-btn size="sm" variant="tinted" intent="danger" label="🗑️ Delete" @click=${() => this.handleJobAction(job.id, 'delete')}></sutram-btn>
+                <sutram-btn size="sm" intent="highlight" .label=${this.aiTriageMode ? '🔙 Back to Manual Triage' : '🤖 AI-Assisted Batch Triage'} @click=${() => ResearchStore.setState({ aiTriageMode: !this.aiTriageMode })}></sutram-btn>
             </div>
 
             ${this.aiTriageMode ? html`
@@ -377,7 +377,7 @@ export class InSetuExtResearch extends InSetuElement {
                     <div class="rs-view active" style="overflow-y: auto; padding-right: 5px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
                             <h4 style="margin: 0; color: var(--text);">Active & Past Jobs</h4>
-                            <sutram-btn size="sm" intent="success" @click=${() => ResearchStore.setState({ newJobModalOpen: true })}>➕ New Job</sutram-btn>
+                            <sutram-btn size="sm" intent="success" label="➕ New Job" @click=${() => ResearchStore.setState({ newJobModalOpen: true })}></sutram-btn>
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 10px;">
                             ${(this.jobs || []).map(job => this._renderJobCard(job))}

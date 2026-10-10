@@ -545,16 +545,16 @@ export class InSetuExtFlow extends InSetuElement {
                                                                         }}>✨ Fix → ${candidate}</button>
                                                                     ` : ''}
                                                                 </div>
-                                                                <sutram-btn size="sm" variant="text" intent="danger" style="padding: 0 5px; flex-shrink: 0;" @click=${() => {
+                                                                <sutram-btn size="sm" variant="text" intent="danger" label="×" style="padding: 0 5px; flex-shrink: 0;" @click=${() => {
                                                                     this._editForm.includes.splice(idx, 1);
                                                                     this.requestUpdate();
-                                                                }}>×</sutram-btn>
+                                                                }}></sutram-btn>
                                                             </div>
                                                         `})}
                                             </div>
                                             <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
-                                                <sutram-btn size="sm" intent="primary" @click=${() => { this._selectingFor = 'includes'; this._tempContexts = [...this._editForm.includes]; this._showSelectContexts = true; }}>📦 Select Contexts</sutram-btn>
-                                                <sutram-btn size="sm" intent="neutral" @click=${() => {
+                                                <sutram-btn size="sm" intent="primary" label="📦 Select Contexts" @click=${() => { this._selectingFor = 'includes'; this._tempContexts = [...this._editForm.includes]; this._showSelectContexts = true; }}></sutram-btn>
+                                                <sutram-btn size="sm" intent="neutral" label="📄 + File" @click=${() => {
                                                     if (this.ui && this.ui.openWorkspaceBrowser) {
                                                         this.ui.openWorkspaceBrowser({
                                                             mode: 'file',
@@ -570,8 +570,8 @@ export class InSetuExtFlow extends InSetuElement {
                                                             }
                                                         });
                                                     }
-                                                }}>📄 + File</sutram-btn>
-                                                <sutram-btn size="sm" intent="neutral" @click=${() => {
+                                                }}></sutram-btn>
+                                                <sutram-btn size="sm" intent="neutral" label="📁 + Folder" @click=${() => {
                                                     if (this.ui && this.ui.openWorkspaceBrowser) {
                                                         this.ui.openWorkspaceBrowser({
                                                             mode: 'folder',
@@ -588,7 +588,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                             }
                                                         });
                                                     }
-                                                }}>📁 + Folder</sutram-btn>
+                                                }}></sutram-btn>
                                             </div>
                                     </div>
                                     <div>
@@ -610,14 +610,14 @@ export class InSetuExtFlow extends InSetuElement {
                                                                     <span style="font-family: monospace; font-size: 0.85rem; color: ${isMissing ? 'var(--intent-danger)' : (isSystem ? 'var(--intent-primary)' : 'var(--text)')}; word-break: break-all; text-decoration: ${isMissing ? 'line-through' : 'none'}; opacity: ${isMissing ? '0.8' : '1'}; font-weight: ${isSystem ? 'bold' : 'normal'};">${inc}</span>
                                                                     ${isMissing ? html`<span style="margin-left: 8px; font-size: 0.7rem; background: transparent; color: var(--intent-danger); border: 1px solid var(--intent-danger); padding: 1px 6px; border-radius: 10px; font-weight: bold; white-space: nowrap;">⚠️ Missing</span>` : ''}
                                                                 </div>
-                                                                <sutram-btn size="sm" variant="text" intent="danger" style="padding: 0 5px; flex-shrink: 0;" @click=${() => {
+                                                                <sutram-btn size="sm" variant="text" intent="danger" label="×" style="padding: 0 5px; flex-shrink: 0;" @click=${() => {
                                                                     this._editForm.showIfExists.splice(idx, 1);
                                                                     this.requestUpdate();
-                                                                }}>×</sutram-btn>
+                                                                }}></sutram-btn>
                                                             </div>
                                                         `})}
                                             </div>
-                                            <sutram-btn size="sm" intent="neutral" style="margin: 0 0 15px 0;" @click=${() => { this._selectingFor = 'exists'; this._tempContexts = [...(this._editForm.showIfExists || [])]; this._showSelectContexts = true; }}>➕ Add Required Contexts</sutram-btn>
+                                            <sutram-btn size="sm" intent="neutral" label="➕ Add Required Contexts" style="margin: 0 0 15px 0;" @click=${() => { this._selectingFor = 'exists'; this._tempContexts = [...(this._editForm.showIfExists || [])]; this._showSelectContexts = true; }}></sutram-btn>
                                             <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if all of these are missing:</label>
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
                                                     ${!this._editForm?.showIfMissing || this._editForm?.showIfMissing?.length === 0 ? html`<sutram-empty-state text="No requirements."></sutram-empty-state>` : 
@@ -635,14 +635,14 @@ export class InSetuExtFlow extends InSetuElement {
                                                                     <span style="font-family: monospace; font-size: 0.85rem; color: ${isMissing ? 'var(--intent-danger)' : (isSystem ? 'var(--intent-primary)' : 'var(--text)')}; word-break: break-all; text-decoration: ${isMissing ? 'line-through' : 'none'}; opacity: ${isMissing ? '0.8' : '1'}; font-weight: ${isSystem ? 'bold' : 'normal'};">${inc}</span>
                                                                     ${isMissing ? html`<span style="margin-left: 8px; font-size: 0.7rem; background: transparent; color: var(--intent-danger); border: 1px solid var(--intent-danger); padding: 1px 6px; border-radius: 10px; font-weight: bold; white-space: nowrap;">⚠️ Missing</span>` : ''}
                                                                 </div>
-                                                                <sutram-btn size="sm" variant="text" intent="danger" style="padding: 0 5px; flex-shrink: 0;" @click=${() => {
+                                                                <sutram-btn size="sm" variant="text" intent="danger" label="×" style="padding: 0 5px; flex-shrink: 0;" @click=${() => {
                                                                     this._editForm.showIfMissing.splice(idx, 1);
                                                                     this.requestUpdate();
-                                                                }}>×</sutram-btn>
+                                                                }}></sutram-btn>
                                                             </div>
                                                         `})}
                                             </div>
-                                            <sutram-btn size="sm" intent="neutral" style="margin: 0 0 15px 0;" @click=${() => { this._selectingFor = 'missing'; this._tempContexts = [...(this._editForm.showIfMissing || [])]; this._showSelectContexts = true; }}>➕ Add Missing Contexts</sutram-btn>
+                                            <sutram-btn size="sm" intent="neutral" label="➕ Add Missing Contexts" style="margin: 0 0 15px 0;" @click=${() => { this._selectingFor = 'missing'; this._tempContexts = [...(this._editForm.showIfMissing || [])]; this._showSelectContexts = true; }}></sutram-btn>
                                     </div>
                                     <div>
                                             <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">

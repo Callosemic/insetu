@@ -1668,11 +1668,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 <div slot="footer" style="display: flex; justify-content: space-between; width: 100%;">
                     <sutram-async-btn style="margin: 0; --btn-padding: 8px 14px;" label="🗑️ Delete" intent="danger" .onClick=${async () => await this._deleteTask()}></sutram-async-btn>
                     <div style="display: flex; gap: 10px;">
-                        <button class="btn-sm" style="background: var(--intent-warning); color: black; margin: 0;" @click=${() => {
-                            KanbanStore.getState().setModal('edit', false);
-                            if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(editTaskForm.filepath, true, true);
-                        }}>📝 Raw Edit</button>
-                        ${this._isDirtyTracker ? html`<sutram-async-btn style="margin: 0;" label="💾 Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor-tracker')._handleSave()}></sutram-async-btn>` : ''}
+                        <sutram-btn size="sm" intent="warning" label="📝 Raw Edit" @click=${() => {                             KanbanStore.getState().setModal('edit', false);                             if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(editTaskForm.filepath, true, true);                         }}></sutram-btn>${this._isDirtyTracker ? html`<sutram-async-btn style="margin: 0;" label="💾 Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor-tracker')._handleSave()}></sutram-async-btn>` : ''}
                     </div>
                 </div>
                 ` : ''}
@@ -1993,7 +1989,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                 <div style="position: relative; display: flex; flex-direction: column; padding-left: 30px; padding-bottom: 12px;">
                                     <div style="position: absolute; left: 10px; top: -15px; height: 35px; width: 2px; background: var(--border); z-index: 1;"></div>
                                     <div style="position: absolute; left: 10px; top: 18px; width: 20px; height: 2px; background: var(--border); z-index: 1;"></div>
-                                    <sutram-btn size="sm" variant="tinted" intent="neutral" style="width: fit-content; z-index: 2;"
+                                    <sutram-btn size="sm" variant="tinted" intent="neutral" label="➕ New ${nextTierLabel}" style="width: fit-content; z-index: 2;"
                                         @click=${() => {
                                             const prefill = { parentId: task.id, tier: nextTier, repo: task.repo };
                                             if (isTemplate) prefill.status = 'template';
@@ -2002,7 +1998,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                                 prefill 
                                             });
                                         }}>
-                                        ➕ New ${nextTierLabel}
                                     </sutram-btn>
                                 </div>
                             ` : ''}
@@ -2544,7 +2539,7 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                     <div style="display: flex; gap: 10px; align-items: center;">
                                         <sutram-input label="Tab Label" .value=${t.label} @sutram-input-changed=${e => this._updateParentTab(i, 'label', e.detail.value)} style="flex: 1;" ?flush=${true}></sutram-input>
                                         <sutram-input label="Tab ID" .value=${t.id} @sutram-input-changed=${e => this._updateParentTab(i, 'id', e.detail.value)} style="flex: 1;" ?flush=${true}></sutram-input>
-                                        <sutram-btn size="sm" intent="danger" style="margin-top: 18px;" @click=${() => this._removeParentTab(i)}>✕</sutram-btn>
+                                        <sutram-btn size="sm" intent="danger" label="✕" style="margin-top: 18px;" @click=${() => this._removeParentTab(i)}></sutram-btn>
                                     </div>
                                 `)}
                                 <div style="display: flex; justify-content: flex-start; margin-top: 5px;">

@@ -300,14 +300,9 @@ export class InSetuExtNotesEditor extends InSetuElement {
                 </div>
                 ${this.filepath ? html`
                 <div slot="footer" style="display: flex; justify-content: space-between; width: 100%;">
-                    <sutram-btn size="sm" intent="danger" @click=${this._deleteNote}>🗑️ Delete</sutram-btn>
+                    <sutram-btn size="sm" intent="danger" label="🗑️ Delete" @click=${this._deleteNote}></sutram-btn>
                     <div style="display: flex; gap: 10px;">
-                        <sutram-btn size="sm" intent="warning" @click=${() => {
-                            const fp = this.filepath;
-                            NotesStore.setState({ editNoteFilepath: null });
-                            if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(fp, true, true);
-                        }}>📝 Raw Edit</sutram-btn>
-                        ${this._isDirty ? html`<sutram-async-btn style="margin: 0;" label="💾 Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor')._handleSave()}></sutram-async-btn>` : ''}
+                        <sutram-btn size="sm" intent="warning" label="📝 Raw Edit" @click=${() => {                             const fp = this.filepath;                             NotesStore.setState({ editNoteFilepath: null });                             if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(fp, true, true);                         }}></sutram-btn>${this._isDirty ? html`<sutram-async-btn style="margin: 0;" label="💾 Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor')._handleSave()}></sutram-async-btn>` : ''}
                     </div>
                 </div>
                 ` : ''}
