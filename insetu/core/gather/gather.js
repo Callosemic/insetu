@@ -491,7 +491,7 @@ export class InSetuExtGather extends InSetuElement {
                                                                 isFS: false, 
                                                                 isSkeleton: f.isSkeleton,
                                                                 needs_recompile: isDirty,
-                                                                suppress: ['file-browse', 'file-edit'],
+                                                                suppress: ['file-edit'],
                                                                 chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, f.filename) : [f.filename]
                                                             }}
                                                             @card-clicked=${() => {
@@ -569,7 +569,7 @@ window.ExtensionRegistry.registerExtension('gather', {
         {
             id: 'batch-download',
             label: 'Download',
-            icon: '⬇️',
+            icon: 'download',
             intent: 'primary',
             group: 'share',
             vfsBound: true,
@@ -605,7 +605,7 @@ window.ExtensionRegistry.registerExtension('gather', {
         {
             id: 'batch-share',
             label: 'Compile Pack',
-            icon: '✨',
+            icon: 'zap',
             intent: 'warning',
             emphasis: true,
             group: 'share',

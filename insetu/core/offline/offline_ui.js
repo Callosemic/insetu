@@ -195,9 +195,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                         <h3 style="margin: 0; color: var(--text);">Offline Ledger (IndexedDB)</h3>
                         <span style="font-size: 0.85rem; color: var(--text-muted);">Inspect the VFS blob cache and pending mutation outbox.</span>
                     </div>
-                    <sutram-btn intent="primary" style="--btn-padding: 6px 12px; margin: 0;" @click=${() => this.onForceRefresh()}>
-                        Refresh
-                    </sutram-btn>
+                    <sutram-btn intent="primary" label="Refresh" style="--btn-padding: 6px 12px; margin: 0;" @click=${() => this.onForceRefresh()}></sutram-btn>
                 </div>
 
                 <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 15px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; justify-content: space-between;">
@@ -215,7 +213,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                             ${this.storagePersisted ? '🔒 Persisted (Safe from Eviction)' : '⚠️ Best Effort (At risk of eviction)'}
                         </div>
                         ${!this.storagePersisted ? html`
-                            <sutram-btn intent="highlight" style="margin: 0; font-weight: bold;" @click=${this._requestPersistentStorage}>Request Rights</sutram-btn>
+                            <sutram-btn intent="highlight" label="Request Rights" style="margin: 0; font-weight: bold;" @click=${this._requestPersistentStorage}></sutram-btn>
                         ` : ''}
                     </div>
                 </div>
@@ -264,8 +262,8 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                                     </div>
                                     <pre style="margin: 0; font-size: 0.75rem; padding: 6px; max-height: 100px; overflow-y: auto;">${item.bodyString ? (item.bodyString.startsWith('{') || item.bodyString.startsWith('[') ? JSON.stringify(JSON.parse(item.bodyString), null, 2) : item.bodyString) : 'Empty Payload'}</pre>
                                     <div style="display: flex; gap: 8px; margin-top: 8px;">
-                                        <sutram-btn intent="warning" style="--btn-padding: 6px 12px; margin: 0; color: #000;" @click=${() => this._retryDeadLetter(item)}>Retry</sutram-btn>
-                                        <sutram-btn intent="danger" style="--btn-padding: 6px 12px; margin: 0;" @click=${() => this._discardDeadLetter(item)}>Discard</sutram-btn>
+                                        <sutram-btn intent="warning" label="Retry" style="--btn-padding: 6px 12px; margin: 0; color: #000;" @click=${() => this._retryDeadLetter(item)}></sutram-btn>
+                                        <sutram-btn intent="danger" label="Discard" style="--btn-padding: 6px 12px; margin: 0;" @click=${() => this._discardDeadLetter(item)}></sutram-btn>
                                     </div>
                                 </div>
                             `)}
@@ -294,8 +292,10 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                                 <sutram-virtual-list
                                     .items=${filteredBlobs}
                                     .renderItem=${key => html`
-                                        <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); padding: 6px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; word-break: break-all; margin-bottom: 4px;">
-                                            ${key}
+                                        <div style="width: 100%; box-sizing: border-box; padding-bottom: 4px;">
+                                            <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); padding: 6px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; word-break: break-all;">
+                                                ${key}
+                                            </div>
                                         </div>
                                     `}>
                                 </sutram-virtual-list>
@@ -484,9 +484,7 @@ export class InSetuCoreOfflineLog extends InSetuElement {
                         <span style="font-size: 0.85rem; color: var(--text-muted);">Real-time inspection of caching, reads, outbox mutations, and sync events.</span>
                     </div>
                     <div style="display: flex; gap: 8px;">
-                        <sutram-btn intent="danger" @click=${() => OfflineStore.getState().clearLogs()}>
-                            Clear Logs
-                        </sutram-btn>
+                        <sutram-btn intent="danger" label="Clear Logs" @click=${() => OfflineStore.getState().clearLogs()}></sutram-btn>
                     </div>
                 </div>
 

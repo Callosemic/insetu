@@ -297,14 +297,18 @@ class SSEPipeline {
                     }
                 }
             }
-
             // Apply definitive SSOT state directly from the kernel
             if (data.active_modules !== undefined && data.pending_modules !== undefined) {
                 if (window.inSetu.stores?.App) {
-                    window.inSetu.stores.App.setState({
-                        activeModules: data.active_modules,
-                        pendingModules: data.pending_modules
-                    });
+                    const state = window.inSetu.stores.App.getState();
+                    const sameActive = JSON.stringify(state.activeModules) === JSON.stringify(data.active_modules);
+                    const samePending = JSON.stringify(state.pendingModules) === JSON.stringify(data.pending_modules);
+                    if (!sameActive || !samePending) {
+                        window.inSetu.stores.App.setState({
+                            activeModules: data.active_modules,
+                            pendingModules: data.pending_modules
+                        });
+                    }
                 }
             }
         });

@@ -125,14 +125,17 @@ def api_fs_archive(ctx):
         filepath = data.get("filepath", "").strip()
         if not filepath:
                 return jsonify({"error": "Filepath required"}), 400
+        from insetu.core.utils_core import InSetuURI
+        uri = InSetuURI.from_any(filepath)
 
-        from akasa.uri import AkasaURI
-        uri = AkasaURI(filepath)
+        parent_path = uri.path.rpartition('/')[0] if '/' in uri.path else ''
 
-        if not uri.parent.path or uri.parent.path == '.':
-            rel_dest = f"archived/{uri.basename}"
+        if not parent_path or parent_path == '.':
+            new_path = f"archived/{uri.basename}"
         else:
-            rel_dest = f"{uri.parent.path}/archived/{uri.basename}"
+            new_path = f"{parent_path}/archived/{uri.basename}"
+
+        rel_dest = f"vfs://{uri.repo}/{new_path}" if uri.repo else new_path
 
         res, code = execute_vfs_move(workspace_id, filepath, rel_dest)
         # Retain payload signature compatibility for the frontend
@@ -183,7 +186,7 @@ def api_fs_upload(ctx):
     import time
     from akasa.db import get_connection
     from akasa.hooks import hooks
-    from akasa.utils import resolve_sandbox_path
+    from insetu.core.utils_core import InSetuURI
 
     db_conn = get_connection("workers", workspace_id=workspace_id)
     uploaded_paths = []
@@ -193,8 +196,14 @@ def api_fs_upload(ctx):
                     continue
 
             filename = werkzeug.utils.secure_filename(file.filename)
-            filepath = f"{dest_dir}/{filename}".strip('/') if dest_dir else filename
-            resolved_path = resolve_physical_path(filepath, workspace_id)
+            target_path = f"{dest_dir}/{filename}".strip('/') if dest_dir else filename
+
+            uri = InSetuURI.from_any(target_path)
+            filepath = str(uri)
+
+            resolved_path = ctx.resolve_path(filepath)
+            if not resolved_path:
+                continue
 
             is_new = not os.path.exists(resolved_path)
             os.makedirs(Path(resolved_path).parent, exist_ok=True)

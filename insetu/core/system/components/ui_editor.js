@@ -370,9 +370,22 @@ export class InSetuFrontmatterEditor extends InSetuElement {
 
             // Always check the outbox for pending writes to prevent stale cache reads offline
             const outbox = window.inSetu?.stores?.Offline?.getState()?.outboxItems || [];
-            const pendingWrite = [...outbox].reverse().find(i => i.method === 'POST' && i.path.endsWith('fs/save') && i.payload?.filepath === this.filepath);
-            if (pendingWrite && pendingWrite.payload?.content !== undefined) {
-                text = pendingWrite.payload.content;
+            let pendingContent = undefined;
+            [...outbox].reverse().find(i => {
+                if (i.method === 'POST' && i.path.endsWith('fs/save')) {
+                    try {
+                        const payload = i.bodyString ? JSON.parse(i.bodyString) : (i.payload || {});
+                        if (payload.filepath === this.filepath && payload.content !== undefined) {
+                            pendingContent = payload.content;
+                            return true;
+                        }
+                    } catch(e) {}
+                }
+                return false;
+            });
+
+            if (pendingContent !== undefined) {
+                text = pendingContent;
             } else if (text === null) {
                 throw new Error("Failed to read file.");
             }
@@ -505,12 +518,8 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                             }}>
                         </sutram-entity-actions>
                     </div>
-                    <sutram-btn intent="neutral" style="margin: 0; --btn-padding: 4px 8px;" title="Toggle Prose Mode" @click=${() => this._toggleWritingMode()}>
-                        <yv-icon name="${this._writingMode ? 'pen-tool' : 'code'}" style="width: 14px; height: 14px; pointer-events: none;"></yv-icon>
-                    </sutram-btn>
-                    <sutram-btn intent="neutral" style="margin: 0; --btn-padding: 4px 8px;" title="Focus Mode" @click=${() => this._toggleZenMode()}>
-                        <yv-icon name="maximize-2" style="width: 14px; height: 14px; pointer-events: none;"></yv-icon>
-                    </sutram-btn>
+                    <sutram-btn intent="neutral" icon="${this._writingMode ? 'pen-tool' : 'code'}" style="margin: 0; --btn-padding: 4px 8px;" title="Toggle Prose Mode" @click=${() => this._toggleWritingMode()}></sutram-btn>
+                    <sutram-btn intent="neutral" icon="maximize-2" style="margin: 0; --btn-padding: 4px 8px;" title="Focus Mode" @click=${() => this._toggleZenMode()}></sutram-btn>
                     <button class="meta-btn ${this._metadataExpanded ? 'active' : ''}"
                         @click=${() => this._metadataExpanded = !this._metadataExpanded}
                         title="Toggle Metadata">

@@ -407,10 +407,10 @@ async function checkManifestVersion() {
                 });
             }
         }
-        if (deltaData.active_modules !== undefined) {
+        if (deltaData.active_modules !== undefined && JSON.stringify(AppStore.getState().activeModules) !== JSON.stringify(deltaData.active_modules)) {
             AppStore.setState({ activeModules: deltaData.active_modules });
         }
-        if (deltaData.pending_modules !== undefined) {
+        if (deltaData.pending_modules !== undefined && JSON.stringify(AppStore.getState().pendingModules) !== JSON.stringify(deltaData.pending_modules)) {
             AppStore.setState({ pendingModules: deltaData.pending_modules });
         }
         if (deltaData.is_pipeline_active !== undefined) {
@@ -625,14 +625,15 @@ export async function executeBootSequence() {
 
                 // Handle single files, Gather batches (Arrays), or Bridge turns (data.records)
                 const targets = Array.isArray(data) ? data : (data.records || [data]);
-
                 targets.forEach(t => {
                     const fp = t.filepath || t.folderpath || t;
-                    const buffer = activeBuffers[fp];
+                    if (!fp || typeof fp !== 'string') return;
+                    const normFp = fp.includes('://') ? fp : `vfs://${fp.replace(/^\/+/, '')}`;
+                    const buffer = activeBuffers[normFp] || activeBuffers[fp];
                     // A buffer is only physically dirty if it represents a real VFS file and its content differs
                     if (buffer && buffer.isFS && buffer.content !== buffer.originalContent) {
                         isDirty = true;
-                        if (!dirtyFiles.includes(fp)) dirtyFiles.push(fp);
+                        if (!dirtyFiles.includes(buffer.filename)) dirtyFiles.push(buffer.filename);
                     }
                 });
 
@@ -1139,8 +1140,8 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
             cleanPath = parts.slice(3).join('/'); // strips /api/<ws>/
         }
         const isFormData = payload instanceof FormData;
-        const options = isFormData ? { headers: {} } : {};
-        const res = await window.inSetu.api.workspace.post(cleanPath, payload, options);
+        const reqOptions = isFormData ? { ...options, headers: { ...(options.headers || {}) } } : { ...options };
+        const res = await window.inSetu.api.workspace.post(cleanPath, payload, reqOptions);
 
         if (!res.ok) {
             let errMsg = res.statusText;

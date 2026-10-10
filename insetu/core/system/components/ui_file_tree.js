@@ -27,10 +27,11 @@ export class InSetuFileTree extends InSetuElement {
             .toolbar-row { padding: 5px 10px; }
         }
         .file-list-container {
-            flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 10px 12px 20px 12px;
+            flex: 1; display: flex; flex-direction: column; min-height: 0;
+            --tree-item-px: 12px;
         }
         @container (max-width: 480px) {
-            .file-list-container { padding-left: 0; padding-right: 0; }
+            .file-list-container { --tree-item-px: 0px; }
         }
     `];
 constructor() {
@@ -64,11 +65,13 @@ constructor() {
         if (!this._cachedTree) {
             const prefix = this.stripPrefix;
             // CQRS Read-Path: Overlay pending offline mutations at render time
-            const pendingFiles = Array.from(this._pendingMutations || []).filter(f => f && typeof f === 'string');
+            const normalizeToNaked = (p) => p.replace(/^vfs:\/\//, '');
+            const pendingFiles = Array.from(this._pendingMutations || []).filter(f => f && typeof f === 'string').map(normalizeToNaked);
             let mergedFiles = Array.from(new Set([...this.files, ...pendingFiles]));
 
             if (this._deletedMutations && this._deletedMutations.size > 0) {
-                mergedFiles = mergedFiles.filter(f => !this._deletedMutations.has(f));
+                const deletedSet = new Set(Array.from(this._deletedMutations).map(normalizeToNaked));
+                mergedFiles = mergedFiles.filter(f => !deletedSet.has(f));
             }
 
             const mappedFiles = prefix 
@@ -100,11 +103,13 @@ constructor() {
         let flatResults = [];
         // Short-circuit the hierarchical tree generation if we are actively searching
         if (isSearching) {
-            const pendingFiles = Array.from(this._pendingMutations || []).filter(f => f && typeof f === 'string');
+            const normalizeToNaked = (p) => p.replace(/^vfs:\/\//, '');
+            const pendingFiles = Array.from(this._pendingMutations || []).filter(f => f && typeof f === 'string').map(normalizeToNaked);
             let mergedFiles = Array.from(new Set([...this.files, ...pendingFiles]));
 
             if (this._deletedMutations && this._deletedMutations.size > 0) {
-                mergedFiles = mergedFiles.filter(f => !this._deletedMutations.has(f));
+                const deletedSet = new Set(Array.from(this._deletedMutations).map(normalizeToNaked));
+                mergedFiles = mergedFiles.filter(f => !deletedSet.has(f));
             }
 
             const filteredFiles = window.inSetu.utils.fuzzyFilterObjects(mergedFiles, this._searchQuery);
@@ -144,7 +149,7 @@ constructor() {
                     ?bottomBorder=${(!isSearching && this.currentPath.length > 0 && !this.hidePath)}>
                     ${(!isSearching && this.currentPath.length > 0 && !this.hidePath) ? html`
                         <div slot="bottom-row" class="toolbar-row" style="background: var(--input-bg); border-top: 1px solid var(--border); overflow: hidden;">
-                            <sutram-btn intent="neutral" @click=${() => this._setPath(this.currentPath.slice(0, -1))} style="margin-right: 8px;"><yv-icon name="corner-left-up" style="width: 14px; height: 14px; margin-right: 6px;"></yv-icon> Up</sutram-btn>
+                            <sutram-btn intent="neutral" icon="corner-left-up" label="Up" @click=${() => this._setPath(this.currentPath.slice(0, -1))} style="margin-right: 8px;"></sutram-btn>
                             <yenvui-scrub-track style="flex: 1; min-width: 0; font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem;">
                                 /${this.currentPath.join('/')}
                             </yenvui-scrub-track>
@@ -153,7 +158,7 @@ constructor() {
                 </sutram-toolbar>
             ` : ((!isSearching && this.currentPath.length > 0 && !this.hidePath) ? html`
                 <div class="toolbar-row" style="background: var(--input-bg); border-bottom: 1px solid var(--border); overflow: hidden;">
-                    <sutram-btn intent="neutral" @click=${() => this._setPath(this.currentPath.slice(0, -1))} style="margin-right: 8px;"><yv-icon name="corner-left-up" style="width: 14px; height: 14px; margin-right: 6px;"></yv-icon> Up</sutram-btn>
+                    <sutram-btn intent="neutral" icon="corner-left-up" label="Up" @click=${() => this._setPath(this.currentPath.slice(0, -1))} style="margin-right: 8px;"></sutram-btn>
                     <yenvui-scrub-track style="flex: 1; min-width: 0; font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem;">
                         /${this.currentPath.join('/')}
                     </yenvui-scrub-track>
@@ -167,7 +172,7 @@ constructor() {
                             const key = filepath.split('/').pop();
                             const fullFilepath = `${this.basePath}${filepath}`;
                             return html`
-                                <div style="padding-bottom: 8px; width: 100%; box-sizing: border-box;">
+                                <div style="width: 100%; box-sizing: border-box; padding: 0 var(--tree-item-px) 8px var(--tree-item-px);">
                                     <sutram-card
                                         style="margin-bottom: 0;"
                                         .filename=${fullFilepath}
@@ -175,7 +180,7 @@ constructor() {
                                         .titleText=${key}
                                         descriptionText=""
                                         intent="primary"
-                                        icon=${this._pendingMutations.has(fullFilepath) ? 'cloud-upload' : 'file-code-2'}
+                                        icon=${(this._pendingMutations.has(fullFilepath) || this._pendingMutations.has(`vfs://${fullFilepath}`)) ? 'cloud-upload' : 'file-code-2'}
                                         .entityType=${this.entityType || 'file'}
                                         .entityData=${{ filepath: fullFilepath, isFS: true }}>
                                     </sutram-card>
@@ -194,7 +199,7 @@ constructor() {
                                 const pathPrefix = this.currentPath.length > 0 ? this.currentPath.join('/') + '/' : '';
                                 const folderPath = `${this.basePath}${pathPrefix}${key}`;
                                 return html`
-                                    <div style="padding-bottom: 8px; width: 100%; box-sizing: border-box;">
+                                    <div style="width: 100%; box-sizing: border-box; padding: 0 var(--tree-item-px) 8px var(--tree-item-px);">
                                         <sutram-card
                                             style="margin-bottom: 0;"
                                             .titleText=${key}
@@ -211,7 +216,7 @@ constructor() {
                             const filepath = `${this.basePath}${pathPrefix}${key}`;
                             if (this.hideFiles) return '';
                             return html`
-                                <div style="padding-bottom: 8px; width: 100%; box-sizing: border-box;">
+                                <div style="width: 100%; box-sizing: border-box; padding: 0 var(--tree-item-px) 8px var(--tree-item-px);">
                                     <sutram-card
                                         style="margin-bottom: 0;"
                                         .filename=${filepath}
@@ -219,9 +224,9 @@ constructor() {
                                         .titleText=${key}
                                         descriptionText=""
                                         intent="primary"
-                                        icon=${this._pendingMutations.has(filepath) ? 'cloud-upload' : 'file-code-2'}
+                                        icon=${(this._pendingMutations.has(filepath) || this._pendingMutations.has(`vfs://${filepath}`)) ? 'cloud-upload' : 'file-code-2'}
                                         .entityType=${this.entityType || 'file'}
-                                        .entityData=${{ filepath, isFS: true, is_dirty: this._pendingMutations.has(filepath) }}>
+                                        .entityData=${{ filepath, isFS: true, is_dirty: this._pendingMutations.has(filepath) || this._pendingMutations.has(`vfs://${filepath}`) }}>
                                     </sutram-card>
                                 </div>
                             `;
