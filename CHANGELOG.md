@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.24.0 (2026-10-10)
+
+### Bug Fixes
+
+- **core**: Normalize VFS URI schemes, standardize Sutram button labels, and harden SSE telemetry
+  event loops
+  ([`72f0e21`](https://github.com/Callosemic/insetu/commit/72f0e2117803b9729e77b8aaa59c851a56753217))
+
+### Features
+
+- **kernel**: Implement dynamic polyglot importmap resolution and vendorization script hardening
+  ([`8d11739`](https://github.com/Callosemic/insetu/commit/8d117396a3d4330b282eabe316da0996f313bfa7))
+
+### Refactoring
+
+- **ui**: Enforce declarative label property on sutram-btn across extensions
+  ([`2e1b61e`](https://github.com/Callosemic/insetu/commit/2e1b61eb441d68dcaa249b5439014da79fa81d36))
+
+
 ## v0.23.0 (2026-10-08)
 
 ### Bug Fixes
