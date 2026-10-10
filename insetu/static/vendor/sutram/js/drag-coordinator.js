@@ -1,4 +1,4 @@
-import{html as e,css as m}from"lit";import{SutramElement as y}from"./sutram_sdk.js";import"../../yenvui/js/drop-zone.js";export class SutramDragCoordinator extends y{static properties={dragState:{type:Object},spatialState:{type:Object}};static styles=m`
+import{html as n,css as x}from"lit";import{SutramElement as f}from"./sutram_sdk.js";import"../../yenvui/js/drop-zone.js";export class SutramDragCoordinator extends f{static properties={dragState:{type:Object},spatialState:{type:Object}};static styles=x`
         :host {
             display: contents;
         }
@@ -195,17 +195,16 @@ import{html as e,css as m}from"lit";import{SutramElement as y}from"./sutram_sdk.
             background: #000000 !important;
             color: #ffffff !important;
         }
-
         :host([data-theme="e-ink"]) .drag-floater {
             background: #ffffff !important;
             color: #000000 !important;
             border: 2px solid #000000 !important;
             box-shadow: 4px 4px 0 #000000 !important;
         }
-    `;connectedCallback(){super.connectedCallback(),this.observeTheme()}updatePointer(r,h){const g=this.shadowRoot.querySelector(".drag-floater");g&&(g.style.transform=`translate3d(${r}px, ${h}px, 0) translate(-50%, -50%)`)}render(){if(!this.dragState||!this.dragState.active)return e`<yenvui-drop-overlay></yenvui-drop-overlay>`;const{entity:r,currentX:h,currentY:g,sourceCol:o,currentZone:t,sourceRect:b}=this.dragState,n=this.spatialState?.capacity||3,i=b||{left:0,top:0,width:window.innerWidth,height:window.innerHeight};return e`
+    `;connectedCallback(){super.connectedCallback()}updated(e){super.updated(e),e.has("dragState")&&(this._dropZonesCache=null)}getHoveredZone(e,i){this._dropZonesCache||(this._dropZonesCache=Array.from(this.shadowRoot.querySelectorAll("yenvui-drop-target")).map(r=>{const t=r.getBoundingClientRect();return{zone:r.zone,left:t.left,right:t.right,top:t.top,bottom:t.bottom}}));const o=this._dropZonesCache.find(r=>e>=r.left&&e<=r.right&&i>=r.top&&i<=r.bottom);return o?o.zone:null}updatePointer(e,i){const o=this.shadowRoot.querySelector(".drag-floater");o&&(o.style.transform=`translate3d(${e}px, ${i}px, 0) translate(-50%, -50%)`)}render(){if(!this.dragState||!this.dragState.active)return n`<yenvui-drop-overlay></yenvui-drop-overlay>`;const{entity:e,currentX:i,currentY:o,sourceCol:r,currentZone:t,sourceRect:b}=this.dragState,a=this.spatialState?.capacity||3,d=b||{left:0,top:0,width:window.innerWidth,height:window.innerHeight};return n`
             <yenvui-drop-overlay class="hud-overlay" ?active=${!0}>
                 <!-- Localized Bounding Box HUD Container -->
-                <div class="hud-hud-card" style="left: ${i.left}px; top:${i.top}px; width: ${i.width}px; height:${i.height}px;">
+                <div class="hud-hud-card" style="left: ${d.left}px; top:${d.top}px; width: ${d.width}px; height:${d.height}px;">
 
                     <div style="width: 100%; max-width: 500px;">
                         <!-- Header -->
@@ -214,7 +213,7 @@ import{html as e,css as m}from"lit";import{SutramElement as y}from"./sutram_sdk.
                                 <yv-icon name="split" style="width: 14px; height: 14px;"></yv-icon> REPOSITION OR DOCK
                             </div>
                             <div class="hud-header-title">
-                                ${r?.label||r?.id||"Projection"}
+                                ${e?.label||e?.id||"Projection"}
                             </div>
                         </div>
 
@@ -228,19 +227,19 @@ import{html as e,css as m}from"lit";import{SutramElement as y}from"./sutram_sdk.
                         </div>
                         <div style="display: flex; gap: 10px;">
                             <yenvui-drop-target zone="left" class="drop-target-btn intent-primary" .intent=${"primary"} ?hovered=${t==="left"}>
-                                Left Flank
+                                Left
                             </yenvui-drop-target>
                             <yenvui-drop-target zone="center" class="drop-target-btn intent-primary" .intent=${"primary"} ?hovered=${t==="center"}>
-                                Center Focus
+                                Center
                             </yenvui-drop-target>
-                            <yenvui-drop-target zone="right" class="drop-target-btn intent-primary" .intent=${"primary"} ?hovered=${t==="right"} style="${n===2?"opacity: 0.4; pointer-events: none;":""}">
-                                Right Flank
+                            <yenvui-drop-target zone="right" class="drop-target-btn intent-primary" .intent=${"primary"} ?hovered=${t==="right"} style="${a===2?"opacity: 0.4; pointer-events: none;":""}">
+                                Right
                             </yenvui-drop-target>
                         </div>
                     </div>
 
                     <!-- ARRANGE TABS Section -->
-                    ${o&&o!=="window"&&this.spatialState?.columns?.[o]?.pinned?.length>1?e`
+                    ${r&&r!=="window"&&this.spatialState?.columns?.[r]?.pinned?.length>1?n`
                         <div class="section-box arrange-tabs">
                             <div class="section-header arrange-tabs">
                                 <span style="display: flex; align-items: center; gap: 6px;">
@@ -249,11 +248,11 @@ import{html as e,css as m}from"lit";import{SutramElement as y}from"./sutram_sdk.
                                 <span style="opacity: 0.7;">Drop between tabs to reorder</span>
                             </div>
                             <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                                ${(()=>{const v=this.spatialState.columns[o].pinned;let a=[...v];const d=a.findIndex(p=>p.id===r?.id);let s=d;if(t&&t.startsWith("reorder-")&&(s=parseInt(t.replace("reorder-",""),10)),d!==-1&&s!==-1&&d!==s){const[p]=a.splice(d,1);a.splice(s,0,p)}return v.map((p,l)=>{const c=a[l],x=t==="reorder-"+l;return e`
-                                            ${l>0?e`<span style="color: var(--text-muted); font-size: 0.8rem;">•</span>`:""}
-                                            <yenvui-drop-target zone="reorder-${l}" class="drop-target-btn intent-highlight" .intent=${"highlight"} ?hovered=${x}>
-                                                <yv-icon name="${c.icon||"component"}" style="width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;"></yv-icon>
-                                                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${c.label||c.id}</span>
+                                ${(()=>{const v=this.spatialState.columns[r].pinned;let s=[...v];const p=s.findIndex(g=>g.id===e?.id);let l=p;if(t&&t.startsWith("reorder-")&&(l=parseInt(t.replace("reorder-",""),10)),p!==-1&&l!==-1&&p!==l){const[g]=s.splice(p,1);s.splice(l,0,g)}return v.map((g,c)=>{const h=s[c],u=t==="reorder-"+c;return n`
+                                            ${c>0?n`<span style="color: var(--text-muted); font-size: 0.8rem;">•</span>`:""}
+                                            <yenvui-drop-target zone="reorder-${c}" class="drop-target-btn intent-highlight" .intent=${"highlight"} ?hovered=${u}>
+                                                <yv-icon name="${h.icon||"component"}" style="width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;"></yv-icon>
+                                                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${h.label||h.id}</span>
                                             </yenvui-drop-target>
                                         `})})()}
                             </div>
@@ -271,24 +270,24 @@ import{html as e,css as m}from"lit";import{SutramElement as y}from"./sutram_sdk.
                         <div style="display: flex; flex-direction: column; gap: 8px;">
                             <div style="display: flex; gap: 8px;">
                                 <yenvui-drop-target zone="span-1-left" class="drop-target-btn intent-warning" .intent=${"warning"} ?hovered=${t==="span-1-left"}>
-                                    Left Flank
+                                    Left
                                 </yenvui-drop-target>
                                 <yenvui-drop-target zone="span-1-center" class="drop-target-btn intent-warning" .intent=${"warning"} ?hovered=${t==="span-1-center"}>
-                                    Center Focus
+                                    Center
                                 </yenvui-drop-target>
-                                ${n>=3?e`
+                                ${a>=3?n`
                                     <yenvui-drop-target zone="span-1-right" class="drop-target-btn intent-warning" .intent=${"warning"} ?hovered=${t==="span-1-right"}>
-                                        Right Flank
+                                        Right
                                     </yenvui-drop-target>
                                 `:""}
                             </div>
 
-                            ${n>=2?e`
+                            ${a>=2?n`
                                 <div style="display: flex; gap: 8px;">
                                     <yenvui-drop-target zone="span-2-left" class="drop-target-btn intent-warning" .intent=${"warning"} ?hovered=${t==="span-2-left"}>
                                         Left + Center
                                     </yenvui-drop-target>
-                                    ${n>=3?e`
+                                    ${a>=3?n`
                                         <yenvui-drop-target zone="span-2-center" class="drop-target-btn intent-warning" .intent=${"warning"} ?hovered=${t==="span-2-center"}>
                                             Center + Right
                                         </yenvui-drop-target>
@@ -296,9 +295,9 @@ import{html as e,css as m}from"lit";import{SutramElement as y}from"./sutram_sdk.
                                 </div>
                             `:""}
 
-                            ${n>=3?e`
+                            ${a>=3?n`
                                 <yenvui-drop-target zone="span-3-left" class="drop-target-btn intent-warning" .intent=${"warning"} ?hovered=${t==="span-3-left"}>
-                                    All 3 Columns
+                                    All Columns
                                 </yenvui-drop-target>
                             `:""}
                         </div>
@@ -311,7 +310,7 @@ import{html as e,css as m}from"lit";import{SutramElement as y}from"./sutram_sdk.
                 </div>
                 <!-- Floating Cursor Node (Hardware Accelerated) -->
                 <div class="drag-floater">
-                    <yv-icon name="${r?.icon||"component"}" style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;"></yv-icon> ${r?.label||r?.id||"Dragging"}
+                    <yv-icon name="${e?.icon||"component"}" style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;"></yv-icon> ${e?.label||e?.id||"Dragging"}
                 </div>
             </yenvui-drop-overlay>
         `}}customElements.define("sutram-drag-coordinator",SutramDragCoordinator);

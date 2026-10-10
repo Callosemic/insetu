@@ -30,6 +30,12 @@ import{html as a,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
             .selection-strip {
                 border-radius: 0 !important;
             }
+            .action-grip-rail {
+                border-radius: 0 !important;
+            }
+            .actions-tray {
+                border-radius: 0 !important;
+            }
         }
         .selection-strip {
             width: 14px !important;
@@ -227,29 +233,17 @@ import{html as a,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
             text-align: center;
             margin: 0;
         }
-
         /* Unstyled slots for host-injected buttons */
-        ::slotted(button), ::slotted(sutram-async-btn) {
+        ::slotted(button), ::slotted(sutram-btn), ::slotted(sutram-async-btn), ::slotted(yenvui-btn), ::slotted(yenvui-async-btn) {
             height: 30px;
             padding: 0 10px !important;
-            border-radius: 6px;
             font-size: 0.75rem !important;
-            font-weight: 700;
             display: inline-flex !important;
             align-items: center;
             justify-content: center;
             gap: 5px;
-            cursor: pointer;
-            transition: filter 0.15s ease, transform 0.1s ease;
             white-space: nowrap;
-            user-select: none;
             margin: 0 !important;
-            background: var(--input-bg);
-            color: var(--text);
-            border: 1px solid var(--border);
-        }
-        ::slotted(button:hover) {
-            filter: brightness(1.12);
         }
 
         /* E-Ink High Contrast Overrides */
@@ -349,10 +343,10 @@ import{html as a,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
                 border-left-width: 6px;
             }
         }
-    `;constructor(){super(),this._overlayActive=!1,this._hasActions=!1,this.selected=!1,this._gestureController=new h(this,{scrollableContainerSelector:"actions-wrapper",onPanStart:(t,n)=>{const e=this.getBoundingClientRect();this._cardWidth=e.width,this._localStartX=t-e.left;const r=this.shadowRoot.querySelector(".actions-wrapper");this._actionsScrollLeft=r?r.scrollLeft:null,this._initialScrollLeft=this._actionsScrollLeft},onPanMove:(t,n,e)=>{if(e==="horizontal"&&this._overlayActive){const r=this._gestureController.startX-t,i=this.shadowRoot.querySelector(".actions-wrapper");if(i&&this._initialScrollLeft!==null){let s=this._initialScrollLeft+r;this._drawerRafId&&cancelAnimationFrame(this._drawerRafId),this._drawerRafId=requestAnimationFrame(()=>{s<0?i.style.transform=`translateX(${Math.abs(s)*.4}px)`:(i.style.transform="translateX(0px)",i.scrollLeft=s)})}}},onPanEnd:(t,n,e)=>{if(e!=="horizontal")return;const r=this._gestureController.startX-t;if(Math.abs(r)>10&&(this._isPanning=!0,setTimeout(()=>this._isPanning=!1,150)),this._overlayActive){const i=this.shadowRoot.querySelector(".actions-wrapper");i&&(i.style.transition="transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)",i.style.transform="translateX(0px)",setTimeout(()=>{i.style.transition=""},200),this._initialScrollLeft+r<-(this._cardWidth*.2)&&(this._overlayActive=!1));return}if(Math.abs(r)>30){const i=r>30,s=r<-30,c=this._localStartX<this._cardWidth*.3,o=this._localStartX>this._cardWidth*.7;c&&s&&!this.disableSelection?this._toggleSelection():o&&i&&(this._hasActions||this.querySelector('[slot="actions"]'))&&(this._overlayActive=!0)}}}),this._overlayListener=t=>{t.detail.source!==this&&this._overlayActive&&(this._overlayActive=!1)},this._focusOutListener=t=>{!this.contains(t.relatedTarget)&&this._overlayActive&&(this._overlayActive=!1)}}connectedCallback(){super.connectedCallback(),this.addEventListener("focusout",this._focusOutListener),document.addEventListener("yenvui-overlay-opened",this._overlayListener),this.registerOutsideClick(()=>{this._overlayActive&&(this._overlayActive=!1)})}disconnectedCallback(){super.disconnectedCallback(),this.removeEventListener("focusout",this._focusOutListener),document.removeEventListener("yenvui-overlay-opened",this._overlayListener),this._gestureController&&typeof this._gestureController.abort=="function"&&this._gestureController.abort()}updated(t){super.updated(t),t.has("_overlayActive")&&this._overlayActive&&this.dispatchEvent(new CustomEvent("yenvui-overlay-opened",{bubbles:!0,composed:!0,detail:{source:this}})),(t.has("entityData")||t.has("filename")||t.has("titleText"))&&this._overlayActive&&(this._overlayActive=!1)}_toggleSelection(){this.selected=!this.selected,this.dispatchEvent(new CustomEvent("yenvui-card-select-toggled",{detail:{selected:this.selected},bubbles:!0,composed:!0}))}firstUpdated(){this._checkActions()}_checkActions(){const t=this.shadowRoot.querySelector('slot[name="actions"]');if(t){const n=t.assignedElements({flatten:!0});this._hasActions=n.length>0}else this._hasActions=!!this.querySelector('[slot="actions"]')}_handleSlotChange(t){this._checkActions()}render(){const t=!this.descriptionText&&!this.detailText,n=this.intent?`var(--intent-${this.intent})`:this.intentColor||"var(--intent-neutral)";return a`
-            <div class="card-wrapper" style="--card-intent: ${n}"
-                @mouseleave=${()=>{window.matchMedia("(hover: hover)").matches&&!this._gestureController.active&&(this._overlayActive=!1)}}
-                @pointerdown=${e=>this._gestureController.start(e)}>
+    `;constructor(){super(),this._overlayActive=!1,this._hasActions=!1,this.selected=!1,this._isPanning=!1,this._overlayListener=t=>{t.detail.source!==this&&this._overlayActive&&(this._overlayActive=!1)},this._focusOutListener=t=>{!this.contains(t.relatedTarget)&&this._overlayActive&&(this._overlayActive=!1)}}_initGestureController(){this._gestureController||(this._gestureController=new h(this,{scrollableContainerSelector:"actions-wrapper",onPanStart:(t,s)=>{const e=this.getBoundingClientRect();this._cardWidth=e.width,this._localStartX=t-e.left;const r=this.shadowRoot.querySelector(".actions-wrapper");this._actionsScrollLeft=r?r.scrollLeft:null,this._initialScrollLeft=this._actionsScrollLeft},onPanMove:(t,s,e)=>{if(e==="horizontal"&&this._overlayActive){const r=this._gestureController.startX-t,i=this.shadowRoot.querySelector(".actions-wrapper");if(i&&this._initialScrollLeft!==null){let n=this._initialScrollLeft+r;this._drawerRafId&&cancelAnimationFrame(this._drawerRafId),this._drawerRafId=requestAnimationFrame(()=>{n<0?i.style.transform=`translateX(${Math.abs(n)*.4}px)`:(i.style.transform="translateX(0px)",i.scrollLeft=n)})}}},onPanEnd:(t,s,e)=>{if(e!=="horizontal")return;const r=this._gestureController.startX-t;if(Math.abs(r)>10&&(this._isPanning=!0,setTimeout(()=>this._isPanning=!1,150)),this._overlayActive){const i=this.shadowRoot.querySelector(".actions-wrapper");i&&(i.style.transition="transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)",i.style.transform="translateX(0px)",setTimeout(()=>{i.style.transition=""},200),this._initialScrollLeft+r<-(this._cardWidth*.2)&&(this._overlayActive=!1));return}if(Math.abs(r)>30){const i=r>30,n=r<-30,c=this._localStartX<this._cardWidth*.3,o=this._localStartX>this._cardWidth*.7;c&&n&&!this.disableSelection?this._toggleSelection():o&&i&&(this._hasActions||this.querySelector('[slot="actions"]'))&&(this._overlayActive=!0)}}}))}connectedCallback(){super.connectedCallback(),this.addEventListener("focusout",this._focusOutListener),document.addEventListener("yenvui-overlay-opened",this._overlayListener),this.registerOutsideClick(()=>{this._overlayActive&&(this._overlayActive=!1)})}disconnectedCallback(){super.disconnectedCallback(),this.removeEventListener("focusout",this._focusOutListener),document.removeEventListener("yenvui-overlay-opened",this._overlayListener),this._gestureController&&typeof this._gestureController.abort=="function"&&this._gestureController.abort()}updated(t){if(super.updated(t),t.has("_overlayActive")&&this._overlayActive&&this.dispatchEvent(new CustomEvent("yenvui-overlay-opened",{bubbles:!0,composed:!0,detail:{source:this}})),t.has("entityData")||t.has("filename")||t.has("titleText")){const s=t.get("filename"),e=t.get("titleText"),r=t.has("filename")&&s!==this.filename,i=t.has("titleText")&&e!==this.titleText;this._overlayActive&&(r||i)&&(this._overlayActive=!1)}}_toggleSelection(){this.selected=!this.selected,this.dispatchEvent(new CustomEvent("yenvui-card-select-toggled",{detail:{selected:this.selected},bubbles:!0,composed:!0}))}firstUpdated(){this._checkActions()}_checkActions(){const t=this.shadowRoot.querySelector('slot[name="actions"]');if(t){const s=t.assignedElements({flatten:!0});this._hasActions=s.length>0}else this._hasActions=!!this.querySelector('[slot="actions"]')}_handleSlotChange(t){this._checkActions()}render(){const t=!this.descriptionText&&!this.detailText,s=this.intent?`var(--intent-${this.intent})`:this.intentColor||"var(--intent-neutral)";return a`
+            <div class="card-wrapper" style="--card-intent: ${s}"
+                @mouseleave=${()=>{window.matchMedia("(hover: hover)").matches&&(!this._gestureController||!this._gestureController.active)&&(this._overlayActive=!1)}}
+                @pointerdown=${e=>{this._initGestureController(),this._gestureController.start(e)}}>
 
                 ${this.disableSelection?"":a`<div class="selection-hit-zone" title="Select Item" @click=${e=>{e.stopPropagation(),this._toggleSelection()}}></div><div class="selection-strip"></div>`}
                 <div class="content-col" @click=${e=>{this.dispatchEvent(new CustomEvent("yenvui-card-clicked",{detail:{filename:this.filename,isSource:!0},bubbles:!0,composed:!0}))}} style="cursor: pointer; padding: 12px; min-width: 0;">
@@ -397,7 +391,7 @@ import{html as a,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
                     @click=${e=>{e.stopPropagation(),e.preventDefault(),this._overlayActive=!this._overlayActive}}>
                     <yv-icon name="chevron-left" style="width: 14px; height: 14px;"></yv-icon>
                 </div>
-                <div class="actions-tray" @click=${{handleEvent:e=>{if(this._isPanning){e.stopPropagation(),e.preventDefault();return}const r=e.composedPath?e.composedPath():[],i=r.some(o=>o.tagName==="SUTRAM-DROPDOWN"||o.tagName==="YENVUI-DROPDOWN"),s=r.some(o=>o.classList&&o.classList.contains("menu-item"));if(i&&!s)return;r.some(o=>{if(!o.tagName)return!1;const l=o.tagName.toUpperCase();return!!(l==="BUTTON"||l==="SUTRAM-ASYNC-BTN"||l==="YENVUI-ASYNC-BTN"||s)})&&(this._overlayActive=!1)},capture:!0}}>
+                <div class="actions-tray" @click=${{handleEvent:e=>{if(this._isPanning){e.stopPropagation(),e.preventDefault();return}const r=e.composedPath?e.composedPath():[],i=r.some(o=>o.tagName==="SUTRAM-DROPDOWN"||o.tagName==="YENVUI-DROPDOWN"),n=r.some(o=>o.classList&&o.classList.contains("menu-item"));if(i&&!n)return;const c=r.some(o=>{if(!o.tagName)return!1;const l=o.tagName.toUpperCase();return!!(l==="BUTTON"||l==="SUTRAM-ASYNC-BTN"||l==="YENVUI-ASYNC-BTN"||n)})},capture:!0}}>
                     ${t?"":a`<span class="tray-caption">${this.titleText}</span>`}
                     <div class="actions-wrapper">
                         <slot name="actions" @slotchange=${this._handleSlotChange}></slot>

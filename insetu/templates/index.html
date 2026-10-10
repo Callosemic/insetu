@@ -33,19 +33,20 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script type="importmap">
+        {{ import_map|safe }}
+    </script>
+    <link rel="modulepreload" href="/static/vendor/sutram/js/sutram-boot.js">
+    <link rel="modulepreload" href="/static/vendor/sutram/js/sutram_sdk.js">
+    <link rel="modulepreload" href="/static/js/app.js">
     <script>
         window.ACTIVE_EXTENSIONS = {{ extensions|tojson|safe }};
-        window.SUTRAM_MANIFEST_URLS = [
-            '/static/vendor.json'
-            {% for ext in extensions %}
-            , '/static/extensions/{{ ext }}/vendor.json'
-            {% endfor %}
-        ];
+        window.SUTRAM_PUBLIC_PATH = '/static/vendor/sutram/js/';
     </script>
-    <script src="/static/icons.js"></script>
+    <script src="/static/vendor/lucide/icons.js"></script>
     <script src="{{ url_for('static', filename='vendor/sutram/js/sutram-boot.js') }}"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/yenvui/css/theme-tokens.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/yenvui/css/yenvui-primitives.css') }}">
     <style>
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
         .retro-boot {

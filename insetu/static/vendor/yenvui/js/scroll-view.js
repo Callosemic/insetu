@@ -6,7 +6,7 @@ import{html as i,css as d}from"lit";import{YenvuiBase as n}from"./yenvui-base.js
             min-height: 0;
             overflow-y: auto;
             box-sizing: border-box;
-            padding: var(--scroll-padding, 10px 12px 20px 12px);
+            padding: var(--scroll-padding, 0 12px);
             --mobile-edge-padding: 0px;
             --content-padding-x: 12px;
         }
@@ -22,4 +22,4 @@ import{html as i,css as d}from"lit";import{YenvuiBase as n}from"./yenvui-base.js
                 --mobile-edge-padding: 20px;
             }
         }
-    `;constructor(){super(),this.padding="10px 12px 20px 12px"}updated(t){super.updated(t),t.has("padding")&&this.padding&&this.padding!=="none"&&this.style.setProperty("--scroll-padding",this.padding)}render(){return i`<slot></slot>`}}customElements.define("yenvui-scroll-view",YenvuiScrollView);
+    `;constructor(){super(),this.padding="0 12px"}updated(t){super.updated(t),t.has("padding")&&this.padding&&this.padding!=="none"&&this.style.setProperty("--scroll-padding",this.padding)}render(){return i`<slot></slot>`}}customElements.define("yenvui-scroll-view",YenvuiScrollView);

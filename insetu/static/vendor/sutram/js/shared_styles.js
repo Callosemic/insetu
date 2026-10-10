@@ -1,4 +1,6 @@
-import{css as t}from"lit";export const sharedStyles=t`
+import{css as t}from"lit";import{sharedStyles as r}from"../../yenvui/js/shared_styles.js";export const sharedStyles=t`
+    ${r}
+
     /* Global Reset for Components */
     * { 
         box-sizing: border-box; 

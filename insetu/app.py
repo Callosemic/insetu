@@ -296,12 +296,47 @@ def resolve_python_vendors(active_exts):
             print(f"⚠️ SemVer conflict for Python vendor [{specifier}]. Utilizing highest version {highest_item['version']}.")
 
         resolved_paths[specifier] = highest_item["path"]
-
     # 4. Inject into sys.path
     for specifier, abs_path in resolved_paths.items():
         if os.path.exists(abs_path) and abs_path not in sys.path:
             sys.path.insert(0, abs_path)
             print(f"🐍 Python Vendor Injected: [{specifier}] -> {abs_path}")
+
+def resolve_js_vendors(active_exts):
+    """Resolves and builds the JS import map for the frontend bootloader statelessly."""
+    packages = {}
+
+    # 1. Read Core Baseline Manifest
+    core_vendor_file = Path(app.static_folder).joinpath("vendor.json")
+    if core_vendor_file.exists() and core_vendor_file.is_file():
+        try:
+            with open(core_vendor_file, "r", encoding="utf-8") as f:
+                core_imports = json.load(f).get("imports", {})
+            for specifier, meta in core_imports.items():
+                packages[specifier] = {
+                    "version": meta.get("version", "0.0.0"),
+                    "resolvedPath": f"/static/{meta.get('path', '')}"
+                }
+        except Exception: pass
+
+    # 2. Sweep Active Extensions
+    ext_base = Path(app.root_path).joinpath("extensions")
+    for ext in active_exts:
+        vendor_file = ext_base.joinpath(ext, "vendor.json")
+        if vendor_file.exists() and vendor_file.is_file():
+            try:
+                with open(vendor_file, "r", encoding="utf-8") as f:
+                    ext_imports = json.load(f).get("imports", {})
+                for specifier, meta in ext_imports.items():
+                    if specifier not in packages or parse_semver(meta.get("version", "0.0.0")) > parse_semver(packages[specifier]["version"]):
+                        packages[specifier] = {
+                            "version": meta.get("version", "0.0.0"),
+                            "resolvedPath": f"/static/extensions/{ext}/{meta.get('path', '')}"
+                        }
+            except Exception: pass
+
+    return {specifier: meta["resolvedPath"] for specifier, meta in packages.items()}
+
 @app.route('/static/extensions/<ext_name>/<path:filename>')
 def serve_extension_static(ext_name, filename):
     """Serves static assets and vendored dependencies directly from an extension directory."""
@@ -481,7 +516,10 @@ def index():
     instance_emoji = settings.get("instance_emoji", "⚙️")
     extensions = cfg.get("extensions", [])
     mounted_extensions = [ext for ext in extensions if ext == "config" or ext in app.blueprints]
-    return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=mounted_extensions)
+
+    import_map = resolve_js_vendors(mounted_extensions)
+
+    return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=mounted_extensions, import_map=json.dumps({"imports": import_map}))
 
 # Ignite active workspace feature components JIT at application startup
 load_workspace_extensions()

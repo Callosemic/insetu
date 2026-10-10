@@ -92,7 +92,6 @@ import{LitElement as i,html as a,css as n}from"lit";export class YenvuiModal ext
             background: var(--bg-hover, #f1f5f9);
             filter: none;
         }
-
         .body {
             padding: 20px;
             overflow-y: auto;
@@ -104,6 +103,7 @@ import{LitElement as i,html as a,css as n}from"lit";export class YenvuiModal ext
             flex-direction: column;
             gap: 15px;
             -webkit-overflow-scrolling: touch; /* Momentum scrolling for iOS */
+            container-type: inline-size;
         }
         :host([flush]) .body {
             padding: 0;
@@ -130,7 +130,8 @@ import{LitElement as i,html as a,css as n}from"lit";export class YenvuiModal ext
             border: none !important; 
             cursor: pointer; 
         }
-        ::slotted(yenvui-async-btn[slot="footer"]) {
+        ::slotted(yenvui-async-btn[slot="footer"]),
+        ::slotted(sutram-async-btn[slot="footer"]) {
             flex: 1;
             margin: 0 !important;
             padding: 0 !important;

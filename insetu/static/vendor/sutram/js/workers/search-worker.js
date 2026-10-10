@@ -1,0 +1,1 @@
+import{fuzzyFilterObjects as i,buildFileTree as o}from"../utils.js";self.addEventListener("message",n=>{const{type:s,requestId:t,items:r,query:a}=n.data;if(s==="FUZZY_SEARCH"){const g=i(r,a,e=>typeof e=="string"?e:e.label||String(e));self.postMessage({requestId:t,results:g})}else if(s==="BUILD_TREE"){const l=o(r);self.postMessage({requestId:t,tree:l})}});

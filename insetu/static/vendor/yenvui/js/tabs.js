@@ -1,4 +1,4 @@
-import{html as e,css as r}from"lit";import{YenvuiBase as o}from"./yenvui-base.js";export class YenvuiTabs extends o{static properties={tabs:{type:Array},activeTab:{type:String},variant:{type:String,reflect:!0},cacheViews:{type:Boolean}};static styles=r`
+import{html as e,css as r}from"lit";import{YenvuiBase as i}from"./yenvui-base.js";export class YenvuiTabs extends i{static properties={tabs:{type:Array},activeTab:{type:String},variant:{type:String,reflect:!0},cacheViews:{type:Boolean}};static styles=r`
         :host {
             display: flex;
             flex-direction: column;
@@ -101,7 +101,6 @@ import{html as e,css as r}from"lit";import{YenvuiBase as o}from"./yenvui-base.js
             box-shadow: none !important;
             background: transparent !important;
         }
-
         .content-container {
             flex: 1;
             display: flex;
@@ -109,6 +108,7 @@ import{html as e,css as r}from"lit";import{YenvuiBase as o}from"./yenvui-base.js
             min-height: 0;
             overflow: hidden;
             background: var(--bg);
+            container-type: inline-size;
         }
     `;constructor(){super(),this.tabs=[],this.activeTab="",this.variant="primary",this.cacheViews=!0}_handleTabClick(a){this.dispatchEvent(new CustomEvent("yenvui-tab-selected",{detail:{tabId:a},bubbles:!0,composed:!0}))}render(){const a=this.variant==="sub";return e`
             <div class="tabs-header-wrap" style="display: flex; width: 100%; background: ${a?"var(--bg)":"var(--bg-deep)"}; flex-shrink: 0; height: ${a?"44px":"54px"};">

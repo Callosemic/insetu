@@ -449,7 +449,13 @@ def api_emergency_dump():
             }
             
             for rel_path, filepath in matched_entries:
-                if "/vendor/" in rel_path:
+                if rel_path.startswith("sutram/sutram/"):
+                    if "vendor_sutram.txt" not in buckets: buckets["vendor_sutram.txt"] = []
+                    buckets["vendor_sutram.txt"].append((rel_path, filepath))
+                elif rel_path.startswith("sutram/yenvui/"):
+                    if "vendor_yenvui.txt" not in buckets: buckets["vendor_yenvui.txt"] = []
+                    buckets["vendor_yenvui.txt"].append((rel_path, filepath))
+                elif "/vendor/" in rel_path:
                     try:
                         vendor_name = rel_path.split('/vendor/')[1].split('/')[0]
                     except IndexError:

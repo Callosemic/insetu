@@ -32,7 +32,7 @@ import{html as n,css as i}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
         .window-btn:hover { background: var(--bg-hover); color: var(--text); }
         .window-btn.active-span { background: color-mix(in srgb, var(--intent-color, var(--intent-primary)) 20%, transparent); color: var(--intent-color, var(--intent-primary)); border: 1px solid var(--intent-color, var(--intent-primary)); }
         .window-btn.close-btn:hover { color: var(--intent-danger); background: color-mix(in srgb, var(--intent-danger) 15%, transparent); }
-        .body { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); }
+        .body { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); container-type: inline-size; }
 
         :host([data-theme="e-ink"]) dialog {
             border: 2px solid #000;
