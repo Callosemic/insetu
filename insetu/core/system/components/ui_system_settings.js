@@ -53,11 +53,10 @@ export class InSetuSystemSettings extends InSetuElement {
         const btns = [];
 
         let hasCompleteTakeover = false;
-
         customActions.forEach(act => {
             if (act.id === `${ext.id}_generic_settings`) {
                 hasCompleteTakeover = true;
-                btns.push(renderBtn(act.icon || '⚙️', act.label || `${ext.title} Base Settings`, act.onClick));
+                btns.push(renderBtn(act.icon || 'settings', act.label || `${ext.title} Base Settings`, act.onClick));
             }
         });
 
@@ -69,7 +68,7 @@ export class InSetuSystemSettings extends InSetuElement {
 
             // If there are visible settings OR custom actions to display in the modal, render the Base Settings button
             if (visibleSchema.length > 0 || embeddedActions.length > 0) {
-                btns.push(renderBtn('⚙️', `${ext.title} Base Settings`, () => this._openGenericSettings(ext.id, rawSchema)));
+                btns.push(renderBtn('settings', `${ext.title} Base Settings`, () => this._openGenericSettings(ext.id, rawSchema)));
             }
         }
 
@@ -86,14 +85,16 @@ export class InSetuSystemSettings extends InSetuElement {
             this.layoutCapacity = state.capacity || 3;
         });
         this.registerGlobalListener('click', document, this._handleOutsideClick);
+        this.registerGlobalListener('insetu:system:close-settings', window, () => {
+            this.modalOpen = false;
+        });
     }
     disconnectedCallback() {
         super.disconnectedCallback();
     }
     _handleOutsideClick(e) {
         if (!this.menuOpen) return;
-        const path = e.composedPath();
-        if (!path.includes(this)) {
+        if (!this.getEventPath(e).includes(this)) {
             this.menuOpen = false;
         }
     }
@@ -317,7 +318,7 @@ export class InSetuSystemSettings extends InSetuElement {
                 <div slot="footer" style="width: 100%; display: flex; gap: 8px;">
                     <sutram-entity-actions 
                         .entityType=${'system_control'} 
-                        .entityData=${{ closeModal: () => this.modalOpen = false }}
+                        .entityData=${{}}
                         style="width: 100%; display: flex; gap: 8px;">
                     </sutram-entity-actions>
                 </div>
@@ -364,7 +365,7 @@ export class InSetuSystemSettings extends InSetuElement {
             ${this.docsModalOpen ? html`
             <sutram-modal 
                 ?open=${true} 
-                titleText="📖 Documentation Hub"  
+                titleText="Documentation Hub"  
                 ?fullscreen=${true} 
                 @sutram-modal-closed=${() => this.docsModalOpen = false}>${!this._docsStatus ? html`
                     <div style="padding: 20px;"><yenvui-spinner text="Scanning for documentation..."></yenvui-spinner></div>
@@ -551,7 +552,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
     render() {
         return html`
             ${this.open ? html`
-            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="🗃️ Add / Remove Workspaces" @sutram-modal-closed=${(e) => { if (e.target !== e.currentTarget) return; this.open = false; AppStore.setState({ isWorkspaceEditorOpen: false }); }}>
+            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Add / Remove Workspaces" @sutram-modal-closed=${(e) => { if (e.target !== e.currentTarget) return; this.open = false; AppStore.setState({ isWorkspaceEditorOpen: false }); }}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0; overflow-y: auto;">
                     <form @submit=${this._handleCreateWorkspace} style="display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; background: transparent; border: none; box-shadow: none;">
                         <sutram-input label="Workspace Unique Name / ID" placeholder="e.g. guitar_academy" .value=${this._newWsId} @sutram-input-changed=${e => this._newWsId = e.detail.value} ?flush=${true}></sutram-input>
@@ -572,7 +573,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                         }}></sutram-async-btn>
                     </form>
                     ${this._showHostBrowser ? html`
-                    <sutram-modal ?open=${true} ?fullscreen=${true} titleText="📁 Select Local System Directory" @sutram-modal-closed=${() => this._showHostBrowser = false}>
+                    <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Select Local System Directory" @sutram-modal-closed=${() => this._showHostBrowser = false}>
                         <div slot="body" style="display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow-y: auto;">
                             <div style="display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-shrink: 0;">
                                 <sutram-btn intent="neutral" label="Parent Dir" @click=${this._goUpHostDir}></sutram-btn>

@@ -11,13 +11,26 @@ window.addEventListener('beforeunload', (e) => {
         e.returnValue = '';
     }
 });
-
 window.addEventListener('sutram-evict-projection', (e) => {
-    if (e.detail && e.detail.id === 'bridge') {
+    const id = e.detail?.id;
+    if (id === 'bridge') {
         BridgeStore.getState().clearPayload();
+    } else if (id === 'bridge:edit-cell') {
+        const cellId = BridgeStore.getState().editCellId;
+        if (cellId) {
+            window.inSetu?.stores?.Fs?.getState()?.closeBuffer(`yomama://${cellId}`);
+            BridgeStore.setState({ editCellId: null, editCellOriginalFile: '' });
+        }
+    } else if (id === 'bridge:syntax-diff') {
+        BridgeStore.setState({ syntaxErrorDiff: null });
     }
 });
 
+window.addEventListener('insetu:bridge:cell-swap', (e) => {
+    if (e.detail?.id) {
+        BridgeStore.getState().swapCell(e.detail.id);
+    }
+});
 export const BridgeStore = createExtensionStore('Bridge', {
     cells: [],
     activeBridgeJobId: null,
@@ -26,8 +39,11 @@ export const BridgeStore = createExtensionStore('Bridge', {
     telemetry: null,
     historyRecords: [],
     historyViewMode: 'transaction',
+    editCellId: null,
+    editCellOriginalFile: '',
+    syntaxErrorDiff: null,
     parseAndAppendCells: (text) => {
-        const val = text.replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
+        const val = (text || '').replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
         const lines = val.split('\n');
         const newCells = [];
         let cellIdx = 0;
@@ -140,14 +156,55 @@ export const BridgeStore = createExtensionStore('Bridge', {
     removeCell: (id) => {
         BridgeStore.setState(state => ({ cells: state.cells.filter(c => c.id !== id) }));
     },
+    swapCell: (id) => {
+        const state = BridgeStore.getState();
+        const isEditingThis = state.editCellId === id;
+        let textToSwap = state.cells.find(c => c.id === id)?.content;
+        if (isEditingThis) {
+            const buffer = window.inSetu?.stores?.Fs?.getState()?.activeBuffers?.[`yomama://${id}`];
+            if (buffer) textToSwap = buffer.content;
+        }
+        if (!textToSwap) return;
+
+        const blockRegex = /^(<<<<<<< SEARCH)[ \t]*\r?\n([\s\S]*?)^(=======)[ \t]*\r?\n([\s\S]*?)^(>>>>>>> REPLACE)/m;
+        const match = textToSwap.match(blockRegex);
+
+        if (match) {
+            const before = textToSwap.substring(0, match.index);
+            const searchBlock = match[2];
+            const replaceBlock = match[4];
+            const after = textToSwap.substring(match.index + match[0].length);
+            const swappedChunk = `${before}<<<<<<< SEARCH\n${replaceBlock}=======\n${searchBlock}>>>>>>> REPLACE${after}`;
+
+            if (isEditingThis) {
+                window.inSetu?.stores?.Fs?.getState()?.updateBuffer(`yomama://${id}`, { content: swappedChunk });
+            } else {
+                BridgeStore.getState().updateCellContent(id, swappedChunk.trim());
+            }
+        } else {
+            alert("Could not cleanly parse SEARCH/REPLACE blocks to swap. Ensure '=======' is on its own line.");
+        }
+    },
     clearPayload: () => {
+        const curEditId = BridgeStore.getState().editCellId;
+        if (curEditId) {
+            window.inSetu?.stores?.Fs?.getState()?.closeBuffer(`yomama://${curEditId}`);
+        }
         BridgeStore.setState({ 
             cells: [], 
             activeBridgeJobId: null,
             viewMode: 'input',
             consoleOutput: 'Ready...',
-            telemetry: null
+            telemetry: null,
+            editCellId: null,
+            editCellOriginalFile: '',
+            syntaxErrorDiff: null
         });
+        if (window.Sutram?.stores?.Layout) {
+            const layout = window.Sutram.stores.Layout.getState();
+            layout.closeWindow('bridge:edit-cell');
+            layout.closeWindow('bridge:syntax-diff');
+        }
     },
     setViewMode: (mode) => BridgeStore.setState({ viewMode: mode }),
     setConsoleOutput: (out) => BridgeStore.setState({ consoleOutput: out }),
@@ -182,11 +239,7 @@ export class InSetuExtBridge extends InSetuElement {
         viewMode: { type: String },
         telemetry: { type: Object },
         _fileVerificationCache: { type: Object },
-        _editCellId: { type: String },
-        _editContent: { type: String },
-        _editCellOriginalFile: { type: String },
-        _autoSwaps: { type: Object },
-        _syntaxErrorDiff: { type: String }
+        _autoSwaps: { type: Object }
     };
     static styles = [
         sharedStyles,
@@ -212,14 +265,8 @@ export class InSetuExtBridge extends InSetuElement {
         this.viewMode = 'input';
         this._fileVerificationCache = {};
         this._globalBypassSandwich = false;
-        this._editCellId = null;
-        this._editContent = '';
-        this._editCellOriginalFile = '';
-        this._headerTouchStartX = null;
-        this._headerTouchStartY = null;
         this._autoSwaps = {};
         this._rejectedAutoSwaps = new Set();
-        this._syntaxErrorDiff = null;
         this._allowDeepSearch = false;
         this._confirmedCandidates = {};
     }
@@ -263,7 +310,7 @@ export class InSetuExtBridge extends InSetuElement {
         if (swapped) this.requestUpdate();
     }
     onWorkspaceLoad(workspaceId) {
-        BridgeStore.setState({ cells: [], activeBridgeJobId: null, telemetry: null, consoleOutput: 'Ready...', viewMode: 'input' });
+        BridgeStore.getState().clearPayload();
         window.inSetu.stores.Fs?.setState({ fileVerificationCache: {} });
         this._allowDeepSearch = false;
         this._confirmedCandidates = {};
@@ -289,12 +336,14 @@ export class InSetuExtBridge extends InSetuElement {
         });
         // Event listeners for Yomama Actions
         this.registerGlobalListener('insetu:bridge:cell-deleted', window, (e) => {
-            if (this._editCellId === e.detail.id) {
-                this._editCellId = null;
-                this.requestUpdate();
+            if (BridgeStore.getState().editCellId === e.detail.id) {
+                window.inSetu?.stores?.Fs?.getState()?.closeBuffer(`yomama://${e.detail.id}`);
+                BridgeStore.setState({ editCellId: null, editCellOriginalFile: '' });
+                if (window.Sutram?.stores?.Layout) {
+                    window.Sutram.stores.Layout.getState().closeWindow('bridge:edit-cell');
+                }
             }
         });
-        this.registerGlobalListener('insetu:bridge:cell-swap', window, (e) => this._handleSwap(e.detail.id));
 
         // Listen for saves from the agnostic Editor Projection
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
@@ -306,7 +355,7 @@ export class InSetuExtBridge extends InSetuElement {
                     if (buffer && buffer.content) {
                         const text = buffer.content;
                         const fileMatch = text.match(/^<<<<<<< FILE:\s*(.+)$/m);
-                        const newFile = fileMatch ? fileMatch[1].trim() : this._editCellOriginalFile;
+                        const newFile = fileMatch ? fileMatch[1].trim() : BridgeStore.getState().editCellOriginalFile;
                         const rawContent = text.replace(/^<<<<<<< FILE:.*\n?/m, '').trim();
 
                         BridgeStore.getState().updateCellFile(cellId, newFile);
@@ -333,41 +382,8 @@ export class InSetuExtBridge extends InSetuElement {
     disconnectedCallback() {
         super.disconnectedCallback();
     }
-    _handleSwap(id) {
-        let textToSwap = this.cells.find(c => c.id === id)?.content;
-        if (this._editCellId === id) {
-            const buffer = window.inSetu.stores.Fs?.getState()?.activeBuffers[`yomama://${id}`];
-            if (buffer) textToSwap = buffer.content;
-            else textToSwap = this._editContent;
-        }
-        if (!textToSwap) return;
-
-        // Strict multiline matching: anchors to the start of the line to bypass inline '=======' in code strings
-        const blockRegex = /^(<<<<<<< SEARCH)[ \t]*\r?\n([\s\S]*?)^(=======)[ \t]*\r?\n([\s\S]*?)^(>>>>>>> REPLACE)/m;
-        const match = textToSwap.match(blockRegex);
-
-        if (match) {
-            const before = textToSwap.substring(0, match.index);
-            const searchBlock = match[2];
-            const replaceBlock = match[4];
-            const after = textToSwap.substring(match.index + match[0].length);
-
-            const swappedChunk = `${before}<<<<<<< SEARCH\n${replaceBlock}=======\n${searchBlock}>>>>>>> REPLACE${after}`;
-
-            if (this._editCellId === id) {
-                this._editContent = swappedChunk;
-                window.inSetu.stores.Fs?.getState()?.updateBuffer(`yomama://${id}`, { content: swappedChunk });
-                this.requestUpdate();
-            } else {
-                BridgeStore.getState().updateCellContent(id, swappedChunk.trim());
-            }
-        } else {
-            alert("Could not cleanly parse SEARCH/REPLACE blocks to swap. Ensure '=======' is on its own line.");
-        }
-    }
     _openEditorModal(cell) {
-        this._editCellId = cell.id;
-        this._editCellOriginalFile = cell.file;
+        BridgeStore.setState({ editCellId: cell.id, editCellOriginalFile: cell.file });
         const virtualUri = `yomama://${cell.id}`;
 
         // Push the chunk into the agnostic multi-buffer store
@@ -383,49 +399,19 @@ export class InSetuExtBridge extends InSetuElement {
             ext: 'js',
             codeMode: 'javascript'
         });
-    }
-    _navigateChunk(direction) {
-        if (!this._editCellId) return;
 
-        // Auto-save current edits before navigating away
-        const buffer = window.inSetu.stores.Fs?.getState()?.activeBuffers[`yomama://${this._editCellId}`];
-        const text = buffer ? buffer.content : this._editContent;
-        const fileMatch = text.match(/^<<<<<<< FILE:\s*(.+)$/m);
-        const newFile = fileMatch ? fileMatch[1].trim() : this._editCellOriginalFile;
-        const rawContent = text.replace(/^<<<<<<< FILE:.*\n?/m, '').trim();
-        BridgeStore.getState().updateCellFile(this._editCellId, newFile);
-        BridgeStore.getState().updateCellContent(this._editCellId, rawContent);
-        // Find and open the next chunk in the entire payload
-        const allCells = this.cells;
-        if (allCells.length <= 1) return;
-
-        const currentIndex = allCells.findIndex(c => c.id === this._editCellId);
-        let newIndex = currentIndex + direction;
-
-        // Prevent wrapping at the boundaries
-        if (newIndex < 0 || newIndex >= allCells.length) return;
-
-        this._openEditorModal(allCells[newIndex]);
-    }
-
-    _handleHeaderTouchStart(e) {
-        this._headerTouchStartX = e.changedTouches[0].clientX;
-        this._headerTouchStartY = e.changedTouches[0].clientY;
-    }
-
-    _handleHeaderTouchEnd(e) {
-        if (this._headerTouchStartX === null) return;
-        const endX = e.changedTouches[0].clientX;
-        const endY = e.changedTouches[0].clientY;
-        const deltaX = this._headerTouchStartX - endX;
-        const deltaY = Math.abs(this._headerTouchStartY - endY);
-
-        if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 40) {
-            if (deltaX > 0) this._navigateChunk(1);
-            else this._navigateChunk(-1);
+        if (window.Sutram?.stores?.Layout) {
+            const layout = window.Sutram.stores.Layout.getState();
+            layout.openWindow({
+                id: 'bridge:edit-cell',
+                component: 'insetu-bridge-edit-projection',
+                label: `Edit Patch: ${cell.file.split('/').pop()}`,
+                icon: 'git-commit',
+                intent: 'highlight',
+                extName: 'bridge',
+                windowOnly: true
+            }, layout.focusedColumn || 'center', 1);
         }
-        this._headerTouchStartX = null;
-        this._headerTouchStartY = null;
     }
     _handleParentToggle(file) {
         const cells = BridgeStore.getState().cells || [];
@@ -454,17 +440,6 @@ export class InSetuExtBridge extends InSetuElement {
         });
         BridgeStore.setState({ cells: updatedCells });
         this.requestUpdate();
-    }
-    _saveEditModal() {
-        const text = this._editContent;
-        const fileMatch = text.match(/^<<<<<<< FILE:\s*(.+)$/m);
-        const newFile = fileMatch ? fileMatch[1].trim() : this._editCellOriginalFile;
-
-        const rawContent = text.replace(/^<<<<<<< FILE:.*\n?/m, '').trim();
-
-        BridgeStore.getState().updateCellFile(this._editCellId, newFile);
-        BridgeStore.getState().updateCellContent(this._editCellId, rawContent);
-        this._editCellId = null;
     }
     _getSyncAction(dryRunActive, bypassSandwich = false, overridePayload = {}) {
         return async (e) => {
@@ -500,14 +475,19 @@ export class InSetuExtBridge extends InSetuElement {
                             });
                         }
                         if (tel.can_commit && tel.mode === 'live') {
-                            // Extract the true OS-resolved paths from the telemetry payload
-                            const safePatches = tel.patches || [];
-                            const resolvedFiles = Array.from(new Set(safePatches.map(p => p.resolved_file).filter(Boolean)));
-
+                            const curEditId = BridgeStore.getState().editCellId;
+                            if (curEditId) {
+                                window.inSetu?.stores?.Fs?.getState()?.closeBuffer(`yomama://${curEditId}`);
+                            }
                             // Retain console view and telemetry to show the success receipt, but clear the staging cells
-                            BridgeStore.setState({ cells: [] });
+                            BridgeStore.setState({ cells: [], editCellId: null, editCellOriginalFile: '', syntaxErrorDiff: null });
+                            if (window.Sutram?.stores?.Layout) {
+                                const layout = window.Sutram.stores.Layout.getState();
+                                layout.closeWindow('bridge:edit-cell');
+                                layout.closeWindow('bridge:syntax-diff');
+                            }
 
-                            // The backend Event Bus natively handles RAG RAG compilation and RAG RAG diffs via the Topology Slew Limiter.
+                            // The backend Event Bus natively handles RAG compilation and diffs via the Topology Slew Limiter.
                             // We only need to refresh the ledger UI history locally.
                             BridgeStore.getState().fetchHistory();
                         }
@@ -523,7 +503,7 @@ export class InSetuExtBridge extends InSetuElement {
         };
     }
     _handleConsoleClick(e) {
-        const path = e.composedPath ? e.composedPath() : [e.target];
+        const path = this.getEventPath(e);
         const btn = path.find(el => el && el.dataset && el.dataset.action);
         if (!btn) return;
         const action = btn.dataset.action;
@@ -556,8 +536,19 @@ export class InSetuExtBridge extends InSetuElement {
             })();
         } else if (action === 'view-diff') {
             const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
-            this._syntaxErrorDiff = decodedDiff;
-            this.requestUpdate();
+            BridgeStore.setState({ syntaxErrorDiff: decodedDiff });
+            if (window.Sutram?.stores?.Layout) {
+                const layout = window.Sutram.stores.Layout.getState();
+                layout.openWindow({
+                    id: 'bridge:syntax-diff',
+                    component: 'insetu-bridge-diff-projection',
+                    label: 'Syntax Error Diff',
+                    icon: 'alert-triangle',
+                    intent: 'danger',
+                    extName: 'bridge',
+                    windowOnly: true
+                }, layout.focusedColumn || 'center', 1);
+            }
         } else if (action === 'copy-diff') {
             const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
             this.utils.copyRawText(decodedDiff);
@@ -848,7 +839,7 @@ export class InSetuExtBridge extends InSetuElement {
                                         if (commentMatch && commentMatch[1]) {
                                             commentText = commentMatch[1].trim();
                                         }
-                                        const descStr = commentText ? `${i + 1} of ${groupCells.length} • "${commentText}"` : `${i + 1} of${groupCells.length}`;
+                                        const descStr = commentText ? `${i + 1} of ${groupCells.length} • "${commentText}"` : `${i + 1} of ${groupCells.length}`;
                                         return html`
                                         <sutram-card
                                             .titleText=${typeStr}
@@ -858,7 +849,7 @@ export class InSetuExtBridge extends InSetuElement {
                                             intent=${c.active ? "success" : "neutral"}
                                             selectionStoreKey="none"
                                             entityType="yomama"
-                                            .entityData=${{...c, suppress: ['yomama-swap']}}
+                                            .entityData=${c}
                                             @sutram-card-select-toggled=${(e) => BridgeStore.getState().toggleCellActive(c.id)}
                                             @card-clicked=${() => this._openEditorModal(c)}>
                                         </sutram-card>
@@ -897,56 +888,156 @@ export class InSetuExtBridge extends InSetuElement {
                     `}
                 </div>
             </div>
-
-            <sutram-modal 
-                ?open=${!!this._editCellId} 
-                ?fullscreen=${true} 
-                titleText=${this._editCellId ? `Edit Patch: ${this._editCellOriginalFile.split('/').pop()}` : ''}
-                @sutram-modal-closed=${() => this._editCellId = null}>
-
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0;">
-                    ${this._editCellId ? html`
-                        <insetu-editor-projection 
-                            .filepath=${`yomama://${this._editCellId}`} 
-                            data-sub-id=${`yomama://${this._editCellId}`}>
-                        </insetu-editor-projection>
-                    ` : ''}
-                </div>
-                <div slot="footer" style="display: flex; width: 100%; justify-content: space-between;">
-                    <sutram-btn intent="danger" label="Cancel" style="margin: 0;" @click=${() => this._editCellId = null}></sutram-btn>
-                    <sutram-btn intent="success" label="Save Patch" style="margin: 0;" @click=${() => {
-                        const buffer = window.inSetu.stores.Fs?.getState()?.activeBuffers[`yomama://${this._editCellId}`];
-                        if (buffer) {
-                            this._editContent = buffer.content;
-                            this._saveEditModal();
-                        }
-                    }}></sutram-btn>
-                </div>
-            </sutram-modal>
-
-            <sutram-modal 
-                ?open=${!!this._syntaxErrorDiff} 
-                ?fullscreen=${true} 
-                titleText="Syntax Error Diff"
-                @sutram-modal-closed=${() => this._syntaxErrorDiff = null}>
-
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0;">
-                    ${this._syntaxErrorDiff ? html`
-                        <sutram-textarea 
-                            readonly 
-                            style="width: 100%; height: 100%; font-family: var(--font-mono); font-size: 0.85rem; background: var(--input-bg); color: var(--text); border: none; margin: 0; --bg-input: var(--input-bg);" 
-                            .value=${this._syntaxErrorDiff}>
-                        </sutram-textarea>
-                    ` : ''}
-                </div>
-                <div slot="footer" style="display: flex; width: 100%; justify-content: flex-end;">
-                    <sutram-btn intent="neutral" label="Close" style="margin: 0;" @click=${() => this._syntaxErrorDiff = null}></sutram-btn>
-                </div>
-            </sutram-modal>
         `;
     }
 }
 customElements.define('insetu-ext-bridge', InSetuExtBridge);
+export class InSetuBridgeEditProjection extends InSetuElement {
+    static properties = {
+        editCellId: { type: String },
+        editCellOriginalFile: { type: String },
+        cells: { type: Array }
+    };
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+    `];
+    constructor() {
+        super();
+        const st = BridgeStore.getState();
+        this.editCellId = st.editCellId;
+        this.editCellOriginalFile = st.editCellOriginalFile || '';
+        this.cells = st.cells || [];
+    }
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(BridgeStore, state => {
+            this.editCellId = state.editCellId;
+            this.editCellOriginalFile = state.editCellOriginalFile || '';
+            this.cells = state.cells || [];
+            this.requestUpdate();
+        });
+    }
+    _commitCurrentBuffer() {
+        if (!this.editCellId) return;
+        const buffer = window.inSetu.stores.Fs?.getState()?.activeBuffers[`yomama://${this.editCellId}`];
+        if (buffer) {
+            const text = buffer.content;
+            const fileMatch = text.match(/^<<<<<<< FILE:\s*(.+)$/m);
+            const newFile = fileMatch ? fileMatch[1].trim() : this.editCellOriginalFile;
+            const rawContent = text.replace(/^<<<<<<< FILE:.*\n?/m, '').trim();
+            BridgeStore.getState().updateCellFile(this.editCellId, newFile);
+            BridgeStore.getState().updateCellContent(this.editCellId, rawContent);
+        }
+    }
+    _navigateChunk(direction) {
+        if (!this.editCellId || this.cells.length <= 1) return;
+        const prevCellId = this.editCellId;
+        this._commitCurrentBuffer();
+        const currentIndex = this.cells.findIndex(c => c.id === prevCellId);
+        const newIndex = currentIndex + direction;
+        if (newIndex < 0 || newIndex >= this.cells.length) return;
+
+        const nextCell = this.cells[newIndex];
+        if (prevCellId !== nextCell.id) {
+            window.inSetu?.stores?.Fs?.getState()?.closeBuffer(`yomama://${prevCellId}`);
+        }
+        const virtualUri = `yomama://${nextCell.id}`;
+        window.inSetu.stores.Fs?.getState()?.openBuffer(virtualUri, {
+            filename: virtualUri,
+            content: `<<<<<<< FILE: ${nextCell.file}\n${nextCell.content}`,
+            originalContent: `<<<<<<< FILE: ${nextCell.file}\n${nextCell.content}`,
+            fullText: `<<<<<<< FILE: ${nextCell.file}\n${nextCell.content}`,
+            isFS: false,
+            forceEdit: true,
+            isMemoryOnly: true,
+            isSupportedEditor: true,
+            ext: 'js',
+            codeMode: 'javascript'
+        });
+        BridgeStore.setState({ editCellId: nextCell.id, editCellOriginalFile: nextCell.file });
+        if (window.Sutram?.stores?.Layout) {
+            const layoutStore = window.Sutram.stores.Layout;
+            const nextLabel = `Edit Patch: ${nextCell.file.split('/').pop()}`;
+            layoutStore.setState(s => ({
+                windows: (s.windows || []).map(w => w.id === 'bridge:edit-cell' ? { ...w, label: nextLabel, titleText: nextLabel } : w)
+            }));
+        }
+    }
+    render() {
+        if (!this.editCellId) return html``;
+        const currentIndex = this.cells.findIndex(c => c.id === this.editCellId);
+        const total = this.cells.length;
+        return html`
+            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+                <insetu-editor-projection 
+                    .filepath=${`yomama://${this.editCellId}`} 
+                    data-sub-id=${`yomama://${this.editCellId}`}>
+                </insetu-editor-projection>
+            </div>
+            <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-shrink: 0; flex-wrap: wrap;">
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <sutram-btn intent="danger" icon="x" label="Cancel" style="margin: 0;" @click=${() => {
+                        if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('bridge:edit-cell');
+                    }}></sutram-btn>
+                    <sutram-btn intent="warning" icon="refresh-cw" label="Swap S/R" style="margin: 0;" @click=${() => {
+                        window.dispatchEvent(new CustomEvent('insetu:bridge:cell-swap', { detail: { id: this.editCellId } }));
+                    }}></sutram-btn>
+                </div>
+                ${total > 1 ? html`
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <sutram-btn size="sm" intent="neutral" icon="chevron-left" label="Prev" ?disabled=${currentIndex <= 0} @click=${() => this._navigateChunk(-1)}></sutram-btn>
+                        <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted);">${currentIndex + 1} / ${total}</span>
+                        <sutram-btn size="sm" intent="neutral" icon="chevron-right" label="Next" ?disabled=${currentIndex >= total - 1} @click=${() => this._navigateChunk(1)}></sutram-btn>
+                    </div>
+                ` : ''}
+                <sutram-btn intent="success" icon="check" label="Save Patch" style="flex: 1; margin: 0;" @click=${() => {
+                    this._commitCurrentBuffer();
+                    if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('bridge:edit-cell');
+                }}></sutram-btn>
+            </div>
+        `;
+    }
+}
+customElements.define('insetu-bridge-edit-projection', InSetuBridgeEditProjection);
+
+export class InSetuBridgeDiffProjection extends InSetuElement {
+    static properties = { syntaxErrorDiff: { type: String } };
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+    `];
+    constructor() {
+        super();
+        this.syntaxErrorDiff = BridgeStore.getState().syntaxErrorDiff || '';
+    }
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(BridgeStore, state => {
+            this.syntaxErrorDiff = state.syntaxErrorDiff || '';
+            this.requestUpdate();
+        });
+    }
+    render() {
+        return html`
+            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden;">
+                <sutram-textarea 
+                    readonly 
+                    ?autoSize=${false}
+                    ?flush=${true}
+                    .monospace=${true}
+                    style="flex: 1; height: 100%; margin: 0; --bg-input: var(--input-bg);" 
+                    .value=${this.syntaxErrorDiff}>
+                </sutram-textarea>
+            </div>
+            <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; justify-content: flex-end; flex-shrink: 0;">
+                <sutram-btn intent="neutral" icon="x" label="Close" style="margin: 0;" @click=${() => {
+                    BridgeStore.setState({ syntaxErrorDiff: null });
+                    if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('bridge:syntax-diff');
+                }}></sutram-btn>
+            </div>
+        `;
+    }
+}
+customElements.define('insetu-bridge-diff-projection', InSetuBridgeDiffProjection);
 export class InSetuExtBridgeHistoryActions extends InSetuElement {
     static get extensionName() { return 'bridge'; }
     static properties = { _viewMode: { type: String } };
@@ -972,7 +1063,7 @@ export class InSetuExtBridgeHistoryActions extends InSetuElement {
                 class="system-action-btn"
                 @click=${() => BridgeStore.setState({ historyViewMode: isTx ? 'file' : 'transaction' })}
                 title="${isTx ? 'Switch to By File view' : 'Switch to By Turn view'}">
-                ${isTx ? '🗂️' : '📄'}
+                <yv-icon name="${isTx ? 'folder-kanban' : 'file-text'}" style="width: 15px; height: 15px;"></yv-icon>
             </button>
         `;
     }
@@ -1108,7 +1199,6 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                 .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
                 <insetu-repo-filter
                     slot="filters"
-                    label="📌 Repos:"
                     .repos=${this.ecosystem.allRepos}
                     .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
                     @repo-filter-changed=${(e) => window.inSetu.stores.App.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
@@ -1142,10 +1232,10 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                                 }
                                 const count = record.patch_count || (Array.isArray(chunks) && chunks.length > 0 ? chunks.length : 1);
                                 const patchStr = count + (count !== 1 ? ' patches' : ' patch');
-                                let descStr = patchStr + (record.is_snapshot ? ' • 💾 Snapshot' : '');
+                                let descStr = patchStr + (record.is_snapshot ? ' • Snapshot' : '');
 
                                 if (Array.isArray(chunks) && chunks.length > 0 && chunks[0].comment) {
-                                    descStr = "💬 " + chunks[0].comment;
+                                    descStr = chunks[0].comment;
                                 }
                                 return html`
                                 <sutram-card
@@ -1196,10 +1286,10 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                                 }
                                 const count = record.patch_count || (Array.isArray(chunks) && chunks.length > 0 ? chunks.length : 1);
                                 const patchStr = count + (count !== 1 ? ' patches' : ' patch');
-                                let descStr = patchStr + (record.is_snapshot ? ' • 💾 Snapshot' : '');
+                                let descStr = patchStr + (record.is_snapshot ? ' • Snapshot' : '');
 
                                 if (Array.isArray(chunks) && chunks.length > 0 && chunks[0].comment) {
-                                    descStr = "💬 " + chunks[0].comment;
+                                    descStr = chunks[0].comment;
                                 }
                                 return html`
                                 <sutram-card

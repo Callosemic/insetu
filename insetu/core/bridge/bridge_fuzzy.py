@@ -13,17 +13,10 @@ def clean_chevron_meltdown(text):
         if not re.search(r'[a-zA-Z0-9]', trailing.replace('```', '')):
             return text[:last_idx]
     return text
-
 def expand_macros(text):
     # Semantic Multiplier Macro: e.g., ``` or =======
     text = re.sub(r'\{\{\s*(.)\s*\*\s*(\d+)\s*\}\}', lambda m: m.group(1) * int(m.group(2)), text)
     text = re.sub(r'\{\{\s*triple(.)\s*\}\}', lambda m: m.group(1) * 3, text)
-    text = re.sub(r'_(?:[^_\n]_){3,}', lambda m: m.group(0).replace('_', ''), text)
-    text = re.sub(r'\x5b\x73\x6f\x75\x72\x63\x65\x3a\x5c\x73\x2a\x5c\x64\x2b\x5d', '', text)
-    text = re.sub(r'\x5b\x63\x69\x74\x65\x3a\x5c\x73\x2a\x5b\x5c\x64\x5c\x73\x2c\x5d\x2b\x5d', '', text)
-    text = re.sub(r'\x5b\x63\x69\x74\x65\x5f\x73\x74\x61\x72\x74\x5d', '', text)
-    text = re.sub(r'\x5b\x63\x69\x74\x65\x5f\x65\x6e\x64\x5d', '', text)
-    text = re.sub(r'\x5b\x63\x69\x74\x65\x5d', '', text)
     return text
 
 def is_effectively_identical(lines_a, lines_b):

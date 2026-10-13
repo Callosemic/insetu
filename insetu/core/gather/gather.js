@@ -385,7 +385,6 @@ export class InSetuExtGather extends InSetuElement {
                 .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
                 <insetu-repo-filter
                     slot="filters"
-                    label="📌 Repos:"
                     .repos=${this.ecosystem.allRepos}
                     .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
                     @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>

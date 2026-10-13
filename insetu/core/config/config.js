@@ -134,6 +134,19 @@ export class InSetuExtConfig extends InSetuElement {
         this.registerGlobalListener('insetu:config:save', window, () => {
             if (this._isOpen) this._saveConfig();
         });
+        this.registerGlobalListener('insetu:config:edit-repo', window, (e) => {
+            const { repo, idx } = e.detail;
+            this._repoBackup = JSON.parse(JSON.stringify(repo));
+            this._editingRepoIdx = idx;
+            this._isNewRepo = false;
+        });
+        this.registerGlobalListener('insetu:config:remove-repo', window, (e) => {
+            const { idx } = e.detail;
+            if (confirm("Remove this repository from tracking?")) {
+                this.configForm.target_repos.splice(idx, 1);
+                this.requestUpdate();
+            }
+        });
     }
     onWorkspaceLoad(workspaceId) {
         if (this._isOpen) this.openModal();
@@ -209,7 +222,7 @@ export class InSetuExtConfig extends InSetuElement {
             const isExpanded = !!this._expandedBuckets[bIdx]; // Default false
             return html`
                 <sutram-collapsible 
-                    titleText="📦 ${headerTitle}" 
+                    titleText="${headerTitle}" 
                     intent="neutral" 
                     .open=${isExpanded} 
                     style="--title-weight: normal; --title-size: 0.95rem;"
@@ -220,13 +233,13 @@ export class InSetuExtConfig extends InSetuElement {
                     }}>
                     <div slot="actions" style="display: flex; gap: 8px;">
                         ${!isImplicit ? html`
-                            <sutram-btn intent="neutral" label="Test" icon="🧪" style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.75rem;"
+                            <sutram-btn intent="neutral" label="Test" icon="flask-conical" style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.75rem;"
                                 @click=${(e) => {
                                     e.stopPropagation();
                                     this._testRepoBucketing(rIdx, b.id);
                                 }}></sutram-btn>
                         ` : ''}
-                        <sutram-btn intent="danger" variant="text" label="Remove" icon="🗑️" style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.75rem;"
+                        <sutram-btn intent="danger" variant="text" label="Remove" icon="trash-2" style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.75rem;"
                             @click=${(e) => {
                                 e.stopPropagation();
                                 this.configForm.target_repos[rIdx].sub_buckets.splice(bIdx, 1);
@@ -344,27 +357,13 @@ export class InSetuExtConfig extends InSetuElement {
                             icon="package"
                             intent="highlight"
                             ?disableSelection=${true}
-                            style="cursor: pointer;"
-                            @click=${() => { 
+                            entityType="config-repo"
+                            .entityData=${{ repo, idx }}
+                            @card-clicked=${() => { 
                                 this._repoBackup = JSON.parse(JSON.stringify(repo)); 
                                 this._editingRepoIdx = idx; 
                                 this._isNewRepo = false;
                             }}>
-                            <div slot="actions" style="display: flex; gap: 8px;">
-                                <sutram-btn intent="primary" label="Edit" style="--btn-padding: 4px 10px; margin: 0;" @click=${(e) => { 
-                                    e.stopPropagation(); 
-                                    this._repoBackup = JSON.parse(JSON.stringify(repo)); 
-                                    this._editingRepoIdx = idx; 
-                                    this._isNewRepo = false;
-                                }}></sutram-btn>
-                                <sutram-btn intent="danger" label="Remove" style="--btn-padding: 4px 10px; margin: 0;" @click=${(e) => {
-                                    e.stopPropagation();
-                                    if(confirm("Remove this repository from tracking?")) {
-                                        this.configForm.target_repos.splice(idx, 1);
-                                        this.requestUpdate();
-                                    }
-                                }}></sutram-btn>
-                            </div>
                         </sutram-card>
                     `)}
                 </sutram-card-group>
@@ -386,7 +385,7 @@ export class InSetuExtConfig extends InSetuElement {
                 <div slot="body" style="display: flex; flex-direction: column;">
                     ${repo ? html`
                     <div style="padding: 15px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; background: var(--bg);">
-                        <span style="font-size: 1.4rem;">📦</span>
+                        <yv-icon name="package" style="width: 22px; height: 22px; color: var(--intent-primary); flex-shrink: 0;"></yv-icon>
                         <sutram-input .value=${repo.title || ''} placeholder="Display Title (e.g. My Repository)" style="flex: 1; margin: 0; --bg-input: var(--input-bg);" @sutram-input-changed=${(e) => { repo.title = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>
                     </div>
                     <sutram-collapsible   
@@ -411,9 +410,8 @@ export class InSetuExtConfig extends InSetuElement {
                                     ...(repo.archive_type && repo.archive_type !== 'repo' && repo.archive_type !== 'media-vault' ? [{ value: repo.archive_type, label: repo.archive_type }] : [])
                                 ]} @sutram-input-changed=${(e) => { repo.archive_type = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-select>
                             </div>
-
-                            <div style="font-size: 0.8rem; color: var(--text-muted); font-family: var(--font-mono); margin-top: -5px;">
-                                📁 Path Preview: <span style="color: var(--intent-primary); font-weight: bold;">${repo.physical_path ? repo.physical_path : `[project root]/${repo.repo_dir || 'my-new-repo'}/`}</span>
+                            <div style="font-size: 0.8rem; color: var(--text-muted); font-family: var(--font-mono); margin-top: -5px; display: flex; align-items: center; gap: 6px;">
+                                <yv-icon name="folder" style="width: 14px; height: 14px; color: var(--intent-warning);"></yv-icon> Path Preview: <span style="color: var(--intent-primary); font-weight: bold;">${repo.physical_path ? repo.physical_path : `[project root]/${repo.repo_dir || 'my-new-repo'}/`}</span>
                             </div>
 
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
@@ -649,6 +647,28 @@ window.ExtensionRegistry.registerExtension('config', {
     ],
     entityActions: [
         {
+            targetEntity: 'config-repo',
+            id: 'config-repo-edit',
+            label: 'Edit',
+            icon: 'edit-3',
+            intent: 'primary',
+            group: 'edit',
+            vfsBound: false,
+            order: 10,
+            emitEvent: (data) => ({ name: 'insetu:config:edit-repo', detail: data })
+        },
+        {
+            targetEntity: 'config-repo',
+            id: 'config-repo-remove',
+            label: 'Remove',
+            icon: 'trash-2',
+            intent: 'danger',
+            group: 'file',
+            vfsBound: false,
+            order: 20,
+            emitEvent: (data) => ({ name: 'insetu:config:remove-repo', detail: data })
+        },
+        {
             targetEntity: 'system_control',
             id: 'sys-refresh-files',
             label: 'Refresh Files',
@@ -674,7 +694,7 @@ window.ExtensionRegistry.registerExtension('config', {
             order: 20,
             asyncAction: async (data, e) => {
                 if (!confirm("Reboot the inSetu OS daemon?")) return;
-                if (data && data.closeModal) data.closeModal();
+                window.inSetu?.events?.emit('insetu:system:close-settings');
                 AppStore.setState({ isRebooting: true, rebootType: 'reboot' });
                 try {
                     await window.inSetu.api.system.post('reboot', {});
@@ -700,7 +720,7 @@ window.ExtensionRegistry.registerExtension('config', {
             vfsBound: false,
             order: 30,
             onClick: (data, e) => {
-                if (data && data.closeModal) data.closeModal();
+                window.inSetu?.events?.emit('insetu:system:close-settings');
                 if (window.inSetu.sys.simulatePanic) window.inSetu.sys.simulatePanic();
             }
         }

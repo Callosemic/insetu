@@ -9,7 +9,7 @@ import uuid
 import concurrent.futures
 from flask import jsonify
 from akasa.utils import get_workspace_physics, generate_ascii_tree
-from insetu.core.utils_core import evaluate_circuit_breaker, get_default_repo_template, resolve_logical_path, get_repo_path, InSetuURI
+from insetu.core.utils_core import evaluate_circuit_breaker, get_default_repo_template, resolve_logical_path, get_repo_path, InSetuURI, is_naked_context_uri
 from insetu.core.topology.engine_topology import resolve_file_bucket
 from akasa.extension import ExtensionContext
 from insetu.core.sdk import InSetuExtension
@@ -926,8 +926,10 @@ def mount_gather_volumes(workspace_id=None, **kwargs):
 from akasa.utils import thread_safe_cache
 @hooks.on('coerce_naked_uri')
 def coerce_gather_uris(raw_uri=None, **kwargs):
-    if raw_uri and (raw_uri.endswith('_context.txt') or raw_uri.startswith('contexts/') or raw_uri.startswith('.insetu/ext/gather/data/contexts/')):
-        clean_c = raw_uri.replace('.insetu/ext/gather/data/contexts/', '').replace('contexts/', '')
+    if not raw_uri:
+        return None
+    if is_naked_context_uri(raw_uri):
+        clean_c = raw_uri.replace('.insetu/ext/gather/data/contexts/', '').replace('contexts/', '').replace('ctx://contexts/', '')
         return f"ctx://contexts/{clean_c}"
     return None
 

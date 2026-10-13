@@ -54,12 +54,7 @@ def execute_binary(cmd, cwd=None, env=None, check=False, capture_output=True, te
         text=text,
         **kwargs
     )
-from akasa.hooks import hooks
-import threading
-import io
-import re
-from ruamel.yaml import YAML
-from akasa.uri import AkasaURI
+
 class InSetuURI(AkasaURI):
     """
     Host application subclass injecting domain-specific routing aliases,
@@ -81,7 +76,6 @@ class InSetuURI(AkasaURI):
             if raw_str.startswith('ctx://') or raw_str.startswith('vfs://'):
                 pass
             else:
-                from akasa.hooks import hooks
                 # Inversion of Control: Extensions explicitly claim their own URI namespaces
                 coerced = next((r for r in hooks.emit('coerce_naked_uri', raw_uri=raw_str) if r), None)
                 if coerced:
@@ -643,6 +637,21 @@ def generate_text_chunks(blocks, chunk_limit=400000):
         current_length += block_len
     if current_chunk:
         yield "".join(current_chunk)
+def is_naked_diff_uri(raw_uri: str) -> bool:
+    if not raw_uri or not isinstance(raw_uri, str):
+        return False
+    clean = raw_uri.replace('\\', '/').strip()
+    if clean.startswith(('ctx://diffs/', 'diffs/', '.insetu/ext/git/data/diffs/')):
+        return True
+    return clean.endswith('_diffs.txt')
+
+def is_naked_context_uri(raw_uri: str) -> bool:
+    if not raw_uri or not isinstance(raw_uri, str):
+        return False
+    clean = raw_uri.replace('\\', '/').strip()
+    if clean.startswith(('ctx://contexts/', 'contexts/', '.insetu/ext/gather/data/contexts/')):
+        return True
+    return clean.endswith('_context.txt')
 
 def evaluate_circuit_breaker(touched_count, total_count, threshold=0.5):
     if not total_count or total_count <= 0:

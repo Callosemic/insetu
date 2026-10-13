@@ -18,11 +18,10 @@ export function bootServiceWorker() {
                 window.inSetu?.offlineLog?.(`First install: Warmed SW cache with ${urlsToCache.length} dynamic boot assets.`, 'success');
             }
         });
-
         navigator.serviceWorker.register('/sw.js').then(reg => {
             // Ground-Zero Telemetry: Confirm SW registration in the current sandbox
             if (window.inSetu && window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                window.inSetu.ui.setGlobalStatus("✅ Service Worker Active", 3000);
+                window.inSetu.ui.setGlobalStatus("Service Worker Active", 3000);
             }
             reg.addEventListener('updatefound', () => {
                 const newWorker = reg.installing;
@@ -148,7 +147,7 @@ export function autoWireSettingsSchemas() {
                     const action = {
                         id: `${extName}_generic_settings`,
                         label: `${manifest.name || extName.charAt(0).toUpperCase() + extName.slice(1)} Base Settings`,
-                        icon: '⚙️',
+                        icon: 'settings',
                         onClick: async () => {
                             const genericModal = document.getElementById('insetu-generic-settings-root');
                             if (genericModal) {
@@ -543,13 +542,12 @@ async function executeSecurityHandshake() {
             AppStore.setState({ authToken: data.token, isOffline: false });
             return true;
         }
-
         // Fallback: Challenge issued, render HTML auth gate
         if (res.status === 401) {
             return new Promise((resolve) => {
                 document.body.innerHTML = `
                     <div style="font-family:monospace; background:#0f172a; color:#f8fafc; padding:20px; text-align:center; height:100dvh; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; align-items:center;">
-                        <h2 style="color:#10b981; margin-top:0;">🔑 inSetu Security Gate</h2>
+                        <h2 style="color:#10b981; margin-top:0; display:flex; align-items:center; gap:8px;"><yv-icon name="key" style="width:22px; height:22px;"></yv-icon><span>inSetu Security Gate</span></h2>
                         <p style="color:#94a3b8; margin-bottom:20px;">Enter the persistent 'auth_token' defined in your config.json:</p>
                         <input type="password" id="auth-token-input" style="padding:12px; font-size:1.1rem; border-radius:4px; border:1px solid #334155; background:#1e293b; color:#fff; margin-bottom:15px; width:100%; max-width:300px; text-align:center;" />
                         <button id="auth-submit-btn" style="background:#3b82f6; color:white; border:none; padding:12px 20px; border-radius:4px; font-size:1.1rem; font-weight:bold; cursor:pointer; width:100%; max-width:300px;">Authenticate</button>
@@ -575,11 +573,11 @@ async function executeSecurityHandshake() {
                             AppStore.setState({ authToken: data.token, isOffline: false });
                             window.location.reload(); // Reload to cleanly restore the boot screen
                         } else {
-                            btn.innerText = '❌ Invalid Token';
+                            btn.innerText = 'Invalid Token';
                             setTimeout(() => btn.innerText = 'Authenticate', 2000);
                         }
                     } catch (e) {
-                        btn.innerText = '❌ Network Error';
+                        btn.innerText = 'Network Error';
                         setTimeout(() => btn.innerText = 'Authenticate', 2000);
                     }
                 };
@@ -662,7 +660,7 @@ export async function executeBootSequence() {
     const authenticated = await executeSecurityHandshake();
     console.log("[BOOT] Security Handshake completed:", authenticated);
     if (!authenticated) {
-        document.body.innerHTML = `<div style="font-family:monospace; color:var(--intent-danger); text-align:center; padding-top:20dvh;"><h2>❌ Access Denied</h2><p>Invalid framework credentials configuration.</p></div>`;
+        document.body.innerHTML = `<div style="font-family:monospace; color:var(--intent-danger); text-align:center; padding-top:20dvh;"><h2>Access Denied</h2><p>Invalid framework credentials configuration.</p></div>`;
         return;
     }
 
@@ -670,11 +668,10 @@ export async function executeBootSequence() {
     if (window.inSetu.sse) {
         window.inSetu.sse.connect();
     }
-
     if (AppStore.getState().isOffline) {
         updateBootProgress("Offline Mode — Hydrating Cached Shell...");
         if (window.inSetu && window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-            window.inSetu.ui.setGlobalStatus("⚡ Running in Offline Mode", 4000);
+            window.inSetu.ui.setGlobalStatus("Running in Offline Mode", 4000);
         }
 
         // Hydrate offline UI shell state from local storage
@@ -968,12 +965,11 @@ export async function executeBootSequence() {
     }
     // Always trigger handleHashChange on startup to populate layout state
     handleHashChange();
-
     // Everything is fully booted, topologies mapped, and extensions mounted.
     updateBootProgress("System Ready!");
     window.BOOT_COMPLETE = true;
     if (window.inSetu?.ui?.setGlobalStatus) {
-        window.inSetu.ui.setGlobalStatus("✅ System Ready", 2000);
+        window.inSetu.ui.setGlobalStatus("System Ready", 2000);
     }
     if (window.panicTimeout) clearTimeout(window.panicTimeout);
     const _initPanicBtn = document.getElementById('js-panic-button');
@@ -990,11 +986,10 @@ window.addEventListener('unhandledrejection', (e) => {
         const errorMsg = e.reason?.message || String(e.reason);
         console.error("⚠️ [BOOT FATAL] Unhandled Promise Rejection:", errorMsg);
         window.inSetu?.offlineLog?.(`[BOOT FATAL] Promise Rejection: ${errorMsg}`, 'error');
-
         // Paint the exact missing module error directly to the boot screen UI
         const statusEl = document.getElementById('retro-status-msg');
         if (statusEl) {
-            statusEl.innerHTML = `<span style="color:var(--intent-danger)">❌ Boot Error: ${errorMsg}</span>`;
+            statusEl.innerHTML = `<span style="color:var(--intent-danger)">Boot Error: ${errorMsg}</span>`;
         }
     }
 });
@@ -1162,7 +1157,7 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
         if (!silent) {
             alert(`Operation failed.\nReason: ${e.message}`);
             if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                window.inSetu.ui.setGlobalStatus(`❌ Error: ${e.message}`, 5000, true);
+                window.inSetu.ui.setGlobalStatus(`Error: ${e.message}`, 5000, true);
             }
         }
         throw e;
@@ -1382,11 +1377,10 @@ async function performSoftRefresh(targetWs = null) {
         if (targetWs) {
             window.location.hash = `#/${encodeURIComponent(targetWs)}/center/`;
         }
-
         // 4. Hydrate active DOM views using native routing
         window.inSetu.events.emitHook('insetu:soft-refresh', currentWs);
 
-        window.inSetu.ui.setGlobalStatus("✅ Workspace Hydrated", 2000);
+        window.inSetu.ui.setGlobalStatus("Workspace Hydrated", 2000);
     } catch (e) {
         console.error(e);
         alert("Soft refresh failed. Falling back to hard reload.");
@@ -1398,7 +1392,7 @@ async function fullRefresh() {
         window.inSetu.sse.disconnect();
     }
     if (window.inSetu?.ui?.setGlobalStatus) {
-        window.inSetu.ui.setGlobalStatus("🔄 Rebooting Frontend & Purging Caches...", 2000);
+        window.inSetu.ui.setGlobalStatus("Rebooting Frontend & Purging Caches...", 2000);
     }
     try {
         // 1. Purge stale UI state keys

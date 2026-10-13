@@ -106,6 +106,18 @@ export function insertLinkToEditor(path, name) {
 
     window.inSetu.stores.Fs?.getState()?.setModal('linkInsert', { open: false });
 }
+window.Sutram = window.Sutram || {};
+window.Sutram.vendorizeLanguage = async (lang) => {
+    if (window.inSetu?.api?.workspace?.post) {
+        const res = await window.inSetu.api.workspace.post('editor/vendorize', { mode: lang });
+        if (res.ok) {
+            const data = await res.json();
+            return data.path;
+        }
+    }
+    return null;
+};
+
 window.inSetu.editor = window.inSetu.editor || {};
 window.inSetu.editor.getEditorContent = getEditorContent;
 window.inSetu.editor.setEditorContent = setEditorContent;
@@ -148,6 +160,14 @@ export class InSetuMarkdownEditor extends InSetuElement {
         if (editor && editor.insertAtCursor) {
             editor.insertAtCursor(text);
         }
+    }
+
+    transformContent(transformFn) {
+        const editor = this.shadowRoot.querySelector('sutram-editor');
+        if (editor && editor.transformContent) {
+            return editor.transformContent(transformFn);
+        }
+        return false;
     }
 
     setCursor(pos) {
@@ -299,6 +319,28 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         this._writingMode = false;
         this.zenMode = false;
     }
+    _cleanArtifacts() {
+        const cleanFn = window.inSetu?.utils?.cleanCodeArtifacts;
+        if (!cleanFn) return;
+        const cmEditor = this.shadowRoot.querySelector('insetu-markdown-editor');
+        let modified = false;
+        if (cmEditor && cmEditor.transformContent) {
+            modified = cmEditor.transformContent(cleanFn);
+        } else if (this._content) {
+            const nextContent = cleanFn(this._content);
+            if (nextContent !== this._content) {
+                this._content = nextContent;
+                this._checkDirty();
+                modified = true;
+            }
+        }
+        if (modified) {
+            if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("✨ Cleaned citations and span tags", 2000);
+        } else {
+            if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("No citation or span artifacts found", 2000);
+        }
+    }
+
     _toggleWritingMode() {
         this._writingMode = !this._writingMode;
         this._yamlData = { ...this._yamlData, writing_mode: this._writingMode };
@@ -341,7 +383,26 @@ export class InSetuFrontmatterEditor extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-
+        this.registerGlobalListener('insetu:editor:clean-artifacts', window, (e) => {
+            if (!e.detail?.filepath || e.detail.filepath === this.filepath) {
+                this._cleanArtifacts();
+            }
+        });
+        this.registerGlobalListener('insetu:editor:toggle-prose', window, (e) => {
+            if (e.detail?.filepath === this.filepath) {
+                this._toggleWritingMode();
+            }
+        });
+        this.registerGlobalListener('insetu:editor:toggle-zen', window, (e) => {
+            if (e.detail?.filepath === this.filepath) {
+                this._toggleZenMode();
+            }
+        });
+        this.registerGlobalListener('insetu:editor:save-frontmatter', window, () => {
+            if (this._isDirty) {
+                this._handleSave();
+            }
+        });
     }
     disconnectedCallback() {
         super.disconnectedCallback();
@@ -349,15 +410,15 @@ export class InSetuFrontmatterEditor extends InSetuElement {
             window.removeEventListener('keydown', this._escListener);
         }
     }
-
     updated(changedProperties) {
         super.updated(changedProperties);
-        if (changedProperties.has('filepath') && this.filepath) {
+        if (changedProperties.has('filepath') && this.filepath && this.filepath !== this._lastLoadedFilepath) {
             this._loadFile();
         }
     }
     async _loadFile() {
         if (!this.filepath) return;
+        this._lastLoadedFilepath = this.filepath;
         this._loading = true;
         try {
             let text = null;
@@ -427,21 +488,22 @@ export class InSetuFrontmatterEditor extends InSetuElement {
             this._loading = false;
         }
     }
-
     _checkDirty() {
-        let latestYaml = { ...this._yamlData };
-        this.dispatchEvent(new CustomEvent('insetu:request-frontmatter', {
-            detail: {
-                currentYaml: latestYaml,
-                respond: (newYaml) => { latestYaml = newYaml; }
-            },
-            bubbles: true, composed: true
-        }));
-        const contentDirty = (this._content.trim() !== this._originalContent.trim());
-        const yamlDirty = (JSON.stringify(latestYaml) !== this._originalYaml);
-        this._isDirty = contentDirty || yamlDirty;
-        this.dispatchEvent(new CustomEvent('editor-dirty', { detail: { isDirty: this._isDirty }, bubbles: true, composed: true }));
-        this.requestUpdate();
+        queueMicrotask(() => {
+            let latestYaml = { ...this._yamlData };
+            this.dispatchEvent(new CustomEvent('insetu:request-frontmatter', {
+                detail: {
+                    currentYaml: latestYaml,
+                    respond: (newYaml) => { latestYaml = newYaml; }
+                },
+                bubbles: true, composed: true
+            }));
+            const contentDirty = (this._content.trim() !== this._originalContent.trim());
+            const yamlDirty = (JSON.stringify(latestYaml) !== this._originalYaml);
+            this._isDirty = contentDirty || yamlDirty;
+            this.dispatchEvent(new CustomEvent('editor-dirty', { detail: { isDirty: this._isDirty }, bubbles: true, composed: true }));
+            this.requestUpdate();
+        });
     }
 
     async _handleSave() {
@@ -500,7 +562,6 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                 <div style="padding: 8px 15px 6px 15px; background: var(--bg); flex-shrink: 0;">
                     <slot name="title-control"></slot>
                 </div>
-
                 <!-- Entity Action Bar Row with Metadata Button on the Right -->
                 <div class="action-bar-row">
                     <div class="action-bar-scroll">
@@ -508,18 +569,18 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                         <sutram-entity-actions 
                             variant="menu-bar"
                             ?scrollable=${true}
-                            .entityType=${'file'} 
+                            .entityType=${'file:editor'} 
                             .entityData=${{ 
                                 filepath: this.filepath, 
                                 isFS: true,
+                                isMarkdown: true,
+                                writingMode: this._writingMode,
                                 isDirty: this._isDirty,
-                                getTransientState: () => this._content,
+                                transientContent: this._content,
                                 suppress: ['file-edit']
                             }}>
                         </sutram-entity-actions>
                     </div>
-                    <sutram-btn intent="neutral" icon="${this._writingMode ? 'pen-tool' : 'code'}" style="margin: 0; --btn-padding: 4px 8px;" title="Toggle Prose Mode" @click=${() => this._toggleWritingMode()}></sutram-btn>
-                    <sutram-btn intent="neutral" icon="maximize-2" style="margin: 0; --btn-padding: 4px 8px;" title="Focus Mode" @click=${() => this._toggleZenMode()}></sutram-btn>
                     <button class="meta-btn ${this._metadataExpanded ? 'active' : ''}"
                         @click=${() => this._metadataExpanded = !this._metadataExpanded}
                         title="Toggle Metadata">
@@ -579,6 +640,42 @@ if (window.ExtensionRegistry) {
         name: "Editor Preferences",
         version: "2.0.0",
         offline_mode: "full",
+        entityActions: [
+            {
+                targetEntity: 'editor',
+                id: 'editor-toggle-prose',
+                label: (data) => data?.writingMode ? 'Code Mode' : 'Prose Mode',
+                icon: (data) => data?.writingMode ? 'code' : 'pen-tool',
+                group: 'tools',
+                vfsBound: false,
+                intent: 'neutral',
+                order: 11,
+                match: (data) => !!data?.isMarkdown,
+                emitEvent: (data) => ({ name: 'insetu:editor:toggle-prose', detail: { filepath: data.filepath } })
+            },
+            {
+                targetEntity: 'editor',
+                id: 'editor-focus-mode',
+                label: 'Focus Mode',
+                icon: 'maximize-2',
+                group: 'tools',
+                vfsBound: false,
+                intent: 'neutral',
+                order: 12,
+                emitEvent: (data) => ({ name: 'insetu:editor:toggle-zen', detail: { filepath: data.filepath } })
+            },
+            {
+                targetEntity: 'editor',
+                id: 'editor-clean-ai-tags',
+                label: 'Clean AI Tags',
+                icon: 'sparkles',
+                group: 'tools',
+                vfsBound: false,
+                intent: 'neutral',
+                order: 13,
+                emitEvent: (data) => ({ name: 'insetu:editor:clean-artifacts', detail: { filepath: data.filepath } })
+            }
+        ],
         shortcuts: [
             {
                 id: 'editor-indent-tab',
@@ -595,15 +692,22 @@ if (window.ExtensionRegistry) {
                 }
             },
             {
+                id: 'editor-clean-artifacts',
+                context: 'global',
+                key: 'ctrl+alt+c',
+                label: 'Clean AI Tags',
+                action: () => {
+                    const activePath = getActiveEditorPath();
+                    window.inSetu?.events?.emit('insetu:editor:clean-artifacts', { filepath: activePath });
+                }
+            },
+            {
                 id: 'editor-save-frontmatter',
                 context: 'global',
                 key: 'ctrl+s',
                 label: 'Save Active Frontmatter Document',
                 action: () => {
-                    const activeEditor = document.querySelector('insetu-frontmatter-editor');
-                    if (activeEditor && activeEditor._isDirty) {
-                        activeEditor._handleSave();
-                    }
+                    window.inSetu?.events?.emit('insetu:editor:save-frontmatter');
                 }
             }
         ]

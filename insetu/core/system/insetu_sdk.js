@@ -1,7 +1,8 @@
 // insetu/insetu/static/js/core/sdk.js
 // Tier 1A: inSetu Local OS SDK Wrapper
 import { SutramElement, createSutramStore, ExtensionRegistry as SutramRegistry, bindStoreInput } from '/static/vendor/sutram/js/sutram_sdk.js';
-import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, coalescedAsync, formatDate, timeAgo, nativeShareFiles } from '/static/vendor/sutram/js/utils.js';
+import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, coalescedAsync, formatDate, timeAgo, nativeShareFiles, cleanCodeArtifacts } from '/static/vendor/sutram/js/utils.js';
+import { getEventPath, getEventTarget } from '/static/vendor/yenvui/js/physics.js';
 import * as jsYaml from '/static/vendor/js-yaml/js-yaml.min.js';
 
 export { bindStoreInput };
@@ -164,6 +165,7 @@ export class InSetuElement extends SutramElement {
             extractManifestFiles: window.inSetu.utils.extractManifestFiles,
             parseFrontmatter: window.inSetu.utils.parseFrontmatter,
             serializeFrontmatter: window.inSetu.utils.serializeFrontmatter,
+            cleanCodeArtifacts: window.inSetu.utils.cleanCodeArtifacts,
             getActiveWorkspace: window.inSetu.utils.getActiveWorkspace
         };
     }
@@ -184,6 +186,9 @@ export class InSetuElement extends SutramElement {
             bindJobAction: (path, payloadGenerator, pollOptions = {}) => {
                 return async (e) => {
                     const payload = typeof payloadGenerator === 'function' ? await payloadGenerator(e) : payloadGenerator;
+                    if (pollOptions.closeWindowId && window.Sutram?.stores?.Layout) {
+                        window.Sutram.stores.Layout.getState().closeWindow(pollOptions.closeWindowId);
+                    }
                     const res = await this.api.post(path, payload);
                     if (!res.ok) {
                         const err = await res.json().catch(() => ({}));
@@ -333,7 +338,7 @@ export class InSetuElement extends SutramElement {
 }
 window.inSetu = window.inSetu || {};
 // Pre-seed foundational OS chassis modules to protect against offline cache misses or backend latency
-const _baseCore = ['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'cartographer', 'offline', 'topology'];
+const _baseCore = ['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'cartographer', 'offline', 'topology', 'llm', 'agent'];
 window.inSetu.CORE_MODULES = window.inSetu.CORE_MODULES && window.inSetu.CORE_MODULES.size > 0 
     ? window.inSetu.CORE_MODULES 
     : new Set(_baseCore);
@@ -348,7 +353,8 @@ export const CORE_UI_SCRIPTS = [
     '/static/extensions/bridge/bridge.js',
     '/static/extensions/gather/gather.js',
     '/static/extensions/config/config.js',
-    '/static/extensions/offline/offline_ui.js'
+    '/static/extensions/offline/offline_ui.js',
+    '/static/extensions/agent/agent.js'
 ];
 
 window.inSetu.stores = window.inSetu.stores || {};
@@ -484,6 +490,8 @@ window.ExtensionRegistry.registerExtension = function(extName, config) {
     }
 };
 // Attach util wrappers mapping to the Sutram imports
+window.inSetu.utils.getEventPath = getEventPath;
+window.inSetu.utils.getEventTarget = getEventTarget;
 window.inSetu.utils.slugify = slugify;
 window.inSetu.utils.fuzzyFilterObjects = fuzzyFilterObjects;
 window.inSetu.utils.normalizeAccentText = normalizeAccentText;
@@ -491,6 +499,7 @@ window.inSetu.utils.formatDate = formatDate;
 window.inSetu.utils.timeAgo = timeAgo;
 window.inSetu.utils.coalescedAsync = coalescedAsync;
 window.inSetu.utils.nativeShareFiles = nativeShareFiles;
+window.inSetu.utils.cleanCodeArtifacts = cleanCodeArtifacts;
 window.inSetu.utils.formatArtifactSize = function(meta) {
     if (!meta) return "";
     if (meta.size_bytes !== undefined) {

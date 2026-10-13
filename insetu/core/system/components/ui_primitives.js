@@ -60,7 +60,7 @@ export class InSetuJobTracker extends InSetuElement {
     }
     render() {
         if (this._status === 'idle' || this._status === 'completed') return html``;
-        if (this._status === 'failed') return html`<div style="color: var(--intent-danger); font-weight: bold; margin-top: 10px;">❌ Error: ${this._error}</div>`;
+        if (this._status === 'failed') return html`<div style="color: var(--intent-danger); font-weight: bold; margin-top: 10px; display: flex; align-items: center; gap: 6px;"><yv-icon name="alert-triangle" style="width: 14px; height: 14px;"></yv-icon><span>Error: ${this._error}</span></div>`;
         return html`<div style="margin-top: 10px;"><yenvui-spinner .text=${this._message || 'Processing...'}></yenvui-spinner></div>`;
     }
 }
@@ -85,13 +85,15 @@ export class InSetuRebootOverlay extends InSetuElement {
             this.rebootType = state.rebootType || 'reboot';
         });
     }
-
     render() {
         if (!this.isRebooting) return html``;
         const isPanic = this.rebootType === 'panic';
         return html`
             <div style="position:fixed; top:0; left:0; width:100vw; height:100dvh; background:rgba(15,23,42,0.95); z-index:999999; display:flex; flex-direction:column; align-items:center; justify-content:center; color:${isPanic ? '#ef4444' : '#38bdf8'}; font-family:monospace; backdrop-filter:blur(5px);">
-                <h2>${isPanic ? '⚠️ Initiating Kernel Panic...' : '🔄 Rebooting inSetu OS...'}</h2>
+                <h2 style="display: flex; align-items: center; gap: 10px;">
+                    <yv-icon name="${isPanic ? 'alert-triangle' : 'refresh-cw'}" style="width: 24px; height: 24px;"></yv-icon>
+                    <span>${isPanic ? 'Initiating Kernel Panic...' : 'Rebooting inSetu OS...'}</span>
+                </h2>
                 <p style="color:#94a3b8;">${isPanic ? 'Awaiting Lifeboat FS binding...' : 'Awaiting kernel binding...'}</p>
             </div>
         `;
@@ -117,8 +119,9 @@ export class InSetConfigBanner extends InSetuElement {
     render() {
         if (!this.configMissing) return html``;
         return html`
-            <div style="background: var(--intent-warning); color: #000; padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem;">
-                ⚠️ Configuration file missing. Operating in empty fallback state.
+            <div style="background: var(--intent-warning); color: #000; padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                <yv-icon name="alert-triangle" style="width: 16px; height: 16px;"></yv-icon>
+                <span>Configuration file missing. Operating in empty fallback state.</span>
                 <span style="cursor:pointer; text-decoration:underline; margin-left:15px; opacity:0.8;" @click=${() => window.inSetu.stores.App.setState({ configMissing: false })}>Dismiss</span>
             </div>
         `;

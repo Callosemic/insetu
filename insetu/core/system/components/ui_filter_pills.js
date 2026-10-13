@@ -8,7 +8,6 @@ export class InSetuRepoFilter extends LitElement {
         activeRepos: { type: Array },
         extraRepos: { type: Array }
     };
-
     static styles = [
         sharedStyles,
         css`
@@ -16,6 +15,14 @@ export class InSetuRepoFilter extends LitElement {
             .label { font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap; user-select: none; }
         `
     ];
+    constructor() {
+        super();
+        this.label = 'Repos:';
+        this.repos = [];
+        this.activeRepos = ['ALL'];
+        this.extraRepos = [];
+    }
+
     _handleRepoToggle(e) {
             e.stopPropagation();
             const { id, active } = e.detail;
@@ -43,10 +50,9 @@ export class InSetuRepoFilter extends LitElement {
         const activeRepoSet = new Set(this.activeRepos);
         const visibleRepos = this.repos || [];
         const visibleExtra = this.extraRepos || [];
-
         return html`
             <div class="wrap">
-                ${this.label ? html`<span class="label">${this.label}</span>` : ''}
+                ${this.label ? html`<span class="label" style="display: inline-flex; align-items: center; gap: 4px;"><yv-icon name="pin" style="width: 14px; height: 14px; color: var(--intent-primary);"></yv-icon>${this.label}</span>` : ''}
 
                 <div @sutram-pill-toggled=${this._handleRepoToggle} style="display: contents;">
                     <sutram-pill pillId="ALL" labelText="All" ?active=${activeRepoSet.has('ALL')}></sutram-pill>

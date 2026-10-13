@@ -123,7 +123,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
     }
     onWorkspaceLoad() { OfflineStore.getState().fetchOfflineState(); }
     onForceRefresh() {
-        this.setStatus("🔄 Refreshing Offline Ledger...", 1500);
+        this.setStatus("Refreshing Offline Ledger...", 1500);
         OfflineStore.getState().fetchOfflineState(true);
     }
 
@@ -159,10 +159,9 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                     }
                 }
             } catch (e) {}
-
             window.inSetu.stores.App.setState({ outboxCount: count, pendingMutations: pendingSet, deletedMutations: deletedSet });
-            if (window.inSetu?.offlineLog) window.inSetu.offlineLog(`Re-queued poison pill for sync: [${item.method}] ${item.path}`, 'info');
-            if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`🌩️ Queued for sync (${count})`, 3000);
+            if (window.inSetu?.offlineLog) window.inSetu.offlineLog(`Re-queued poison pill for sync: [${item.method}]${item.path}`, 'info');
+            if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`Queued for sync (${count})`, 3000);
         } catch (e) {
             alert("Failed to re-queue record.");
         }
@@ -172,7 +171,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
             const granted = await navigator.storage.persist();
             if (granted) {
                 OfflineStore.setState({ storagePersisted: true });
-                if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus("🔒 Persistent Storage Granted!", 3000);
+                if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus("Persistent Storage Granted!", 3000);
             } else {
                 alert("The browser denied persistent storage rights. You may need to interact with the site more or install it as a PWA to elevate your storage clearance.");
             }
@@ -210,7 +209,8 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                     </div>
                     <div style="display: flex; align-items: center; gap: 10px;">
                         <div style="display: flex; align-items: center; gap: 6px; font-size: 0.85rem; font-weight: bold; padding: 6px 12px; border-radius: 4px; background: ${this.storagePersisted ? 'var(--intent-success)' : 'var(--bg)'}; color: ${this.storagePersisted ? 'white' : 'var(--text-muted)'}; border: 1px solid ${this.storagePersisted ? 'var(--intent-success)' : 'var(--border)'};">
-                            ${this.storagePersisted ? '🔒 Persisted (Safe from Eviction)' : '⚠️ Best Effort (At risk of eviction)'}
+                            <yv-icon name="${this.storagePersisted ? 'lock' : 'alert-triangle'}" style="width: 14px; height: 14px;"></yv-icon>
+                            <span>${this.storagePersisted ? 'Persisted (Safe from Eviction)' : 'Best Effort (At risk of eviction)'}</span>
                         </div>
                         ${!this.storagePersisted ? html`
                             <sutram-btn intent="highlight" label="Request Rights" style="margin: 0; font-weight: bold;" @click=${this._requestPersistentStorage}></sutram-btn>
@@ -224,14 +224,14 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                     <sutram-card
                         titleText="Outbox Mutations (${this.outboxItems.length})"
                         descriptionText="Pending API transactions waiting for network reconnection."
-                        icon="🌩️"
+                        icon="cloud-lightning"
                         intent="warning"
                         ?disableSelection=${true}
                         style="margin-bottom: 20px;">
                         <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
                             ${this.outboxItems.length === 0 ? html`
-                                <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem;">
-                                    ✅ Outbox is empty. All mutations are synced.
+                                <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem; display: flex; align-items: center; gap: 6px;">
+                                    <yv-icon name="check-circle-2" style="width: 14px; height: 14px;"></yv-icon> Outbox is empty. All mutations are synced.
                                 </div>
                             ` : this.outboxItems.map(item => html`
                                 <div style="background: var(--bg); border-radius: 4px; border: 1px solid var(--border); padding: 10px;">
@@ -244,12 +244,11 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                             `)}
                         </div>
                     </sutram-card>
-
                     ${this.deadLetters.length > 0 ? html`
                     <sutram-card
                         titleText="Dead Letter Queue (${this.deadLetters.length})"
                         descriptionText="Failed offline transactions (Poison Pills)."
-                        icon="☠️"
+                        icon="skull"
                         intent="danger"
                         ?disableSelection=${true}
                         style="margin-bottom: 20px;">
@@ -270,11 +269,10 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                         </div>
                     </sutram-card>
                     ` : ''}
-
                     <sutram-card
                         titleText="VFS Blob Cache (${this.cachedBlobs.length})"
                         descriptionText="Stale-While-Revalidate GET requests mirrored for offline viewing."
-                        icon="🗄️"
+                        icon="hard-drive"
                         intent="primary"
                         ?disableSelection=${true}>
                         <sutram-search-bar 
@@ -349,11 +347,10 @@ export class InSetuCoreOfflineSettings extends InSetuElement {
                 const fullConfig = data.config || {};
 
                 fullConfig.target_repos = configs;
-
                 const res = await this.api.workspace.post('system/config', fullConfig);
                 if (res.ok) {
                     window.inSetu.stores.App.setState({ targetConfigs: configs });
-                    if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`✅ Saved offline capability for ${repoDir}`, 2000);
+                    if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`Saved offline capability for ${repoDir}`, 2000);
                 }
             } catch (e) {
                 alert(`Failed to save setting: ${e.message}`);
@@ -386,7 +383,7 @@ export class InSetuCoreOfflineSettings extends InSetuElement {
                 }
             }
             window.inSetu?.offlineLog?.(`Pre-cache complete for '${repoDir}': ${cachedCount}/${files.length} cached.`, 'success');
-            if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`✅ Successfully cached ${files.length} files for ${repoDir}`, 3000);
+            if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`Successfully cached ${files.length} files for${repoDir}`, 3000);
 
             setTimeout(() => {
                 this.dispatch('insetu:force-refresh', { parentId: 'offline', subId: 'ledger' });
@@ -399,13 +396,13 @@ export class InSetuCoreOfflineSettings extends InSetuElement {
     render() {
         if (!this.storageModalOpen) return html``;
         return html`
-            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="🗄️ Offline Storage Management" @sutram-modal-closed=${() => OfflineStore.setState({ storageModalOpen: false })}>
+            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Offline Storage Management" @sutram-modal-closed=${() => OfflineStore.setState({ storageModalOpen: false })}>
                 <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Manage offline cache capabilities per-repository.</p>
 
                 ${this.targetConfigs.map(repo => html`
                     <div style="display: flex; gap: 10px; flex-wrap: wrap; padding: 15px; background: var(--input-bg); border-radius: 6px; border: 1px solid var(--border); align-items: center; justify-content: space-between;">
                         <div style="display: flex; flex-direction: column; flex: 1; min-width: 250px;">
-                            <span style="font-weight: bold; color: var(--intent-primary); font-size: 1.1rem;">📁 ${repo.repo_dir}</span>
+                            <span style="font-weight: bold; color: var(--intent-primary); font-size: 1.1rem; display: flex; align-items: center; gap: 6px;"><yv-icon name="folder" style="width: 16px; height: 16px;"></yv-icon> ${repo.repo_dir}</span>
                             <span style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">${repo.title || 'No Display Title'}</span>
                         </div>
                         <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
@@ -460,9 +457,8 @@ export class InSetuCoreOfflineLog extends InSetuElement {
         });
         this.logs = OfflineStore.getState().logs || [];
     }
-
     onWorkspaceLoad() { this.requestUpdate(); }
-    onForceRefresh() { this.setStatus("🔄 Refreshed Telemetry Log", 1500); this.requestUpdate(); }
+    onForceRefresh() { this.setStatus("Refreshed Telemetry Log", 1500); this.requestUpdate(); }
 
     _getIntentColor(type) {
         if (type === 'success') return 'var(--intent-success)';

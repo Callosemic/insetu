@@ -125,7 +125,6 @@ def api_fs_archive(ctx):
         filepath = data.get("filepath", "").strip()
         if not filepath:
                 return jsonify({"error": "Filepath required"}), 400
-        from insetu.core.utils_core import InSetuURI
         uri = InSetuURI.from_any(filepath)
 
         parent_path = uri.path.rpartition('/')[0] if '/' in uri.path else ''
@@ -135,7 +134,8 @@ def api_fs_archive(ctx):
         else:
             new_path = f"{parent_path}/archived/{uri.basename}"
 
-        rel_dest = f"vfs://{uri.repo}/{new_path}" if uri.repo else new_path
+        scheme = uri.scheme or "vfs"
+        rel_dest = f"{scheme}://{uri.repo}/{new_path}" if uri.repo else new_path
 
         res, code = execute_vfs_move(workspace_id, filepath, rel_dest)
         # Retain payload signature compatibility for the frontend
@@ -186,7 +186,6 @@ def api_fs_upload(ctx):
     import time
     from akasa.db import get_connection
     from akasa.hooks import hooks
-    from insetu.core.utils_core import InSetuURI
 
     db_conn = get_connection("workers", workspace_id=workspace_id)
     uploaded_paths = []
