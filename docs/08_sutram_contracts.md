@@ -34,8 +34,7 @@ Extensions must register their UI topology via `window.ExtensionRegistry.registe
 *   **`ExtensionRegistry.executeUIHook(zone: String, data: Any)`**: Dispatches data to a synchronous UI event bus zone.
 
 ## III. State Management & Utilities
-
-*   **`createSutramStore(name: String, initialState: Object, persistKeys: Array, getScopeId: Function, prefix: String)`**: Generates a Zustand vanilla store wrapped with devtools and `subscribeWithSelector`. Optionally synchronizes specified keys to `localStorage`.
+*   **`createSutramStore(name: String, initialState: Object, persistenceSchema: Object, getScopeId: Function, prefix: String)`**: Generates a Zustand vanilla store wrapped with devtools and `subscribeWithSelector`. `persistenceSchema` supports `{ localSync: [...], sessionSync: [...], onEvict: { windowId: resetStateOrFn } }`.
 *   **`bindStoreInput(store: Object, statePath: String, currentValue: Any, options: Object)`**: Utility to automate 2-way binding between Sutram form inputs and Zustand stores. `options` accepts `{ type, label, placeholder, style, selectOptions, onUpdate, inline, flush }`.
 *   **`createJobPoller(apiClient: Object)`**: Factory returning a standalone async poller (`pollJob(jobId: String, options: Object)`). `options` accepts `{ onProgress(msg), onComplete(statusData), onError(err) }`.
 *   **Pure Utilities (`window.inSetu.utils` / `window.Sutram.utils`)**:
@@ -72,8 +71,8 @@ Dynamically generates form controls from backend JSON schemas.
 *   **`<sutram-folder-browser>`**: Interactive directory tree browser with breadcrumbs. Properties: `.files` (Array of paths), `.currentPath` (Array of strings). Emits `@path-changed`.
 
 ## VI. Interactive Primitives
-
 *   **`<sutram-async-btn>`**: Action button with an integrated state machine (`idle` -> `loading` -> `success` | `error`). Properties: `.label`, `.loadingLabel`, `.successLabel`, `.errorLabel`, `.intent` (e.g., `'primary'`, `'danger'`), `?disabled`, `?active`. You MUST bind a functional object to `.onClick=${async (e) => {...}}`.
+*   **`<sutram-report-projection>`**: Generalized spatial viewport projection for multi-tab or single-block reports, logs, and dry-run outputs. Properties: `.caption` (String), `.content` (String), `.tabs` (Array of `{ id, label, icon, content }`), `.activeTab` (String), `.actions` (Array of `{ label, icon, intent, primary, asyncAction, onClick, style, disabled }`), `.extraContent` (TemplateResult), `.suggestedFilename` (String).
 *   **`<sutram-editor>`**: State-aware wrapper for CodeMirror 6. Properties: `.value`, `?readOnly`, `.language`, `?writingMode`, `.customExtensions`, `?enableWordcount`. Methods: `insertAtCursor(text: String)`. Emits `@editor-changed`.
 *   **`<sutram-dropdown>`**: Context menu. Properties: `.items` (Array of `{label, icon, onClick}`), `?open`, `.align`.
 *   **`<sutram-tag>`**: Badge label. Properties: `.text`, `.intent`.

@@ -14,6 +14,9 @@ The core OS is strictly domain-agnostic. It does not know what a "citation" or a
 * **`app.py` / `insetu/core/bridge/engine_bridge.py` (The Sync Bridge):** The Yomama translation layer and physical atomic commit engine. Features Phase C JSON Telemetry rendering, interactive confirmation cards, and the Receipts history tab (`insetu-ext-bridge-history`) backing the Ephemeral Patch Ledger (`bridge_ledger`).
 * **`insetu/core/cartographer/cartographer.py` (The Cartographer):** Generates code indices and maps workspace topology.
 * **`insetu/core/offline/engine_offline.py` (The Offline Engine):** Tier 0 core engine managing local caching, IndexedDB state warming, and offline synchronization quotas.
+* **`insetu/core/llm/engine_llm.py` (The LLM Gateway):** Universal inference orchestrator supporting Anthropic, Gemini, and Claude CLI streaming.
+* **`insetu/core/agent/engine_agent.py` & `agent.js` (The Agent Harness):** Autonomous ReAct worker chain and multi-turn chat UI orchestrating context gathering, LLM inference, and Yomama patch verification.
+* **`insetu/core/system/cli_commands.py` (CLI Command Engine):** Modularized command suite driving onboarding initialization (`insetu init`), service control, and desktop application shortcuts.
 * **`insetu/kernel/hooks.py` (The Event Bus):** The API substrate allowing extensions to intercept RAG compilation, VFS commits, and OS process lifecycle events.
 * **`akasa.workers` (The Stateless Relay):** The centralized background task manager that sweeps switchboards and manages active SQLite worker threads across workspace swaps. It incorporates an integrated native filesystem watcher (`watchdog`) to automatically record unmanaged non-Git directory mutations into an SQLite fixture ledger for differential context compilation.
 
@@ -21,12 +24,13 @@ The core OS is strictly domain-agnostic. It does not know what a "citation" or a
 ## 2. Active Extensions (V1 Finalized)
 These are fully built and compliant extensions currently operating within the system. Note that all domain extensions now reside physically in the `insetu/extensions/` and `insetu/static/js/extensions/` directories to preserve the micro-kernel boundary.
 ### A. Git Operations (`engine_git.py`)
-* **Status:** Active Extension (Decoupled from Core Kernel, Upgraded with Dynamic Settings).
+* **Status:** Active Extension (Decoupled from Core Kernel, Upgraded with Dynamic Settings and Spatial Projections).
 * **Role:** Version control, diff generation, repository reconciliation strategies, and workspace sweeping.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** Ephemeral (direct `.git/` inspection) with configuration states bound to tenant settings databases.
 * **Injection Surfaces:**
-    * Polymorphic Cards: Registers `git-push`, `git-sweep`, `git-state-continue`, `git-state-abort`, and `git-resolve-conflicts` actions inside the centralized Entity-Action Registry.
+    * Polymorphic Cards: Registers `git-push`, `git-sweep`, `git-ctrl-init`, `git-ctrl-remote`, `git-ctrl-pull`, `git-ctrl-branch`, `git-state-continue`, `git-state-abort`, and `git-resolve-conflicts` actions inside the centralized Entity-Action Registry.
+    * Spatial Projections: Projects commit message drafting into `InSetuGitPushProjection` (`git:push`) and pull dry-run inspection into `sutram-report-projection` (`git:preview`) with integrated runtime reconciliation controls.
     * Core Hooks: `@hooks.on('compile_contexts')` to trigger JIT background diff asset compilation; returns `next_kwargs` (`touched_diffs`) for worker step chaining into `engine_flow.py`.
     * Configuration: Declares dynamic repo-level pull strategy selectors (`rebase`, `merge`, `ff_only`), as well as declarative `repoConfigOptions` (`git-repo-exclude`) and `bucketConfigOptions` (`git-exclude`).
 ### B. Citations (`engine_citations.py`)
@@ -46,11 +50,12 @@ These are fully built and compliant extensions currently operating within the sy
     * Worker Matrix: Submits long-running URL scraping routines to the `TaskQueue`.
     * UI Hooks: Primary Navigation Tab injection (The Triage UI).
 ### D. Kanban Tracker (`engine_tracker.py`)
-* **Status:** Active Extension (Upgraded to SDK V2).
+* **Status:** Active Extension (Upgraded to SDK V2 with Spatial Projections).
 * **Role:** Project management, issue routing, sprint tracking, shadow board template spawning, task hierarchy tree inspection, and active focus isolation.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `~/.insetu/data/tracker.db` (CQRS Cache) backed by asynchronous `.tracker/` Markdown file commits via the VFS.
 * **Injection Surfaces:**
+    * Spatial Projections: Decoupled ticket editing into `InSetuTrackerEditProjection` (`tracker:edit`) pinned to spatial viewport columns.
     * Config Hooks: Uses `@hooks.on('mutate_workspace_config')` to natively inject `.tracker/` virtual sub-buckets into the RAG Gatherer based on active schema types.
     * VFS Hooks: Uses `vfs_mutated` to instantly sync the UI SQLite index.
     * Polymorphic Cards: Registers `task-start`, `task-close`, `task-convert`, `task-hierarchy`, `task-focus`, `task-new-child`, `task-reopen`, `task-pause`, `task-spawn` entity actions.
@@ -69,10 +74,11 @@ These are fully built and compliant extensions currently operating within the sy
     * Broadcasts `pre_compile_document` to intercept bibliography mappings.
     * Listens to `@hooks.on('vfs_resolve_file')` to resolve compiled publish artifacts via VFS.
 ### F. Prompts & Workflows (`engine_prompts.py` & `engine_flow.py`)
-* **Status:** Active Extensions (`prompts` upgraded to SDK V2).
+* **Status:** Active Extensions (`prompts` upgraded to SDK V2, `flow` upgraded to Spatial Projections).
 * **Role:** Manage prompt resolution, LLM execution pipelines, and automated context batching.
 * **Dependencies (`__depends__`):** `['prompts', 'gather']`
 * **Injection Surfaces:**
+    * Spatial Projections: Decoupled batch execution inspection (`InSetuFlowViewProjection`, `flow:view`) and batch editing (`InSetuFlowEditProjection`, `flow:edit`) into spatial columns.
     * Core Hooks: `@hooks.on('vfs_mutated')`, `@hooks.on('compile_contexts')`, and `@hooks.on('git_evaluation_complete')` triggering coalesced background batch recompilation.
 
 ### G. Favorites (`engine_favorites.py`)
@@ -135,12 +141,13 @@ These are fully built and compliant extensions currently operating within the sy
     * Core Hooks: `@hooks.on('topology_boot_complete')` triggering non-blocking background worker tasks.
     * Settings Schema: Declarative port mode selector and manual bind action trigger.
 ### O. Semantic Update (`engine_update.py` & `ext_update.js`)
-* **Status:** Active Extension (SDK V2).
+* **Status:** Active Extension (SDK V2 with Spatial Projections and DAG Chaining).
 * **Role:** Automated semantic versioning, dry-run release previews, initial PyPI release building/uploading, PyPI publishing verification, baseline tagging, and package distribution.
 * **Dependencies (`__depends__`):** `['git']`
 * **Data Containment:** Ephemeral / Workspace settings.
 * **Injection Surfaces:**
-    * UI Hooks: Sub-navigation Tab injection (`ctrl` -> `update`), `zone:vfs-mutated` for debounced repo status refresh.
+    * Spatial Projections: Decoupled dry-run release previews, changelog inspections, and execution logs into `sutram-report-projection` (`update:preview`).
+    * Background DAG Chains: Submits post-bump compilation chains via `resolve_dag_chain(ctx, 'register_compilation_steps')` to automatically compile release artifacts and code indices.
     * Event Bus: Emits `insetu:git:generate-diffs` on version scaffold/tag creation.
 ### P. Offline Engine & HTTP Gateway (`offline_ui.js` & `api.js`)
 * **Status:** Core Engine / Active Extension (SDK V2).
