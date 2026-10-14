@@ -1,3 +1,4 @@
+import os
 import time
 import uuid
 import json
@@ -10,15 +11,15 @@ from insetu.core.sdk import InSetuExtension
 from akasa.db import get_connection
 from akasa.hooks import hooks
 from akasa.workers import submit_immediate_job, register_callback, cancel_job
-from insetu.core.utils_core import get_repo_path
-
+from insetu.core.utils_core import get_repo_path, execute_binary
 TOPOLOGY_SCHEMA = {
     "topology_ledger": {
         "filepath": "TEXT PRIMARY KEY",
         "repo": "TEXT",
         "bucket_id": "TEXT",
         "is_tracked": "INTEGER DEFAULT 1",
-        "timestamp": "REAL"
+        "timestamp": "REAL",
+        "git_status": "TEXT DEFAULT ''"
     },
     "topology_event_buffer": {
         "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -98,27 +99,50 @@ def _background_scan_topology(ctx, ledger_events=None, force_full=False, target_
         "message": "Topology mapped successfully.",
         "next_kwargs": {"ledger_events": all_events}
     }
+def _get_repo_git_status_map(repo_path):
+    """Runs git status --porcelain on a repository path and returns a map of relative_filepath -> status_code."""
+    status_map = {}
+    if not repo_path or not os.path.exists(repo_path):
+        return status_map
+    try:
+        res = execute_binary(['git', '-c', 'core.quotepath=false', 'status', '--porcelain'], capture_output=True, text=True, cwd=repo_path)
+        if res.returncode == 0:
+            for line in res.stdout.splitlines():
+                if len(line) < 4:
+                    continue
+                xy = line[:2].strip()
+                rel_p = line[3:].strip()
+                if ' -> ' in rel_p:
+                    rel_p = rel_p.split(' -> ')[-1].strip()
+                rel_p = rel_p.strip('"').replace('\\', '/')
+                if xy:
+                    status_map[rel_p] = xy
+    except Exception:
+        pass
+    return status_map
 
 @hooks.on('register_manifest_signatures')
 def hook_topology_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs):
-    """Yields lightweight repository signatures for the vfs domain."""
+    """Yields lightweight repository signatures for the vfs domain, incorporating git_status counts."""
     ctx = topology_bp.get_context(workspace_id)
-    rows = ctx.db.execute("SELECT repo, count(*) as cnt, max(timestamp) as max_ts FROM topology_ledger GROUP BY repo").fetchall()
+    rows = ctx.db.execute(
+        "SELECT repo, count(*) as cnt, max(timestamp) as max_ts, sum(CASE WHEN git_status != '' AND git_status IS NOT NULL THEN 1 ELSE 0 END) as mod_cnt FROM topology_ledger GROUP BY repo"
+    ).fetchall()
     vfs_sigs = {}
     for r in rows:
         repo = r['repo']
-        vfs_sigs[repo] = f"{r['cnt']}-{r['max_ts']}"
+        vfs_sigs[repo] = f"{r['cnt']}-{r['max_ts']}-{r['mod_cnt'] or 0}"
     return {"vfs": vfs_sigs}
 
 @topology_bp.route('vfs', methods=['GET'])
 def api_topology_vfs_repo(ctx):
-    """Surgically fetches the VFS bucket structure for a specific repository."""
+    """Surgically fetches the VFS bucket structure and git modification state for a specific repository."""
     repo = ctx.req.args.get('repo', '').strip()
     conn = ctx.db
     if repo:
-        rows = conn.execute("SELECT filepath, bucket_id FROM topology_ledger WHERE repo=?", (repo,)).fetchall()
+        rows = conn.execute("SELECT filepath, bucket_id, git_status FROM topology_ledger WHERE repo=?", (repo,)).fetchall()
     else:
-        rows = conn.execute("SELECT filepath, repo, bucket_id FROM topology_ledger").fetchall()
+        rows = conn.execute("SELECT filepath, repo, bucket_id, git_status FROM topology_ledger").fetchall()
 
     files_by_bucket = {}
     for r in rows:
@@ -126,8 +150,10 @@ def api_topology_vfs_repo(ctx):
         b_id = r['bucket_id']
         key = f"{r_name}::{b_id}"
         if key not in files_by_bucket:
-            files_by_bucket[key] = {"files": [], "meta": {"type": "vfs_bucket", "repo": r_name, "bucket_id": b_id}}
+            files_by_bucket[key] = {"files": [], "git_modified": [], "meta": {"type": "vfs_bucket", "repo": r_name, "bucket_id": b_id}}
         files_by_bucket[key]["files"].append(r['filepath'])
+        if r['git_status']:
+            files_by_bucket[key]["git_modified"].append(r['filepath'])
     return jsonify({"repo": repo, "buckets": files_by_bucket})
 @hooks.on('force_topology_scan', priority=10)
 def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
@@ -152,8 +178,8 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
         if not repo_dir: continue
 
         repo_path = get_repo_path(repo_dir, workspace_id)
-
         valid_files = get_valid_workspace_files(repo_path, repo_cfg, workspace_id)
+        git_status_map = _get_repo_git_status_map(repo_path)
         sub_buckets = repo_cfg.get("sub_buckets", [])
 
         conn.execute("DELETE FROM topology_ledger WHERE repo = ?", (repo_dir,))
@@ -161,9 +187,10 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
             b, module = resolve_file_bucket(f, sub_buckets, repo_dir=repo_dir)
             bucket_id = module if (b and module) else (b.get("id") if b else "main")
             filepath = f"{repo_dir}/{f}"
+            g_status = git_status_map.get(f, "")
             conn.execute(
-                "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp) VALUES (?, ?, ?, ?)",
-                (filepath, repo_dir, bucket_id, time.time())
+                "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp, git_status) VALUES (?, ?, ?, ?, ?)",
+                (filepath, repo_dir, bucket_id, time.time(), g_status)
             )
     conn.commit()
     return True
@@ -178,14 +205,16 @@ def hook_request_vfs_manifest(workspace_id=None, **kwargs):
     """Returns the vfs manifest derived directly from the topology ledger via raw tuple queries."""
     try:
         ctx = topology_bp.get_context(workspace_id)
-        cursor = ctx.db.execute("SELECT repo, bucket_id, filepath FROM topology_ledger")
+        cursor = ctx.db.execute("SELECT repo, bucket_id, filepath, git_status FROM topology_ledger")
 
         manifest = {}
-        for repo, bucket_id, filepath in cursor.fetchall():
+        for repo, bucket_id, filepath, git_status in cursor.fetchall():
             manifest_key = f"{repo}::{bucket_id}"
             if manifest_key not in manifest:
-                manifest[manifest_key] = {"files": [], "meta": {"type": "vfs_bucket", "repo": repo, "bucket_id": bucket_id}}
+                manifest[manifest_key] = {"files": [], "git_modified": [], "meta": {"type": "vfs_bucket", "repo": repo, "bucket_id": bucket_id}}
             manifest[manifest_key]["files"].append(filepath)
+            if git_status:
+                manifest[manifest_key]["git_modified"].append(filepath)
 
         return manifest
     except Exception:
@@ -461,7 +490,6 @@ def resolve_topology_buffer(workspace_id):
             elif existing:
                 if phys_mtime <= existing["timestamp"]:
                     is_genuinely_modified = False
-
             if is_genuinely_modified:
                 conn.execute(
                     "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp) VALUES (?, ?, ?, ?)",
@@ -469,6 +497,21 @@ def resolve_topology_buffer(workspace_id):
                 )
                 dirty_repos.add(repo_dir)
                 dirty_buckets.add(f"{repo_dir}::{bucket_id}")
+
+    # Refresh git_status across any touched repositories
+    for touched_repo in dirty_repos:
+        if touched_repo == "global":
+            continue
+        r_path = get_repo_path(touched_repo, workspace_id)
+        g_map = _get_repo_git_status_map(r_path)
+        repo_rows = conn.execute("SELECT filepath, git_status FROM topology_ledger WHERE repo = ?", (touched_repo,)).fetchall()
+        for r_row in repo_rows:
+            fp = r_row["filepath"]
+            rel_f = fp[len(touched_repo)+1:] if fp.startswith(f"{touched_repo}/") else fp
+            new_st = g_map.get(rel_f, "")
+            if (r_row["git_status"] or "") != new_st:
+                conn.execute("UPDATE topology_ledger SET git_status = ?, timestamp = ? WHERE filepath = ?", (new_st, time.time(), fp))
+
     conn.commit()
 
     hooks.emit(

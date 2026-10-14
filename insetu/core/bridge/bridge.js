@@ -538,19 +538,16 @@ export class InSetuExtBridge extends InSetuElement {
                 const layout = window.Sutram.stores.Layout.getState();
                 layout.openWindow({
                     id: 'bridge:syntax-diff',
-                    component: 'sutram-report-projection',
-                    label: 'Syntax Error Diff',
+                    component: 'insetu-bridge-diff-projection',
+                    label: 'Patch Diff Inspector',
                     icon: 'alert-triangle',
                     intent: 'danger',
                     extName: 'bridge',
                     windowOnly: true,
                     props: {
-                        caption: 'Unified diff between existing file and proposed AST syntax changes.',
-                        content: decodedDiff,
-                        suggestedFilename: `syntax_error_${Date.now()}.diff`,
-                        actions: [
-                            { label: 'Close', icon: 'x', intent: 'neutral', onClick: () => layout.closeWindow('bridge:syntax-diff') }
-                        ]
+                        caption: 'Synchronized comparison between existing disk state and proposed patch block.',
+                        diffContent: decodedDiff,
+                        suggestedFilename: `syntax_error_${Date.now()}.diff`
                     }
                 }, layout.focusedColumn || 'center', 1);
             }
@@ -660,11 +657,10 @@ export class InSetuExtBridge extends InSetuElement {
                                                         <span style="font-size: 0.75rem; color: var(--intent-highlight); border: 1px solid var(--intent-highlight); padding: 2px 6px; border-radius: 4px;">${p.flags.join(', ')}</span>
                                                     ` : ''}
                                                 </div>
-
                                                 ${p.error_message ? html`<p style="color: ${p.status === 'auto_skipped' ? 'var(--intent-warning)' : 'var(--intent-danger)'}; margin: 6px 0 0 0;">${p.error_message}</p>` : ''}
                                                 ${p.syntax_error ? html`
                                                     <div style="display: flex; gap: 10px; margin-top: 8px;">
-                                                        <sutram-btn data-action="view-diff" data-b64="${p.syntax_error}" intent="danger" label="View Syntax Error Diff" style="--btn-padding: 4px 10px;"></sutram-btn>
+                                                        <sutram-btn data-action="view-diff" data-b64="${p.syntax_error}" intent="danger" icon="git-compare" label="${p.resolution_type === 'anchor_failed' ? 'Inspect Anchor Mismatch Diff' : (p.status === 'failed' ? 'Inspect Failed Anchor Diff' : 'View Syntax Error Diff')}" style="--btn-padding: 4px 10px;"></sutram-btn>
                                                     </div>
                                                 ` : ''}
                                                 ${p.candidates && p.candidates.length > 0 ? html`
@@ -897,11 +893,75 @@ export class InSetuExtBridge extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-bridge', InSetuExtBridge);
+export class InSetuBridgeDiffProjection extends InSetuElement {
+    static properties = {
+        caption: { type: String },
+        diffContent: { type: String },
+        searchStr: { type: String },
+        replaceStr: { type: String },
+        suggestedFilename: { type: String }
+    };
+    static styles = [sharedStyles, css`
+        :host {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            background: var(--bg);
+            box-sizing: border-box;
+        }
+    `];
+    constructor() {
+        super();
+        this.caption = '';
+        this.diffContent = '';
+        this.searchStr = '';
+        this.replaceStr = '';
+        this.suggestedFilename = '';
+    }
+    render() {
+        const filename = this.suggestedFilename || `diff_${Date.now()}.diff`;
+        const rawPayload = this.diffContent || `<<<<<<< SEARCH\n${this.searchStr}\n=======\n${this.replaceStr}\n>>>>>>> REPLACE`;
+
+        return html`
+            <div style="height: 38px; padding: 0 10px; background: var(--bg-deep); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-shrink: 0;">
+                <div style="display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1;">
+                    <yv-icon name="git-compare" style="width: 14px; height: 14px; color: var(--intent-danger); flex-shrink: 0;"></yv-icon>
+                    <span style="font-family: var(--font-mono); font-size: 0.8rem; font-weight: bold; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        ${filename}
+                    </span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                    <sutram-entity-actions
+                        .entityType=${'text_blob'}
+                        .entityData=${{ textContent: rawPayload, suggestedFilename: filename }}>
+                    </sutram-entity-actions>
+                    <sutram-btn size="sm" intent="neutral" icon="x" label="Close" style="margin: 0;" @click=${() => {
+                        if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('bridge:syntax-diff');
+                    }}></sutram-btn>
+                </div>
+            </div>
+            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0;">
+                <sutram-diff-viewer
+                    .diffText=${this.diffContent}
+                    .searchStr=${this.searchStr}
+                    .replaceStr=${this.replaceStr}
+                    leftTitle="Original"
+                    rightTitle="Patch">
+                </sutram-diff-viewer>
+            </div>
+        `;
+    }
+}
+customElements.define('insetu-bridge-diff-projection', InSetuBridgeDiffProjection);
+
 export class InSetuBridgeEditProjection extends InSetuElement {
     static properties = {
         editCellId: { type: String },
         editCellOriginalFile: { type: String },
-        cells: { type: Array }
+        cells: { type: Array },
+        _previewDiff: { type: Boolean }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
@@ -912,6 +972,7 @@ export class InSetuBridgeEditProjection extends InSetuElement {
         this.editCellId = st.editCellId;
         this.editCellOriginalFile = st.editCellOriginalFile || '';
         this.cells = st.cells || [];
+        this._previewDiff = false;
     }
     connectedCallback() {
         super.connectedCallback();
@@ -968,21 +1029,43 @@ export class InSetuBridgeEditProjection extends InSetuElement {
             }));
         }
     }
+    _extractCurrentBlocks() {
+        const buffer = window.inSetu.stores.Fs?.getState()?.activeBuffers[`yomama://${this.editCellId}`];
+        const rawText = buffer ? buffer.content : (this.cells.find(c => c.id === this.editCellId)?.content || '');
+        const match = rawText.match(/<<<<<<< SEARCH[ \t]*\r?\n([\s\S]*?)^=======[ \t]*\r?\n([\s\S]*?)^>>>>>>> REPLACE/m);
+        if (match) {
+            return { searchStr: match[1].replace(/\r?\n$/, ''), replaceStr: match[2].replace(/\r?\n$/, '') };
+        }
+        return { searchStr: '', replaceStr: rawText };
+    }
     render() {
         if (!this.editCellId) return html``;
         const currentIndex = this.cells.findIndex(c => c.id === this.editCellId);
         const total = this.cells.length;
+        const { searchStr, replaceStr } = this._previewDiff ? this._extractCurrentBlocks() : { searchStr: '', replaceStr: '' };
         return html`
-            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
-                <insetu-editor-projection 
-                    .filepath=${`yomama://${this.editCellId}`} 
-                    data-sub-id=${`yomama://${this.editCellId}`}>
-                </insetu-editor-projection>
+            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0;">
+                ${this._previewDiff ? html`
+                    <sutram-diff-viewer
+                        .searchStr=${searchStr}
+                        .replaceStr=${replaceStr}
+                        leftTitle="SEARCH Block"
+                        rightTitle="REPLACE Block">
+                    </sutram-diff-viewer>
+                ` : html`
+                    <insetu-editor-projection 
+                        .filepath=${`yomama://${this.editCellId}`} 
+                        data-sub-id=${`yomama://${this.editCellId}`}>
+                    </insetu-editor-projection>
+                `}
             </div>
             <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-shrink: 0; flex-wrap: wrap;">
                 <div style="display: flex; gap: 8px; align-items: center;">
                     <sutram-btn intent="danger" icon="x" label="Cancel" style="margin: 0;" @click=${() => {
                         if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('bridge:edit-cell');
+                    }}></sutram-btn>
+                    <sutram-btn intent="highlight" icon="${this._previewDiff ? 'edit-3' : 'columns'}" label="${this._previewDiff ? 'Raw Editor' : 'Diff View'}" style="margin: 0;" @click=${() => {
+                        this._previewDiff = !this._previewDiff;
                     }}></sutram-btn>
                     <sutram-btn intent="warning" icon="refresh-cw" label="Swap S/R" style="margin: 0;" @click=${() => {
                         window.dispatchEvent(new CustomEvent('insetu:bridge:cell-swap', { detail: { id: this.editCellId } }));

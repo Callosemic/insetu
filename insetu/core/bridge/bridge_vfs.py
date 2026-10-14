@@ -356,8 +356,21 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             # Apply patch to memory buffer
             ok, new_content, _ = apply_block_in_memory(content, b, silent=True)
             if not ok:
+                import difflib
+                search_lines = search_str.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
+                file_lines = content.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
+                matcher = difflib.SequenceMatcher(None, file_lines, search_lines)
+                match = matcher.find_longest_match(0, len(file_lines), 0, len(search_lines))
+                start_idx = max(0, match.a - match.b)
+                end_idx = min(len(file_lines), start_idx + len(search_lines))
+                actual_lines = file_lines[start_idx:end_idx]
+                diff = list(difflib.ndiff(search_lines, actual_lines))
+                err_b64 = base64.b64encode(("\n".join(diff)).encode('utf-8')).decode('utf-8')
+
                 patch_tel["status"] = "failed"
                 patch_tel["error_message"] = "Failed to anchor patch block in memory."
+                patch_tel["syntax_error"] = err_b64
+                patch_tel["available_actions"].append("deselect_patch")
                 telemetry["can_commit"] = False
                 telemetry["summary"]["failed"] += 1
                 telemetry["patches"].append(patch_tel)

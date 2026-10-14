@@ -8,7 +8,7 @@ from flask import request, jsonify, send_file
 from insetu.core.sdk import InSetuExtension
 from akasa.vfs import execute_vfs_move, execute_vfs_delete, execute_vfs_save
 from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
-from insetu.core.utils_core import InSetuURI
+from insetu.core.utils_core import InSetuURI, get_repo_path, execute_binary
 
 fs_bp = InSetuExtension(
     'fs', 
@@ -44,6 +44,53 @@ def api_fs_fetch(ctx):
     if content is not None:
         return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
     return "File not found.", 404
+
+class FileGitDiffResponse(TypedDict):
+    filepath: str
+    repo: str
+    head_content: str
+    working_content: str
+    is_untracked: bool
+    is_modified: bool
+@fs_bp.route('git_diff', methods=['GET'], request_schema=FileTargetPayload, response_schema=FileGitDiffResponse, docstring="[sync] Returns the git HEAD content and current working tree content for a target VFS file.")
+def api_fs_git_diff(ctx):
+    """Retrieves the Git HEAD baseline and current working tree text for a file."""
+    workspace_id = ctx.workspace_id
+    filename = ctx.req.args.get('file', '').strip()
+    if not filename:
+        return jsonify({"error": "Filepath required"}), 400
+
+    uri = InSetuURI.from_any(filename)
+    repo_dir = uri.repo
+    rel_path = uri.path
+
+    working_content = uri.read(workspace_id)
+    if working_content is None:
+        working_content = ""
+
+    head_content = ""
+    is_untracked = False
+
+    if repo_dir:
+        repo_path = get_repo_path(repo_dir, workspace_id)
+        if repo_path and os.path.exists(repo_path):
+            try:
+                res = execute_binary(['git', 'show', f'HEAD:{rel_path}'], capture_output=True, text=True, cwd=repo_path)
+                if res.returncode == 0:
+                    head_content = res.stdout
+                else:
+                    is_untracked = True
+            except Exception:
+                is_untracked = True
+
+    return jsonify({
+        "filepath": str(uri),
+        "repo": repo_dir,
+        "head_content": head_content,
+        "working_content": working_content,
+        "is_untracked": is_untracked,
+        "is_modified": head_content != working_content
+    })
 # Bypass the InSetuExtension wrapper to retain the global /download/ path for absolute URLs
 @fs_bp.bp.route('/download/<path:filename>')
 def download_file(filename):

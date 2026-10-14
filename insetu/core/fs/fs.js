@@ -3,7 +3,7 @@ import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { InSetuElement, createExtensionStore } from '/static/extensions/system/insetu_sdk.js';
 import { resolveEditorMode } from '/static/extensions/system/components/ui_editor.js';
 import { AppStore } from '/static/extensions/system/store.js';
-import { buildFileTree, downloadFile as sutramDownloadFile, downloadBlob, bindGhostDrag } from '../../vendor/sutram/js/utils.js';
+import { buildFileTree, resolveDirectoryState, downloadFile as sutramDownloadFile, downloadBlob, bindGhostDrag } from '../../vendor/sutram/js/utils.js';
 export function bindDownloadDrag(e, filename, fetchUrl) {
     const absoluteUrl = window.location.origin + fetchUrl;
     const safeName = filename.split('/').pop();
@@ -41,6 +41,49 @@ export function normalizeVfsURI(path) {
     if (!path || typeof path !== 'string') return '';
     if (path.includes('://')) return path;
     return `vfs://${path.replace(/^\/+/, '')}`;
+}
+
+export function isFileGitModified(filepath) {
+    if (!filepath || typeof filepath !== 'string') return false;
+    const cleanFp = filepath.replace(/^vfs:\/\//, '');
+    const normFp = normalizeVfsURI(filepath);
+
+    // 1. Check if the file has unsaved changes in the active editor buffer
+    const activeBuf = FsStore.getState().activeBuffers?.[normFp] || FsStore.getState().activeBuffers?.[cleanFp];
+    if (activeBuf && activeBuf.isFS && activeBuf.content !== activeBuf.originalContent) {
+        return true;
+    }
+
+    // 2. Check the SSOT VFS manifest's git_modified set
+    const vfsManifest = AppStore.getState().manifest?.vfs || {};
+    for (const bucket of Object.values(vfsManifest)) {
+        if (Array.isArray(bucket?.git_modified) && (bucket.git_modified.includes(cleanFp) || bucket.git_modified.includes(normFp))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+export async function viewFileGitDiff(filepath) {
+    if (!filepath) return;
+    const normPath = normalizeVfsURI(filepath);
+    const cleanName = normPath.split('/').pop();
+
+    if (window.Sutram?.stores?.Layout) {
+        const layout = window.Sutram.stores.Layout.getState();
+        layout.openWindow({
+            id: `vfs:diff:${normPath}`,
+            component: 'insetu-file-diff-projection',
+            label: `Diff: ${cleanName}`,
+            icon: 'git-compare',
+            intent: 'warning',
+            extName: 'fs',
+            windowOnly: true,
+            props: {
+                filepath: normPath
+            }
+        }, layout.focusedColumn || 'center', 1);
+    }
 }
 
 export const FsStore = createExtensionStore('Fs', {
@@ -1077,6 +1120,23 @@ window.ExtensionRegistry.registerExtension('fs', {
         },
         {
             targetEntity: 'file',
+            id: 'file-git-diff',
+            label: 'Diff',
+            icon: 'git-compare',
+            group: 'edit',
+            vfsBound: false,
+            intent: 'warning',
+            order: 11,
+            match: (data) => {
+                if (data.isSkeleton || !data.isFS) return false;
+                return !!(data.git_modified || data.isDirty || isFileGitModified(data.filepath));
+            },
+            onClick: (data, e) => {
+                viewFileGitDiff(data.filepath);
+            }
+        },
+        {
+            targetEntity: 'file',
             id: 'file-copy',
             label: 'Copy',
             icon: 'clipboard',
@@ -1499,15 +1559,14 @@ export function openWorkspaceBrowser(options = {}) {
     AppStore.setState({ browserConfig: { mode, callback, isParts, title } });
 
     let targetManifest = files || getGlobalManifest();
-
     let cbPath = [];
     if (autoDrilldown) {
-        let current = buildFileTree(targetManifest);
-        while (true) {
-            const keys = Object.keys(current).filter(k => k !== '_isFile');
-            if (keys.length === 1 && !current[keys[0]]._isFile) {
-                cbPath.push(keys[0]);
-                current = current[keys[0]];
+        let cursor = buildFileTree(targetManifest);
+        while (cursor && cursor.type === 'directory' && cursor.children) {
+            const children = Object.values(cursor.children);
+            if (children.length === 1 && children[0].type === 'directory') {
+                cbPath.push(children[0].name);
+                cursor = children[0];
                 continue;
             }
             break;
@@ -1948,10 +2007,13 @@ window.inSetu.vfs.downloadFile = downloadFile;
 window.inSetu.vfs.shareFiles = shareFiles;
 window.inSetu.vfs.uploadFileToWorkspace = uploadFileToWorkspace;
 window.inSetu.vfs.viewSourceFile = viewSourceFile;
+window.inSetu.vfs.viewFileGitDiff = viewFileGitDiff;
+window.inSetu.vfs.isFileGitModified = isFileGitModified;
 window.inSetu.vfs.viewAndCopy = viewAndCopy;
 window.inSetu.vfs.viewInWindow = viewInWindow;
 window.inSetu.vfs.deleteEmptyFolder = deleteEmptyFolder;
 window.inSetu.vfs.buildFileTree = buildFileTree;
+window.inSetu.vfs.resolveDirectoryState = resolveDirectoryState;
 window.inSetu.vfs.getGlobalManifest = getGlobalManifest;
 window.inSetu.ui.openNewFileModal = openNewFileModal;
 window.inSetu.ui.openNewFolderModal = openNewFolderModal;
@@ -2392,6 +2454,133 @@ export class InSetuBrowserProjection extends InSetuElement {
     }
 }
 customElements.define('insetu-browser-projection', InSetuBrowserProjection);
+export class InSetuFileDiffProjection extends InSetuElement {
+    static properties = {
+        filepath: { type: String },
+        _loading: { type: Boolean },
+        _error: { type: String },
+        _headContent: { type: String },
+        _workingContent: { type: String },
+        _isUntracked: { type: Boolean },
+        _hasUnsavedBuffer: { type: Boolean }
+    };
+    static styles = [sharedStyles, css`
+        :host {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            background: var(--bg);
+            box-sizing: border-box;
+        }
+    `];
+
+    constructor() {
+        super();
+        this.filepath = '';
+        this._loading = false;
+        this._error = '';
+        this._headContent = '';
+        this._workingContent = '';
+        this._isUntracked = false;
+        this._hasUnsavedBuffer = false;
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        if (!this.filepath && this.dataset.subId?.startsWith('vfs:diff:')) {
+            this.filepath = this.dataset.subId.replace('vfs:diff:', '');
+        }
+        this.subscribe(FsStore, state => {
+            if (!this.filepath) return;
+            const normFp = normalizeVfsURI(this.filepath);
+            const buf = state.activeBuffers?.[normFp] || state.activeBuffers?.[this.filepath];
+            if (buf && buf.isFS && buf.content !== undefined && buf.content !== 'Loading...') {
+                this._workingContent = buf.content;
+                this._hasUnsavedBuffer = buf.content !== buf.originalContent;
+            }
+        });
+        if (this.filepath) {
+            this._fetchDiff();
+        }
+    }
+
+    updated(changedProperties) {
+        super.updated(changedProperties);
+        if (changedProperties.has('filepath') && this.filepath) {
+            this._fetchDiff();
+        }
+    }
+
+    async _fetchDiff() {
+        if (!this.filepath) return;
+        this._loading = true;
+        this._error = '';
+        try {
+            const normFp = normalizeVfsURI(this.filepath);
+            const res = await window.inSetu.api.workspace.get(`fs/git_diff?file=${encodeURIComponent(normFp)}`);
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || `HTTP ${res.status}`);
+            }
+            const data = await res.json();
+            this._headContent = data.head_content || '';
+            this._isUntracked = !!data.is_untracked;
+
+            const buf = FsStore.getState().activeBuffers?.[normFp] || FsStore.getState().activeBuffers?.[this.filepath];
+            if (buf && buf.isFS && buf.content !== undefined && buf.content !== 'Loading...') {
+                this._workingContent = buf.content;
+                this._hasUnsavedBuffer = buf.content !== buf.originalContent;
+            } else {
+                this._workingContent = data.working_content || '';
+                this._hasUnsavedBuffer = false;
+            }
+        } catch (e) {
+            this._error = e.message || 'Failed to load Git diff.';
+        } finally {
+            this._loading = false;
+        }
+    }
+
+    render() {
+        if (this._loading) {
+            return html`<div style="padding: 20px;"><sutram-spinner text="Comparing against Git HEAD..."></sutram-spinner></div>`;
+        }
+        if (this._error) {
+            return html`<div style="padding: 20px; color: var(--intent-danger); font-family: var(--font-mono);">Error: ${this._error}</div>`;
+        }
+
+        const rightLabel = this._hasUnsavedBuffer
+            ? 'Working Buffer (Unsaved Edits)'
+            : 'Working Tree (Disk)';
+        const leftLabel = this._isUntracked
+            ? 'Git HEAD (Untracked / New File)'
+            : 'Git HEAD (Committed)';
+
+        return html`
+            <div style="padding: 8px 15px; background: var(--input-bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-shrink: 0;">
+                <span style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    ${this.filepath.replace(/^vfs:\/\//, '')}
+                </span>
+                <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0;">
+                    <sutram-btn size="sm" intent="neutral" icon="refresh-cw" label="Refresh" @click=${() => this._fetchDiff()}></sutram-btn>
+                    <sutram-btn size="sm" intent="primary" icon="edit-3" label="Open Editor" @click=${() => viewSourceFile(this.filepath, true)}></sutram-btn>
+                </div>
+            </div>
+            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0;">
+                <sutram-diff-viewer
+                    .searchStr=${this._headContent}
+                    .replaceStr=${this._workingContent}
+                    .leftTitle=${leftLabel}
+                    .rightTitle=${rightLabel}>
+                </sutram-diff-viewer>
+            </div>
+        `;
+    }
+}
+customElements.define('insetu-file-diff-projection', InSetuFileDiffProjection);
+
 // Isolate VFS-specific dirty state checks
 window.addEventListener('beforeunload', (e) => {
     const buffers = Object.values(FsStore.getState().activeBuffers || {});
