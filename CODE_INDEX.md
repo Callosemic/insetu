@@ -20,13 +20,6 @@ insetu/
 │   ├── 08_sutram_contracts.md      # Sutram Platform API & Interface Contracts.
 │   ├── ADR_INDEX.md                # Ledger of Logic for inSetu ADRs.
 │   └── adrs/                       # Architectural Decision Records.
-│       ├── 0017-extension-sdk-and-pit-of-success.md # Defines the InSetuExtension and InSetuElement base classes.
-│       ├── 0018-event-sourced-vfs-ledger.md # SQLite event sourcing for VFS mutations and Watchdog events.
-│       ├── 0022-differential-context-compilation.md # Surgical updates to RAG contexts avoiding full recompilation.
-│       ├── 0024-frontend-sdk-decoupling-and-domain-accessors.md # Front-end SDK abstraction (this.vfs, this.sys, this.editor).
-│       ├── 0027-global-multi-select-and-batch-action-registry.md # Global UI selection tray and batch action execution.
-│       ├── 0028-native-hash-routing-and-event-bus.md # Zero-bundler SPA routing using URL hashes.
-│       ├── 0029-core-kernel-extraction-and-three-tier-architecture.md # Separation of Kernel, Core OS, and Domain Extensions.
 │       ├── 0030-kernel-utility-bisect-and-domain-relocation.md # Decoupling kernel utilities from core OS domains.
 │       ├── 0031-sutram-micro-kernel-vendorization-and-vfs-ledger-unification.md # Vendorizing Sutram and merging VFS tracking ledgers.
 │       ├── 0032-dynamic-polyglot-vendorization-and-importmap-resolution.md # Import map strategies for offline-first vendor libraries.
@@ -76,10 +69,17 @@ insetu/
 │           ├── 0014-event-bus-tenant-authorization.md # Authorization rules for cross-tenant event bus emissions.
 │           ├── 0015-codemirror6-migration.md # Transition from legacy editors to CodeMirror 6.
 │           ├── 0016-explicit-api-client-and-fetch-deprecation.md # Mandates the use of the centralized inSetu API client.
+│           ├── 0017-extension-sdk-and-pit-of-success.md # Defines the InSetuExtension and InSetuElement base classes.
+│           ├── 0018-event-sourced-vfs-ledger.md # SQLite event sourcing for VFS mutations and Watchdog events.
 │           ├── 0021_standardized_state_isolation.md # Unidirectional Data Flow and tenant state isolation.
+│           ├── 0022-differential-context-compilation.md # Surgical updates to RAG contexts avoiding full recompilation.
 │           ├── 0023-polymorphic-entity-action-card-registry.md # Dynamic context-aware actions for UI entity cards.
+│           ├── 0024-frontend-sdk-decoupling-and-domain-accessors.md # Front-end SDK abstraction (this.vfs, this.sys, this.editor).
 │           ├── 0025-declarative-app-shell-and-brokered-resource-management.md # Declarative UI layout definitions and slot brokering.
-│           └── 0026-unified-token-gatehouse-and-tailscale-auth.md # Centralized REST/WebSocket authentication and Tailscale WHOIS.
+│           ├── 0026-unified-token-gatehouse-and-tailscale-auth.md # Centralized REST/WebSocket authentication and Tailscale WHOIS.
+│           ├── 0027-global-multi-select-and-batch-action-registry.md # Global UI selection tray and batch action execution.
+│           ├── 0028-native-hash-routing-and-event-bus.md # Zero-bundler SPA routing using URL hashes.
+│           └── 0029-core-kernel-extraction-and-three-tier-architecture.md # Separation of Kernel, Core OS, and Domain Extensions.
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── app.py                      # [Micro-Kernel & Extension Bootloader]
