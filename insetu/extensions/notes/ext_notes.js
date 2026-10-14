@@ -14,6 +14,22 @@ export const NotesStore = createExtensionStore('Notes', {
     editNoteFilepath: null,
     noteForm: { title: '', repo: 'global', bucket: 'None', tags: '' },
     pinnedRepos: new Set(['ALL']),
+    openNoteEditor: (filepath, title = null) => {
+        if (!filepath) return;
+        NotesStore.setState({ editNoteFilepath: filepath });
+        if (window.Sutram?.stores?.Layout) {
+            const layout = window.Sutram.stores.Layout.getState();
+            layout.openWindow({
+                id: 'notes:editor',
+                component: 'insetu-ext-notes-editor',
+                label: title || filepath.split('/').pop(),
+                icon: 'file-text',
+                intent: 'highlight',
+                extName: 'notes',
+                windowOnly: true
+            }, layout.focusedColumn || 'center', 1);
+        }
+    },
     fetchNotes: window.inSetu.utils.coalescedAsync(async () => {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('notes')) return;
         NotesStore.setState({ loading: true });
@@ -77,13 +93,14 @@ export const NotesStore = createExtensionStore('Notes', {
                     outboxItems: [...currentOutbox, { method: 'POST', path: 'fs/save', payload: { filepath, content } }] 
                 });
             }
-
             NotesStore.setState(s => ({ 
                 notes: [{ filepath, title, repo, sub_bucket: bucket, tags: tagsArr, updated_at: now }, ...s.notes],
                 newNoteModalOpen: false, 
                 editNoteFilepath: filepath,
                 noteForm: { title: '', repo: 'global', bucket: 'None', tags: '' } 
             }));
+
+            NotesStore.getState().openNoteEditor(filepath, title);
 
             if (!window.inSetu.stores.App.getState().isOffline) {
                 NotesStore.getState().fetchNotes();
@@ -92,8 +109,11 @@ export const NotesStore = createExtensionStore('Notes', {
             alert("Network error: " + e.message);
         }
     }
+}, {
+    onEvict: {
+        'notes:editor': { editNoteFilepath: null }
+    }
 });
-
 window.inSetu.stores.Notes = NotesStore;
 
 // 2. The Global Modal (New Notes)
@@ -104,7 +124,6 @@ export class InSetuExtNotesModals extends InSetuElement {
         noteForm: { type: Object }
     };
     static styles = [sharedStyles, css`:host { display: contents; }`];
-
     constructor() {
         super();
         this.newNoteModalOpen = false;
@@ -112,20 +131,10 @@ export class InSetuExtNotesModals extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-
-        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
-            const payload = e.detail;
-            if (!payload || !payload.mutations) return;
-            const currentEdit = NotesStore.getState().editNoteFilepath;
-            if (currentEdit) {
-                const deleted = payload.mutations.find(m => m.filepath === currentEdit && m.operation === 'delete');
-                if (deleted) NotesStore.setState({ editNoteFilepath: null });
-            }
-        });
-
         this.subscribe(NotesStore, state => {
-            this.newNoteModalOpen = state.newNoteModalOpen;
-            this.noteForm = state.noteForm;
+            this.newNoteModalOpen = !!state.newNoteModalOpen;
+            this.noteForm = state.noteForm || {};
+            this.requestUpdate();
         });
     }
     render() {
@@ -133,16 +142,15 @@ export class InSetuExtNotesModals extends InSetuElement {
         return html`
             <sutram-modal 
                 ?open=${true} 
-                ?fullscreen=${true}
                 titleText="Create New Note"
                 @sutram-modal-closed=${() => NotesStore.setState({ newNoteModalOpen: false })}>
                 <div slot="body" style="display: contents;">
-                    <sutram-input label="Note Title" .value=${this.noteForm.title} placeholder="e.g., API Architectural Decision" @sutram-input-changed=${(e) => NotesStore.setState(state => ({ noteForm: { ...state.noteForm, title: e.detail.value }}))}></sutram-input>
+                    <sutram-input label="Note Title" .value=${this.noteForm?.title || ''} placeholder="e.g., API Architectural Decision" @sutram-input-changed=${(e) => NotesStore.setState(state => ({ noteForm: { ...state.noteForm, title: e.detail.value }}))}></sutram-input>
                     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                         <div style="flex: 1; min-width: 150px;">
-                            <sutram-select label="Repository Mapping" .value=${this.noteForm.repo} .options=${[{value: 'global', label: 'Global OS Level'}, ...this.ecosystem.allRepos.map(r => ({value: r, label: r}))]} @sutram-input-changed=${(e) => NotesStore.setState(state => ({ noteForm: { ...state.noteForm, repo: e.detail.value }}))}></sutram-select>
+                            <sutram-select label="Repository Mapping" .value=${this.noteForm?.repo || 'global'} .options=${[{value: 'global', label: 'Global OS Level'}, ...this.ecosystem.allRepos.map(r => ({value: r, label: r}))]} @sutram-input-changed=${(e) => NotesStore.setState(state => ({ noteForm: { ...state.noteForm, repo: e.detail.value }}))}></sutram-select>
                         </div>
-                        ${this.noteForm.repo !== 'global' ? (() => {
+                        ${(this.noteForm?.repo || 'global') !== 'global' ? (() => {
                             const buckets = this.sys.getFlattenedBuckets ? this.sys.getFlattenedBuckets(this.noteForm.repo) : [];
                             if (buckets.length > 0) {
                                 return html`
@@ -154,13 +162,10 @@ export class InSetuExtNotesModals extends InSetuElement {
                             return '';
                         })() : ''}
                     </div>
-
-                    <sutram-input label="Tags (comma separated)" .value=${this.noteForm.tags} placeholder="e.g., architecture, frontend, bug" @sutram-input-changed=${(e) => NotesStore.setState(state => ({ noteForm: { ...state.noteForm, tags: e.detail.value }}))}></sutram-input>
+                    <sutram-input label="Tags (comma separated)" .value=${this.noteForm?.tags || ''} placeholder="e.g., architecture, frontend, bug" @sutram-input-changed=${(e) => NotesStore.setState(state => ({ noteForm: { ...state.noteForm, tags: e.detail.value }}))}></sutram-input>
                 </div>
-
-                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${() => NotesStore.getState().saveNewNote()}>
-                    💾 Create & Open Note
-                </button>
+                <sutram-btn slot="footer" intent="neutral" icon="x" label="Cancel" @click=${() => NotesStore.setState({ newNoteModalOpen: false })}></sutram-btn>
+                <sutram-async-btn slot="footer" intent="primary" icon="save" label="Create & Open Note" .onClick=${() => NotesStore.getState().saveNewNote()}></sutram-async-btn>
             </sutram-modal>
         `;
     }
@@ -172,25 +177,32 @@ export class InSetuExtNotesEditor extends InSetuElement {
     static get extensionName() { return 'notes'; }
     static properties = {
         filepath: { type: String },
-        allRepos: { type: Array },
         editForm: { type: Object }
     };
-    static styles = [sharedStyles, css`:host { display: contents; }`];
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+    `];
     constructor() {
         super();
         this.filepath = null;
-        this.allRepos = [];
         this.editForm = { title: '', repo: 'global', bucket: 'None', tags: '' };
         this._isDirty = false;
     }
-
     connectedCallback() {
         super.connectedCallback();
+        this.filepath = NotesStore.getState().editNoteFilepath;
         this.subscribe(NotesStore, state => {
             this.filepath = state.editNoteFilepath;
+            this.requestUpdate();
         });
-        this.subscribe(window.inSetu.stores.Gather, state => {
-            this.allRepos = state.allRepos || [];
+        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
+            const mutations = e.detail?.mutations || [];
+            if (this.filepath && mutations.some(m => m.filepath === this.filepath && m.operation === 'delete')) {
+                NotesStore.setState({ editNoteFilepath: null });
+                if (window.Sutram?.stores?.Layout) {
+                    window.Sutram.stores.Layout.getState().closeWindow('notes:editor');
+                }
+            }
         });
     }
     _onFrontmatterLoaded(e) {
@@ -234,13 +246,15 @@ export class InSetuExtNotesEditor extends InSetuElement {
     async _deleteNote() {
         if (!this.filepath) return;
         if (!confirm("Are you sure you want to permanently delete this note? This cannot be undone.")) return;
-        await this.sys.executeWorkspaceMutation('fs/delete', { filepath: this.filepath }, {
-            collapseKey: `vfs:delete:${this.filepath}`,
-            deletedMutations: [this.filepath],
+        const targetFp = this.filepath;
+        await this.sys.executeWorkspaceMutation('fs/delete', { filepath: targetFp }, {
+            collapseKey: `vfs:delete:${targetFp}`,
+            deletedMutations: [targetFp],
             onSuccess: (data) => {
                 NotesStore.setState({ editNoteFilepath: null });
+                if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('notes:editor');
                 if (data && data.job_id === 'offline_queue') {
-                    NotesStore.setState(s => ({ notes: s.notes.filter(n => n.filepath !== this.filepath) }));
+                    NotesStore.setState(s => ({ notes: s.notes.filter(n => n.filepath !== targetFp) }));
                 } else {
                     NotesStore.getState().fetchNotes();
                 }
@@ -250,63 +264,57 @@ export class InSetuExtNotesEditor extends InSetuElement {
     render() {
         if (!this.filepath) return html``;
         return html`
-            <sutram-modal 
-                ?open=${true} 
-                titleText="📝 ${this.filepath || ''}"
-                ?fullscreen=${true}
-                ?flush=${true}
-                @sutram-modal-closed=${() => NotesStore.setState({ editNoteFilepath: null })}>
-
-                <div slot="body" style="display: contents;">
-                    ${this.filepath ? html`
-                        <insetu-frontmatter-editor
-                            id="fm-editor"
-                            .filepath=${this.filepath}
-                            .defaultExpanded=${false}
-                            @editor-dirty=${e => { this._isDirty = e.detail.isDirty; this.requestUpdate(); }}
-                            @insetu:frontmatter-loaded=${this._onFrontmatterLoaded}
-                            @insetu:request-frontmatter=${this._onRequestFrontmatter}>
-                            <div slot="title-control" style="padding: 0;">
-                                <sutram-textarea 
-                                    .value=${this.editForm.title} 
-                                    placeholder="Note Title..." 
-                                    ?autoSize=${true}
-                                    .minRows=${1}
-                                    .maxHeight=${150}
-                                    ?borderless=${true}
-                                    style="font-weight: bold; font-size: 1.3rem; width: 100%; color: var(--text);"
-                                    @sutram-input-changed=${e => { 
-                                        const val = e.detail.value.replace(/[\r\n]+/g, ' '); 
-                                        this.editForm.title = val; 
-                                        this.requestUpdate(); 
-                                    }}>
-                                </sutram-textarea>
-                            </div>
-                            <div slot="metadata-controls" style="display: flex; flex-direction: column; gap: 5px; margin-top: 5px;">
-                                <div style="display: flex; gap: 15px; flex-wrap: wrap;">
-                                    <sutram-select style="flex: 1; min-width: 150px; margin-bottom: 0;" label="Repository" .value=${this.editForm.repo} .options=${[{value: 'global', label: 'Global OS Level'}, ...this.allRepos.map(r => ({value: r, label: r}))]} @sutram-input-changed=${e => { this.editForm.repo = e.detail.value; this.requestUpdate(); }}></sutram-select>
-                                    ${this.editForm.repo !== 'global' ? (() => {
-                                        const buckets = this.sys.getFlattenedBuckets ? this.sys.getFlattenedBuckets(this.editForm.repo) : [];
-                                        if (buckets.length > 0) {
-                                            return html`<sutram-select style="flex: 1; min-width: 150px; margin-bottom: 0;" label="Sub-Bucket" .value=${this.editForm.bucket} .options=${[{value: 'None', label: 'None'}, ...buckets.map(b => ({value: b.id, label: b.title}))]} @sutram-input-changed=${e => { this.editForm.bucket = e.detail.value; this.requestUpdate(); }}></sutram-select>`;
-                                        }
-                                        return '';
-                                    })() : ''}
-                                </div>
-                                <sutram-input style="width: 100%; margin-bottom: 0;" label="Tags" .value=${this.editForm.tags} placeholder="e.g., architecture, bug" @sutram-input-changed=${e => { this.editForm.tags = e.detail.value; this.requestUpdate(); }}></sutram-input>
-                            </div>
-                        </insetu-frontmatter-editor>
-                    ` : ''}
-                </div>
-                ${this.filepath ? html`
-                <div slot="footer" style="display: flex; justify-content: space-between; width: 100%;">
-                    <sutram-btn size="sm" intent="danger" label="🗑️ Delete" @click=${this._deleteNote}></sutram-btn>
-                    <div style="display: flex; gap: 10px;">
-                        <sutram-btn size="sm" intent="warning" label="📝 Raw Edit" @click=${() => {                             const fp = this.filepath;                             NotesStore.setState({ editNoteFilepath: null });                             if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(fp, true, true);                         }}></sutram-btn>${this._isDirty ? html`<sutram-async-btn style="margin: 0;" label="💾 Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor')._handleSave()}></sutram-async-btn>` : ''}
+            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+                <insetu-frontmatter-editor
+                    id="fm-editor"
+                    .filepath=${this.filepath}
+                    .defaultExpanded=${false}
+                    @editor-dirty=${e => { this._isDirty = e.detail.isDirty; this.requestUpdate(); }}
+                    @insetu:frontmatter-loaded=${this._onFrontmatterLoaded}
+                    @insetu:request-frontmatter=${this._onRequestFrontmatter}>
+                    <div slot="title-control" style="padding: 0;">
+                        <sutram-textarea 
+                            .value=${this.editForm.title} 
+                            placeholder="Note Title..." 
+                            ?autoSize=${true}
+                            .minRows=${1}
+                            .maxHeight=${150}
+                            ?borderless=${true}
+                            style="font-weight: bold; font-size: 1.3rem; width: 100%; color: var(--text);"
+                            @sutram-input-changed=${e => { 
+                                const val = e.detail.value.replace(/[\r\n]+/g, ' '); 
+                                this.editForm.title = val; 
+                                this.requestUpdate(); 
+                            }}>
+                        </sutram-textarea>
                     </div>
+                    <div slot="metadata-controls" style="display: flex; flex-direction: column; gap: 5px; margin-top: 5px;">
+                        <div style="display: flex; gap: 15px; flex-wrap: wrap;">
+                            <sutram-select style="flex: 1; min-width: 150px; margin-bottom: 0;" label="Repository" .value=${this.editForm.repo} .options=${[{value: 'global', label: 'Global OS Level'}, ...(this.ecosystem.allRepos || []).map(r => ({value: r, label: r}))]} @sutram-input-changed=${e => { this.editForm.repo = e.detail.value; this.requestUpdate(); }}></sutram-select>
+                            ${this.editForm.repo !== 'global' ? (() => {
+                                const buckets = this.sys.getFlattenedBuckets ? this.sys.getFlattenedBuckets(this.editForm.repo) : [];
+                                if (buckets.length > 0) {
+                                    return html`<sutram-select style="flex: 1; min-width: 150px; margin-bottom: 0;" label="Sub-Bucket" .value=${this.editForm.bucket} .options=${[{value: 'None', label: 'None'}, ...buckets.map(b => ({value: b.id, label: b.title}))]} @sutram-input-changed=${e => { this.editForm.bucket = e.detail.value; this.requestUpdate(); }}></sutram-select>`;
+                                }
+                                return '';
+                            })() : ''}
+                        </div>
+                        <sutram-input style="width: 100%; margin-bottom: 0;" label="Tags" .value=${this.editForm.tags} placeholder="e.g., architecture, bug" @sutram-input-changed=${e => { this.editForm.tags = e.detail.value; this.requestUpdate(); }}></sutram-input>
+                    </div>
+                </insetu-frontmatter-editor>
+            </div>
+            <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; justify-content: space-between; width: 100%; flex-shrink: 0;">
+                <sutram-btn size="sm" intent="danger" icon="trash-2" label="Delete" @click=${this._deleteNote}></sutram-btn>
+                <div style="display: flex; gap: 10px;">
+                    <sutram-btn size="sm" intent="warning" icon="code" label="Raw Edit" @click=${() => {
+                        const fp = this.filepath;
+                        NotesStore.setState({ editNoteFilepath: null });
+                        if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('notes:editor');
+                        if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(fp, true, true);
+                    }}></sutram-btn>
+                    ${this._isDirty ? html`<sutram-async-btn style="margin: 0;" icon="save" label="Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor')._handleSave()}></sutram-async-btn>` : ''}
                 </div>
-                ` : ''}
-            </sutram-modal>
+            </div>
         `;
     }
 }
@@ -353,9 +361,10 @@ export class InSetuExtNotes extends InSetuElement {
             this.allRepos = state.allRepos || [];
             this.requestUpdate();
         });
-
         NotesStore.getState().fetchNotes();
-        this.registerGlobalListener('insetu:notes:new', window, () => NotesStore.setState({ newNoteModalOpen: true }));
+        this.registerGlobalListener('insetu:notes:new', window, () => {
+            NotesStore.setState({ newNoteModalOpen: true });
+        });
         this.registerGlobalListener('sutram-sync-complete', window, () => NotesStore.getState().fetchNotes());
         // Expose the isolated notes directory to the global VFS manifest and file explorers
         this.registerGlobalListener('insetu:global-manifest-files', window, (e) => {
@@ -383,17 +392,15 @@ export class InSetuExtNotes extends InSetuElement {
         const filteredNotes = this.searchQuery 
             ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredNotes, this.searchQuery, n => `${n.title} ${n.repo} ${(n.tags || []).join(' ')}`) 
             : repoFilteredNotes;
-
         return html`
             <sutram-toolbar
-                searchPlaceholder="🔍 Fuzzy search notes..."
+                searchPlaceholder="Fuzzy search notes..."
                 .searchQuery=${this.searchQuery}
                 @search-changed=${(e) => NotesStore.setState({ searchQuery: e.detail.value })}
                 .enableFilterDropdown=${true}
                 .activeFilters=${Array.from(this.pinnedRepos)}>
                 <insetu-repo-filter
                     slot="filters"
-                    label="📌 Repos:"
                     .repos=${this.allRepos}
                     .activeRepos=${Array.from(this.pinnedRepos)}
                     @repo-filter-changed=${(e) => NotesStore.setState({ pinnedRepos: new Set(e.detail.activeRepos) })}>
@@ -403,7 +410,7 @@ export class InSetuExtNotes extends InSetuElement {
                 ${this.loading ? html`<sutram-spinner text="Loading notes..."></sutram-spinner>` : ''}
 
                 <div style="display: flex; flex-direction: column; gap: 10px; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
-                    ${filteredNotes.length === 0 && !this.loading ? html`<insetu-empty-state text="No notes found. Click '☰' to create one."></insetu-empty-state>` : ''}
+                    ${filteredNotes.length === 0 && !this.loading ? html`<insetu-empty-state text="No notes found. Open the menu in the top-right to create one."></insetu-empty-state>` : ''}
                     ${filteredNotes.map(n => html`
                         <sutram-card
                             .filename=${n.filepath}
@@ -414,7 +421,9 @@ export class InSetuExtNotes extends InSetuElement {
                             intent="highlight"
                             entityType="file:note"
                             .entityData=${{ filepath: n.filepath, isFS: true, repoDir: n.repo }}
-                            @card-clicked=${() => NotesStore.setState({ editNoteFilepath: n.filepath })}>
+                            @card-clicked=${() => {
+                                NotesStore.getState().openNoteEditor(n.filepath, n.title);
+                            }}>
 
                             <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px;">
                                 ${n.tags && n.tags.length > 0 ? n.tags.map(tag => html`<span class="task-tag">#${tag}</span>`) : ''}
@@ -438,10 +447,9 @@ export class InSetuExtNotesActions extends InSetuElement {
             alert("No notes available to cache.");
             return;
         }
-
         const activeWs = window.inSetu.utils.getActiveWorkspace();
         window.inSetu?.offlineLog?.(`Starting pre-cache for Notes Library (${notes.length} files)...`, 'info');
-        if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`⏳ Caching ${notes.length} notes...`, null);
+        if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`Caching ${notes.length} notes...`, null);
 
         let cachedCount = 0;
         try {
@@ -455,7 +463,7 @@ export class InSetuExtNotesActions extends InSetuElement {
             }
 
             window.inSetu?.offlineLog?.(`Pre-cache complete for Notes: ${cachedCount}/${notes.length} cached.`, 'success');
-            if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`✅ Successfully cached ${cachedCount} notes.`, 3000);
+            if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`Successfully cached ${cachedCount} notes.`, 3000);
 
             setTimeout(() => {
                 this.dispatch('insetu:force-refresh', { parentId: 'offline', subId: 'ledger' });
@@ -465,16 +473,17 @@ export class InSetuExtNotesActions extends InSetuElement {
             alert(`Failed to cache notes: ${e.message}`);
         }
     }
-
     render() {
         const items = [
-            { label: 'New Note', icon: '📝', onClick: () => this.dispatch('insetu:notes:new') },
-            { label: 'Pre-Cache Notes', icon: '⬇️', onClick: () => this._preCacheNotes() }
+            { label: 'New Note', icon: 'file-plus', onClick: () => this.dispatch('insetu:notes:new') },
+            { label: 'Pre-Cache Notes', icon: 'download', onClick: () => this._preCacheNotes() }
         ];
 
         return html`
             <sutram-dropdown align="right" .items=${items}>
-                <button slot="trigger" class="system-action-btn">☰</button>
+                <button slot="trigger" class="system-action-btn" title="Notes Actions">
+                    <yv-icon name="menu" style="width: 14px; height: 14px;"></yv-icon>
+                </button>
             </sutram-dropdown>
         `;
     }
@@ -491,10 +500,6 @@ window.ExtensionRegistry.registerExtension('notes', {
         {
             slot: "slots:global",
             component: "insetu-ext-notes-modals"
-        },
-        {
-            slot: "slots:global",
-            component: "insetu-ext-notes-editor"
         },
         {
             slot: "slots:sub-navigation",
@@ -518,7 +523,8 @@ window.ExtensionRegistry.registerExtension('notes', {
         {
             match: (filepath) => filepath && filepath.startsWith('ctx://notes/'),
             onOpen: (filepath) => {
-                NotesStore.setState({ editNoteFilepath: filepath });
+                const existingNote = (NotesStore.getState().notes || []).find(n => n.filepath === filepath);
+                NotesStore.getState().openNoteEditor(filepath, existingNote?.title);
             }
         }
     ]

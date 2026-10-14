@@ -71,7 +71,8 @@ export class InSetuExtPublishModals extends InSetuElement {
                 </div>
                 <div slot="footer">
                     <sutram-async-btn 
-                        label="🚀 Compile & Download" 
+                        icon="download"
+                        label="Compile & Download" 
                         intent="primary" 
                         style="flex: 1; margin: 0; --btn-padding: 15px;"
                         .onClick=${this.api.bindJobAction('compile-document', 

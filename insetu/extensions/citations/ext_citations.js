@@ -13,12 +13,13 @@ export const CitationStore = createExtensionStore('Citations', {
             attachForm: { repo: '', bucket: 'None' },
             editForm: { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' },
             importingIds: new Set()
-}, ['pinnedRepos']);
+}, { localSync: ['pinnedRepos'] });
 
 window.inSetu.stores.Citations = CitationStore;
 import { html, css } from 'lit';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 export class InSetuExtCitations extends InSetuElement {
+    static get extensionName() { return 'citations'; }
     static properties = {
         importingIds: { type: Object },
         localLibrary: { type: Array },
@@ -403,10 +404,10 @@ export class InSetuExtCitations extends InSetuElement {
                 intent="highlight"
                 entityType=${isExplore ? 'explore_citation' : 'citation'}
                 .entityData=${{ ...c, isImporting, isExplore, alreadyExists }}>
-                <div style="font-size: 0.8rem; margin-top: 4px; color: var(--text-muted);">
-                    ID: <span style="font-family: monospace; color: var(--intent-primary);">[@${c.id}]</span> ${c.open_access ? '🔓 OA' : ''}
+                <div style="font-size: 0.8rem; margin-top: 4px; color: var(--text-muted); display: flex; align-items: center; gap: 6px;">
+                    <span>ID: <span style="font-family: monospace; color: var(--intent-primary);">[@${c.id}]</span></span> ${c.open_access ? html`<span style="display: inline-flex; align-items: center; gap: 2px;"><yv-icon name="unlock" style="width: 12px; height: 12px; color: var(--intent-success);"></yv-icon> OA</span>` : ''}
                 </div>
-                ${c.URL ? html`<div style="font-size: 0.8rem; margin-top: 4px;">🌐 <a href="${c.URL}" target="_blank" style="color: var(--intent-success); text-decoration: underline; word-break: break-all;">${c.URL}</a></div>` : ''}
+                ${c.URL ? html`<div style="font-size: 0.8rem; margin-top: 4px; display: flex; align-items: center; gap: 4px;"><yv-icon name="globe" style="width: 12px; height: 12px; color: var(--intent-success); flex-shrink: 0;"></yv-icon> <a href="${c.URL}" target="_blank" style="color: var(--intent-success); text-decoration: underline; word-break: break-all;">${c.URL}</a></div>` : ''}
                 ${attTags ? html`<div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">${attTags}</div>` : ''}
             </sutram-card>
         `;
@@ -425,17 +426,17 @@ export class InSetuExtCitations extends InSetuElement {
             : pinnedSet;
         return html`
             <sutram-toolbar
-                searchPlaceholder="🔍 Fuzzy search personal library..."
+                searchPlaceholder="Fuzzy search personal library..."
                 .searchQuery=${this.mainSearchQuery}
                 @search-changed=${(e) => { this.mainSearchQuery = e.detail.value; }}
                 .bottomBorder=${true}>
                 <div slot="bottom-row" class="toolbar-row" style="background: var(--input-bg);">
                     <insetu-repo-filter
-                        label="📌 Repos:"
+                        label="Repos:"
                         .repos=${this.allRepos}
                         .activeRepos=${Array.from(this.pinnedRepos)}
-                        .extraRepos=${[{id: "ORPHANS", label: "👻 Orphans"}]}
-                        @repo-filter-changed=${(e) => window.inSetu.stores.Gather.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                        .extraRepos=${[{id: "ORPHANS", label: "Orphans"}]}
+                        @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                     </insetu-repo-filter>
                 </div>
             </sutram-toolbar>
@@ -510,14 +511,13 @@ export class InSetuExtCitations extends InSetuElement {
                         </div>
                     </div>
                     ` : ''}
-                    <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 10px; font-size: 1rem;" @click=${() => this._performExploreSearch(false)}>🔍 Search Catalog</button>
+                    <sutram-btn size="sm" intent="highlight" icon="search" label="Search Catalog" style="margin: 0; padding: 10px; font-size: 1rem;" @click=${() => this._performExploreSearch(false)}></sutram-btn>
                 </div>
                 ${this.exploreLoading ? html`<div class="spinner" style="display: block;">Querying global catalogs...</div>` : ''}
                 <div style="display: flex; flex-direction: column; gap: 10px;">
                     ${this.exploredItems.length === 0 && !this.exploreLoading ? html`<p style="color: var(--text-muted); font-style: italic;">Search the open science index to discover and import citations.</p>` : ''}
-                    ${this.exploredItems.map(c => this._renderCard(c, true))}
-                    ${this.exploredItems.length > 0 && this.exploredItems.length % 20 === 0 ? html`
-                        <button class="btn-sm" style="background: var(--intent-neutral); margin: 10px auto; display: block;" @click=${() => this._performExploreSearch(true)}>⬇️ Load More</button>
+                    ${this.exploredItems.map(c => this._renderCard(c, true))}${this.exploredItems.length > 0 && this.exploredItems.length % 20 === 0 ? html`
+                        <sutram-btn size="sm" intent="neutral" icon="download" label="Load More" style="margin: 10px auto; display: block;" @click=${() => this._performExploreSearch(true)}></sutram-btn>
                     ` : ''}
                 </div>
             </div>
@@ -538,7 +538,7 @@ export class InSetuExtCitations extends InSetuElement {
                             <label><input type="radio" name="lib-merge-strat" value="manual" ?checked=${this.importStrategy === 'manual'}> Manual Resolve</label>
                         </div>
                     </div>
-                    <button class="btn-sm" style="background: var(--intent-success); margin: 0; padding: 8px 16px;" @click=${() => this.shadowRoot.getElementById('lib-file-picker').click()}>📁 Choose File</button>
+                    <sutram-btn size="sm" intent="success" icon="folder" label="Choose File" style="margin: 0; padding: 8px 16px;" @click=${() => this.shadowRoot.getElementById('lib-file-picker').click()}></sutram-btn>
                     <input type="file" id="lib-file-picker" accept=".json,application/json" style="display: none;" @change=${this._handleImportFile}>
                 </div>
                 <div style="font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; color: var(--text);">${this.importLog}</div>
@@ -554,18 +554,18 @@ export class InSetuExtCitations extends InSetuElement {
                     <div style="display: flex; gap: 10px; margin-bottom: 15px;">
                         <sutram-select style="flex:1; margin:0;" .value=${this.attachForm.repo} .options=${this.allRepos.map(r => ({value: r, label: r}))} @sutram-input-changed=${e => { CitationStore.setState(s => ({ attachForm: { ...s.attachForm, repo: e.detail.value, bucket: 'None' } })); }}></sutram-select>
                         <sutram-select style="flex:1; margin:0;" .value=${this.attachForm.bucket} .options=${[{value: 'None', label: 'No Bucket'}, ...(this.attachForm.repo ? this.sys.getFlattenedBuckets(this.attachForm.repo).map(b => ({value: b.id, label: b.title})) : [])]} @sutram-input-changed=${e => CitationStore.setState(s => ({ attachForm: { ...s.attachForm, bucket: e.detail.value } }))}></sutram-select>
-                        <sutram-async-btn class="btn-sm" label="📌 Pin" intent="success" style="margin: 0;" .onClick=${() => this._saveAttachmentList([...(this.activeAttachCitation?._attachments || []), { repo: this.attachForm.repo, bucket: this.attachForm.bucket }])}></sutram-async-btn>
+                        <sutram-async-btn class="btn-sm" icon="pin" label="Pin" intent="success" style="margin: 0;" .onClick=${() => this._saveAttachmentList([...(this.activeAttachCitation?._attachments || []), { repo: this.attachForm.repo, bucket: this.attachForm.bucket }])}></sutram-async-btn>
                     </div>
                     <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:5px;">Currently Pinned Repositories:</label>
                     <div style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px; overflow-y: auto; flex: 1;">
                         ${(this.activeAttachCitation?._attachments || []).length === 0 ? html`<span style="color: var(--text-muted); font-style: italic;">Not pinned to any repository.</span>` : (this.activeAttachCitation?._attachments || []).map((a, idx) => html`
                             <div style="display: flex; justify-content: space-between; align-items: center; background: var(--pane-bg); border: 1px solid var(--border); padding: 6px 10px; border-radius: 4px;">
-                                <span style="font-size: 0.85rem; font-family: monospace; color: var(--text);">${a.repo} ${a.bucket !== 'None' ? '🗂️ ' + a.bucket : ''}</span>
+                                <span style="font-size: 0.85rem; font-family: monospace; color: var(--text);">${a.repo} ${a.bucket !== 'None' ? ' : ' + a.bucket : ''}</span>
                                 <button style="background: transparent; border: none; cursor: pointer; padding: 0;" @click=${() => {
                                     const atts = [...this.activeAttachCitation._attachments];
                                     atts.splice(idx, 1);
                                     this._saveAttachmentList(atts);
-                                }}>❌</button>
+                                }}><yv-icon name="x" style="width: 14px; height: 14px; color: var(--intent-danger);"></yv-icon></button>
                             </div>
                         `)}
                     </div>
@@ -613,19 +613,19 @@ export class InSetuExtCitations extends InSetuElement {
                     </div>
                     <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: flex-end;">
                         <sutram-input label="Author Input" placeholder="Last, First" style="flex: 1; margin: 0;" .value=${this.editForm.authorInput} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, authorInput: e.detail.value } }))}></sutram-input>
-                        <button id="btn-add-cit-author" class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 8px 12px;" @click=${() => {
+                        <sutram-btn id="btn-add-cit-author" size="sm" intent="primary" icon="plus" label="Add" style="margin: 0; padding: 8px 12px;" @click=${() => {
                             const val = (this.editForm.authorInput || '').trim();
                             if (!val) return;
                             const parts = val.split(',').map(s => s.trim());
                             const newAuthor = parts.length > 1 ? { family: parts[0], given: parts.slice(1).join(', ') } : { family: parts[0] };
                             CitationStore.setState(s => ({ currentEditAuthors: [...s.currentEditAuthors, newAuthor], editForm: { ...s.editForm, authorInput: '' } }));
-                        }}>➕ Add</button>
+                        }}></sutram-btn>
                     </div>
                     <sutram-input label="Date (YYYY or YYYY-MM-DD)" .value=${this.editForm.dateStr} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, dateStr: e.detail.value } }))}></sutram-input>
                     <sutram-textarea label="Other Metadata (CSL-JSON)" .value=${this.editForm.jsonStr} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, jsonStr: e.detail.value } }))}></sutram-textarea>
                 </div>
-                <sutram-async-btn slot="footer" label="🗑️ Delete" intent="danger" .onClick=${this._deleteDynamicCitation.bind(this)}></sutram-async-btn>
-                <sutram-async-btn slot="footer" label="💾 Save Changes" intent="primary" .onClick=${this._saveDynamicCitation.bind(this)}></sutram-async-btn>
+                <sutram-async-btn slot="footer" icon="trash-2" label="Delete" intent="danger" .onClick=${this._deleteDynamicCitation.bind(this)}></sutram-async-btn>
+                <sutram-async-btn slot="footer" icon="save" label="Save Changes" intent="primary" .onClick=${this._saveDynamicCitation.bind(this)}></sutram-async-btn>
             </sutram-modal>
             ` : ''}
         `;

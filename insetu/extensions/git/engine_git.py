@@ -8,7 +8,7 @@ from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from akasa.utils import get_workspace_physics
 from akasa.hooks import hooks
-from insetu.core.utils_core import get_repo_path, execute_binary
+from insetu.core.utils_core import get_repo_path, execute_binary, is_naked_diff_uri
 def get_headless_git_env():
     """Returns a secure OS environment block pre-configured for non-interactive SSH connections."""
     env = os.environ.copy()
@@ -64,11 +64,12 @@ GIT_SETTINGS_SCHEMA = [
 ]
 git_bp = InSetuExtension('git', __name__, title="Version Control", description="Version control integration, diff generation, and workspace sweeping.", settings_schema=GIT_SETTINGS_SCHEMA)
 __depends__ = ['gather']
-
 @hooks.on('coerce_naked_uri')
 def coerce_git_uris(raw_uri=None, **kwargs):
-    if raw_uri and (raw_uri.endswith('_diffs.txt') or raw_uri.startswith('diffs/') or raw_uri.startswith('.insetu/ext/git/data/diffs/')):
-        clean_d = raw_uri.replace('.insetu/ext/git/data/diffs/', '').replace('diffs/', '')
+    if not raw_uri:
+        return None
+    if is_naked_diff_uri(raw_uri):
+        clean_d = raw_uri.replace('.insetu/ext/git/data/diffs/', '').replace('diffs/', '').replace('ctx://diffs/', '')
         return f"ctx://diffs/{clean_d}"
     return None
 

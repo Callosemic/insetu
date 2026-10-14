@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import TypedDict, Optional
 from flask import jsonify
+from akasa.workers import cancel_job, resolve_dag_chain
 from insetu.core.sdk import InSetuExtension
 from insetu.extensions.git.engine_git import execute_git
 from insetu.core.utils_core import get_repo_path, execute_binary
@@ -123,25 +124,30 @@ def _clean_semantic_release_logs(log_text):
 def _background_bump_task(ctx, repo, prerelease=False, **kwargs):
     """Phase 1: Validates tree integrity, calculates versions, and updates the changelog."""
     repo_path = _get_valid_repo_path(ctx, repo)
-
     ctx.jobs.update_progress("Validating working tree integrity...")
     _require_clean_tree(repo_path, "initiating a release bump")
+
+    delayed_job_id = f"cmp_del_{ctx.workspace_id}"
+    cancel_job(delayed_job_id, workspace_id=ctx.workspace_id)
 
     dist_dir = Path(repo_path) / "dist"
     if dist_dir.exists():
         shutil.rmtree(dist_dir)
-
     ctx.jobs.update_progress("Calculating semantic version and bumping repository...")
-    # Environment Variable Injection for Parser Settings
-    env = os.environ.copy()
-    parser_style = ctx.settings.get("commit_parser", "conventional", repo=repo)
-    if parser_style == "angular": parser_style = "conventional"
-    env["PSR_COMMIT_PARSER"] = parser_style
-    dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
-
     logical_pyproject = f"vfs://{repo}/pyproject.toml"
     pyproject_content = ctx.vfs.read(logical_pyproject) or ""
     import re
+    cp_match = re.search(r'^commit_parser\s*=\s*[\'"]([^\'"]*)[\'"]', pyproject_content, re.MULTILINE)
+    toml_commit_parser = cp_match.group(1) if cp_match else None
+
+    # Environment Variable Injection for Parser Settings
+    env = os.environ.copy()
+    parser_style = toml_commit_parser or ctx.settings.get("commit_parser", "conventional", repo=repo)
+    if parser_style == "angular": parser_style = "conventional"
+    env["PSR_COMMIT_PARSER"] = parser_style
+    auto_publish = bool(ctx.settings.get("auto_publish", False, repo=repo))
+    dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
+
     pr_match = re.search(r'^prerelease_token\s*=\s*[\'"]([^\'"]*)[\'"]', pyproject_content, re.MULTILINE)
     prerelease_token = pr_match.group(1) if pr_match else "rc"
     cmd = ['semantic-release', 'version']
@@ -177,6 +183,19 @@ def _background_bump_task(ctx, repo, prerelease=False, **kwargs):
 
         err_msg = res.stderr.strip() if res.stderr else res.stdout.strip()
         raise RuntimeError(f"Semantic Release Engine Failed:\n{err_msg}")
+    # Cancel any delayed compile queued by the watchdog during semantic-release writes
+    cancel_job(delayed_job_id, workspace_id=ctx.workspace_id)
+
+    # Reconcile code index and RAG contexts with the newly committed release artifacts
+    ordered_steps = resolve_dag_chain(ctx, 'register_compilation_steps')
+    if ordered_steps:
+        ctx.jobs.submit_chain(
+            ordered_steps,
+            on_complete_hook="compilation_sequence_complete",
+            job_category="system_background",
+            force_full=False
+        )
+
     # Evaluate Phase 2 Automation
     if ctx.settings.get("auto_publish", False, repo=repo):
         ctx.jobs.update_progress("Auto-publish enabled. Routing to distribution pipeline...")
@@ -380,7 +399,7 @@ def _background_preview_bump_task(ctx, repo, prerelease=False, **kwargs):
     if status_check.stdout.strip():
         raise RuntimeError("Working tree is not clean. Please commit or stash your changes before previewing a release bump.")
     env = os.environ.copy()
-    parser_style = ctx.settings.get("commit_parser", "conventional")
+    parser_style = ctx.settings.get("commit_parser", "conventional", repo=repo)
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
 
@@ -531,9 +550,10 @@ def _background_status_task(ctx, repo, **kwargs):
         version = v_match.group(1)
     b_match = re.search(r'^build_command\s*=\s*[\'"]([^\'"]*)[\'"]', content, re.MULTILINE)
     build_command = b_match.group(1) if b_match else ""
-
     pr_match = re.search(r'^prerelease_token\s*=\s*[\'"]([^\'"]*)[\'"]', content, re.MULTILINE)
     prerelease_token = pr_match.group(1) if pr_match else "rc"
+    cp_match = re.search(r'^commit_parser\s*=\s*[\'"]([^\'"]*)[\'"]', content, re.MULTILINE)
+    toml_commit_parser = cp_match.group(1) if cp_match else None
     vcs_match = re.search(r'^vcs_release\s*=\s*(true|false)', content, re.MULTILINE | re.IGNORECASE)
     vcs_release = vcs_match.group(1).lower() == 'true' if vcs_match else True
     has_pypi_token = bool(ctx.settings.get("pypi_token") or os.getenv("TWINE_PASSWORD") or os.getenv("PYPI_TOKEN"))
@@ -635,10 +655,12 @@ def _background_status_task(ctx, repo, **kwargs):
         "has_pypi_token": has_pypi_token,
         "has_token": has_token,
         "distribution_target": dist_target,
+        "commit_parser": parser_style,
+        "auto_publish": auto_publish,
         "last_publish_time": ctx.store.get(f"update_{repo}.json", "last_publish_time", 0.0)
     }}
 @update_bp.worker("update_toml_config_task")
-def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=None, prerelease_token=None, **kwargs):
+def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=None, prerelease_token=None, commit_parser=None, **kwargs):
     import re
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
@@ -655,12 +677,17 @@ def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=No
             new_content = re.sub(r'^build_command\s*=\s*[\'"][^\'"]*[\'"]', f'build_command = "{build_command}"', new_content, flags=re.MULTILINE)
         else:
             new_content = re.sub(r'(\[tool\.semantic_release\])', r'\1\nbuild_command = "' + build_command + '"', new_content)
-
     if prerelease_token is not None:
         if re.search(r'^prerelease_token\s*=', new_content, re.MULTILINE):
             new_content = re.sub(r'^prerelease_token\s*=\s*[\'"][^\'"]*[\'"]', f'prerelease_token = "{prerelease_token}"', new_content, flags=re.MULTILINE)
         else:
             new_content = re.sub(r'(\[tool\.semantic_release\])', r'\1\nprerelease_token = "' + prerelease_token + '"', new_content)
+    if commit_parser is not None:
+        ctx.settings.set("commit_parser", commit_parser, repo=repo)
+        if re.search(r'^commit_parser\s*=', new_content, re.MULTILINE):
+            new_content = re.sub(r'^commit_parser\s*=\s*[\'"][^\'"]*[\'"]', f'commit_parser = "{commit_parser}"', new_content, flags=re.MULTILINE)
+        else:
+            new_content = re.sub(r'(\[tool\.semantic_release\])', r'\1\ncommit_parser = "' + commit_parser + '"', new_content)
     if vcs_release is not None:
         vcs_str = "true" if vcs_release else "false"
         if re.search(r'^vcs_release\s*=', new_content, re.MULTILINE):
@@ -674,13 +701,13 @@ def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=No
     status_res = execute_git(repo_path, ['status', '--porcelain', 'pyproject.toml'], check=False)
     if status_res.stdout.strip():
         execute_git(repo_path, ['commit', '-m', f'chore: update semantic_release config in pyproject.toml [skip ci]'], check=False)
-
-    return {"message": "Configuration updated successfully.", "artifact": {"build_command": build_command, "vcs_release": vcs_release}}
+    return {"message": "Configuration updated successfully.", "artifact": {"build_command": build_command, "vcs_release": vcs_release, "commit_parser": commit_parser}}
 class UpdateTomlPayload(TypedDict, total=False):
     repo: str
     build_command: Optional[str]
     vcs_release: Optional[bool]
     prerelease_token: Optional[str]
+    commit_parser: Optional[str]
 @update_bp.route('update_toml_config', methods=['POST'], request_schema=UpdateTomlPayload, docstring="Updates semantic release configuration natively in pyproject.toml.")
 def api_update_toml_config(ctx):
     """Updates semantic release configuration natively in pyproject.toml."""
@@ -689,10 +716,11 @@ def api_update_toml_config(ctx):
     build_command = data.get('build_command')
     vcs_release = data.get('vcs_release')
     prerelease_token = data.get('prerelease_token')
+    commit_parser = data.get('commit_parser')
     if not repo:
         return jsonify({"error": "Repo required"}), 400
 
-    job_id = ctx.jobs.submit("update_toml_config_task", repo=repo, build_command=build_command, vcs_release=vcs_release, prerelease_token=prerelease_token, job_category="ui_blocking")
+    job_id = ctx.jobs.submit("update_toml_config_task", repo=repo, build_command=build_command, vcs_release=vcs_release, prerelease_token=prerelease_token, commit_parser=commit_parser, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("manual_build_task")
 def _background_manual_build(ctx, repo, build_command, **kwargs):
@@ -813,6 +841,9 @@ def _background_scaffold_task(ctx, repo, initial_version, **kwargs):
 version_toml = [
     "pyproject.toml:project.version"
 ]
+assets = [
+    "CODE_INDEX.md"
+]
 commit_parser = "conventional"
 vcs_release = false
 prerelease_token = "rc"
@@ -851,6 +882,9 @@ description = "Auto-generated project configuration"
 [tool.semantic_release]
 version_toml = [
     "pyproject.toml:project.version"
+]
+assets = [
+    "CODE_INDEX.md"
 ]
 commit_parser = "conventional"
 vcs_release = false

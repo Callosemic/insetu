@@ -168,7 +168,15 @@ export const KanbanStore = createExtensionStore('Kanban', {
             throw new Error(err.error || "Failed to transition task.");
         }
     }
-}, ['pinnedTags', 'pinnedBuckets']);
+}, {
+    localSync: ['pinnedTags', 'pinnedBuckets'],
+    onEvict: {
+        'tracker:edit': (state) => ({
+            modals: { ...(state.modals || {}), edit: false },
+            editTaskForm: { ...(state.editTaskForm || {}), filepath: '' }
+        })
+    }
+});
 window.inSetu.stores.Kanban = KanbanStore;
 
 function _formatDateForInput(val, isDateOnly = false) {
@@ -287,9 +295,9 @@ export class InSetuTrackerTicket extends InSetuElement {
                             🚧 Blocks ${downstreamTasks.length} Ticket(s)
                         </sutram-tag>
                     ` : ''}
-                    ${t.deliveryDate ? html`<sutram-tag intent="${isOverdue ? 'danger' : ''}">📅 Due: ${t.deliveryDate}</sutram-tag>` : ''}
+                    ${t.deliveryDate ? html`<sutram-tag intent="${isOverdue ? 'danger' : ''}">Due: ${t.deliveryDate}</sutram-tag>` : ''}
                 </div>
-            </insetu-card>
+            </sutram-card>
         `;
     }
 }
@@ -855,11 +863,11 @@ constructor() {
                             </div>
                         </div>
                         <div style="display: flex; gap: 8px;">
-                            <button class="btn-sm" style="background: rgba(0,0,0,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); margin: 0;" @click=${() => {
+                            <sutram-btn size="sm" intent="neutral" label="🌳 View Hierarchy" style="background: rgba(0,0,0,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); margin: 0;" @click=${() => {
                                 const task = this.tasks.find(t => t.id === activeFocusId);
                                 if (task) window.inSetu.events.emit('insetu:tracker:open-hierarchy', { task });
-                            }}>🌳 View Hierarchy</button>
-                            <button class="btn-sm" style="background: rgba(0,0,0,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); margin: 0;" @click=${() => KanbanStore.getState().setFocus(null)}>✕ Clear Focus</button>
+                            }}></sutram-btn>
+                            <sutram-btn size="sm" intent="neutral" label="✕ Clear Focus" style="background: rgba(0,0,0,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); margin: 0;" @click=${() => KanbanStore.getState().setFocus(null)}></sutram-btn>
                         </div>
                     </div>
                 ` : ''}
@@ -984,7 +992,9 @@ export class InSetuExtTrackerActions extends InSetuElement {
     render() {
         return html`
             <sutram-dropdown align="right" .items=${this._menuItems}>
-                <button slot="trigger" class="system-action-btn">☰</button>
+                <button slot="trigger" class="system-action-btn" title="Tracker Actions">
+                    <yv-icon name="menu" style="width: 14px; height: 14px;"></yv-icon>
+                </button>
             </sutram-dropdown>
         `;
     }
@@ -1336,8 +1346,23 @@ export class InSetuExtTrackerModals extends InSetuElement {
         }
     }
     _openEditTaskModal(filepath) {
+        if (!filepath) return;
         KanbanStore.getState().setEditTaskField('filepath', filepath);
         KanbanStore.getState().setModal('edit', true);
+        if (window.Sutram?.stores?.Layout) {
+            const layout = window.Sutram.stores.Layout.getState();
+            const existingTask = (KanbanStore.getState().tasks || []).find(t => t.filepath === filepath);
+            const label = existingTask?.title ? `${existingTask.id}:${existingTask.title.substring(0, 28)}` : filepath.split('/').pop();
+            layout.openWindow({
+                id: 'tracker:edit',
+                component: 'insetu-tracker-edit-projection',
+                label,
+                icon: 'check-square',
+                intent: 'primary',
+                extName: 'tracker',
+                windowOnly: true
+            }, layout.focusedColumn || 'center', 1);
+        }
     }
     _onFrontmatterLoaded(e) {
         const yaml = e.detail.yaml;
@@ -1555,123 +1580,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 <sutram-async-btn slot="footer" label="💾 Save" intent="primary" .onClick=${async (e) => {
                     await this._saveNewTask();
                 }}></sutram-async-btn>
-            </sutram-modal>
-            ` : ''}
-            <!-- Edit Task Modal -->
-            ${this._modals?.edit ? html`
-            <sutram-modal 
-                ?open=${true} 
-                titleText="✏️ ${editTaskForm.filepath || ''}"
-                ?fullscreen=${true}
-                ?flush=${true}
-                style="--modal-backdrop: transparent; --modal-backdrop-filter: none;"
-                @sutram-modal-closing=${this._handleModalClosing}
-                @sutram-modal-closed=${() => { 
-                    KanbanStore.getState().setModal('edit', false); 
-                    this._originalTaskSnapshot = null; 
-                }}>
-
-                <div slot="body" style="display: contents;">
-                    ${this._modals?.edit && editTaskForm.filepath ? html`
-                        <insetu-frontmatter-editor
-                            id="fm-editor-tracker"
-                            .filepath=${editTaskForm.filepath}
-                            .defaultExpanded=${false}
-                            @editor-dirty=${e => { this._isDirtyTracker = e.detail.isDirty; this.requestUpdate(); }}
-                            @insetu:frontmatter-loaded=${this._onFrontmatterLoaded}
-                            @insetu:request-frontmatter=${this._onRequestFrontmatter}>
-
-                            <div slot="title-control" style="padding: 0;">
-                                <sutram-textarea
-                                    .value=${editTaskForm.title}
-                                    placeholder="Ticket Summary Blueprint..."
-                                    ?autoSize=${true}
-                                    .minRows=${1}
-                                    .maxHeight=${150}
-                                    ?borderless=${true}
-                                    style="font-weight: bold; font-size: 1.25rem; width: 100%; color: var(--text); margin: 0;"
-                                    @sutram-input-changed=${(e) => {
-                                        const val = e.detail.value.replace(/[\r\n]+/g, ' ');
-                                        KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, title: val } }));
-                                    }}>
-                                </sutram-textarea>
-                            </div>
-                            <div slot="metadata-controls" style="display: flex; flex-direction: column; gap: 12px; margin: 0; max-height: 40vh; overflow-y: auto; overflow-x: hidden; padding-right: 5px;">
-                                <div class="meta-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 15px;">
-                                    ${(() => {
-                                        const schema = KanbanStore.getState().getSchemaForRepo(activeRepoEdit);
-                                        const getTierTypes = (t) => KanbanStore.getState().getTierTypes(schema, t);
-                                        const t1Types = getTierTypes(1);
-                                        const t2Types = getTierTypes(2);
-
-                                        const tierOptions = [];
-                                        if (t1Types.length > 0) tierOptions.push({value: 1, label: schema.t1_label || 'Tier 1'});
-                                        if (t2Types.length > 0) tierOptions.push({value: 2, label: schema.t2_label || 'Tier 2'});
-                                        tierOptions.push({value: 3, label: schema.t3_label || 'Tier 3'});
-
-                                        const currentTierTypes = getTierTypes(editTaskForm.tier || 3);
-                                        const typeOptions = currentTierTypes.map(t => ({value: t, label: t.charAt(0).toUpperCase() + t.slice(1)}));
-
-                                        return html`
-                                            ${bindStoreInput(KanbanStore, 'editTaskForm.repo', editTaskForm.repo, { label: 'Repository', type: 'select', flush: true, selectOptions: this.ecosystem.allRepos.map(r => ({value: r, label: r})), onUpdate: () => {
-                                                const newSchema = KanbanStore.getState().getSchemaForRepo(KanbanStore.getState().editTaskForm.repo);
-                                                const newT3Types = KanbanStore.getState().getTierTypes(newSchema, 3);
-                                                KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, bucket: 'None', tier: 3, type: newT3Types.length > 0 ? newT3Types[0] : 'task' } }));
-                                            } })}
-                                            ${bucketsEdit.length > 0 ? bindStoreInput(KanbanStore, 'editTaskForm.bucket', editTaskForm.bucket, { label: 'Sub-Bucket', type: 'select', flush: true, selectOptions: [{value: 'None', label: 'No Bucket'}, ...bucketsEdit.map(b => ({value: b.id, label: b.title}))] }) : ''}
-                                            ${tierOptions.length > 1 ? bindStoreInput(KanbanStore, 'editTaskForm.tier', editTaskForm.tier || 3, { label: 'Tier', type: 'select', flush: true, selectOptions: tierOptions, onUpdate: (val) => {
-                                                const types = getTierTypes(val);
-                                                KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, type: types.length > 0 ? types[0] : 'task' } }));
-                                            }}) : ''}
-                                            ${bindStoreInput(KanbanStore, 'editTaskForm.type', editTaskForm.type, { label: 'Ticket Type', type: 'select', flush: true, selectOptions: typeOptions })}
-                                        `;
-                                    })()}
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.status', editTaskForm.status, { label: 'Status Zone', type: 'select', flush: true, selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}, {value: 'closed', label: 'Closed (Resolved)'}, {value: 'template', label: 'Template'}] })}
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.priority', editTaskForm.priority, { label: 'Priority', type: 'select', flush: true, selectOptions: [{value: '', label: 'None'}, {value: 'P0', label: 'P0'}, {value: 'P1', label: 'P1'}, {value: 'P2', label: 'P2'}, {value: 'P3', label: 'P3'}] })}
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.size', editTaskForm.size, { label: 'Size Estimate', type: 'select', flush: true, selectOptions: [{value: '', label: 'None'}, {value: 'XS', label: 'XS'}, {value: 'S', label: 'S'}, {value: 'M', label: 'M'}, {value: 'L', label: 'L'}, {value: 'XL', label: 'XL'}] })}
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.tagsRaw', editTaskForm.tagsRaw, { label: 'Tags (comma-separated)', placeholder: 'Architecture, UI', flush: true })}
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.deliveryDate', editTaskForm.deliveryDate, { label: 'Delivery Deadline', type: 'date', flush: true })}
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.createdAt', editTaskForm.createdAt, { label: 'Created At', type: 'datetime-local', flush: true })}
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.closedAt', editTaskForm.closedAt, { label: 'Closed At', type: 'datetime-local', flush: true })}
-                                </div>
-                                <div style="display: flex; flex-direction: column; gap: 15px; align-items: stretch; padding-top: 12px; border-top: 1px solid var(--border);">
-                                    <div style="display: flex; flex-direction: column; gap: 6px;">
-                                        <sutram-label text="Parent ID"></sutram-label>
-                                        <div style="display: flex; gap: 8px; align-items: center;">
-                                            ${editTaskForm.parentId ? html`
-                                                <sutram-tag intent="primary">
-                                                    <span>${editTaskForm.parentId}</span>
-                                                    <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, parentId: '' } }))}>×</span>
-                                                </sutram-tag>
-                                            ` : ''}
-                                            <sutram-async-btn size="sm" label="🔗 Pick Parent" intent="neutral" .onClick=${() => this._openPicker('parentId', 'edit')}></sutram-async-btn>
-                                        </div>
-                                    </div>
-                                    <div style="display: flex; flex-direction: column; gap: 6px;">
-                                        <sutram-label text="Dependencies"></sutram-label>
-                                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                                            ${(editTaskForm.dependsOn || []).map(dep => html`
-                                                <sutram-tag intent="warning">
-                                                    <span>${dep}</span>
-                                                    <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => this._removeDependency(dep, 'edit')}>×</span>
-                                                </sutram-tag>
-                                            `)}
-                                            <sutram-async-btn size="sm" label="🔗 Add Dep" intent="neutral" .onClick=${() => this._openPicker('dependsOn', 'edit')}></sutram-async-btn>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </insetu-frontmatter-editor>
-                    ` : ''}
-                </div>
-                ${this._modals?.edit && editTaskForm.filepath ? html`
-                <div slot="footer" style="display: flex; justify-content: space-between; width: 100%;">
-                    <sutram-async-btn style="margin: 0; --btn-padding: 8px 14px;" label="🗑️ Delete" intent="danger" .onClick=${async () => await this._deleteTask()}></sutram-async-btn>
-                    <div style="display: flex; gap: 10px;">
-                        <sutram-btn size="sm" intent="warning" label="📝 Raw Edit" @click=${() => {                             KanbanStore.getState().setModal('edit', false);                             if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(editTaskForm.filepath, true, true);                         }}></sutram-btn>${this._isDirtyTracker ? html`<sutram-async-btn style="margin: 0;" label="💾 Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor-tracker')._handleSave()}></sutram-async-btn>` : ''}
-                    </div>
-                </div>
-                ` : ''}
             </sutram-modal>
             ` : ''}
 
@@ -2079,11 +1987,10 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 return this.requestUpdate();
             }
             const rootDisplayTitle = rootTask.title ? rootTask.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
-
             return html`
                 <div style="display: flex; flex-direction: column; gap: 20px;">
                     <div style="display: flex; align-items: center; gap: 15px; border-bottom: 1px solid var(--border); padding-bottom: 15px;">
-                        <sutram-btn size="sm" intent="neutral" @click=${() => this._activeTemplateRoot = null}>🔙 Back</sutram-btn>
+                        <sutram-btn size="sm" intent="neutral" label="🔙 Back" @click=${() => this._activeTemplateRoot = null}></sutram-btn>
                         <h3 style="margin: 0; color: var(--text);">Template Editor: ${rootDisplayTitle}</h3>
                     </div>
                     <div>
@@ -2182,6 +2089,179 @@ export class InSetuExtTrackerModals extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-tracker-modals', InSetuExtTrackerModals);
+
+export class InSetuTrackerEditProjection extends InSetuElement {
+    static get extensionName() { return 'tracker'; }
+    static properties = {
+        editTaskForm: { type: Object },
+        _isDirtyTracker: { type: Boolean }
+    };
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+    `];
+    constructor() {
+        super();
+        this.editTaskForm = KanbanStore.getState().editTaskForm || {};
+        this._isDirtyTracker = false;
+    }
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(KanbanStore, state => {
+            this.editTaskForm = state.editTaskForm || {};
+            this.requestUpdate();
+        });
+        this.registerGlobalListener('insetu:tracker:save-edit-task', window, () => {
+            const fm = this.shadowRoot.getElementById('fm-editor-tracker');
+            if (fm && typeof fm._handleSave === 'function') fm._handleSave();
+        });
+    }
+    _onFrontmatterLoaded(e) {
+        const modalsEl = document.querySelector('insetu-ext-tracker-modals');
+        if (modalsEl && typeof modalsEl._onFrontmatterLoaded === 'function') {
+            modalsEl._onFrontmatterLoaded(e);
+        }
+    }
+    _onRequestFrontmatter(e) {
+        const modalsEl = document.querySelector('insetu-ext-tracker-modals');
+        if (modalsEl && typeof modalsEl._onRequestFrontmatter === 'function') {
+            modalsEl._onRequestFrontmatter(e);
+        }
+    }
+    async _deleteTask() {
+        const { filepath } = KanbanStore.getState().editTaskForm;
+        if (!filepath) return;
+        if (!confirm("Are you sure you want to permanently delete this ticket? This cannot be undone.")) return;
+
+        await this.sys.executeWorkspaceMutation('fs/delete', { filepath }, {
+            onSuccess: (data) => {
+                if (window.Sutram?.stores?.Layout) {
+                    window.Sutram.stores.Layout.getState().closeWindow('tracker:edit');
+                }
+                if (data && data.job_id === 'offline_queue') {
+                    KanbanStore.setState(s => ({
+                        tasks: s.tasks.filter(t => t.filepath !== filepath)
+                    }));
+                } else {
+                    KanbanStore.getState().fetchTasks();
+                }
+            }
+        });
+    }
+    render() {
+        const editTaskForm = this.editTaskForm || {};
+        if (!editTaskForm.filepath) return html``;
+        const activeRepoEdit = editTaskForm.repo || '';
+        const bucketsEdit = activeRepoEdit && this.sys?.getFlattenedBuckets ? this.sys.getFlattenedBuckets(activeRepoEdit) : [];
+        const modalsEl = document.querySelector('insetu-ext-tracker-modals');
+
+        return html`
+            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+                <insetu-frontmatter-editor
+                    id="fm-editor-tracker"
+                    .filepath=${editTaskForm.filepath}
+                    .defaultExpanded=${false}
+                    @editor-dirty=${e => { this._isDirtyTracker = e.detail.isDirty; this.requestUpdate(); }}
+                    @insetu:frontmatter-loaded=${this._onFrontmatterLoaded}
+                    @insetu:request-frontmatter=${this._onRequestFrontmatter}>
+
+                    <div slot="title-control" style="padding: 0;">
+                        <sutram-textarea
+                            .value=${editTaskForm.title}
+                            placeholder="Ticket Summary Blueprint..."
+                            ?autoSize=${true}
+                            .minRows=${1}
+                            .maxHeight=${150}
+                            ?borderless=${true}
+                            style="font-weight: bold; font-size: 1.25rem; width: 100%; color: var(--text); margin: 0;"
+                            @sutram-input-changed=${(e) => {
+                                const val = e.detail.value.replace(/[\r\n]+/g, ' ');
+                                KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, title: val } }));
+                            }}>
+                        </sutram-textarea>
+                    </div>
+                    <div slot="metadata-controls" style="display: flex; flex-direction: column; gap: 12px; margin: 0; max-height: 40vh; overflow-y: auto; overflow-x: hidden; padding-right: 5px;">
+                        <div class="meta-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 15px;">
+                            ${(() => {
+                                const schema = KanbanStore.getState().getSchemaForRepo(activeRepoEdit);
+                                const getTierTypes = (t) => KanbanStore.getState().getTierTypes(schema, t);
+                                const t1Types = getTierTypes(1);
+                                const t2Types = getTierTypes(2);
+
+                                const tierOptions = [];
+                                if (t1Types.length > 0) tierOptions.push({value: 1, label: schema.t1_label || 'Tier 1'});
+                                if (t2Types.length > 0) tierOptions.push({value: 2, label: schema.t2_label || 'Tier 2'});
+                                tierOptions.push({value: 3, label: schema.t3_label || 'Tier 3'});
+
+                                const currentTierTypes = getTierTypes(editTaskForm.tier || 3);
+                                const typeOptions = currentTierTypes.map(t => ({value: t, label: t.charAt(0).toUpperCase() + t.slice(1)}));
+
+                                return html`
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.repo', editTaskForm.repo, { label: 'Repository', type: 'select', flush: true, selectOptions: this.ecosystem.allRepos.map(r => ({value: r, label: r})), onUpdate: () => {
+                                        const newSchema = KanbanStore.getState().getSchemaForRepo(KanbanStore.getState().editTaskForm.repo);
+                                        const newT3Types = KanbanStore.getState().getTierTypes(newSchema, 3);
+                                        KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, bucket: 'None', tier: 3, type: newT3Types.length > 0 ? newT3Types[0] : 'task' } }));
+                                    } })}
+                                    ${bucketsEdit.length > 0 ? bindStoreInput(KanbanStore, 'editTaskForm.bucket', editTaskForm.bucket, { label: 'Sub-Bucket', type: 'select', flush: true, selectOptions: [{value: 'None', label: 'No Bucket'}, ...bucketsEdit.map(b => ({value: b.id, label: b.title}))] }) : ''}
+                                    ${tierOptions.length > 1 ? bindStoreInput(KanbanStore, 'editTaskForm.tier', editTaskForm.tier || 3, { label: 'Tier', type: 'select', flush: true, selectOptions: tierOptions, onUpdate: (val) => {
+                                        const types = getTierTypes(val);
+                                        KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, type: types.length > 0 ? types[0] : 'task' } }));
+                                    }}) : ''}
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.type', editTaskForm.type, { label: 'Ticket Type', type: 'select', flush: true, selectOptions: typeOptions })}
+                                `;
+                            })()}
+                            ${bindStoreInput(KanbanStore, 'editTaskForm.status', editTaskForm.status, { label: 'Status Zone', type: 'select', flush: true, selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}, {value: 'closed', label: 'Closed (Resolved)'}, {value: 'template', label: 'Template'}] })}
+                            ${bindStoreInput(KanbanStore, 'editTaskForm.priority', editTaskForm.priority, { label: 'Priority', type: 'select', flush: true, selectOptions: [{value: '', label: 'None'}, {value: 'P0', label: 'P0'}, {value: 'P1', label: 'P1'}, {value: 'P2', label: 'P2'}, {value: 'P3', label: 'P3'}] })}
+                            ${bindStoreInput(KanbanStore, 'editTaskForm.size', editTaskForm.size, { label: 'Size Estimate', type: 'select', flush: true, selectOptions: [{value: '', label: 'None'}, {value: 'XS', label: 'XS'}, {value: 'S', label: 'S'}, {value: 'M', label: 'M'}, {value: 'L', label: 'L'}, {value: 'XL', label: 'XL'}] })}
+                            ${bindStoreInput(KanbanStore, 'editTaskForm.tagsRaw', editTaskForm.tagsRaw, { label: 'Tags (comma-separated)', placeholder: 'Architecture, UI', flush: true })}
+                            ${bindStoreInput(KanbanStore, 'editTaskForm.deliveryDate', editTaskForm.deliveryDate, { label: 'Delivery Deadline', type: 'date', flush: true })}
+                            ${bindStoreInput(KanbanStore, 'editTaskForm.createdAt', editTaskForm.createdAt, { label: 'Created At', type: 'datetime-local', flush: true })}
+                            ${bindStoreInput(KanbanStore, 'editTaskForm.closedAt', editTaskForm.closedAt, { label: 'Closed At', type: 'datetime-local', flush: true })}
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 15px; align-items: stretch; padding-top: 12px; border-top: 1px solid var(--border);">
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <sutram-label text="Parent ID"></sutram-label>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    ${editTaskForm.parentId ? html`
+                                        <sutram-tag intent="primary">
+                                            <span>${editTaskForm.parentId}</span>
+                                            <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, parentId: '' } }))}>×</span>
+                                        </sutram-tag>
+                                    ` : ''}
+                                    <sutram-async-btn size="sm" label="🔗 Pick Parent" intent="neutral" .onClick=${() => { if (modalsEl) modalsEl._openPicker('parentId', 'edit'); }}></sutram-async-btn>
+                                </div>
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <sutram-label text="Dependencies"></sutram-label>
+                                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                    ${(editTaskForm.dependsOn || []).map(dep => html`
+                                        <sutram-tag intent="warning">
+                                            <span>${dep}</span>
+                                            <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => { if (modalsEl) modalsEl._removeDependency(dep, 'edit'); }}>×</span>
+                                        </sutram-tag>
+                                    `)}
+                                    <sutram-async-btn size="sm" label="🔗 Add Dep" intent="neutral" .onClick=${() => { if (modalsEl) modalsEl._openPicker('dependsOn', 'edit'); }}></sutram-async-btn>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </insetu-frontmatter-editor>
+            </div>
+            <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; justify-content: space-between; width: 100%; flex-shrink: 0;">
+                <sutram-async-btn size="sm" style="margin: 0;" icon="trash-2" label="Delete" intent="danger" .onClick=${() => this._deleteTask()}></sutram-async-btn>
+                <div style="display: flex; gap: 10px;">
+                    <sutram-btn size="sm" intent="warning" icon="code" label="Raw Edit" @click=${() => {
+                        const fp = editTaskForm.filepath;
+                        if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('tracker:edit');
+                        if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(fp, true, true);
+                    }}></sutram-btn>
+                    ${this._isDirtyTracker ? html`<sutram-async-btn style="margin: 0;" icon="save" label="Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor-tracker')._handleSave()}></sutram-async-btn>` : ''}
+                </div>
+            </div>
+        `;
+    }
+}
+customElements.define('insetu-tracker-edit-projection', InSetuTrackerEditProjection);
+
 // OS Registration Hook
 export class InSetuExtTrackerSettings extends InSetuElement {
     static styles = [sharedStyles, css`
@@ -2543,7 +2623,7 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                     </div>
                                 `)}
                                 <div style="display: flex; justify-content: flex-start; margin-top: 5px;">
-                                    <sutram-async-btn label="➕ Add Parent Tab" intent="neutral" .onClick=${() => this._addParentTab()}></sutram-async-btn>
+                                    <sutram-async-btn icon="plus" label="Add Parent Tab" intent="neutral" .onClick=${() => this._addParentTab()}></sutram-async-btn>
                                 </div>
                             </div>
                         </sutram-collapsible>
@@ -2688,13 +2768,13 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                         })()}
                                     </div>
                                     <div style="display: flex; justify-content: flex-end; margin-top: 5px;">
-                                        <sutram-async-btn label="🗑️ Remove View" intent="danger" .onClick=${() => this._removeGlobalView(i)}></sutram-async-btn>
+                                        <sutram-async-btn icon="trash-2" label="Remove View" intent="danger" .onClick=${() => this._removeGlobalView(i)}></sutram-async-btn>
                                     </div>
                                 </div>
                             `)}
                         </div>
                         <div style="display: flex; justify-content: flex-start; margin-top: 15px;">
-                            <sutram-async-btn label="➕ Add Global View" intent="primary" style="margin: 0;" .onClick=${() => this._addGlobalView()}></sutram-async-btn>
+                            <sutram-async-btn icon="plus" label="Add Global View" intent="primary" style="margin: 0;" .onClick=${() => this._addGlobalView()}></sutram-async-btn>
                         </div>
                     </sutram-collapsible>
                 </div>
@@ -2965,17 +3045,6 @@ window.ExtensionRegistry.registerExtension('tracker', {
         {
             match: (filepath) => filepath && filepath.includes('.tracker/'),
             onOpen: (filepath) => {
-                if (window.inSetu.ui && window.inSetu.ui.closeFileModal) window.inSetu.ui.closeFileModal(true);
-
-                const trackerState = KanbanStore.getState();
-                const targetSub = trackerState.customViews && trackerState.customViews.length > 0 
-                    ? trackerState.customViews[0].id 
-                    : 'todos';
-
-                // Ensure the tracker board is visible in the center spatial column
-                const ws = window.inSetu.utils.getActiveWorkspace();
-                window.location.hash = `#/${encodeURIComponent(ws)}/center/${encodeURIComponent(targetSub)}`;
-
                 window.inSetu.events.emit('insetu:tracker:open-edit-task', { filepath });
             }
         }

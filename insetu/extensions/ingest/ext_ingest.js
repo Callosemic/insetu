@@ -19,7 +19,7 @@ export class InSetuExtIngestActions extends InSetuElement {
     render() {
         return html`
             <div style="display: flex; gap: 10px; margin-bottom: 10px; padding: 8px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; align-items: center;">
-                <button @click=${(e) => { e.preventDefault(); IngestStore.setState({ ingestModalOpen: true, ingestError: null, ingestStatus: null }); }} class="btn-sm" style="background: var(--intent-primary); margin: 0;">🌐 Import from URL</button>
+                <sutram-btn size="sm" intent="primary" icon="globe" label="Import from URL" style="margin: 0;" @click=${(e) => { e.preventDefault(); IngestStore.setState({ ingestModalOpen: true, ingestError: null, ingestStatus: null }); }}></sutram-btn>
             </div>
         `;
     }

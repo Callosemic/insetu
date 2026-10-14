@@ -290,7 +290,6 @@ def gather_next_page(job_id, workspace_id=None):
       if not exists:
         prior_scrape = conn.execute("SELECT id FROM research_inbox WHERE url=? AND scraped_at IS NOT NULL", (link['url'],)).fetchone()
         prior_cit = None
-        from akasa.utils import is_extension_enabled
         if is_extension_enabled("citations", workspace_id=workspace_id):
           try:
             from insetu.extensions.citations.engine_citations import citations_bp

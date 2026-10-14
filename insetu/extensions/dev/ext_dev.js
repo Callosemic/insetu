@@ -109,8 +109,8 @@ export class InSetuExtDevDash extends InSetuElement {
 
                         <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
                             ${this.thrashingFiles.length === 0 ? html`
-                                <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem;">
-                                    ✅ File system is stable. No thrashing detected.
+                                <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem; display: flex; align-items: center; gap: 6px;">
+                                    <yv-icon name="check-circle-2" style="width: 14px; height: 14px;"></yv-icon> File system is stable. No thrashing detected.
                                 </div>
                             ` : this.thrashingFiles.map(f => html`
                                 <div style="display: flex; flex-direction: column; background: var(--bg); border-radius: 4px; border: 1px solid var(--border); overflow: hidden;">
@@ -158,8 +158,8 @@ export class InSetuExtDevDash extends InSetuElement {
 
                         <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
                             ${this.systemErrors.length === 0 ? html`
-                                <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem;">
-                                    ✅ No system errors recorded.
+                                <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem; display: flex; align-items: center; gap: 6px;">
+                                    <yv-icon name="check-circle-2" style="width: 14px; height: 14px;"></yv-icon> No system errors recorded.
                                 </div>
                             ` : this.systemErrors.map(err => html`
                                 <div style="display: flex; flex-direction: column; background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
@@ -202,8 +202,8 @@ export class InSetuExtDevDash extends InSetuElement {
 
                         <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
                             ${this.bridgeErrors.length === 0 ? html`
-                                <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem;">
-                                    ✅ No bridge errors recorded.
+                                <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem; display: flex; align-items: center; gap: 6px;">
+                                    <yv-icon name="check-circle-2" style="width: 14px; height: 14px;"></yv-icon> No bridge errors recorded.
                                 </div>
                             ` : this.bridgeErrors.map(err => html`
                                 <div style="display: flex; flex-direction: column; background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
@@ -320,11 +320,10 @@ export class InSetuExtDevLogs extends InSetuElement {
                 </div>
                 <div style="display: flex; gap: 12px; align-items: center;">
                     ${this.loading ? html`<sutram-spinner style="display:block; margin:0;" text="Fetching..."></sutram-spinner>` : ''}
-                    <button @click=${this.copyLogs} title="Copy to Clipboard" style="background: transparent; border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 6px 12px; cursor: pointer; font-size: 0.85rem; transition: background 0.2s;" onmouseover="this.style.background='var(--input-bg)'" onmouseout="this.style.background='transparent'">
-                        📋 Copy
-                    </button>
+                    <sutram-btn icon="copy" label="Copy" intent="neutral" @click=${this.copyLogs} style="margin: 0;"></sutram-btn>
                     <sutram-async-btn
-                        label="⬇️ Export Boot Logs"
+                        icon="download"
+                        label="Export Boot Logs"
                         intent="primary"
                         style="margin: 0;"
                         .onClick=${this._getDownloadLogsAction()}>

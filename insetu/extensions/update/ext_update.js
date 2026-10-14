@@ -20,6 +20,8 @@ export const UpdateStore = createExtensionStore('Update', {
     packageName: '',
     repoBuildCommand: 'python -m build',
     repoPrereleaseToken: 'rc',
+    repoCommitParser: 'conventional',
+    autoPublish: false,
     repoVcsRelease: true,
     hasToken: true,
     hasPypiToken: false,
@@ -28,12 +30,6 @@ export const UpdateStore = createExtensionStore('Update', {
     missingBinaries: [],
     eligibleRepos: {},
     isBackendMissing: false,
-    previewModalOpen: false,
-    previewOutput: '',
-    previewChangelog: '',
-    previewTab: 'changelog',
-    previewActionType: 'bump',
-    previewCaption: '',
     distributionTarget: 'python_pypi',
     lastPublishTime: 0,
     latestBuildArtifact: null,
@@ -48,18 +44,83 @@ export const UpdateStore = createExtensionStore('Update', {
             return new Promise((resolve, reject) => {
                 window.inSetu.utils.pollJob(data.job_id, {
                     onProgress: (msg) => {
-                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
+                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`${msg}`, null);
                     },
                     onComplete: (statusData) => {
-                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`✅ Preview ready.`, 2000);
-                        UpdateStore.setState({ 
-                            previewOutput: statusData.artifact.output || defaultOutput,
-                            previewChangelog: statusData.artifact.changelog || defaultChangelog,
-                            previewActionType: actionType,
-                            previewModalOpen: true,
-                            previewTab: tab,
-                            previewCaption: defaultCaption || ''
-                        });
+                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`Preview ready.`, 2000);
+                        const output = statusData.artifact.output || defaultOutput;
+                        const changelog = statusData.artifact.changelog || defaultChangelog;
+                        if (window.Sutram?.stores?.Layout) {
+                            const layout = window.Sutram.stores.Layout.getState();
+                            const closeWin = () => layout.closeWindow('update:preview');
+                            const confirmLabel = actionType === 'publish' 
+                                ? 'Confirm & Execute Publish' 
+                                : (actionType === 'first_release' ? 'Confirm & Initial Release' : 'Confirm & Execute Bump');
+
+                            const executeAction = async () => {
+                                closeWin();
+                                const ep = actionType === 'publish' ? 'publish' : (actionType === 'first_release' ? 'first_release' : 'bump');
+                                const msg = actionType === 'publish' ? 'Publish' : (actionType === 'first_release' ? 'First Release' : 'Bump');
+                                const extra = actionType === 'bump' ? { prerelease: UpdateStore.getState().isPrerelease } : {};
+                                const postRes = await window.inSetu.api.workspace.post(`update/${ep}`, { repo, ...extra });
+                                if (postRes.status === 202) {
+                                    const pData = await postRes.json();
+                                    window.inSetu.utils.pollJob(pData.job_id, {
+                                        onProgress: (pMsg) => {
+                                            if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`${pMsg}`, null);
+                                        },
+                                        onComplete: (sData) => {
+                                            const out = sData.artifact?.output || sData.message;
+                                            UpdateStore.setState({ lastReleaseLog: out });
+                                            if (actionType === 'first_release') {
+                                                if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`Initial release v${sData.artifact?.version || ''} published!`, 5000);
+                                                UpdateStore.getState().fetchRepoStatus(repo);
+                                                UpdateStore.getState().fetchEligibleRepos();
+                                            } else {
+                                                if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`${msg} complete.`, 2000);
+                                                UpdateStore.getState().fetchRepoStatus(repo);
+                                            }
+                                        },
+                                        onError: (err) => {
+                                            const logText = `${msg} Error:\n\n${err.message}`;
+                                            UpdateStore.setState({ lastReleaseLog: logText });
+                                            if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`${msg} failed:${err.message}`, 5000, true);
+                                        }
+                                    });
+                                }
+                            };
+
+                            const tabs = actionType !== 'log_view' ? [
+                                { id: 'changelog', label: 'Change Log', icon: 'file-text', content: changelog },
+                                { id: 'full', label: 'Complete Report', icon: 'terminal', content: output }
+                            ] : [
+                                { id: 'full', label: 'Complete Report', icon: 'terminal', content: output }
+                            ];
+
+                            const actions = actionType !== 'log_view' ? [
+                                { label: 'Cancel', icon: 'x', intent: 'neutral', onClick: closeWin },
+                                { label: confirmLabel, icon: 'zap', intent: 'success', primary: true, asyncAction: executeAction }
+                            ] : [
+                                { label: 'Close', icon: 'x', intent: 'neutral', onClick: closeWin }
+                            ];
+
+                            layout.openWindow({
+                                id: 'update:preview',
+                                component: 'sutram-report-projection',
+                                label: actionType === 'log_view' ? 'Release Execution Log' : 'Release Preview',
+                                icon: 'package',
+                                intent: 'success',
+                                extName: 'update',
+                                windowOnly: true,
+                                props: {
+                                    caption: defaultCaption || '',
+                                    tabs,
+                                    activeTab: tab,
+                                    actions,
+                                    suggestedFilename: `release_log_${Date.now()}.txt`
+                                }
+                            }, layout.focusedColumn || 'center', 1);
+                        }
                         resolve();
                     },
                     onError: (err) => {
@@ -177,6 +238,8 @@ export const UpdateStore = createExtensionStore('Update', {
                             packageName: statusData.artifact.package_name || '',
                             repoBuildCommand: statusData.artifact.build_command ?? 'python -m build',
                             repoPrereleaseToken: statusData.artifact.prerelease_token || 'rc',
+                            repoCommitParser: statusData.artifact.commit_parser || 'conventional',
+                            autoPublish: statusData.artifact.auto_publish === true,
                             repoVcsRelease: statusData.artifact.vcs_release !== false,
                             hasToken: statusData.artifact.has_token !== false,
                             hasPypiToken: statusData.artifact.has_pypi_token === true,
@@ -191,7 +254,7 @@ export const UpdateStore = createExtensionStore('Update', {
                         console.error("Status check failed:", err.message);
                         UpdateStore.setState({ repoLoading: false });
                         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                            window.inSetu.ui.setGlobalStatus(`❌ Status Error: ${err.message}`, 5000, true);
+                            window.inSetu.ui.setGlobalStatus(`Status Error: ${err.message}`, 5000, true);
                         }
                     }
                 });
@@ -212,7 +275,7 @@ export const UpdateStore = createExtensionStore('Update', {
                 window.inSetu.utils.pollJob(data.job_id, {
                     onComplete: () => {
                         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                            window.inSetu.ui.setGlobalStatus(`✅ Created basic TOML for ${repo}.`, 3000);
+                            window.inSetu.ui.setGlobalStatus(`Created basic TOML for ${repo}.`, 3000);
                         }
                         UpdateStore.getState().fetchRepoStatus(repo);
                         UpdateStore.getState().fetchEligibleRepos();
@@ -229,16 +292,18 @@ export const UpdateStore = createExtensionStore('Update', {
             alert(`Network error: ${e.message}`);
         }
     },
-    updateTomlConfig: async (repo, buildCommand, vcsRelease, prereleaseToken) => {
+    updateTomlConfig: async (repo, buildCommand, vcsRelease, prereleaseToken, commitParser = null) => {
         if (!repo) return;
         try {
-            const res = await window.inSetu.api.post('update/update_toml_config', { repo, build_command: buildCommand, vcs_release: vcsRelease, prerelease_token: prereleaseToken });
+            const payload = { repo, build_command: buildCommand, vcs_release: vcsRelease, prerelease_token: prereleaseToken };
+            if (commitParser !== null) payload.commit_parser = commitParser;
+            const res = await window.inSetu.api.post('update/update_toml_config', payload);
             if (res.status === 202) {
                 const data = await res.json();
                 return new Promise((resolve, reject) => {
                     window.inSetu.utils.pollJob(data.job_id, {
                         onComplete: () => {
-                            if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`✅ Release config updated.`, 2000);
+                            if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`Release config updated.`, 2000);
                             UpdateStore.getState().fetchRepoStatus(repo);
                             resolve();
                         },
@@ -265,10 +330,28 @@ export const UpdateStore = createExtensionStore('Update', {
             if (res.ok) {
                 UpdateStore.setState({ distributionTarget: target });
                 if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                    window.inSetu.ui.setGlobalStatus(`✅ Distribution target updated.`, 2000);
+                    window.inSetu.ui.setGlobalStatus(`Distribution target updated.`, 2000);
                 }
             } else {
                 throw new Error("Failed to save setting.");
+            }
+        } catch(e) {
+            alert(`Error saving setting: ${e.message}`);
+        }
+    },
+    toggleAutoPublish: async (repo, enabled) => {
+        if (!repo) return;
+        try {
+            const res = await window.inSetu.api.post(`update/settings?repo=${encodeURIComponent(repo)}`, {
+                auto_publish: enabled
+            });
+            if (res.ok) {
+                UpdateStore.setState({ autoPublish: enabled });
+                if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
+                    window.inSetu.ui.setGlobalStatus(`Auto-publish preference saved.`, 2000);
+                }
+            } else {
+                throw new Error("Failed to save auto-publish setting.");
             }
         } catch(e) {
             alert(`Error saving setting: ${e.message}`);
@@ -283,7 +366,7 @@ export const UpdateStore = createExtensionStore('Update', {
                 window.inSetu.utils.pollJob(data.job_id, {
                     onComplete: () => {
                         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                            window.inSetu.ui.setGlobalStatus(`✅ Version forced to v${version}.`, 3000);
+                            window.inSetu.ui.setGlobalStatus(`Version forced to v${version}.`, 3000);
                         }
                         UpdateStore.getState().fetchRepoStatus(repo);
                     },
@@ -302,30 +385,54 @@ export const UpdateStore = createExtensionStore('Update', {
                 const data = await res.json();
                 window.inSetu.utils.pollJob(data.job_id, {
                     onProgress: (msg) => {
-                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
+                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`${msg}`, null);
                     },
                     onComplete: (statusData) => {
-                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`✅ Manual build complete.`, 2000);
-                        UpdateStore.setState({ 
-                            previewOutput: statusData.artifact.output || 'No output.',
-                            previewChangelog: 'Manual Build Execution Log',
-                            previewActionType: 'log_view',
-                            previewModalOpen: true,
-                            previewTab: 'full',
-                            previewCaption: 'Execution log output for the manual build action.'
-                        });
+                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`Manual build complete.`, 2000);
+                        if (window.Sutram?.stores?.Layout) {
+                            const layout = window.Sutram.stores.Layout.getState();
+                            layout.openWindow({
+                                id: 'update:preview',
+                                component: 'sutram-report-projection',
+                                label: 'Manual Build Log',
+                                icon: 'terminal',
+                                intent: 'neutral',
+                                extName: 'update',
+                                windowOnly: true,
+                                props: {
+                                    caption: 'Execution log output for the manual build action.',
+                                    content: statusData.artifact.output || 'No output.',
+                                    suggestedFilename: `build_log_${Date.now()}.txt`,
+                                    actions: [
+                                        { label: 'Close', icon: 'x', intent: 'neutral', onClick: () => layout.closeWindow('update:preview') }
+                                    ]
+                                }
+                            }, layout.focusedColumn || 'center', 1);
+                        }
                         UpdateStore.getState().fetchRepoStatus(repo);
                     },
                     onError: (err) => {
                         alert(`Build Error: ${err.message}`);
-                        UpdateStore.setState({ 
-                            previewOutput: err.message || 'No output.',
-                            previewChangelog: 'Manual Build Execution Log (Failed)',
-                            previewActionType: 'log_view',
-                            previewModalOpen: true,
-                            previewTab: 'full',
-                            previewCaption: 'Execution log output for the failed manual build action.'
-                        });
+                        if (window.Sutram?.stores?.Layout) {
+                            const layout = window.Sutram.stores.Layout.getState();
+                            layout.openWindow({
+                                id: 'update:preview',
+                                component: 'sutram-report-projection',
+                                label: 'Manual Build Log (Failed)',
+                                icon: 'alert-triangle',
+                                intent: 'danger',
+                                extName: 'update',
+                                windowOnly: true,
+                                props: {
+                                    caption: 'Execution log output for the failed manual build action.',
+                                    content: err.message || 'No output.',
+                                    suggestedFilename: `build_error_${Date.now()}.txt`,
+                                    actions: [
+                                        { label: 'Close', icon: 'x', intent: 'neutral', onClick: () => layout.closeWindow('update:preview') }
+                                    ]
+                                }
+                            }, layout.focusedColumn || 'center', 1);
+                        }
                         UpdateStore.getState().fetchRepoStatus(repo);
                     }
                 });
@@ -344,7 +451,7 @@ export const UpdateStore = createExtensionStore('Update', {
                 window.inSetu.utils.pollJob(data.job_id, {
                     onComplete: () => {
                         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                            window.inSetu.ui.setGlobalStatus(`✅ Successfully scaffolded versioning for ${repo}.`, 3000);
+                            window.inSetu.ui.setGlobalStatus(`Successfully scaffolded versioning for ${repo}.`, 3000);
                         }
                         UpdateStore.getState().fetchRepoStatus(repo);
                         UpdateStore.getState().fetchEligibleRepos();
@@ -365,7 +472,6 @@ export const UpdateStore = createExtensionStore('Update', {
         }
     }
 });
-
 window.inSetu.stores.Update = UpdateStore;
 
 export class InSetuExtUpdate extends InSetuElement {
@@ -386,6 +492,8 @@ export class InSetuExtUpdate extends InSetuElement {
         packageName: { type: String },
         repoBuildCommand: { type: String },
         repoPrereleaseToken: { type: String },
+        repoCommitParser: { type: String },
+        autoPublish: { type: Boolean },
         repoVcsRelease: { type: Boolean },
         hasToken: { type: Boolean },
         hasPypiToken: { type: Boolean },
@@ -395,19 +503,12 @@ export class InSetuExtUpdate extends InSetuElement {
         missingDependencies: { type: Array },
         missingBinaries: { type: Array },
         eligibleRepos: { type: Object },
-        previewModalOpen: { type: Boolean },
-        previewOutput: { type: String },
-        previewChangelog: { type: String },
-        previewTab: { type: String },
-        previewActionType: { type: String },
-        previewCaption: { type: String },
         lastPublishTime: { type: Number },
         latestBuildArtifact: { type: String },
         isPrerelease: { type: Boolean }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow-y: auto; background: var(--bg); box-sizing: border-box; padding: 20px; }
-        .output-box { font-family: var(--font-mono); background: var(--input-bg); border: 1px solid var(--border); padding: 12px; border-radius: 4px; font-size: 0.85rem; color: var(--text); white-space: pre-wrap; overflow-y: auto; flex: 1; min-height: 150px; margin-top: 15px; }
     `];
     constructor() {
         super();
@@ -424,6 +525,8 @@ export class InSetuExtUpdate extends InSetuElement {
         this.pypiPackageExists = false;
         this.repoBuildCommand = 'python -m build';
         this.repoPrereleaseToken = 'rc';
+        this.repoCommitParser = 'conventional';
+        this.autoPublish = false;
         this.repoVcsRelease = true;
         this.hasToken = true;
         this.hasPypiToken = false;
@@ -432,12 +535,6 @@ export class InSetuExtUpdate extends InSetuElement {
         this.missingDependencies = [];
         this.missingBinaries = [];
         this.eligibleRepos = {};
-        this.previewModalOpen = false;
-        this.previewOutput = '';
-        this.previewChangelog = '';
-        this.previewTab = 'changelog';
-        this.previewActionType = 'bump';
-        this.previewCaption = '';
         this.lastPublishTime = 0;
         this.latestBuildArtifact = null;
         this.isPrerelease = false;
@@ -461,6 +558,8 @@ export class InSetuExtUpdate extends InSetuElement {
             this.packageName = state.packageName || '';
             this.repoBuildCommand = state.repoBuildCommand ?? 'python -m build';
             this.repoPrereleaseToken = state.repoPrereleaseToken || 'rc';
+            this.repoCommitParser = state.repoCommitParser || 'conventional';
+            this.autoPublish = !!state.autoPublish;
             this.repoVcsRelease = state.repoVcsRelease !== false;
             this.hasToken = state.hasToken !== false;
             this.hasPypiToken = state.hasPypiToken === true;
@@ -469,12 +568,6 @@ export class InSetuExtUpdate extends InSetuElement {
             this.missingDependencies = state.missingDependencies || [];
             this.missingBinaries = state.missingBinaries || [];
             this.eligibleRepos = state.eligibleRepos || {};
-            this.previewModalOpen = state.previewModalOpen;
-            this.previewOutput = state.previewOutput;
-            this.previewChangelog = state.previewChangelog || '';
-            this.previewTab = state.previewTab || 'changelog';
-            this.previewActionType = state.previewActionType || 'bump';
-            this.previewCaption = state.previewCaption || '';
             this.lastPublishTime = state.lastPublishTime || 0;
             this.latestBuildArtifact = state.latestBuildArtifact || null;
             this.isPrerelease = state.isPrerelease || false;
@@ -541,42 +634,13 @@ export class InSetuExtUpdate extends InSetuElement {
         UpdateStore.getState().fetchEligibleRepos();
         UpdateStore.getState().checkDependencies();
     }
-    _getReleaseAction(endpoint, successMessage, isFirstRelease = false) {
-        return this.api.bindJobAction(endpoint, { repo: this.targetRepo }, {
-            onProgress: (msg) => {
-                this.setStatus(`⏳ ${msg}`, null);
-            },
-            onComplete: (statusData) => {
-                const output = statusData.artifact?.output || statusData.message;
-                UpdateStore.setState({ lastReleaseLog: output });
-                if (isFirstRelease) {
-                    this.setStatus(`🎉 Initial release v${statusData.artifact?.version || ''} published!`, 5000);
-                    UpdateStore.getState().fetchRepoStatus(this.targetRepo);
-                    UpdateStore.getState().fetchEligibleRepos();
-                } else {
-                    this.setStatus(`✅ ${successMessage} complete.`, 2000);
-                }
-                console.log(`${successMessage} Output:\n`, output);
-            },
-            onError: (err) => {
-                const logText = `❌ ${successMessage} Error:\n\n${err.message}`;
-                UpdateStore.setState({ lastReleaseLog: logText });
-                if (isFirstRelease) {
-                    this.setStatus(`❌ First release failed. See log below.`, 5000, true);
-                } else {
-                    this.setStatus(`❌ ${successMessage} failed: ${err.message}`, 5000, true);
-                }
-                console.error(`${successMessage} Error:\n`, err);
-            }
-        });
-    }
 
     render() {
         return html`
             <div style="display: flex; flex-direction: column; height: 100%;">
                 ${this.missingDependencies.length > 0 ? html`
                     <div style="background: var(--input-bg); border: 1px solid var(--intent-warning); border-radius: 4px; padding: 12px 15px; margin-bottom: 15px; display: flex; align-items: flex-start; gap: 10px;">
-                        <span style="font-size: 1.2rem; line-height: 1;">⚠️</span>
+                        <yv-icon name="alert-triangle" style="width: 18px; height: 18px; color: var(--intent-warning); flex-shrink: 0; margin-top: 2px;"></yv-icon>
                         <div style="display: flex; flex-direction: column; gap: 4px;">
                             <span style="font-weight: bold; color: var(--intent-warning); font-size: 0.95rem;">Missing Dependencies</span>
                             <span style="font-size: 0.85rem; color: var(--text);">Run the following command to install required Python packages:</span>
@@ -586,7 +650,7 @@ export class InSetuExtUpdate extends InSetuElement {
                 ` : ''}
                 ${this.missingBinaries.length > 0 ? html`
                     <div style="background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 4px; padding: 12px 15px; margin-bottom: 15px; display: flex; align-items: flex-start; gap: 10px;">
-                        <span style="font-size: 1.2rem; line-height: 1;">🚨</span>
+                        <yv-icon name="alert-octagon" style="width: 18px; height: 18px; color: var(--intent-danger); flex-shrink: 0; margin-top: 2px;"></yv-icon>
                         <div style="display: flex; flex-direction: column; gap: 4px;">
                             <span style="font-weight: bold; color: var(--intent-danger); font-size: 0.95rem;">Missing System Binaries</span>
                             <span style="font-size: 0.85rem; color: var(--text);">The following required system binaries are missing from your host environment:</span>
@@ -675,25 +739,25 @@ export class InSetuExtUpdate extends InSetuElement {
                             </div>
                             ${!this.repoLoading && this.repoConfigured && !this.hasRelease ? html`
                                 <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 6px;">
-                                    <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic;">⚠️ Local version configured, but no Git release tag has been established.</span>
-                                    <button class="btn-sm" style="background: var(--intent-primary); color: white; border: none; padding: 6px 12px; font-weight: bold; font-size: 0.8rem; border-radius: 4px; cursor: pointer; align-self: flex-start;"
+                                    <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic;">Local version configured, but no Git release tag has been established.</span>
+                                    <sutram-btn size="sm" intent="primary" icon="tag" label="Tag and Sync Initial Version" style="align-self: flex-start;"
                                         @click=${() => {
                                             const ver = this.repoVersion || "0.1.0";
                                             if (confirm(`Establish and tag initial baseline release v${ver}?`)) {
                                                 UpdateStore.getState().forceVersion(this.targetRepo, ver);
                                             }
                                         }}>
-                                        🏷️ Tag and Sync Initial Version
-                                    </button>
+                                    </sutram-btn>
                                 </div>
                             ` : ''}
                             ${!this.repoLoading && this.repoConfigured && this.hasPendingBump ? html`
                                 <div style="margin-top: 10px; background: var(--bg); border: 1px solid var(--intent-success); border-radius: 4px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px;">
-                                    <span style="font-size: 0.85rem; color: var(--intent-success); font-weight: bold;">
-                                        🚀 <strong>Ready to Version & Update:</strong> Next Version is <code style="font-family: var(--font-mono); color: var(--text);">v${this.nextVersion}</code>
+                                    <span style="font-size: 0.85rem; color: var(--intent-success); font-weight: bold; display: flex; align-items: center; gap: 6px;">
+                                        <yv-icon name="rocket" style="width: 14px; height: 14px;"></yv-icon> <strong>Ready to Version & Update:</strong> Next Version is <code style="font-family: var(--font-mono); color: var(--text);">v${this.nextVersion}</code>
                                     </span>
                                     <sutram-async-btn 
-                                        label="⚡ Bump to v${this.nextVersion}" 
+                                        icon="zap"
+                                        label="Bump to v${this.nextVersion}" 
                                         intent="success" 
                                         style="margin: 0; --btn-padding: 4px 10px; --btn-font-size: 0.8rem;"
                                         .onClick=${async () => await UpdateStore.getState().previewBump(this.targetRepo)}>
@@ -702,21 +766,21 @@ export class InSetuExtUpdate extends InSetuElement {
                             ` : ''}
                         </div>
                         ${!this.repoLoading && this.repoConfigured ? html`
-                            <span style="font-size: 0.75rem; color: var(--intent-success); border: 1px solid var(--intent-success); padding: 2px 6px; border-radius: 10px; font-weight: bold;">
-                                ✅ Configured
+                            <span style="font-size: 0.75rem; color: var(--intent-success); border: 1px solid var(--intent-success); padding: 2px 6px; border-radius: 10px; font-weight: bold; display: inline-flex; align-items: center; gap: 4px;">
+                                <yv-icon name="check-circle-2" style="width: 12px; height: 12px;"></yv-icon> Configured
                             </span>
                         ` : ''}
                     </div>
-
                     ${!this.repoLoading && !this.isClean && this.repoConfigured ? html`
-                        <div style="background: var(--bg); border: 1px dashed var(--intent-warning); border-radius: 4px; padding: 8px 12px; margin-top: 10px; color: var(--intent-warning); font-size: 0.85rem; font-weight: bold; text-align: center;">
-                            ⚠️ Working tree is not clean. Commit changes before releasing.
+                        <div style="background: var(--bg); border: 1px dashed var(--intent-warning); border-radius: 4px; padding: 8px 12px; margin-top: 10px; color: var(--intent-warning); font-size: 0.85rem; font-weight: bold; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                            <yv-icon name="alert-triangle" style="width: 14px; height: 14px; flex-shrink: 0;"></yv-icon>
+                            <span>Working tree is not clean. Commit changes before releasing.</span>
                         </div>
                     ` : ''}
                     ${!this.repoLoading && !this.hasPyproject ? html`
                         <div style="background: var(--bg); border: 1px dashed var(--intent-warning); border-radius: 4px; padding: 8px 12px; margin-bottom: 10px; color: var(--intent-warning); font-size: 0.85rem; font-weight: bold; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px;">
-                            <span>⚠️ Missing pyproject.toml in this repository.</span>
-                            <sutram-btn size="sm" intent="warning" label="📄 Create Basic TOML and Tag"
+                            <span>Missing pyproject.toml in this repository.</span>
+                            <sutram-btn size="sm" intent="warning" icon="file-plus" label="Create Basic TOML and Tag"
                                 @click=${() => {
                                     const initVer = prompt("Enter initial semantic version (e.g., 0.1.0):", "0.1.0");
                                     if (initVer) {
@@ -728,7 +792,7 @@ export class InSetuExtUpdate extends InSetuElement {
                         </div>
                     ` : ''}
                     ${!this.repoLoading && !this.repoConfigured ? html`
-                        <button class="btn-sm" style="background: var(--intent-success); margin: 0; padding: 10px; font-weight: bold; width: 100%; ${!this.hasPyproject ? 'opacity: 0.5; cursor: not-allowed;' : ''}"
+                        <sutram-btn size="sm" intent="success" icon="sparkles" label="Initialize Semantic Versioning" style="width: 100%; margin: 0;"
                             ?disabled=${!this.hasPyproject}
                             @click=${() => {
                                 const initVer = prompt("Enter initial semantic version (e.g., 0.1.0):", "0.1.0");
@@ -736,8 +800,7 @@ export class InSetuExtUpdate extends InSetuElement {
                                     UpdateStore.getState().scaffoldRepo(this.targetRepo, initVer.trim());
                                 }
                             }}>
-                            ✨ Initialize Semantic Versioning
-                        </button>
+                        </sutram-btn>
                     ` : ''}
                 </div>
                 ${!this.repoLoading && this.repoConfigured ? html`
@@ -751,8 +814,9 @@ export class InSetuExtUpdate extends InSetuElement {
                                 <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Release via GitHub API (<code>vcs_release</code>)</span>
                             </div>
                             ${this.repoVcsRelease && !this.hasToken ? html`
-                                <div style="color: var(--intent-warning); font-size: 0.75rem; margin-left: 24px;">
-                                    ⚠️ No GitHub API token detected in secrets or environment. Local tag/push will succeed, but API release card creation will fail.
+                                <div style="color: var(--intent-warning); font-size: 0.75rem; margin-left: 24px; display: flex; align-items: center; gap: 6px;">
+                                    <yv-icon name="alert-triangle" style="width: 12px; height: 12px; flex-shrink: 0;"></yv-icon>
+                                    <span>No GitHub API token detected in secrets or environment. Local tag/push will succeed, but API release card creation will fail.</span>
                                 </div>
                             ` : ''}
                         </div>
@@ -778,7 +842,8 @@ export class InSetuExtUpdate extends InSetuElement {
                                         }}>
                                     </sutram-input>
                                     <sutram-async-btn 
-                                        label="💾 Save" 
+                                        icon="save"
+                                        label="Save" 
                                         intent="success" 
                                         ?disabled=${!this.isClean}
                                         style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
@@ -787,7 +852,8 @@ export class InSetuExtUpdate extends InSetuElement {
                                         }}>
                                     </sutram-async-btn>
                                     <sutram-async-btn 
-                                        label="▶️ Run Manually" 
+                                        icon="play"
+                                        label="Run Manually" 
                                         intent="neutral" 
                                         style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
                                         .onClick=${async () => {
@@ -797,6 +863,33 @@ export class InSetuExtUpdate extends InSetuElement {
                                 </div>
                             ` : ''}
                             <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 24px;">Executed by Semantic Release before tagging. Changes are committed to <code>pyproject.toml</code> natively.</span>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; border-top: 1px dashed var(--border); padding-top: 10px; margin-top: 4px;">
+                            <sutram-select
+                                label="Commit Parser Convention"
+                                ?flush=${true}
+                                ?disabled=${!this.isClean}
+                                .value=${this.repoCommitParser || 'conventional'}
+                                .options=${[
+                                    { value: 'conventional', label: 'Conventional Commits (Angular)' },
+                                    { value: 'emoji', label: 'Emoji (Gitmoji)' },
+                                    { value: 'scipy', label: 'SciPy' }
+                                ]}
+                                @sutram-input-changed=${(e) => {
+                                    UpdateStore.setState({ repoCommitParser: e.detail.value });
+                                    UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, this.repoVcsRelease, this.repoPrereleaseToken, e.detail.value);
+                                }}>
+                            </sutram-select>
+                            <div style="display: flex; align-items: center; padding-top: 18px;">
+                                <sutram-toggle
+                                    label="Auto-Publish after Bump"
+                                    ?flush=${true}
+                                    .checked=${this.autoPublish}
+                                    @sutram-input-changed=${(e) => {
+                                        UpdateStore.getState().toggleAutoPublish(this.targetRepo, e.detail.value);
+                                    }}>
+                                </sutram-toggle>
+                            </div>
                         </div>
 
                         <div style="display: flex; flex-direction: column; gap: 6px; border-top: 1px dashed var(--border); padding-top: 10px; margin-top: 4px;">
@@ -812,7 +905,8 @@ export class InSetuExtUpdate extends InSetuElement {
                                     }}>
                                 </sutram-input>
                                 <sutram-async-btn 
-                                    label="💾 Save Token" 
+                                    icon="save"
+                                    label="Save Token" 
                                     intent="success" 
                                     ?disabled=${!this.isClean}
                                     style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
@@ -830,7 +924,8 @@ export class InSetuExtUpdate extends InSetuElement {
                         <div style="flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px;">
                             <sutram-async-btn 
                                 style="width: 100%;" 
-                                label="${this.hasPendingBump ? '📦 Step 1: Bump to v' + this.nextVersion : '📦 Step 1: Bump & Tag'}" 
+                                icon="package"
+                                label="${this.hasPendingBump ? 'Step 1: Bump to v' + this.nextVersion : 'Step 1: Bump & Tag'}" 
                                 intent="${this.hasPendingBump ? 'success' : 'primary'}" 
                                 ?disabled=${!this.repoConfigured || !this.isClean}
                                 .onClick=${async () => await UpdateStore.getState().previewBump(this.targetRepo)}>
@@ -873,14 +968,14 @@ export class InSetuExtUpdate extends InSetuElement {
                                 }
                                 const isFirstReleasePhase = this.distributionTarget === 'python_pypi' ? !this.pypiPackageExists : !this.hasRelease;
                                 const step2Disabled = !this.repoConfigured || (isFirstReleasePhase && !this.isClean) || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken) || this.distributionTarget === 'disabled' || buildMismatch;
-                                const buildLabel = this.latestBuildArtifact ? html`<span style="font-size: 0.75rem; color: var(--intent-success); font-family: var(--font-mono); text-align: center; display: block; margin-top: 4px;">📦 Active Artifact: ${this.latestBuildArtifact}</span>` : '';
-                                const mismatchLabel = buildMismatch ? html`<span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block; margin-top: 4px;">⚠️ Build artifact missing or version mismatch. Ensure Step 1 succeeded.</span>` : '';
-
+                                const buildLabel = this.latestBuildArtifact ? html`<span style="font-size: 0.75rem; color: var(--intent-success); font-family: var(--font-mono); justify-content: center; display: flex; align-items: center; gap: 6px; margin-top: 4px;"><yv-icon name="package" style="width: 12px; height: 12px;"></yv-icon> Active Artifact: ${this.latestBuildArtifact}</span>` : '';
+                                const mismatchLabel = buildMismatch ? html`<span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block; margin-top: 4px;">Build artifact missing or version mismatch. Ensure Step 1 succeeded.</span>` : '';
                                 if (isFirstReleasePhase) {
                                     return html`
                                         <sutram-async-btn 
                                             style="width: 100%;" 
-                                            label="${this.distributionTarget === 'python_pypi' ? '🚀 Publish v' + (this.repoVersion || '0.1.0') + ' to PyPI' : '🏷️ Release v' + (this.repoVersion || '0.1.0') + ' to VCS'}" 
+                                            icon="${this.distributionTarget === 'python_pypi' ? 'send' : 'tag'}"
+                                            label="${this.distributionTarget === 'python_pypi' ? 'Publish v' + (this.repoVersion || '0.1.0') + ' to PyPI' : 'Release v' + (this.repoVersion || '0.1.0') + ' to VCS'}" 
                                             intent="highlight" 
                                             ?disabled=${step2Disabled}
                                             .disabled=${step2Disabled}
@@ -896,7 +991,8 @@ export class InSetuExtUpdate extends InSetuElement {
                                     return html`
                                         <sutram-async-btn 
                                             style="width: 100%;" 
-                                            label="${this.distributionTarget === 'python_pypi' ? '🚀 Step 2: Publish Release' : (this.distributionTarget === 'disabled' ? '🚫 Publishing Disabled' : '🚀 Step 2: Push VCS Release')}" 
+                                            icon="${this.distributionTarget === 'disabled' ? 'ban' : 'send'}"
+                                            label="${this.distributionTarget === 'python_pypi' ? 'Step 2: Publish Release' : (this.distributionTarget === 'disabled' ? 'Publishing Disabled' : 'Step 2: Push VCS Release')}" 
                                             intent="highlight" 
                                             ?disabled=${step2Disabled}
                                             .disabled=${step2Disabled}
@@ -911,13 +1007,15 @@ export class InSetuExtUpdate extends InSetuElement {
                                 }
                             })()}
                             ${this.distributionTarget === 'python_pypi' && !this.hasPypiToken ? html`
-                                <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block; margin-top: 4px;">
-                                    ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings.
+                                <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 4px;">
+                                    <yv-icon name="alert-triangle" style="width: 12px; height: 12px; flex-shrink: 0;"></yv-icon>
+                                    <span>API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings.</span>
                                 </span>
                             ` : ''}
                             ${this.lastPublishTime > 0 && this.distributionTarget === 'python_pypi' && !this.pypiPublished && ((Date.now() / 1000) - this.lastPublishTime < 3600) ? html`
-                                <div style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold; text-align: left; line-height: 1.3; background: var(--bg); padding: 8px 10px; border-radius: 4px; border: 1px solid var(--intent-highlight); margin-top: 2px;">
-                                    🕒 Publish dispatched <strong>${this.utils.timeAgo(this.lastPublishTime * 1000)}</strong>. PyPI indexing may take several minutes before it reflects here.
+                                <div style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold; text-align: left; line-height: 1.3; background: var(--bg); padding: 8px 10px; border-radius: 4px; border: 1px solid var(--intent-highlight); margin-top: 2px; display: flex; align-items: center; gap: 6px;">
+                                    <yv-icon name="clock" style="width: 14px; height: 14px; flex-shrink: 0;"></yv-icon>
+                                    <span>Publish dispatched <strong>${this.utils.timeAgo(this.lastPublishTime * 1000)}</strong>. PyPI indexing may take several minutes before it reflects here.</span>
                                 </div>
                             ` : ''}
                             <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3; margin-top: 4px;">
@@ -936,99 +1034,33 @@ export class InSetuExtUpdate extends InSetuElement {
                 ` : ''}
                 ${this.lastReleaseLog ? html`
                     <div style="margin-top: 15px; display: flex; justify-content: flex-end;">
-                        <sutram-btn size="sm" intent="neutral" label="👁️ View Last Release Log"
+                        <sutram-btn size="sm" intent="neutral" icon="eye" label="View Last Release Log"
                             @click=${() => {
-                                UpdateStore.setState({
-                                    previewOutput: this.lastReleaseLog,
-                                    previewChangelog: 'Release Execution Log',
-                                    previewActionType: 'log_view',
-                                    previewModalOpen: true,
-                                    previewTab: 'full',
-                                    previewCaption: 'Execution log output for the previous release action.'
-                                });
+                                if (window.Sutram?.stores?.Layout) {
+                                    const layout = window.Sutram.stores.Layout.getState();
+                                    layout.openWindow({
+                                        id: 'update:preview',
+                                        component: 'sutram-report-projection',
+                                        label: 'Release Execution Log',
+                                        icon: 'file-text',
+                                        intent: 'neutral',
+                                        extName: 'update',
+                                        windowOnly: true,
+                                        props: {
+                                            caption: 'Execution log output for the previous release action.',
+                                            content: this.lastReleaseLog,
+                                            suggestedFilename: `release_log_${Date.now()}.txt`,
+                                            actions: [
+                                                { label: 'Close', icon: 'x', intent: 'neutral', onClick: () => layout.closeWindow('update:preview') }
+                                            ]
+                                        }
+                                    }, layout.focusedColumn || 'center', 1);
+                                }
                             }}>
                         </sutram-btn>
                     </div>
                 ` : ''}
             </div>
-            ${this.previewModalOpen ? html`
-            <sutram-modal ?open=${true} ?fullscreen=${true} titleText=${this.previewActionType === 'log_view' ? 'Release Execution Log' : 'Release Preview'} @sutram-modal-closed=${() => UpdateStore.setState({ previewModalOpen: false })}>
-                <div slot="body" style="display: contents;">
-                    <p style="font-size: 0.9rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">
-                        ${this.previewCaption}
-                    </p>
-                    <div style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;">
-                        ${this.previewActionType !== 'log_view' ? html`
-                            <button class="btn-sm" style="background: ${this.previewTab === 'changelog' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.previewTab === 'changelog' ? 'white' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; padding: 6px 12px; font-weight: bold; cursor: pointer;"
-                                @click=${() => UpdateStore.setState({ previewTab: 'changelog' })}>
-                                📝 Change Log
-                            </button>
-                        ` : ''}
-                        <button class="btn-sm" style="background: ${this.previewTab === 'full' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.previewTab === 'full' ? 'white' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; padding: 6px 12px; font-weight: bold; cursor: pointer;"
-                            @click=${() => UpdateStore.setState({ previewTab: 'full' })}>
-                            📋 Complete Report
-                        </button>
-                    </div>
-                    ${this.previewTab === 'changelog' && this.previewActionType !== 'log_view' ? html`
-                        <div class="output-box" style="margin-top: 0; margin-bottom: 8px;">${this.previewChangelog}</div>
-                    ` : html`
-                        <div class="output-box" style="margin-top: 0; margin-bottom: 8px;">${this.previewOutput}</div>
-                    `}
-                    <div style="padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end;">
-                        <sutram-entity-actions 
-                            ?scrollable=${true}
-                            style="justify-content: flex-end;"
-                            .entityType=${'text_blob'} 
-                            .entityData=${{ 
-                                textContent: this.previewTab === 'changelog' && this.previewActionType !== 'log_view' ? this.previewChangelog : this.previewOutput,
-                                suggestedFilename: `release_log_${Date.now()}.txt`
-                            }}>
-                        </sutram-entity-actions>
-                    </div>
-                </div>
-                <div slot="footer" style="display: flex; width: 100%; gap: 10px;">
-                    <sutram-btn size="sm" intent="neutral" style="flex: 1; --btn-padding: 10px 15px;" .label=${this.previewActionType === 'log_view' ? '❌ Close' : '❌ Cancel'} @click=${() => UpdateStore.setState({ previewModalOpen: false })}></sutram-btn>
-                    ${this.previewActionType !== 'log_view' ? html`
-                        <sutram-async-btn label="${this.previewActionType === 'publish' ? '⚡ Confirm & Execute Publish' : (this.previewActionType === 'first_release' ? '⚡ Confirm & Initial Release' : '⚡ Confirm & Execute Bump')}" intent="success" style="flex: 1; margin: 0; --btn-padding: 10px 15px;" .onClick=${async () => {
-                            UpdateStore.setState({ previewModalOpen: false });
-                            const endpoint = this.previewActionType === 'publish' ? 'publish' : (this.previewActionType === 'first_release' ? 'first_release' : 'bump');
-                            const msg = this.previewActionType === 'publish' ? 'Publish' : (this.previewActionType === 'first_release' ? 'First Release' : 'Bump');
-
-                            // Inject the prerelease flag strictly for the bump route
-                            const extraPayload = this.previewActionType === 'bump' ? { prerelease: this.isPrerelease } : {};
-
-                            const action = this.api.bindJobAction(endpoint, { repo: this.targetRepo, ...extraPayload }, {
-                                onProgress: (msg) => {
-                                    this.setStatus(`⏳ ${msg}`, null);
-                                },
-                                onComplete: (statusData) => {
-                                    const output = statusData.artifact?.output || statusData.message;
-                                    UpdateStore.setState({ lastReleaseLog: output });
-                                    if (this.previewActionType === 'first_release') {
-                                        this.setStatus(`🎉 Initial release v${statusData.artifact?.version || ''} published!`, 5000);
-                                        UpdateStore.getState().fetchRepoStatus(this.targetRepo);
-                                        UpdateStore.getState().fetchEligibleRepos();
-                                    } else {
-                                        this.setStatus(`✅ ${msg} complete.`, 2000);
-                                        UpdateStore.getState().fetchRepoStatus(this.targetRepo);
-                                    }
-                                },
-                                onError: (err) => {
-                                    const logText = `❌ ${msg} Error:\n\n${err.message}`;
-                                    UpdateStore.setState({ lastReleaseLog: logText });
-                                    if (this.previewActionType === 'first_release') {
-                                        this.setStatus(`❌ First release failed. See log below.`, 5000, true);
-                                    } else {
-                                        this.setStatus(`❌ ${msg} failed: ${err.message}`, 5000, true);
-                                    }
-                                }
-                            });
-                            await action();
-                        }}></sutram-async-btn>
-                    ` : ''}
-                </div>
-            </sutram-modal>
-            ` : ''}
         `;
     }
 }

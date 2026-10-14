@@ -346,7 +346,7 @@ export class InSetuExtHooksActions extends InSetuElement {
     static styles = [sharedStyles, css`:host { display: flex; align-items: stretch; height: 100%; }`];
     render() {
         return html`
-            <button class="system-action-btn" title="New Rule" @click=${() => this.dispatch('insetu:hooks:edit', { data: null })}>➕</button>
+            <button class="system-action-btn" title="New Rule" @click=${() => this.dispatch('insetu:hooks:edit', { data: null })}><yv-icon name="plus" style="width: 14px; height: 14px;"></yv-icon></button>
         `;
     }
 }

@@ -16,7 +16,27 @@ export const ResearchStore = createExtensionStore('Research', {
     isTabActive: false,
     newJobModalOpen: false,
     searchForm: { query: '', provider: 'serper', parser: 'jina', dateRange: '', dateStart: '', dateEnd: '', yearStart: '', yearEnd: '', maxResults: '50', maxCustom: '' },
-    setSearchForm: (field, val) => ResearchStore.setState(state => ({ searchForm: { ...state.searchForm, [field]: val } }))
+    setSearchForm: (field, val) => ResearchStore.setState(state => ({ searchForm: { ...state.searchForm, [field]: val } })),
+    openItemPreview: (itemId) => {
+        ResearchStore.setState({ selectedItemId: itemId });
+        if (window.Sutram?.stores?.Layout) {
+            const layout = window.Sutram.stores.Layout.getState();
+            const item = (ResearchStore.getState().inbox || []).find(i => i.id === itemId);
+            layout.openWindow({
+                id: 'research:preview',
+                component: 'insetu-research-preview-projection',
+                label: item?.title ? `Preview: ${item.title.substring(0, 30)}` : 'Research Item Preview',
+                icon: 'file-text',
+                intent: 'highlight',
+                extName: 'research',
+                windowOnly: true
+            }, layout.focusedColumn || 'center', 1);
+        }
+    }
+}, {
+    onEvict: {
+        'research:preview': { selectedItemId: null }
+    }
 });
 
 window.inSetu.stores.Research = ResearchStore;
@@ -183,11 +203,13 @@ export class InSetuExtResearch extends InSetuElement {
             const success = await this.sys.executeWorkspaceMutation('fs/save', { filepath, content: item.raw_markdown }, { silent: true });
             if (!success) return alert("Failed to write Markdown to disk.");
         }
-
         try {
             await this.api.postJson(`inbox/${inboxId}/disposition`, { status });
             if (this.selectedItemId === inboxId) {
                 ResearchStore.setState({ selectedItemId: null });
+                if (window.Sutram?.stores?.Layout) {
+                    window.Sutram.stores.Layout.getState().closeWindow('research:preview');
+                }
             }
 
             const currentInbox = this.inbox;
@@ -300,12 +322,11 @@ export class InSetuExtResearch extends InSetuElement {
             : `(${job.processed_links}/${job.total_links} scraped)`;
 
         const activeInbox = this.inbox.filter(i => i.job_id === this.selectedJobId);
-
         return html`
             <div id="rs-detail-header" style="margin-bottom: 15px; padding: 15px; background: var(--input-bg); border-radius: 6px; border: 1px solid var(--border);">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px;">
-                    <div style="font-weight: bold; color: var(--intent-primary); font-size: 1.15rem; word-break: break-word;">🔍 ${job.query}</div>
-                    <sutram-async-btn style="flex-shrink: 0;" label="📋 Copy" intent="neutral" .onClick=${() => this.utils.copyRawText(job.query)}></sutram-async-btn>
+                    <div style="font-weight: bold; color: var(--intent-primary); font-size: 1.15rem; word-break: break-word; display: flex; align-items: center; gap: 8px;"><yv-icon name="search" style="width: 18px; height: 18px;"></yv-icon> ${job.query}</div>
+                    <sutram-async-btn style="flex-shrink: 0;" icon="copy" label="Copy" intent="neutral" .onClick=${() => this.utils.copyRawText(job.query)}></sutram-async-btn>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
                     <span style="font-size: 0.95rem;"><b>Status:</b> <span style="color: var(--intent-${activeIntent}); font-weight: bold;">${job.status.toUpperCase()}</span> <span style="color: var(--text-muted);">${cardStatusExtra}</span></span>
@@ -317,12 +338,12 @@ export class InSetuExtResearch extends InSetuElement {
                 </div>
             </div>
             <div id="rs-job-actions-row" style="margin-bottom: 15px; display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap;">
-                ${job.status === 'running' ? html`<sutram-btn size="sm" intent="warning" label="⏸️ Pause" @click=${() => this.handleJobAction(job.id, 'pause')}></sutram-btn>` : ''}
-                ${job.status === 'paused' ? html`<sutram-btn size="sm" intent="success" label="▶️ Resume" @click=${() => this.handleJobAction(job.id, 'resume')}></sutram-btn>` : ''}
-                ${job.status === 'failed' ? html`<sutram-btn size="sm" intent="highlight" label="🔄 Retry" @click=${() => this.handleJobAction(job.id, 'retry')}></sutram-btn>` : ''}
-                ${['running', 'paused', 'gathering', 'failed'].includes(job.status) ? html`<sutram-btn size="sm" intent="neutral" label="⏹️ Cancel" @click=${() => this.handleJobAction(job.id, 'cancel')}></sutram-btn>` : ''}
-                <sutram-btn size="sm" variant="tinted" intent="danger" label="🗑️ Delete" @click=${() => this.handleJobAction(job.id, 'delete')}></sutram-btn>
-                <sutram-btn size="sm" intent="highlight" .label=${this.aiTriageMode ? '🔙 Back to Manual Triage' : '🤖 AI-Assisted Batch Triage'} @click=${() => ResearchStore.setState({ aiTriageMode: !this.aiTriageMode })}></sutram-btn>
+                ${job.status === 'running' ? html`<sutram-btn size="sm" intent="warning" icon="pause" label="Pause" @click=${() => this.handleJobAction(job.id, 'pause')}></sutram-btn>` : ''}
+                ${job.status === 'paused' ? html`<sutram-btn size="sm" intent="success" icon="play" label="Resume" @click=${() => this.handleJobAction(job.id, 'resume')}></sutram-btn>` : ''}
+                ${job.status === 'failed' ? html`<sutram-btn size="sm" intent="highlight" icon="refresh-cw" label="Retry" @click=${() => this.handleJobAction(job.id, 'retry')}></sutram-btn>` : ''}
+                ${['running', 'paused', 'gathering', 'failed'].includes(job.status) ? html`<sutram-btn size="sm" intent="neutral" icon="square" label="Cancel" @click=${() => this.handleJobAction(job.id, 'cancel')}></sutram-btn>` : ''}
+                <sutram-btn size="sm" variant="tinted" intent="danger" icon="trash-2" label="Delete" @click=${() => this.handleJobAction(job.id, 'delete')}></sutram-btn>
+                <sutram-btn size="sm" intent="highlight" icon="${this.aiTriageMode ? 'arrow-left' : 'bot'}" .label=${this.aiTriageMode ? 'Back to Manual Triage' : 'AI-Assisted Batch Triage'} @click=${() => ResearchStore.setState({ aiTriageMode: !this.aiTriageMode })}></sutram-btn>
             </div>
 
             ${this.aiTriageMode ? html`
@@ -330,14 +351,14 @@ export class InSetuExtResearch extends InSetuElement {
                     <h3 style="margin-top: 0; color: var(--intent-highlight); margin-bottom: 15px;">Batch Triage Pipeline</h3>
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 1: Download Context</h4>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Downloads all fully-scraped pending URLs in this job as chunked text files.</p>
-                    <sutram-async-btn style="margin-bottom: 25px; display: block;" label="📦 Pack Context Files" intent="primary" .onClick=${this._getGenerateContextAction(job.id)}></sutram-async-btn>
+                    <sutram-async-btn style="margin-bottom: 25px; display: block;" icon="package" label="Pack Context Files" intent="primary" .onClick=${this._getGenerateContextAction(job.id)}></sutram-async-btn>
 
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 2: Prompt Template</h4>
                     <sutram-textarea readonly style="width: 100%; min-height: 160px; margin-bottom: 25px;" .value=${'Review these scraped documents. I am researching [INSERT TOPIC]. Filter out any documents that are SEO spam, irrelevant, or low quality. Output your response as a raw JSON object containing three arrays of `id` strings: `accept` (highly relevant), `reject` (spam/irrelevant), and `rescan` (relevant but poorly formatted or truncated). Do not include markdown blocks. Example: {"accept": ["id-1"], "reject": ["id-2"], "rescan": ["id-3"]}'}></sutram-textarea>
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 3: Ingest AI Triage</h4>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Paste the raw JSON object from the LLM here to process the batch.</p>
                     <sutram-textarea id="rs-ai-json-input" .value=${this._aiJsonInput} @sutram-input-changed=${e => this._aiJsonInput = e.detail.value} placeholder='{"accept": [], "reject": [], "rescan": []}' style="width: 100%; min-height: 120px; margin-bottom: 10px;"></sutram-textarea>
-                    <sutram-async-btn style="width: 100%; display: block;" label="🤖 Execute Triage" intent="highlight" .onClick=${this.executeAITriage.bind(this)}></sutram-async-btn>
+                    <sutram-async-btn style="width: 100%; display: block;" icon="bot" label="Execute Triage" intent="highlight" .onClick=${this.executeAITriage.bind(this)}></sutram-async-btn>
                 </div>
             ` : html`
                 <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
@@ -355,9 +376,9 @@ export class InSetuExtResearch extends InSetuElement {
                                         icon="file-text"
                                         ?selected=${isSelected}
                                         intent="primary"
-                                        @card-clicked=${() => ResearchStore.setState({ selectedItemId: item.id })}>
-                                        ${item.status === 'duplicate' ? html`<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;"><span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold;">⚠️ Already Scraped</span><button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-warning); color: var(--intent-warning); padding: 2px 8px; margin: 0; font-size: 0.7rem;" @click=${(e) => { e.stopPropagation(); this.handleDisposition(item.id, 'force_scrape'); }}>Force Scrape Anyway</button></div>` : ''}
-                                        ${item.status === 'in_library' ? html`<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;"><span style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold;">📚 In Library</span><button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-highlight); color: var(--intent-highlight); padding: 2px 8px; margin: 0; font-size: 0.7rem;" @click=${(e) => { e.stopPropagation(); this.handleDisposition(item.id, 'force_scrape'); }}>Force Scrape Anyway</button></div>` : ''}
+                                        @card-clicked=${() => ResearchStore.getState().openItemPreview(item.id)}>
+                                        ${item.status === 'duplicate' ? html`<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;"><span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold;">⚠️ Already Scraped</span><sutram-btn size="sm" intent="warning" label="Force Scrape Anyway" style="padding: 2px 8px; margin: 0; font-size: 0.7rem;" @click=${(e) => { e.stopPropagation(); this.handleDisposition(item.id, 'force_scrape'); }}></sutram-btn></div>` : ''}
+                                        ${item.status === 'in_library' ? html`<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;"><span style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold;">📚 In Library</span><sutram-btn size="sm" intent="highlight" label="Force Scrape Anyway" style="padding: 2px 8px; margin: 0; font-size: 0.7rem;" @click=${(e) => { e.stopPropagation(); this.handleDisposition(item.id, 'force_scrape'); }}></sutram-btn></div>` : ''}
                                     </sutram-card>
                                 `;
                             })}
@@ -367,17 +388,14 @@ export class InSetuExtResearch extends InSetuElement {
             `}
         `;
     }
-
     render() {
-        const activeItem = this.inbox.find(i => i.id === this.selectedItemId);
-
         return html`
             <div class="rs-layout">
                 ${!this.selectedJobId ? html`
                     <div class="rs-view active" style="overflow-y: auto; padding-right: 5px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
                             <h4 style="margin: 0; color: var(--text);">Active & Past Jobs</h4>
-                            <sutram-btn size="sm" intent="success" label="➕ New Job" @click=${() => ResearchStore.setState({ newJobModalOpen: true })}></sutram-btn>
+                            <sutram-btn size="sm" intent="success" icon="plus" label="New Job" @click=${() => ResearchStore.setState({ newJobModalOpen: true })}></sutram-btn>
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 10px;">
                             ${(this.jobs || []).map(job => this._renderJobCard(job))}
@@ -389,31 +407,6 @@ export class InSetuExtResearch extends InSetuElement {
                     </div>
                 `}
             </div>
-            ${!!activeItem ? html`
-            <sutram-modal ?open=${true} titleText="Research Item Preview" ?fullscreen=${true} @sutram-modal-closed=${() => ResearchStore.setState({ selectedItemId: null })}>
-                <div slot="body" style="display: contents;">
-                    ${activeItem ? html`
-                        <div style="padding: 15px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; background: var(--input-bg);">
-                            <div>
-                                <div style="margin-bottom: 4px; font-weight: bold; color: var(--intent-highlight); font-size: 1.15rem;">${activeItem.title || 'Untitled'}</div>
-                                <div style="margin-bottom: 4px;"><a href="${activeItem.url}" target="_blank" style="color: var(--intent-primary); font-size: 0.85rem; word-break: break-all; font-weight: normal; text-decoration: none;">🔗 ${activeItem.url}</a></div>
-                                <div style="color: var(--text-muted); font-family: monospace; font-size: 0.75rem; font-weight: normal; user-select: all;">Item ID: ${activeItem.id}</div>
-                            </div>
-                            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                                <div style="display: flex; gap: 5px; flex: 1; min-width: 200px;">
-                                    <sutram-input .value=${this.targetDir || 'research/'} placeholder="Target path (e.g. research/)" style="flex: 1; margin: 0; font-family: monospace;" @sutram-input-changed=${(e) => ResearchStore.setState({ targetDir: e.detail.value })}></sutram-input>
-                                    <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 6px 12px;" @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}>...</button>
-                                </div>
-                                <button class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${() => this.handleDisposition(activeItem.id, 'accepted')}>✅ Accept to Workspace</button>
-                                <button class="btn-sm" style="background: var(--intent-danger); margin: 0;" @click=${() => this.handleDisposition(activeItem.id, 'rejected')}>🗑️ Reject</button>
-                                <button class="btn-sm" style="background: var(--intent-warning); margin: 0;" @click=${() => this.handleDisposition(activeItem.id, 'force_scrape')}>🔄 Re-Scrape</button>
-                            </div>
-                        </div>
-                        <div tabindex="0" style="flex: 1; overflow-y: auto; padding: 20px; font-size: 0.95rem; outline: none;" .innerHTML=${activeItem.raw_markdown ? marked.parse(activeItem.raw_markdown) : '<span style="color: var(--intent-warning); font-style: italic;">Awaiting extraction...</span>'}></div>
-                    ` : ''}
-                </div>
-            </sutram-modal>
-            ` : ''}
             ${this.newJobModalOpen ? html`
             <sutram-modal ?open=${true} ?fullscreen=${true} titleText="New Research Job" @sutram-modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
                 <div slot="body" style="display: contents;">
@@ -437,7 +430,7 @@ export class InSetuExtResearch extends InSetuElement {
                         <div style="flex: 1;">
                             <div style="display: flex; gap: 8px; align-items: flex-end;">
                                 ${bindStoreInput(ResearchStore, 'targetDir', this.targetDir || 'research/', { label: 'Default Output Folder', placeholder: 'e.g. research/', style: 'flex: 1; font-family: monospace;' })}
-                                <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 12px; height: 38px;" @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}>...</button>
+                                <sutram-btn size="sm" intent="highlight" label="..." style="margin: 0; padding: 8px 12px; height: 38px;" @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}></sutram-btn>
                             </div>
                         </div>
                     </div>
@@ -448,13 +441,101 @@ export class InSetuExtResearch extends InSetuElement {
                         </div>
                     </div>
                 </div>
-                <sutram-async-btn slot="footer" label="🚀 Start Scraping" loadingLabel="⏳ Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></sutram-async-btn>
+                <sutram-async-btn slot="footer" icon="rocket" label="Start Scraping" loadingLabel="Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></sutram-async-btn>
             </sutram-modal>
             ` : ''}
         `;
     }
 }
 customElements.define('insetu-ext-research', InSetuExtResearch);
+
+export class InSetuResearchPreviewProjection extends InSetuElement {
+    static get extensionName() { return 'research'; }
+    static properties = {
+        inbox: { type: Array },
+        selectedItemId: { type: String },
+        targetDir: { type: String }
+    };
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+    `];
+    constructor() {
+        super();
+        const st = ResearchStore.getState();
+        this.inbox = st.inbox || [];
+        this.selectedItemId = st.selectedItemId || null;
+        this.targetDir = st.targetDir || 'research/';
+    }
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(ResearchStore, state => {
+            this.inbox = state.inbox || [];
+            this.selectedItemId = state.selectedItemId;
+            this.targetDir = state.targetDir || 'research/';
+            this.requestUpdate();
+        });
+    }
+    async handleDisposition(inboxId, status) {
+        const item = this.inbox.find(i => i.id === inboxId);
+        if (!item) return;
+
+        if (status === 'accepted') {
+            const targetDir = (this.targetDir || 'research/').replace(/\/+$/, '') + '/';
+            const slug = (() => {
+                const generated = this.utils.slugify(item.title);
+                return (generated || 'research-note').replace(/^-+|-+$/g, '').substring(0, 60);
+            })();
+            const filepath = targetDir + slug + '.md';
+
+            const success = await this.sys.executeWorkspaceMutation('fs/save', { filepath, content: item.raw_markdown }, { silent: true });
+            if (!success) return alert("Failed to write Markdown to disk.");
+        }
+
+        try {
+            await this.api.postJson(`inbox/${inboxId}/disposition`, { status });
+            if (window.Sutram?.stores?.Layout) {
+                window.Sutram.stores.Layout.getState().closeWindow('research:preview');
+            }
+            const currentInbox = this.inbox;
+            if (status === 'force_scrape') {
+                const updatedInbox = currentInbox.map(i => i.id === inboxId ? { ...i, status: 'pending', scraped_at: null, raw_markdown: null } : i);
+                ResearchStore.setState({ inbox: updatedInbox });
+            } else {
+                const updatedInbox = currentInbox.filter(i => i.id !== inboxId);
+                ResearchStore.setState({ inbox: updatedInbox });
+            }
+        } catch (err) {
+            alert(`Disposition failed: ${err.message}`);
+        }
+    }
+    render() {
+        const activeItem = this.inbox.find(i => i.id === this.selectedItemId);
+        if (!activeItem) return html``;
+        return html`
+            <div style="padding: 15px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; background: var(--input-bg); flex-shrink: 0;">
+                <div>
+                    <div style="margin-bottom: 4px; font-weight: bold; color: var(--intent-highlight); font-size: 1.15rem;">${activeItem.title || 'Untitled'}</div>
+                    <div style="margin-bottom: 4px; display: flex; align-items: center; gap: 6px;"><yv-icon name="link" style="width: 14px; height: 14px; color: var(--intent-primary); flex-shrink: 0;"></yv-icon><a href="${activeItem.url}" target="_blank" style="color: var(--intent-primary); font-size: 0.85rem; word-break: break-all; font-weight: normal; text-decoration: none;">${activeItem.url}</a></div>
+                    <div style="color: var(--text-muted); font-family: monospace; font-size: 0.75rem; font-weight: normal; user-select: all;">Item ID: ${activeItem.id}</div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                    <div style="display: flex; gap: 5px; flex: 1; min-width: 200px;">
+                        <sutram-input ?flush=${true} .value=${this.targetDir || 'research/'} placeholder="Target path (e.g. research/)" style="flex: 1; margin: 0; font-family: monospace;" @sutram-input-changed=${(e) => ResearchStore.setState({ targetDir: e.detail.value })}></sutram-input>
+                        <sutram-btn size="sm" intent="highlight" label="..." style="margin: 0; padding: 6px 12px;" @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}></sutram-btn>
+                    </div>
+                    <sutram-btn size="sm" intent="success" icon="check" label="Accept to Workspace" style="margin: 0;" @click=${() => this.handleDisposition(activeItem.id, 'accepted')}></sutram-btn>
+                    <sutram-btn size="sm" intent="danger" icon="trash-2" label="Reject" style="margin: 0;" @click=${() => this.handleDisposition(activeItem.id, 'rejected')}></sutram-btn>
+                    <sutram-btn size="sm" intent="warning" icon="refresh-cw" label="Re-Scrape" style="margin: 0;" @click=${() => this.handleDisposition(activeItem.id, 'force_scrape')}></sutram-btn>
+                </div>
+            </div>
+            <sutram-scroll-view padding="20px">
+                <div tabindex="0" style="font-size: 0.95rem; outline: none; white-space: pre-wrap; font-family: var(--font-mono);" .textContent=${activeItem.raw_markdown || 'Awaiting extraction...'}></div>
+            </sutram-scroll-view>
+        `;
+    }
+}
+customElements.define('insetu-research-preview-projection', InSetuResearchPreviewProjection);
+
 export class InSetuExtResearchActions extends InSetuElement {
     static properties = { selectedJobId: { type: String } };
     static styles = [sharedStyles, css`

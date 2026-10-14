@@ -7,6 +7,17 @@ export const GitStore = createExtensionStore('Git', {
     reposStatus: {},
     currentPushRepo: '',
     currentPushDiffFile: '',
+    pushChangelogs: [],
+    gitPushMessage: '',
+    activeRepo: '',
+    newBranchName: '',
+    branchModalOpen: false,
+    runtimeStrategy: 'rebase',
+    repoStrategies: {},
+    activeRemoteRepo: '',
+    remoteUrlInput: '',
+    remoteConflict: false,
+    remoteModalOpen: false,
     activeSweepJobId: null,
     activePushJobId: null,
     activeDiffJobId: null,
@@ -23,8 +34,14 @@ export const GitStore = createExtensionStore('Git', {
             console.error("Failed to fetch git status", e); 
         }
     })
+}, {
+    onEvict: {
+        'git:push': { currentPushRepo: '', currentPushDiffFile: '', gitPushMessage: '', pushChangelogs: [] },
+        'git:preview': { runtimeStrategy: 'rebase' }
+    }
 });
 window.inSetu.stores.Git = GitStore;
+
 export async function generateDiffs(force = false) {
     const gitStoreObj = typeof GitStore !== 'undefined' ? GitStore : window.inSetu?.stores?.Git;
     if (!gitStoreObj || !gitStoreObj.getState) return;
@@ -69,20 +86,14 @@ export class InSetuExtGitDiffs extends InSetuElement {
         searchQuery: { type: String },
         categoryOrder: { type: Array },
         hiddenOutputs: { type: Array },
-        pushModalOpen: { type: Boolean },
-        pushChangelogs: { type: Array },
         sweepFiles: { type: Object },
         selectedSweepFiles: { type: Object },
         sweepExpandedRepos: { type: Object },
         sweepLoading: { type: Boolean },
-        gitPushMessage: { type: String },
-        currentPushRepo: { type: String },
-        currentPushDiffFile: { type: String },
         activePushJobId: { type: String },
         activeModules: { type: Array },
         pendingModules: { type: Array },
-        isPipelineActive: { type: Boolean },
-        _showFilters: { type: Boolean }
+        isPipelineActive: { type: Boolean }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
@@ -94,15 +105,10 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.searchQuery = '';
         this.categoryOrder = [];
         this.hiddenOutputs = [];
-        this.pushModalOpen = false;
-        this.pushChangelogs = [];
         this.sweepFiles = {};
         this.selectedSweepFiles = {};
         this.sweepExpandedRepos = new Set();
         this.sweepLoading = false;
-        this.gitPushMessage = '';
-        this.currentPushRepo = '';
-        this.currentPushDiffFile = '';
         this.activePushJobId = null;
     }
     connectedCallback() {
@@ -111,9 +117,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
             this.activeDiffJobId = state.activeDiffJobId;
             this.diffJobError = state.diffJobError;
             this.activePushJobId = state.activePushJobId;
-            this.requestUpdate();
-        });
-        this.subscribe(GitStore, (state) => {
             this.requestUpdate();
         });
         this.subscribe(AppStore, state => {
@@ -185,39 +188,48 @@ disconnectedCallback() {
     }
     async _handleOpenPush(e) {
         const { diffFile, repo } = e.detail;
-        this.currentPushDiffFile = diffFile;
-        this.currentPushRepo = repo;
-        this.gitPushMessage = '';
-        this.pushChangelogs = [];
-        this.pushModalOpen = true;
+        let resolvedRepo = repo;
+        if (!resolvedRepo && diffFile) {
+            const manifestObj = AppStore.getState().manifest?.ctx?.[diffFile];
+            resolvedRepo = manifestObj?.meta?.repo || '';
+            if (!resolvedRepo) {
+                const allRepos = AppStore.getState().allRepos || [];
+                const base = diffFile.split('/').pop().replace('_diffs.txt', '');
+                resolvedRepo = allRepos.find(r => r.replace(/-/g, '_').toLowerCase() === base.toLowerCase() || base.toLowerCase().startsWith(r.replace(/-/g, '_').toLowerCase() + '_')) || '';
+            }
+        }
+        GitStore.setState({
+            currentPushDiffFile: diffFile,
+            currentPushRepo: resolvedRepo,
+            gitPushMessage: '',
+            pushChangelogs: []
+        });
+        if (window.Sutram?.stores?.Layout) {
+            const layout = window.Sutram.stores.Layout.getState();
+            layout.openWindow({
+                id: 'git:push',
+                component: 'insetu-git-push-projection',
+                label: `Commit & Push: ${repo || ''}`,
+                icon: 'send',
+                intent: 'highlight',
+                extName: 'git',
+                windowOnly: true
+            }, layout.focusedColumn || 'center', 1);
+        }
         try {
-            const res = await this.api.get(`changelogs?repo=${encodeURIComponent(repo || '')}&t=${Date.now()}`);
+            const res = await this.api.get(`changelogs?repo=${encodeURIComponent(resolvedRepo || '')}&t=${Date.now()}`);
             if (res.ok) {
                 const data = await res.json();
                 if (data.changelogs && data.changelogs.length > 0) {
-                    this.pushChangelogs = data.changelogs;
-                    this.gitPushMessage = data.changelogs[0].title;
+                    GitStore.setState({
+                        pushChangelogs: data.changelogs,
+                        gitPushMessage: data.changelogs[0].title
+                    });
                 }
             }
         } catch (err) {
             console.error("Failed to load changelogs.");
         }
-    }
-    _getPushAction() {
-        return this.api.bindJobAction('push', () => {
-            const msg = this.gitPushMessage.trim();
-            if (!msg) throw new Error("Please enter a commit message.");
-            if (!this.currentPushRepo) throw new Error("Repository context missing.");
-            this.pushModalOpen = false;
-            return { repo: this.currentPushRepo, message: msg, diff_file: this.currentPushDiffFile };
-        }, {
-            onProgress: (progressMsg) => { this.gitPushMessage = progressMsg || "Pushing to remote... please wait."; },
-            onComplete: async (statusData) => {
-                const { currentPushRepo } = GitStore.getState();
-                alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
-            },
-            onError: (err) => alert(`❌ Push failed:\n\n${err.message}`)
-        });
     }
     async _fetchSweepStatusSilent() {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('git')) return;
@@ -264,11 +276,11 @@ disconnectedCallback() {
             if (!msg) throw new Error("Commit message required.");
             return { selections, message: msg };
         }, {
-            onProgress: (msg) => { if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg || "Sweeping workspaces..."}`, null); },
+            onProgress: (msg) => { if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`${msg || "Sweeping workspaces..."}`, null); },
             onComplete: async (statusData) => {
-                alert(`✅ Global Sweep successful:\n\n${statusData.message}`);
+                alert(`Global Sweep successful:\n\n${statusData.message}`, 'success');
             },
-            onError: (err) => alert(`❌ Global Sweep failed:\n\n${err.message}`)
+            onError: (err) => alert(`Global Sweep failed:\n\n${err.message}`, 'danger')
         });
     }
     _getRepoSweepAction(repo) {
@@ -286,10 +298,10 @@ disconnectedCallback() {
                 delete this.selectedSweepFiles[repo];
                 this.requestUpdate();
 
-                alert(`✅ Sweep successful for ${repo}:\n\n${statusData.message}`);
+                alert(`Sweep successful for ${repo}:\n\n${statusData.message}`, 'success');
                 this._fetchSweepStatusSilent();
             },
-            onError: (err) => alert(`❌ Sweep failed for ${repo}:\n\n${err.message}`)
+            onError: (err) => alert(`Sweep failed for ${repo}:\n\n${err.message}`, 'danger')
         });
     }
 
@@ -358,10 +370,9 @@ disconnectedCallback() {
                 .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
                 <insetu-repo-filter
                     slot="filters"
-                    label="📌 Repos:"
                     .repos=${this.ecosystem.allRepos}
                     .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
-                    @repo-filter-changed=${(e) => window.inSetu.stores.Gather.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                    @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
             </sutram-toolbar>
             <sutram-scroll-view>
@@ -374,7 +385,7 @@ disconnectedCallback() {
                         ?open=${true}>
                         <div style="display: flex; flex-direction: column; gap: 8px;">
                             ${categories[catName].map(f => {
-                                const descText = f.branch ? `🌿 Branch: ${f.branch}` : f.description;
+                                const descText = f.branch ? `Branch: ${f.branch}` : f.description;
                                 const repoStr = f.repoDir ? `[${f.repoDir}] ` : '';
                                 // Extract sizes if previously stuffed into detailText
                                 const sizeStr = (f.detailText && f.detailText.includes(' | ')) ? f.detailText.split(' | ')[1] : "";
@@ -412,17 +423,17 @@ disconnectedCallback() {
                 ${!isGitLoading && diffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px; padding: 0;">Diffs automatically map when this tab is opened.</p>` : ''}
                 ${!isGitLoading && Object.keys(this.sweepFiles).some(r => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)) ? html`
                     <sutram-collapsible 
-                        titleText="🧹 Sweepable State" 
+                        titleText="Sweepable State" 
                         intent="neutral" 
                         ?open=${true}>
-                        <sutram-async-btn slot="actions" label="🚀 Sweep All" intent="primary" style="margin: 0;" .onClick=${this._getSweepAllAction()}></sutram-async-btn>
+                        <sutram-async-btn slot="actions" icon="send" label="Sweep All" intent="primary" style="margin: 0;" .onClick=${this._getSweepAllAction()}></sutram-async-btn>
 
                         <div style="display: flex; flex-direction: column; gap: 8px;">
                             <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
                             ${Object.entries(this.sweepFiles).filter(([r, _]) => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)).map(([repo, files]) => {
                                 const isLocked = this.sweepLoading;
                                 const branch = GitStore.getState().reposStatus[repo]?.current;
-                                const descText = branch ? `🌿 Branch: ${branch} | ${files.length} untracked or excluded files pending.` : `${files.length} untracked or excluded files pending.`;
+                                const descText = branch ? `Branch: ${branch} -${files.length} untracked or excluded files pending.` : `${files.length} untracked or excluded files pending.`;
                                 return html`
                                 <sutram-card
                                     style="opacity: ${isLocked ? '0.6' : '1'}; pointer-events: ${isLocked ? 'none' : 'auto'}; transition: opacity 0.2s ease;"
@@ -473,60 +484,109 @@ disconnectedCallback() {
                     </sutram-collapsible>
                 ` : ''}
                 ${!isGitLoading && diffFiles.length === 0 && Object.keys(this.sweepFiles).length === 0 && !this.sweepLoading ? html`
-                    <div style="background: var(--input-bg); border: 1px dashed var(--border); border-radius: 6px; padding: 30px 15px; text-align: center; margin: 20px;">
-                        <div style="font-size: 2.5rem; margin-bottom: 10px;">✨</div>
+                    <div style="background: var(--input-bg); border: 1px dashed var(--border); border-radius: 6px; padding: 30px 15px; text-align: center; margin: 20px; display: flex; flex-direction: column; align-items: center;">
+                        <yv-icon name="sparkles" style="width: 36px; height: 36px; color: var(--intent-success); margin-bottom: 10px;"></yv-icon>
                         <h3 style="margin: 0 0 5px 0; color: var(--text);">Working Tree Clean</h3>
                         <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0;">No diffs or untracked metadata detected.</p>
                     </div>
                 ` : ''}
             </sutram-scroll-view>
             </div>
-            ${this.pushModalOpen ? html`
-            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="🚀 Commit & Push" @sutram-modal-closed=${() => this.pushModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
-                    ${(() => {
-                        const selectValue = this.pushChangelogs.some(cl => cl.title === this.gitPushMessage) ? this.gitPushMessage : '';
-                        return html`
-                            <sutram-select 
-                                label="Recent Changelogs"
-                                .value=${selectValue}
-                                .options=${[{ value: '', label: '-- Type a custom message below --' }, ...this.pushChangelogs.map(cl => ({ value: cl.title, label: cl.title }))]}
-                                @sutram-input-changed=${(e) => this.gitPushMessage = e.detail.value}>
-                            </sutram-select>
-                        `;
-                    })()}
-                    <sutram-textarea  
-                        label="Commit Message"
-                        placeholder="Enter commit message..."
-                        .value=${this.gitPushMessage}
-                        @sutram-input-changed=${(e) => this.gitPushMessage = e.detail.value}>
-                    </sutram-textarea>
-                </div>
-                <sutram-async-btn slot="footer" label="🚀 Execute Push" intent="primary" .onClick=${this._getPushAction()}></sutram-async-btn>
-            </sutram-modal>
-            ` : ''}
         `;
     }
 }
 customElements.define('insetu-ext-git-diffs', InSetuExtGitDiffs);
+
+export class InSetuGitPushProjection extends InSetuElement {
+    static get extensionName() { return 'git'; }
+    static properties = {
+        currentPushRepo: { type: String },
+        currentPushDiffFile: { type: String },
+        pushChangelogs: { type: Array },
+        gitPushMessage: { type: String }
+    };
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+    `];
+    constructor() {
+        super();
+        const st = GitStore.getState();
+        this.currentPushRepo = st.currentPushRepo || '';
+        this.currentPushDiffFile = st.currentPushDiffFile || '';
+        this.pushChangelogs = st.pushChangelogs || [];
+        this.gitPushMessage = st.gitPushMessage || '';
+    }
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(GitStore, state => {
+            this.currentPushRepo = state.currentPushRepo || '';
+            this.currentPushDiffFile = state.currentPushDiffFile || '';
+            this.pushChangelogs = state.pushChangelogs || [];
+            this.gitPushMessage = state.gitPushMessage || '';
+            this.requestUpdate();
+        });
+    }
+    _getPushAction() {
+        let pushedRepo = '';
+        return this.api.bindJobAction('push', () => {
+            const msg = (this.gitPushMessage || '').trim();
+            const repo = (this.currentPushRepo || '').trim();
+            const diffFile = this.currentPushDiffFile || '';
+            if (!msg) throw new Error("Please enter a commit message.");
+            if (!repo) throw new Error("Repository context missing.");
+            pushedRepo = repo;
+            if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('git:push');
+            return { repo, message: msg, diff_file: diffFile };
+        }, {
+            onProgress: (progressMsg) => {
+                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`${progressMsg || "Pushing to remote..."}`, null);
+            },
+            onComplete: async (statusData) => {
+                alert(`Successfully pushed ${pushedRepo}!\n\n${statusData.message}`, 'success');
+            },
+            onError: (err) => alert(`Push failed:\n\n${err.message}`, 'danger')
+        });
+    }
+    render() {
+        const selectValue = this.pushChangelogs.some(cl => cl.title === this.gitPushMessage) ? this.gitPushMessage : '';
+        return html`
+            <sutram-scroll-view padding="15px" style="gap: 12px;">
+                <sutram-select 
+                    label="Recent Changelogs"
+                    .value=${selectValue}
+                    .options=${[{ value: '', label: '-- Type a custom message below --' }, ...this.pushChangelogs.map(cl => ({ value: cl.title, label: cl.title }))]}
+                    @sutram-input-changed=${(e) => GitStore.setState({ gitPushMessage: e.detail.value })}>
+                </sutram-select>
+                <sutram-textarea  
+                    label="Commit Message"
+                    placeholder="Enter commit message..."
+                    .value=${this.gitPushMessage}
+                    @sutram-input-changed=${(e) => GitStore.setState({ gitPushMessage: e.detail.value })}>
+                </sutram-textarea>
+            </sutram-scroll-view>
+            <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; gap: 10px; flex-shrink: 0;">
+                <sutram-btn intent="neutral" icon="x" label="Cancel" style="flex: 1; margin: 0;" @click=${() => {
+                    if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('git:push');
+                }}></sutram-btn>
+                <sutram-async-btn icon="send" label="Execute Push" intent="primary" style="flex: 2; margin: 0;" .onClick=${this._getPushAction()}></sutram-async-btn>
+            </div>
+        `;
+    }
+}
+customElements.define('insetu-git-push-projection', InSetuGitPushProjection);
 export class InSetuExtGitCtrl extends InSetuElement {
     static get extensionName() { return 'git'; }
     static properties = {
         reposStatus: { type: Object },
         branchModalOpen: { type: Boolean },
+        remoteModalOpen: { type: Boolean },
         activeRepo: { type: String },
         newBranchName: { type: String },
-        activePullJobId: { type: String },
-        pullMessage: { type: String },
-        previewModalOpen: { type: Boolean },
-        previewRepo: { type: String },
-        previewMessage: { type: String },
-        remoteModalOpen: { type: Boolean },
-        remoteUrlInput: { type: String },
         activeRemoteRepo: { type: String },
+        remoteUrlInput: { type: String },
         remoteConflict: { type: Boolean },
-        _runtimeStrategy: { type: String },
-        _repoStrategies: { type: Object }
+        activePullJobId: { type: String },
+        pullMessage: { type: String }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; overflow: hidden; container-type: inline-size; }
@@ -535,25 +595,49 @@ export class InSetuExtGitCtrl extends InSetuElement {
         super();
         this.reposStatus = {};
         this.branchModalOpen = false;
+        this.remoteModalOpen = false;
         this.activeRepo = '';
         this.newBranchName = '';
+        this.activeRemoteRepo = '';
+        this.remoteUrlInput = '';
+        this.remoteConflict = false;
         this.activePullJobId = null;
         this.pullMessage = '';
-        this.previewModalOpen = false;
-        this.previewRepo = '';
-        this.previewMessage = '';
-        this.remoteModalOpen = false;
-        this.remoteUrlInput = '';
-        this.activeRemoteRepo = '';
-        this.remoteConflict = false;
-        this._runtimeStrategy = 'rebase';
-        this._repoStrategies = {};
     }
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(GitStore, (state) => {
             this.reposStatus = state.reposStatus || {};
+            this.branchModalOpen = !!state.branchModalOpen;
+            this.remoteModalOpen = !!state.remoteModalOpen;
+            this.activeRepo = state.activeRepo || '';
+            this.newBranchName = state.newBranchName || '';
+            this.activeRemoteRepo = state.activeRemoteRepo || '';
+            this.remoteUrlInput = state.remoteUrlInput || '';
+            this.remoteConflict = !!state.remoteConflict;
             this.requestUpdate();
+        });
+        this.registerGlobalListener('insetu:git:ctrl-init', window, (e) => {
+            const branch = prompt(`Initialize Git repository for '${e.detail.repoDir}' on branch:`, 'main');
+            if (branch) this._initRepo(e.detail.repoDir, branch.trim());
+        });
+        this.registerGlobalListener('insetu:git:ctrl-remote', window, (e) => {
+            GitStore.setState({
+                activeRemoteRepo: e.detail.repoDir,
+                remoteUrlInput: '',
+                remoteConflict: false,
+                remoteModalOpen: true
+            });
+        });
+        this.registerGlobalListener('insetu:git:ctrl-pull', window, (e) => {
+            this._previewPull(e.detail.repoDir);
+        });
+        this.registerGlobalListener('insetu:git:ctrl-branch', window, (e) => {
+            GitStore.setState({
+                activeRepo: e.detail.repoDir,
+                newBranchName: '',
+                branchModalOpen: true
+            });
         });
         this.reposStatus = GitStore.getState().reposStatus || {};
         GitStore.getState().fetchStatus();
@@ -584,6 +668,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     }
                 });
                 this._repoStrategies = strategies;
+                GitStore.setState({ repoStrategies: strategies });
             }
         } catch(e) { console.error("Failed to load extension settings", e); }
     }
@@ -596,13 +681,101 @@ export class InSetuExtGitCtrl extends InSetuElement {
             onComplete: (statusData) => {
                 this.activePullJobId = null;
                 if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`✅ Fetch complete.`, 2000);
-                this.previewRepo = repo;
-                this.previewMessage = statusData.message || 'Already up to date.';
-                this.previewModalOpen = true;
+                if (window.Sutram?.stores?.Layout) {
+                    const layout = window.Sutram.stores.Layout.getState();
+                    const closeWin = () => layout.closeWindow('git:preview');
+                    const currentStrategy = GitStore.getState().repoStrategies?.[repo] || 'rebase';
+                    const extraControls = currentStrategy === 'runtime' ? html`
+                        <div style="background: var(--input-bg); padding: 12px; border-radius: 6px; border: 1px solid var(--border);">
+                            <sutram-select 
+                                label="Reconciliation Strategy"
+                                ?flush=${true}
+                                .value=${GitStore.getState().runtimeStrategy || 'rebase'}
+                                .options=${[
+                                    { value: 'rebase', label: 'Rebase (--rebase)' },
+                                    { value: 'merge', label: 'Merge (--no-rebase)' },
+                                    { value: 'ff_only', label: 'Fast-Forward Only (--ff-only)' }
+                                ]}
+                                @sutram-input-changed=${(e) => GitStore.setState({ runtimeStrategy: e.detail.value })}>
+                            </sutram-select>
+                        </div>
+                    ` : null;
+
+                    const executePull = this.api.bindJobAction('pull', () => {
+                        closeWin();
+                        const strat = (currentStrategy === 'runtime') ? (GitStore.getState().runtimeStrategy || 'rebase') : currentStrategy;
+                        return { repo, strategy: strat };
+                    }, {
+                        onProgress: (msg) => {
+                            if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg}`, null);
+                        },
+                        onComplete: (resData) => {
+                            if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`✅ Pull complete.`, 2000);
+                            alert(`✅ Pull successful for ${repo}\n\n${resData.message}`);
+                            GitStore.getState().fetchStatus();
+                        },
+                        onError: (err) => {
+                            alert(`❌ Pull failed for ${repo}\n\n${err.message}`);
+                        }
+                    });
+
+                    layout.openWindow({
+                        id: 'git:preview',
+                        component: 'sutram-report-projection',
+                        label: `Incoming Changes: ${repo}`,
+                        icon: 'download',
+                        intent: 'primary',
+                        extName: 'git',
+                        windowOnly: true,
+                        props: {
+                            content: statusData.message || 'Already up to date.',
+                            suggestedFilename: `git_preview_${repo}_${Date.now()}.txt`,
+                            extraContent: extraControls,
+                            actions: [
+                                { label: 'Cancel', icon: 'x', intent: 'danger', onClick: closeWin },
+                                { label: 'Confirm & Pull', icon: 'download', intent: 'primary', primary: true, asyncAction: executePull }
+                            ]
+                        }
+                    }, layout.focusedColumn || 'center', 1);
+                }
             },
             onError: (err) => {
                 this.activePullJobId = null;
                 alert(`❌ Fetch failed for ${repo}\n\n${err.message}`);
+            }
+        });
+    }
+
+    async _checkoutBranch(repo, branch, createNew = false) {
+        const action = this.api.bindJobAction('checkout', { repo, branch, create_new: createNew }, {
+            onComplete: (statusData) => {
+                alert(`✅ Checkout successful for ${repo}\n\n${statusData.message}`);
+                GitStore.setState({ branchModalOpen: false });
+                GitStore.getState().fetchStatus();
+            },
+            onError: (err) => alert(`❌ Checkout failed for ${repo}\n\n${err.message}`)
+        });
+        try { await action(); } catch(e) {}
+    }
+
+    _getConnectRemoteAction(resolution = null) {
+        return this.api.bindJobAction('remote/add', () => {
+            const repo = this.activeRemoteRepo;
+            const url = (this.remoteUrlInput || '').trim();
+            if (!url) throw new Error("Please enter a valid Git URL.");
+            return { repo, url, resolution };
+        }, {
+            onComplete: (statusData) => {
+                GitStore.setState({ remoteModalOpen: false, remoteConflict: false });
+                alert(`✅ Remote connected and pushed successfully!\n\n${statusData.message}`);
+                GitStore.getState().fetchStatus();
+            },
+            onError: (err) => {
+                if (err.message.includes('fetch first') || err.message.includes('contains work that you do not have locally') || err.message.includes('non-fast-forward') || err.message.includes('branch tip is behind') || err.message.includes('Updates were rejected')) {
+                    GitStore.setState({ remoteConflict: true });
+                } else {
+                    alert(`❌ Failed to connect remote for ${this.activeRemoteRepo}\n\n${err.message}`);
+                }
             }
         });
     }
@@ -611,18 +784,17 @@ export class InSetuExtGitCtrl extends InSetuElement {
         this.activePullJobId = 'starting';
         try { await this._getPreviewPullAction(repo)(); } catch(e) { this.activePullJobId = null; }
     }
-
     _getInitRepoAction(repo, branch = 'main') {
         return this.api.bindJobAction('init', { repo, branch }, {
             onProgress: (msg) => this.pullMessage = msg,
             onComplete: (statusData) => {
                 this.activePullJobId = null;
-                alert(`✅ ${statusData.message}`);
+                alert(`${statusData.message}`, 'success');
                 GitStore.getState().fetchStatus();
             },
             onError: (err) => {
                 this.activePullJobId = null;
-                alert(`❌ Init failed for ${repo}\n\n${err.message}`);
+                alert(`Init failed for ${repo}\n\n${err.message}`, 'danger');
             }
         });
     }
@@ -632,78 +804,6 @@ export class InSetuExtGitCtrl extends InSetuElement {
         try { await this._getInitRepoAction(repo, branch)(); } catch(e) { this.activePullJobId = null; }
     }
 
-    _getExecutePullAction() {
-        return this.api.bindJobAction('pull', () => {
-            const repo = this.previewRepo;
-            this.previewModalOpen = false;
-            const currentStrategy = this._repoStrategies?.[repo] || 'rebase';
-            const strategy = (currentStrategy === 'runtime') ? this._runtimeStrategy : currentStrategy;
-            return { repo, strategy };
-        }, {
-            onProgress: (msg) => {
-                this.pullMessage = msg;
-                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg}`, null);
-            },
-            onComplete: (statusData) => {
-                this.activePullJobId = null;
-                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`✅ Pull complete.`, 2000);
-                alert(`✅ Pull successful for ${this.previewRepo}\n\n${statusData.message}`);
-                GitStore.getState().fetchStatus();
-            },
-            onError: (err) => {
-                this.activePullJobId = null;
-                alert(`❌ Pull failed for ${this.previewRepo}\n\n${err.message}`);
-            }
-        });
-    }
-
-    _getCheckoutBranchAction(repo, branch, createNew = false) {
-        return this.api.bindJobAction('checkout', { repo, branch, create_new: createNew }, {
-            onProgress: (msg) => this.pullMessage = msg,
-            onComplete: (statusData) => {
-                this.activePullJobId = null;
-                alert(`✅ Checkout successful for ${repo}\n\n${statusData.message}`);
-                this.branchModalOpen = false;
-                GitStore.getState().fetchStatus();
-            },
-            onError: (err) => {
-                this.activePullJobId = null;
-                alert(`❌ Checkout failed for ${repo}\n\n${err.message}`);
-            }
-        });
-    }
-    async _checkoutBranch(repo, branch, createNew = false) {
-        this.activePullJobId = 'starting';
-        this.pullMessage = `Checking out ${branch}...`;
-        try { await this._getCheckoutBranchAction(repo, branch, createNew)(); } catch(e) { this.activePullJobId = null; }
-    }
-
-    _getConnectRemoteAction(resolution = null) {
-        return this.api.bindJobAction('remote/add', () => {
-            const repo = this.activeRemoteRepo;
-            const url = this.remoteUrlInput.trim();
-            if (!url) throw new Error("Please enter a valid Git URL.");
-            this.remoteModalOpen = false;
-            return { repo, url, resolution };
-        }, {
-            onProgress: (msg) => this.pullMessage = msg,
-            onComplete: (statusData) => {
-                this.activePullJobId = null;
-                this.remoteConflict = false;
-                alert(`✅ Remote connected and pushed successfully!\n\n${statusData.message}`);
-                GitStore.getState().fetchStatus();
-            },
-            onError: (err) => {
-                this.activePullJobId = null;
-                if (err.message.includes('fetch first') || err.message.includes('contains work that you do not have locally') || err.message.includes('non-fast-forward') || err.message.includes('branch tip is behind') || err.message.includes('Updates were rejected')) {
-                    this.remoteConflict = true;
-                    this.remoteModalOpen = true;
-                } else {
-                    alert(`❌ Failed to connect remote for ${this.activeRemoteRepo}\n\n${err.message}`);
-                }
-            }
-        });
-    }
     render() {
         return html`
             <sutram-scroll-view padding="15px" style="gap: 15px;">
@@ -714,56 +814,39 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     const status = this.reposStatus[repo] || {};
                     if (status.is_git === false) {
                         return html`
-                            <sutram-card titleText=${repo} descriptionText="Not a Git repository." icon="folder" intent="neutral">
-                                <div slot="actions" style="display: flex; align-items: center; gap: 5px;">
-                                    <sutram-input .value=${"main"} placeholder="main" style="width: 100px; margin: 0;" @sutram-input-changed=${(e) => this.newBranchName = e.detail.value}></sutram-input>
-                                    <sutram-btn size="sm" intent="success" label="✨ Initialize" @click=${() => {
-                                        this._initRepo(repo, this.newBranchName || 'main');
-                                    }}></sutram-btn>
-                                </div>
+                            <sutram-card 
+                                titleText=${repo} 
+                                descriptionText="Not a Git repository." 
+                                icon="folder" 
+                                intent="neutral"
+                                ?disableSelection=${true}
+                                entityType="repo"
+                                .entityData=${{ repoDir: repo, isGitCtrl: true, status }}>
                             </sutram-card>
                         `;
                     }
                     const currentBranch = status.current || 'unknown';
                     const syncText = status.sync_status ? ` | ${status.sync_status}` : '';
-                    const descText = `🌿 Branch: ${currentBranch}${syncText}`;
-                    const currentStrategy = this._repoStrategies?.[repo] || 'rebase';
+                    const descText = `Branch: ${currentBranch}${syncText}`;
                     const conflicts = status.conflicts || [];
-                    const conflictBadge = conflicts.length > 0 ? html`<span slot="header-tags" class="task-tag" style="background: var(--intent-danger); color: white; border: 1px solid var(--intent-danger); margin-left: 5px;">⚠️ ${conflicts.length} Conflict${conflicts.length > 1 ? 's' : ''}</span>` : '';
-
+                    const conflictBadge = conflicts.length > 0 ? html`<span slot="header-tags" class="task-tag" style="background: var(--intent-danger); color: white; border: 1px solid var(--intent-danger); margin-left: 5px;">${conflicts.length} Conflict${conflicts.length > 1 ? 's' : ''}</span>` : '';
                     return html`
-                        <sutram-card titleText=${repo} descriptionText=${descText} icon="package" intent="${conflicts.length > 0 ? 'danger' : 'neutral'}">
-                            ${conflictBadge}
-                            ${status.has_remote === false ? html`
-                                <sutram-btn slot="actions" size="sm" intent="primary" label="☁️ Connect Remote" style="margin-right: 5px;" @click=${() => {
-                                    this.activeRemoteRepo = repo;
-                                    this.remoteUrlInput = '';
-                                    this.remoteConflict = false;
-                                    this.remoteModalOpen = true;
-                                }}></sutram-btn>
-                            ` : status.sync_status === '☁️ Local Only' ? html`
-                                <sutram-btn slot="actions" size="sm" intent="warning" label="⬆️ Publish / Fix Remote" style="margin-right: 5px;" @click=${() => {
-                                    this.activeRemoteRepo = repo;
-                                    this.remoteUrlInput = '';
-                                    this.remoteConflict = false;
-                                    this.remoteModalOpen = true;
-                                }}></sutram-btn>
-                            ` : html`
-                                <sutram-btn slot="actions" size="sm" intent="primary" label="⬇️ Fetch & Pull..." style="margin-right: 5px;" @click=${() => this._previewPull(repo)}></sutram-btn>
-                            `}
-                            <sutram-btn slot="actions" size="sm" intent="highlight" label="🌿 Switch Branch" @click=${() => {
-                                this.activeRepo = repo;
-                                this.newBranchName = '';
-                                this.branchModalOpen = true;
-                            }}></sutram-btn>
+                        <sutram-card 
+                            titleText=${repo} 
+                            descriptionText=${descText} 
+                            icon="package" 
+                            intent="${conflicts.length > 0 ? 'danger' : 'neutral'}"
+                            ?disableSelection=${true}
+                            entityType="repo"
+                            .entityData=${{ repoDir: repo, isGitCtrl: true, status }}>${conflictBadge}
                         </sutram-card>
                     `;
                 })}
             </sutram-scroll-view>
+
             ${this.branchModalOpen ? html`
-            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Branch Management: ${this.activeRepo}" @sutram-modal-closed=${() => this.branchModalOpen = false}>
-                <div slot="body" style="display: contents;">
-                    <div>
+                <sutram-modal ?open=${true} titleText="Branch Management: ${this.activeRepo}" @sutram-modal-closed=${() => GitStore.setState({ branchModalOpen: false })}>
+                    <div slot="body" style="display: contents;">
                         <sutram-select 
                             label="Switch to Existing Branch"
                             .value=""
@@ -772,82 +855,52 @@ export class InSetuExtGitCtrl extends InSetuElement {
                                 if (e.detail.value) this._checkoutBranch(this.activeRepo, e.detail.value, false);
                             }}>
                         </sutram-select>
-                    </div>
-                    <hr style="border: 0; border-top: 1px solid var(--border); width: 100%;">
-                    <div>
+                        <hr style="border: 0; border-top: 1px solid var(--border); width: 100%; margin: 15px 0;">
                         <div style="display: flex; gap: 10px; align-items: flex-end;">
-                            <sutram-input label="Create New Branch" placeholder="new-feature-branch" .value=${this.newBranchName} @sutram-input-changed=${e => this.newBranchName = e.detail.value} style="flex: 1; margin: 0;"></sutram-input>
-                            <sutram-btn size="sm" intent="success" label="➕ Create & Switch" @click=${() => {
-                                if(this.newBranchName) this._checkoutBranch(this.activeRepo, this.newBranchName, true);
+                            <sutram-input label="Create New Branch" placeholder="new-feature-branch" .value=${this.newBranchName} @sutram-input-changed=${e => GitStore.setState({ newBranchName: e.detail.value })} ?flush=${true} style="flex: 1; margin: 0;"></sutram-input>
+                            <sutram-btn intent="success" icon="plus" label="Create & Switch" style="margin: 0;" @click=${() => {
+                                if (this.newBranchName) this._checkoutBranch(this.activeRepo, this.newBranchName, true);
                             }}></sutram-btn>
                         </div>
                     </div>
-                </div>
-            </sutram-modal>
+                </sutram-modal>
             ` : ''}
-            ${this.previewModalOpen ? html`
-            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Incoming Changes: ${this.previewRepo}" @sutram-modal-closed=${() => this.previewModalOpen = false}>
-                <div slot="body" style="display: contents;">
-                    <pre style="margin: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 10px; border-radius: 4px; overflow-y: auto; max-height: 40vh; white-space: pre-wrap; font-size: 0.85rem;">${this.previewMessage}</pre>
 
-                    ${(() => {
-                        const currentStrategy = this._repoStrategies?.[this.previewRepo] || 'rebase';
-                        if (currentStrategy === 'runtime') {
-                            return html`
-                                <div style="display: flex; align-items: center; gap: 10px; background: var(--input-bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border); margin-top: 5px;">
-                                    <sutram-select 
-                                        label="Reconciliation Strategy"
-                                        .value=${this._runtimeStrategy}
-                                        .options=${[
-                                            { value: 'rebase', label: 'Rebase (--rebase)' },
-                                            { value: 'merge', label: 'Merge (--no-rebase)' },
-                                            { value: 'ff_only', label: 'Fast-Forward Only (--ff-only)' }
-                                        ]}
-                                        @sutram-input-changed=${(e) => this._runtimeStrategy = e.detail.value}>
-                                    </sutram-select>
-                                </div>
-                            `;
-                        }
-                        return '';
-                    })()}
-                </div>
-                <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${() => this.previewModalOpen = false}>Cancel</button>
-                <sutram-async-btn slot="footer" label="⬇️ Confirm & Pull" intent="primary" .onClick=${this._getExecutePullAction()}></sutram-async-btn>
-            </sutram-modal>
-            ` : ''}
             ${this.remoteModalOpen ? html`
-            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Connect Remote: ${this.activeRemoteRepo}" @sutram-modal-closed=${() => this.remoteModalOpen = false}>
-                <div slot="body" style="display: contents;">
-                    ${this.remoteConflict ? html`
-                        <div style="background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 6px; padding: 15px;">
-                            <h4 style="margin: 0 0 10px 0; color: var(--intent-danger);">⚠️ Remote Contains Unmerged Work</h4>
-                            <p style="font-size: 0.85rem; color: var(--text); margin: 0 0 10px 0;">The repository you created on GitHub likely has an initial README or License file. Git rejected the push to prevent overwriting it.</p>
-                            <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;"><strong>Option 1 (Recommended):</strong> Pull those remote files down and merge them with your local code.<br><strong>Option 2:</strong> Force push your local code, completely overwriting whatever is currently on the remote.</p>
-                        </div>
-                    ` : html`
-                        <div>
-                            <sutram-input label="Remote Git URL" placeholder="git@github.com:user/repo.git" .value=${this.remoteUrlInput} @sutram-input-changed=${e => this.remoteUrlInput = e.detail.value}></sutram-input>
-                            <button class="btn-sm" style="background: var(--intent-neutral); margin-top: 8px; white-space: nowrap;" @click=${() => {
-                                const url = this.remoteUrlInput.trim();
-                                const match = url.match(/^https:\/\/(github\.com|gitlab\.com|bitbucket\.org)\/(.+?)(?:\.git)?\/?$/);
-                                if (match) {
-                                    this.remoteUrlInput = 'git@' + match[1] + ':' + match[2] + '.git';
-                                    this.requestUpdate();
-                                } else if (url.startsWith('https://')) {
-                                    alert("Could not auto-convert. Ensure it is a standard GitHub, GitLab, or Bitbucket HTTPS URL.");
-                                }
-                            }}>🔄 Convert to SSH</button>
-                            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 8px;">We will set this as the 'origin' remote and push the current branch to establish upstream tracking. <b style="color: var(--intent-warning);">Use an SSH URL to avoid headless authentication errors.</b></p>
-                        </div>
-                    `}
-                </div>
-                ${this.remoteConflict ? html`
-                    <sutram-async-btn slot="footer" label="⚠️ Force Push (Overwrite)" intent="danger" style="margin-right: auto;" .onClick=${this._getConnectRemoteAction('force')}></sutram-async-btn>
-                    <sutram-async-btn slot="footer" label="⬇️ Pull & Merge" intent="success" .onClick=${this._getConnectRemoteAction('pull')}></sutram-async-btn>
-                ` : html`
-                    <sutram-async-btn slot="footer" label="☁️ Connect & Push" intent="success" .onClick=${this._getConnectRemoteAction()}></sutram-async-btn>
-                `}
-            </sutram-modal>
+                <sutram-modal ?open=${true} titleText="Connect Remote: ${this.activeRemoteRepo}" @sutram-modal-closed=${() => GitStore.setState({ remoteModalOpen: false })}>
+                    <div slot="body" style="display: contents;">
+                        ${this.remoteConflict ? html`
+                            <div style="background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 6px; padding: 15px;">
+                                <h4 style="margin: 0 0 10px 0; color: var(--intent-danger); display: flex; align-items: center; gap: 6px;"><yv-icon name="alert-triangle" style="width: 16px; height: 16px;"></yv-icon> Remote Contains Unmerged Work</h4>
+                                <p style="font-size: 0.85rem; color: var(--text); margin: 0 0 10px 0;">The repository you created on GitHub likely has an initial README or License file. Git rejected the push to prevent overwriting it.</p>
+                                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;"><strong>Option 1 (Recommended):</strong> Pull those remote files down and merge them with your local code.<br><strong>Option 2:</strong> Force push your local code, completely overwriting whatever is currently on the remote.</p>
+                            </div>
+                        ` : html`
+                            <div>
+                                <sutram-input label="Remote Git URL" placeholder="git@github.com:user/repo.git" .value=${this.remoteUrlInput} @sutram-input-changed=${e => GitStore.setState({ remoteUrlInput: e.detail.value })}></sutram-input>
+                                <sutram-btn size="sm" intent="neutral" icon="refresh-cw" label="Convert to SSH" style="margin-top: 8px; white-space: nowrap;" @click=${() => {
+                                    const url = (this.remoteUrlInput || '').trim();
+                                    const match = url.match(/^https:\/\/(github\.com|gitlab\.com|bitbucket\.org)\/(.+?)(?:\.git)?\/?$/);
+                                    if (match) {
+                                        GitStore.setState({ remoteUrlInput: 'git@' + match[1] + ':' + match[2] + '.git' });
+                                    } else if (url.startsWith('https://')) {
+                                        alert("Could not auto-convert. Ensure it is a standard GitHub, GitLab, or Bitbucket HTTPS URL.");
+                                    }
+                                }}></sutram-btn>
+                                <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 8px;">We will set this as the 'origin' remote and push the current branch to establish upstream tracking. <b style="color: var(--intent-warning);">Use an SSH URL to avoid headless authentication errors.</b></p>
+                            </div>
+                        `}
+                    </div>
+                    <div slot="footer" style="display: flex; gap: 10px; width: 100%;">
+                        ${this.remoteConflict ? html`
+                            <sutram-async-btn icon="alert-triangle" label="Force Push (Overwrite)" intent="danger" style="flex: 1; margin: 0;" .onClick=${this._getConnectRemoteAction('force')}></sutram-async-btn>
+                            <sutram-async-btn icon="download" label="Pull & Merge" intent="success" style="flex: 1; margin: 0;" .onClick=${this._getConnectRemoteAction('pull')}></sutram-async-btn>
+                        ` : html`
+                            <sutram-btn intent="neutral" icon="x" label="Cancel" style="flex: 1; margin: 0;" @click=${() => GitStore.setState({ remoteModalOpen: false })}></sutram-btn>
+                            <sutram-async-btn icon="cloud" label="Connect & Push" intent="success" style="flex: 2; margin: 0;" .onClick=${this._getConnectRemoteAction()}></sutram-async-btn>
+                        `}
+                    </div>
+                </sutram-modal>
             ` : ''}
         `;
     }
@@ -862,7 +915,7 @@ window.ExtensionRegistry.registerExtension('git', {
             targetEntity: 'diff',
             id: 'git-push',
             label: 'Push',
-            icon: '🚀',
+            icon: 'send',
             intent: 'highlight',
             group: 'share',
             vfsBound: true,
@@ -873,18 +926,92 @@ window.ExtensionRegistry.registerExtension('git', {
             targetEntity: 'repo',
             id: 'git-sweep',
             label: 'Sweep Repo',
-            icon: '🚀',
+            icon: 'send',
             intent: 'highlight',
             group: 'share',
             vfsBound: true,
             order: 10,
+            match: (data) => !!data?.has_untracked_files,
             emitEvent: (data) => ({ name: 'insetu:git:sweep-repo', detail: { repoDir: data.repoDir } })
+        },
+        {
+            targetEntity: 'repo',
+            id: 'git-ctrl-init',
+            label: 'Initialize',
+            icon: 'sparkles',
+            intent: 'success',
+            group: 'tools',
+            vfsBound: false,
+            order: 11,
+            match: (data) => {
+                if (!data?.isGitCtrl) return false;
+                const status = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir];
+                return status && status.is_git === false;
+            },
+            emitEvent: (data) => ({ name: 'insetu:git:ctrl-init', detail: { repoDir: data.repoDir } })
+        },
+        {
+            targetEntity: 'repo',
+            id: 'git-ctrl-remote',
+            label: (data) => {
+                const status = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir];
+                return status?.has_remote === false ? 'Connect Remote' : 'Publish / Fix Remote';
+            },
+            icon: (data) => {
+                const status = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir];
+                return status?.has_remote === false ? 'cloud' : 'upload-cloud';
+            },
+            intent: (data) => {
+                const status = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir];
+                return status?.has_remote === false ? 'primary' : 'warning';
+            },
+            group: 'share',
+            vfsBound: false,
+            order: 12,
+            match: (data) => {
+                if (!data?.isGitCtrl) return false;
+                const status = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir];
+                return status && status.is_git !== false && (status.has_remote === false || status.sync_status === '☁️ Local Only');
+            },
+            emitEvent: (data) => ({ name: 'insetu:git:ctrl-remote', detail: { repoDir: data.repoDir } })
+        },
+        {
+            targetEntity: 'repo',
+            id: 'git-ctrl-pull',
+            label: 'Fetch & Pull...',
+            icon: 'download',
+            intent: 'primary',
+            group: 'share',
+            vfsBound: true,
+            order: 13,
+            match: (data) => {
+                if (!data?.isGitCtrl) return false;
+                const status = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir];
+                return status && status.is_git !== false && status.has_remote !== false && status.sync_status !== '☁️ Local Only';
+            },
+            emitEvent: (data) => ({ name: 'insetu:git:ctrl-pull', detail: { repoDir: data.repoDir } })
+        },
+        {
+            targetEntity: 'repo',
+            id: 'git-ctrl-branch',
+            label: 'Switch Branch',
+            icon: 'git-branch',
+            intent: 'highlight',
+            group: 'tools',
+            vfsBound: true,
+            order: 14,
+            match: (data) => {
+                if (!data?.isGitCtrl) return false;
+                const status = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir];
+                return status && status.is_git !== false;
+            },
+            emitEvent: (data) => ({ name: 'insetu:git:ctrl-branch', detail: { repoDir: data.repoDir } })
         },
         {
             targetEntity: 'repo',
             id: 'git-state-continue',
             label: 'Continue',
-            icon: '▶️',
+            icon: 'play',
             intent: 'success',
             group: 'tools',
             vfsBound: false,
@@ -914,7 +1041,7 @@ window.ExtensionRegistry.registerExtension('git', {
             targetEntity: 'repo',
             id: 'git-state-abort',
             label: 'Abort',
-            icon: '🛑',
+            icon: 'octagon',
             intent: 'danger',
             group: 'tools',
             vfsBound: false,
@@ -946,7 +1073,7 @@ window.ExtensionRegistry.registerExtension('git', {
             targetEntity: 'repo',
             id: 'git-resolve-conflicts',
             label: 'Resolve Conflicts',
-            icon: '⚠️',
+            icon: 'alert-triangle',
             intent: 'danger',
             group: 'edit',
             vfsBound: false,

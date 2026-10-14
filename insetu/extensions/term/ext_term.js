@@ -1,6 +1,7 @@
 // ext_term.js - Terminal Extension
 import { html, css } from 'lit';
 import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 
@@ -495,7 +496,7 @@ export class InSetuExtTerm extends InSetuElement {
 customElements.define('insetu-ext-term', InSetuExtTerm);
 export class InSetuExtTermActions extends InSetuElement {
     static get extensionName() { return 'term'; }
-    static styles = [css`
+    static styles = [sharedStyles, css`
         button {
             background: transparent; color: var(--text); border: 1px solid var(--border);
             border-radius: 4px; cursor: pointer; font-weight: bold; width: 34px; height: 34px;
@@ -508,7 +509,7 @@ export class InSetuExtTermActions extends InSetuElement {
         return html`
             <button title="Toggle Keyboard Bar" @click=${() => {
                 window.inSetu.events.emit('insetu:term:toggle-keyboard');
-            }}>⌨️</button>
+            }}><yv-icon name="keyboard" style="width: 14px; height: 14px;"></yv-icon></button>
         `;
     }
 }

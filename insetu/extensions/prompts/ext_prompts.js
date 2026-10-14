@@ -223,12 +223,12 @@ export class InSetuExtPromptsActions extends InSetuElement {
     get _menuItems() {
         const isOffline = window.inSetu?.stores?.App?.getState()?.isOffline;
         if (isOffline) {
-            return [{ label: 'Read-Only (Offline)', icon: '🔒', onClick: () => {} }];
+            return [{ label: 'Read-Only (Offline)', icon: 'lock', onClick: () => {} }];
         }
         return [
             { 
                 label: 'New Folder',  
-                icon: '📁', 
+                icon: 'folder-plus', 
                 onClick: () => { 
                     const cpPath = this.globalBrowsePath || []; 
                     const prefix = cpPath.length > 0 ? "ctx://prompts/" + cpPath.join('/') + "/" : "ctx://prompts/"; 
@@ -237,7 +237,7 @@ export class InSetuExtPromptsActions extends InSetuElement {
             },
             { 
                 label: 'New Prompt', 
-                icon: '📄', 
+                icon: 'file-plus', 
                 onClick: () => { 
                     const cpPath = this.globalBrowsePath || []; 
                     const prefix = cpPath.length > 0 ? "ctx://prompts/" + cpPath.join('/') + "/" : "ctx://prompts/"; 
@@ -249,7 +249,9 @@ export class InSetuExtPromptsActions extends InSetuElement {
     render() {
         return html`
             <sutram-dropdown align="right" .items=${this._menuItems}>
-                <button slot="trigger" class="system-action-btn">☰</button>
+                <button slot="trigger" class="system-action-btn" title="Prompt Actions">
+                    <yv-icon name="menu" style="width: 14px; height: 14px;"></yv-icon>
+                </button>
             </sutram-dropdown>
         `;
     }
@@ -265,49 +267,7 @@ window.ExtensionRegistry.registerExtension('prompts', {
     name: "Prompt Library",
     version: "2.0.0",
     offline_mode: "read_only",
-    entityActions: [
-        {
-            targetEntity: 'prompt',
-            id: 'prompt-edit',
-            label: 'Edit',
-            icon: '✏️',
-            intent: 'neutral',
-            order: 10,
-            onClick: (data) => {
-                if (window.inSetu.vfs.viewSourceFile) {
-                    window.inSetu.vfs.viewSourceFile(data.filepath, true);
-                }
-            }
-        },
-        {
-            targetEntity: 'prompt',
-            id: 'prompt-copy',
-            label: 'Copy',
-            icon: '📋',
-            intent: 'success',
-            order: 20,
-            asyncAction: async (data) => {
-                const activeWs = window.inSetu.utils.getActiveWorkspace();
-                const fetchUrl = `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(data.filepath)}`;
-                await window.inSetu.vfs.fetchAndCopy(data.filepath, fetchUrl);
-            }
-        },
-        {
-            targetEntity: 'prompt',
-            id: 'prompt-delete',
-            label: 'Delete',
-            icon: '🗑️',
-            intent: 'danger',
-            order: 30,
-            asyncAction: async (data) => {
-                if (confirm("Delete this prompt?")) {
-                    await window.inSetu.sys.executeWorkspaceMutation('fs/delete', { filepath: data.filepath }, {
-                        onSuccess: () => window.inSetu.stores.Prompts.getState().fetchPrompts()
-                    });
-                }
-            }
-        }
-    ],
+    entityActions: [],
     customEditors: [
         {
             match: (filepath) => window.inSetu?.stores?.App?.getState()?.isOffline && isPromptPath(filepath),
