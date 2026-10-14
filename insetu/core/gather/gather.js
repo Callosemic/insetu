@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { AppStore } from '/static/extensions/system/store.js';
+import { AppStore, SelectionStore } from '/static/extensions/system/store.js';
 import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 let compilePromise = null;
@@ -564,23 +564,26 @@ window.ExtensionRegistry.registerExtension('gather', {
             component: "insetu-ext-gather"
         }
     ],
-    batchActions: [
+    entityActions: [
         {
-            id: 'batch-download',
+            targetEntity: '*',
+            targetEntities: ['*'],
+            id: 'gather-pack-download',
+            bulkGroupKey: 'pack-download',
             label: 'Download',
+            bulkLabel: 'Download',
             icon: 'download',
             intent: 'primary',
             group: 'share',
             vfsBound: true,
             order: 20,
-            match: (items) => items.length > 0 && items.every(i => {
-                const d = i.data || i;
-                return d?.filepath || d?.folderpath;
-            }),
-            asyncAction: async (items) => {
+            bulkable: true,
+            bulkOnly: true,
+            match: (data) => !!(data?.filepath || data?.folderpath),
+            bulkAction: async (items) => {
                 try {
                     const artifact = await packSelectionPayload(items);
-                    window.inSetu.stores.Selection.getState().clearSelection();
+                    SelectionStore.getState().clearSelection();
                     if (artifact.chunks && artifact.chunks.length > 1) {
                         if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading Parts...", 2000);
                         for (const f of artifact.chunks) {
@@ -602,21 +605,25 @@ window.ExtensionRegistry.registerExtension('gather', {
             }
         },
         {
-            id: 'batch-share',
+            targetEntity: '*',
+            targetEntities: ['*'],
+            id: 'gather-pack-compile',
+            bulkGroupKey: 'pack-compile',
             label: 'Compile Pack',
+            bulkLabel: 'Compile Pack',
             icon: 'zap',
             intent: 'warning',
             emphasis: true,
             group: 'share',
             vfsBound: true,
             order: 30,
-            match: (items) => !!navigator.share && !!navigator.canShare && items.length > 0 && items.every(i => {
-                const d = i.data || i;
-                return d?.filepath || d?.folderpath;
-            }),
-            onClick: (items, e) => {
+            bulkable: true,
+            bulkOnly: true,
+            match: (data) => !!(data?.filepath || data?.folderpath),
+            bulkOnClick: (items, e) => {
                 if (e) e.stopPropagation();
 
+                const canNativeShare = !!navigator.share && !!navigator.canShare;
                 const payloadItems = items.map(i => {
                     const d = i.data || i;
                     if (d?.folderpath) return { folderpath: d.folderpath };
@@ -625,23 +632,25 @@ window.ExtensionRegistry.registerExtension('gather', {
                 }).filter(i => i !== null);
 
                 const itemsHash = JSON.stringify(payloadItems);
-
-                // Synchronous Fast-Path if Quickpack already exists
-                if (_lastPackItemsHash === itemsHash && _lastPackSelection) {
-                    window.inSetu.stores.Selection.getState().clearSelection();
+                // Synchronous Fast-Path if Quickpack already exists (preserves WebKit user gesture)
+                if (canNativeShare && _lastPackItemsHash === itemsHash && _lastPackSelection) {
+                    SelectionStore.getState().clearSelection();
                     window.inSetu.vfs.shareFiles(_lastPackSelection.base_filename, _lastPackSelection.chunks);
                     return;
                 }
 
-                // First Tap: Execute background compilation and cache warm
                 if (window.inSetu.ui?.setGlobalStatus) {
                     window.inSetu.ui.setGlobalStatus("⏳ Compiling Quickpack...", null);
                 }
                 packSelectionPayload(items).then(artifact => {
                     _lastPackItemsHash = itemsHash;
                     _lastPackSelection = artifact;
-                    window.inSetu.stores.Selection.getState().clearSelection();
-                    window.inSetu.vfs.shareFiles(artifact.base_filename, artifact.chunks);
+                    SelectionStore.getState().clearSelection();
+                    if (canNativeShare) {
+                        window.inSetu.vfs.shareFiles(artifact.base_filename, artifact.chunks);
+                    } else if (window.inSetu.ui?.setGlobalStatus) {
+                        window.inSetu.ui.setGlobalStatus("⚡ Quickpack compiled to Gather!", 3000);
+                    }
                 }).catch(err => {
                     alert("Packing failed: " + err.message);
                 });

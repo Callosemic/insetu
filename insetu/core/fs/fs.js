@@ -2,7 +2,7 @@ import { LitElement, html, css } from 'lit';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { InSetuElement, createExtensionStore } from '/static/extensions/system/insetu_sdk.js';
 import { resolveEditorMode } from '/static/extensions/system/components/ui_editor.js';
-import { AppStore } from '/static/extensions/system/store.js';
+import { AppStore, SelectionStore } from '/static/extensions/system/store.js';
 import { buildFileTree, resolveDirectoryState, downloadFile as sutramDownloadFile, downloadBlob, bindGhostDrag } from '../../vendor/sutram/js/utils.js';
 export function bindDownloadDrag(e, filename, fetchUrl) {
     const absoluteUrl = window.location.origin + fetchUrl;
@@ -540,7 +540,6 @@ export async function saveBufferFile(filepath, autoSave = false) {
 export function renameFileTracking(oldPath, newPath) {
     const normOld = normalizeVfsURI(oldPath);
     const normNew = normalizeVfsURI(newPath);
-
     const fsState = window.inSetu.stores.Fs.getState();
     const oldBuf = fsState.activeBuffers[normOld] || fsState.activeBuffers[oldPath];
     if (oldBuf) {
@@ -548,6 +547,16 @@ export function renameFileTracking(oldPath, newPath) {
         fsState.closeBuffer(normOld);
         if (oldPath !== normOld) fsState.closeBuffer(oldPath);
     }
+
+    // Migrate open buffer tracking when parent directories are renamed or moved
+    Object.keys(fsState.activeBuffers || {}).forEach(k => {
+        if (k.startsWith(normOld + '/')) {
+            const childNew = normNew + k.substring(normOld.length);
+            const buf = fsState.activeBuffers[k];
+            fsState.openBuffer(childNew, { ...buf, filename: childNew });
+            fsState.closeBuffer(k);
+        }
+    });
 
     const layoutStore = window.Sutram?.stores?.Layout;
     if (layoutStore) {
@@ -912,10 +921,187 @@ export class InSetuVFSExplorer extends InSetuElement {
         }
 }
 customElements.define('insetu-vfs-explorer', InSetuVFSExplorer);
+export function pruneSubsumedTargets(items) {
+    const rawTargets = items.map(i => ({
+        path: (i.data?.filepath || i.data?.folderpath || i.data?.id || i.filepath || i.folderpath || '').replace(/^vfs:\/\//, ''),
+        isDir: !!(i.data?.isDir || i.isDir)
+    })).filter(t => t.path);
+    if (rawTargets.length === 0) return [];
+
+    const selectedDirs = new Set(rawTargets.filter(t => t.isDir).map(t => t.path.replace(/\/+$/, '')));
+    return rawTargets.filter(target => {
+        const parts = target.path.split('/').filter(Boolean);
+        for (let i = 1; i < parts.length; i++) {
+            const parentSubpath = parts.slice(0, i).join('/');
+            if (selectedDirs.has(parentSubpath)) {
+                return false;
+            }
+        }
+        return true;
+    });
+}
+function _evictDeletedNodeFromState(normPath, rawPath, isDir) {
+    const fsState = window.inSetu.stores.Fs?.getState() || {};
+    if (isDir) {
+        Object.keys(fsState.activeBuffers || {}).forEach(k => {
+            if (k === normPath || k.startsWith(normPath + '/')) {
+                fsState.closeBuffer?.(k);
+            }
+        });
+    } else {
+        fsState.closeBuffer?.(normPath);
+    }
+
+    if (window.Sutram?.stores?.Layout) {
+        const layout = window.Sutram.stores.Layout.getState();
+        ['left', 'center', 'right'].forEach(col => {
+            const pinned = layout.columns[col]?.pinned || [];
+            pinned.forEach(p => {
+                const normP = normalizeVfsURI(p.id);
+                if (normP === normPath || p.id === rawPath || (isDir && normP.startsWith(normPath + '/'))) {
+                    layout.unpinFromColumn(col, p.id);
+                    layout.evictProjection(p.id);
+                }
+            });
+        });
+        layout.evictProjection(normPath);
+    }
+
+    window.inSetu.events.emitHook('insetu:vfs-mutated', {
+        mutations: [{ filepath: normPath + (isDir ? '/' : ''), operation: 'delete' }]
+    });
+}
+
+async function _relocateVfsNode(rawPath, destPath, isDir, options = {}) {
+    const normPath = normalizeVfsURI(rawPath);
+    const normDest = normalizeVfsURI(destPath);
+    await window.inSetu.sys.executeWorkspaceMutation('fs/move', { filepath: normPath, dest_path: normDest }, {
+        collapseKey: `vfs:move:${normPath}`,
+        pendingMutations: [normDest],
+        deletedMutations: [normPath],
+        loadingText: options.loadingText || 'Moving...',
+        silent: !!options.silent,
+        onSuccess: () => {
+            renameFileTracking(normPath, normDest);
+            window.inSetu.events.emitHook('insetu:vfs-mutated', {
+                mutations: [
+                    { filepath: normPath + (isDir ? '/' : ''), operation: 'delete' },
+                    { filepath: normDest + (isDir ? '/' : ''), operation: 'save' }
+                ]
+            });
+            if (options.onSuccess) options.onSuccess();
+        }
+    });
+}
+
+async function _archiveVfsNode(rawPath, isDir, options = {}) {
+    const normPath = normalizeVfsURI(rawPath);
+    await window.inSetu.sys.executeWorkspaceMutation('fs/archive', { filepath: normPath }, {
+        collapseKey: `vfs:archive:${normPath}`,
+        deletedMutations: [normPath],
+        loadingText: options.loadingText || 'Archiving...',
+        silent: !!options.silent,
+        onSuccess: (resData) => {
+            renameFileTracking(normPath, resData.new_path);
+            window.inSetu.events.emitHook('insetu:vfs-mutated', {
+                mutations: [
+                    { filepath: normPath + (isDir ? '/' : ''), operation: 'delete' },
+                    { filepath: resData.new_path + (isDir ? '/' : ''), operation: 'save' }
+                ]
+            });
+            if (options.onSuccess) options.onSuccess(resData);
+        }
+    });
+}
+
+async function _deleteVfsNode(rawPath, isDir, options = {}) {
+    const normPath = normalizeVfsURI(rawPath);
+    await window.inSetu.sys.executeWorkspaceMutation('fs/delete', { filepath: normPath }, {
+        collapseKey: `vfs:delete:${normPath}`,
+        deletedMutations: [normPath],
+        loadingText: options.loadingText || 'Deleting...',
+        silent: !!options.silent,
+        onSuccess: () => {
+            _evictDeletedNodeFromState(normPath, rawPath, isDir);
+            if (options.onSuccess) options.onSuccess();
+        }
+    });
+}
+
+export async function executeBulkMove(items) {
+    const targets = pruneSubsumedTargets(items);
+    if (targets.length === 0) return;
+
+    openFolderBrowser(async (destFolder) => {
+        if (destFolder === undefined || destFolder === null) return;
+        const cleanDest = destFolder.replace(/\/+$/, '');
+
+        if (!confirm(`Move ${targets.length} item(s) to /${cleanDest || '[root]'}?`)) return;
+
+        let movedCount = 0;
+        for (const target of targets) {
+            const itemName = target.path.split('/').filter(Boolean).pop();
+            const destPath = cleanDest ? `${cleanDest}/${itemName}` : itemName;
+            if (destPath === target.path) continue;
+            if (target.isDir && (destPath === target.path || destPath.startsWith(target.path + '/'))) {
+                console.warn(`Cannot move directory '${target.path}' into itself or its own subfolder.`);
+                continue;
+            }
+            await _relocateVfsNode(target.path, destPath, target.isDir, {
+                silent: true,
+                onSuccess: () => { movedCount++; }
+            });
+        }
+        SelectionStore.getState().clearSelection();
+        if (window.inSetu.ui?.setGlobalStatus) {
+            window.inSetu.ui.setGlobalStatus(`Moved ${movedCount} item(s) to /${cleanDest || '[root]'}`, 3000);
+        }
+    });
+}
+
+export async function executeBulkArchive(items) {
+    const targets = pruneSubsumedTargets(items);
+    if (targets.length === 0) return;
+
+    if (!confirm(`Archive ${targets.length} item(s) to 'archived/' subdirectories?`)) return;
+
+    let archivedCount = 0;
+    for (const target of targets) {
+        await _archiveVfsNode(target.path, target.isDir, {
+            silent: true,
+            onSuccess: () => { archivedCount++; }
+        });
+    }
+    SelectionStore.getState().clearSelection();
+    if (window.inSetu.ui?.setGlobalStatus) {
+        window.inSetu.ui.setGlobalStatus(`Archived ${archivedCount} item(s)`, 3000);
+    }
+}
+
+export async function executeBulkDelete(items) {
+    const targets = pruneSubsumedTargets(items);
+    if (targets.length === 0) return;
+
+    if (!confirm(`Permanently delete ${targets.length} item(s)? This cannot be undone!`)) return;
+
+    let deletedCount = 0;
+    for (const target of targets) {
+        await _deleteVfsNode(target.path, target.isDir, {
+            silent: true,
+            onSuccess: () => { deletedCount++; }
+        });
+    }
+    SelectionStore.getState().clearSelection();
+    if (window.inSetu.ui?.setGlobalStatus) {
+        window.inSetu.ui.setGlobalStatus(`Deleted ${deletedCount} item(s)`, 3000);
+    }
+}
+
 export class InSetuVFSExplorerActions extends InSetuElement {
     static properties = {
         globalBrowsePath: { type: Array },
-        _menuItems: { type: Array }
+        _menuItems: { type: Array },
+        _selectedCount: { type: Number }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; align-items: stretch; height: 100%; }
@@ -925,6 +1111,8 @@ export class InSetuVFSExplorerActions extends InSetuElement {
         super();
         this.globalBrowsePath = [];
         this._menuItems = [];
+        this._selectedCount = 0;
+        this._selectedItems = new Map();
     }
 
     connectedCallback() {
@@ -933,12 +1121,43 @@ export class InSetuVFSExplorerActions extends InSetuElement {
             this.globalBrowsePath = state.globalBrowsePath || [];
             this._rebuildMenu();
         });
+        this.subscribe(SelectionStore, state => {
+            this._selectedItems = state.selectedItems || new Map();
+            this._selectedCount = this._selectedItems.size;
+            this._rebuildMenu();
+            this.requestUpdate();
+        });
         this.globalBrowsePath = AppStore.getState().globalBrowsePath || [];
+        this._selectedItems = SelectionStore.getState()?.selectedItems || new Map();
+        this._selectedCount = this._selectedItems.size;
         this._rebuildMenu();
     }
+
     _rebuildMenu() {
+        const selectedMap = this._selectedItems || new Map();
+        const selectedList = Array.from(selectedMap.values());
+        const selectedCount = selectedList.length;
+
         const currentPath = this.globalBrowsePath.join('/');
         const items = [];
+        if (selectedCount > 0) {
+            const bulkFileActions = window.ExtensionRegistry?.getAggregatableActions 
+                ? window.ExtensionRegistry.getAggregatableActions(selectedList, { group: 'file' }) 
+                : [];
+
+            if (bulkFileActions.length > 0) {
+                bulkFileActions.forEach(act => items.push(act));
+                items.push({ divider: true });
+            }
+
+            items.push({
+                label: `Clear Selection (${selectedCount})`,
+                icon: 'x',
+                onClick: () => SelectionStore.getState().clearSelection()
+            });
+            items.push({ divider: true });
+        }
+
         if (!currentPath) {
             items.push({ label: 'New Repository', icon: 'package', onClick: () => openNewFolderModal() });
         } else {
@@ -960,10 +1179,16 @@ export class InSetuVFSExplorerActions extends InSetuElement {
     }
 
     render() {
+        const count = this._selectedCount || 0;
         return html`
             <sutram-dropdown align="right" .items=${this._menuItems} style="height: 100%; display: flex; align-items: stretch;">
-                <button slot="trigger" class="system-action-btn" title="Actions" style="border: none; border-left: 1px solid var(--border); border-radius: 0; height: 100%; width: 44px; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
-                    <yv-icon name="menu" style="width: 14px; height: 14px;"></yv-icon>
+                <button slot="trigger" class="system-action-btn" title="${count > 0 ? `Bulk Actions (${count} selected)` : 'Actions'}" style="border: none; border-left: 1px solid var(--border); border-radius: 0; height: 100%; width: 44px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; position: relative;">
+                    ${count > 0 ? html`
+                        <yv-icon name="layers" style="width: 15px; height: 15px; color: var(--intent-warning);"></yv-icon>
+                        <span style="position: absolute; top: 4px; right: 4px; background: var(--intent-warning); color: var(--bg-deep); border-radius: 50%; width: 14px; height: 14px; font-size: 9px; font-weight: bold; display: flex; align-items: center; justify-content: center; line-height: 1;">${count > 9 ? '9+' : count}</span>
+                    ` : html`
+                        <yv-icon name="menu" style="width: 14px; height: 14px;"></yv-icon>
+                    `}
                 </button>
             </sutram-dropdown>
         `;
@@ -991,116 +1216,114 @@ window.ExtensionRegistry.registerExtension('fs', {
     entityActions: [
         {
             targetEntity: 'file',
-            id: 'file-move',
+            targetEntities: ['file', 'folder'],
+            id: 'vfs-move',
+            bulkGroupKey: 'move',
             label: 'Move',
             icon: 'truck',
             group: 'file',
             vfsBound: true,
             intent: 'neutral',
             order: 64,
-            match: (data) => data.isFS && !data.isSkeleton,
+            bulkable: true,
+            match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
             onClick: (data, e) => {
-                const cleanFp = (data.filepath || '').replace(/^vfs:\/\//, '');
-                const parts = cleanFp ? cleanFp.split('/').filter(p => p) : [];
-                parts.pop();
-                window.inSetu.stores.Fs.getState().setModal('move', { open: false, currentFile: cleanFp, destPath: cleanFp, initialParts: parts });
-                if (window.Sutram?.stores?.Layout) {
-                    const layout = window.Sutram.stores.Layout.getState();
-                    layout.openWindow({
-                        id: 'vfs:move-file',
-                        component: 'insetu-move-file-projection',
-                        label: `Move: ${cleanFp.split('/').pop()}`,
-                        icon: 'truck',
-                        intent: 'warning',
-                        extName: 'fs',
-                        windowOnly: true
-                    }, layout.focusedColumn || 'center', 1);
+                if (data.isDir) {
+                    const folderName = data.folderpath.split('/').filter(Boolean).pop();
+                    openFolderBrowser(async (destParent) => {
+                        if (destParent === undefined || destParent === null) return;
+                        const cleanDest = destParent.replace(/\/+$/, '');
+                        const destPath = cleanDest ? `${cleanDest}/${folderName}` : folderName;
+                        if (destPath === data.folderpath || destPath.startsWith(data.folderpath + '/')) {
+                            alert("Cannot move a folder into itself or a subfolder.");
+                            return;
+                        }
+                        await _relocateVfsNode(data.folderpath, destPath, true, { loadingText: 'Moving folder...' });
+                    });
+                } else {
+                    const cleanFp = (data.filepath || '').replace(/^vfs:\/\//, '');
+                    const parts = cleanFp ? cleanFp.split('/').filter(p => p) : [];
+                    parts.pop();
+                    window.inSetu.stores.Fs.getState().setModal('move', { open: false, currentFile: cleanFp, destPath: cleanFp, initialParts: parts });
+                    if (window.Sutram?.stores?.Layout) {
+                        const layout = window.Sutram.stores.Layout.getState();
+                        layout.openWindow({
+                            id: 'vfs:move-file',
+                            component: 'insetu-move-file-projection',
+                            label: `Move: ${cleanFp.split('/').pop()}`,
+                            icon: 'truck',
+                            intent: 'warning',
+                            extName: 'fs',
+                            windowOnly: true
+                        }, layout.focusedColumn || 'center', 1);
+                    }
                 }
-            }
+            },
+            bulkAction: (items, e) => executeBulkMove(items)
         },
         {
             targetEntity: 'file',
-            id: 'file-rename',
+            targetEntities: ['file', 'folder'],
+            id: 'vfs-rename',
             label: 'Rename',
             icon: 'edit-3',
             group: 'file',
             vfsBound: true,
             intent: 'neutral',
             order: 65,
-            match: (data) => data.isFS && !data.isSkeleton,
+            bulkable: false,
+            match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
             asyncAction: async (data, e) => {
-                const currentName = data.filepath.split('/').pop();
-                const newName = prompt("Enter new filename:", currentName);
+                const rawPath = data.isDir ? data.folderpath : data.filepath;
+                const parts = rawPath.split('/').filter(Boolean);
+                const currentName = parts.pop() || '';
+                const newName = prompt(`Enter new ${data.isDir ? 'folder' : 'file'} name:`, currentName);
                 if (!newName || newName === currentName) return;
-                const parts = data.filepath.split('/');
-                parts.pop();
                 const destPath = parts.length > 0 ? parts.join('/') + '/' + newName : newName;
-                await window.inSetu.sys.executeWorkspaceMutation('fs/move', { filepath: data.filepath, dest_path: destPath }, {
-                    collapseKey: `vfs:move:${data.filepath}`,
-                    pendingMutations: [destPath],
-                    deletedMutations: [data.filepath],
-                    loadingText: 'Renaming...',
-                    onSuccess: () => {
-                        renameFileTracking(data.filepath, destPath);
-                        window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: [{ filepath: data.filepath, operation: 'delete' }, { filepath: destPath, operation: 'save' }] });
-                    }
-                });
+                await _relocateVfsNode(rawPath, destPath, !!data.isDir, { loadingText: 'Renaming...' });
             }
         },
         {
             targetEntity: 'file',
-            id: 'file-archive',
+            targetEntities: ['file', 'folder'],
+            id: 'vfs-archive',
+            bulkGroupKey: 'archive',
             label: 'Archive',
             icon: 'archive',
             group: 'file',
             vfsBound: true,
             intent: 'warning',
             order: 66,
-            match: (data) => data.isFS && !data.isSkeleton,
+            bulkable: true,
+            match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
             asyncAction: async (data, e) => {
-                if (!confirm("Archive this file to an 'archived/' subdirectory?")) return;
-                const normPath = normalizeVfsURI(data.filepath);
-                await window.inSetu.sys.executeWorkspaceMutation('fs/archive', { filepath: normPath }, {
-                    collapseKey: `vfs:archive:${normPath}`,
-                    deletedMutations: [normPath],
-                    onSuccess: (resData) => {
-                        renameFileTracking(normPath, resData.new_path);
-                        window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: [{ filepath: normPath, operation: 'delete' }, { filepath: resData.new_path, operation: 'save' }] });
-                    }
-                });
-            }
+                const rawPath = data.isDir ? data.folderpath : data.filepath;
+                const label = data.isDir ? `folder "${rawPath.split('/').filter(Boolean).pop()}"` : `this file`;
+                if (!confirm(`Archive ${label} to an 'archived/' directory?`)) return;
+                await _archiveVfsNode(rawPath, !!data.isDir, { loadingText: 'Archiving...' });
+            },
+            bulkAction: (items, e) => executeBulkArchive(items)
         },
         {
             targetEntity: 'file',
-            id: 'file-delete',
+            targetEntities: ['file', 'folder'],
+            id: 'vfs-delete',
+            bulkGroupKey: 'delete',
             label: 'Delete',
             icon: 'trash-2',
             group: 'file',
             vfsBound: true,
             intent: 'danger',
             order: 67,
-            match: (data) => data.isFS && !data.isSkeleton,
+            bulkable: true,
+            match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
             asyncAction: async (data, e) => {
-                if (!confirm("Permanently delete this file? This cannot be undone!")) return;
-                const normPath = normalizeVfsURI(data.filepath);
-                await window.inSetu.sys.executeWorkspaceMutation('fs/delete', { filepath: normPath }, {
-                    collapseKey: `vfs:delete:${normPath}`,
-                    deletedMutations: [normPath],
-                    onSuccess: () => {
-                        window.inSetu.stores.Fs.getState().closeBuffer(normPath);
-                        if (window.Sutram?.stores?.Layout) {
-                            const layout = window.Sutram.stores.Layout.getState();
-                            ['left', 'center', 'right'].forEach(col => {
-                                if (layout.columns[col]?.pinned?.some(p => p.id === normPath || p.id === data.filepath)) {
-                                    layout.unpinFromColumn(col, normPath);
-                                }
-                            });
-                            layout.evictProjection(normPath);
-                        }
-                        window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: [{ filepath: normPath, operation: 'delete' }] });
-                    }
-                });
-            }
+                const rawPath = data.isDir ? data.folderpath : data.filepath;
+                const label = data.isDir ? `folder "${rawPath.split('/').filter(Boolean).pop()}" and all its contents` : `this file`;
+                if (!confirm(`Permanently delete ${label}? This cannot be undone!`)) return;
+                await _deleteVfsNode(rawPath, !!data.isDir, { loadingText: 'Deleting...' });
+            },
+            bulkAction: (items, e) => executeBulkDelete(items)
         },
         {
             targetEntity: 'file',
@@ -2317,7 +2540,7 @@ export class InSetuLinkInsertProjection extends InSetuElement {
                 ` : ''}
             </div>
             <sutram-scroll-view padding="12px" style="gap: 6px;">
-                ${li.deepSearchLoading ? html`<yenvui-spinner text="Searching file contents across workspace..."></yenvui-spinner>` : ''}
+                ${li.deepSearchLoading ? html`<sutram-spinner text="Searching file contents across workspace..."></sutram-spinner>` : ''}
                 ${(!li.deepSearchLoading && (!li.searchResults || li.searchResults.length === 0)) ? html`
                     <span style="color:var(--text-muted); font-style:italic; padding: 10px;">
                         ${(!li.searchQuery) ? 'Type to search...' : 'No files found.'}

@@ -78,10 +78,15 @@ constructor() {
             const normalizeToNaked = (p) => p.replace(/^vfs:\/\//, '');
             const pendingFiles = Array.from(this._pendingMutations || []).filter(f => f && typeof f === 'string').map(normalizeToNaked);
             let mergedFiles = Array.from(new Set([...this.files, ...pendingFiles]));
-
             if (this._deletedMutations && this._deletedMutations.size > 0) {
                 const deletedSet = new Set(Array.from(this._deletedMutations).map(normalizeToNaked));
-                mergedFiles = mergedFiles.filter(f => !deletedSet.has(f));
+                mergedFiles = mergedFiles.filter(f => {
+                    if (deletedSet.has(f)) return false;
+                    for (const d of deletedSet) {
+                        if (f.startsWith(d + '/')) return false;
+                    }
+                    return true;
+                });
             }
 
             const mappedFiles = prefix 
@@ -114,10 +119,15 @@ constructor() {
             const normalizeToNaked = (p) => p.replace(/^vfs:\/\//, '');
             const pendingFiles = Array.from(this._pendingMutations || []).filter(f => f && typeof f === 'string').map(normalizeToNaked);
             let mergedFiles = Array.from(new Set([...this.files, ...pendingFiles]));
-
             if (this._deletedMutations && this._deletedMutations.size > 0) {
                 const deletedSet = new Set(Array.from(this._deletedMutations).map(normalizeToNaked));
-                mergedFiles = mergedFiles.filter(f => !deletedSet.has(f));
+                mergedFiles = mergedFiles.filter(f => {
+                    if (deletedSet.has(f)) return false;
+                    for (const d of deletedSet) {
+                        if (f.startsWith(d + '/')) return false;
+                    }
+                    return true;
+                });
             }
 
             const filteredFiles = window.inSetu.utils.fuzzyFilterObjects(mergedFiles, this._searchQuery);
@@ -149,18 +159,18 @@ constructor() {
                     ${(!isSearching && activePath.length > 0 && !this.hidePath) ? html`
                         <div slot="bottom-row" class="toolbar-row" style="background: var(--input-bg); border-top: 1px solid var(--border); overflow: hidden;">
                             <sutram-btn intent="neutral" icon="corner-left-up" label="Up" @click=${() => this._setPath(activePath.slice(0, -1))} style="margin-right: 8px;"></sutram-btn>
-                            <yenvui-scrub-track style="flex: 1; min-width: 0; font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem;">
+                            <sutram-scrub-track style="flex: 1; min-width: 0; font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem;">
                                 /${activePath.join('/')}
-                            </yenvui-scrub-track>
+                            </sutram-scrub-track>
                         </div>
                     ` : ''}
                 </sutram-toolbar>
             ` : ((!isSearching && activePath.length > 0 && !this.hidePath) ? html`
                 <div class="toolbar-row" style="background: var(--input-bg); border-bottom: 1px solid var(--border); overflow: hidden;">
                     <sutram-btn intent="neutral" icon="corner-left-up" label="Up" @click=${() => this._setPath(activePath.slice(0, -1))} style="margin-right: 8px;"></sutram-btn>
-                    <yenvui-scrub-track style="flex: 1; min-width: 0; font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem;">
+                    <sutram-scrub-track style="flex: 1; min-width: 0; font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem;">
                         /${activePath.join('/')}
-                    </yenvui-scrub-track>
+                    </sutram-scrub-track>
                 </div>
             ` : '')}
             <div class="file-list-container">
