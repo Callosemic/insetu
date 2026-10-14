@@ -176,7 +176,7 @@ def log_skill_practice(ctx):
             new_filename = f"{slugify(name)}.md"
             new_abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(new_filename).as_posix()
             if os.path.exists(abs_path):
-                ctx.vfs.save(abs_path, "", data={"action": "delete"})
+                ctx.vfs.delete(abs_path)
             abs_path = new_abs_path
             final_filename = new_filename
             conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
@@ -241,7 +241,7 @@ def update_skill_structure(ctx):
             new_filename = f"{slugify(name)}.md"
             new_abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(new_filename).as_posix()
             if os.path.exists(abs_path):
-                ctx.vfs.save(abs_path, "", data={"action": "delete"})
+                ctx.vfs.delete(abs_path)
             abs_path = new_abs_path
             final_filename = new_filename
             conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
@@ -268,7 +268,7 @@ def delete_skill_item(ctx):
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
 
         if os.path.exists(abs_path):
-            ctx.vfs.save(abs_path, "", data={"action": "delete"})
+            ctx.vfs.delete(abs_path)
 
         conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
         conn.commit()

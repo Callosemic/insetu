@@ -2,6 +2,7 @@ import base64
 import json
 import urllib.request
 import urllib.error
+from pathlib import Path
 from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
@@ -208,9 +209,8 @@ def _background_post_reply(ctx, ticket_id=None, body=None, **kwargs):
 
         seen = set()
         quote_regex = re.compile(r'\n\s*(?:envoyé\s*:|from\s*:|de\s*:|von\s*:|on\s+.*?(?:wrote|écrit)\s*:|_{10,})', re.I)
-
         desc = tkt.get("description_text") or tkt.get("description") or ""
-        clean_desc = quote_regex.split(desc)[0].trim() if desc else ""
+        clean_desc = quote_regex.split(desc)[0].strip() if desc else ""
         if clean_desc:
             t_text += f"{clean_desc}\n\n---\n\n"
             seen.add(clean_desc)

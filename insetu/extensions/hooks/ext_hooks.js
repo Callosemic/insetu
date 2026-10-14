@@ -134,8 +134,7 @@ export class InSetuExtHooks extends InSetuElement {
         try {
             const payload = { ...this.ruleForm };
             if (this.editingRule) payload.id = this.editingRule.id;
-
-            await this.api.postJson('save', payload);
+            await this.api.post('save', payload);
             HooksStore.setState({ ruleModalOpen: false });
             HooksStore.getState().fetchRules();
         } catch (e) {
@@ -145,7 +144,7 @@ export class InSetuExtHooks extends InSetuElement {
 
     async toggleRule(rule) {
         try {
-            await this.api.postJson('toggle', { id: rule.id, enabled: !rule.enabled });
+            await this.api.post('toggle', { id: rule.id, enabled: !rule.enabled });
             HooksStore.getState().fetchRules();
         } catch (e) {
             alert(`Error toggling rule: ${e.message}`);
@@ -155,7 +154,7 @@ export class InSetuExtHooks extends InSetuElement {
     async deleteRule(ruleId) {
         if (!confirm("Are you sure you want to delete this automation rule?")) return;
         try {
-            await this.api.postJson('delete', { id: ruleId });
+            await this.api.post('delete', { id: ruleId });
             HooksStore.getState().fetchRules();
         } catch (e) {
             alert(`Error deleting rule: ${e.message}`);

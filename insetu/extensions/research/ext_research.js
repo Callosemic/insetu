@@ -164,9 +164,8 @@ export class InSetuExtResearch extends InSetuElement {
         if (!query) throw new Error("Query required.");
 
         const maxResults = formMax === 'custom' ? (parseInt(maxCustom, 10) || 50) : parseInt(formMax, 10);
-
         try {
-            await this.api.postJson('start', { query, provider, parser: parser, target_dir: targetDir, max_results: maxResults, date_range: dateRange });
+            await this.api.post('start', { query, provider, parser: parser, target_dir: targetDir, max_results: maxResults, date_range: dateRange });
             ResearchStore.setState(s => ({ searchForm: { ...s.searchForm, query: '' }, newJobModalOpen: false }));
             await this.fetchState();
         } catch (err) {
@@ -178,7 +177,7 @@ export class InSetuExtResearch extends InSetuElement {
         if (action === 'delete' && !confirm("Are you sure you want to permanently delete this research job and all its scraped items? This cannot be undone.")) return;
 
         try {
-            await this.api.postJson(`${jobId}/action`, { action });
+            await this.api.post(`${jobId}/action`, { action });
             if (action === 'delete') {
                 ResearchStore.setState({ selectedJobId: null, selectedItemId: null, aiTriageMode: false });
             }
@@ -203,8 +202,9 @@ export class InSetuExtResearch extends InSetuElement {
             const success = await this.sys.executeWorkspaceMutation('fs/save', { filepath, content: item.raw_markdown }, { silent: true });
             if (!success) return alert("Failed to write Markdown to disk.");
         }
+
         try {
-            await this.api.postJson(`inbox/${inboxId}/disposition`, { status });
+            await this.api.post(`inbox/${inboxId}/disposition`, { status });
             if (this.selectedItemId === inboxId) {
                 ResearchStore.setState({ selectedItemId: null });
                 if (window.Sutram?.stores?.Layout) {
@@ -490,9 +490,8 @@ export class InSetuResearchPreviewProjection extends InSetuElement {
             const success = await this.sys.executeWorkspaceMutation('fs/save', { filepath, content: item.raw_markdown }, { silent: true });
             if (!success) return alert("Failed to write Markdown to disk.");
         }
-
         try {
-            await this.api.postJson(`inbox/${inboxId}/disposition`, { status });
+            await this.api.post(`inbox/${inboxId}/disposition`, { status });
             if (window.Sutram?.stores?.Layout) {
                 window.Sutram.stores.Layout.getState().closeWindow('research:preview');
             }

@@ -195,9 +195,8 @@ def _background_bump_task(ctx, repo, prerelease=False, **kwargs):
             job_category="system_background",
             force_full=False
         )
-
     # Evaluate Phase 2 Automation
-    if ctx.settings.get("auto_publish", False, repo=repo):
+    if auto_publish:
         ctx.jobs.update_progress("Auto-publish enabled. Routing to distribution pipeline...")
         ctx.jobs.submit("publish_task", repo=repo, job_category="system_background")
         output += "\n\nAuto-publish workflow triggered."
@@ -394,17 +393,20 @@ def _background_preview_bump_task(ctx, repo, prerelease=False, **kwargs):
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
     ctx.jobs.update_progress("Evaluating dry-run semantic version bump...")
-
     status_check = execute_git(repo_path, ['status', '--porcelain', '-uall'], check=False)
     if status_check.stdout.strip():
         raise RuntimeError("Working tree is not clean. Please commit or stash your changes before previewing a release bump.")
-    env = os.environ.copy()
-    parser_style = ctx.settings.get("commit_parser", "conventional", repo=repo)
-    if parser_style == "angular": parser_style = "conventional"
-    env["PSR_COMMIT_PARSER"] = parser_style
 
     logical_pyproject = f"vfs://{repo}/pyproject.toml"
     pyproject_content = ctx.vfs.read(logical_pyproject) or ""
+    cp_match = re.search(r'^commit_parser\s*=\s*[\'"]([^\'"]*)[\'"]', pyproject_content, re.MULTILINE)
+    toml_commit_parser = cp_match.group(1) if cp_match else None
+
+    env = os.environ.copy()
+    parser_style = toml_commit_parser or ctx.settings.get("commit_parser", "conventional", repo=repo)
+    if parser_style == "angular": parser_style = "conventional"
+    env["PSR_COMMIT_PARSER"] = parser_style
+
     pr_match = re.search(r'^prerelease_token\s*=\s*[\'"]([^\'"]*)[\'"]', pyproject_content, re.MULTILINE)
     prerelease_token = pr_match.group(1) if pr_match else "rc"
     cmd = ['semantic-release', '-v', '--noop', 'version']
@@ -558,7 +560,6 @@ def _background_status_task(ctx, repo, **kwargs):
     vcs_release = vcs_match.group(1).lower() == 'true' if vcs_match else True
     has_pypi_token = bool(ctx.settings.get("pypi_token") or os.getenv("TWINE_PASSWORD") or os.getenv("PYPI_TOKEN"))
     has_token = bool(ctx.settings.get("github_token") or os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN"))
-
     # Check for existing build artifacts to validate Phase 1 success
     latest_build_artifact = None
     if dist_target == "python_pypi":
@@ -569,9 +570,10 @@ def _background_status_task(ctx, repo, **kwargs):
                 latest_build_artifact = max(wheels, key=lambda p: p.stat().st_mtime).name
 
     env = os.environ.copy()
-    parser_style = ctx.settings.get("commit_parser", "conventional", repo=repo)
+    parser_style = toml_commit_parser or ctx.settings.get("commit_parser", "conventional", repo=repo)
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
+    auto_publish = bool(ctx.settings.get("auto_publish", False, repo=repo))
 
     # 2. If configured, let the CLI take precedence (as it resolves Git tags accurately)
     next_version = None

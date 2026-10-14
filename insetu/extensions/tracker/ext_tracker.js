@@ -1261,7 +1261,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
         state.setNewTaskField('dependsOn', []);
         state.setNewTaskField('priority', '');
         state.setNewTaskField('size', '');
-
         // Smart Bucket Resolution from active bucket filters
         const targetBucket = (() => {
             const activeBucketPins = Array.from(state.pinnedBuckets || []).filter(b => b !== 'ALL');
@@ -1283,25 +1282,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
             }
             return 'None';
         })();
-
-        const activeBucketPins = Array.from(state.pinnedBuckets || []).filter(b => b !== 'ALL');
-        if (activeBucketPins.length > 0) {
-            const repoPrefix = targetRepo ? `${targetRepo}::` : '';
-            const matchingPins = activeBucketPins.filter(b => !targetRepo || b.startsWith(repoPrefix));
-            const bucketIds = Array.from(new Set(matchingPins.map(b => b.includes('::') ? b.split('::')[1] : b)));
-            if (bucketIds.length === 1) {
-                targetBucket = bucketIds[0];
-            } else if (activeBucketPins.length === 1) {
-                const singlePin = activeBucketPins[0];
-                if (singlePin.includes('::')) {
-                    const [pRepo, pBucket] = singlePin.split('::');
-                    if (!targetRepo || pRepo === targetRepo) {
-                        targetBucket = pBucket;
-                        if (!targetRepo) state.setNewTaskField('repo', pRepo);
-                    }
-                }
-            }
-        }
         state.setNewTaskField('bucket', targetBucket);
 
         if (prefill) {
