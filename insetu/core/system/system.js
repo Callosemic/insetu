@@ -1116,10 +1116,21 @@ export function setSyncStatus(state) {
 }
 // --- NON-BLOCKING TOAST NOTIFICATIONS ---
 // Hijack native alerts to prevent thread blocking while preserving stack traces
-window.alert = function(msg, intent = 'danger') {
-    const toastStore = window.inSetu?.stores?.Toast;
+window.alert = function(msg, intent = null) {
+    let resolvedIntent = intent;
+    if (!resolvedIntent) {
+        const str = String(msg || '');
+        if (/^(?:✅|\s*(?:success|pull successful|checkout successful|remote connected|sweep successful|triage complete|initialized|practice entry|structural configuration))/i.test(str) || str.toLowerCase().includes('successfully')) {
+            resolvedIntent = 'success';
+        } else if (/^⚠️/i.test(str)) {
+            resolvedIntent = 'warning';
+        } else {
+            resolvedIntent = 'danger';
+        }
+    }
+    const toastStore = window.inSetu?.stores?.Toast || window.Sutram?.stores?.Toast;
     if (toastStore && typeof toastStore.getState === 'function') {
-        toastStore.getState().addToast(msg, intent);
+        toastStore.getState().addToast(String(msg || '').replace(/^(?:✅|❌|⚠️)\s*/, ''), resolvedIntent);
     } else {
         console.warn("Alert:", msg); // Graceful fallback
     }

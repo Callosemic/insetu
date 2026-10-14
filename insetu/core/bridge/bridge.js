@@ -11,20 +11,7 @@ window.addEventListener('beforeunload', (e) => {
         e.returnValue = '';
     }
 });
-window.addEventListener('sutram-evict-projection', (e) => {
-    const id = e.detail?.id;
-    if (id === 'bridge') {
-        BridgeStore.getState().clearPayload();
-    } else if (id === 'bridge:edit-cell') {
-        const cellId = BridgeStore.getState().editCellId;
-        if (cellId) {
-            window.inSetu?.stores?.Fs?.getState()?.closeBuffer(`yomama://${cellId}`);
-            BridgeStore.setState({ editCellId: null, editCellOriginalFile: '' });
-        }
-    } else if (id === 'bridge:syntax-diff') {
-        BridgeStore.setState({ syntaxErrorDiff: null });
-    }
-});
+
 
 window.addEventListener('insetu:bridge:cell-swap', (e) => {
     if (e.detail?.id) {
@@ -41,7 +28,6 @@ export const BridgeStore = createExtensionStore('Bridge', {
     historyViewMode: 'transaction',
     editCellId: null,
     editCellOriginalFile: '',
-    syntaxErrorDiff: null,
     parseAndAppendCells: (text) => {
         const val = (text || '').replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
         const lines = val.split('\n');
@@ -197,8 +183,7 @@ export const BridgeStore = createExtensionStore('Bridge', {
             consoleOutput: 'Ready...',
             telemetry: null,
             editCellId: null,
-            editCellOriginalFile: '',
-            syntaxErrorDiff: null
+            editCellOriginalFile: ''
         });
         if (window.Sutram?.stores?.Layout) {
             const layout = window.Sutram.stores.Layout.getState();
@@ -229,6 +214,19 @@ export const BridgeStore = createExtensionStore('Bridge', {
     },
     getActiveFiles: () => {
         return Array.from(new Set(BridgeStore.getState().cells.filter(c => c.active).map(c => c.file)));
+    }
+}, {
+    onEvict: {
+        'bridge': () => {
+            BridgeStore.getState().clearPayload();
+            return {};
+        },
+        'bridge:edit-cell': (state) => {
+            if (state.editCellId) {
+                window.inSetu?.stores?.Fs?.getState()?.closeBuffer(`yomama://${state.editCellId}`);
+            }
+            return { editCellId: null, editCellOriginalFile: '' };
+        }
     }
 });
 window.inSetu.stores.Bridge = BridgeStore;
@@ -480,7 +478,7 @@ export class InSetuExtBridge extends InSetuElement {
                                 window.inSetu?.stores?.Fs?.getState()?.closeBuffer(`yomama://${curEditId}`);
                             }
                             // Retain console view and telemetry to show the success receipt, but clear the staging cells
-                            BridgeStore.setState({ cells: [], editCellId: null, editCellOriginalFile: '', syntaxErrorDiff: null });
+                            BridgeStore.setState({ cells: [], editCellId: null, editCellOriginalFile: '' });
                             if (window.Sutram?.stores?.Layout) {
                                 const layout = window.Sutram.stores.Layout.getState();
                                 layout.closeWindow('bridge:edit-cell');
@@ -536,17 +534,24 @@ export class InSetuExtBridge extends InSetuElement {
             })();
         } else if (action === 'view-diff') {
             const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
-            BridgeStore.setState({ syntaxErrorDiff: decodedDiff });
             if (window.Sutram?.stores?.Layout) {
                 const layout = window.Sutram.stores.Layout.getState();
                 layout.openWindow({
                     id: 'bridge:syntax-diff',
-                    component: 'insetu-bridge-diff-projection',
+                    component: 'sutram-report-projection',
                     label: 'Syntax Error Diff',
                     icon: 'alert-triangle',
                     intent: 'danger',
                     extName: 'bridge',
-                    windowOnly: true
+                    windowOnly: true,
+                    props: {
+                        caption: 'Unified diff between existing file and proposed AST syntax changes.',
+                        content: decodedDiff,
+                        suggestedFilename: `syntax_error_${Date.now()}.diff`,
+                        actions: [
+                            { label: 'Close', icon: 'x', intent: 'neutral', onClick: () => layout.closeWindow('bridge:syntax-diff') }
+                        ]
+                    }
                 }, layout.focusedColumn || 'center', 1);
             }
         } else if (action === 'copy-diff') {
@@ -1000,44 +1005,6 @@ export class InSetuBridgeEditProjection extends InSetuElement {
 }
 customElements.define('insetu-bridge-edit-projection', InSetuBridgeEditProjection);
 
-export class InSetuBridgeDiffProjection extends InSetuElement {
-    static properties = { syntaxErrorDiff: { type: String } };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
-    `];
-    constructor() {
-        super();
-        this.syntaxErrorDiff = BridgeStore.getState().syntaxErrorDiff || '';
-    }
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(BridgeStore, state => {
-            this.syntaxErrorDiff = state.syntaxErrorDiff || '';
-            this.requestUpdate();
-        });
-    }
-    render() {
-        return html`
-            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden;">
-                <sutram-textarea 
-                    readonly 
-                    ?autoSize=${false}
-                    ?flush=${true}
-                    .monospace=${true}
-                    style="flex: 1; height: 100%; margin: 0; --bg-input: var(--input-bg);" 
-                    .value=${this.syntaxErrorDiff}>
-                </sutram-textarea>
-            </div>
-            <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; justify-content: flex-end; flex-shrink: 0;">
-                <sutram-btn intent="neutral" icon="x" label="Close" style="margin: 0;" @click=${() => {
-                    BridgeStore.setState({ syntaxErrorDiff: null });
-                    if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('bridge:syntax-diff');
-                }}></sutram-btn>
-            </div>
-        `;
-    }
-}
-customElements.define('insetu-bridge-diff-projection', InSetuBridgeDiffProjection);
 export class InSetuExtBridgeHistoryActions extends InSetuElement {
     static get extensionName() { return 'bridge'; }
     static properties = { _viewMode: { type: String } };
