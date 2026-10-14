@@ -1,4 +1,4 @@
-import{html as i,css as r}from"lit";import{YenvuiBase as s}from"./yenvui-base.js";export class YenvuiDropdown extends s{static properties={items:{type:Array},open:{type:Boolean,reflect:!0},align:{type:String},_loadingItemId:{type:String,state:!0}};static styles=r`
+import{html as i,css as r}from"lit";import{YenvuiBase as n}from"./yenvui-base.js";export class YenvuiDropdown extends n{static properties={items:{type:Array},open:{type:Boolean,reflect:!0},align:{type:String},_loadingItemId:{type:String,state:!0}};static styles=r`
         :host { display: block; height: 100%; }
         .dropdown-menu {
             position: absolute;
@@ -37,7 +37,7 @@ import{html as i,css as r}from"lit";import{YenvuiBase as s}from"./yenvui-base.js
             animation: spin 1s linear infinite;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    `;constructor(){super(),this.items=[],this.open=!1,this.align="right",this._loadingItemId=null}connectedCallback(){super.connectedCallback(),this.registerOutsideClick&&this.registerOutsideClick(()=>{this.open&&(this.open=!1)})}_toggle(e){this._loadingItemId||(this.open=!this.open)}async _executeItem(e,o){if(!this._loadingItemId){if(e.asyncAction){this._loadingItemId=e.id||e.label;try{await e.asyncAction(o)}catch(t){console.error(t),window.inSetu?.ui?.setGlobalStatus&&window.inSetu.ui.setGlobalStatus(`Action Failed: ${t.message}`,4e3,!0)}finally{this._loadingItemId=null,this.open=!1}}else if(this.open=!1,e.onClick)try{const t=e.onClick(o);t&&typeof t.catch=="function"&&t.catch(n=>{console.error(n),window.inSetu?.ui?.setGlobalStatus&&window.inSetu.ui.setGlobalStatus(`Action Failed: ${n.message}`,4e3,!0)})}catch(t){console.error(t),window.inSetu?.ui?.setGlobalStatus&&window.inSetu.ui.setGlobalStatus(`Action Failed: ${t.message}`,4e3,!0)}}}render(){return i`
+    `;constructor(){super(),this.items=[],this.open=!1,this.align="right",this._loadingItemId=null}connectedCallback(){super.connectedCallback(),this.registerOutsideClick&&this.registerOutsideClick(()=>{this.open&&(this.open=!1)})}_toggle(e){this._loadingItemId||(this.open=!this.open)}_notifyError(e){console.error(e),window.dispatchEvent(new CustomEvent("sutram-status-update",{detail:{msg:`Action Failed: ${e.message}`,timeout:4e3,isError:!0}}))}async _executeItem(e,o){if(!this._loadingItemId){if(e.asyncAction){this._loadingItemId=e.id||e.label;try{await e.asyncAction(o)}catch(t){this._notifyError(t)}finally{this._loadingItemId=null,this.open=!1}}else if(this.open=!1,e.onClick)try{const t=e.onClick(o);t&&typeof t.catch=="function"&&t.catch(a=>this._notifyError(a))}catch(t){this._notifyError(t)}}}render(){return i`
             <div style="position: relative; display: flex; align-items: stretch; width: 100%; height: 100%;">
                 <div @click=${this._toggle} style="display: flex; align-items: stretch; width: 100%; height: 100%;">
                     <slot name="trigger"></slot>
@@ -53,7 +53,7 @@ import{html as i,css as r}from"lit";import{YenvuiBase as s}from"./yenvui-base.js
                     </div>
                 `:""}
             </div>
-        `}}customElements.define("yenvui-dropdown",YenvuiDropdown);export class YenvuiFilterDropdown extends s{static properties={filterText:{type:String},open:{type:Boolean,reflect:!0},hasFilters:{type:Boolean}};static styles=r`
+        `}}customElements.define("yenvui-dropdown",YenvuiDropdown);export class YenvuiFilterDropdown extends n{static properties={filterText:{type:String},open:{type:Boolean,reflect:!0},hasFilters:{type:Boolean}};static styles=r`
         :host { display: block; position: static; height: 100%; }
         .container { display: flex; align-items: stretch; height: 100%; }
         .panel {

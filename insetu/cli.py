@@ -2,342 +2,93 @@ import os
 import sys
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 # Enforce host-specific control directory for the Akasa kernel
 os.environ["AKASA_CONTROL_DIR"] = ".insetu"
 
-def handle_service(action, cwd):
-    """Manages the background systemd daemon for inSetu."""
-    # Inject XDG_RUNTIME_DIR to prevent D-Bus "No medium found" errors over SSH/WSL
-    if "XDG_RUNTIME_DIR" not in os.environ and hasattr(os, 'getuid'):
-        os.environ["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
-
-    service_name = "insetu.service"
-    systemd_user_dir = Path.home() / ".config" / "systemd" / "user"
-    service_file = systemd_user_dir / service_name
-
-    if action == "install":
-        insetu_bin = shutil.which("insetu")
-        if not insetu_bin:
-            print("❌ Error: Could not resolve the absolute path to the 'insetu' executable.")
-            return
-
-        systemd_user_dir.mkdir(parents=True, exist_ok=True)
-
-        # Dynamically generate the systemd unit file
-        unit_content = f"""[Unit]
-Description=inSetu Developer OS
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory={cwd}
-ExecStart={insetu_bin} serve
-Restart=always
-RestartSec=3
-Environment="PATH={os.environ.get('PATH', '')}"
-Environment="PYTHONUNBUFFERED=1"
-
-[Install]
-WantedBy=default.target
-"""
-        service_file.write_text(unit_content)
-
-        print(f"⚙️  Installing systemd service at {service_file}...")
-        subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-        subprocess.run(["systemctl", "--user", "enable", service_name], check=True)
-        subprocess.run(["systemctl", "--user", "start", service_name], check=True)
-
-        from akasa.utils import load_config as _load_config
-        cfg = _load_config()
-        port = int(os.environ.get("INSETU_PORT", cfg.get("port", 5005)))
-
-        print(f"✅ inSetu daemon installed and anchored to: {cwd} (Port {port})")
-        print(f"👉 Local Access URL: http://127.0.0.1:{port}")
-        print("👉 You can now close this terminal. Check status anytime with: insetu service status")
-
-    elif action == "uninstall":
-        if service_file.exists():
-            print("🛑 Stopping and disabling inSetu daemon...")
-            subprocess.run(["systemctl", "--user", "stop", service_name])
-            subprocess.run(["systemctl", "--user", "disable", service_name])
-            service_file.unlink()
-            subprocess.run(["systemctl", "--user", "daemon-reload"])
-            print("✅ inSetu service uninstalled successfully.")
-        else:
-            print("⚠️  No inSetu service found to uninstall.")
-
-    elif action == "status":
-        from akasa.utils import load_config as _load_config
-        cfg = _load_config()
-        port = int(os.environ.get("INSETU_PORT", cfg.get("port", 5005)))
-        print(f"⚙️  inSetu Service Telemetry:")
-        print(f"   ├─ Anchored Directory: {cwd}")
-        print(f"   ├─ Configured Port: {port}")
-        print(f"   └─ Access URL: http://127.0.0.1:{port}\n")
-        subprocess.run(["systemctl", "--user", "status", service_name])
-
-    elif action in ["start", "stop", "restart"]:
-        subprocess.run(["systemctl", "--user", action, service_name])
-    else:
-        print(f"❌ Unknown service action: {action}. Use install|uninstall|start|stop|restart|status.")
-def scaffold_extension(ext_name):
-    import re
-    if not re.match(r'^[a-z0-9_]+$', ext_name):
-        print("❌ Error: Extension name must be lowercase, alphanumeric, and underscores only.")
-        return
-
-    script_dir = Path(__file__).resolve().parent
-    ext_dir = script_dir / "extensions" / ext_name
-
-    if ext_dir.exists():
-        print(f"❌ Error: Extension '{ext_name}' already exists.")
-        return
-
-    ext_dir.mkdir(parents=True, exist_ok=True)
-    
-    # __init__.py
-    (ext_dir / "__init__.py").write_text("")
-    
-    # vendor.json
-    (ext_dir / "vendor.json").write_text('{\n    "imports": {},\n    "python": {}\n}\n')
-
-    cap_name = "".join(word.capitalize() for word in ext_name.split('_'))
-
-    defaults_dir = script_dir / "defaults"
-    
-    # Read and interpolate engine_template_py.txt
-    engine_tpl = defaults_dir / "engine_template_py.txt"
-    if engine_tpl.exists():
-        engine_code = engine_tpl.read_text(encoding="utf-8")
-        engine_code = engine_code.replace("{{ext_name}}", ext_name).replace("{{cap_name}}", cap_name)
-        (ext_dir / f"engine_{ext_name}.py").write_text(engine_code, encoding="utf-8")
-    else:
-        print("⚠️ Warning: engine_template_py.txt not found in defaults.")
-
-    # Read and interpolate ext_template_js.txt
-    js_tpl = defaults_dir / "ext_template_js.txt"
-    if js_tpl.exists():
-        js_code = js_tpl.read_text(encoding="utf-8")
-        js_code = js_code.replace("{{ext_name}}", ext_name).replace("{{cap_name}}", cap_name)
-        (ext_dir / f"ext_{ext_name}.js").write_text(js_code, encoding="utf-8")
-    else:
-        print("⚠️ Warning: ext_template_js.txt not found in defaults.")
-    
-    print(f"✅ Successfully scaffolded '{ext_name}' at {ext_dir.as_posix()}")
-    print("👉 Next Steps:")
-    print(f"1. Enable '{ext_name}' in your workspace config.json")
-    print(f"2. Restart the daemon to mount the new routes.")
 
 def scaffold_profiles(cwd):
+    """Minimal zero-dependency profile bootstrapper for the Immutable Recovery Bootloader."""
     base_dir = Path(cwd).joinpath(".insetu").as_posix()
-    is_new_hub = not os.path.exists(base_dir)
     os.makedirs(base_dir, exist_ok=True)
-  
-    script_dir = Path(__file__).resolve().parent.as_posix()
-    defaults_dir = Path(script_dir).joinpath("defaults").as_posix()
-    
-    # Scaffold the default config
-    target_config = Path(base_dir).joinpath("config.json").as_posix()
-    if not os.path.exists(target_config):
-        src_config = Path(defaults_dir).joinpath("config_json.txt").as_posix()
-        if os.path.exists(src_config):
-            shutil.copy(src_config, target_config)
 
-    # Scaffold workflows
-    target_workflows = Path(base_dir).joinpath("workflows.json").as_posix()
-    if not os.path.exists(target_workflows):
-        with open(target_workflows, "w", encoding="utf-8") as f:
+    defaults_dir = Path(__file__).resolve().parent.joinpath("defaults").as_posix()
+    for target_name, src_name in [
+        ("config.json", "config_json.txt"),
+        ("system.json", "system_json.txt"),
+        (".gitignore", "gitignore.txt")
+    ]:
+        target_p = Path(base_dir).joinpath(target_name).as_posix()
+        src_p = Path(defaults_dir).joinpath(src_name).as_posix()
+        if not os.path.exists(target_p) and os.path.exists(src_p):
+            shutil.copy(src_p, target_p)
+
+    wf_p = Path(base_dir).joinpath("workflows.json").as_posix()
+    if not os.path.exists(wf_p):
+        with open(wf_p, "w", encoding="utf-8") as f:
             json.dump({"context_batches": []}, f, indent=2)
 
-    # Scaffold the Tier 1 OS config locally
-    target_sys = Path(base_dir).joinpath("system.json").as_posix()
-    if not os.path.exists(target_sys):
-        src_sys = Path(defaults_dir).joinpath("system_json.txt").as_posix()
-        if os.path.exists(src_sys):
-            shutil.copy(src_sys, target_sys)
-            
-    # Scaffold the Git safeguard
-    target_gitignore = Path(base_dir).joinpath(".gitignore").as_posix()
-    if not os.path.exists(target_gitignore):
-        src_gitignore = Path(defaults_dir).joinpath("gitignore.txt").as_posix()
-        if os.path.exists(src_gitignore):
-            shutil.copy(src_gitignore, target_gitignore)
-
-    if is_new_hub:
-        print(f"[*] Initialized local inSetu environment at {base_dir}")
-
-def check_daemon_alive(port):
-    """Pings localhost to check if an inSetu daemon is already running."""
-    url = f"http://127.0.0.1:{port}/auth/bootstrap"
-    req = urllib.request.Request(
-        url, 
-        headers={"Content-Type": "application/json"}, 
-        data=b"{}"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=0.8) as res:
-            return res.status in (200, 401)
-    except Exception:
-        return False
-
-def launch_gui(cwd):
-    """Launches pywebview desktop shell, attaching to an active daemon or starting an embedded server."""
-    try:
-        import webview as _webview
-    except ImportError:
-        print("❌ Desktop GUI requires pywebview. Install with: pip install pywebview (or pip install insetu[gui])")
-        sys.exit(1)
-
-    from akasa.utils import load_config as _load_config
-    from insetu.app import run_app as _run_app
-
-    scaffold_profiles(cwd)
-    cfg = _load_config()
-    port = int(os.environ.get("INSETU_PORT", cfg.get("port", 5005)))
-
-    if check_daemon_alive(port):
-        print(f"🔗 Attaching GUI to active inSetu daemon on http://127.0.0.1:{port}...")
-    else:
-        print(f"🚀 No active daemon detected. Booting embedded server on port {port}...")
-        server_thread = threading.Thread(target=_run_app, daemon=True)
-        server_thread.start()
-
-    title = cfg.get("instance_title", "inSetu Developer OS")
-    _webview.create_window(
-        title=title,
-        url=f"http://127.0.0.1:{port}",
-        width=1280,
-        height=800,
-        resizable=True
-    )
-    _webview.start()
-
-def create_desktop_shortcut(cwd):
-    """Generates a native OS application shortcut for inSetu GUI."""
-    insetu_bin = shutil.which("insetu") or os.path.abspath(sys.argv[0])
-    icon_path = Path(__file__).resolve().parent / "static" / "icon-192.png"
-
-    if sys.platform == "linux" or sys.platform.startswith("freebsd"):
-        apps_dir = Path.home() / ".local" / "share" / "applications"
-        apps_dir.mkdir(parents=True, exist_ok=True)
-        desktop_file = apps_dir / "insetu.desktop"
-
-        content = f"""[Desktop Entry]
-Type=Application
-Name=inSetu Developer OS
-Comment=inSetu Developer OS Desktop Shell
-Exec={insetu_bin} gui
-Icon={icon_path}
-Terminal=false
-Categories=Development;IDE;
-Path={cwd}
-"""
-        desktop_file.write_text(content)
-        desktop_file.chmod(0o755)
-        print(f"✅ Linux desktop shortcut generated: {desktop_file}")
-
-    elif sys.platform == "darwin":
-        apps_dir = Path.home() / "Applications"
-        app_bundle = apps_dir / "inSetu Developer OS.app"
-        contents_dir = app_bundle / "Contents"
-        macos_dir = contents_dir / "MacOS"
-        macos_dir.mkdir(parents=True, exist_ok=True)
-
-        launcher_script = macos_dir / "inSetu"
-        launcher_script.write_text(f"""#!/bin/bash
-cd "{cwd}"
-exec "{insetu_bin}" gui
-""")
-        launcher_script.chmod(0o755)
-
-        plist_file = contents_dir / "Info.plist"
-        plist_file.write_text("""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>inSetu</string>
-    <key>CFBundleIdentifier</key>
-    <string>dev.insetu.developer-os</string>
-    <key>CFBundleName</key>
-    <string>inSetu Developer OS</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>2.0.0</string>
-</dict>
-</plist>
-""")
-        print(f"✅ macOS App bundle generated: {app_bundle}")
-
-    elif sys.platform == "win32":
-        start_menu = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
-        start_menu.mkdir(parents=True, exist_ok=True)
-        shortcut_path = start_menu / "inSetu Developer OS.lnk"
-
-        ps_script = f"""
-$WshShell = New-Object -comObject WScript.Shell
-$Shortcut = $WshShell.CreateShortcut("{shortcut_path}")
-$Shortcut.TargetPath = "{insetu_bin}"
-$Shortcut.Arguments = "gui"
-$Shortcut.WorkingDirectory = "{cwd}"
-$Shortcut.Save()
-"""
-        subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], check=True)
-        print(f"✅ Windows Start Menu shortcut generated: {shortcut_path}")
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: insetu [serve | gui | service | shortcut | create-extension]")
+        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension]")
         sys.exit(1)
 
     command = sys.argv[1]
     cwd = os.getcwd()
-    
-    if command == "create-extension":
-        if len(sys.argv) < 3:
-            print("Usage: insetu create-extension <extension_name>")
-            sys.exit(1)
-        scaffold_extension(sys.argv[2])
 
-    elif command == "gui":
-        launch_gui(cwd)
+    if command in ("-h", "--help", "help"):
+        print("inSetu Developer OS CLI")
+        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension]")
+        sys.exit(0)
 
-    elif command == "shortcut":
+    if command == "serve":
         scaffold_profiles(cwd)
-        create_desktop_shortcut(cwd)
-        
-    elif command == "serve":
-        scaffold_profiles(cwd)
-        # The Immutable Recovery Bootloader
         try:
-            # Import after scaffolding to ensure paths resolve correctly
-            from insetu.app import run_app
-            run_app()
-        except Exception as e:
-            import traceback
-            err_details = traceback.format_exc()
-            print(f"\n[!] KERNEL PANIC: {type(e).__name__} detected during boot.")
+            from insetu.app import run_app as _run_app
+            _run_app()
+        except Exception:
+            import traceback as _traceback
+            err_details = _traceback.format_exc()
+            print("\n[!] KERNEL PANIC detected during boot.")
             print(f"[!] Details:\n{err_details}")
             print("[!] Booting Immutable Recovery OS (Lifeboat FS)...")
             os.environ["INSETU_PANIC_DETAILS"] = err_details
-            from insetu.fallback_bridge import run_recovery_app
-            run_recovery_app()
+            from insetu.fallback_bridge import run_recovery_app as _run_recovery_app
+            _run_recovery_app()
+
+    elif command == "init":
+        from insetu.core.system.cli_commands import handle_init as _handle_init
+        _handle_init(cwd, sys.argv[2:])
+
+    elif command == "create-extension":
+        if len(sys.argv) < 3:
+            print("Usage: insetu create-extension <extension_name>")
+            sys.exit(1)
+        from insetu.core.system.cli_commands import scaffold_extension as _scaffold_extension
+        _scaffold_extension(sys.argv[2])
+
+    elif command == "gui":
+        from insetu.core.system.cli_commands import launch_gui as _launch_gui
+        _launch_gui(cwd)
+
+    elif command == "shortcut":
+        from insetu.core.system.cli_commands import create_desktop_shortcut as _create_desktop_shortcut
+        _create_desktop_shortcut(cwd)
+
     elif command == "service":
         if len(sys.argv) < 3:
             print("Usage: insetu service [install | uninstall | start | stop | restart | status]")
             sys.exit(1)
+        from insetu.core.system.cli_commands import handle_service as _handle_service
+        _handle_service(sys.argv[2], cwd)
 
-        # Scaffold the profiles just in case they run install on a fresh directory
-        if sys.argv[2] == "install":
-            scaffold_profiles(cwd)
-
-        handle_service(sys.argv[2], cwd)
     else:
         print(f"Unknown command: {command}")
+        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension]")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

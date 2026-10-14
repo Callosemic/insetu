@@ -1,4 +1,4 @@
-import{html as n,css as x}from"lit";import{SutramElement as f}from"./sutram_sdk.js";import"../../yenvui/js/drop-zone.js";export class SutramDragCoordinator extends f{static properties={dragState:{type:Object},spatialState:{type:Object}};static styles=x`
+import{html as n,css as u}from"lit";import{SutramElement as y}from"./sutram_sdk.js";import"../../yenvui/js/drop-zone.js";export class SutramDragCoordinator extends y{static properties={dragState:{type:Object},spatialState:{type:Object}};static styles=u`
         :host {
             display: contents;
         }
@@ -205,19 +205,13 @@ import{html as n,css as x}from"lit";import{SutramElement as f}from"./sutram_sdk.
             <yenvui-drop-overlay class="hud-overlay" ?active=${!0}>
                 <!-- Localized Bounding Box HUD Container -->
                 <div class="hud-hud-card" style="left: ${d.left}px; top:${d.top}px; width: ${d.width}px; height:${d.height}px;">
-
                     <div style="width: 100%; max-width: 500px;">
-                        <!-- Header -->
-                        <div style="display: flex; flex-direction: column; margin-bottom: 20px;">
-                            <div class="hud-header-subtitle">
-                                <yv-icon name="split" style="width: 14px; height: 14px;"></yv-icon> REPOSITION OR DOCK
-                            </div>
-                            <div class="hud-header-title">
-                                ${e?.label||e?.id||"Projection"}
-                            </div>
-                        </div>
-
+                        <!-- Top Close Action -->
+                        <yenvui-drop-target zone="close" class="drop-target-btn intent-danger" .intent=${"danger"} ?hovered=${t==="close"} style="margin-bottom: 14px;">
+                            <yv-icon name="x" style="width: 18px; height: 18px;"></yv-icon> Close
+                        </yenvui-drop-target>
                     <!-- TAB POSITION Section -->
+                    ${e?.windowOnly?"":n`
                     <div class="section-box tab-pos">
                         <div class="section-header tab-pos">
                             <span style="display: flex; align-items: center; gap: 6px;">
@@ -237,9 +231,10 @@ import{html as n,css as x}from"lit";import{SutramElement as f}from"./sutram_sdk.
                             </yenvui-drop-target>
                         </div>
                     </div>
+                    `}
 
                     <!-- ARRANGE TABS Section -->
-                    ${r&&r!=="window"&&this.spatialState?.columns?.[r]?.pinned?.length>1?n`
+                    ${!e?.windowOnly&&r&&r!=="window"&&this.spatialState?.columns?.[r]?.pinned?.length>1?n`
                         <div class="section-box arrange-tabs">
                             <div class="section-header arrange-tabs">
                                 <span style="display: flex; align-items: center; gap: 6px;">
@@ -248,9 +243,9 @@ import{html as n,css as x}from"lit";import{SutramElement as f}from"./sutram_sdk.
                                 <span style="opacity: 0.7;">Drop between tabs to reorder</span>
                             </div>
                             <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                                ${(()=>{const v=this.spatialState.columns[r].pinned;let s=[...v];const p=s.findIndex(g=>g.id===e?.id);let l=p;if(t&&t.startsWith("reorder-")&&(l=parseInt(t.replace("reorder-",""),10)),p!==-1&&l!==-1&&p!==l){const[g]=s.splice(p,1);s.splice(l,0,g)}return v.map((g,c)=>{const h=s[c],u=t==="reorder-"+c;return n`
+                                ${(()=>{const v=this.spatialState.columns[r].pinned;let s=[...v];const p=s.findIndex(g=>g.id===e?.id);let l=p;if(t&&t.startsWith("reorder-")&&(l=parseInt(t.replace("reorder-",""),10)),p!==-1&&l!==-1&&p!==l){const[g]=s.splice(p,1);s.splice(l,0,g)}return v.map((g,c)=>{const h=s[c],x=t==="reorder-"+c;return n`
                                             ${c>0?n`<span style="color: var(--text-muted); font-size: 0.8rem;">•</span>`:""}
-                                            <yenvui-drop-target zone="reorder-${c}" class="drop-target-btn intent-highlight" .intent=${"highlight"} ?hovered=${u}>
+                                            <yenvui-drop-target zone="reorder-${c}" class="drop-target-btn intent-highlight" .intent=${"highlight"} ?hovered=${x}>
                                                 <yv-icon name="${h.icon||"component"}" style="width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;"></yv-icon>
                                                 <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${h.label||h.id}</span>
                                             </yenvui-drop-target>
@@ -302,10 +297,15 @@ import{html as n,css as x}from"lit";import{SutramElement as f}from"./sutram_sdk.
                             `:""}
                         </div>
                     </div>
-                    <!-- Bottom Close Action -->
-                    <yenvui-drop-target zone="close" class="drop-target-btn intent-danger" .intent=${"danger"} ?hovered=${t==="close"}>
-                        <yv-icon name="x" style="width: 18px; height: 18px;"></yv-icon> Close
-                    </yenvui-drop-target>
+                    <!-- Footer Projection Title -->
+                    <div style="display: flex; flex-direction: column; align-items: center; text-align: center; margin-top: 6px;">
+                        <div class="hud-header-subtitle" style="justify-content: center;">
+                            <yv-icon name="split" style="width: 14px; height: 14px;"></yv-icon> REPOSITION OR DOCK
+                        </div>
+                        <div class="hud-header-title">
+                            ${e?.label||e?.id||"Projection"}
+                        </div>
+                    </div>
 
                 </div>
                 <!-- Floating Cursor Node (Hardware Accelerated) -->

@@ -44,7 +44,7 @@ from akasa.utils import register_core_module
 # Dependency Injection: Register host OS physics with the Kernel
 hooks.register_trusted_namespace('insetu.core.')
 hooks.register_extension_namespace('insetu.extensions.')
-for core_mod in ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline']:
+for core_mod in ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline', 'llm', 'agent']:
     register_core_module(core_mod)
 
 # Explicitly register system core routes first to prevent dynamic loader misfires
@@ -58,6 +58,14 @@ try:
         app.register_blueprint(fs_bp.bp)
 except Exception as e:
     print(f"⚠️ Failed to mount core system routes explicitly: {e}")
+@app.after_request
+def disable_http_caching(response):
+    """Disable browser HTTP caching. Rely exclusively on the Service Worker for offline performance."""
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
 @app.before_request
 def enforce_token_gate():
     """Universal interceptor enforcing token verification on all REST paths."""
@@ -365,7 +373,6 @@ def serve_extension_static(ext_name, filename):
 @app.route('/static/js/extensions/ext_<ext_name>.js')
 def serve_extension_js(ext_name):
     """ADR 0012: Dynamically serve frontend JS from the bundled extension subdirectory."""
-    from flask import Response as _Response
 
     # 1. Try bundled topology
     bundled_path = Path(app.root_path).joinpath("extensions", ext_name, f"ext_{ext_name}.js").as_posix()
@@ -378,7 +385,7 @@ def serve_extension_js(ext_name):
         return send_file(legacy_path, mimetype='application/javascript')
 
     # 3. Virtual fallback for Python-only declarative extensions
-    return _Response("export default {};", mimetype='application/javascript')
+    return Response("export default {};", mimetype='application/javascript')
 @app.route('/sw.js')
 def sw():
     return send_file(Path(app.static_folder).joinpath('sw.js').as_posix(), mimetype='application/javascript')

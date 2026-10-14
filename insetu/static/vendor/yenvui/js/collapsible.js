@@ -94,6 +94,8 @@ import{html as e,css as o}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
             display: flex;
             flex-direction: column;
             padding: 0 0 12px 0;
+            content-visibility: auto;
+            contain-intrinsic-size: auto 180px;
         }
 
         :host([flush]) .content {
