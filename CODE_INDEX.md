@@ -20,13 +20,6 @@ insetu/
 │   ├── 08_sutram_contracts.md      # Sutram Platform API & Interface Contracts.
 │   ├── ADR_INDEX.md                # Ledger of Logic for inSetu ADRs.
 │   └── adrs/                       # Architectural Decision Records.
-│       ├── 0004-asynchronous-vfs-commit-pipeline.md # Defines the non-blocking VFS write queue and thread safety.
-│       ├── 0006-tenant-isolated-compilation-locks.md # Defines thread-local locks for RAG payload compilations.
-│       ├── 0008-offline-first-synchronization.md # Offline capabilities and Service Worker caching.
-│       ├── 0013-posix-compliant-pathlib-migration.md # Standardization on POSIX paths for cross-platform parity.
-│       ├── 0014-event-bus-tenant-authorization.md # Authorization rules for cross-tenant event bus emissions.
-│       ├── 0015-codemirror6-migration.md # Transition from legacy editors to CodeMirror 6.
-│       ├── 0016-explicit-api-client-and-fetch-deprecation.md # Mandates the use of the centralized inSetu API client.
 │       ├── 0017-extension-sdk-and-pit-of-success.md # Defines the InSetuExtension and InSetuElement base classes.
 │       ├── 0018-event-sourced-vfs-ledger.md # SQLite event sourcing for VFS mutations and Watchdog events.
 │       ├── 0021_standardized_state_isolation.md # Unidirectional Data Flow and tenant state isolation.
@@ -66,22 +59,35 @@ insetu/
 │       ├── 0055-vfs-parity-action-middleware-and-singleton-modal-deprecation.md # VFS parity gatekeeper action middleware, singleton file modal deprecation, and InSetuURI coercion hooks.
 │       ├── 0056-system-sdk-module-renaming-spatial-grid-routing-and-syntax-fallback.md # System SDK module renaming, spatial grid routing, and Tree-Sitter syntax fallback.
 │       ├── 0057-workspace-swap-layout-eviction-and-yv-icon-migration.md # Pre-swap layout eviction, yv-icon migration, and primitive alias purge.
+│       ├── 0058-universal-llm-gateway-react-agent-harness-and-vfs-modal-projection-decoupling.md # Universal LLM gateway, autonomous ReAct agent harness, and spatial VFS projections.
+│       ├── 0059-extension-modal-annihilation-spatial-projection-migration-and-store-eviction.md # [comment required]
 │       └── archived/               # Superseded and historical ADR documents.
 │           ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │           ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
 │           ├── 0003-stateless-multi-tenant-routing.md # Initial stateless request-scoped multi-tenant REST routing setup.
+│           ├── 0004-asynchronous-vfs-commit-pipeline.md # Defines the non-blocking VFS write queue and thread safety.
 │           ├── 0005-transport-shell-decoupling.md # Decoupling of HTTP transport shell from pure domain logic.
+│           ├── 0006-tenant-isolated-compilation-locks.md # Defines thread-local locks for RAG payload compilations.
 │           ├── 0007-stateless-ui-factory-and-component-decoupling.md # UI decoupling from business logic via Zustand UDF.
+│           ├── 0008-offline-first-synchronization.md # Offline capabilities and Service Worker caching.
 │           ├── 0009-ephemeral-artifacts-and-immediate-jobs-ledger.md # Management of short-lived job artifacts and garbage collection.
 │           ├── 0010-vfs-boundary-exemptions.md # Rules for paths exempt from strict VFS isolation.
 │           ├── 0011-vfs-barrier-synchronization.md # Synchronization barriers for asynchronous VFS flushes.
-│           └── 0012-extension-subdirectory-extraction.md # Extraction of domain extensions into isolated subdirectories.
+│           ├── 0012-extension-subdirectory-extraction.md # Extraction of domain extensions into isolated subdirectories.
+│           ├── 0013-posix-compliant-pathlib-migration.md # Standardization on POSIX paths for cross-platform parity.
+│           ├── 0014-event-bus-tenant-authorization.md # Authorization rules for cross-tenant event bus emissions.
+│           ├── 0015-codemirror6-migration.md # Transition from legacy editors to CodeMirror 6.
+│           └── 0016-explicit-api-client-and-fetch-deprecation.md # Mandates the use of the centralized inSetu API client.
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── app.py                      # [Micro-Kernel & Extension Bootloader]
 │   ├── cli.py                      # [Daemon & Process Management]
 │   ├── core/                       # Core frontend SDK and UI components.
 │   │   ├── __init__.py             # Module initialization.
+│   │   ├── agent/                  # Autonomous ReAct agent harness and streaming chat interface.
+│   │   │   ├── __init__.py         # Module initialization.
+│   │   │   ├── agent.js            # Agent chat streaming UI, turn history, and session management.
+│   │   │   └── engine_agent.py     # ReAct agent execution loop, prompt packing, and self-healing patch retry logic.
 │   │   ├── bridge/                 # Yomama Sync Bridge and AST validation engine.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── bridge.js           # [Sync Bridge Payload UI]
@@ -103,6 +109,9 @@ insetu/
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── engine_gather.py    # [Context Compiler and Workflow Batch routing]
 │   │   │   └── gather.js           # [Context Batch & Workflow UI]
+│   │   ├── llm/                    # Universal multi-provider LLM gateway and streaming proxy.
+│   │   │   ├── __init__.py         # Module initialization.
+│   │   │   └── engine_llm.py       # Multi-model inference orchestrator (Anthropic, Gemini, Claude CLI).
 │   │   ├── offline/                # Local offline data provider and sync reconciliation engine.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── engine_offline.py   # Offline data provider and sync reconciliation handlers.
@@ -111,6 +120,7 @@ insetu/
 │   │   │   └── __init__.py         # Module initialization.
 │   │   ├── system/                 # System lifecycle, settings, and recovery controllers.
 │   │   │   ├── api.js              # Centralized API fetch wrapper and token injector.
+│   │   │   ├── cli_commands.py     # Modular CLI command implementations (init, daemon service, GUI, shortcuts).
 │   │   │   ├── components/         # Reusable Lit Web Components for the OS.
 │   │   │   │   ├── ui_editor.js    # CodeMirror 6 markdown and frontmatter editor wrappers.
 │   │   │   │   ├── ui_file_tree.js # Recursive file tree browser with fuzzy search.

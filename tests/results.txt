@@ -3,7 +3,127 @@
 ============================================================
 
 🔍 Sweeping Python Backend (AST Analysis)...
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/editor/engine_editor.py:110
+   ↳ pathlib.write_text() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: EVENT_LEDGER_SENTINEL] [workspace]/insetu/insetu/core/system/cli_commands.py:29
+   ↳ Native 'open' in write mode detected. Route through execute_vfs_save to maintain Event Ledger parity (ADR 0018).
+
+❌ [VIOLATION: EVENT_LEDGER_SENTINEL] [workspace]/insetu/insetu/core/system/cli_commands.py:29
+   ↳ Native file write detected. Route through execute_vfs_save to maintain Event Ledger parity (ADR 0018).
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:102
+   ↳ pathlib.write_text() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:104
+   ↳ pathlib.write_text() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: VFS_CONSTRAINT] [workspace]/insetu/insetu/core/system/cli_commands.py:117
+   ↳ Synchronous shutil.move/rmtree detected. Route through the async VFS queue.
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:123
+   ↳ pathlib.write_bytes() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: EVENT_LEDGER_SENTINEL] [workspace]/insetu/insetu/core/system/cli_commands.py:226
+   ↳ Native 'open' in write mode detected. Route through execute_vfs_save to maintain Event Ledger parity (ADR 0018).
+
+❌ [VIOLATION: EVENT_LEDGER_SENTINEL] [workspace]/insetu/insetu/core/system/cli_commands.py:226
+   ↳ Native file write detected. Route through execute_vfs_save to maintain Event Ledger parity (ADR 0018).
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:237
+   ↳ pathlib.write_text() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:247
+   ↳ pathlib.write_text() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:261
+   ↳ pathlib.write_text() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:309
+   ↳ pathlib.write_text() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:329
+   ↳ pathlib.unlink() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:365
+   ↳ pathlib.write_text() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:366
+   ↳ pathlib.write_text() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:375
+   ↳ pathlib.write_text() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:383
+   ↳ pathlib.write_text() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:462
+   ↳ pathlib.write_text() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:474
+   ↳ pathlib.write_text() bypass detected. Route through the async VFS queue.
+
+❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/core/system/cli_commands.py:481
+   ↳ pathlib.write_text() bypass detected. Route through the async VFS queue.
+
+⚠️ [WARNING: IO_BLOCK_BAN] engine_llm.py:144
+   ↳ Subprocess call outside of designated engines (permitted but flagged).
+❌ [VIOLATION: EXECUTE_BINARY_MANDATE] [workspace]/insetu/insetu/core/llm/engine_llm.py:144
+   ↳ Direct 'subprocess.Popen()' invocation detected. Route through 'execute_binary()' in utils_core to resolve PATH binaries cleanly.
+
+🔍 Sweeping Vendor Manifest Paths (Existence Analysis)...
 🔍 Sweeping JavaScript Frontend (Hybrid AST + Regex Analysis)...
+❌ [VIOLATION: BANNED_YENVUI_TAG_BAN] [workspace]/insetu/insetu/core/fs/fs.js:1857
+   ↳ Deprecated 'yenvui-' token detected. Migrate entirely to vendorized 'sutram-' primitives.
+
+❌ [VIOLATION: BANNED_YENVUI_TAG_BAN] [workspace]/insetu/insetu/core/fs/fs.js:1858
+   ↳ Deprecated 'yenvui-' token detected. Migrate entirely to vendorized 'sutram-' primitives.
+
+❌ [VIOLATION: BANNED_YENVUI_TAG_BAN] [workspace]/insetu/insetu/core/fs/fs.js:2258
+   ↳ Deprecated 'yenvui-' token detected. Migrate entirely to vendorized 'sutram-' primitives.
+
+❌ [VIOLATION: BANNED_YENVUI_TAG_BAN] [workspace]/insetu/insetu/core/config/config.js:498
+   ↳ Deprecated 'yenvui-' token detected. Migrate entirely to vendorized 'sutram-' primitives.
+
+❌ [VIOLATION: DROPDOWN_CLICK_OUTSIDE_VIOLATION] [workspace]/insetu/insetu/core/system/system.js:1
+   ↳ Manual click listener detected for dropdown/filter management. Migrate to <insetu-filter-dropdown>.
+
+❌ [VIOLATION: BANNED_YENVUI_TAG_BAN] [workspace]/insetu/insetu/core/system/components/ui_editor.js:555
+   ↳ Deprecated 'yenvui-' token detected. Migrate entirely to vendorized 'sutram-' primitives.
+
+❌ [VIOLATION: BANNED_YENVUI_TAG_BAN] [workspace]/insetu/insetu/core/system/components/ui_primitives.js:64
+   ↳ Deprecated 'yenvui-' token detected. Migrate entirely to vendorized 'sutram-' primitives.
+
+❌ [VIOLATION: VIEW_TEXT_BLOB_MANDATE] [workspace]/insetu/insetu/core/system/components/ui_primitives.js:135
+   ↳ Deprecated vfs.openVirtualFile detected. Migrate to this.ui.viewTextBlob(title, content, suggestedFilename) or window.inSetu.ui.viewTextBlob instead.
+
+❌ [VIOLATION: BANNED_YENVUI_TAG_BAN] [workspace]/insetu/insetu/core/system/components/ui_file_tree.js:153
+   ↳ Deprecated 'yenvui-' token detected. Migrate entirely to vendorized 'sutram-' primitives.
+
+❌ [VIOLATION: BANNED_YENVUI_TAG_BAN] [workspace]/insetu/insetu/core/system/components/ui_file_tree.js:155
+   ↳ Deprecated 'yenvui-' token detected. Migrate entirely to vendorized 'sutram-' primitives.
+
+❌ [VIOLATION: BANNED_YENVUI_TAG_BAN] [workspace]/insetu/insetu/core/system/components/ui_file_tree.js:162
+   ↳ Deprecated 'yenvui-' token detected. Migrate entirely to vendorized 'sutram-' primitives.
+
+❌ [VIOLATION: BANNED_YENVUI_TAG_BAN] [workspace]/insetu/insetu/core/system/components/ui_file_tree.js:164
+   ↳ Deprecated 'yenvui-' token detected. Migrate entirely to vendorized 'sutram-' primitives.
+
+❌ [VIOLATION: BANNED_YENVUI_TAG_BAN] [workspace]/insetu/insetu/core/system/components/ui_system_settings.js:371
+   ↳ Deprecated 'yenvui-' token detected. Migrate entirely to vendorized 'sutram-' primitives.
+
+❌ [VIOLATION: BANNED_YENVUI_TAG_BAN] [workspace]/insetu/insetu/core/system/components/ui_system_settings.js:580
+   ↳ Deprecated 'yenvui-' token detected. Migrate entirely to vendorized 'sutram-' primitives.
+
+❌ [VIOLATION: GLOBAL_LISTENER_MANDATE] [workspace]/insetu/insetu/extensions/update/ext_update.js:430
+   ↳ Raw window.addEventListener detected. Use this.registerGlobalListener() to prevent memory leaks on component unmount.
+
+❌ [VIOLATION: GLOBAL_LISTENER_MANDATE] [workspace]/insetu/insetu/extensions/git/ext_git.js:40
+   ↳ Raw window.addEventListener detected. Use this.registerGlobalListener() to prevent memory leaks on component unmount.
+
+❌ [VIOLATION: GLOBAL_LISTENER_MANDATE] [workspace]/insetu/insetu/extensions/notes/ext_notes.js:118
+   ↳ Raw window.addEventListener detected. Use this.registerGlobalListener() to prevent memory leaks on component unmount.
+
 🔍 Sweeping CSS Stylesheets (Regex Analysis)...
 ============================================================
-✅ SUCCESS: Codebase complies with all engineering standards.
+❌ FAILED: Found 39 architectural violations.

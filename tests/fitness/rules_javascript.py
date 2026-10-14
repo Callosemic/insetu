@@ -90,6 +90,7 @@ def check_javascript_files():
     registry_debounce_pattern = re.compile(r'(?:window\.)?ExtensionRegistry\.utils\.debounce')
     banned_ui_zones_pattern = re.compile(r'\buiHooks\s*:|[\'"]zone:[a-zA-Z0-9_-]+[\'"]')
     banned_has_actions_pattern = re.compile(r'\bhas-actions\b')
+    composed_path_pattern = re.compile(r'\be\.composedPath\s*\(\s*\)')
     unscoped_offline_storage_pattern = re.compile(r"localStorage\.(?:set|get)Item\(['\"]insetu_offline_(?:config|topology|workspaces)['\"]")
     domain_store_config_mirror_pattern = re.compile(r'(?:targetConfigs|allRepos)\s*:\s*AppStore\.getState\(\)\.(?:targetConfigs|allRepos)')
     singleton_modal_ban_pattern = re.compile(r'\b(?:FsStore\.getState\(\)\.fileModal|insetu-file-modal)\b')
@@ -109,8 +110,7 @@ def check_javascript_files():
         ts_available = True
     except ImportError:
         print("⚠️ [WARNING] Tree-sitter not installed. Falling back to legacy regex. (Run `pip install -e .[syntax]`)")
-
-    for filepath in collect_unique_files([FRONTEND_DIR, BACKEND_DIR / "extensions"], [".js"]):
+    for filepath in collect_unique_files([FRONTEND_DIR, BACKEND_DIR / "core", BACKEND_DIR / "extensions"], [".js"]):
         file = filepath.name
         is_extension = file.startswith("ext_") or "extensions" in filepath.parts
         with open(filepath, "r", encoding="utf-8") as f:
@@ -178,8 +178,7 @@ def check_javascript_files():
             report_violation("DOMCONTENTLOADED_REGISTRATION_BAN", filepath, 1, "Extensions must invoke ExtensionRegistry.registerExtension at top-level module scope to guarantee deterministic registration during boot.")
         if "navigator.share(" in full_content and "navigator.canShare" not in full_content:
             report_violation("WEB_SHARE_GUARD_MANDATE", filepath, 1, "Invocation of navigator.share() detected without a defensive navigator.canShare check.")
-
-        if file not in ["app.js", "ui_dropdowns.js", "ui_file_tree.js"]:
+        if file not in ["app.js", "system.js", "ui_dropdowns.js", "ui_file_tree.js"]:
             if "addEventListener('click'" in full_content or 'addEventListener("click"' in full_content:
                 if "dropdown" in full_content.lower() or "filter" in full_content.lower():
                     if "insetu-filter-dropdown" not in full_content:
@@ -205,6 +204,9 @@ def check_javascript_files():
                 if hex_color_pattern.search(line):
                     if "style=" in line or "cssText" in line:
                         report_violation("THEME_TOKENS", filepath, line_num, f"Hardcoded HEX color found: {line.strip()}. Use CSS intent variables (e.g., var(--btn)).")
+            if composed_path_pattern.search(line) and file not in ["physics.js", "sutram_sdk.js", "insetu_sdk.js"]:
+                report_violation("EVENT_PATH_RESOLVER_MANDATE", filepath, line_num, "Direct 'e.composedPath()' usage detected. Use 'getEventPath(e)' or 'this.getEventPath(e)' via the SDK for centralized event path resolution.")
+
             if not ts_available:
                 if clear_timeout_pattern.search(line):
                     if "Timer" not in line and "panicTimeout" not in line:
