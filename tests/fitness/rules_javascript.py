@@ -298,8 +298,11 @@ def check_javascript_files():
 
             if zustand_reference_mutation_pattern.search(line):
                 report_violation("ZUSTAND_REFERENCE_MUTATION", filepath, line_num, "Symmetric state assignment detected (e.g. {manifest: manifest}). Ensure complex objects are explicitly cloned using the spread operator before passing to setState.")
-            if is_extension and banned_ui_zones_pattern.search(line):
+            if (is_extension or 'core' in filepath.parts) and banned_ui_zones_pattern.search(line):
                 report_violation("BANNED_UI_ZONES", filepath, line_num, "The 'uiHooks' object and 'zone:*' string hooks are permanently deprecated (ADR 0041). Use declarative customEditors, expanded layoutSlots, native InSetuElement lifecycles, or the Typed Event Bus.")
+
+            if re.search(r'\bbatchActions\s*:', line):
+                report_violation("LEGACY_BATCH_ACTIONS_BAN", filepath, line_num, "The 'batchActions' schema array is deprecated. Migrate bulk actions directly into 'entityActions' using 'bulkable: true' (ADR 0061).")
             if banned_has_actions_pattern.search(line):
                 report_violation("BANNED_HAS_ACTIONS_ATTRIBUTE", filepath, line_num, "The 'has-actions' attribute is deprecated. <insetu-card> and <sutram-card> now automatically query the ExtensionRegistry to mount the action tray.")
 

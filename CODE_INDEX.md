@@ -22,12 +22,8 @@ insetu/
 │   └── adrs/                       # Architectural Decision Records.
 │       ├── 0017-extension-sdk-and-pit-of-success.md # Defines the InSetuExtension and InSetuElement base classes.
 │       ├── 0018-event-sourced-vfs-ledger.md # SQLite event sourcing for VFS mutations and Watchdog events.
-│       ├── 0021_standardized_state_isolation.md # Unidirectional Data Flow and tenant state isolation.
 │       ├── 0022-differential-context-compilation.md # Surgical updates to RAG contexts avoiding full recompilation.
-│       ├── 0023-polymorphic-entity-action-card-registry.md # Dynamic context-aware actions for UI entity cards.
 │       ├── 0024-frontend-sdk-decoupling-and-domain-accessors.md # Front-end SDK abstraction (this.vfs, this.sys, this.editor).
-│       ├── 0025-declarative-app-shell-and-brokered-resource-management.md # Declarative UI layout definitions and slot brokering.
-│       ├── 0026-unified-token-gatehouse-and-tailscale-auth.md # Centralized REST/WebSocket authentication and Tailscale WHOIS.
 │       ├── 0027-global-multi-select-and-batch-action-registry.md # Global UI selection tray and batch action execution.
 │       ├── 0028-native-hash-routing-and-event-bus.md # Zero-bundler SPA routing using URL hashes.
 │       ├── 0029-core-kernel-extraction-and-three-tier-architecture.md # Separation of Kernel, Core OS, and Domain Extensions.
@@ -60,7 +56,9 @@ insetu/
 │       ├── 0056-system-sdk-module-renaming-spatial-grid-routing-and-syntax-fallback.md # System SDK module renaming, spatial grid routing, and Tree-Sitter syntax fallback.
 │       ├── 0057-workspace-swap-layout-eviction-and-yv-icon-migration.md # Pre-swap layout eviction, yv-icon migration, and primitive alias purge.
 │       ├── 0058-universal-llm-gateway-react-agent-harness-and-vfs-modal-projection-decoupling.md # Universal LLM gateway, autonomous ReAct agent harness, and spatial VFS projections.
-│       ├── 0059-extension-modal-annihilation-spatial-projection-migration-and-store-eviction.md # [comment required]
+│       ├── 0059-extension-modal-annihilation-spatial-projection-migration-and-store-eviction.md # Extension modal annihilation, spatial viewport projections, and store eviction governance.
+│       ├── 0060-git-aware-topology-manifest-sync-and-spatial-diff-projections.md # Git-aware topology CQRS ledger, real-time manifest delta sync, and spatial diff projections.
+│       ├── 0061-polymorphic-bulk-entity-actions-subsumption-pruning-and-recursive-vfs-eviction.md # [comment required]
 │       └── archived/               # Superseded and historical ADR documents.
 │           ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │           ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -77,7 +75,11 @@ insetu/
 │           ├── 0013-posix-compliant-pathlib-migration.md # Standardization on POSIX paths for cross-platform parity.
 │           ├── 0014-event-bus-tenant-authorization.md # Authorization rules for cross-tenant event bus emissions.
 │           ├── 0015-codemirror6-migration.md # Transition from legacy editors to CodeMirror 6.
-│           └── 0016-explicit-api-client-and-fetch-deprecation.md # Mandates the use of the centralized inSetu API client.
+│           ├── 0016-explicit-api-client-and-fetch-deprecation.md # Mandates the use of the centralized inSetu API client.
+│           ├── 0021_standardized_state_isolation.md # Unidirectional Data Flow and tenant state isolation.
+│           ├── 0023-polymorphic-entity-action-card-registry.md # Dynamic context-aware actions for UI entity cards.
+│           ├── 0025-declarative-app-shell-and-brokered-resource-management.md # Declarative UI layout definitions and slot brokering.
+│           └── 0026-unified-token-gatehouse-and-tailscale-auth.md # Centralized REST/WebSocket authentication and Tailscale WHOIS.
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── app.py                      # [Micro-Kernel & Extension Bootloader]

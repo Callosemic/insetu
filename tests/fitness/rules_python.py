@@ -134,6 +134,12 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 report_violation("SDK_VFS_WALK_MANDATE", self.filepath, node.lineno, "Raw os.walk() detected in extension. Use ctx.vfs.walk() instead.")
             if isinstance(node.func, ast.Name) and node.func.id == 'open':
                 report_violation("SDK_VFS_READ_MANDATE", self.filepath, node.lineno, "Native open() detected in extension. Use ctx.vfs.read() instead.")
+            if isinstance(node.func, ast.Attribute) and node.func.attr == 'save':
+                for kw in node.keywords:
+                    if kw.arg == 'data' and isinstance(kw.value, ast.Dict):
+                        for k, v in zip(kw.value.keys, kw.value.values):
+                            if isinstance(k, ast.Constant) and k.value == 'action' and isinstance(v, ast.Constant) and v.value == 'delete':
+                                report_violation("DEPRECATED_VFS_DELETE_ACTION", self.filepath, node.lineno, "Passing data={'action': 'delete'} to ctx.vfs.save() is deprecated. Use ctx.vfs.delete() instead.")
             if isinstance(node.func, ast.Attribute) and node.func.attr == 'route':
                 if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value in ('', '/'):
                     report_violation("BANNED_EMPTY_ROUTE", self.filepath, node.lineno, f"Empty or root route selection ('{node.args[0].value}') detected in extension engine. Use an explicit endpoint name instead to prevent reverse proxy redirect traps.")
