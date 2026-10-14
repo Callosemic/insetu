@@ -16,8 +16,8 @@ All UI components extending the platform must inherit from `SutramElement`. This
 Extensions must register their UI topology via `window.ExtensionRegistry.registerExtension(name: String, config: Object)`. The `config` object accepts the following declarative arrays:
 *   **`layoutSlots`**: Projects components into the `<sutram-app-shell>`.
     *   Schema: `{ slot: "slots:sub-navigation", targetParent: "tab_id", id: "sub_id", label: "Label", icon: "icon-name", intent: "primary", order: 1, component: "custom-tag" }`
-*   **`entityActions`**: Defines buttons for the `<sutram-entity-actions>` broker.
-    *   Schema: `{ targetEntity: "type", id: "str", label: "str" | (data) => "str", icon: "str" | (data) => "str", intent: "primary", order: 1, match: (data) => bool, emitEvent: (data) => ({name, detail}), asyncAction: async (data, e) => {...}, onClick: (data, e) => {...} }`
+*   **`entityActions`**: Defines contextual and bulk buttons for the `<sutram-entity-actions>` and selection tray brokers.
+    *   Schema: `{ targetEntity: "type", targetEntities: ["type1", "type2"], id: "str", bulkGroupKey: "str", label: "str" | (data) => "str", bulkLabel: "str", icon: "str" | (data) => "str", intent: "primary", order: 1, bulkable: bool, bulkOnly: bool, match: (data) => bool, emitEvent: (data) => ({name, detail}), asyncAction: async (data, e) => {...}, onClick: (data, e) => {...}, bulkAction: async (items, e) => {...}, bulkOnClick: (items, e) => {...} }`
 *   **`settingsActions`**: Injects buttons into the host's settings UI.
     *   Schema: `{ id: "str", label: "str", icon: "str", onClick: async () => {...} }`
 *   **`shortcuts`**: Registers global keybindings.
@@ -73,6 +73,7 @@ Dynamically generates form controls from backend JSON schemas.
 ## VI. Interactive Primitives
 *   **`<sutram-async-btn>`**: Action button with an integrated state machine (`idle` -> `loading` -> `success` | `error`). Properties: `.label`, `.loadingLabel`, `.successLabel`, `.errorLabel`, `.intent` (e.g., `'primary'`, `'danger'`), `?disabled`, `?active`. You MUST bind a functional object to `.onClick=${async (e) => {...}}`.
 *   **`<sutram-report-projection>`**: Generalized spatial viewport projection for multi-tab or single-block reports, logs, and dry-run outputs. Properties: `.caption` (String), `.content` (String), `.tabs` (Array of `{ id, label, icon, content }`), `.activeTab` (String), `.actions` (Array of `{ label, icon, intent, primary, asyncAction, onClick, style, disabled }`), `.extraContent` (TemplateResult), `.suggestedFilename` (String).
+*   **`<sutram-diff-viewer>`**: Side-by-side structural comparison primitive backed by CodeMirror 6 `@codemirror/merge`. Properties: `.diffText` (String), `.searchStr` (String), `.replaceStr` (String), `.leftTitle` (String), `.rightTitle` (String).
 *   **`<sutram-editor>`**: State-aware wrapper for CodeMirror 6. Properties: `.value`, `?readOnly`, `.language`, `?writingMode`, `.customExtensions`, `?enableWordcount`. Methods: `insertAtCursor(text: String)`. Emits `@editor-changed`.
 *   **`<sutram-dropdown>`**: Context menu. Properties: `.items` (Array of `{label, icon, onClick}`), `?open`, `.align`.
 *   **`<sutram-tag>`**: Badge label. Properties: `.text`, `.intent`.

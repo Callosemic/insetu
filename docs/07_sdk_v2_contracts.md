@@ -66,7 +66,7 @@ Extensions are strictly forbidden from relative-importing OS chassis functions. 
 * **`this.ecosystem`**: Auto-hydrated workspace topology (`this.ecosystem.allRepos`, `this.ecosystem.pinnedRepos`, `this.ecosystem.targetConfigs`).
 * **`.setStatus(msg, timeout, isError)`**: Base helper to emit global status updates via `this.ui.setGlobalStatus`.
 * **`.compileSystem()`**: Base helper to trigger background system compilations via `this.sys.executeSystemCompile`.
-* **`this.vfs`**: `.viewSourceFile(path)`, `.fetchAndCopy(path)`, `.downloadFile(url)`, `.shareFiles(file, chunks)`, `.normalizeVfsURI(path)`
+* **`this.vfs`**: `.viewSourceFile(path)`, `.viewFileGitDiff(path)`, `.isFileGitModified(path)`, `.fetchAndCopy(path)`, `.downloadFile(url)`, `.shareFiles(file, chunks)`, `.normalizeVfsURI(path)`
 * **`this.ui`**: `.openWorkspaceBrowser(options)`, `.openFolderBrowser(cb)`, `.setGlobalStatus(msg)`, `.viewTextBlob(title, content, suggestedFilename)`
 * **`this.sys`**: `.executeWorkspaceMutation(path, payload)`, `.executeSystemCompile()`, `.switchTab(tabId)`, `.refreshManifest()`
 * **`this.editor`**: `.getEditorContent()`, `.setEditorContent(text)`, `.insertTextAtCursor(text)`
@@ -105,16 +105,22 @@ window.ExtensionRegistry.registerExtension('my_ext', {
     name: "My Extension",
     version: "2.0.0",
     offline_mode: "full", // Options: "full", "read_only", "none"
-
-    // Injects contextual buttons onto file/task cards
+    // Injects contextual and bulk buttons onto file/task cards and selection trays
     entityActions: [{
-        targetEntity: 'file', // Matches the entityType property of an <insetu-card>
+        targetEntity: 'file', // Target entity type or '*'
+        targetEntities: ['file', 'folder'], // Optional multi-entity support
         id: 'my-action',
+        bulkGroupKey: 'my-group', // Key to aggregate bulk actions across heterogenous items
         label: 'Action',
-        icon: '⚡',
+        bulkLabel: 'Bulk Action', // Optional label override in bulk selection mode
+        icon: 'zap',
         intent: 'primary', // success, danger, warning, neutral
         order: 50,
-        match: (data) => data.filepath.endsWith('.md'),
+        bulkable: true, // Enables action in multi-select tray
+        bulkOnly: false, // Set true to hide from individual card action bars
+        match: (data) => data.filepath?.endsWith('.md'),
+        onClick: (data, e) => { ... },
+        bulkAction: async (items, e) => { ... }, // Bulk handler receiving selected items
         emitEvent: (data) => ({ name: 'insetu:ext:action', detail: data })
     }],
     // Keyboard shortcut bindings
