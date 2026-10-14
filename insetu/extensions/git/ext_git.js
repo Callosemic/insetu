@@ -420,16 +420,13 @@ disconnectedCallback() {
                         </div>
                     </sutram-collapsible>
                 `)}
-                ${!isGitLoading && diffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px; padding: 0;">Diffs automatically map when this tab is opened.</p>` : ''}
                 ${!isGitLoading && Object.keys(this.sweepFiles).some(r => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)) ? html`
                     <sutram-collapsible 
                         titleText="Sweepable State" 
                         intent="neutral" 
                         ?open=${true}>
                         <sutram-async-btn slot="actions" icon="send" label="Sweep All" intent="primary" style="margin: 0;" .onClick=${this._getSweepAllAction()}></sutram-async-btn>
-
                         <div style="display: flex; flex-direction: column; gap: 8px;">
-                            <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
                             ${Object.entries(this.sweepFiles).filter(([r, _]) => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)).map(([repo, files]) => {
                                 const isLocked = this.sweepLoading;
                                 const branch = GitStore.getState().reposStatus[repo]?.current;
