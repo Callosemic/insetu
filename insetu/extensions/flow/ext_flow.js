@@ -393,7 +393,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                 });
                                             })();
                                             const isLocked = isFlowLoading && isDirty;
-                                            const statusIcon = isLocked ? 'loader' : (isDirty ? 'alert-triangle' : 'package');
+                                            const statusIcon = isLocked ? 'loader' : (isDirty ? 'construction' : 'package');
                                             return html`
                                                 <sutram-card
                                                         style="opacity: ${isLocked ? '0.6' : '1'}; pointer-events: ${isLocked ? 'none' : 'auto'}; transition: opacity 0.2s ease;"

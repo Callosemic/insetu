@@ -404,7 +404,7 @@ disconnectedCallback() {
                                     .detailPrefix=${repoStr}
                                     .detailText=${f.filename}
                                     .detailSuffix=${sizeStr ? ` | ${sizeStr}` : ''}
-                                    icon=${isLocked ? "loader" : (isDirty ? "alert-triangle" : "package")}
+                                    icon=${isLocked ? "loader" : (isDirty ? "construction" : "package")}
                                     intent=${isDirty ? "warning" : "highlight"}
                                     entityType="file:diff"
                                     .entityData=${{ 

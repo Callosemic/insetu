@@ -2086,10 +2086,18 @@ export class InSetuTrackerEditProjection extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(KanbanStore, state => {
-            this.editTaskForm = state.editTaskForm || {};
-            this.requestUpdate();
-        });
+        const subId = this.dataset?.subId;
+        if (subId && subId.includes('.tracker/') && !KanbanStore.getState().editTaskForm?.filepath) {
+            KanbanStore.getState().setEditTaskField('filepath', subId.replace(/^vfs:\/\//, ''));
+        }
+        this.subscribe(
+            KanbanStore,
+            state => state.editTaskForm || {},
+            (editTaskForm) => {
+                this.editTaskForm = editTaskForm;
+                this.requestUpdate();
+            }
+        );
         this.registerGlobalListener('insetu:tracker:save-edit-task', window, () => {
             const fm = this.shadowRoot.getElementById('fm-editor-tracker');
             if (fm && typeof fm._handleSave === 'function') fm._handleSave();
@@ -3023,6 +3031,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
     ],
     customEditors: [
         {
+            component: 'insetu-tracker-edit-projection',
             match: (filepath) => filepath && filepath.includes('.tracker/'),
             onOpen: (filepath) => {
                 window.inSetu.events.emit('insetu:tracker:open-edit-task', { filepath });

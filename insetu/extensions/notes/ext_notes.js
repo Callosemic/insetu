@@ -19,14 +19,22 @@ export const NotesStore = createExtensionStore('Notes', {
         NotesStore.setState({ editNoteFilepath: filepath });
         if (window.Sutram?.stores?.Layout) {
             const layout = window.Sutram.stores.Layout.getState();
+            const existingCol = ['left', 'center', 'right'].find(col =>
+                layout.columns[col]?.pinned?.some(p => p.id === filepath)
+            );
+            if (existingCol) {
+                layout.setFocusedColumn(existingCol);
+                layout.setActiveProjection(existingCol, filepath);
+                return;
+            }
             layout.openWindow({
-                id: 'notes:editor',
+                id: filepath,
                 component: 'insetu-ext-notes-editor',
                 label: title || filepath.split('/').pop(),
                 icon: 'file-text',
                 intent: 'highlight',
                 extName: 'notes',
-                windowOnly: true
+                allow_popout: true
             }, layout.focusedColumn || 'center', 1);
         }
     },
@@ -131,11 +139,15 @@ export class InSetuExtNotesModals extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(NotesStore, state => {
-            this.newNoteModalOpen = !!state.newNoteModalOpen;
-            this.noteForm = state.noteForm || {};
-            this.requestUpdate();
-        });
+        this.subscribe(
+            NotesStore,
+            state => ({ newNoteModalOpen: !!state.newNoteModalOpen, noteForm: state.noteForm || {} }),
+            ({ newNoteModalOpen, noteForm }) => {
+                this.newNoteModalOpen = newNoteModalOpen;
+                this.noteForm = noteForm;
+                this.requestUpdate();
+            }
+        );
     }
     render() {
         if (!this.newNoteModalOpen) return html``;
@@ -190,17 +202,33 @@ export class InSetuExtNotesEditor extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.filepath = NotesStore.getState().editNoteFilepath;
-        this.subscribe(NotesStore, state => {
-            this.filepath = state.editNoteFilepath;
-            this.requestUpdate();
-        });
+        const subId = this.dataset?.subId;
+        this.filepath = (subId && subId.startsWith('ctx://notes/')) ? subId : NotesStore.getState().editNoteFilepath;
+        this.subscribe(
+            NotesStore,
+            state => state.editNoteFilepath,
+            (editNoteFilepath) => {
+                const currentSubId = this.dataset?.subId;
+                if (currentSubId && currentSubId.startsWith('ctx://notes/')) {
+                    this.filepath = currentSubId;
+                } else if (editNoteFilepath) {
+                    this.filepath = editNoteFilepath;
+                }
+                this.requestUpdate();
+            }
+        );
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const mutations = e.detail?.mutations || [];
             if (this.filepath && mutations.some(m => m.filepath === this.filepath && m.operation === 'delete')) {
-                NotesStore.setState({ editNoteFilepath: null });
+                const deletedFp = this.filepath;
+                if (NotesStore.getState().editNoteFilepath === deletedFp) {
+                    NotesStore.setState({ editNoteFilepath: null });
+                }
                 if (window.Sutram?.stores?.Layout) {
-                    window.Sutram.stores.Layout.getState().closeWindow('notes:editor');
+                    const layout = window.Sutram.stores.Layout.getState();
+                    layout.closeWindow(deletedFp);
+                    layout.closeWindow('notes:editor');
+                    ['left', 'center', 'right'].forEach(col => layout.unpinFromColumn(col, deletedFp));
                 }
             }
         });
@@ -251,8 +279,15 @@ export class InSetuExtNotesEditor extends InSetuElement {
             collapseKey: `vfs:delete:${targetFp}`,
             deletedMutations: [targetFp],
             onSuccess: (data) => {
-                NotesStore.setState({ editNoteFilepath: null });
-                if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('notes:editor');
+                if (NotesStore.getState().editNoteFilepath === targetFp) {
+                    NotesStore.setState({ editNoteFilepath: null });
+                }
+                if (window.Sutram?.stores?.Layout) {
+                    const layout = window.Sutram.stores.Layout.getState();
+                    layout.closeWindow(targetFp);
+                    layout.closeWindow('notes:editor');
+                    ['left', 'center', 'right'].forEach(col => layout.unpinFromColumn(col, targetFp));
+                }
                 if (data && data.job_id === 'offline_queue') {
                     NotesStore.setState(s => ({ notes: s.notes.filter(n => n.filepath !== targetFp) }));
                 } else {
@@ -308,8 +343,15 @@ export class InSetuExtNotesEditor extends InSetuElement {
                 <div style="display: flex; gap: 10px;">
                     <sutram-btn size="sm" intent="warning" icon="code" label="Raw Edit" @click=${() => {
                         const fp = this.filepath;
-                        NotesStore.setState({ editNoteFilepath: null });
-                        if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('notes:editor');
+                        if (NotesStore.getState().editNoteFilepath === fp) {
+                            NotesStore.setState({ editNoteFilepath: null });
+                        }
+                        if (window.Sutram?.stores?.Layout) {
+                            const layout = window.Sutram.stores.Layout.getState();
+                            layout.closeWindow(fp);
+                            layout.closeWindow('notes:editor');
+                            ['left', 'center', 'right'].forEach(col => layout.unpinFromColumn(col, fp));
+                        }
                         if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(fp, true, true);
                     }}></sutram-btn>
                     ${this._isDirty ? html`<sutram-async-btn style="margin: 0;" icon="save" label="Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor')._handleSave()}></sutram-async-btn>` : ''}
@@ -350,17 +392,29 @@ export class InSetuExtNotes extends InSetuElement {
             const touchedNote = payload.mutations.some(m => m.filepath && m.filepath.startsWith('ctx://notes/'));
             if (touchedNote) NotesStore.getState().fetchNotes();
         });
-
-        this.subscribe(NotesStore, state => {
-            this.notes = state.notes || [];
-            this.loading = state.loading;
-            this.searchQuery = state.searchQuery;
-            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
-        });
-        this.subscribe(AppStore, state => {
-            this.allRepos = state.allRepos || [];
-            this.requestUpdate();
-        });
+        this.subscribe(
+            NotesStore,
+            state => ({
+                notes: state.notes || [],
+                loading: state.loading,
+                searchQuery: state.searchQuery,
+                pinnedRepos: state.pinnedRepos || new Set(['ALL'])
+            }),
+            ({ notes, loading, searchQuery, pinnedRepos }) => {
+                this.notes = notes;
+                this.loading = loading;
+                this.searchQuery = searchQuery;
+                this.pinnedRepos = pinnedRepos;
+            }
+        );
+        this.subscribe(
+            AppStore,
+            state => state.allRepos || [],
+            (allRepos) => {
+                this.allRepos = allRepos;
+                this.requestUpdate();
+            }
+        );
         NotesStore.getState().fetchNotes();
         this.registerGlobalListener('insetu:notes:new', window, () => {
             NotesStore.setState({ newNoteModalOpen: true });
@@ -521,6 +575,7 @@ window.ExtensionRegistry.registerExtension('notes', {
     ],
     customEditors: [
         {
+            component: 'insetu-ext-notes-editor',
             match: (filepath) => filepath && filepath.startsWith('ctx://notes/'),
             onOpen: (filepath) => {
                 const existingNote = (NotesStore.getState().notes || []).find(n => n.filepath === filepath);
