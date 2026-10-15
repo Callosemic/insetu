@@ -14,8 +14,8 @@ import{html as i,css as s}from"lit";import{YenvuiBase as l}from"./yenvui-base.js
             display: flex;
             align-items: center;
             gap: 10px;
-            padding: 0 0 0 12px;
-            height: 44px;
+            padding: 0 0 0 var(--yv-gutter-x, 12px);
+            height: var(--yv-header-height, 44px);
             box-sizing: border-box;
             background: var(--input-bg);
             border: none;
