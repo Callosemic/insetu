@@ -14,7 +14,7 @@ Extensions must be capable of relying on one another (e.g., a `zotero_sync` exte
 * **The Python Metadata:** Every `engine_{ext}.py` module must expose a module-level list named `__depends__ = ['citations', ...]` mapping its upstream requirements, and optionally `__external_depends__` (PyPI packages) or `__external_binaries__` (system CLI tools like `git` or `pandoc`) to communicate system dependencies.
 * **The Blueprint Wrapper:** Backend extensions must utilize the `InSetuExtension` SDK class instead of raw Flask Blueprints to guarantee strict tenant path isolation and context injection.
 * **The Bootloader (app.py):** The `load_workspace_extensions()` routine must perform a topological sort (Directed Acyclic Graph) of the requested extensions in `config.json`. 
-    * If an extension requires a dependency that is missing or fails to import, the child extension is gracefully aborted and logged as an `ImportError`.
+    * If an extension requires a dependency that is missing or fails to import, the child extension is gracefully aborted, recorded in `app._bypassed_extensions`, and injected into `cfg["bypassed_extensions"]` via `@hooks.on('mutate_workspace_config')` for client-side diagnostic visibility.
 * **The JS Bootloader (app.js):** The frontend mirrors the backend DAG. ES6 imports guarantee that parent modules load and register their API surfaces before child extensions attempt to attach to them.
 ## 2. The Backend Injection Surface (Python Event Bus)
 Extensions cannot hardcode themselves into `engine_gather.py` or the `bridge_sync` transaction loop. They must subscribe to OS lifecycle events.

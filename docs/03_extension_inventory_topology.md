@@ -79,7 +79,7 @@ These are fully built and compliant extensions currently operating within the sy
 * **Dependencies (`__depends__`):** `['prompts', 'gather']`
 * **Injection Surfaces:**
     * Spatial Projections: Decoupled batch execution inspection (`InSetuFlowViewProjection`, `flow:view`) and batch editing (`InSetuFlowEditProjection`, `flow:edit`) into spatial columns.
-    * Core Hooks: `@hooks.on('vfs_mutated')`, `@hooks.on('compile_contexts')`, and `@hooks.on('git_evaluation_complete')` triggering coalesced background batch recompilation.
+    * Core Hooks: `@hooks.on('coerce_naked_uri')` for URI canonicalization, `@hooks.on('request_paths')` and `@hooks.on('workspace_boot')` for `ctx://workflows` volume mounting, `@hooks.on('register_compilation_steps')` for DAG chain compilation, and `@hooks.on('pre_file_save')` for response archiving.
 
 ### G. Favorites (`engine_favorites.py`)
 * **Status:** Active Extension (Upgraded to SDK V2).
@@ -233,6 +233,7 @@ To enforce **ADR 0002 (Domain Decoupling)**, extensions must never query each ot
 | `compilation_sequence_complete` | `engine_gather` | `cartographer` | Emitted when all background compilation steps in a chain have finished. |
 | `register_manifest_signatures` | `<Micro-Kernel>` | All Extensions | Yields domain-specific manifest signatures (hashes/timestamps) for decentralized delta sync. |
 | `topology_boot_complete` | `engine_topology` | `engine_gather` | Emitted when physical topology disk mapping completes on workspace boot. |
+| `coerce_naked_uri` | `InSetuURI.from_any` | `flow`, `git` | Intercepts naked path strings to coerce them into canonical `ctx://` domain URIs. |
 ### 2. Frontend UI Zones (`ExtensionRegistry`)
 | Zone ID | Context / Trigger | Primary Use Case |
 | :--- | :--- | :--- |
