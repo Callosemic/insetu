@@ -1016,7 +1016,6 @@ async function _deleteVfsNode(rawPath, isDir, options = {}) {
         }
     });
 }
-
 export async function executeBulkMove(items) {
     const targets = pruneSubsumedTargets(items);
     if (targets.length === 0) return;
@@ -1027,7 +1026,7 @@ export async function executeBulkMove(items) {
 
         if (!confirm(`Move ${targets.length} item(s) to /${cleanDest || '[root]'}?`)) return;
 
-        let movedCount = 0;
+        const operations = [];
         for (const target of targets) {
             const itemName = target.path.split('/').filter(Boolean).pop();
             const destPath = cleanDest ? `${cleanDest}/${itemName}` : itemName;
@@ -1036,15 +1035,35 @@ export async function executeBulkMove(items) {
                 console.warn(`Cannot move directory '${target.path}' into itself or its own subfolder.`);
                 continue;
             }
-            await _relocateVfsNode(target.path, destPath, target.isDir, {
-                silent: true,
-                onSuccess: () => { movedCount++; }
+            operations.push({
+                action: 'move',
+                filepath: normalizeVfsURI(target.path),
+                dest_path: normalizeVfsURI(destPath),
+                is_dir: !!target.isDir
             });
         }
-        SelectionStore.getState().clearSelection();
-        if (window.inSetu.ui?.setGlobalStatus) {
-            window.inSetu.ui.setGlobalStatus(`Moved ${movedCount} item(s) to /${cleanDest || '[root]'}`, 3000);
-        }
+        if (operations.length === 0) return;
+
+        await window.inSetu.sys.executeWorkspaceMutation('fs/bulk', { operations }, {
+            collapseKey: `vfs:bulk:move:${Date.now()}`,
+            pendingMutations: operations.map(op => op.dest_path),
+            deletedMutations: operations.map(op => op.filepath),
+            loadingText: `Moving ${operations.length} item(s)...`,
+            successMessage: `Moved ${operations.length} item(s) to /${cleanDest || '[root]'}`,
+            onSuccess: () => {
+                const mutations = [];
+                operations.forEach(op => {
+                    renameFileTracking(op.filepath, op.dest_path);
+                    mutations.push({ filepath: op.filepath + (op.is_dir ? '/' : ''), operation: 'delete' });
+                    mutations.push({ filepath: op.dest_path + (op.is_dir ? '/' : ''), operation: 'save' });
+                });
+                window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations });
+                SelectionStore.getState().clearSelection();
+                if (window.inSetu.ui?.setGlobalStatus) {
+                    window.inSetu.ui.setGlobalStatus(`Moved ${operations.length} item(s) to /${cleanDest || '[root]'}`, 3000);
+                }
+            }
+        });
     });
 }
 
@@ -1054,17 +1073,37 @@ export async function executeBulkArchive(items) {
 
     if (!confirm(`Archive ${targets.length} item(s) to 'archived/' subdirectories?`)) return;
 
-    let archivedCount = 0;
-    for (const target of targets) {
-        await _archiveVfsNode(target.path, target.isDir, {
-            silent: true,
-            onSuccess: () => { archivedCount++; }
-        });
-    }
-    SelectionStore.getState().clearSelection();
-    if (window.inSetu.ui?.setGlobalStatus) {
-        window.inSetu.ui.setGlobalStatus(`Archived ${archivedCount} item(s)`, 3000);
-    }
+    const operations = targets.map(target => ({
+        action: 'archive',
+        filepath: normalizeVfsURI(target.path),
+        is_dir: !!target.isDir
+    }));
+
+    await window.inSetu.sys.executeWorkspaceMutation('fs/bulk', { operations }, {
+        collapseKey: `vfs:bulk:archive:${Date.now()}`,
+        deletedMutations: operations.map(op => op.filepath),
+        loadingText: `Archiving ${operations.length} item(s)...`,
+        successMessage: `Archived ${operations.length} item(s)`,
+        onSuccess: (resData) => {
+            const returnedOps = resData?.operations || [];
+            const mutations = [];
+            operations.forEach((op, idx) => {
+                const dest = returnedOps[idx]?.dest_path;
+                if (dest) {
+                    renameFileTracking(op.filepath, dest);
+                    mutations.push({ filepath: op.filepath + (op.is_dir ? '/' : ''), operation: 'delete' });
+                    mutations.push({ filepath: dest + (op.is_dir ? '/' : ''), operation: 'save' });
+                }
+            });
+            if (mutations.length > 0) {
+                window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations });
+            }
+            SelectionStore.getState().clearSelection();
+            if (window.inSetu.ui?.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus(`Archived ${operations.length} item(s)`, 3000);
+            }
+        }
+    });
 }
 
 export async function executeBulkDelete(items) {
@@ -1073,17 +1112,30 @@ export async function executeBulkDelete(items) {
 
     if (!confirm(`Permanently delete ${targets.length} item(s)? This cannot be undone!`)) return;
 
-    let deletedCount = 0;
-    for (const target of targets) {
-        await _deleteVfsNode(target.path, target.isDir, {
-            silent: true,
-            onSuccess: () => { deletedCount++; }
-        });
-    }
-    SelectionStore.getState().clearSelection();
-    if (window.inSetu.ui?.setGlobalStatus) {
-        window.inSetu.ui.setGlobalStatus(`Deleted ${deletedCount} item(s)`, 3000);
-    }
+    const operations = targets.map(target => ({
+        action: 'delete',
+        filepath: normalizeVfsURI(target.path),
+        rawPath: target.path,
+        is_dir: !!target.isDir
+    }));
+
+    await window.inSetu.sys.executeWorkspaceMutation('fs/bulk', {
+        operations: operations.map(({ action, filepath, is_dir }) => ({ action, filepath, is_dir }))
+    }, {
+        collapseKey: `vfs:bulk:delete:${Date.now()}`,
+        deletedMutations: operations.map(op => op.filepath),
+        loadingText: `Deleting ${operations.length} item(s)...`,
+        successMessage: `Deleted ${operations.length} item(s)`,
+        onSuccess: () => {
+            operations.forEach(op => {
+                _evictDeletedNodeFromState(op.filepath, op.rawPath, op.is_dir);
+            });
+            SelectionStore.getState().clearSelection();
+            if (window.inSetu.ui?.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus(`Deleted ${operations.length} item(s)`, 3000);
+            }
+        }
+    });
 }
 
 export class InSetuVFSExplorerActions extends InSetuElement {
@@ -2015,12 +2067,12 @@ export class InSetuEditorProjection extends InSetuElement {
         this.subscribe('Fs', state => {
             this._buffer = state.activeBuffers[this.filepath] || null;
         });
-
         // Pointer Relaunch: Fetch the file from the VFS if the layout mounted this component but memory is empty
         setTimeout(() => {
             if (!this._buffer && this.filepath && !this.filepath.startsWith('yomama://') && !this.filepath.startsWith('virtual://')) {
                 if (window.inSetu?.vfs?.viewSourceFile) {
-                    const isPhysical = !this.filepath.startsWith('ctx://');
+                    const isEditableCtx = this.filepath.startsWith('ctx://notes/') || this.filepath.startsWith('ctx://prompts/');
+                    const isPhysical = !this.filepath.startsWith('ctx://') || isEditableCtx;
                     window.inSetu.vfs.viewSourceFile(this.filepath, isPhysical, true);
                 }
             }

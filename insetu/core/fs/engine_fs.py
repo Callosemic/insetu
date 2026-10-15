@@ -13,7 +13,7 @@ from insetu.core.sdk import InSetuExtension
 from akasa.db import get_connection
 from akasa.hooks import hooks
 from akasa.utils import sniff_tenant_id
-from akasa.vfs import execute_vfs_move, execute_vfs_delete, execute_vfs_save
+from akasa.vfs import execute_vfs_move, execute_vfs_delete, execute_vfs_save, execute_vfs_bulk
 from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
 from insetu.core.utils_core import InSetuURI, get_repo_path, execute_binary
 
@@ -213,6 +213,74 @@ def api_fs_delete(ctx):
             hooks.emit_background('system_error', source="VFS:Delete", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
         except Exception: pass
         return jsonify({"error": f"VFS Delete Error: {str(e)}"}), 500
+
+class BulkMutationItem(TypedDict, total=False):
+    action: str  # 'move' | 'archive' | 'delete'
+    filepath: str
+    dest_path: Optional[str]
+    is_dir: Optional[bool]
+
+class FileBulkPayload(TypedDict):
+    operations: List[BulkMutationItem]
+
+@fs_bp.route('bulk', methods=['POST'], request_schema=FileBulkPayload, docstring="[sync] Executes a batch of VFS file or directory mutations (move, archive, delete) in a single atomic operation.")
+def api_fs_bulk(ctx):
+    workspace_id = ctx.workspace_id
+    try:
+        data = ctx.req.get_json(silent=True) or {}
+        raw_ops = data.get("operations", [])
+        if not raw_ops or not isinstance(raw_ops, list):
+            return jsonify({"error": "A non-empty 'operations' list is required"}), 400
+
+        normalized_ops = []
+        for item in raw_ops:
+            act = (item.get("action") or "").strip().lower()
+            fp = (item.get("filepath") or "").strip()
+            if not fp or act not in ("move", "archive", "delete"):
+                continue
+
+            if act == "delete":
+                normalized_ops.append({
+                    "action": "delete",
+                    "filepath": fp,
+                    "is_dir": bool(item.get("is_dir"))
+                })
+            elif act == "move":
+                dest = (item.get("dest_path") or "").strip()
+                if dest and dest != fp:
+                    normalized_ops.append({
+                        "action": "move",
+                        "filepath": fp,
+                        "dest_path": dest,
+                        "is_dir": bool(item.get("is_dir"))
+                    })
+            elif act == "archive":
+                uri = InSetuURI.from_any(fp)
+                parent_path = uri.path.rpartition('/')[0] if '/' in uri.path else ''
+                if not parent_path or parent_path == '.':
+                    new_path = f"archived/{uri.basename}"
+                else:
+                    new_path = f"{parent_path}/archived/{uri.basename}"
+                scheme = uri.scheme or "vfs"
+                rel_dest = f"{scheme}://{uri.repo}/{new_path}" if uri.repo else new_path
+                normalized_ops.append({
+                    "action": "move",
+                    "filepath": fp,
+                    "dest_path": rel_dest,
+                    "is_dir": bool(item.get("is_dir"))
+                })
+
+        if not normalized_ops:
+            return jsonify({"error": "No valid bulk operations provided"}), 400
+
+        res, code = execute_vfs_bulk(workspace_id, normalized_ops)
+        return jsonify(res), code
+    except Exception as e:
+        try:
+            hooks.emit_background('system_error', source="VFS:Bulk", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
+        except Exception:
+            pass
+        return jsonify({"error": f"VFS Bulk Error: {str(e)}"}), 500
 class FileUploadRequest(TypedDict):
     file: List[bytes]
     dest_dir: str

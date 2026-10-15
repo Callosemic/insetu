@@ -1,67 +1,29 @@
 import { AppStore, StatusStore } from '/static/extensions/system/store.js';
-import { SutramDB } from '/static/vendor/sutram/js/offline.js';
+import { SutramDB, bootSutramServiceWorker, purgeSutramCaches } from '/static/vendor/sutram/js/offline.js';
 import '/static/vendor/sutram/js/app_shell.js';
 export function bootServiceWorker() {
-    if ('serviceWorker' in navigator) {
-        let isFirstInstall = !navigator.serviceWorker.controller;
-
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-            if (isFirstInstall) {
-                isFirstInstall = false;
-                // Eagerly warm the cache with all dynamically imported ES modules from the boot sequence
-                const resources = window.performance.getEntriesByType('resource');
-                const urlsToCache = resources
-                    .filter(r => r.name.includes('/static/') && !r.name.includes('/api/'))
-                    .map(r => r.name);
-
-                urlsToCache.forEach(url => fetch(url, { priority: 'low' }).catch(()=>{}));
-                window.inSetu?.offlineLog?.(`First install: Warmed SW cache with ${urlsToCache.length} dynamic boot assets.`, 'success');
-            }
-        });
-        navigator.serviceWorker.register('/sw.js').then(reg => {
-            // Ground-Zero Telemetry: Confirm SW registration in the current sandbox
-            if (window.inSetu && window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                window.inSetu.ui.setGlobalStatus("Service Worker Active", 3000);
-            }
-            reg.addEventListener('updatefound', () => {
-                const newWorker = reg.installing;
-                newWorker.addEventListener('statechange', () => {
-                    if (newWorker.state === 'installed') {
-                        if (navigator.serviceWorker.controller) {
-                            const isRec = window.inSetu?.stores?.App?.getState()?.isReconciling;
-                            if (isRec) {
-                                console.log('New update deferred until outbox drains...');
-                                window.addEventListener('sutram-sync-complete', () => {
-                                    newWorker.postMessage({ type: 'SKIP_WAITING' });
-                                    window.location.reload();
-                                }, { once: true });
-                            } else {
-                                console.log('New update available. Refreshing...');
-                                newWorker.postMessage({ type: 'SKIP_WAITING' });
-                                window.location.reload();
-                            }
-                        } else {
-                            console.log('SW installed for the first time. Hydrating dynamic module cache...');
-                            setTimeout(() => window.location.reload(), 500);
-                        }
-                    }
-                });
-            });
-
-            // Keep SW informed of reconciliation state
+    bootSutramServiceWorker({
+        swUrl: '/sw.js',
+        staticPathPrefix: '/static/',
+        excludePathPrefix: '/api/',
+        isReconciling: () => Boolean(window.inSetu?.stores?.App?.getState()?.isReconciling),
+        subscribeReconciling: (cb) => {
             if (window.inSetu?.stores?.App) {
-                window.inSetu.stores.App.subscribe(s => s.isReconciling, (isRec) => {
-                    if (navigator.serviceWorker.controller) {
-                        navigator.serviceWorker.controller.postMessage({ type: 'SET_RECONCILING', value: isRec });
-                    }
-                });
+                window.inSetu.stores.App.subscribe(s => s.isReconciling, cb);
             }
-        }).catch(err => {
-            alert("SW Registration Failed: " + err.message);
-        });
-    } else {
-        alert("⚠️ Offline mode disabled: Service Workers require a secure context (HTTPS or localhost).");
-    }
+        },
+        onStatus: (msg, timeout) => {
+            if (window.inSetu?.ui?.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus(msg, timeout);
+            }
+        },
+        onLog: (msg, type) => {
+            window.inSetu?.offlineLog?.(msg, type);
+        },
+        onError: (msg) => {
+            alert(msg);
+        }
+    });
 }
 // Natively hook browser connectivity events for instant offline transitions
 window.addEventListener('offline', () => {
@@ -188,15 +150,19 @@ async function bootExtensions() {
         '/static/extensions/system/components/ui_filter_pills.js',
         '/static/extensions/system/components/ui_primitives.js'
     ];
-
     if (isPopout) {
         // Fast-path popout: Only load UI primitives and the VFS file editor
         const popoutScripts = ['/static/extensions/fs/fs.js'];
         const hash = window.location.hash.replace(/^#\/?/, '');
         const parts = hash.split('/').map(decodeURIComponent);
-        const subId = parts[2] || '';
-        const matchingExt = activeExts.find(ext => ext === subId);
-        if (matchingExt && matchingExt !== 'fs') {
+        const subId = parts.slice(2).join('/') || '';
+        let matchingExt = activeExts.find(ext => ext === subId || subId.startsWith(`${ext}:`));
+        if (!matchingExt) {
+            if (subId.startsWith('ctx://notes/')) matchingExt = 'notes';
+            else if (subId.includes('.tracker/')) matchingExt = 'tracker';
+            else if (subId.startsWith('ctx://prompts/')) matchingExt = 'prompts';
+        }
+        if (matchingExt && matchingExt !== 'fs' && activeExts.includes(matchingExt)) {
             popoutScripts.push(`/static/extensions/${matchingExt}/ext_${matchingExt}.js`);
         }
 
@@ -713,12 +679,18 @@ export async function executeBootSequence() {
         document.body.innerHTML = `<div style="font-family:monospace; color:var(--intent-danger); text-align:center; padding-top:20dvh;"><h2>Access Denied</h2><p>Invalid framework credentials configuration.</p></div>`;
         return;
     }
-
     // Connect SSE or wire up BroadcastChannel relay for Pop-outs
     if (isPopout) {
         const channel = new BroadcastChannel('insetu_telemetry');
+        let primaryAcknowledged = false;
+
         channel.onmessage = (e) => {
             const { type, data } = e.data || {};
+            if (type === 'presence_pong') {
+                primaryAcknowledged = true;
+                return;
+            }
+            primaryAcknowledged = true;
             const activeWs = window.inSetu.utils.getActiveWorkspace();
             if (type === 'vfs_mutated') {
                 if (data.workspace_id && data.workspace_id !== activeWs) return;
@@ -744,6 +716,14 @@ export async function executeBootSequence() {
                 }
             }
         };
+
+        channel.postMessage({ type: 'presence_ping' });
+        setTimeout(() => {
+            if (!primaryAcknowledged && window.inSetu?.sse && !window.inSetu.sse.isConnected) {
+                console.log("📡 [Pop-out] Standalone mode: No primary window detected via BroadcastChannel. Lazily mounting direct SSE stream...");
+                window.inSetu.sse.connect();
+            }
+        }, 1500);
     } else if (window.inSetu.sse) {
         window.inSetu.sse.connect();
     }
@@ -1117,8 +1097,13 @@ window.addEventListener('unhandledrejection', (e) => {
         }
     }
 });
-
 window.addEventListener('error', (e) => {
+    if (e.filename && e.filename.includes('codemirror')) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        console.warn("[CodeMirror] Suppressed internal editor exception:", e.error || e.message);
+        return;
+    }
     const isExtensionError = e.filename && (e.filename.includes('ext_') || e.filename.includes('extensions/'));
     if (window.BOOT_COMPLETE || isExtensionError) {
         e.preventDefault();
@@ -1287,9 +1272,42 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
             }
             throw new Error(errMsg);
         }
-
         const data = await res.json();
         if (onSuccess) await onSuccess(data);
+
+        if (!silent) {
+            const toastStore = window.inSetu?.stores?.Toast || window.Sutram?.stores?.Toast;
+            if (toastStore && typeof toastStore.getState === 'function') {
+                const isQueuedOffline = data && data.job_id === 'offline_queue';
+                const targetName = payload?.filepath ? payload.filepath.split('/').filter(Boolean).pop() : '';
+                let toastMsg = options.successMessage || '';
+
+                if (!toastMsg) {
+                    if (isQueuedOffline) {
+                        toastMsg = `Queued offline: ${targetName || cleanPath}`;
+                    } else if (cleanPath === 'fs/save') {
+                        toastMsg = `Saved ${targetName || 'file'}`;
+                    } else if (cleanPath === 'fs/move') {
+                        const destName = payload?.dest_path ? payload.dest_path.split('/').filter(Boolean).pop() : '';
+                        toastMsg = `Moved ${targetName || 'item'}${destName ? ` to ${destName}` : ''}`;
+                    } else if (cleanPath === 'fs/archive') {
+                        toastMsg = `Archived ${targetName || 'item'}`;
+                    } else if (cleanPath === 'fs/delete') {
+                        toastMsg = `Deleted ${targetName || 'item'}`;
+                    } else if (cleanPath === 'fs/upload') {
+                        toastMsg = data?.message || 'Upload complete';
+                    } else if (cleanPath === 'fs/bulk') {
+                        toastMsg = data?.message || 'Bulk file operation complete';
+                    } else if (data?.message) {
+                        toastMsg = data.message;
+                    }
+                }
+
+                if (toastMsg) {
+                    toastStore.getState().addToast(toastMsg, isQueuedOffline ? 'warning' : 'success', 3000);
+                }
+            }
+        }
         return data;
     } catch (e) {
         if (!silent) {
@@ -1540,16 +1558,8 @@ async function fullRefresh() {
                 localStorage.removeItem(k);
             }
         });
-
-        // 2. Unregister Service Workers to force fresh JS bundle loads on reload
-        if ('serviceWorker' in navigator) {
-            try {
-                const regs = await navigator.serviceWorker.getRegistrations();
-                for (let reg of regs) await reg.unregister();
-            } catch(e) {}
-        }
-        // 3. Clear CacheStorage
-        await purgeServiceWorkerCaches();
+        // 2. Unregister Service Workers and clear CacheStorage via Sutram offline kernel
+        await purgeSutramCaches();
 
         // 4. Hard reload browser
         window.location.reload(true);

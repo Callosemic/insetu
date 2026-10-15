@@ -490,7 +490,7 @@ export class InSetuExtGather extends InSetuElement {
                                                     const activeIntent = isDirty ? "warning" : baseIntent;
                                                     let displayIcon = isQuickpack ? "zap" :
                                                         (isLocked ? "loader" : 
-                                                        (isDirty ? "alert-triangle" : "package"));
+                                                        (isDirty ? "construction" : "package"));
                                                     return html`
                                                     <div style="padding-bottom: 12px;">
                                                         <sutram-card

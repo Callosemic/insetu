@@ -75,7 +75,7 @@ GATHER_SETTINGS_SCHEMA = [
             "neutral": []
         },
         "description": "Map semantic intent colors to arrays of title keywords.",
-        "html_desc": "Map semantic intent colors to arrays of title keywords. <div style='margin-top: 6px; display: flex; flex-wrap: wrap; gap: 10px; font-family: var(--font-mono); font-weight: bold;'><span style='color: var(--intent-primary);'>● primary</span> <span style='color: var(--intent-success);'>● success</span> <span style='color: var(--intent-warning);'>● warning</span> <span style='color: var(--intent-danger);'>● danger</span> <span style='color: var(--intent-highlight);'>● highlight</span> <span style='color: var(--intent-neutral);'>● neutral</span></div>"
+        "intent_legend": ["primary", "success", "warning", "danger", "highlight", "neutral"]
     }
 ]
 gather_bp = InSetuExtension('gather', __name__, core=True, settings_schema=GATHER_SETTINGS_SCHEMA)

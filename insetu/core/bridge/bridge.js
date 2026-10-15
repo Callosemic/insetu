@@ -940,24 +940,12 @@ export class InSetuBridgeDiffProjection extends InSetuElement {
     render() {
         const filename = this.suggestedFilename || `diff_${Date.now()}.diff`;
         const rawPayload = this.diffContent || `<<<<<<< SEARCH\n${this.searchStr}\n=======\n${this.replaceStr}\n>>>>>>> REPLACE`;
-
         return html`
-            <div style="height: 38px; padding: 0 10px; background: var(--bg-deep); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-shrink: 0;">
-                <div style="display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1;">
-                    <yv-icon name="git-compare" style="width: 14px; height: 14px; color: var(--intent-danger); flex-shrink: 0;"></yv-icon>
-                    <span style="font-family: var(--font-mono); font-size: 0.8rem; font-weight: bold; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                        ${filename}
-                    </span>
-                </div>
-                <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
-                    <sutram-entity-actions
-                        .entityType=${'text_blob'}
-                        .entityData=${{ textContent: rawPayload, suggestedFilename: filename }}>
-                    </sutram-entity-actions>
-                    <sutram-btn size="sm" intent="neutral" icon="x" label="Close" style="margin: 0;" @click=${() => {
-                        if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('bridge:syntax-diff');
-                    }}></sutram-btn>
-                </div>
+            <div style="height: 38px; padding: 0 10px; background: var(--bg-deep); border-bottom: 1px solid var(--border); display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-shrink: 0;">
+                <sutram-entity-actions
+                    .entityType=${'text_blob'}
+                    .entityData=${{ textContent: rawPayload, suggestedFilename: filename }}>
+                </sutram-entity-actions>
             </div>
             <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0;">
                 <sutram-diff-viewer

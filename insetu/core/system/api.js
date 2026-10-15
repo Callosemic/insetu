@@ -14,6 +14,7 @@ const offlineProvider = new OfflineHttpProvider({
     },
     isOfflineCapable: (url) => {
         const extName = url.split('/api/')[1]?.split('/')[1] || '';
+        if (['fs', 'editor', 'notes', 'tracker', 'flow'].includes(extName)) return true;
         const offlineMode = window.ExtensionRegistry?.getExtension(extName)?.offline_mode || 'none';
         return offlineMode !== 'read_only' && offlineMode !== 'none';
     },
@@ -34,6 +35,17 @@ const offlineProvider = new OfflineHttpProvider({
         deletedItems.forEach(p => deletedSet.add(p));
 
         window.inSetu.stores.App.setState({ outboxCount: count, pendingMutations: pendingSet, deletedMutations: deletedSet });
+        if (window.inSetu?.stores?.Offline) {
+            const curOutbox = window.inSetu.stores.Offline.getState()?.outboxItems || [];
+            if (typeof window.inSetu.stores.Offline.setState === 'function') {
+                window.inSetu.stores.Offline.setState({
+                    outboxItems: [...curOutbox, { scope_id: scopeId, path: url, method, headers, bodyString, timestamp: Date.now() }]
+                });
+            }
+            if (typeof window.inSetu.stores.Offline.getState()?.fetchOfflineState === 'function') {
+                window.inSetu.stores.Offline.getState().fetchOfflineState();
+            }
+        }
         window.inSetu?.offlineLog?.(`Enqueued mutation [${method}] (${count} pending): ${url}`, 'info', bodyString);
         if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`🌩️ Queued for sync (${count})`, 3000);
     },
@@ -147,18 +159,7 @@ window.inSetu.api = {
         }
         options.headers = headers;
         let res;
-        const isPopout = new URLSearchParams(window.location.search).get('popout') === 'true';
-
-        if (isPopout) {
-            try {
-                res = await fetch(url, options);
-            } catch (err) {
-                if (err.name === 'AbortError') throw err;
-                window.inSetu?.stores?.App?.setState({ isOffline: true });
-                if (window.Sutram?.stores?.Environment) window.Sutram.stores.Environment.setState({ isOffline: true });
-                throw err;
-            }
-        } else if (method === 'GET') {
+        if (method === 'GET') {
             res = await offlineProvider.get(url, options, scopeId);
         } else {
             const rawPayload = options.body ? (typeof options.body === 'string' ? JSON.parse(options.body) : options.body) : {};
@@ -252,6 +253,11 @@ class SSEPipeline {
             console.log("🟢 [SSE TELEMETRY] Connected to real-time system stream. Fallback polling relaxed.");
         };
         const bc = new BroadcastChannel('insetu_telemetry');
+        bc.onmessage = (ev) => {
+            if (ev.data?.type === 'presence_ping') {
+                bc.postMessage({ type: 'presence_pong' });
+            }
+        };
         this.source.addEventListener('vfs_mutated', (e) => {
             const data = JSON.parse(e.data);
             bc.postMessage({ type: 'vfs_mutated', data });

@@ -691,6 +691,15 @@ if (window.ExtensionRegistry) {
         name: "Editor Preferences",
         version: "2.0.0",
         offline_mode: "full",
+        uiHooks: {
+            'sutram:popout-projection': (id) => {
+                if (id) {
+                    popoutProjection(id);
+                    return true;
+                }
+                return false;
+            }
+        },
         entityActions: [
             {
                 targetEntity: 'editor',
