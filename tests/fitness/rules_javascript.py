@@ -75,7 +75,7 @@ def check_javascript_files():
     direct_execute_ui_hook_pattern = re.compile(r"(?:ExtensionRegistry|window\.ExtensionRegistry)\.executeUIHook\(")
     dom_content_loaded_registration_pattern = re.compile(r'DOMContentLoaded[\'"]\s*,\s*(?:\(\)\s*=>|function\s*\(\)\s*)\s*\{[\s\S]*?ExtensionRegistry\.registerExtension')
     banned_cdn_import_pattern = re.compile(r'(?:from\s+|import\(\s*)[\'"]https?://(esm\.sh|cdn\.jsdelivr\.net|unpkg\.com)')
-    banned_yenvui_tag_pattern = re.compile(r'\byenvui-')
+    banned_yenvui_tag_pattern = re.compile(r'<\/?yenvui-')
     sutram_subdir_pattern = re.compile(r'from\s+[\'"][^\'"]*vendor/sutram/(?!js/)[^\'"]*[\'"]')
     raw_dialog_pattern = re.compile(r'<dialog\b')
     inline_date_formatting_pattern = re.compile(r'new\s+Date\([^)]*\)\.toLocale(?:Date|Time)?String\(\)')
@@ -97,6 +97,8 @@ def check_javascript_files():
     legacy_routing_ban_pattern = re.compile(r'\bAppStore\.getState\(\)\.(?:activeTab|activeSubTabs|setActiveRoute)\b')
     udf_editor_intent_mandate_pattern = re.compile(r'document\.querySelectorAll\([\'"]insetu-editor-projection[\'"]\)')
     legacy_sdk_import_ban_pattern = re.compile(r'from\s+[\'"][^\'"]*/static/extensions/system/sdk\.js[\'"]')
+    coarse_store_sub_pattern = re.compile(r'this\.subscribe\(\s*([^,\n]+|\n\s*[^,\n]+)\s*,\s*(?:(?:(?:\(?\s*(?:state|s)\s*\)?)|(?:\(?\s*\{[^}]+\}\s*\)?))\s*=>\s*\{|function\s*\([^)]*\)\s*\{)', re.MULTILINE)
+    direct_browse_path_setstate_pattern = re.compile(r'\.setState\(\s*\{[^\}]*\bglobalBrowsePath\s*:')
 
     # Initialize Tree-sitter for Hybrid Parsing
     ts_available = False
@@ -162,7 +164,40 @@ def check_javascript_files():
                     if "Timer" not in line_text and "panicTimeout" not in line_text:
                         report_violation("DEBOUNCE_MANDATE", filepath, line_idx + 1, "Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling. (Exemptions granted for explicit Timer variables).")
 
+            # Coarse Store Subscription Mandate
+            sub_query = Query(JS_LANG, '''
+                (call_expression
+                    function: (member_expression
+                        object: (this)
+                        property: (property_identifier) @sub_prop (#eq? @sub_prop "subscribe")
+                    )
+                    arguments: (arguments) @args
+                ) @call
+            ''')
+            for match in QueryCursor(sub_query).matches(tree.root_node):
+                for node in match[1].get("call", []):
+                    args_node = node.child_by_field_name("arguments")
+                    if args_node:
+                        named_args = [c for c in args_node.children if c.is_named]
+                        line_n = node.start_point[0] + 1
+                        if len(named_args) < 3 and file not in ["store.js", "system.js", "insetu_sdk.js", "sutram_sdk.js"]:
+                            report_violation(
+                                "COARSE_STORE_SUBSCRIPTION_MANDATE",
+                                filepath,
+                                line_n,
+                                "Coarse monolithic store subscription detected. Use selector-scoped subscriptions (this.subscribe(Store, state => slice, (slice) => ...)) with structural equality to prevent render thrashing."
+                            )
+
         # --- 2. GLOBAL & STRING PATTERNS ---
+        if not ts_available and file not in ["store.js", "system.js", "insetu_sdk.js", "sutram_sdk.js"]:
+            for m in coarse_store_sub_pattern.finditer(full_content):
+                line_num = full_content[:m.start()].count('\n') + 1
+                report_violation(
+                    "COARSE_STORE_SUBSCRIPTION_MANDATE",
+                    filepath,
+                    line_num,
+                    "Coarse monolithic store subscription detected. Use selector-scoped subscriptions (this.subscribe(Store, state => slice, (slice) => ...)) with structural equality to prevent render thrashing."
+                )
         if file in ["ext_tracker.js", "ext_research.js", "ext_config.js"] and "document.getElementById" in full_content:
             report_violation("GRADUATED_COMP_DOM_READ", filepath, 1, "Graduated components are forbidden from using document.getElementById (DOM Read Ban). Bind to reactive Lit properties instead.")
         if is_extension and "extends InSetuElement" in full_content and "static get extensionName()" not in full_content:
@@ -272,6 +307,8 @@ def check_javascript_files():
                 report_violation("EXPLICIT_API_MANDATE", filepath, line_num, "Legacy window.inSetu.fetch() detected. Route through the explicit window.inSetu.api SDK (ADR 0016).")
             if file not in ["api.js", "sdk.js"] and legacy_api_routing_pattern.search(line):
                 report_violation("SEMANTIC_API_ROUTING_MANDATE", filepath, line_num, "Direct invocation of api.workspace() or api.system() detected. Route through the semantic .get() or .post() chains instead.")
+            if direct_browse_path_setstate_pattern.search(line):
+                report_violation("CANONICAL_BROWSE_PATH_MANDATE", filepath, line_num, "Direct setState on globalBrowsePath detected. Use AppStore.getState().setBrowsePath(pathArray, subId) to keep tabBrowsePaths and the URL hash in sync.")
 
             if is_extension and re.search(r'class\s+\w+\s+extends\s+LitElement\b', line):
                 report_violation("SDK_ELEMENT_MANDATE", filepath, line_num, "Extension component extends raw LitElement. Inherit from InSetuElement to protect multi-tenant lifecycles.")
@@ -288,7 +325,7 @@ def check_javascript_files():
             if banned_cdn_import_pattern.search(line):
                 report_violation("BANNED_CDN_IMPORT", filepath, line_num, "Hardcoded CDN import detected. Extensions must utilize vendor.json and local vendor subdirectories.")
             if banned_yenvui_tag_pattern.search(line):
-                report_violation("BANNED_YENVUI_TAG_BAN", filepath, line_num, "Deprecated 'yenvui-' token detected. Migrate entirely to vendorized 'sutram-' primitives.")
+                report_violation("BANNED_YENVUI_TAG_BAN", filepath, line_num, "Deprecated '<yenvui-' custom element tag detected. Migrate entirely to vendorized 'sutram-' primitives.")
 
             if is_extension and lit_element_class_pattern.search(line):
                 report_violation("SDK_ELEMENT_MANDATE", filepath, line_num, "Extension component extends native LitElement. Use InSetuElement instead to enable managed lifecycles.")

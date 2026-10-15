@@ -278,13 +278,14 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 if getattr(dec.func.value, 'id', '') == 'hooks' and dec.func.attr == 'on':
                     if len(dec.args) > 0 and isinstance(dec.args[0], ast.Constant):
                         hook_events.append(dec.args[0].value)
-
         for child in ast.walk(node):
             if isinstance(child, ast.Import):
                 for alias in child.names:
                     name = alias.asname or alias.name
                     if name in self.top_level_imports or alias.name in self.top_level_imports:
                         report_violation("REDUNDANT_INLINE_IMPORT", self.filepath, child.lineno, f"Redundant inline import '{alias.name}' inside '{node.name}' (already imported at module level).")
+                    elif not (alias.asname and alias.asname.startswith('_')):
+                        report_violation("UNALIASED_INLINE_IMPORT", self.filepath, child.lineno, f"Inline import '{alias.name}' inside '{node.name}' must be placed at the module top-level or aliased with a leading underscore (e.g. 'import {alias.name} as _{alias.name}').")
             elif isinstance(child, ast.ImportFrom):
                 module = child.module or ""
                 for alias in child.names:
@@ -292,6 +293,8 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     name = alias.asname or alias.name
                     if full_name in self.top_level_imports or name in self.top_level_imports:
                         report_violation("REDUNDANT_INLINE_IMPORT", self.filepath, child.lineno, f"Redundant inline import 'from {module} import {alias.name}' inside '{node.name}' (already imported at module level).")
+                    elif not (alias.asname and alias.asname.startswith('_')):
+                        report_violation("UNALIASED_INLINE_IMPORT", self.filepath, child.lineno, f"Inline import 'from {module} import {alias.name}' inside '{node.name}' must be placed at the module top-level or aliased with a leading underscore (e.g. 'from {module} import {alias.name} as _{alias.name}').")
         for legacy_hook in ['vfs_transaction_committed', 'post_file_save', 'post_file_delete']:
             if legacy_hook in hook_events:
                 report_violation("LEGACY_HOOK_BAN", self.filepath, node.lineno, f"Function subscribes to deprecated '{legacy_hook}'. Use unified 'vfs_mutated' instead.")
