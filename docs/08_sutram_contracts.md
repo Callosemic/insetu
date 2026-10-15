@@ -60,7 +60,7 @@ Dynamically generates form controls from backend JSON schemas.
 ## V. Layout & Container Primitives
 
 *   **`<sutram-app-shell>`**: Top-level declarative tab layout shell.
-*   **`<sutram-card>`**: Polymorphic catalog item. Automatically binds to `SelectionStore` if `selectionStoreKey` is provided. Properties: `.titleText`, `.descriptionText`, `.detailText`, `.detailPrefix`, `.detailSuffix`, `.icon`, `.intentColor`, `?selected`, `?disableSelection`, `selectionStoreKey="Selection"`, `?compact`, `?flush`. Emits `@sutram-card-select-toggled`.
+*   **`<sutram-card>`**: Polymorphic catalog item. Automatically binds to `SelectionStore` if `selectionStoreKey` is provided. Properties: `.titleText`, `.descriptionText`, `.detailText`, `.detailPrefix`, `.detailSuffix`, `.icon`, `.intent` (`'primary'` | `'warning'` | `'danger'` | `'neutral'` | `'highlight'`), `.intentColor`, `?selected`, `?disableSelection`, `selectionStoreKey="Selection"`, `?compact`, `?flush`. Emits `@sutram-card-select-toggled`.
 *   **`<sutram-card-group>`**: Wraps cards with horizontal gesture locking and accordion physics. Properties: `?enableEdgeSelection`, `?stacked`, `?accordion`.
 *   **`<sutram-modal>`**: Native `#top-layer` dialog overlay. Properties: `?open`, `.titleText`, `?fullscreen`, `?flush`, `.maxWidth`. Emits `@sutram-modal-closed`.
 *   **`<sutram-board>` & `<sutram-column>`**: Multi-column flex grid layout. Column properties: `.titleText`, `.intentColor`.
