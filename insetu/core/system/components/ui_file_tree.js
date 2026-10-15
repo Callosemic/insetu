@@ -250,6 +250,7 @@ constructor() {
                                 </div>
                             `;
                         }}>
+                    </sutram-virtual-list>
                 `}
             </div>
         `;

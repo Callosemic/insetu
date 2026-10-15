@@ -2652,7 +2652,7 @@ export class InSetuLinkInsertProjection extends InSetuElement {
                             .detailText=${item.path}
                             .descriptionText=${item.snippet ? '"...' + item.snippet.replace(/</g, '&lt;') + '"' : ''}
                             icon="file-text"
-                            intentColor="var(--intent-primary)"
+                            intent="primary"
                             ?disableSelection=${true}
                             @card-clicked=${() => {
                                 insertLinkToEditor(item.path, name);

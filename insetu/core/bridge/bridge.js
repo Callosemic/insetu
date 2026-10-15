@@ -510,7 +510,7 @@ export class InSetuExtBridge extends InSetuElement {
                     }
                 },
                 onError: (err) => {
-                    BridgeStore.setState({ activeBridgeJobId: null, consoleOutput: `<span style="color: var(--intent-danger); font-weight: bold;">[!] ${err.message}</span>` });
+                    BridgeStore.setState({ activeBridgeJobId: null, consoleOutput: `[!] ${err.message}` });
                 }
             });
             await action(e);
@@ -607,7 +607,8 @@ export class InSetuExtBridge extends InSetuElement {
     }
     _renderTelemetry() {
         const t = this.telemetry;
-        if (!t) return html`<div id="status-box" class="console-header-text" style=${`width: 100%; font-family: var(--font-mono); white-space: pre-wrap; color: var(--text);`} .innerHTML=${this.consoleOutput}></div>`;
+        const isErrorOutput = typeof this.consoleOutput === 'string' && this.consoleOutput.startsWith('[!]');
+        if (!t) return html`<div id="status-box" class="console-header-text" style=${`width: 100%; font-family: var(--font-mono); font-size: 0.9rem; white-space: pre-wrap; color: ${isErrorOutput ? 'var(--intent-danger)' : 'var(--text)'}; font-weight: ${isErrorOutput ? 'bold' : 'normal'};`}>${this.consoleOutput}</div>`;
 
         return html`
             <div style="width: 100%; display: flex; flex-direction: column;">
@@ -643,23 +644,23 @@ export class InSetuExtBridge extends InSetuElement {
                             const hasError = filePatches.some(p => p.status === 'failed' || p.status === 'syntax_error');
                             const hasWarning = filePatches.some(p => p.status === 'needs_confirmation' || p.status === 'offer_deep_search');
                             const isSkipped = filePatches.every(p => p.status === 'auto_skipped');
-                            let intentColor = 'var(--intent-success)';
+                            let cardIntent = 'success';
                             let icon = 'check-circle-2';
-                            if (hasError) { intentColor = 'var(--intent-danger)'; icon = 'x-circle'; }
-                            else if (hasWarning) { intentColor = 'var(--intent-warning)'; icon = 'alert-triangle'; }
-                            else if (isSkipped) { intentColor = 'var(--intent-neutral)'; icon = 'skip-forward'; }
+                            if (hasError) { cardIntent = 'danger'; icon = 'x-circle'; }
+                            else if (hasWarning) { cardIntent = 'warning'; icon = 'alert-triangle'; }
+                            else if (isSkipped) { cardIntent = 'neutral'; icon = 'skip-forward'; }
 
                             const targetEntityFile = file;
                             return html`
                                 <sutram-card 
-                                    titleText="${file}" 
-                                    icon="${icon}"
-                                    detailText="${filePatches.length} Patch${filePatches.length !== 1 ? 'es' : ''}" 
-                                    intentColor="${intentColor}"
+                                    .titleText=${file} 
+                                    .icon=${icon}
+                                    .detailText=${`${filePatches.length} Patch${filePatches.length !== 1 ? 'es' : ''}`} 
+                                    .intent=${cardIntent}
                                     entityType="file"
                                     .entityData=${{ filepath: targetEntityFile, isFS: true, suppress: ['file-browse'] }}>
 
-                                    <div style="padding: 2px 0; font-size: 0.9rem; color: var(--text);">
+                                    <div style="padding: 2px 0; font-size: 0.85rem; line-height: 1.5; color: var(--text);">
                                         ${filePatches.map((p) => {
                                             const origFile = p.original_file;
                                             const origFileIdx = origFileCounters[origFile] || 0;
@@ -670,10 +671,10 @@ export class InSetuExtBridge extends InSetuElement {
                                                 <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                                                     <p style="margin: 0; font-weight: bold; color: var(--text-muted);">Patch #${(p.patch_index || 0) + 1}: <span style="color: var(--text);">${(p.status || 'unknown').replace('_', ' ')}</span></p>
                                                     ${p.flags && p.flags.length > 0 ? html`
-                                                        <span style="font-size: 0.75rem; color: var(--intent-highlight); border: 1px solid var(--intent-highlight); padding: 2px 6px; border-radius: 4px;">${p.flags.join(', ')}</span>
+                                                        <span style="font-size: 0.75rem; color: var(--intent-highlight); border: 1px solid var(--intent-highlight); padding: 2px 6px; border-radius: 4px; flex-shrink: 0;">${p.flags.join(', ')}</span>
                                                     ` : ''}
                                                 </div>
-                                                ${p.error_message ? html`<p style="color: ${p.status === 'auto_skipped' ? 'var(--intent-warning)' : 'var(--intent-danger)'}; margin: 6px 0 0 0;">${p.error_message}</p>` : ''}
+                                                ${p.error_message ? html`<div style="color: ${p.status === 'auto_skipped' ? 'var(--intent-warning)' : 'var(--intent-danger)'}; margin: 6px 0 0 0; font-family: var(--font-mono); font-size: 0.8rem; white-space: pre-wrap; word-break: break-word;">${p.error_message}</div>` : ''}
                                                 ${p.syntax_error ? html`
                                                     <div style="display: flex; gap: 10px; margin-top: 8px;">
                                                         <sutram-btn data-action="view-diff" data-b64="${p.syntax_error}" intent="danger" icon="git-compare" label="${p.resolution_type === 'anchor_failed' ? 'Inspect Anchor Mismatch Diff' : (p.status === 'failed' ? 'Inspect Failed Anchor Diff' : 'View Syntax Error Diff')}" style="--btn-padding: 4px 10px;"></sutram-btn>
@@ -791,7 +792,7 @@ export class InSetuExtBridge extends InSetuElement {
                                             }}></sutram-input>
 
                                             <div style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--intent-highlight);">
-                                                ${selectedCount} of${totalCount} patches selected
+                                                ${selectedCount} of ${totalCount} patches selected
                                             </div>
                                         </div>
                                         ${this._autoSwaps[file] ? html`

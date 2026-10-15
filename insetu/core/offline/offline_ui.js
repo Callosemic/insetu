@@ -160,7 +160,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                 }
             } catch (e) {}
             window.inSetu.stores.App.setState({ outboxCount: count, pendingMutations: pendingSet, deletedMutations: deletedSet });
-            if (window.inSetu?.offlineLog) window.inSetu.offlineLog(`Re-queued poison pill for sync: [${item.method}]${item.path}`, 'info');
+            if (window.inSetu?.offlineLog) window.inSetu.offlineLog(`Re-queued poison pill for sync: [${item.method}] ${item.path}`, 'info');
             if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`Queued for sync (${count})`, 3000);
         } catch (e) {
             alert("Failed to re-queue record.");
@@ -383,7 +383,7 @@ export class InSetuCoreOfflineSettings extends InSetuElement {
                 }
             }
             window.inSetu?.offlineLog?.(`Pre-cache complete for '${repoDir}': ${cachedCount}/${files.length} cached.`, 'success');
-            if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`Successfully cached ${files.length} files for${repoDir}`, 3000);
+            if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`Successfully cached ${files.length} files for ${repoDir}`, 3000);
 
             setTimeout(() => {
                 this.dispatch('insetu:force-refresh', { parentId: 'offline', subId: 'ledger' });
