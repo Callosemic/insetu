@@ -1,4 +1,4 @@
-import{html as n,css as u}from"lit";import{SutramElement as y}from"./sutram_sdk.js";import"../../yenvui/js/drop-zone.js";export class SutramDragCoordinator extends y{static properties={dragState:{type:Object},spatialState:{type:Object}};static styles=u`
+import{html as n,css as x}from"lit";import{SutramElement as f}from"./sutram_sdk.js";import"../../yenvui/js/drop-zone.js";export class SutramDragCoordinator extends f{static properties={dragState:{type:Object},spatialState:{type:Object}};static styles=x`
         :host {
             display: contents;
         }
@@ -201,7 +201,7 @@ import{html as n,css as u}from"lit";import{SutramElement as y}from"./sutram_sdk.
             border: 2px solid #000000 !important;
             box-shadow: 4px 4px 0 #000000 !important;
         }
-    `;connectedCallback(){super.connectedCallback()}updated(e){super.updated(e),e.has("dragState")&&(this._dropZonesCache=null)}getHoveredZone(e,i){this._dropZonesCache||(this._dropZonesCache=Array.from(this.shadowRoot.querySelectorAll("yenvui-drop-target")).map(r=>{const t=r.getBoundingClientRect();return{zone:r.zone,left:t.left,right:t.right,top:t.top,bottom:t.bottom}}));const o=this._dropZonesCache.find(r=>e>=r.left&&e<=r.right&&i>=r.top&&i<=r.bottom);return o?o.zone:null}updatePointer(e,i){const o=this.shadowRoot.querySelector(".drag-floater");o&&(o.style.transform=`translate3d(${e}px, ${i}px, 0) translate(-50%, -50%)`)}render(){if(!this.dragState||!this.dragState.active)return n`<yenvui-drop-overlay></yenvui-drop-overlay>`;const{entity:e,currentX:i,currentY:o,sourceCol:r,currentZone:t,sourceRect:b}=this.dragState,a=this.spatialState?.capacity||3,d=b||{left:0,top:0,width:window.innerWidth,height:window.innerHeight};return n`
+    `;connectedCallback(){super.connectedCallback()}updated(e){super.updated(e),e.has("dragState")&&(this._dropZonesCache=null,this.dragState?.active&&this.dragState.currentX!==void 0&&this.dragState.currentY!==void 0&&this.updatePointer(this.dragState.currentX,this.dragState.currentY))}getHoveredZone(e,i){this._dropZonesCache||(this._dropZonesCache=Array.from(this.shadowRoot.querySelectorAll("yenvui-drop-target")).map(r=>{const t=r.getBoundingClientRect();return{zone:r.zone,left:t.left,right:t.right,top:t.top,bottom:t.bottom}}));const o=this._dropZonesCache.find(r=>e>=r.left&&e<=r.right&&i>=r.top&&i<=r.bottom);return o?o.zone:null}updatePointer(e,i){const o=this.shadowRoot.querySelector(".drag-floater");o&&(o.style.transform=`translate3d(${e}px, ${i}px, 0) translate(-50%, -50%)`)}render(){if(!this.dragState||!this.dragState.active)return n`<yenvui-drop-overlay></yenvui-drop-overlay>`;const{entity:e,currentX:i,currentY:o,sourceCol:r,currentZone:t,sourceRect:b}=this.dragState,a=this.spatialState?.capacity||3,d=b||{left:0,top:0,width:window.innerWidth,height:window.innerHeight};return n`
             <yenvui-drop-overlay class="hud-overlay" ?active=${!0}>
                 <!-- Localized Bounding Box HUD Container -->
                 <div class="hud-hud-card" style="left: ${d.left}px; top:${d.top}px; width: ${d.width}px; height:${d.height}px;">
@@ -243,9 +243,9 @@ import{html as n,css as u}from"lit";import{SutramElement as y}from"./sutram_sdk.
                                 <span style="opacity: 0.7;">Drop between tabs to reorder</span>
                             </div>
                             <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                                ${(()=>{const v=this.spatialState.columns[r].pinned;let s=[...v];const p=s.findIndex(g=>g.id===e?.id);let l=p;if(t&&t.startsWith("reorder-")&&(l=parseInt(t.replace("reorder-",""),10)),p!==-1&&l!==-1&&p!==l){const[g]=s.splice(p,1);s.splice(l,0,g)}return v.map((g,c)=>{const h=s[c],x=t==="reorder-"+c;return n`
+                                ${(()=>{const v=this.spatialState.columns[r].pinned;let s=[...v];const p=s.findIndex(g=>g.id===e?.id);let l=p;if(t&&t.startsWith("reorder-")&&(l=parseInt(t.replace("reorder-",""),10)),p!==-1&&l!==-1&&p!==l){const[g]=s.splice(p,1);s.splice(l,0,g)}return v.map((g,c)=>{const h=s[c],u=t==="reorder-"+c;return n`
                                             ${c>0?n`<span style="color: var(--text-muted); font-size: 0.8rem;">•</span>`:""}
-                                            <yenvui-drop-target zone="reorder-${c}" class="drop-target-btn intent-highlight" .intent=${"highlight"} ?hovered=${x}>
+                                            <yenvui-drop-target zone="reorder-${c}" class="drop-target-btn intent-highlight" .intent=${"highlight"} ?hovered=${u}>
                                                 <yv-icon name="${h.icon||"component"}" style="width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;"></yv-icon>
                                                 <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${h.label||h.id}</span>
                                             </yenvui-drop-target>
@@ -309,7 +309,7 @@ import{html as n,css as u}from"lit";import{SutramElement as y}from"./sutram_sdk.
 
                 </div>
                 <!-- Floating Cursor Node (Hardware Accelerated) -->
-                <div class="drag-floater">
+                <div class="drag-floater" style="transform: translate3d(${i||0}px, ${o||0}px, 0) translate(-50%, -50%);">
                     <yv-icon name="${e?.icon||"component"}" style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;"></yv-icon> ${e?.label||e?.id||"Dragging"}
                 </div>
             </yenvui-drop-overlay>

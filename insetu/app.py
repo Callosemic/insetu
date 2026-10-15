@@ -1,25 +1,27 @@
 from pathlib import Path
 import os
-
-# Enforce host-specific control directory for the Akasa kernel
-os.environ["AKASA_CONTROL_DIR"] = ".insetu"
-
-# Fire Drill: Intercept the boot sequence to test the Lifeboat FS
-import os
-if os.environ.get("INSETU_SIMULATE_PANIC") == "1" or os.path.exists(".panic_lock"):
-    if "INSETU_SIMULATE_PANIC" in os.environ: del os.environ["INSETU_SIMULATE_PANIC"]
-    if os.path.exists(".panic_lock"): os.remove(".panic_lock")
-    raise SyntaxError("Simulated Kernel Panic (Triggered via UI Fire Drill)")
+import sys
 import io
+import re
 import random
 import datetime
 import json
 import importlib
+import operator
 import queue
 import threading
 import time
 import logging
 from contextlib import redirect_stdout
+
+# Enforce host-specific control directory for the Akasa kernel
+os.environ["AKASA_CONTROL_DIR"] = ".insetu"
+
+# Fire Drill: Intercept the boot sequence to test the Lifeboat FS
+if os.environ.get("INSETU_SIMULATE_PANIC") == "1" or os.path.exists(".panic_lock"):
+    if "INSETU_SIMULATE_PANIC" in os.environ: del os.environ["INSETU_SIMULATE_PANIC"]
+    if os.path.exists(".panic_lock"): os.remove(".panic_lock")
+    raise SyntaxError("Simulated Kernel Panic (Triggered via UI Fire Drill)")
 from flask import Flask, render_template, request, jsonify, send_file, Response
 from werkzeug.middleware.proxy_fix import ProxyFix
 import akasa.workers # Initializes the metronome listeners
@@ -65,13 +67,15 @@ def disable_http_caching(response):
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
     return response
-
 @app.before_request
 def enforce_token_gate():
     """Universal interceptor enforcing token verification on all REST paths."""
     # Always allow core landing, public assets, and the auth route to bypass checks
     # Expose the panic endpoint so the recovery OS button works even if JS crashes before the token handshake
-    if request.path in ['/', '/manifest.json', '/sw.js', '/favicon.ico', '/auth/bootstrap', '/api/system/panic', '/api/system/openapi.json', '/recovery'] or request.path.startswith('/static/'):
+    if (request.path in ['/', '/manifest.json', '/sw.js', '/favicon.ico', '/auth/bootstrap', '/api/system/panic', '/api/system/openapi.json', '/recovery'] 
+        or request.path.startswith('/static/') 
+        or request.path.startswith('/sm/') 
+        or request.path.endswith('.map')):
         return None
 
     # Check header first, fallback to query parameter for WebSockets
@@ -167,11 +171,11 @@ def load_workspace_extensions():
                     break
         except Exception as e:
             print(f"⚠️  Extension Load Failed [{ext}]: {type(e).__name__} - {str(e)}")
-
     # Topological Sort
     sorted_exts = []
     visited = set()
     visiting = set()
+    bypassed_extensions = []
 
     def visit(ext):
         if ext in visited: return
@@ -186,7 +190,13 @@ def load_workspace_extensions():
                 if dep in modules:
                     visit(dep)
                 else:
-                    print(f"⚠️ Extension [{ext}] requires missing dependency [{dep}]. Bypassing.")
+                    msg = f"Extension [{ext}] requires missing dependency [{dep}]."
+                    print(f"⚠️ {msg} Bypassing.")
+                    bypassed_extensions.append({
+                        "extension": ext,
+                        "missing_dependency": dep,
+                        "reason": msg
+                    })
                     missing_dep = True
 
         visiting.remove(ext)
@@ -197,6 +207,8 @@ def load_workspace_extensions():
     for ext in list(modules.keys()):
         if ext not in visited:
             visit(ext)
+
+    app._bypassed_extensions = bypassed_extensions
     # Mount Blueprints in safe DAG order
     for ext in sorted_exts:
         try:
@@ -219,9 +231,6 @@ def load_workspace_extensions():
             print(f"⚠️  Unexpected Mount Failure [{ext}]: {type(e).__name__} - {str(e)}")
     # Purge the config cache via decoupled event so the fully-mounted Extension DAG gets a chance to inject
     hooks.emit('config_mutated')
-
-import operator
-import re
 
 OPERATORS = {
     '=':  operator.eq,
@@ -448,12 +457,12 @@ def intercept_local_static_assets():
             return send_file(local_path, mimetype='image/png')
 @app.route('/favicon.ico')
 def favicon():
-    from akasa.utils import load_config, get_workspace_physics
-    cfg = load_config()
+    from akasa.utils import load_config as _load_config, get_workspace_physics as _get_workspace_physics
+    cfg = _load_config()
     custom_icon_name = cfg.get("instance_favicon", "favicon.ico")
 
     # Anchor to the absolute instance directory to survive os.chdir() hijacking
-    cfg_path, _ = get_workspace_physics()
+    cfg_path, _ = _get_workspace_physics()
     instance_dir = Path(cfg_path).parent.as_posix()
     local_icon_path = Path(instance_dir).joinpath("static", custom_icon_name).as_posix()
 
@@ -515,10 +524,10 @@ def recovery_ui():
     return html
 @app.route('/')
 def index():
-    from akasa.utils import load_config
-    from akasa.extension import SettingsManager
-    cfg = load_config()
-    settings = SettingsManager('system', "default")
+    from akasa.utils import load_config as _load_config
+    from akasa.extension import SettingsManager as _SettingsManager
+    cfg = _load_config()
+    settings = _SettingsManager('system', "default")
     instance_title = settings.get("instance_title", "inSetu Developer OS")
     instance_emoji = settings.get("instance_emoji", "⚙️")
     extensions = cfg.get("extensions", [])
@@ -527,16 +536,16 @@ def index():
     import_map = resolve_js_vendors(mounted_extensions)
 
     return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=mounted_extensions, import_map=json.dumps({"imports": import_map}))
-
 # Ignite active workspace feature components JIT at application startup
 load_workspace_extensions()
-import os
-from akasa.hooks import hooks
+
+@hooks.on('mutate_workspace_config')
+def inject_bypassed_extensions(cfg, workspace_id=None, **kwargs):
+    cfg["bypassed_extensions"] = getattr(app, '_bypassed_extensions', [])
 
 # Fire the system boot hook to ignite the worker pools and VFS queues globally
 # Guardrail: Prevent the Werkzeug master reloader process from executing background threads,
 # but allow ignition if running under standard WSGI servers where the reloader is absent.
-import sys
 is_werkzeug_worker = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
 is_cli_serve = "serve" in sys.argv
 

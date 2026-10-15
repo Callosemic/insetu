@@ -362,7 +362,7 @@ import{html as a,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
                 @pointerdown=${e=>{this._initGestureController(),this._gestureController.start(e)}}>
 
                 ${this.disableSelection?"":a`<div class="selection-hit-zone" title="Select Item" @click=${e=>{e.stopPropagation(),this._toggleSelection()}}></div><div class="selection-strip"></div>`}
-                <div class="content-col" @click=${e=>{this.dispatchEvent(new CustomEvent("yenvui-card-clicked",{detail:{filename:this.filename,isSource:!0},bubbles:!0,composed:!0}))}} style="cursor: pointer; padding: 12px; min-width: 0;">
+                <div class="content-col" @click=${e=>{if(this._isPanning){e.stopPropagation(),e.preventDefault();return}this.dispatchEvent(new CustomEvent("yenvui-card-clicked",{detail:{filename:this.filename,isSource:!0},bubbles:!0,composed:!0}))}} style="cursor: pointer; padding: 12px; min-width: 0;">
                     <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; gap: 8px;">
                         <div class="card-title" style="display: flex; align-items: center; gap: 6px; font-weight: bold; color: var(--text); font-size: 0.85rem; min-width: 0; overflow: hidden;">
                             ${this.icon&&this.icon.startsWith("<i")?a`<div style="flex-shrink: 0;" .innerHTML=${this.icon}></div>`:this.icon?/^[a-zA-Z0-9-]+$/.test(this.icon)?a`<yv-icon name="${this.icon}" style="width: 14px; height: 14px; color: var(--card-intent, var(--intent-primary)); flex-shrink: 0;"></yv-icon>`:a`<span style="flex-shrink: 0;">${this.icon}</span>`:""}
