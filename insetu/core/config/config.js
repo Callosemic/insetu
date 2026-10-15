@@ -124,13 +124,17 @@ export class InSetuExtConfig extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(AppStore, (state) => {
-            if (state.isConfigOpen && !this._isOpen) {
-                this.openModal();
-            } else if (!state.isConfigOpen && this._isOpen) {
-                this._isOpen = false;
+        this.subscribe(
+            AppStore,
+            state => state.isConfigOpen,
+            (isConfigOpen) => {
+                if (isConfigOpen && !this._isOpen) {
+                    this.openModal();
+                } else if (!isConfigOpen && this._isOpen) {
+                    this._isOpen = false;
+                }
             }
-        });
+        );
         this.registerGlobalListener('insetu:config:save', window, () => {
             if (this._isOpen) this._saveConfig();
         });
