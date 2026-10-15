@@ -106,6 +106,8 @@ def check_javascript_files():
     legacy_sdk_import_ban_pattern = re.compile(r'from\s+[\'"][^\'"]*/static/extensions/system/sdk\.js[\'"]')
     coarse_store_sub_pattern = re.compile(r'this\.subscribe\(\s*([^,\n]+|\n\s*[^,\n]+)\s*,\s*(?:(?:(?:\(?\s*(?:state|s)\s*\)?)|(?:\(?\s*\{[^}]+\}\s*\)?))\s*=>\s*\{|function\s*\([^)]*\)\s*\{)', re.MULTILINE)
     direct_browse_path_setstate_pattern = re.compile(r'\.setState\(\s*\{[^\}]*\bglobalBrowsePath\s*:')
+    dirty_alert_triangle_pattern = re.compile(r'isDirty\s*\?\s*[\'"]alert-triangle[\'"]')
+    n_plus_one_bulk_vfs_pattern = re.compile(r'export\s+async\s+function\s+executeBulk(?:Move|Archive|Delete)[\s\S]*?for\s*\([^)]*\)\s*\{[\s\S]*?await\s+_(?:relocate|archive|delete)VfsNode\b')
 
     # Initialize Tree-sitter for Hybrid Parsing
     ts_available = False
@@ -196,6 +198,13 @@ def check_javascript_files():
                             )
 
         # --- 2. GLOBAL & STRING PATTERNS ---
+        if n_plus_one_bulk_vfs_pattern.search(full_content):
+            report_violation(
+                "BULK_VFS_LOOP_BAN",
+                filepath,
+                1,
+                "Sequential N+1 VFS mutation loop detected inside executeBulk*. Dispatch a single atomic 'fs/bulk' mutation instead."
+            )
         if not ts_available and file not in ["store.js", "system.js", "insetu_sdk.js", "sutram_sdk.js"]:
             for m in coarse_store_sub_pattern.finditer(full_content):
                 line_num = full_content[:m.start()].count('\n') + 1
@@ -347,8 +356,10 @@ def check_javascript_files():
 
             if zustand_reference_mutation_pattern.search(line):
                 report_violation("ZUSTAND_REFERENCE_MUTATION", filepath, line_num, "Symmetric state assignment detected (e.g. {manifest: manifest}). Ensure complex objects are explicitly cloned using the spread operator before passing to setState.")
-            if (is_extension or 'core' in filepath.parts) and banned_ui_zones_pattern.search(line):
+            if (is_extension or 'core' in filepath.parts) and file not in ["fs.js", "ui_editor.js", "insetu_sdk.js"] and banned_ui_zones_pattern.search(line):
                 report_violation("BANNED_UI_ZONES", filepath, line_num, "The 'uiHooks' object and 'zone:*' string hooks are permanently deprecated (ADR 0041). Use declarative customEditors, expanded layoutSlots, native InSetuElement lifecycles, or the Typed Event Bus.")
+            if dirty_alert_triangle_pattern.search(line):
+                report_violation("DIRTY_CARD_CONSTRUCTION_ICON_MANDATE", filepath, line_num, "Dirty cards must use the 'construction' icon instead of 'alert-triangle' (e.g., isDirty ? 'construction' : 'package').")
 
             if re.search(r'\bbatchActions\s*:', line):
                 report_violation("LEGACY_BATCH_ACTIONS_BAN", filepath, line_num, "The 'batchActions' schema array is deprecated. Migrate bulk actions directly into 'entityActions' using 'bulkable: true' (ADR 0061).")

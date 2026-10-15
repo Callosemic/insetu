@@ -52,7 +52,8 @@ insetu/
 │       ├── 0059-extension-modal-annihilation-spatial-projection-migration-and-store-eviction.md # Extension modal annihilation, spatial viewport projections, and store eviction governance.
 │       ├── 0060-git-aware-topology-manifest-sync-and-spatial-diff-projections.md # Git-aware topology CQRS ledger, real-time manifest delta sync, and spatial diff projections.
 │       ├── 0061-polymorphic-bulk-entity-actions-subsumption-pruning-and-recursive-vfs-eviction.md # Polymorphic bulk entity actions, subsumption pruning, and recursive VFS eviction.
-│       ├── 0062-projection-popouts-occ-concurrency-and-memoized-manifest-cqrs.md # [comment required]
+│       ├── 0062-projection-popouts-occ-concurrency-and-memoized-manifest-cqrs.md # Ephemeral pop-out windows, SHA-256 OCC conflict detection, and memoized manifest derivations.
+│       ├── 0063-atomic-vfs-bulk-mutations-popout-presence-and-sw-consolidation.md # [comment required]
 │       └── archived/               # Superseded and historical ADR documents.
 │           ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │           ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
