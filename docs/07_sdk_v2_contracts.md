@@ -40,7 +40,7 @@ Route handlers (`@my_ext_bp.route('path')`) and background workers (`@my_ext_bp.
 **Database & I/O Interfaces:**
 
 * **`ctx.db`** *(DatabaseWrapper)*: Automated SQLite connector keyed securely to the active tenant workspace schema. Exposes `.get_all(table)`, `.insert_or_replace(table, dict)`, `.update(table, data, where_col, where_val)`, `.get_by_id(table, id_val, id_col)`, and `.delete(table, col, val)`.
-* **`ctx.vfs`** *(VFSTransaction)*: Atomic Virtual File System context. Exposes `.save(filepath, content, data)`, `.delete(filepath, data)`, `.read(filepath)`, and `.walk(directory)`. Directly utilizing `os.walk` or `open()` is strictly banned.
+* **`ctx.vfs`** *(VFSTransaction)*: Atomic Virtual File System context. Exposes `.save(filepath, content, data)`, `.delete(filepath, data)`, `.read(filepath)`, `.walk(directory)`, and `.bulk(operations)`. Directly utilizing `os.walk` or `open()` is strictly banned.
 * **`ctx.sync_vfs_barrier(timeout=5.0)`** *(Method)*: Enqueues an event barrier sentinel onto `_VFS_WRITE_QUEUE` and halts the current thread until all preceding VFS write transactions physically commit.
 * **`ctx.jobs`** *(JobManager)*: Off-thread background execution dispatcher. Exposes `.submit(task_name, coalesce=False, **kwargs)` for immediate tasks. For ledger-scheduled execution, use `submit_job()` for recurring metronome tasks (`interval_ms > 0`) or `submit_one_shot_job()` for self-destructing delayed tasks (`delay_ms`).
     * **Step Chaining:** You may pass a reserved `_chain` dictionary (matching `JobChainPayload`) as a kwarg to `.submit()` to automatically sequence multiple background workers or trigger an `on_complete_hook` event upon final settlement.
@@ -66,7 +66,7 @@ Extensions are strictly forbidden from relative-importing OS chassis functions. 
 * **`this.ecosystem`**: Auto-hydrated workspace topology (`this.ecosystem.allRepos`, `this.ecosystem.pinnedRepos`, `this.ecosystem.targetConfigs`).
 * **`.setStatus(msg, timeout, isError)`**: Base helper to emit global status updates via `this.ui.setGlobalStatus`.
 * **`.compileSystem()`**: Base helper to trigger background system compilations via `this.sys.executeSystemCompile`.
-* **`this.vfs`**: `.viewSourceFile(path)`, `.viewFileGitDiff(path)`, `.isFileGitModified(path)`, `.fetchAndCopy(path)`, `.downloadFile(url)`, `.shareFiles(file, chunks)`, `.normalizeVfsURI(path)`
+* **`this.vfs`**: `.viewSourceFile(path)`, `.viewFileGitDiff(path)`, `.isFileGitModified(path)`, `.fetchAndCopy(path)`, `.downloadFile(url)`, `.shareFiles(file, chunks)`, `.normalizeVfsURI(path)`, `.executeBulkMove(items)`, `.executeBulkArchive(items)`, `.executeBulkDelete(items)`
 * **`this.ui`**: `.openWorkspaceBrowser(options)`, `.openFolderBrowser(cb)`, `.setGlobalStatus(msg)`, `.viewTextBlob(title, content, suggestedFilename)`, `.popoutProjection(filepath)`
 * **`this.sys`**: `.executeWorkspaceMutation(path, payload)`, `.executeSystemCompile()`, `.switchTab(tabId)`, `.refreshManifest()`
 * **`AppStore.getState().setBrowsePath(pathArray, subId)`**: Updates active browse paths and automatically reflects directory navigation in the URL hash.
@@ -145,7 +145,7 @@ window.ExtensionRegistry.registerExtension('my_ext', {
         component: "insetu-ext-component" // Exclude 'component' if defining a parent container tab
     }],
     // Declarative custom file editor matchers (ADR 0041)
-    customEditors: [{ id: 'my-editor', match: (filepath) => filepath.endsWith('.ext'), onOpen: (filepath) => { ... } }],
+    customEditors: [{ id: 'my-editor', component: 'my-editor-projection', match: (filepath) => filepath.endsWith('.ext'), onOpen: (filepath) => { ... } }],
     // Extends workspace configuration cards with domain-specific controls
     repoConfigOptions: [{ id: 'my-repo-opt', order: 10, component: ({ repo, updateCallback }) => { ... } }],
     bucketConfigOptions: [{ id: 'my-bucket-opt', order: 10, component: ({ bucket, repoDir, updateCallback }) => { ... } }],

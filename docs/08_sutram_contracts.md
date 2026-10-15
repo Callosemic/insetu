@@ -22,8 +22,8 @@ Extensions must register their UI topology via `window.ExtensionRegistry.registe
     *   Schema: `{ id: "str", label: "str", icon: "str", onClick: async () => {...} }`
 *   **`shortcuts`**: Registers global keybindings.
     *   Schema: `{ context: "global", key: "ctrl+s", label: "str", action: () => {...} }`
-*   **`customEditors`**: Intercepts file/resource clicks to launch custom modals.
-    *   Schema: `{ match: (filepath) => bool, onOpen: (filepath) => {...} }`
+*   **`customEditors`**: Intercepts file/resource clicks to launch custom modals or spatial projections.
+    *   Schema: `{ id?: "str", component?: "custom-tag", match: (filepath) => bool, onOpen: (filepath) => {...} }`
 *   **`repoConfigOptions` / `bucketConfigOptions`**: Injects form toggles directly into the host's configuration matrix.
     *   Schema: `{ id: "str", order: 1, component: ({repo/bucket, updateCallback}) => html\`...\` }`
 
