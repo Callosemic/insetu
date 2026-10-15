@@ -15,19 +15,26 @@ def check_vendor_manifest_paths():
                 entries = data.get(domain, {})
                 if not isinstance(entries, dict):
                     continue
-
                 for specifier, meta in entries.items():
                     if isinstance(meta, dict):
                         rel_path = meta.get("path")
-                        if rel_path and not rel_path.startswith(("http://", "https://")):
-                            abs_path = (vendor_file.parent / rel_path).resolve()
-                            if not abs_path.exists():
+                        if rel_path:
+                            if rel_path.startswith(("http://", "https://")):
                                 report_violation(
-                                    "VENDOR_MANIFEST_MISSING_ASSET",
+                                    "VENDOR_MANIFEST_CDN_BAN",
                                     vendor_file,
                                     1,
-                                    f"Vendor specifier '{specifier}' in [{domain}] references missing local asset: '{rel_path}'"
+                                    f"Vendor specifier '{specifier}' in [{domain}] references banned external CDN URL: '{rel_path}'. Vendor assets locally (ADR 0032)."
                                 )
+                            else:
+                                abs_path = (vendor_file.parent / rel_path).resolve()
+                                if not abs_path.exists():
+                                    report_violation(
+                                        "VENDOR_MANIFEST_MISSING_ASSET",
+                                        vendor_file,
+                                        1,
+                                        f"Vendor specifier '{specifier}' in [{domain}] references missing local asset: '{rel_path}'"
+                                    )
         except json.JSONDecodeError:
             report_violation("VENDOR_MANIFEST_SYNTAX_ERROR", vendor_file, 1, "Malformed JSON syntax in vendor.json")
         except Exception as e:
@@ -258,9 +265,14 @@ def check_javascript_files():
                     
                 if is_extension and is_lit_component and global_dispatch_pattern.search(line):
                     report_violation("CUSTOM_EVENT_DISPATCH_MANDATE", filepath, line_num, "Raw window.dispatchEvent detected. Route through this.dispatch(eventName, detail) for streamlined multi-tenant boundaries.")
-
             if dom_annihilation_pattern.search(line):
                 report_violation("SURGICAL_DOM_MANDATE", filepath, line_num, "DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.")
+
+            if is_lit_component and re.search(r'\.innerHTML\s*=', line):
+                report_violation("LIT_INNER_HTML_BAN", filepath, line_num, "Direct '.innerHTML=' assignment in Lit component detected. Render text nodes declaratively using Lit interpolation to prevent XSS.")
+
+            if re.search(r'<sutram-card\b[^>]*\bintentColor=["\']var\(--intent-', line):
+                report_violation("SUTRAM_CARD_INTENT_TOKEN_MANDATE", filepath, line_num, "Deprecated intentColor='var(--intent-*)' detected on <sutram-card>. Use declarative intent='primary|warning|danger|neutral|highlight' token property instead.")
 
             if raw_layout_ban_pattern.search(line):
                 report_violation("RAW_LAYOUT_BAN", filepath, line_num, "Raw layout class '.file-card' detected. Migrate to <insetu-card> or <yenvui-card> primitives.")
