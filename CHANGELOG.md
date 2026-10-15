@@ -2,6 +2,66 @@
 
 <!-- version list -->
 
+## v0.25.0 (2026-10-15)
+
+### Bug Fixes
+
+- **app**: Capture bypassed extensions telemetry, allow source maps in token gate, and align AST
+  imports
+  ([`32824a7`](https://github.com/Callosemic/insetu/commit/32824a7062f0c6c5241dd69db4b614045c4bc87c))
+
+- **core**: Sanitize bridge console, standardize sutram-card intent, and repair virtual list markup
+  ([`5d657fa`](https://github.com/Callosemic/insetu/commit/5d657fa72a22c70c86d8f7da9be1df7b2386f143))
+
+- **extensions**: Resolve python strip syntax, unify vfs deletion, and align semantic release parser
+  precedence
+  ([`3c2e6ff`](https://github.com/Callosemic/insetu/commit/3c2e6ffb6b13e581d19d4d0eb9d722a1b22b24cb))
+
+- **git-diffs**: Git extension small format change
+  ([`0c62c8a`](https://github.com/Callosemic/insetu/commit/0c62c8afeffef64a4b7ec26d9c54a270b582ab9f))
+
+### Features
+
+- Add universal LLM gateway, autonomous ReAct agent harness, dynamic CodeMirror vendorization, and
+  VFS spatial projections
+  ([`5fcd26a`](https://github.com/Callosemic/insetu/commit/5fcd26adbf1be3c0699125a6712bea4afc59f976))
+
+- Migrate extension modals to spatial projections and standardize iconography
+  ([`0758976`](https://github.com/Callosemic/insetu/commit/075897650efaf04b226df47d0288dd519fb49791))
+
+- **core**: Implement projection popouts, occ concurrency, memoized manifest cqrs, and ast hygiene
+  ([`ce74eea`](https://github.com/Callosemic/insetu/commit/ce74eea48704a9077075c19996fa4e88a6150571))
+
+- **flow**: Dynamic volume mounting, uri coercion hook, and async compilation polling
+  ([`927e08a`](https://github.com/Callosemic/insetu/commit/927e08ab339140906e3d7aca426cf2769e55dbe8))
+
+- **vendor**: Consolidate lit bundle and harden javascript fitness guardrails
+  ([`bee5c7d`](https://github.com/Callosemic/insetu/commit/bee5c7d4f4cbf3a637417d78cfe6308aadf059c1))
+
+- **vendor**: Declare lit sub-package and virtualizer specifiers in vendor manifest
+  ([`51bfc42`](https://github.com/Callosemic/insetu/commit/51bfc4287856585ee3c7d01aed82a6a6fc18a1a8))
+
+- **vfs**: Git-aware topology ledger, real-time manifest sync, and spatial diff projections
+  ([`a4743c1`](https://github.com/Callosemic/insetu/commit/a4743c1f4fd3fb8dcd3370a28a6880e397856c38))
+
+- **vfs**: Unify polymorphic bulk entity actions, target subsumption pruning, and recursive eviction
+  ([`58314b4`](https://github.com/Callosemic/insetu/commit/58314b4213f4320ed52b3a5d6d32d55886e8ac31))
+
+### Refactoring
+
+- Modularize cli commands, lock down app shell caching, and expand fitness suite
+  ([`3dd7617`](https://github.com/Callosemic/insetu/commit/3dd76177189a09eb3362b293b2d0900704cdeca1))
+
+- Modularize cli commands, lock down app shell caching, and expand fitness suite
+  ([`90150ff`](https://github.com/Callosemic/insetu/commit/90150ff79a04e2aeafdfbc5f70d1ff05b9287606))
+
+- **config**: Migrate AppStore subscription to selector-scoped listener
+  ([`0d3179a`](https://github.com/Callosemic/insetu/commit/0d3179a55d1697742ec3b5307984145f460e15a2))
+
+- **core**: Standardize bridge diff report projection and smart toast intent resolution
+  ([`99151e9`](https://github.com/Callosemic/insetu/commit/99151e9222f2845c04d3f57c3bea25fb34b10034))
+
+
 ## v0.24.0 (2026-10-10)
 
 ### Bug Fixes
