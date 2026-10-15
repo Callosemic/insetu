@@ -1,4 +1,4 @@
-import{html as n,css as x}from"lit";import{SutramElement as f}from"./sutram_sdk.js";import"../../yenvui/js/drop-zone.js";export class SutramDragCoordinator extends f{static properties={dragState:{type:Object},spatialState:{type:Object}};static styles=x`
+import{html as n,css as z}from"lit";import{SutramElement as C}from"./sutram_sdk.js";import"../../yenvui/js/drop-zone.js";export class SutramDragCoordinator extends C{static properties={dragState:{type:Object},spatialState:{type:Object},_activeMode:{type:String,state:!0}};static styles=z`
         :host {
             display: contents;
         }
@@ -9,22 +9,135 @@ import{html as n,css as x}from"lit";import{SutramElement as f}from"./sutram_sdk.
             backdrop-filter: blur(6px);
             -webkit-backdrop-filter: blur(6px);
         }
-
         .hud-hud-card {
             position: absolute;
-            background: var(--pane-bg);
+            background: color-mix(in srgb, var(--pane-bg) 94%, transparent);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
             border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 20px;
+            padding: 12px 16px 16px 16px;
             box-sizing: border-box;
             box-shadow: var(--overlay-shadow, 0 25px 60px rgba(0, 0, 0, 0.6));
             display: flex;
             flex-direction: column;
-            align-items: center;
-            justify-content: center;
+            justify-content: space-between;
             overflow-y: auto;
             color: var(--text);
             font-family: inherit;
+        }
+
+        .top-anchor-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: stretch;
+            width: 100%;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+
+        .top-third-slot {
+            width: calc((100% - 24px) / 3);
+            display: flex;
+        }
+        .middle-workspace {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            max-width: 520px;
+            margin: 22px auto auto auto;
+            gap: 14px;
+        }
+
+        .mode-switcher-row {
+            display: flex;
+            width: 100%;
+            gap: 12px;
+        }
+
+        .mode-switcher-btn {
+            flex: 1;
+            width: 50%;
+            height: 58px;
+            border-radius: 10px;
+            border: 2px solid var(--border);
+            background: var(--input-bg);
+            color: var(--text-muted);
+            font-weight: 700;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.15s ease;
+            box-sizing: border-box;
+        }
+
+        .mode-switcher-btn.active-mode.tab-mode {
+            border-color: var(--intent-primary);
+            background: color-mix(in srgb, var(--intent-primary) 14%, var(--input-bg));
+            color: var(--intent-primary);
+        }
+
+        .mode-switcher-btn.active-mode.win-mode {
+            border-color: var(--intent-warning);
+            background: color-mix(in srgb, var(--intent-warning) 14%, var(--input-bg));
+            color: var(--intent-warning);
+        }
+
+        .mode-switcher-btn[hovered].tab-mode {
+            border-color: var(--intent-primary);
+            background: color-mix(in srgb, var(--intent-primary) 28%, var(--input-bg));
+            color: var(--intent-primary);
+            transform: scale(1.02);
+        }
+
+        .mode-switcher-btn[hovered].win-mode {
+            border-color: var(--intent-warning);
+            background: color-mix(in srgb, var(--intent-warning) 28%, var(--input-bg));
+            color: var(--intent-warning);
+            transform: scale(1.02);
+        }
+
+        .screen-drop-btn {
+            flex: 1;
+            height: 76px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: var(--input-bg);
+            color: var(--text);
+            font-weight: 600;
+            font-size: 0.85rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 8px 10px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            box-sizing: border-box;
+        }
+
+        .screen-drop-btn.intent-primary[hovered] {
+            border-color: var(--intent-primary);
+            background: color-mix(in srgb, var(--intent-primary) 22%, var(--input-bg));
+            color: var(--intent-primary);
+        }
+
+        .screen-drop-btn.intent-warning[hovered] {
+            border-color: var(--intent-warning);
+            background: color-mix(in srgb, var(--intent-warning) 22%, var(--input-bg));
+            color: var(--intent-warning);
+        }
+
+        .bottom-anchor-footer {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            margin-top: auto;
+            padding-top: 12px;
+            flex-shrink: 0;
         }
 
         .hud-header-subtitle {
@@ -136,7 +249,6 @@ import{html as n,css as x}from"lit";import{SutramElement as f}from"./sutram_sdk.
             background: color-mix(in srgb, var(--intent-danger) 25%, var(--input-bg));
             color: var(--intent-danger);
         }
-
         /* Floating Drag Node */
         .drag-floater {
             position: fixed;
@@ -144,15 +256,15 @@ import{html as n,css as x}from"lit";import{SutramElement as f}from"./sutram_sdk.
             top: 0;
             pointer-events: none;
             background: var(--intent-highlight);
-            color: #ffffff;
+            color: var(--text-light, #ffffff);
             padding: 8px 16px;
             border-radius: 6px;
             font-weight: 700;
             font-size: 0.9rem;
             opacity: 0.9;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+            box-shadow: var(--overlay-shadow, 0 10px 25px rgba(0, 0, 0, 0.4));
             z-index: 10000;
-            border: 1px solid rgba(255, 255, 255, 0.3);
+            border: 1px solid var(--border);
             display: flex;
             align-items: center;
             gap: 8px;
@@ -160,157 +272,192 @@ import{html as n,css as x}from"lit";import{SutramElement as f}from"./sutram_sdk.
         }
 
         /* E-Ink High Contrast Theme Overrides */
-        :host([data-theme="e-ink"]) .hud-overlay {
-            background: rgba(255, 255, 255, 0.9) !important;
+        :host-context([data-theme="e-ink"]) .hud-overlay {
+            background: var(--modal-backdrop, rgba(255, 255, 255, 0.9)) !important;
             backdrop-filter: none !important;
         }
 
-        :host([data-theme="e-ink"]) .hud-hud-card {
-            background: #ffffff !important;
-            border: 3px solid #000000 !important;
-            color: #000000 !important;
-            box-shadow: 6px 6px 0 #000000 !important;
+        :host-context([data-theme="e-ink"]) .hud-hud-card {
+            background: var(--bg, #ffffff) !important;
+            border: 3px solid var(--border, #000000) !important;
+            color: var(--text, #000000) !important;
+            box-shadow: 6px 6px 0 var(--border, #000000) !important;
         }
 
-        :host([data-theme="e-ink"]) .section-box {
-            border: 2px solid #000000 !important;
-            background: #ffffff !important;
+        :host-context([data-theme="e-ink"]) .section-box {
+            border: 2px solid var(--border, #000000) !important;
+            background: var(--bg, #ffffff) !important;
         }
 
-        :host([data-theme="e-ink"]) .section-header,
-        :host([data-theme="e-ink"]) .hud-header-subtitle,
-        :host([data-theme="e-ink"]) .hud-header-title {
-            color: #000000 !important;
+        :host-context([data-theme="e-ink"]) .section-header,
+        :host-context([data-theme="e-ink"]) .hud-header-subtitle,
+        :host-context([data-theme="e-ink"]) .hud-header-title {
+            color: var(--text, #000000) !important;
             font-weight: 900 !important;
         }
-
-        :host([data-theme="e-ink"]) .drop-target-btn {
-            background: #ffffff !important;
-            border: 2px solid #000000 !important;
-            color: #000000 !important;
+        :host-context([data-theme="e-ink"]) .drop-target-btn,
+        :host-context([data-theme="e-ink"]) .mode-switcher-btn,
+        :host-context([data-theme="e-ink"]) .screen-drop-btn {
+            background: var(--bg, #ffffff) !important;
+            border: 2px solid var(--border, #000000) !important;
+            color: var(--text, #000000) !important;
             font-weight: 800 !important;
         }
 
-        :host([data-theme="e-ink"]) .drop-target-btn[hovered] {
-            background: #000000 !important;
-            color: #ffffff !important;
+        :host-context([data-theme="e-ink"]) .mode-switcher-btn.active-mode {
+            border-style: dashed !important;
+            box-shadow: 3px 3px 0 var(--border, #000000) !important;
         }
-        :host([data-theme="e-ink"]) .drag-floater {
-            background: #ffffff !important;
-            color: #000000 !important;
-            border: 2px solid #000000 !important;
-            box-shadow: 4px 4px 0 #000000 !important;
+
+        :host-context([data-theme="e-ink"]) .drop-target-btn[hovered],
+        :host-context([data-theme="e-ink"]) .mode-switcher-btn[hovered],
+        :host-context([data-theme="e-ink"]) .screen-drop-btn[hovered] {
+            background: var(--text, #000000) !important;
+            color: var(--bg, #ffffff) !important;
         }
-    `;connectedCallback(){super.connectedCallback()}updated(e){super.updated(e),e.has("dragState")&&(this._dropZonesCache=null,this.dragState?.active&&this.dragState.currentX!==void 0&&this.dragState.currentY!==void 0&&this.updatePointer(this.dragState.currentX,this.dragState.currentY))}getHoveredZone(e,i){this._dropZonesCache||(this._dropZonesCache=Array.from(this.shadowRoot.querySelectorAll("yenvui-drop-target")).map(r=>{const t=r.getBoundingClientRect();return{zone:r.zone,left:t.left,right:t.right,top:t.top,bottom:t.bottom}}));const o=this._dropZonesCache.find(r=>e>=r.left&&e<=r.right&&i>=r.top&&i<=r.bottom);return o?o.zone:null}updatePointer(e,i){const o=this.shadowRoot.querySelector(".drag-floater");o&&(o.style.transform=`translate3d(${e}px, ${i}px, 0) translate(-50%, -50%)`)}render(){if(!this.dragState||!this.dragState.active)return n`<yenvui-drop-overlay></yenvui-drop-overlay>`;const{entity:e,currentX:i,currentY:o,sourceCol:r,currentZone:t,sourceRect:b}=this.dragState,a=this.spatialState?.capacity||3,d=b||{left:0,top:0,width:window.innerWidth,height:window.innerHeight};return n`
+        :host-context([data-theme="e-ink"]) .drag-floater {
+            background: var(--bg, #ffffff) !important;
+            color: var(--text, #000000) !important;
+            border: 2px solid var(--border, #000000) !important;
+            box-shadow: 4px 4px 0 var(--border, #000000) !important;
+        }
+    `;constructor(){super(),this._activeMode="tab",this._lastDragActive=!1}connectedCallback(){super.connectedCallback()}willUpdate(t){if(super.willUpdate(t),t.has("dragState")){const o=!!this.dragState?.active;if(o&&!this._lastDragActive){const i=this.dragState?.entity,e=this.dragState?.sourceCol;this._activeMode=i?.windowOnly||e==="window"?"window":"tab"}this._lastDragActive=o;const r=this.dragState?.currentZone;r==="mode-tab"||["left","center","right"].includes(r)||r&&r.startsWith("reorder-")?!this.dragState?.entity?.windowOnly&&this._activeMode!=="tab"&&(this._activeMode="tab"):(r==="mode-window"||r==="window"||r&&r.startsWith("span-"))&&this._activeMode!=="window"&&(this._activeMode="window")}}updated(t){super.updated(t),(t.has("dragState")||t.has("_activeMode"))&&(this._dropZonesCache=null,this.dragState?.active&&this.dragState.currentX!==void 0&&this.dragState.currentY!==void 0&&this.updatePointer(this.dragState.currentX,this.dragState.currentY))}getHoveredZone(t,o){this._dropZonesCache||(this._dropZonesCache=Array.from(this.shadowRoot.querySelectorAll("yenvui-drop-target")).map(e=>{const a=e.getBoundingClientRect();return{zone:e.zone,left:a.left,right:a.right,top:a.top,bottom:a.bottom}}));const r=this._dropZonesCache.find(e=>t>=e.left&&t<=e.right&&o>=e.top&&o<=e.bottom),i=r?r.zone:null;return i==="mode-tab"&&!this.dragState?.entity?.windowOnly&&this._activeMode!=="tab"?(this._activeMode="tab",this._dropZonesCache=null,this.requestUpdate()):i==="mode-window"&&this._activeMode!=="window"&&(this._activeMode="window",this._dropZonesCache=null,this.requestUpdate()),i}updatePointer(t,o){const r=this.shadowRoot.querySelector(".drag-floater");r&&(r.style.transform=`translate3d(${t}px, ${o}px, 0) translate(-50%, -50%)`)}render(){if(!this.dragState||!this.dragState.active)return n`<yenvui-drop-overlay></yenvui-drop-overlay>`;const{entity:t,currentX:o,currentY:r,sourceCol:i,currentZone:e,sourceRect:a}=this.dragState,d=this.spatialState?.capacity||3,s=a||{left:0,top:0,width:window.innerWidth,height:window.innerHeight},m=!!(t?.allow_popout||t?.id&&window.ExtensionRegistry?.resolveCustomEditor?.(t.id)||t?.id&&window.ExtensionRegistry?.executeUIHook?.("sutram:is-popoutable",t.id)||t?.id&&t.id.includes("://")),v=t?.windowOnly?"window":this._activeMode,y=`left: ${s.left}px; top: ${s.top}px; width: ${s.width}px; height: ${s.height}px;`,u=`transform: translate3d(${o||0}px, ${r||0}px, 0) translate(-50%, -50%);`,w=`mode-switcher-btn tab-mode ${v==="tab"?"active-mode":""}`,f=`mode-switcher-btn win-mode ${v==="window"?"active-mode":""}`,k=d===2?"opacity: 0.4; pointer-events: none;":"";return n`
             <yenvui-drop-overlay class="hud-overlay" ?active=${!0}>
-                <!-- Localized Bounding Box HUD Container -->
-                <div class="hud-hud-card" style="left: ${d.left}px; top:${d.top}px; width: ${d.width}px; height:${d.height}px;">
-                    <div style="width: 100%; max-width: 500px;">
-                        <!-- Top Close Action -->
-                        <yenvui-drop-target zone="close" class="drop-target-btn intent-danger" .intent=${"danger"} ?hovered=${t==="close"} style="margin-bottom: 14px;">
-                            <yv-icon name="x" style="width: 18px; height: 18px;"></yv-icon> Close
-                        </yenvui-drop-target>
-                    <!-- TAB POSITION Section -->
-                    ${e?.windowOnly?"":n`
-                    <div class="section-box tab-pos">
-                        <div class="section-header tab-pos">
-                            <span style="display: flex; align-items: center; gap: 6px;">
-                                <yv-icon name="columns" style="width: 14px; height: 14px;"></yv-icon> TAB POSITION
-                            </span>
-                            <span style="opacity: 0.7;">Drop target column</span>
+                <div class="hud-hud-card" style=${y}>
+                    <div class="top-anchor-row">
+                        <div class="top-third-slot">
+                            ${m?n`
+                                <yenvui-drop-target zone="popout" class="drop-target-btn intent-highlight" .intent=${"highlight"} ?hovered=${e==="popout"} style="width: 100%; height: 42px;">
+                                    <yv-icon name="external-link" style="width: 16px; height: 16px;"></yv-icon> Pop Out
+                                </yenvui-drop-target>
+                            `:""}
                         </div>
-                        <div style="display: flex; gap: 10px;">
-                            <yenvui-drop-target zone="left" class="drop-target-btn intent-primary" .intent=${"primary"} ?hovered=${t==="left"}>
-                                Left
-                            </yenvui-drop-target>
-                            <yenvui-drop-target zone="center" class="drop-target-btn intent-primary" .intent=${"primary"} ?hovered=${t==="center"}>
-                                Center
-                            </yenvui-drop-target>
-                            <yenvui-drop-target zone="right" class="drop-target-btn intent-primary" .intent=${"primary"} ?hovered=${t==="right"} style="${a===2?"opacity: 0.4; pointer-events: none;":""}">
-                                Right
+                        <div class="top-third-slot"></div>
+                        <div class="top-third-slot">
+                            <yenvui-drop-target zone="close" class="drop-target-btn intent-danger" .intent=${"danger"} ?hovered=${e==="close"} style="width: 100%; height: 42px;">
+                                <yv-icon name="x" style="width: 16px; height: 16px;"></yv-icon> Close
                             </yenvui-drop-target>
                         </div>
                     </div>
-                    `}
 
-                    <!-- ARRANGE TABS Section -->
-                    ${!e?.windowOnly&&r&&r!=="window"&&this.spatialState?.columns?.[r]?.pinned?.length>1?n`
-                        <div class="section-box arrange-tabs">
-                            <div class="section-header arrange-tabs">
-                                <span style="display: flex; align-items: center; gap: 6px;">
-                                    <yv-icon name="arrow-left-right" style="width: 14px; height: 14px;"></yv-icon> ARRANGE TABS
-                                </span>
-                                <span style="opacity: 0.7;">Drop between tabs to reorder</span>
+                    <div class="middle-workspace">
+                        <div class="mode-switcher-row">
+                            ${t?.windowOnly?"":n`
+                                <yenvui-drop-target zone="mode-tab" class=${w} .intent=${"primary"} ?hovered=${e==="mode-tab"}>
+                                    <yv-icon name="columns" style="width: 16px; height: 16px;"></yv-icon> Tab
+                                </yenvui-drop-target>
+                            `}
+                            <yenvui-drop-target zone="mode-window" class=${f} .intent=${"warning"} ?hovered=${e==="mode-window"}>
+                                <yv-icon name="layout-grid" style="width: 16px; height: 16px;"></yv-icon> Window
+                            </yenvui-drop-target>
+                        </div>
+
+                        ${v==="tab"&&!t?.windowOnly?n`
+                            <div class="section-box tab-pos" style="margin-bottom: 0;">
+                                <div class="section-header tab-pos">
+                                    <span style="display: flex; align-items: center; gap: 6px;">
+                                        <yv-icon name="columns" style="width: 14px; height: 14px;"></yv-icon> TAB POSITION
+                                    </span>
+                                    <span style="opacity: 0.7;">Drop target column</span>
+                                </div>
+                                <div style="display: flex; gap: 10px;">
+                                    <yenvui-drop-target zone="left" class="screen-drop-btn intent-primary" .intent=${"primary"} ?hovered=${e==="left"}>
+                                        <yv-icon name="panel-left" style="width: 18px; height: 18px;"></yv-icon>
+                                        <span>Left</span>
+                                    </yenvui-drop-target>
+                                    <yenvui-drop-target zone="center" class="screen-drop-btn intent-primary" .intent=${"primary"} ?hovered=${e==="center"}>
+                                        <yv-icon name="columns" style="width: 18px; height: 18px;"></yv-icon>
+                                        <span>Center</span>
+                                    </yenvui-drop-target>
+                                    <yenvui-drop-target zone="right" class="screen-drop-btn intent-primary" .intent=${"primary"} ?hovered=${e==="right"} style=${k}>
+                                        <yv-icon name="panel-right" style="width: 18px; height: 18px;"></yv-icon>
+                                        <span>Right</span>
+                                    </yenvui-drop-target>
+                                </div>
                             </div>
-                            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                                ${(()=>{const v=this.spatialState.columns[r].pinned;let s=[...v];const p=s.findIndex(g=>g.id===e?.id);let l=p;if(t&&t.startsWith("reorder-")&&(l=parseInt(t.replace("reorder-",""),10)),p!==-1&&l!==-1&&p!==l){const[g]=s.splice(p,1);s.splice(l,0,g)}return v.map((g,c)=>{const h=s[c],u=t==="reorder-"+c;return n`
-                                            ${c>0?n`<span style="color: var(--text-muted); font-size: 0.8rem;">•</span>`:""}
-                                            <yenvui-drop-target zone="reorder-${c}" class="drop-target-btn intent-highlight" .intent=${"highlight"} ?hovered=${u}>
-                                                <yv-icon name="${h.icon||"component"}" style="width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;"></yv-icon>
-                                                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${h.label||h.id}</span>
+
+                            ${i&&i!=="window"&&this.spatialState?.columns?.[i]?.pinned?.length>1?n`
+                                <div class="section-box arrange-tabs" style="margin-bottom: 0;">
+                                    <div class="section-header arrange-tabs">
+                                        <span style="display: flex; align-items: center; gap: 6px;">
+                                            <yv-icon name="arrow-left-right" style="width: 14px; height: 14px;"></yv-icon> ARRANGE TABS
+                                        </span>
+                                        <span style="opacity: 0.7;">Drop to reorder</span>
+                                    </div>
+                                    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                        ${(()=>{const x=this.spatialState.columns[i].pinned;let p=[...x];const c=p.findIndex(h=>h.id===t?.id);let l=c;if(e&&e.startsWith("reorder-")&&(l=parseInt(e.replace("reorder-",""),10)),c!==-1&&l!==-1&&c!==l){const[h]=p.splice(c,1);p.splice(l,0,h)}return x.map((h,g)=>{const b=p[g],$=e==="reorder-"+g,S="reorder-"+g;return n`
+                                                    ${g>0?n`<span style="color: var(--text-muted); font-size: 0.8rem;">•</span>`:""}
+                                                    <yenvui-drop-target zone=${S} class="drop-target-btn intent-highlight" .intent=${"highlight"} ?hovered=${$}>
+                                                        <yv-icon name=${b.icon||"component"} style="width: 14px; height: 14px;"></yv-icon>
+                                                        <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${b.label||b.id}</span>
+                                                    </yenvui-drop-target>
+                                                `})})()}
+                                    </div>
+                                </div>
+                            `:""}
+                        `:n`
+                            <div class="section-box window-pos" style="margin-bottom: 0;">
+                                <div class="section-header window-pos">
+                                    <span style="display: flex; align-items: center; gap: 6px;">
+                                        <yv-icon name="layout-grid" style="width: 14px; height: 14px;"></yv-icon> WINDOW POSITION
+                                    </span>
+                                    <span style="opacity: 0.7;">Viewport capacity preset</span>
+                                </div>
+                                <div style="display: flex; flex-direction: column; gap: 10px;">
+                                    <div style="display: flex; gap: 10px;">
+                                        <yenvui-drop-target zone="span-1-left" class="screen-drop-btn intent-warning" .intent=${"warning"} ?hovered=${e==="span-1-left"}>
+                                            <yv-icon name="panel-left" style="width: 18px; height: 18px;"></yv-icon>
+                                            <span>Left</span>
+                                        </yenvui-drop-target>
+                                        <yenvui-drop-target zone="span-1-center" class="screen-drop-btn intent-warning" .intent=${"warning"} ?hovered=${e==="span-1-center"}>
+                                            <yv-icon name="square" style="width: 18px; height: 18px;"></yv-icon>
+                                            <span>Center</span>
+                                        </yenvui-drop-target>
+                                        ${d>=3?n`
+                                            <yenvui-drop-target zone="span-1-right" class="screen-drop-btn intent-warning" .intent=${"warning"} ?hovered=${e==="span-1-right"}>
+                                                <yv-icon name="panel-right" style="width: 18px; height: 18px;"></yv-icon>
+                                                <span>Right</span>
                                             </yenvui-drop-target>
-                                        `})})()}
-                            </div>
-                        </div>
-                    `:""}
+                                        `:""}
+                                    </div>
 
-                    <!-- WINDOW POSITION Section -->
-                    <div class="section-box window-pos">
-                        <div class="section-header window-pos">
-                            <span style="display: flex; align-items: center; gap: 6px;">
-                                <yv-icon name="layout-grid" style="width: 14px; height: 14px;"></yv-icon> WINDOW POSITION
-                            </span>
-                            <span style="opacity: 0.7;">Viewport capacity preset</span>
-                        </div>
-                        <div style="display: flex; flex-direction: column; gap: 8px;">
-                            <div style="display: flex; gap: 8px;">
-                                <yenvui-drop-target zone="span-1-left" class="drop-target-btn intent-warning" .intent=${"warning"} ?hovered=${t==="span-1-left"}>
-                                    Left
-                                </yenvui-drop-target>
-                                <yenvui-drop-target zone="span-1-center" class="drop-target-btn intent-warning" .intent=${"warning"} ?hovered=${t==="span-1-center"}>
-                                    Center
-                                </yenvui-drop-target>
-                                ${a>=3?n`
-                                    <yenvui-drop-target zone="span-1-right" class="drop-target-btn intent-warning" .intent=${"warning"} ?hovered=${t==="span-1-right"}>
-                                        Right
-                                    </yenvui-drop-target>
-                                `:""}
-                            </div>
+                                    ${d>=2?n`
+                                        <div style="display: flex; gap: 10px;">
+                                            <yenvui-drop-target zone="span-2-left" class="screen-drop-btn intent-warning" .intent=${"warning"} ?hovered=${e==="span-2-left"}>
+                                                <yv-icon name="columns" style="width: 18px; height: 18px;"></yv-icon>
+                                                <span>Left + Center</span>
+                                            </yenvui-drop-target>
+                                            ${d>=3?n`
+                                                <yenvui-drop-target zone="span-2-center" class="screen-drop-btn intent-warning" .intent=${"warning"} ?hovered=${e==="span-2-center"}>
+                                                    <yv-icon name="columns" style="width: 18px; height: 18px;"></yv-icon>
+                                                    <span>Center + Right</span>
+                                                </yenvui-drop-target>
+                                            `:""}
+                                        </div>
+                                    `:""}
 
-                            ${a>=2?n`
-                                <div style="display: flex; gap: 8px;">
-                                    <yenvui-drop-target zone="span-2-left" class="drop-target-btn intent-warning" .intent=${"warning"} ?hovered=${t==="span-2-left"}>
-                                        Left + Center
-                                    </yenvui-drop-target>
-                                    ${a>=3?n`
-                                        <yenvui-drop-target zone="span-2-center" class="drop-target-btn intent-warning" .intent=${"warning"} ?hovered=${t==="span-2-center"}>
-                                            Center + Right
+                                    ${d>=3?n`
+                                        <yenvui-drop-target zone="span-3-left" class="screen-drop-btn intent-warning" .intent=${"warning"} ?hovered=${e==="span-3-left"} style="height: 60px;">
+                                            <yv-icon name="maximize-2" style="width: 18px; height: 18px;"></yv-icon>
+                                            <span>Span Across</span>
                                         </yenvui-drop-target>
                                     `:""}
                                 </div>
-                            `:""}
-
-                            ${a>=3?n`
-                                <yenvui-drop-target zone="span-3-left" class="drop-target-btn intent-warning" .intent=${"warning"} ?hovered=${t==="span-3-left"}>
-                                    All Columns
-                                </yenvui-drop-target>
-                            `:""}
-                        </div>
+                            </div>
+                        `}
                     </div>
-                    <!-- Footer Projection Title -->
-                    <div style="display: flex; flex-direction: column; align-items: center; text-align: center; margin-top: 6px;">
+
+                    <div class="bottom-anchor-footer">
                         <div class="hud-header-subtitle" style="justify-content: center;">
-                            <yv-icon name="split" style="width: 14px; height: 14px;"></yv-icon> REPOSITION OR DOCK
+                            <yv-icon name="split" style="width: 14px; height: 14px;"></yv-icon> ${t?.id||"REPOSITION OR DOCK"}
                         </div>
                         <div class="hud-header-title">
-                            ${e?.label||e?.id||"Projection"}
+                            ${t?.label||t?.id||"Projection"}
                         </div>
                     </div>
-
                 </div>
-                <!-- Floating Cursor Node (Hardware Accelerated) -->
-                <div class="drag-floater" style="transform: translate3d(${i||0}px, ${o||0}px, 0) translate(-50%, -50%);">
-                    <yv-icon name="${e?.icon||"component"}" style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;"></yv-icon> ${e?.label||e?.id||"Dragging"}
+                <div class="drag-floater" style=${u}>
+                    <yv-icon name=${t?.icon||"component"} style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;"></yv-icon> ${t?.label||t?.id||"Dragging"}
                 </div>
             </yenvui-drop-overlay>
         `}}customElements.define("sutram-drag-coordinator",SutramDragCoordinator);

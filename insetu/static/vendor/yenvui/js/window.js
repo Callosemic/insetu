@@ -38,15 +38,22 @@ import{html as n,css as i}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
             border: 2px solid #000;
             box-shadow: 4px 4px 0 var(--intent-color, #8b5cf6);
         }
-    `;constructor(){super(),this.anchorCol="center",this.span=1,this.z=1e3,this.titleText="",this.icon="component",this.intent="primary"}disconnectedCallback(){super.disconnectedCallback();const e=this.shadowRoot.querySelector("dialog");e&&e.open&&(document.body.appendChild(e),e.close(),e.remove())}updated(e){super.updated(e);const t=this.shadowRoot.querySelector("dialog");if(t){t.open||t.show(),t.style.zIndex=this.z;const o=`var(--intent-${this.intent})`;t.style.setProperty("--intent-color",o)}}render(){return n`
+    `;constructor(){super(),this.anchorCol="center",this.span=1,this.z=1e3,this.titleText="",this.icon="component",this.intent="primary"}disconnectedCallback(){super.disconnectedCallback();const t=this.shadowRoot.querySelector("dialog");t&&t.open&&(document.body.appendChild(t),t.close(),t.remove())}updated(t){super.updated(t);const e=this.shadowRoot.querySelector("dialog");if(e){e.open||e.show(),e.style.zIndex=this.z;const o=`var(--intent-${this.intent})`;e.style.setProperty("--intent-color",o)}}render(){return n`
             <dialog @pointerdown=${()=>this.dispatchEvent(new CustomEvent("yenvui-window-focus",{bubbles:!0,composed:!0}))}>
                 <div class="header" 
-                    @dblclick=${e=>{e.stopPropagation(),this.dispatchEvent(new CustomEvent("yenvui-window-dock",{bubbles:!0,composed:!0}))}}
-                    @pointerdown=${e=>{e.stopPropagation();const t=Date.now();if(t-(this._lastTapTime||0)<300){this.dispatchEvent(new CustomEvent("yenvui-window-dock",{bubbles:!0,composed:!0})),this._lastTapTime=0;return}this._lastTapTime=t,this.dispatchEvent(new CustomEvent("yenvui-window-drag-start",{detail:{originalEvent:e},bubbles:!0,composed:!0}))}}>
+                    @dblclick=${t=>{t.stopPropagation(),this.dispatchEvent(new CustomEvent("yenvui-window-dock",{bubbles:!0,composed:!0}))}}
+                    @pointerdown=${t=>{t.stopPropagation();const e=Date.now();if(e-(this._lastTapTime||0)<300){this.dispatchEvent(new CustomEvent("yenvui-window-dock",{bubbles:!0,composed:!0})),this._lastTapTime=0;return}this._lastTapTime=e,this.dispatchEvent(new CustomEvent("yenvui-window-drag-start",{detail:{originalEvent:t},bubbles:!0,composed:!0}))}}>
                     <div class="title-area">
                         <yv-icon name="${this.icon}" style="width: 14px; height: 14px; color: var(--intent-color, var(--intent-primary));"></yv-icon>
                         ${this.titleText}
                     </div>
+                    <button 
+                        class="window-btn close-btn" 
+                        title="Close Window"
+                        @pointerdown=${t=>t.stopPropagation()}
+                        @click=${t=>{t.stopPropagation(),this.dispatchEvent(new CustomEvent("yenvui-window-close",{bubbles:!0,composed:!0}))}}>
+                        <yv-icon name="x" style="width: 16px; height: 16px;"></yv-icon>
+                    </button>
                 </div>
                 <div class="body"><slot></slot></div>
             </dialog>
