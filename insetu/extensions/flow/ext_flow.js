@@ -4,8 +4,26 @@ import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
 const AppStore = window.inSetu.stores.App;
+
+export function canonicalizeFlowUri(uri) {
+    if (!uri) return '';
+    let s = String(uri).replace(/\\/g, '/').trim();
+    if (s.startsWith('vfs://') || s.startsWith('ctx://')) return s;
+    while (s.includes('://')) {
+        s = s.split('://').pop();
+    }
+    if (uri.includes('diffs/') || s.endsWith('_diffs.txt')) return `ctx://diffs/${s.replace(/^diffs\//, '')}`;
+    if (uri.includes('workflows/') || s.endsWith('_workflow_context.txt') || (s.startsWith('workflow_') && s.endsWith('_context.txt'))) {
+        return `ctx://workflows/${s.replace(/^workflows\//, '')}`;
+    }
+    if (uri.includes('prompts/')) return `ctx://prompts/${s.replace(/^prompts\//, '')}`;
+    if (s.endsWith('_context.txt')) return `ctx://contexts/${s.replace(/^contexts\//, '')}`;
+    return `vfs://${s.replace(/^\/+/, '')}`;
+}
+
 export const FlowStore = createExtensionStore('Flow', {
     batches: [],
+    availableOptions: { contexts: [], diffs: [], prompts: [], artifactsDir: '.insetu/data', profileDir: '.insetu' },
     loading: false,
     searchQuery: '',
     editingBatch: null,
@@ -17,7 +35,7 @@ export const FlowStore = createExtensionStore('Flow', {
     tempContexts: [],
     selectingFor: 'includes',
     contextSearchQuery: '',
-    fetchBatches: window.inSetu.utils.coalescedAsync(async () => {
+    fetchBatches: async () => {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('flow')) return;
         if ((FlowStore.getState().batches || []).length === 0) {
             FlowStore.setState({ loading: true });
@@ -26,27 +44,22 @@ export const FlowStore = createExtensionStore('Flow', {
             const res = await window.inSetu.api.get('flow/batches');
             if (res.ok) {
                 const data = await res.json();
+                const nextOptions = {
+                    contexts: data.available_contexts || [],
+                    diffs: data.available_diffs || [],
+                    prompts: data.available_prompts || [],
+                    artifactsDir: data.artifacts_dir || '.insetu/data',
+                    profileDir: data.profile_dir || '.insetu'
+                };
+                FlowStore.setState({
+                    batches: data.batches || [],
+                    availableOptions: nextOptions
+                });
                 const gatherStore = window.inSetu?.stores?.Gather;
                 if (gatherStore && typeof gatherStore.setState === 'function') {
-                    const currentOpts = gatherStore.getState()?.gatherOptions || {};
-                    if (JSON.stringify(currentOpts.contexts) !== JSON.stringify(data.available_contexts) ||
-                        JSON.stringify(currentOpts.diffs) !== JSON.stringify(data.available_diffs) ||
-                        JSON.stringify(currentOpts.prompts) !== JSON.stringify(data.available_prompts)) {
-                        gatherStore.setState(state => ({
-                            gatherOptions: {
-                                ...(state?.gatherOptions || {}),
-                                contexts: data.available_contexts || [],
-                                diffs: data.available_diffs || [],
-                                prompts: data.available_prompts || [],
-                                artifactsDir: data.artifacts_dir || ".insetu/data",
-                                profileDir: data.profile_dir || ".insetu"
-                            }
-                        }));
-                    }
-                }
-                const currentBatches = FlowStore.getState().batches;
-                if (JSON.stringify(currentBatches) !== JSON.stringify(data.batches)) {
-                    FlowStore.setState({ batches: data.batches || [] });
+                    gatherStore.setState(state => ({
+                        gatherOptions: { ...(state?.gatherOptions || {}), ...nextOptions }
+                    }));
                 }
             }
         } catch (e) {
@@ -54,7 +67,7 @@ export const FlowStore = createExtensionStore('Flow', {
         } finally {
             FlowStore.setState({ loading: false });
         }
-    })
+    }
 }, {
     onEvict: {
         'flow:view': { viewingBatch: null, viewingBatchPromptText: '', responseContent: '' },
@@ -125,12 +138,25 @@ export class InSetuExtFlow extends InSetuElement {
         this._debouncedFetchBatches = this._debouncedFetchBatches || this.utils.debounce(() => {
             FlowStore.getState().fetchBatches();
         }, 500);
+        const fState = FlowStore.getState();
+        this.batches = fState.batches || [];
+        this.loading = fState.loading || false;
+        this.searchQuery = fState.searchQuery || '';
 
-        this.subscribe(FlowStore, state => {
-            this.batches = state.batches;
-            this.loading = state.loading;
-            this.searchQuery = state.searchQuery;
-        });
+        this.subscribe(
+            FlowStore,
+            state => ({
+                batches: state.batches || [],
+                loading: state.loading || false,
+                searchQuery: state.searchQuery || ''
+            }),
+            ({ batches, loading, searchQuery }) => {
+                this.batches = batches;
+                this.loading = loading;
+                this.searchQuery = searchQuery;
+                this.requestUpdate();
+            }
+        );
         this.registerGlobalListener('insetu:flow:edit-batch', window, (e) => this.openEditBatchModal(e.detail));
         this.registerGlobalListener('insetu:flow:refresh-prompt', window, () => {
             const vb = FlowStore.getState().viewingBatch;
@@ -139,17 +165,26 @@ export class InSetuExtFlow extends InSetuElement {
         this.registerGlobalListener('insetu:git:diffs-refreshed', window, () => {
             this._debouncedManifestRefresh();
         });
-        this.subscribe(AppStore, state => {
-            this.allRepos = state.allRepos || [];
-            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
-            this.activeModules = state.activeModules || [];
-            this.pendingModules = state.pendingModules || [];
-            this.isPipelineActive = state.isPipelineActive || false;
-            this.requestUpdate();
-        });
-        this.subscribe(AppStore, state => state.manifest, () => {
-            this.requestUpdate();
-        });
+        this.subscribe(
+            AppStore,
+            state => ({
+                allRepos: state.allRepos || [],
+                pinnedRepos: state.pinnedRepos || new Set(['ALL']),
+                activeModules: state.activeModules || [],
+                pendingModules: state.pendingModules || [],
+                isPipelineActive: state.isPipelineActive || false,
+                manifestCtx: state.manifest?.ctx,
+                dirtyBuckets: state.dirtyBuckets
+            }),
+            (slice) => {
+                this.allRepos = slice.allRepos;
+                this.pinnedRepos = slice.pinnedRepos;
+                this.activeModules = slice.activeModules;
+                this.pendingModules = slice.pendingModules;
+                this.isPipelineActive = slice.isPipelineActive;
+                this.requestUpdate();
+            }
+        );
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
@@ -162,7 +197,7 @@ export class InSetuExtFlow extends InSetuElement {
             FlowStore.getState().fetchBatches();
         });
         this.registerGlobalListener('insetu:compile-step-complete', window, (e) => {
-            if (e.detail.ext_name === 'flow' && (e.detail.artifact?.step_id === 'flow_workflows' || e.detail.artifact?.step_id === 'compile_workflows_task')) {
+            if (e.detail?.ext_name === 'flow') {
                 if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
                     window.inSetu.sys.refreshManifest().then(() => {
                         FlowStore.getState().fetchBatches();
@@ -180,7 +215,7 @@ export class InSetuExtFlow extends InSetuElement {
     }
     openEditBatchModal(batch = null) {
         const savedPrompt = batch && batch.include_prompt ? batch.include_prompt : '';
-        const gatherOptions = window.inSetu.stores.Gather.getState().gatherOptions || {};
+        const gatherOptions = FlowStore.getState().availableOptions || window.inSetu.stores.Gather?.getState()?.gatherOptions || {};
         const cleanSavedPrompt = savedPrompt.replace(/^\.insetu\/prompts\//, '').replace(/^prompts\//, '');
         const availablePrompts = (gatherOptions.prompts || []).map(p => p.replace(/^\.insetu\/prompts\//, '').replace(/^prompts\//, ''));
         const matchedPrompt = (() => {
@@ -189,27 +224,14 @@ export class InSetuExtFlow extends InSetuElement {
             }
             return cleanSavedPrompt;
         })();
-        const canonicalize = (uri) => {
-            if (!uri) return '';
-            let s = uri.replace(/\\/g, '/').trim();
-            if (s.startsWith('vfs://') || s.startsWith('ctx://')) return s;
-            while (s.includes('://')) {
-                s = s.split('://').pop();
-            }
-            if (uri.includes('diffs/') || s.endsWith('_diffs.txt')) return `ctx://diffs/${s.replace(/^diffs\//, '')}`;
-            if (uri.includes('workflows/') || s.endsWith('_workflow_context.txt')) return `ctx://workflows/${s.replace(/^workflows\//, '')}`;
-            if (uri.includes('prompts/')) return `ctx://prompts/${s.replace(/^prompts\//, '')}`;
-            if (s.endsWith('_context.txt')) return `ctx://contexts/${s.replace(/^contexts\//, '')}`;
-            return `vfs://${s.replace(/^\/+/, '')}`;
-        };
 
         const editForm = {
             id: batch ? batch.id : '',
             title: batch ? batch.title : '',
             domain: batch && batch.domain ? batch.domain : 'Workflows',
-            includes: batch && batch.includes ? batch.includes.map(canonicalize) : [],
-            showIfExists: batch && batch.show_if_exists ? batch.show_if_exists.map(canonicalize) : [],
-            showIfMissing: batch && batch.show_if_missing ? batch.show_if_missing.map(canonicalize) : [],
+            includes: batch && batch.includes ? batch.includes.map(canonicalizeFlowUri) : [],
+            showIfExists: batch && batch.show_if_exists ? batch.show_if_exists.map(canonicalizeFlowUri) : [],
+            showIfMissing: batch && batch.show_if_missing ? batch.show_if_missing.map(canonicalizeFlowUri) : [],
             hasPrompt: batch ? !!batch.include_prompt : false,
             prompt: matchedPrompt,
             hasResponse: batch ? !!batch.response_path : false,
@@ -248,13 +270,13 @@ export class InSetuExtFlow extends InSetuElement {
                 windowOnly: true
             }, layout.focusedColumn || 'center', 1);
         }
-        const { gatherOptions } = window.inSetu.stores.Gather.getState();
+        const gatherOptions = FlowStore.getState().availableOptions || window.inSetu.stores.Gather?.getState()?.gatherOptions || {};
         if (batch.include_prompt) {
             const prompts = gatherOptions.prompts || [];
             const promptPath = prompts.includes(batch.include_prompt) 
                 ? batch.include_prompt 
                 : (prompts.find(p => p.endsWith(batch.include_prompt)) || batch.include_prompt);
-            window.inSetu.api.get(`prompts/resolve?file=${encodeURIComponent(promptPath)}`)
+            this.api.workspace.get(`prompts/resolve?file=${encodeURIComponent(promptPath)}`)
                 .then(res => res.ok ? res.text() : Promise.reject(new Error("Prompt resolution failed")))
                 .then(text => { FlowStore.setState({ viewingBatchPromptText: text }); })
                 .catch(err => { FlowStore.setState({ viewingBatchPromptText: `[Error: ${err.message}]` }); });
@@ -268,15 +290,7 @@ export class InSetuExtFlow extends InSetuElement {
             const appState = appStore?.getState ? appStore.getState() : {};
             const categoryOrder = appState?.categoryOrder || [];
             const manifest = appState?.manifest?.ctx || {};
-            const gatherStore = window.inSetu?.stores?.Gather;
-            const gatherState = gatherStore?.getState ? gatherStore.getState() : {};
-            const gatherOptions = gatherState?.gatherOptions || {};
-            // allFiles represents valid configuration targets for the UI builder (potentials + actuals)
-            const allFiles = [
-                ...(gatherOptions?.diffs || []), 
-                ...(gatherOptions?.contexts || []),
-                ...(gatherOptions?.prompts || [])
-            ];
+            const gatherOptions = FlowStore.getState().availableOptions || window.inSetu?.stores?.Gather?.getState()?.gatherOptions || {};
             const repoFilteredBatches = this.batches.map(b => {
                 const actualFilename = `ctx://workflows/workflow_${b.id}_context.txt`;
                 const manifestObj = manifest[actualFilename] || {};
@@ -308,11 +322,9 @@ export class InSetuExtFlow extends InSetuElement {
                     (b.title && b.title.toLowerCase().includes(pr.toLowerCase()))
                 );
             });
-
             const filteredBatches = this.searchQuery 
                 ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredBatches, this.searchQuery, b => `${(b._repos || []).join(' ')} ${b.title} ${b.id} ${b.domain}`) 
                 : repoFilteredBatches;
-            const artifactsDir = gatherOptions?.artifactsDir || ".insetu/profiles/default/data";
             try {
                 return html`
                     <sutram-toolbar
@@ -410,296 +422,6 @@ export class InSetuExtFlow extends InSetuElement {
                             `);
                         })()}
             </sutram-scroll-view>
-                    ${this._editModalOpen ? html`
-                    <sutram-modal    
-                            ?open=${true} 
-                            ?fullscreen=${true}
-                            titleText=${this._editForm?.id ? `Edit Batch: ${this._editForm.title}` : 'Create New Batch'}
-                            @sutram-modal-closed=${() => { this._editModalOpen = false; this._editingBatch = null; this.requestUpdate(); }}>
-                            <div slot="body" style="display: contents;">
-                                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                            <div style="flex: 1; min-width: 150px;">
-                                                    <sutram-input label="Batch Title" .value=${this._editForm?.title || ''} placeholder="e.g. API Wrap-Up" 
-                                                            @sutram-input-changed=${(e) => { this._editForm.title = e.detail.value; if(!this._editingBatch?.id){ this._editForm.id = e.detail.value.toLowerCase().replace(/[^a-z0-9]+/g, '_'); } this.requestUpdate(); }}></sutram-input>
-                                            </div>
-                                            <div style="flex: 1; min-width: 150px; display: none;">
-                                                    <sutram-input .value=${this._editForm?.id || ''} @sutram-input-changed=${(e) => { this._editForm.id = e.detail.value; this.requestUpdate(); }}></sutram-input>
-                                            </div>
-                                            <div style="flex: 1; min-width: 150px;">
-                                                    <sutram-input label="Domain" .value=${this._editForm?.domain || 'Workflows'} placeholder="e.g. Workflows"
-                                                            @sutram-input-changed=${(e) => { this._editForm.domain = e.detail.value; this.requestUpdate(); }}></sutram-input>
-                                            </div>
-                                    </div>
-                                    <div>
-                                            <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">1. Includes (Contexts & Diffs)</h4>
-                                            <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                                                    ${this._editForm?.includes?.length === 0 ? html`<sutram-empty-state text="No files selected."></sutram-empty-state>` : 
-                                                        this._editForm?.includes?.map((inc, idx) => {
-                                                            const isSystem = inc.startsWith('ctx://');
-                                                            const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
-                                                            const isMissing = isContextOrDiff && !allFiles.includes(inc);
-
-                                                            // Candidate Healing Search
-                                                            const candidate = isMissing ? (() => {
-                                                                const base = inc.split('/').pop().replace(/^ctx:\/\//, '');
-                                                                return allFiles.find(f => f === `ctx://contexts/${base}` || f === `ctx://diffs/${base}` || f.endsWith(base));
-                                                            })() : null;
-                                                            const iconName = inc.includes('diffs/') ? "git-pull-request" : (inc.includes('contexts/') ? "package" : (inc.endsWith('/') || (!isSystem && !inc.includes('.')) ? "folder" : "file-text"));
-
-                                                            return html`
-                                                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);">
-                                                                <div style="display: flex; align-items: center; flex: 1; min-width: 0; gap: 8px; flex-wrap: wrap;">
-                                                                    <yv-icon name="${iconName}" style="width: 14px; height: 14px; color: var(--text-muted); flex-shrink: 0;"></yv-icon>
-                                                                    <span style="font-family: monospace; font-size: 0.85rem; color: ${isMissing ? 'var(--intent-danger)' : (isSystem ? 'var(--intent-primary)' : 'var(--text)')}; word-break: break-all; text-decoration: ${isMissing ? 'line-through' : 'none'}; opacity: ${isMissing ? '0.8' : '1'}; font-weight: ${isSystem ? 'bold' : 'normal'};">${inc}</span>${isMissing ? html`<span style="font-size: 0.7rem; background: transparent; color: var(--intent-danger); border: 1px solid var(--intent-danger); padding: 1px 6px; border-radius: 10px; font-weight: bold; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;"><yv-icon name="alert-triangle" style="width: 10px; height: 10px;"></yv-icon> Missing</span>` : ''}
-                                                                    ${candidate ? html`
-                                                                        <sutram-btn size="sm" intent="success" icon="sparkles" label="Fix → ${candidate}" style="margin: 0; padding: 2px 8px; font-size: 0.75rem;" @click=${() => {
-                                                                            this._editForm.includes[idx] = candidate;
-                                                                            this.requestUpdate();
-                                                                        }}></sutram-btn>
-                                                                    ` : ''}
-                                                                </div>
-                                                                <sutram-btn size="sm" variant="text" intent="danger" label="×" style="padding: 0 5px; flex-shrink: 0;" @click=${() => {
-                                                                    this._editForm.includes.splice(idx, 1);
-                                                                    this.requestUpdate();
-                                                                }}></sutram-btn>
-                                                            </div>
-                                                        `})}
-                                            </div>
-                                            <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
-                                                <sutram-btn size="sm" intent="primary" icon="package" label="Select Contexts" @click=${() => { this._selectingFor = 'includes'; this._tempContexts = [...this._editForm.includes]; this._showSelectContexts = true; }}></sutram-btn>
-                                                <sutram-btn size="sm" intent="neutral" icon="file-plus" label="File" @click=${() => {
-                                                    if (this.ui && this.ui.openWorkspaceBrowser) {
-                                                        this.ui.openWorkspaceBrowser({
-                                                            mode: 'file',
-                                                            title: 'Select File',
-                                                            callback: (filepath) => {
-                                                                if (filepath) {
-                                                                    const uri = (filepath.startsWith('vfs://') || filepath.startsWith('ctx://')) ? filepath : `vfs://${filepath.replace(/^\/+/, '')}`;
-                                                                    if (!this._editForm.includes.includes(uri)) {
-                                                                        this._editForm.includes = [...this._editForm.includes, uri];
-                                                                        this.requestUpdate();
-                                                                    }
-                                                                }
-                                                            }
-                                                        });
-                                                    }
-                                                }}></sutram-btn>
-                                                <sutram-btn size="sm" intent="neutral" icon="folder-plus" label="Folder" @click=${() => {
-                                                    if (this.ui && this.ui.openWorkspaceBrowser) {
-                                                        this.ui.openWorkspaceBrowser({
-                                                            mode: 'folder',
-                                                            title: 'Select Folder',
-                                                            callback: (folderpath) => {
-                                                                if (folderpath) {
-                                                                    let uri = (folderpath.startsWith('vfs://') || folderpath.startsWith('ctx://')) ? folderpath : `vfs://${folderpath.replace(/^\/+/, '')}`;
-                                                                    if (!uri.endsWith('/')) uri += '/';
-                                                                    if (!this._editForm.includes.includes(uri)) {
-                                                                        this._editForm.includes = [...this._editForm.includes, uri];
-                                                                        this.requestUpdate();
-                                                                    }
-                                                                }
-                                                            }
-                                                        });
-                                                    }
-                                                }}></sutram-btn>
-                                            </div>
-                                    </div>
-                                    <div>
-                                            <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Visibility Prerequisites (Optional)</h4>
-                                            <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if at least one of these exist:</label>
-                                            <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                                                    ${!this._editForm?.showIfExists || this._editForm?.showIfExists?.length === 0 ? html`<sutram-empty-state text="No requirements."></sutram-empty-state>` : 
-                                                        this._editForm?.showIfExists?.map((inc, idx) => {
-                                                            const isSystem = inc.startsWith('ctx://');
-                                                            const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
-                                                            const isMissing = isContextOrDiff && !allFiles.includes(inc);
-                                                            const iconName = inc.includes('diffs/') ? "git-pull-request" : (inc.includes('contexts/') ? "package" : (inc.endsWith('/') || (!isSystem && !inc.includes('.')) ? "folder" : "file-text"));
-
-                                                            return html`
-                                                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);">
-                                                                <div style="display: flex; align-items: center; flex: 1; min-width: 0; gap: 8px;">
-                                                                    <yv-icon name="${iconName}" style="width: 14px; height: 14px; color: var(--text-muted); flex-shrink: 0;"></yv-icon>
-                                                                    <span style="font-family: monospace; font-size: 0.85rem; color: ${isMissing ? 'var(--intent-danger)' : (isSystem ? 'var(--intent-primary)' : 'var(--text)')}; word-break: break-all; text-decoration: ${isMissing ? 'line-through' : 'none'}; opacity: ${isMissing ? '0.8' : '1'}; font-weight: ${isSystem ? 'bold' : 'normal'};">${inc}</span>
-                                                                    ${isMissing ? html`<span style="margin-left: 8px; font-size: 0.7rem; background: transparent; color: var(--intent-danger); border: 1px solid var(--intent-danger); padding: 1px 6px; border-radius: 10px; font-weight: bold; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;"><yv-icon name="alert-triangle" style="width: 10px; height: 10px;"></yv-icon> Missing</span>` : ''}
-                                                                </div>
-                                                                <sutram-btn size="sm" variant="text" intent="danger" label="×" style="padding: 0 5px; flex-shrink: 0;" @click=${() => {
-                                                                    this._editForm.showIfExists.splice(idx, 1);
-                                                                    this.requestUpdate();
-                                                                }}></sutram-btn>
-                                                            </div>
-                                                        `})}
-                                            </div>
-                                            <sutram-btn size="sm" intent="neutral" icon="plus" label="Add Required Contexts" style="margin: 0 0 15px 0;" @click=${() => { this._selectingFor = 'exists'; this._tempContexts = [...(this._editForm.showIfExists || [])]; this._showSelectContexts = true; }}></sutram-btn>
-                                            <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if all of these are missing:</label>
-                                            <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                                                    ${!this._editForm?.showIfMissing || this._editForm?.showIfMissing?.length === 0 ? html`<sutram-empty-state text="No requirements."></sutram-empty-state>` : 
-                                                        this._editForm?.showIfMissing?.map((inc, idx) => {
-                                                            const isSystem = inc.startsWith('ctx://');
-                                                            const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
-                                                            const isMissing = isContextOrDiff && !allFiles.includes(inc);
-
-                                                            const iconName = inc.includes('diffs/') ? "git-pull-request" : (inc.includes('contexts/') ? "package" : (inc.endsWith('/') || (!isSystem && !inc.includes('.')) ? "folder" : "file-text"));
-
-                                                            return html`
-                                                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);">
-                                                                <div style="display: flex; align-items: center; flex: 1; min-width: 0; gap: 8px;">
-                                                                    <yv-icon name="${iconName}" style="width: 14px; height: 14px; color: var(--text-muted); flex-shrink: 0;"></yv-icon>
-                                                                    <span style="font-family: monospace; font-size: 0.85rem; color: ${isMissing ? 'var(--intent-danger)' : (isSystem ? 'var(--intent-primary)' : 'var(--text)')}; word-break: break-all; text-decoration: ${isMissing ? 'line-through' : 'none'}; opacity: ${isMissing ? '0.8' : '1'}; font-weight: ${isSystem ? 'bold' : 'normal'};">${inc}</span>
-                                                                    ${isMissing ? html`<span style="margin-left: 8px; font-size: 0.7rem; background: transparent; color: var(--intent-danger); border: 1px solid var(--intent-danger); padding: 1px 6px; border-radius: 10px; font-weight: bold; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;"><yv-icon name="alert-triangle" style="width: 10px; height: 10px;"></yv-icon> Missing</span>` : ''}
-                                                                </div>
-                                                                <sutram-btn size="sm" variant="text" intent="danger" label="×" style="padding: 0 5px; flex-shrink: 0;" @click=${() => {
-                                                                    this._editForm.showIfMissing.splice(idx, 1);
-                                                                    this.requestUpdate();
-                                                                }}></sutram-btn>
-                                                            </div>
-                                                        `})}
-                                            </div>
-                                            <sutram-btn size="sm" intent="neutral" icon="plus" label="Add Missing Contexts" style="margin: 0 0 15px 0;" @click=${() => { this._selectingFor = 'missing'; this._tempContexts = [...(this._editForm.showIfMissing || [])]; this._showSelectContexts = true; }}></sutram-btn>
-                                    </div>
-                                    <div>
-                                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-                                                    <sutram-toggle .checked=${this._editForm?.hasPrompt} @sutram-input-changed=${(e) => { this._editForm.hasPrompt = e.detail.value; this.requestUpdate(); }}></sutram-toggle>
-                                                    <h4 style="margin: 0; color: var(--text); font-size: 1.05rem;">3. Instruction Prompt</h4>
-                                            </div>
-                                            ${this._editForm?.hasPrompt ? html`
-                                                    <div style="display: flex; gap: 8px;">
-                                                            <sutram-select style="flex: 1;" .value=${this._editForm.prompt} .options=${[{value: '', label: '-- Select a Prompt --'}, ...(gatherOptions.prompts || []).map(p => { const v = p.replace(/^\.insetu\/prompts\//, '').replace(/^prompts\//, ''); return {value: v, label: v}; })]} @sutram-input-changed=${(e) => { this._editForm.prompt = e.detail.value; this.requestUpdate(); }}></sutram-select>
-                                                    </div>
-                                            ` : ''}
-                                    </div>
-                                    <div>
-                                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-                                                    <sutram-toggle .checked=${this._editForm?.hasResponse} @sutram-input-changed=${(e) => { this._editForm.hasResponse = e.detail.value; this.requestUpdate(); }}></sutram-toggle>
-                                                    <h4 style="margin: 0; color: var(--text); font-size: 1.05rem;">4. Response Text Box</h4>
-                                            </div>
-                                            ${this._editForm?.hasResponse ? html`
-                                                    <sutram-input label="Response Path" .value=${this._editForm.responsePath} placeholder="e.g. sotu/sotu_{date}.current.md" style="font-family: monospace;" @sutram-input-changed=${(e) => { this._editForm.responsePath = e.detail.value; }}></sutram-input>
-                                                    <sutram-input label="Archive Path (Optional)" .value=${this._editForm.archivePath} placeholder="e.g. sotu/archive/" style="font-family: monospace;" @sutram-input-changed=${(e) => { this._editForm.archivePath = e.detail.value; }}></sutram-input>
-                                            ` : ''}
-                                    </div>
-                            </div>
-                            ${this._editingBatch?.id ? html`<sutram-async-btn slot="footer" intent="danger" icon="trash-2" label="Delete Batch" .onClick=${this.deleteEditBatch.bind(this)}></sutram-async-btn>` : ''}
-                            <sutram-async-btn slot="footer" intent="primary" icon="save" label="Save Batch" .onClick=${this.saveEditBatch.bind(this)}></sutram-async-btn>
-                    </sutram-modal>
-                    ` : ''}
-                    ${this._showSelectContexts ? html`
-                    <sutram-modal ?open=${true} titleText="Select Contexts" @sutram-modal-closed=${() => { this._showSelectContexts = false; this._contextSearchQuery = ''; }}>
-                            <div slot="body" style="display: contents;">
-                                    <sutram-input placeholder="Fuzzy search contexts..." .value=${this._contextSearchQuery} @sutram-input-changed=${(e) => { this._contextSearchQuery = e.detail.value; }}></sutram-input>
-                                    <div style="display: flex; flex-direction: column; gap: 5px; overflow-y: auto; flex: 1;">
-                                            ${(this._contextSearchQuery ? this.utils.fuzzyFilterObjects(allFiles, this._contextSearchQuery) : allFiles).map(file => {
-                                                const systemUri = file; // The file is already a fully-qualified URI from the backend
-                                                const isChecked = this._tempContexts.includes(systemUri);
-                                                const isDiff = file.includes('diffs/');
-                                                const manifestObj = manifest[file] || {};
-                                                const meta = manifestObj.meta || {};
-                                                const sizeStr = this.utils.formatArtifactSize(meta);
-
-                                                return html`
-                                                    <div style="display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 1px solid var(--border); background: var(--bg);">
-                                                            <sutram-toggle
-                                                                ?flush=${true}
-                                                                .checked=${isChecked}
-                                                                @sutram-input-changed=${() => {
-                                                                    const set = new Set(this._tempContexts);
-                                                                    set.has(systemUri) ? set.delete(systemUri) : set.add(systemUri);
-                                                                    this._tempContexts = Array.from(set);
-                                                                    this.requestUpdate();
-                                                                }}>
-                                                            </sutram-toggle>
-                                                            <div style="display: flex; flex-direction: column; flex: 1; cursor: pointer;" @click=${() => {
-                                                                const set = new Set(this._tempContexts);
-                                                                set.has(systemUri) ? set.delete(systemUri) : set.add(systemUri);
-                                                                this._tempContexts = Array.from(set);
-                                                                this.requestUpdate();
-                                                            }}>
-                                                                <div style="display: flex; justify-content: space-between;">
-                                                                    <span style="font-family: monospace; font-size: 0.9rem; color: var(--intent-primary); font-weight: bold;">${systemUri}</span>
-                                                                    <span style="font-size: 0.75rem; color: var(--text-muted);">${sizeStr}</span>
-                                                                </div>
-                                                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; display: flex; align-items: center; gap: 6px;">
-                                                                    <yv-icon name="${isDiff ? 'git-pull-request' : 'package'}" style="width: 12px; height: 12px;"></yv-icon>
-                                                                    <span>${isDiff ? 'Git Working Tree Diffs' : `Context Payload (${meta.repos ? meta.repos.join(', ') : 'Generated'})`}</span>
-                                                                </span>
-                                                            </div>
-                                                    </div>
-                                            `})}
-                                    </div>
-                            </div>
-                            <sutram-btn slot="footer" intent="primary" icon="check" label="Confirm Selection" @click=${() => { 
-                                if (this._selectingFor === 'exists') this._editForm.showIfExists = [...this._tempContexts];
-                                else if (this._selectingFor === 'missing') this._editForm.showIfMissing = [...this._tempContexts];
-                                else this._editForm.includes = [...this._tempContexts]; 
-                                this._showSelectContexts = false; 
-                                this._contextSearchQuery = '';
-                            }}></sutram-btn>
-                    </sutram-modal>
-                    ` : ''}
-                    ${this._viewModalOpen ? html`
-                    <sutram-modal ?open=${true} ?fullscreen=${true} titleText=${this._viewingBatch ? `Batch Workflow: ${this._viewingBatch.title}` : ''} @sutram-modal-closed=${() => { this._viewModalOpen = false; this._viewingBatch = null; this.requestUpdate(); }}>
-                            <div slot="body" style="display: contents;">
-                                    ${this._viewingBatch ? html`
-                                            <div>
-                                                    <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">1. Compiled Context Payload</h4>
-                                                    <div style="background: var(--input-bg); padding: 10px 15px; border-radius: 4px; border: 1px solid var(--border); margin-bottom: 10px; max-height: 250px; overflow-y: auto;">
-                                                            <ul style="margin: 0; font-family: monospace; font-size: 0.85rem; color: var(--text); opacity: 0.8; padding-left: 20px;">
-                                                                    ${(this._viewingBatch.includes || []).length > 0 ? this._viewingBatch.includes.map(inc => html`<li style="padding: 2px 0; word-break: break-all;">${inc}</li>`) : html`<li style="color: var(--intent-danger); list-style: none; margin-left: -20px;">No files mapped to this batch.</li>`}
-                                                            </ul>
-                                                    </div>
-                                                    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; width: 100%;">
-                                                            ${(() => {
-                                                                const baseFile = `ctx://workflows/workflow_${this._viewingBatch.id}_context.txt`;
-                                                                const manifestCtx = AppStore.getState().manifest?.ctx || {};
-                                                                const manifestObj = manifestCtx[baseFile] || {};
-                                                                return html`
-                                                                    <sutram-entity-actions 
-                                                                        ?scrollable=${true}
-                                                                        .entityType=${'file'} 
-                                                                        .entityData=${{ 
-                                                                            filepath: baseFile, 
-                                                                            chunks: manifestObj.chunks || [baseFile],
-                                                                            showOnly: ['file-copy', 'file-download', 'file-share', 'file-view-parts']
-                                                                        }}>
-                                                                    </sutram-entity-actions>
-                                                                `;
-                                                            })()}
-                                                    </div>
-                                            </div>
-                                            ${this._viewingBatch.include_prompt ? html`
-                                                    <div>
-                                                            <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Instruction Prompt</h4>
-                                                            <sutram-textarea readonly style="width: 100%; min-height: 150px; margin-bottom: 10px;" .value=${this._viewingBatchPromptText}></sutram-textarea>
-                                                            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                                                                    ${(() => {
-                                                                        const prompts = gatherOptions.prompts || [];
-                                                                        const promptPath = prompts.includes(this._viewingBatch.include_prompt) ? this._viewingBatch.include_prompt : (prompts.find(p => p.endsWith(this._viewingBatch.include_prompt)) || this._viewingBatch.include_prompt);
-                                                                        return html`
-                                                                            <sutram-entity-actions 
-                                                                                .entityType=${'file:prompt'} 
-                                                                                .entityData=${{ 
-                                                                                    filepath: promptPath, 
-                                                                                    isFS: false,
-                                                                                    showOnly: ['prompt-copy', 'prompt-edit']
-                                                                                }}>
-                                                                            </sutram-entity-actions>
-                                                                        `;
-                                                                    })()}
-                                                            </div>
-                                                    </div>
-                                            ` :  
-''}
-                                            ${this._viewingBatch.response_path ? html`
-                                                    <div>
-                                                            <h4 style="margin: 0 0 5px 0; color: var(--text); font-size: 1.05rem;">3. LLM Response Integration</h4>
-                                                            <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Paste response to save to: <code style="word-break: break-all; color: var(--intent-success);">${this._viewingBatch.response_path}</code></p>
-                                                            <sutram-textarea id="batch-response-text" placeholder="Paste LLM response here..." .value=${this._responseContent || ''} .monospace=${true} .rows=${10} @sutram-input-changed=${(e) => { this._responseContent = e.detail.value; this.requestUpdate(); }}></sutram-textarea>
-                                                            <sutram-async-btn intent="success" icon="save" label="Save Response" style="width: 100%; display: block; --btn-padding: 15px; --btn-font-size: 1.1rem;" .onClick=${this.saveBatchResponse.bind(this)}></sutram-async-btn>
-                                                    </div>
-                                            ` : ''}
-                                    ` : ''}
-                            </div>
-                    </sutram-modal>
-                    ` : ''}
         `;
     } catch (err) {
             console.error("Flow UI Render Crash:", err);
@@ -734,38 +456,41 @@ export class InSetuFlowViewProjection extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(FlowStore, state => {
-            this.viewingBatch = state.viewingBatch;
-            this.viewingBatchPromptText = state.viewingBatchPromptText || '';
-            this.responseContent = state.responseContent || '';
-            this.requestUpdate();
-        });
+        this.subscribe(
+            FlowStore,
+            state => ({
+                viewingBatch: state.viewingBatch,
+                viewingBatchPromptText: state.viewingBatchPromptText || '',
+                responseContent: state.responseContent || ''
+            }),
+            ({ viewingBatch, viewingBatchPromptText, responseContent }) => {
+                this.viewingBatch = viewingBatch;
+                this.viewingBatchPromptText = viewingBatchPromptText;
+                this.responseContent = responseContent;
+                this.requestUpdate();
+            }
+        );
     }
     async saveBatchResponse() {
         const content = this.responseContent || '';
         if (!content.trim()) return alert('Please paste a response.');
-        const { gatherOptions } = window.inSetu.stores.Gather.getState();
-        const artifactsDir = gatherOptions.artifactsDir || ".insetu/data";
 
         const now = new Date();
         const tzOffset = now.getTimezoneOffset() * 60000;
         const localISOTime = (new Date(now - tzOffset)).toISOString().slice(0, -1);
         const dStr = localISOTime.replace(/-/g, '').replace(/:/g, '').replace('T', '_').split('.')[0];
         const finalPath = this.viewingBatch.response_path.replace('{date}', dStr);
-        const allRepos = this.ecosystem.allRepos || [];
-
-        const { repo: responseRepo } = this.utils.parseURI(finalPath);
-        const isRepoTarget = responseRepo && allRepos.includes(responseRepo);
+        const normPath = this.vfs?.normalizeVfsURI ? this.vfs.normalizeVfsURI(finalPath) : `vfs://${finalPath.replace(/^\/+/, '')}`;
 
         const payload = {
-            filepath: isRepoTarget ? finalPath : `${artifactsDir}/${finalPath}`,
+            filepath: normPath,
             content: content,
             original_response_path: this.viewingBatch.response_path
         };
         if (this.viewingBatch.archive_path) {
-            const { repo: archiveRepo } = this.utils.parseURI(this.viewingBatch.archive_path);
-            const isArchiveRepoTarget = archiveRepo && allRepos.includes(archiveRepo);
-            payload.archive_path = isArchiveRepoTarget ? this.viewingBatch.archive_path : `${artifactsDir}/${this.viewingBatch.archive_path}`;
+            payload.archive_path = this.vfs?.normalizeVfsURI
+                ? this.vfs.normalizeVfsURI(this.viewingBatch.archive_path)
+                : `vfs://${this.viewingBatch.archive_path.replace(/^\/+/, '')}`;
         }
 
         try {
@@ -872,56 +597,83 @@ export class InSetuFlowEditProjection extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(FlowStore, state => {
-            this.editingBatch = state.editingBatch;
-            this.editForm = state.editForm || {};
-            this.showSelectContexts = !!state.showSelectContexts;
-            this.tempContexts = state.tempContexts || [];
-            this.selectingFor = state.selectingFor || 'includes';
-            this.contextSearchQuery = state.contextSearchQuery || '';
-            this.requestUpdate();
-        });
+        this.subscribe(
+            FlowStore,
+            state => ({
+                editingBatch: state.editingBatch,
+                editForm: state.editForm || {},
+                showSelectContexts: !!state.showSelectContexts,
+                tempContexts: state.tempContexts || [],
+                selectingFor: state.selectingFor || 'includes',
+                contextSearchQuery: state.contextSearchQuery || ''
+            }),
+            (slice) => {
+                this.editingBatch = slice.editingBatch;
+                this.editForm = slice.editForm;
+                this.showSelectContexts = slice.showSelectContexts;
+                this.tempContexts = slice.tempContexts;
+                this.selectingFor = slice.selectingFor;
+                this.contextSearchQuery = slice.contextSearchQuery;
+                this.requestUpdate();
+            }
+        );
     }
     _updateForm(patch) {
         FlowStore.setState(s => ({ editForm: { ...(s.editForm || {}), ...patch } }));
     }
     async deleteEditBatch() {
-        if (!this.editingBatch?.id || !confirm("Delete this workflow batch?")) return;
+        const targetId = this.editingBatch?.id;
+        if (!targetId || !confirm("Delete this workflow batch?")) return;
         try {
-            const res = await this.api.post('batches/delete', { id: this.editingBatch.id }, { collapseKey: `flow:batch:delete:${this.editingBatch.id}` });
+            const res = await this.api.post('batches/delete', { id: targetId }, { collapseKey: `flow:batch:delete:${targetId}` });
             if (res.ok) {
-                FlowStore.setState(s => ({ batches: s.batches.filter(b => b.id !== this.editingBatch.id) }));
+                const responseData = await res.json();
+                if (Array.isArray(responseData.batches)) {
+                    FlowStore.setState({ batches: responseData.batches });
+                } else {
+                    FlowStore.setState(s => ({ batches: (s.batches || []).filter(b => b.id !== targetId) }));
+                }
                 if (window.Sutram?.stores?.Layout) {
                     window.Sutram.stores.Layout.getState().closeWindow('flow:edit');
                 }
-                const responseData = await res.json();
-                if (responseData.manifest) {
-                    AppStore.setState({ manifest: { vfs: responseData.manifest.vfs || {}, ctx: responseData.manifest.ctx || {} } });
+                if (responseData.job_id && this.api.pollJob) {
+                    this.api.pollJob(responseData.job_id, {
+                        onComplete: async () => {
+                            if (window.inSetu.sys?.refreshManifest) await window.inSetu.sys.refreshManifest();
+                            await FlowStore.getState().fetchBatches();
+                        }
+                    });
+                } else if (window.inSetu.sys?.refreshManifest) {
+                    await window.inSetu.sys.refreshManifest();
                 }
-            } else alert("Failed to delete batch.");
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert("Failed to delete batch: " + (err.error || res.statusText));
+            }
         } catch (e) {
             alert("Network error: " + e.message);
         }
     }
     async saveEditBatch() {
-        const originalId = (this.editForm.id || '').trim();
+        const originalId = (this.editingBatch?.id || '').trim();
         const title = (this.editForm.title || '').trim();
         const domain = (this.editForm.domain || '').trim() || "Workflows";
 
         if (!title) return alert("Title is required.");
 
-        const currentBatches = FlowStore.getState().batches;
-        const baseId = this.utils.slugify(title);
+        const currentBatches = FlowStore.getState().batches || [];
+        const baseId = this.utils.slugify(title) || `batch_${Date.now()}`;
         const newId = (() => {
             const isTaken = (id) => currentBatches.some(b => b.id === id && b.id !== originalId);
             if (!isTaken(baseId)) return baseId;
             return Array.from({length: 100}).map((_, i) => `${baseId}_${i+1}`).find(id => !isTaken(id)) || `${baseId}_${Date.now()}`;
         })();
 
-        const payload = { id: newId, original_id: originalId, title, domain, includes: this.editForm.includes || [] };
+        const payload = { id: newId, title, domain, includes: [...(this.editForm.includes || [])] };
+        if (originalId) payload.original_id = originalId;
 
-        if (this.editForm.showIfExists && this.editForm.showIfExists.length > 0) payload.show_if_exists = this.editForm.showIfExists;
-        if (this.editForm.showIfMissing && this.editForm.showIfMissing.length > 0) payload.show_if_missing = this.editForm.showIfMissing;
+        if (this.editForm.showIfExists && this.editForm.showIfExists.length > 0) payload.show_if_exists = [...this.editForm.showIfExists];
+        if (this.editForm.showIfMissing && this.editForm.showIfMissing.length > 0) payload.show_if_missing = [...this.editForm.showIfMissing];
         if (this.editForm.hasPrompt && this.editForm.prompt) payload.include_prompt = this.editForm.prompt;
         if (this.editForm.hasResponse && this.editForm.responsePath) {
             payload.response_path = this.editForm.responsePath.trim();
@@ -930,20 +682,37 @@ export class InSetuFlowEditProjection extends InSetuElement {
         try {
             const res = await this.api.post('batches/save', payload, { collapseKey: `flow:batch:save:${newId}` });
             if (res.ok) {
-                const isExisting = currentBatches.some(b => b.id === originalId);
-                if (isExisting) {
-                    FlowStore.setState({ batches: currentBatches.map(b => b.id === originalId ? payload : b) });
+                const responseData = await res.json();
+                const savedBatch = { ...payload };
+                delete savedBatch.original_id;
+
+                if (Array.isArray(responseData.batches)) {
+                    FlowStore.setState({ batches: responseData.batches });
                 } else {
-                    FlowStore.setState({ batches: [...currentBatches, payload] });
+                    const isExisting = Boolean(originalId) && currentBatches.some(b => b.id === originalId);
+                    if (isExisting) {
+                        FlowStore.setState({ batches: currentBatches.map(b => b.id === originalId ? savedBatch : b) });
+                    } else {
+                        FlowStore.setState({ batches: [...currentBatches, savedBatch] });
+                    }
                 }
                 if (window.Sutram?.stores?.Layout) {
                     window.Sutram.stores.Layout.getState().closeWindow('flow:edit');
                 }
-                const responseData = await res.json();
-                if (responseData.manifest) {
-                    AppStore.setState({ manifest: { vfs: responseData.manifest.vfs || {}, ctx: responseData.manifest.ctx || {} } });
+                if (responseData.job_id && this.api.pollJob) {
+                    this.api.pollJob(responseData.job_id, {
+                        onComplete: async () => {
+                            if (window.inSetu.sys?.refreshManifest) await window.inSetu.sys.refreshManifest();
+                            await FlowStore.getState().fetchBatches();
+                        }
+                    });
+                } else if (window.inSetu.sys?.refreshManifest) {
+                    await window.inSetu.sys.refreshManifest();
                 }
-            } else alert("Failed to save batch.");
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert("Failed to save batch: " + (err.error || res.statusText));
+            }
         } catch (e) {
             alert("Network error: " + e.message);
         }
@@ -951,7 +720,7 @@ export class InSetuFlowEditProjection extends InSetuElement {
     render() {
         const appState = AppStore.getState ? AppStore.getState() : {};
         const manifest = appState?.manifest?.ctx || {};
-        const gatherOptions = window.inSetu?.stores?.Gather?.getState()?.gatherOptions || {};
+        const gatherOptions = FlowStore.getState().availableOptions || window.inSetu?.stores?.Gather?.getState()?.gatherOptions || {};
         const allFiles = [
             ...(gatherOptions?.diffs || []), 
             ...(gatherOptions?.contexts || []),
@@ -999,9 +768,7 @@ export class InSetuFlowEditProjection extends InSetuElement {
                     <div style="flex: 1; min-width: 150px;">
                         <sutram-input label="Batch Title" .value=${this.editForm?.title || ''} placeholder="e.g. API Wrap-Up" 
                             @sutram-input-changed=${(e) => {
-                                const patch = { title: e.detail.value };
-                                if (!this.editingBatch?.id) patch.id = e.detail.value.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-                                this._updateForm(patch);
+                                this._updateForm({ title: e.detail.value });
                             }}></sutram-input>
                     </div>
                     <div style="flex: 1; min-width: 150px;">

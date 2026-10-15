@@ -76,9 +76,9 @@ def _background_execute_rule(ctx, rule_id, rule_name, command, workspace_id=None
 @hooks.on('topology_resolved', priority=100)
 def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None, events=None, **kwargs):
     """Event Bus Hook: Evaluates active automation rules based on resolved topology boundaries."""
-    print(f"🔎 [HOOKS TELEMETRY] process_vfs_triggers triggered. dirty_repos: {dirty_repos}, events count: {len(events) if events else 0}")
     if not events:
         return
+    print(f"🔎 [HOOKS TELEMETRY] process_vfs_triggers triggered. dirty_repos: {dirty_repos}, events count: {len(events)}")
     # Security/Noise Guardrail: Do not trigger automations for system-level ledger-ignored writes
     # (e.g. CODE_INDEX.md cartography, or contexts/ payload generation)
     has_valid_event = any(not e.get("ignore_ledger") for e in events)
