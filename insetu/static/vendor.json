@@ -20,6 +20,31 @@
             "version": "3.1.0",
             "range": ">=3.0.0 && <4.0.0"
         },
+        "lit-html": {
+            "path": "vendor/lit/lit-core.min.js",
+            "version": "3.1.0",
+            "range": ">=3.0.0 && <4.0.0"
+        },
+        "lit-element": {
+            "path": "vendor/lit/lit-core.min.js",
+            "version": "3.1.0",
+            "range": ">=3.0.0 && <4.0.0"
+        },
+        "@lit/reactive-element": {
+            "path": "vendor/lit/lit-core.min.js",
+            "version": "2.0.0",
+            "range": ">=1.0.0 && <3.0.0"
+        },
+        "lit-virtualizer": {
+            "path": "vendor/lit/lit-virtualizer.min.js",
+            "version": "2.0.0",
+            "range": ">=1.0.0 && <3.0.0"
+        },
+        "@lit-labs/virtualizer": {
+            "path": "vendor/lit/lit-virtualizer.min.js",
+            "version": "2.0.0",
+            "range": ">=1.0.0 && <3.0.0"
+        },
         "codemirror-core": {
             "path": "vendor/codemirror/codemirror-core.js",
             "version": "6.0.0",
