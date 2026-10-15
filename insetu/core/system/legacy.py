@@ -1,5 +1,6 @@
 import os
 import shutil
+import sqlite3
 from pathlib import Path
 from akasa.hooks import hooks
 from akasa.utils import get_all_workspace_ids, get_tenant_control_dir
@@ -103,10 +104,8 @@ def migrate_physical_sandboxes(**kwargs):
                                         os.remove(src_file.as_posix())
                                     except Exception:
                                         pass
-
         # 4. Self-Healing DB Recovery: Recover rows from .corrupt_* backup files into active databases
         if ext_base.exists() and ext_base.is_dir():
-            import sqlite3
             for ext_name in os.listdir(ext_base.as_posix()):
                 db_dir = ext_base.joinpath(ext_name, "db")
                 if not db_dir.exists() or not db_dir.is_dir():

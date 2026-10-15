@@ -89,13 +89,17 @@ import '/static/vendor/sutram/js/inputs.js';
 // --- CENTRALIZED SHORTCUT ROUTER ---
 initShortcutRouter(window.ExtensionRegistry, () => {
     const contexts = ['global'];
-
     // 1. Active Spatial Focus Hierarchy
     const layout = window.Sutram?.stores?.Layout?.getState();
     if (layout && layout.focusedColumn) {
         contexts.unshift('tab:' + layout.focusedColumn);
         const activeSub = layout.columns[layout.focusedColumn]?.active;
-        if (activeSub) contexts.unshift('subtab:' + activeSub);
+        if (activeSub) {
+            contexts.unshift('subtab:' + activeSub);
+            if (activeSub.includes(':')) {
+                contexts.unshift('subtab:' + activeSub.split(':').pop());
+            }
+        }
     }
     // 2. Active Element (Piercing Shadow DOM)
     let activeEl = document.activeElement;
@@ -173,9 +177,10 @@ export function autoWireSettingsSchemas() {
         });
     }
 }
-
 async function bootExtensions() {
+    const isPopout = new URLSearchParams(window.location.search).get('popout') === 'true';
     const activeExts = window.ACTIVE_EXTENSIONS || [];
+
     // Batch 0: Core UI Primitives & Foundational Components
     const coreComponents = [
         '/static/extensions/system/components/ui_file_tree.js',
@@ -183,6 +188,27 @@ async function bootExtensions() {
         '/static/extensions/system/components/ui_filter_pills.js',
         '/static/extensions/system/components/ui_primitives.js'
     ];
+
+    if (isPopout) {
+        // Fast-path popout: Only load UI primitives and the VFS file editor
+        const popoutScripts = ['/static/extensions/fs/fs.js'];
+        const hash = window.location.hash.replace(/^#\/?/, '');
+        const parts = hash.split('/').map(decodeURIComponent);
+        const subId = parts[2] || '';
+        const matchingExt = activeExts.find(ext => ext === subId);
+        if (matchingExt && matchingExt !== 'fs') {
+            popoutScripts.push(`/static/extensions/${matchingExt}/ext_${matchingExt}.js`);
+        }
+
+        if (window.ExtensionRegistry && typeof window.ExtensionRegistry.loadBatches === 'function') {
+            await window.ExtensionRegistry.loadBatches([
+                coreComponents,
+                popoutScripts
+            ]);
+        }
+        return;
+    }
+
     // Batch 1: Core OS Chassis Modules
     const coreUrls = CORE_UI_SCRIPTS;
 
@@ -453,14 +479,15 @@ async function checkManifestVersion() {
         console.warn("Heartbeat delta check failed:", e);
     }
 }
-// Keep tick running at 3s so degraded mode reacts immediately when SSE drops
-window.ExtensionRegistry.registerTick('manifest_sync', 3000, checkManifestVersion);
-window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
-// Delegate execution to the Tier 1 agnostic metronome
-window.ExtensionRegistry.startMetronome(
-    () => window.ACTIVE_EXTENSIONS || [],
-    [...Array.from(window.inSetu?.CORE_MODULES || []), 'core_refresh', 'manifest_sync']
-);
+// Keep tick running at 3s so degraded mode reacts immediately when SSE drops (Bypassed in Pop-outs)
+if (!new URLSearchParams(window.location.search).get('popout')) {
+    window.ExtensionRegistry.registerTick('manifest_sync', 3000, checkManifestVersion);
+    window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
+    window.ExtensionRegistry.startMetronome(
+        () => window.ACTIVE_EXTENSIONS || [],
+        [...Array.from(window.inSetu?.CORE_MODULES || []), 'core_refresh', 'manifest_sync']
+    );
+}
 import './api.js'; // Mount explicit API client and network interceptors
 import { createJobPoller } from '/static/vendor/sutram/js/poller.js';
 // ADR 0017: Wrap the global poller to statelessly swallow callbacks and pin requests to the originating workspace
@@ -599,6 +626,16 @@ async function executeSecurityHandshake() {
 }
 export async function executeBootSequence() {
     console.log("[BOOT] Starting sequence...");
+    const isPopout = new URLSearchParams(window.location.search).get('popout') === 'true';
+    // Fast-track pop-out UI suppression before rendering cycles begin
+    if (isPopout) {
+        const retroBoot = document.getElementById('js-panic-button');
+        if (retroBoot) retroBoot.remove();
+        const configBanner = document.querySelector('insetu-config-banner');
+        if (configBanner) configBanner.remove();
+        const appShell = document.querySelector('sutram-app-shell');
+        if (appShell) appShell.setAttribute('variant', 'popout');
+    }
 
     // Pre-emptively extract workspace from URL hash to prevent boot-time layout swapping and 404 fetches
     const initialHash = window.location.hash.replace(/^#\/?/, '');
@@ -606,7 +643,9 @@ export async function executeBootSequence() {
     if (hashParts[0]) {
         try {
             sessionStorage.setItem('insetu_workspace', hashParts[0]);
-            localStorage.setItem('insetu_workspace', hashParts[0]);
+            if (!isPopout) {
+                localStorage.setItem('insetu_workspace', hashParts[0]);
+            }
         } catch(e) {}
     }
 
@@ -656,6 +695,17 @@ export async function executeBootSequence() {
             }
         });
     }
+    // Handshake Token Extraction for Pop-outs (Passed via URL to survive cross-window sessionStorage partitioning)
+    const urlParams = new URLSearchParams(window.location.search);
+    const queryToken = urlParams.get('token');
+    if (queryToken) {
+        sessionStorage.setItem('insetu_boot_token', queryToken);
+        urlParams.delete('token');
+        const newSearch = urlParams.toString() ? '?' + urlParams.toString() : '';
+        const cleanUrl = window.location.pathname + newSearch + window.location.hash;
+        window.history.replaceState(null, '', cleanUrl);
+    }
+
     updateBootProgress("Security Handshake...");
     const authenticated = await executeSecurityHandshake();
     console.log("[BOOT] Security Handshake completed:", authenticated);
@@ -664,8 +714,37 @@ export async function executeBootSequence() {
         return;
     }
 
-    // Connect SSE telemetry now that we have a valid auth token
-    if (window.inSetu.sse) {
+    // Connect SSE or wire up BroadcastChannel relay for Pop-outs
+    if (isPopout) {
+        const channel = new BroadcastChannel('insetu_telemetry');
+        channel.onmessage = (e) => {
+            const { type, data } = e.data || {};
+            const activeWs = window.inSetu.utils.getActiveWorkspace();
+            if (type === 'vfs_mutated') {
+                if (data.workspace_id && data.workspace_id !== activeWs) return;
+                window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: data.mutations });
+            } else if (type === 'job_progress') {
+                if (data.workspace_id && data.workspace_id !== activeWs) return;
+                if (data.status === 'completed' && data.artifact) {
+                    window.inSetu.events.emitHook('insetu:compile-step-complete', {
+                        job_id: data.job_id,
+                        ext_name: data.ext_name,
+                        artifact: data.artifact
+                    });
+                }
+            } else if (type === 'topology_resolved') {
+                if (data.workspace_id && data.workspace_id !== activeWs) return;
+                const state = AppStore.getState();
+                if (data.clear_all) {
+                    AppStore.setState({ dirtyRepos: new Set(), dirtyBuckets: new Set() });
+                } else if ((data.dirty_repos && data.dirty_repos.length > 0) || (data.dirty_buckets && data.dirty_buckets.length > 0)) {
+                    const newRepos = new Set([...state.dirtyRepos, ...(data.dirty_repos || [])]);
+                    const newBuckets = new Set([...state.dirtyBuckets, ...(data.dirty_buckets || [])]);
+                    AppStore.setState({ dirtyRepos: newRepos, dirtyBuckets: newBuckets });
+                }
+            }
+        };
+    } else if (window.inSetu.sse) {
         window.inSetu.sse.connect();
     }
     if (AppStore.getState().isOffline) {
@@ -696,6 +775,20 @@ export async function executeBootSequence() {
                 window.inSetu.serverSchemas = data.meta?.settings_schemas || {};
                 if (data.meta?.core_modules) {
                     window.inSetu.CORE_MODULES = new Set(data.meta.core_modules);
+                }
+
+                // Surface missing extension dependencies directly to the UI
+                const bypassed = config.bypassed_extensions || data.meta?.bypassed_extensions || [];
+                if (bypassed.length > 0) {
+                    const toastStore = window.inSetu?.stores?.Toast || window.Sutram?.stores?.Toast;
+                    bypassed.forEach(b => {
+                        const warningMsg = `⚠️ Extension [${b.extension}] disabled: Missing dependency [${b.missing_dependency}]`;
+                        if (toastStore && typeof toastStore.getState === 'function') {
+                            toastStore.getState().addToast(warningMsg, 'warning', 10000);
+                        } else {
+                            console.warn(`[inSetu Boot Warning] ${warningMsg}`);
+                        }
+                    });
                 }
                 AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
                 const statusBar = document.querySelector('sutram-status-bar');
@@ -930,17 +1023,22 @@ export async function executeBootSequence() {
             if (colId && layout.columns[colId]) {
                 layout.setFocusedColumn(colId);
             }
-
             if (subId) {
                 const colState = layout.columns[colId];
-                const isPinned = colState && colState.pinned.some(p => p.id === subId);
+                const isPinned = colState && colState.pinned.some(p => p.id === subId || p.rawId === subId);
+                let resolvedTargetId = subId;
                 if (!isPinned && window.ExtensionRegistry) {
                     const slots = window.ExtensionRegistry.getLayoutSlots();
-                    const slot = slots.find(s => s.id === subId);
-
+                    let slot = slots.find(s => s.id === subId);
+                    if (!slot) {
+                        const candidates = slots.filter(s => s.rawId === subId);
+                        slot = candidates.find(s => s.targetParent === colId || s.preferredColumn === colId) || candidates[0];
+                    }
                     if (slot) {
+                        resolvedTargetId = slot.id;
                         layout.pinToColumn(colId, {
                             id: slot.id,
+                            rawId: slot.rawId || slot.id,
                             component: slot.component,
                             label: slot.label,
                             extName: slot.extName,
@@ -948,11 +1046,31 @@ export async function executeBootSequence() {
                             icon: slot.icon,
                             intent: slot.intent
                         });
+                        if (resolvedTargetId !== subId) {
+                            const deepStr = deepPath.length > 0 ? '/' + deepPath.map(encodeURIComponent).join('/') : '';
+                            const upgradedHash = `#/${encodeURIComponent(ws)}/${colId}/${encodeURIComponent(resolvedTargetId)}${deepStr}`;
+                            history.replaceState(null, '', upgradedHash);
+                        }
+                    } else if (subId.includes('://') || subId.includes('/') || subId.endsWith('.md') || subId.endsWith('.py') || subId.endsWith('.js') || subId.endsWith('.txt')) {
+                        const safeLabel = subId.split('/').pop();
+                        layout.pinToColumn(colId, {
+                            id: subId,
+                            rawId: subId,
+                            component: 'insetu-editor-projection',
+                            label: safeLabel,
+                            extName: 'fs',
+                            targetParent: colId,
+                            icon: 'file-text',
+                            intent: 'primary'
+                        });
                     }
+                } else if (isPinned) {
+                    const pinnedItem = colState.pinned.find(p => p.id === subId || p.rawId === subId);
+                    if (pinnedItem) resolvedTargetId = pinnedItem.id;
                 }
 
                 if (typeof layout.setActiveProjection === 'function') {
-                    layout.setActiveProjection(colId, subId);
+                    layout.setActiveProjection(colId, resolvedTargetId);
                 }
             }
         }
@@ -966,6 +1084,12 @@ export async function executeBootSequence() {
     // Always trigger handleHashChange on startup to populate layout state
     handleHashChange();
     // Everything is fully booted, topologies mapped, and extensions mounted.
+    if (isPopout) {
+        const banner = document.querySelector('insetu-config-banner');
+        if (banner) banner.remove();
+        const shell = document.querySelector('sutram-app-shell');
+        if (shell) shell.setAttribute('variant', 'popout');
+    }
     updateBootProgress("System Ready!");
     window.BOOT_COMPLETE = true;
     if (window.inSetu?.ui?.setGlobalStatus) {
@@ -1018,10 +1142,13 @@ window.addEventListener('error', (e) => {
 // PWA Isolation: Honor URL-bound workspace parameters before reading cache
 const urlParams = new URLSearchParams(window.location.search);
 const nodeParam = urlParams.get('node');
+const isPopoutParam = urlParams.get('popout') === 'true';
 if (nodeParam) {
     try {
         sessionStorage.setItem('insetu_workspace', nodeParam);
-        localStorage.setItem('insetu_workspace', nodeParam);
+        if (!isPopoutParam) {
+            localStorage.setItem('insetu_workspace', nodeParam);
+        }
     } catch(e) {}
 }
 

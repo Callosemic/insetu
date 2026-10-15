@@ -5,12 +5,15 @@ import json
 import socket
 import threading
 import time
+import traceback
 from typing import TypedDict, Optional, List, Dict, Any
 from flask import request, jsonify
+from akasa.db import get_connection
 from akasa.utils import load_config, save_json_config, load_json_config, get_workspace_physics, sniff_tenant_id
 import akasa.utils as utils
 from akasa.hooks import hooks
 from akasa.sync import get_system_deltas
+from akasa.vfs import execute_vfs_delete
 from insetu.core.sdk import InSetuExtension
 import insetu.core.system.legacy  # Mount one-off migration hooks
 
@@ -604,7 +607,6 @@ def api_system_config(ctx):
                 "requires_reboot": requires_reboot
             })
     except Exception as e:
-        import traceback
         print(f"Config Route Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
 class TopologyResponse(TypedDict):
@@ -650,7 +652,6 @@ def api_system_topology(ctx):
             "config_missing": not os.path.exists(cfg_path)
         })
     except Exception as e:
-        import traceback
         print(f"Topology Route Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
 class ManifestResponse(TypedDict):
@@ -723,7 +724,6 @@ def api_create_workspace(ctx):
 
         return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
     except Exception as e:
-        import traceback
         print(f"Workspace Create Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
 class WorkspaceDeletePayload(TypedDict):
@@ -748,14 +748,12 @@ def api_delete_workspace(ctx):
         local_insetu_dir = Path(utils._cwd).joinpath(".insetu").as_posix()
         ws_dir = Path(local_insetu_dir).joinpath("workspaces", ws_id)
         if os.path.exists(ws_dir.as_posix()):
-            from akasa.vfs import execute_vfs_delete
             execute_vfs_delete("default", ws_dir.as_posix())
 
         save_json_config(index_path, w_data, workspace_id="default")
 
         return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
     except Exception as e:
-        import traceback
         print(f"Workspace Delete Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
 class JobStatusResponse(TypedDict):
@@ -764,10 +762,8 @@ class JobStatusResponse(TypedDict):
     status: str
     message: str
     artifact: Dict[str, Any]
-
 @system_bp.route('jobs/<job_id>', methods=['GET'], response_schema=JobStatusResponse, docstring="Polls the status of an asynchronous background job using the job_id returned by a 202 Accepted response. Status will be 'pending', 'processing', 'completed', or 'failed'.")
 def api_job_status(ctx, job_id):
-    from akasa.db import get_connection
     try:
         conn = get_connection("workers", workspace_id=ctx.workspace_id)
         job = conn.execute("SELECT ext_name, status, status_message, artifact_json, created_at, updated_at FROM immediate_jobs WHERE id=?", (job_id,)).fetchone()
@@ -848,7 +844,6 @@ def api_system_config_test_bucketing(ctx):
 
         return jsonify({"status": "success", "buckets": buckets_map})
     except Exception as e:
-        import traceback
         print(f"Bucketing Test Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
 class ListLocalResponse(TypedDict):

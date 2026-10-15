@@ -4,6 +4,7 @@ import json
 from typing import TypedDict, List, Dict, Any
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
+from insetu.core.utils_core import parse_blocks
 from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
 
 AGENT_SCHEMA = {
@@ -96,8 +97,12 @@ def submit_prompt(ctx):
 
     return jsonify({"status": "accepted", "job_id": job_id, "message_id": user_msg_id}), 202
 def _execute_agent_turn(job_id, workspace_id, session_id, user_prompt, attached_files=None, retry_count=0, **kwargs):
-    from insetu.core.llm.engine_llm import _stream_anthropic, _stream_gemini, _stream_claude_cli
-    from insetu.core.bridge.bridge_vfs import execute_bridge_sync
+    from insetu.core.llm.engine_llm import (
+        _stream_anthropic as __stream_anthropic,
+        _stream_gemini as __stream_gemini,
+        _stream_claude_cli as __stream_claude_cli
+    )
+    from insetu.core.bridge.bridge_vfs import execute_bridge_sync as _execute_bridge_sync
 
     ctx = agent_bp.get_context(workspace_id, job_id=job_id)
     attached_files = attached_files or []
@@ -106,8 +111,8 @@ def _execute_agent_turn(job_id, workspace_id, session_id, user_prompt, attached_
     ctx.jobs.update_progress("Phase 1/4: Assembling workspace context...")
     context_text = ""
     if attached_files:
-        from insetu.core.gather.engine_gather import _pack_selection_worker
-        pack_res = _pack_selection_worker(ctx, items=[{"filepath": f} for f in attached_files], gather_only=True)
+        from insetu.core.gather.engine_gather import _pack_selection_worker as __pack_selection_worker
+        pack_res = __pack_selection_worker(ctx, items=[{"filepath": f} for f in attached_files], gather_only=True)
         base_filename = pack_res.get("artifact", {}).get("base_filename")
         if base_filename:
             context_text = ctx.vfs.read(base_filename) or ""
@@ -141,11 +146,11 @@ def _execute_agent_turn(job_id, workspace_id, session_id, user_prompt, attached_
     try:
         stream_gen = None
         if provider == "anthropic":
-            stream_gen = _stream_anthropic(api_key, model, history_messages, system_prompt)
+            stream_gen = __stream_anthropic(api_key, model, history_messages, system_prompt)
         elif provider == "gemini":
-            stream_gen = _stream_gemini(api_key, model, history_messages, system_prompt)
+            stream_gen = __stream_gemini(api_key, model, history_messages, system_prompt)
         elif provider == "claude_cli":
-            stream_gen = _stream_claude_cli(model, history_messages, system_prompt)
+            stream_gen = __stream_claude_cli(model, history_messages, system_prompt)
 
         if stream_gen:
             for sse_line in stream_gen:
@@ -168,9 +173,7 @@ def _execute_agent_turn(job_id, workspace_id, session_id, user_prompt, attached_
     # --- Phase 3: Patch Application & Verification (Yomama Bridge) ---
     if "<<<<<<< FILE:" in full_response:
         ctx.jobs.update_progress("Phase 3/4: Applying patches and validating syntax...")
-
         # Parse targets for Bridge
-        from insetu.core.utils_core import parse_blocks
         parsed = parse_blocks(full_response)
         target_files = list(parsed.keys())
 
@@ -180,7 +183,7 @@ def _execute_agent_turn(job_id, workspace_id, session_id, user_prompt, attached_
             "dry_run": False
         }
 
-        bridge_raw = execute_bridge_sync(workspace_id, sync_payload)
+        bridge_raw = _execute_bridge_sync(workspace_id, sync_payload)
         bridge_res = json.loads(bridge_raw)
 
         if not bridge_res.get("can_commit"):

@@ -320,18 +320,34 @@ export class InSetuExtBridge extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(BridgeStore, (state) => {
-            this.cells = state.cells || [];
-            this.consoleOutput = state.consoleOutput;
-            this.viewMode = state.viewMode;
-            this.telemetry = state.telemetry;
-            window.inSetu.stores.Fs?.getState()?.verifyFiles(this.cells.map(c => c.file));
-            this._evaluateAutoSwaps();
-        });
-        this.subscribe('Fs', (state) => {
-            this._fileVerificationCache = state.fileVerificationCache || {};
-            this._evaluateAutoSwaps();
-        });
+        this.subscribe(
+            BridgeStore,
+            state => ({
+                cells: state.cells || [],
+                consoleOutput: state.consoleOutput,
+                viewMode: state.viewMode,
+                telemetry: state.telemetry
+            }),
+            ({ cells, consoleOutput, viewMode, telemetry }) => {
+                const cellsChanged = this.cells !== cells;
+                this.cells = cells;
+                this.consoleOutput = consoleOutput;
+                this.viewMode = viewMode;
+                this.telemetry = telemetry;
+                if (cellsChanged) {
+                    window.inSetu.stores.Fs?.getState()?.verifyFiles(this.cells.map(c => c.file));
+                    this._evaluateAutoSwaps();
+                }
+            }
+        );
+        this.subscribe(
+            'Fs',
+            state => state.fileVerificationCache || {},
+            (fileVerificationCache) => {
+                this._fileVerificationCache = fileVerificationCache;
+                this._evaluateAutoSwaps();
+            }
+        );
         // Event listeners for Yomama Actions
         this.registerGlobalListener('insetu:bridge:cell-deleted', window, (e) => {
             if (BridgeStore.getState().editCellId === e.detail.id) {
@@ -976,12 +992,20 @@ export class InSetuBridgeEditProjection extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(BridgeStore, state => {
-            this.editCellId = state.editCellId;
-            this.editCellOriginalFile = state.editCellOriginalFile || '';
-            this.cells = state.cells || [];
-            this.requestUpdate();
-        });
+        this.subscribe(
+            BridgeStore,
+            state => ({
+                editCellId: state.editCellId,
+                editCellOriginalFile: state.editCellOriginalFile || '',
+                cells: state.cells || []
+            }),
+            ({ editCellId, editCellOriginalFile, cells }) => {
+                this.editCellId = editCellId;
+                this.editCellOriginalFile = editCellOriginalFile;
+                this.cells = cells;
+                this.requestUpdate();
+            }
+        );
     }
     _commitCurrentBuffer() {
         if (!this.editCellId) return;
@@ -1099,12 +1123,16 @@ export class InSetuExtBridgeHistoryActions extends InSetuElement {
         super();
         this._viewMode = 'transaction';
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(BridgeStore, state => {
-            this._viewMode = state.historyViewMode || 'transaction';
-        });
+        this._viewMode = BridgeStore.getState().historyViewMode || 'transaction';
+        this.subscribe(
+            BridgeStore,
+            state => state.historyViewMode || 'transaction',
+            (historyViewMode) => {
+                this._viewMode = historyViewMode;
+            }
+        );
     }
     render() {
         const isTx = this._viewMode === 'transaction';
@@ -1129,10 +1157,15 @@ export class InSetuExtBridgeActions extends InSetuElement {
     `];
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(window.inSetu.stores.App, (state) => {
-            this._pinnedRepos = state.pinnedRepos;
-            this.requestUpdate();
-        });
+        this._pinnedRepos = window.inSetu.stores.App.getState().pinnedRepos;
+        this.subscribe(
+            window.inSetu.stores.App,
+            state => state.pinnedRepos,
+            (pinnedRepos) => {
+                this._pinnedRepos = pinnedRepos;
+                this.requestUpdate();
+            }
+        );
     }
 
     render() {
@@ -1201,13 +1234,22 @@ export class InSetuExtBridgeHistory extends InSetuElement {
         super.disconnectedCallback();
         if (this._observer) this._observer.disconnect();
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(BridgeStore, state => {
-            this.historyRecords = state.historyRecords || [];
-            this._viewMode = state.historyViewMode || 'transaction';
-        });
+        const init = BridgeStore.getState();
+        this.historyRecords = init.historyRecords || [];
+        this._viewMode = init.historyViewMode || 'transaction';
+        this.subscribe(
+            BridgeStore,
+            state => ({
+                historyRecords: state.historyRecords || [],
+                historyViewMode: state.historyViewMode || 'transaction'
+            }),
+            ({ historyRecords, historyViewMode }) => {
+                this.historyRecords = historyRecords;
+                this._viewMode = historyViewMode;
+            }
+        );
         BridgeStore.getState().fetchHistory();
     }
 

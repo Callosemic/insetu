@@ -22,7 +22,7 @@ def hook_vfs_resolve_path(filename=None, workspace_id=None, **kwargs):
     if not filename:
         return None
     return resolve_logical_path(filename, workspace_id=workspace_id)
-def execute_binary(cmd, cwd=None, env=None, check=False, capture_output=True, text=True, **kwargs):
+def execute_binary(cmd, cwd=None, env=None, check=False, capture_output=True, text=True, popen=False, **kwargs):
     """
     Universal binary execution wrapper resolving system PATH, venv directories,
     and module CLI fallbacks across systemd, desktop, and isolated environments.
@@ -45,6 +45,16 @@ def execute_binary(cmd, cwd=None, env=None, check=False, capture_output=True, te
     else:
         module_name = bin_name.replace('-', '_')
         full_cmd = [sys.executable, '-m', module_name] + cmd_args[1:]
+
+    if popen:
+        return subprocess.Popen(
+            full_cmd,
+            cwd=cwd,
+            env=env,
+            text=text,
+            **kwargs
+        )
+
     return subprocess.run(
         full_cmd,
         cwd=cwd,
@@ -130,13 +140,13 @@ class InSetuURI(AkasaURI):
         with VFSTransaction(workspace_id) as vfs:
             return vfs.read(str(self), is_absolute_artifact=is_absolute_artifact)
     def bucket(self, workspace_id=None):
-        from insetu.core.topology.engine_topology import resolve_file_bucket
+        from insetu.core.topology.engine_topology import resolve_file_bucket as _resolve_file_bucket
 
         cfg = load_config(workspace_id)
         for repo_cfg in cfg.get("target_repos", []):
             if repo_cfg.get("repo_dir") == self.repo:
                 sub_buckets = repo_cfg.get("sub_buckets", [])
-                b, module = resolve_file_bucket(self.path, sub_buckets, repo_dir=self.repo)
+                b, module = _resolve_file_bucket(self.path, sub_buckets, repo_dir=self.repo)
                 return module if b and module else (b.get("id") if b else "main")
         return "main"
 
@@ -421,7 +431,7 @@ _WATCHDOG_LOCK = threading.Lock()
 _WATCHDOG_DEBOUNCE_WINDOW = 2.0
 _WATCHDOG_THREAD = None
 def _watchdog_debouncer_loop():
-    from akasa.db import get_connection
+    from akasa.db import get_connection as _get_connection
     while True:
         time.sleep(2.0)
         now = time.time()
@@ -446,7 +456,7 @@ def _watchdog_debouncer_loop():
                 if ws_id not in ws_groups: ws_groups[ws_id] = []
                 ws_groups[ws_id].append({"filepath": logical_path, "operation": data['op'], "ignore_ledger": False, "is_watchdog": True})
                 try:
-                    w_conn = get_connection("workers", workspace_id=ws_id)
+                    w_conn = _get_connection("workers", workspace_id=ws_id)
                     w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (logical_path, data['op'], now))
                     w_conn.commit()
                 except Exception: pass
@@ -472,15 +482,14 @@ def _track_intent_vfs_writes(workspace_id=None, filepath=None, resolved_path=Non
             for k in keys_to_remove:
                 del _WATCHDOG_PENDING[k]
 _WATCHDOG_OBSERVER = None
-
 @hooks.on('system_boot')
 def start_filesystem_observer(**kwargs):
     """Initializes a unified Watchdog observer for all active workspaces."""
     global _WATCHDOG_OBSERVER
-    from akasa.extension import SettingsManager
-    from akasa.utils import get_all_workspace_ids
-    workspace_ids = get_all_workspace_ids()
-    if not SettingsManager('core_system', 'default').get("enable_watchdog", True):
+    from akasa.extension import SettingsManager as _SettingsManager
+    from akasa.utils import get_all_workspace_ids as _get_all_workspace_ids
+    workspace_ids = _get_all_workspace_ids()
+    if not _SettingsManager('core_system', 'default').get("enable_watchdog", True):
         return None
 
     active_configs = []
@@ -490,17 +499,16 @@ def start_filesystem_observer(**kwargs):
     if not active_configs:
         return None
     try:
-        from watchdog.observers import Observer
-        from watchdog.observers.polling import PollingObserver
-        from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer as _Observer
+        from watchdog.observers.polling import PollingObserver as _PollingObserver
+        from watchdog.events import FileSystemEventHandler as _FileSystemEventHandler
     except ImportError:
         print("⚠️  Optional package 'watchdog' not found. External modifications require full sweeps.")
         return None
     except Exception as e:
         print(f"⚠️  Watcher initialization failed: {e}")
         return None
-
-    class FileSystemObserver(FileSystemEventHandler):
+    class FileSystemObserver(_FileSystemEventHandler):
         def __init__(self, workspace_id, repo_dir, target_path, ignore_dirs, ignore_patterns, ignore_exceptions=None):
             super().__init__()
             self.workspace_id = workspace_id
@@ -568,11 +576,10 @@ def start_filesystem_observer(**kwargs):
             self.process_event(event, filepath_override=event.src_path, op_override='delete', is_dir_override=is_dir)
             if hasattr(event, 'dest_path'):
                 self.process_event(event, filepath_override=event.dest_path, op_override='save', is_dir_override=is_dir)
-
     try:
-        observer = Observer()
+        observer = _Observer()
     except Exception:
-        observer = PollingObserver()
+        observer = _PollingObserver()
     has_watches = False
     for ws_id, cfg in active_configs:
         _, ws_root = get_workspace_physics(ws_id)
@@ -948,7 +955,6 @@ def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kw
             seen.add(f)
             unique_files.append(f)
     return unique_files
-
 @hooks.on('find_path_candidates')
 def find_path_candidates(query_path=None, workspace_id=None, allowed_repos=None, **kwargs):
     """
@@ -957,11 +963,11 @@ def find_path_candidates(query_path=None, workspace_id=None, allowed_repos=None,
     """
     if not query_path:
         return []
-    from insetu.core.topology.engine_topology import get_omniscient_workspace_files
+    from insetu.core.topology.engine_topology import get_omniscient_workspace_files as _get_omniscient_workspace_files
     clean_query = InSetuURI(str(query_path)).path.replace('\\', '/').strip('/')
     query_basename = Path(clean_query).name.lower()
 
-    omniscient = get_omniscient_workspace_files(workspace_id, allowed_repos)
+    omniscient = _get_omniscient_workspace_files(workspace_id, allowed_repos)
     candidates = []
 
     for cand_basename, cand_rel in omniscient:

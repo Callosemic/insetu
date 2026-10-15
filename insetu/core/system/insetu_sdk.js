@@ -1,7 +1,7 @@
 // insetu/insetu/static/js/core/sdk.js
 // Tier 1A: inSetu Local OS SDK Wrapper
 import { SutramElement, createSutramStore, ExtensionRegistry as SutramRegistry, bindStoreInput } from '/static/vendor/sutram/js/sutram_sdk.js';
-import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, coalescedAsync, formatDate, timeAgo, nativeShareFiles, cleanCodeArtifacts } from '/static/vendor/sutram/js/utils.js';
+import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, coalescedAsync, formatDate, timeAgo, nativeShareFiles, cleanCodeArtifacts, shallowEqual } from '/static/vendor/sutram/js/utils.js';
 import { getEventPath, getEventTarget } from '/static/vendor/yenvui/js/physics.js';
 import * as jsYaml from '/static/vendor/js-yaml/js-yaml.min.js';
 
@@ -166,6 +166,7 @@ export class InSetuElement extends SutramElement {
             parseFrontmatter: window.inSetu.utils.parseFrontmatter,
             serializeFrontmatter: window.inSetu.utils.serializeFrontmatter,
             cleanCodeArtifacts: window.inSetu.utils.cleanCodeArtifacts,
+            shallowEqual: window.inSetu.utils.shallowEqual,
             getActiveWorkspace: window.inSetu.utils.getActiveWorkspace
         };
     }
@@ -316,22 +317,26 @@ export class InSetuElement extends SutramElement {
                 setTimeout(() => this.onWorkspaceLoad(currentWs), 0);
             }
         }
-        // Auto-hydrate the ecosystem topology for all extensions natively
+        // Auto-hydrate the ecosystem topology for all extensions natively using structural slice equality
         if (appStore) {
-            this.subscribe(appStore, state => {
-                this.ecosystem = {
-                    allRepos: state.allRepos || [],
-                    pinnedRepos: state.pinnedRepos || new Set(['ALL']),
-                    targetConfigs: state.targetConfigs || []
-                };
-                this.requestUpdate();
-            });
             const as = appStore.getState ? appStore.getState() : {};
             this.ecosystem = {
                 allRepos: as.allRepos || [],
                 pinnedRepos: as.pinnedRepos || new Set(['ALL']),
                 targetConfigs: as.targetConfigs || []
             };
+            this.subscribe(
+                appStore,
+                state => ({
+                    allRepos: state.allRepos || [],
+                    pinnedRepos: state.pinnedRepos || new Set(['ALL']),
+                    targetConfigs: state.targetConfigs || []
+                }),
+                (eco) => {
+                    this.ecosystem = eco;
+                    this.requestUpdate();
+                }
+            );
         }
     }
     onWorkspaceLoad(workspaceId) {}
@@ -500,6 +505,7 @@ window.inSetu.utils.timeAgo = timeAgo;
 window.inSetu.utils.coalescedAsync = coalescedAsync;
 window.inSetu.utils.nativeShareFiles = nativeShareFiles;
 window.inSetu.utils.cleanCodeArtifacts = cleanCodeArtifacts;
+window.inSetu.utils.shallowEqual = shallowEqual;
 window.inSetu.utils.formatArtifactSize = function(meta) {
     if (!meta) return "";
     if (meta.size_bytes !== undefined) {
@@ -682,6 +688,14 @@ window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = nu
 window.ExtensionRegistry.registerExtension('system', {
     name: "System Core Actions",
     version: "1.0.0",
+    uiHooks: {
+        'sutram:resolve-route-hash': ({ colId, subId }) => {
+            const activeWs = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';
+            const deepPath = window.inSetu?.stores?.App?.getState()?.tabBrowsePaths?.[subId];
+            const deepStr = deepPath && deepPath.length > 0 ? '/' + deepPath.map(encodeURIComponent).join('/') : '';
+            return `#/${activeWs}/${colId}/${subId}${deepStr}`;
+        }
+    },
     shortcuts: [
         { id: 'layout-focus-col-left', context: 'global', key: 'ctrl+1', label: 'Focus Left Column', action: () => { const l = window.Sutram?.stores?.Layout?.getState(); if(l) l.setFocusedColumn('left'); } },
         { id: 'layout-focus-col-center', context: 'global', key: 'ctrl+2', label: 'Focus Center Column', action: () => { const l = window.Sutram?.stores?.Layout?.getState(); if(l) l.setFocusedColumn('center'); } },

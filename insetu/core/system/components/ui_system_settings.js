@@ -103,6 +103,7 @@ export class InSetuSystemSettings extends InSetuElement {
         document.body.setAttribute('data-theme', theme);
         localStorage.setItem('insetu_theme', theme);
         this.menuOpen = false;
+        window.dispatchEvent(new CustomEvent('sutram-theme-changed', { detail: { theme }, bubbles: true, composed: true }));
         window.dispatchEvent(new CustomEvent('insetu:theme-changed', { detail: { theme }, bubbles: true, composed: true }));
     }
     _setLayoutCapacity(cap) {
@@ -368,7 +369,7 @@ export class InSetuSystemSettings extends InSetuElement {
                 titleText="Documentation Hub"  
                 ?fullscreen=${true} 
                 @sutram-modal-closed=${() => this.docsModalOpen = false}>${!this._docsStatus ? html`
-                    <div style="padding: 20px;"><yenvui-spinner text="Scanning for documentation..."></yenvui-spinner></div>
+                    <div style="padding: 20px;"><sutram-spinner text="Scanning for documentation..."></sutram-spinner></div>
                 ` : html`
                     <div style="display: contents;">
                         <div>
@@ -577,7 +578,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                         <div slot="body" style="display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow-y: auto;">
                             <div style="display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-shrink: 0;">
                                 <sutram-btn intent="neutral" label="Parent Dir" @click=${this._goUpHostDir}></sutram-btn>
-                                <yenvui-scrub-track style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-primary); flex: 1;">${this._hostCurrentPath}</yenvui-scrub-track>
+                                <sutram-scrub-track style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-primary); flex: 1;">${this._hostCurrentPath}</sutram-scrub-track>
                             </div>
                             <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;">
                                 ${this._hostDirs.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.9rem;">No subdirectories found.</div>` : this._hostDirs.map(d => html`

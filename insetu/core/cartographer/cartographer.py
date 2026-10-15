@@ -1,8 +1,11 @@
 import os
 import subprocess
+import concurrent.futures
 from pathlib import Path
 from akasa.utils import get_workspace_physics, load_config, build_tree_dict
-from insetu.core.topology.engine_topology import get_valid_workspace_files
+from akasa.vfs import execute_vfs_save
+from insetu.core.utils_core import execute_binary
+from insetu.core.topology.engine_topology import get_valid_workspace_files, get_topology_files_for_repo
 from akasa.hooks import hooks
 from insetu.core.sdk import InSetuExtension
 
@@ -52,7 +55,6 @@ def extract_existing_comments(index_path, repo_path=None):
     git_comments = {}
     if repo_path:
         try:
-            from insetu.core.utils_core import execute_binary
             rel_index = os.path.relpath(index_path, repo_path)
             res = execute_binary(['git', 'show', f'HEAD:{rel_index}'], capture_output=True, text=True, cwd=repo_path)
             if res.returncode == 0:
@@ -128,7 +130,6 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         if not silent: print(f"🗺️  Cartographing {repo_dir}...")
         comments = extract_existing_comments(index_path, repo_path)
 
-        from insetu.core.topology.engine_topology import get_topology_files_for_repo
         valid_files = get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True)
 
         if not valid_files: return
@@ -144,9 +145,7 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         managed_dirs = cfg.get("managed_dirs", []) + config.get("repo_managed_dirs", [])
         tree_lines = render_ascii_tree(tree_dict, comments, managed_dirs)
         footer = "\n```\n"
-
         logical_index_path = f"vfs://{repo_dir}/docs/CODE_INDEX.md" if config.get("is_core_chassis") else f"vfs://{repo_dir}/CODE_INDEX.md"
-        from akasa.vfs import execute_vfs_save
 
         execute_vfs_save(workspace_id, logical_index_path, header + "\n".join(tree_lines) + footer, data={"ignore_ledger": True})
 
@@ -156,8 +155,6 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
                 print(f"  └─ ✅ Index updated. ⚠️ {missing} placeholders require attention.")
             else:
                 print(f"  └─ ✅ Index updated. Perfect documentation parity.")
-
-    import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(process_repo, config) for config in all_configs]
         concurrent.futures.wait(futures)

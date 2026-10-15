@@ -1,22 +1,44 @@
 from pathlib import Path
 import os
 import json
+import hashlib
 import datetime
 import time
 import subprocess
 import threading
+import traceback
 import uuid
 import concurrent.futures
+from typing import TypedDict, List, Dict, Any, Literal, Optional
 from flask import jsonify
-from akasa.utils import get_workspace_physics, generate_ascii_tree
-from insetu.core.utils_core import evaluate_circuit_breaker, get_default_repo_template, resolve_logical_path, get_repo_path, InSetuURI, is_naked_context_uri
+from akasa.utils import get_workspace_physics, generate_ascii_tree, slugify, resolve_system_artifact_path, thread_safe_cache
+from insetu.core.utils_core import (
+    evaluate_circuit_breaker,
+    get_default_repo_template,
+    resolve_logical_path,
+    get_repo_path,
+    get_safe_repo_id,
+    vacuum_manifest_artifacts,
+    extract_manifest_files,
+    get_domain_artifact_path,
+    BucketAddress,
+    InSetuURI,
+    is_naked_context_uri
+)
 from insetu.core.topology.engine_topology import resolve_file_bucket
 from akasa.extension import ExtensionContext
 from insetu.core.sdk import InSetuExtension
 from akasa.hooks import hooks
 from akasa.db import register_schema, get_connection
-from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback, register_ephemeral_artifact
-from akasa.vfs import VFSTransaction, execute_vfs_delete
+from akasa.workers import (
+    submit_immediate_job,
+    submit_one_shot_job,
+    update_immediate_job_status,
+    register_callback,
+    register_ephemeral_artifact,
+    resolve_dag_chain
+)
+from akasa.vfs import VFSTransaction, execute_vfs_delete, mount_volume, register_driver, DefaultVFSDriver
 
 register_schema('vfs_index', {
     'manifest_ledger': {
@@ -64,7 +86,6 @@ def compile_context_payload(workspace_id, output_dir, base_uri, header_block, te
     if max_kb is None:
         max_kb = ctx.settings.get("max_context_size_kb", 0)
     # 1. Physical Idempotency: Hash payload structure (header, text blocks, files) before disk writes
-    import hashlib
     payload_fingerprint = f"{header_block}\n" + "".join(text_blocks) + json.dumps(files)
     content_hash = hashlib.sha256(payload_fingerprint.encode('utf-8')).hexdigest()
     existing_entry = ctx.manifest.get("ctx", {}).get(base_uri)
@@ -196,10 +217,7 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
         "force_full": False,
         "ledger_events": events
     })
-
-    from akasa.workers import submit_one_shot_job
     submit_one_shot_job(job_id, "gather", "execute_delayed_compile", 12000, args_json, workspace_id=workspace_id)
-from akasa.workers import resolve_dag_chain
 
 def get_ordered_compilation_steps(ctx):
     """Delegates compilation sequence resolution to Akasa's generic DAG orchestrator."""
@@ -280,10 +298,13 @@ def hook_vfs_search(workspace_id=None, query=None, **kwargs):
 @hooks.on('gather_declare_topology')
 def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=None, **kwargs):
     """Base Workspace Provider: Yields schemas for standard repo contexts and media vaults."""
-    from insetu.core.utils_core import get_safe_repo_id
-    from insetu.core.topology.engine_topology import topology_bp, resolve_topology_buffer
+    from insetu.core.topology.engine_topology import (
+        topology_bp as _topology_bp,
+        resolve_topology_buffer as _resolve_topology_buffer,
+        get_topology_files_for_repo as _get_topology_files_for_repo
+    )
     # Read-Consistency Guard: Drain pending events before querying topology_ledger
-    drained = resolve_topology_buffer(workspace_id)
+    drained = _resolve_topology_buffer(workspace_id)
     if drained and isinstance(ledger_events, list):
         event_dict = {e['filepath']: e for e in ledger_events}
         for de in drained:
@@ -300,7 +321,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
     debug_log_lines = [f"=== GATHER TOPOLOGY RUN {time.time()} ==="]
     target_configs = [c for c in cfg.get("target_repos", []) if not c.get("exclude_from_context") and (not target_repos or c.get("repo_dir") in target_repos)]
 
-    top_ctx = topology_bp.get_context(workspace_id)
+    top_ctx = _topology_bp.get_context(workspace_id)
     for config in target_configs:
         repo_dir = config.get("repo_dir")
         safe_r_dir = get_safe_repo_id(repo_dir)
@@ -310,8 +331,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
             debug_log_lines.append(f"\n[REPO SKIP] {repo_dir} (Path not found: {repo_path})")
             continue
         # Pull strictly from the SSOT Topology Ledger, avoiding disk I/O
-        from insetu.core.topology.engine_topology import get_topology_files_for_repo
-        final_list = get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True)
+        final_list = _get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True)
 
         debug_log_lines.append(f"\n[REPO] {repo_dir} (Path: {repo_path})")
         debug_log_lines.append(f"  - Total files from Topology Ledger: {len(final_list)}")
@@ -341,11 +361,9 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                     "recall_callback": make_vault_recall(final_list, repo_dir)
                 })
             continue
-
         sub_buckets = config.get("sub_buckets", [])
         buckets = {}
         dynamic_files = {}
-        from akasa.utils import slugify
         if sub_buckets:
             buckets = {}
             for b in sub_buckets:
@@ -482,8 +500,8 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         ctx = gather_bp.get_context(workspace_id)
         paths = ctx.paths
 
-        from insetu.core.topology.engine_topology import resolve_topology_buffer
-        drained = resolve_topology_buffer(workspace_id)
+        from insetu.core.topology.engine_topology import resolve_topology_buffer as _resolve_topology_buffer
+        drained = _resolve_topology_buffer(workspace_id)
         raw_ledger_events = kwargs.get("ledger_events") or []
         event_dict = {}
         def _to_canonical_event(item, default_op="save"):
@@ -636,7 +654,6 @@ def generate_context_file(workspace_id=None, target_repos=None):
                 expected_artifacts.update(InSetuURI(c).basename for c in chunks)
     # 3. Global Vacuum: Purge physical files that aren't explicitly declared
     if target_repos is None:
-        from insetu.core.utils_core import vacuum_manifest_artifacts
         vacuum_manifest_artifacts(ctx, "ctx://contexts", expected_artifacts, exempt_abs_paths=active_ephemerals)
     # Re-inject surviving Ephemeral Artifacts into the manifest
     old_manifest = ctx.manifest.get("ctx", {})
@@ -728,13 +745,10 @@ def _pack_selection_worker(ctx, items=None, gather_only=True, job_id=None, **kwa
     # Pure Granular Routing: Only save the specific quickpack to the ledger
     ctx.save_manifest({base_uri: manifest_entry}, is_full_compile=False)
     ctx.sync_vfs_barrier()
-
     chunks = manifest_entry.get("chunks", [base_uri])
     for chunk in chunks:
-        from akasa.utils import resolve_system_artifact_path
         out_path = resolve_system_artifact_path(chunk, ctx.workspace_id)
         register_ephemeral_artifact(out_path, "quick_pack", 86400, workspace_id=ctx.workspace_id)
-
     return {
         "message": "Compilation successful.",
         "artifact": {
@@ -748,7 +762,6 @@ def _pack_selection_worker(ctx, items=None, gather_only=True, job_id=None, **kwa
             "files": chunks
         }
     }
-from typing import TypedDict, List, Dict, Any, Literal
 
 class ClearQuickpacksResponse(TypedDict):
     status: str
@@ -775,9 +788,8 @@ def api_clear_quickpacks(ctx):
     conn = get_connection("workers", workspace_id=ctx.workspace_id)
     conn.execute("DELETE FROM ephemeral_artifacts WHERE module_owner = 'quick_pack'")
     conn.commit()
-
     return jsonify({"status": "success", "message": f"Cleared {len(keys_to_delete)} quickpacks."})
-from typing import TypedDict, List, Dict, Any, Optional
+
 class PackSelectionPayload(TypedDict, total=False):
     items: List[Dict[str, str]]
     gather_only: Optional[bool]
@@ -828,7 +840,6 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
                     res = _surgically_update_manifest(workspace_id=ctx.workspace_id, files=[], filepath=None)
                     if res: touched_files.extend(res)
             except Exception as e:
-                import traceback
                 print(f"Warning: Differential compile failed, falling back to full sweep: {e}\n{traceback.format_exc()}")
                 needs_full_compile = True
         if needs_full_compile or forced_repos:
@@ -850,7 +861,6 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
             ctx.save_manifest(delta_manifest, is_full_compile=False)
             touched_files.extend(list(delta_manifest.keys()))
         # Map compiled output URIs back to their abstract architectural bucket IDs
-        from insetu.core.utils_core import BucketAddress
         logical_buckets = set()
         final_manifest = ctx.manifest.get("ctx", {})
         for filepath in touched_files:
@@ -878,7 +888,6 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
             }
         }
     except Exception as e:
-        import traceback
         err_trace = traceback.format_exc()
         print(f"CRITICAL COMPILER ERROR:\n{err_trace}")
         try:
@@ -912,18 +921,16 @@ def _register_gather_step(workspace_id=None, **kwargs):
     }]
 @hooks.on('request_paths')
 def hook_request_paths(workspace_id=None, **kwargs):
-    from insetu.core.utils_core import get_domain_artifact_path
     return {
         "contexts_dir": get_domain_artifact_path(workspace_id, "contexts", "gather")
     }
 
 @hooks.on('workspace_boot')
 def mount_gather_volumes(workspace_id=None, **kwargs):
-    from akasa.vfs import mount_volume, register_driver, DefaultVFSDriver
     register_driver('ctx', DefaultVFSDriver())
     ctx = gather_bp.get_context(workspace_id)
     mount_volume(workspace_id, 'ctx', 'contexts', ctx.paths.get("contexts_dir"))
-from akasa.utils import thread_safe_cache
+
 @hooks.on('coerce_naked_uri')
 def coerce_gather_uris(raw_uri=None, **kwargs):
     if not raw_uri:
@@ -957,7 +964,6 @@ def hook_request_manifest(workspace_id=None, **kwargs):
 @hooks.on('request_manifest_chunks')
 def hook_request_manifest_chunks(target_key=None, workspace_id=None, **kwargs):
     try:
-        from insetu.core.utils_core import extract_manifest_files
         ctx = gather_bp.get_context(workspace_id)
         return extract_manifest_files(ctx.manifest, target_key=target_key, domain='ctx')
     except Exception: return []
@@ -966,7 +972,6 @@ def hook_resolve_payload_chunks(uri=None, workspace_id=None, manifest=None, **kw
     if not uri: return []
     try:
         if manifest:
-            from insetu.core.utils_core import extract_manifest_files
             chunks = extract_manifest_files(manifest, target_key=uri, domain='ctx')
         else:
             ctx = gather_bp.get_context(workspace_id)

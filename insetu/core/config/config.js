@@ -492,10 +492,9 @@ export class InSetuExtConfig extends InSetuElement {
             </sutram-modal>
         `;
     }
-
     render() {
         const bodyContent = !this.configForm 
-            ? html`<div style="padding: 20px;"><yenvui-spinner text="Loading configuration..."></yenvui-spinner></div>`
+            ? html`<div style="padding: 20px;"><sutram-spinner text="Loading configuration..."></sutram-spinner></div>`
             : html`
                 <div style="display: flex; flex-direction: column;">
                     <sutram-collapsible 

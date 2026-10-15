@@ -145,17 +145,26 @@ window.inSetu.api = {
         if (method !== 'GET' && options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) {
             headers.set('Content-Type', 'application/json');
         }
-
         options.headers = headers;
         let res;
-        if (method === 'GET') {
+        const isPopout = new URLSearchParams(window.location.search).get('popout') === 'true';
+
+        if (isPopout) {
+            try {
+                res = await fetch(url, options);
+            } catch (err) {
+                if (err.name === 'AbortError') throw err;
+                window.inSetu?.stores?.App?.setState({ isOffline: true });
+                if (window.Sutram?.stores?.Environment) window.Sutram.stores.Environment.setState({ isOffline: true });
+                throw err;
+            }
+        } else if (method === 'GET') {
             res = await offlineProvider.get(url, options, scopeId);
         } else {
             const rawPayload = options.body ? (typeof options.body === 'string' ? JSON.parse(options.body) : options.body) : {};
             const isFormData = options.body instanceof FormData;
             const bodyString = isFormData ? options.body : (options.body ? JSON.stringify(rawPayload) : null);
 
-            // Pass headers cleanly to the offline provider wrapper
             const plainHeaders = {};
             headers.forEach((val, key) => plainHeaders[key] = val);
             options.plainHeaders = plainHeaders;
@@ -242,13 +251,16 @@ class SSEPipeline {
             this.isConnected = true;
             console.log("🟢 [SSE TELEMETRY] Connected to real-time system stream. Fallback polling relaxed.");
         };
+        const bc = new BroadcastChannel('insetu_telemetry');
         this.source.addEventListener('vfs_mutated', (e) => {
             const data = JSON.parse(e.data);
+            bc.postMessage({ type: 'vfs_mutated', data });
             if (data.workspace_id && data.workspace_id !== window.inSetu.utils.getActiveWorkspace()) return;
             window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: data.mutations });
         });
         this.source.addEventListener('topology_resolved', (e) => {
             const data = JSON.parse(e.data);
+            bc.postMessage({ type: 'topology_resolved', data });
             if (data.workspace_id && data.workspace_id !== window.inSetu.utils.getActiveWorkspace()) return;
             const state = AppStore.getState();
             if (data.clear_all) {
@@ -261,6 +273,7 @@ class SSEPipeline {
         });
         this.source.addEventListener('job_progress', (e) => {
             const data = JSON.parse(e.data);
+            bc.postMessage({ type: 'job_progress', data });
             if (data.workspace_id && data.workspace_id !== window.inSetu.utils.getActiveWorkspace()) return;
             const isPipelineJob = ['topology', 'cartographer', 'gather', 'git', 'flow'].includes(data.ext_name);
 

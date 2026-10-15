@@ -1,11 +1,18 @@
 import os
 import json
 import uuid
+import time
+import hashlib
 import datetime
+import traceback
 from pathlib import Path
 from typing import TypedDict, Optional, List, Dict, Any
+import werkzeug.utils
 from flask import request, jsonify, send_file
 from insetu.core.sdk import InSetuExtension
+from akasa.db import get_connection
+from akasa.hooks import hooks
+from akasa.utils import sniff_tenant_id
 from akasa.vfs import execute_vfs_move, execute_vfs_delete, execute_vfs_save
 from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
 from insetu.core.utils_core import InSetuURI, get_repo_path, execute_binary
@@ -95,7 +102,6 @@ def api_fs_git_diff(ctx):
 @fs_bp.bp.route('/download/<path:filename>')
 def download_file(filename):
     """Universal download gateway for contexts, artifacts, and vault files."""
-    from akasa.utils import sniff_tenant_id
     workspace_id = sniff_tenant_id()
     uri = InSetuURI.from_any(filename)
     resolved_path = uri.resolve_if_exists(workspace_id)
@@ -113,7 +119,6 @@ def download_file(filename):
 def _background_fs_search(job_id, workspace_id, query, **kwargs):
     try:
         update_immediate_job_status(job_id, 'processing', "Searching workspace files...", workspace_id=workspace_id)
-        from akasa.hooks import hooks
         results = []
         search_responses = hooks.emit('vfs_search', workspace_id=workspace_id, query=query)
         for res in search_responses:
@@ -156,7 +161,6 @@ def api_fs_move(ctx):
         res, code = execute_vfs_move(workspace_id, filepath, dest_path)
         return jsonify(res), code
     except Exception as e:
-        import traceback
         try:
             hooks.emit_background('system_error', source="VFS:Move", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
         except Exception: pass
@@ -190,7 +194,6 @@ def api_fs_archive(ctx):
         res["message"] = "File archive queued."
         return jsonify(res), code
     except Exception as e:
-        import traceback
         try:
             hooks.emit_background('system_error', source="VFS:Archive", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
         except Exception: pass
@@ -206,7 +209,6 @@ def api_fs_delete(ctx):
         res, code = execute_vfs_delete(workspace_id, filepath)
         return jsonify(res), code
     except Exception as e:
-        import traceback
         try:
             hooks.emit_background('system_error', source="VFS:Delete", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
         except Exception: pass
@@ -226,13 +228,8 @@ def api_fs_upload(ctx):
     workspace_id = ctx.workspace_id
     if 'file' not in ctx.req.files:
             return jsonify({"error": "No files provided"}), 400
-
     files = ctx.req.files.getlist('file')
     dest_dir = ctx.req.form.get('dest_dir', '').strip()
-    import werkzeug.utils
-    import time
-    from akasa.db import get_connection
-    from akasa.hooks import hooks
 
     db_conn = get_connection("workers", workspace_id=workspace_id)
     uploaded_paths = []
@@ -292,17 +289,12 @@ def api_fs_save(ctx):
         filepath, content = data.get("filepath", "").strip(), data.get("content", "")
         if not filepath: 
                 return jsonify({"error": "Filepath is required"}), 400
-
         base_hash = data.get("base_hash")
         if base_hash:
-            import hashlib
-
             current_disk_content = ctx.vfs.read(filepath)
             if current_disk_content is not None:
                 current_hash = hashlib.sha256(current_disk_content.encode('utf-8')).hexdigest()
                 if current_hash != base_hash and current_disk_content != content:
-                    import time
-
                     # Preserve logical URI boundaries using pure string math to avoid Pathlib stripping '://'
                     parts = filepath.split('/')
                     filename = parts[-1]
@@ -316,7 +308,6 @@ def api_fs_save(ctx):
         result = execute_vfs_save(workspace_id, filepath, content, data)
         return jsonify(result)
     except Exception as e:
-        import traceback
         try:
             # Masking content string to prevent payload blowout in the ledger
             safe_payload = {"filepath": data.get("filepath")} if isinstance(data, dict) else {}

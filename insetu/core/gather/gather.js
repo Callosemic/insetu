@@ -249,27 +249,48 @@ export class InSetuExtGather extends InSetuElement {
     }
     onWorkspaceLoad(workspaceId) {
         GatherStore.getState().fetchSettings();
-        const ctxManifest = AppStore.getState().manifest?.ctx || {};
-        this.manifestFiles = Object.keys(ctxManifest);
+        const aState = AppStore.getState();
+        this.manifestFiles = aState.derivedCtxKeys || Object.keys(aState.manifest?.ctx || {});
         this.requestUpdate();
     }
     connectedCallback() {
         super.connectedCallback();
         GatherStore.getState().fetchSettings();
-        this.subscribe(GatherStore, state => {
-            this.loading = state.loading;
-            this.searchQuery = state.searchQuery;
-            this.requestUpdate();
-        });
-        this.subscribe(AppStore, state => {
-            this.manifestFiles = Object.keys(state.manifest?.ctx || {});
-            this.activeModules = state.activeModules || [];
-            this.pendingModules = state.pendingModules || [];
-            this.isPipelineActive = state.isPipelineActive || false;
-            this.categoryOrder = state.categoryOrder || [];
-            this.hiddenOutputs = state.hiddenOutputs || [];
-            this.requestUpdate();
-        });
+        this.subscribe(
+            GatherStore,
+            state => ({
+                loading: state.loading,
+                searchQuery: state.searchQuery,
+                domainColors: state.domainColors
+            }),
+            ({ loading, searchQuery }) => {
+                this.loading = loading;
+                this.searchQuery = searchQuery;
+                this.requestUpdate();
+            }
+        );
+        this.subscribe(
+            AppStore,
+            state => ({
+                manifestFiles: state.derivedCtxKeys || Object.keys(state.manifest?.ctx || {}),
+                manifestCtx: state.manifest?.ctx,
+                dirtyBuckets: state.dirtyBuckets,
+                activeModules: state.activeModules || [],
+                pendingModules: state.pendingModules || [],
+                isPipelineActive: state.isPipelineActive || false,
+                categoryOrder: state.categoryOrder || [],
+                hiddenOutputs: state.hiddenOutputs || []
+            }),
+            (slice) => {
+                this.manifestFiles = slice.manifestFiles;
+                this.activeModules = slice.activeModules;
+                this.pendingModules = slice.pendingModules;
+                this.isPipelineActive = slice.isPipelineActive;
+                this.categoryOrder = slice.categoryOrder;
+                this.hiddenOutputs = slice.hiddenOutputs;
+                this.requestUpdate();
+            }
+        );
         this.subscribe(AppStore, state => state.gatherForceRefreshTick, (tick) => {
             if (tick) this.loadContext(false);
         });
@@ -277,27 +298,28 @@ export class InSetuExtGather extends InSetuElement {
             this._syncState = e.detail.state;
             this.requestUpdate();
         });
-        const handleGatherCompleted = async (artifact = {}) => {
+        const handleGatherCompleted = async () => {
             try {
-                const mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
-                if (mRes.ok) {
-                    const rawManifest = await mRes.json();
-                    AppStore.setState(s => ({
-                        manifest: { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} }
-                    }));
+                if (window.inSetu.sys?.refreshManifest) {
+                    await window.inSetu.sys.refreshManifest();
                 }
             } catch (err) {
                 console.warn("[Gather] Failed to refresh manifest post-compile:", err);
             }
         };
-        this.registerGlobalListener('insetu:gather-compile-completed', window, (e) => handleGatherCompleted(e.detail || {}));
+        this.registerGlobalListener('insetu:gather-compile-completed', window, () => handleGatherCompleted());
         this.registerGlobalListener('insetu:compile-step-complete', window, (e) => {
             if (e.detail && e.detail.ext_name === 'gather') {
-                handleGatherCompleted(e.detail.artifact || {});
+                handleGatherCompleted();
             }
         });
         const aState = AppStore.getState();
-        this.manifestFiles = Object.keys(aState.manifest?.ctx || {});
+        this.manifestFiles = aState.derivedCtxKeys || Object.keys(aState.manifest?.ctx || {});
+        this.activeModules = aState.activeModules || [];
+        this.pendingModules = aState.pendingModules || [];
+        this.isPipelineActive = aState.isPipelineActive || false;
+        this.categoryOrder = aState.categoryOrder || [];
+        this.hiddenOutputs = aState.hiddenOutputs || [];
         const gState = GatherStore.getState();
         this.loading = gState.loading;
         this.searchQuery = gState.searchQuery;

@@ -524,15 +524,21 @@ export async function saveBufferFile(filepath, autoSave = false) {
     if (state.filename.toLowerCase().endsWith('.json')) {
         try { JSON.parse(content); } catch (e) { return alert("Invalid JSON syntax: " + e.message); }
     }
-    await window.inSetu.sys.executeWorkspaceMutation('fs/save', { filepath: normPath, content }, {
+    const baseHash = state.baseHash || null;
+    await window.inSetu.sys.executeWorkspaceMutation('fs/save', { filepath: normPath, content, base_hash: baseHash }, {
         collapseKey: `vfs:save:${normPath}`,
         pendingMutations: [normPath],
         cacheBlobUrl: `/api/${window.inSetu.utils.getActiveWorkspace()}/fs/fetch?file=${encodeURIComponent(normPath)}`,
         cacheBlobContent: content,
         loadingText: 'Saving...',
         silent: autoSave,
-        onSuccess: () => {
-            FsStore.getState().updateBuffer(normPath, { originalContent: content, content });
+        onSuccess: async () => {
+            let nextHash = null;
+            try {
+                const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+                nextHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+            } catch(e) {}
+            FsStore.getState().updateBuffer(normPath, { originalContent: content, content, baseHash: nextHash, saveStatus: 'idle' });
             refreshActiveFileViews(null, normPath);
         }
     });
@@ -756,7 +762,7 @@ export async function deleteEmptyFolder(dirPath) {
         onSuccess: () => {
             const parts = dirPath.split('/');
             parts.pop();
-            AppStore.setState({ globalBrowsePath: parts });
+            AppStore.getState().setBrowsePath(parts, 'files');
             refreshActiveFileViews(normPath, null);
         }
     });
@@ -829,51 +835,35 @@ export class InSetuVFSExplorer extends InSetuElement {
                 this.globalBrowsePath = [];
                 this.loading = false;
         }
-        _updateState(state) {
-                const allFiles = new Set();
-                const targetConfigs = state.targetConfigs || [];
-                // UDF Guardrail: Only show files that belong to explicitly tracked repository targets
-                // This prevents OS artifact directories (contexts/, diffs/) from leaking into the visual root
-                const validPrefixes = targetConfigs.map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
-
-                const vfsManifest = state.manifest?.vfs || {};
-
-                Object.values(vfsManifest).forEach(obj => {
-                    if (obj.files) {
-                        obj.files.forEach(f => {
-                            if (validPrefixes.length === 0 || validPrefixes.some(prefix => f.startsWith(prefix))) {
-                                allFiles.add(f);
-                            }
-                        });
-                    }
-                });
-
-                if (targetConfigs) {
-                        targetConfigs.forEach(cfg => {
-                                if (cfg.repo_dir && !Array.from(allFiles).some(f => f.startsWith(cfg.repo_dir + '/'))) {
-                                        allFiles.add(cfg.repo_dir + '/.gitkeep');
-                                }
-                        });
-                }
-                this.manifestFiles = Array.from(allFiles);
-                this.globalBrowsePath = state.globalBrowsePath || [];
-        }
         connectedCallback() {
                 super.connectedCallback();
-                this.subscribe(AppStore, (state) => {
-                        this._updateState(state);
-                });
-                this.subscribe(FsStore, (state) => {
-                        this.searchQuery = state.searchQuery;
-                });
+                this.subscribe(
+                        AppStore,
+                        state => ({
+                                manifestFiles: state.derivedVfsFiles || [],
+                                globalBrowsePath: state.globalBrowsePath || []
+                        }),
+                        ({ manifestFiles, globalBrowsePath }) => {
+                                this.manifestFiles = manifestFiles;
+                                this.globalBrowsePath = globalBrowsePath;
+                        }
+                );
+                this.subscribe(
+                        FsStore,
+                        state => state.searchQuery || '',
+                        (searchQuery) => {
+                                this.searchQuery = searchQuery;
+                        }
+                );
                 this.registerGlobalListener('sutram-sync-complete', window, () => {
                     if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
                         window.inSetu.sys.refreshManifest();
                     }
                 });
 
-                // Trigger initial read
-                this._updateState(AppStore.getState());
+                const initState = AppStore.getState();
+                this.manifestFiles = initState.derivedVfsFiles || [];
+                this.globalBrowsePath = initState.globalBrowsePath || [];
                 this.searchQuery = FsStore.getState().searchQuery || '';
         }
         disconnectedCallback() {
@@ -893,9 +883,8 @@ export class InSetuVFSExplorer extends InSetuElement {
                         this.loading = false;
                 }
         }
-
         _handlePathChange(e) {
-                AppStore.setState({ globalBrowsePath: e.detail.path });
+                AppStore.getState().setBrowsePath(e.detail.path || [], 'files');
         }
         render() {
             if (this.manifestFiles.length === 0 && !this.loading) {
@@ -1199,6 +1188,15 @@ window.ExtensionRegistry.registerExtension('fs', {
     name: "Virtual File System",
     version: "2.0.0",
     offline_mode: "full",
+    uiHooks: {
+        'sutram:is-projection-dirty': (subId) => {
+            if (!subId) return false;
+            const normId = normalizeVfsURI(subId);
+            const activeBuffers = FsStore.getState().activeBuffers || {};
+            const buf = activeBuffers[subId] || activeBuffers[normId];
+            return Boolean(buf && buf.content !== buf.originalContent);
+        }
+    },
     shortcuts: [
         {
             id: 'new-file-modal-save',
@@ -1510,6 +1508,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             icon: "folder-tree",
             intent: "neutral",
             order: 2,
+            allow_popout: true,
             component: "insetu-vfs-explorer"
         },
         {
@@ -1757,7 +1756,12 @@ export async function viewSourceFile(filepath, isFS = false, bypassHook = false)
         } else if (text === null) {
             throw new Error("Failed to fetch");
         }
-
+        let initialHash = null;
+        try {
+            const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+            initialHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+        } catch(e) {}
+        FsStore.getState().updateBuffer(normPath, { baseHash: initialHash, saveStatus: 'idle', docHandle: null });
         injectTextToBuffer(normPath, text, isSupportedEditor, isMarkdown, isFS);
     } catch (e) {
         injectTextToBuffer(normPath, "Error loading file content.", isSupportedEditor, isMarkdown, isFS);
@@ -1900,8 +1904,9 @@ export class InSetuEditorProjection extends InSetuElement {
         :host([zen-mode]) .zen-exit-btn:hover { opacity: 1; color: var(--intent-danger); border-color: var(--intent-danger); }
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); overflow: hidden; }
         .editor-header {
-            display: flex; justify-content: flex-end; align-items: center; 
+            display: flex; justify-content: space-between; align-items: center; 
             padding: 8px 15px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0;
+            gap: 12px;
         }
         .editor-footer {
             padding: 10px 15px; gap: 10px; border-top: 1px solid var(--border); 
@@ -1926,6 +1931,16 @@ export class InSetuEditorProjection extends InSetuElement {
         this.zenMode = false;
         this._transientCursorPos = 0;
         this._transientScrollTop = 0;
+        this._autoSaveTimer = null;
+    }
+
+    _triggerDebouncedAutoSave() {
+        if (this._autoSaveTimer) clearTimeout(this._autoSaveTimer);
+        this._autoSaveTimer = setTimeout(() => {
+            if (this.isDirty && this.filepath && window.inSetu?.ui?.saveBufferFile) {
+                window.inSetu.ui.saveBufferFile(this.filepath, true);
+            }
+        }, 2000);
     }
     _cleanArtifacts() {
         const cleanFn = window.inSetu?.utils?.cleanCodeArtifacts;
@@ -2026,6 +2041,69 @@ export class InSetuEditorProjection extends InSetuElement {
             }
         });
 
+        // Emergency Flush on Window Close (Protects in-flight keystrokes during debounce)
+        this._beforeUnloadFlush = () => {
+            if (this.isDirty && this.filepath) {
+                const normPath = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(this.filepath) : this.filepath;
+                const ws = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';
+                const token = sessionStorage.getItem('insetu_boot_token') || '';
+                const state = window.inSetu?.stores?.Fs?.getState()?.activeBuffers?.[normPath] || window.inSetu?.stores?.Fs?.getState()?.activeBuffers?.[this.filepath];
+                if (state && state.content !== state.originalContent) {
+                    const headers = { 'Content-Type': 'application/json' };
+                    if (token) headers['Authorization'] = `Bearer ${token}`;
+                    fetch(`/api/${encodeURIComponent(ws)}/fs/save`, {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify({
+                            filepath: normPath,
+                            content: state.content,
+                            base_hash: state.baseHash || null
+                        }),
+                        keepalive: true
+                    }).catch(() => {});
+                }
+            }
+        };
+        window.addEventListener('beforeunload', this._beforeUnloadFlush);
+
+        // Focus-Aware Idle Hot-Swap Listener (Driven by BroadcastChannel or SSE)
+        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
+            const mutations = e.detail?.mutations || [];
+            const normPath = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(this.filepath) : this.filepath;
+            const isMatch = mutations.some(m => {
+                const mNorm = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(m.filepath) : m.filepath;
+                return mNorm === normPath || m.filepath === this.filepath;
+            });
+
+            if (isMatch) {
+                const cmEditor = this.shadowRoot.querySelector('insetu-markdown-editor');
+                const hasFocus = cmEditor?.shadowRoot?.activeElement || this.shadowRoot.activeElement;
+                if (!this.isDirty && !hasFocus) {
+                    window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(normPath)}`)
+                        .then(r => r.ok ? r.text() : null)
+                        .then(async (newText) => {
+                            if (newText !== null && newText !== this._buffer?.content) {
+                                let newHash = null;
+                                try {
+                                    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(newText));
+                                    newHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+                                } catch(err) {}
+                                const fsStore = window.inSetu?.stores?.Fs;
+                                if (fsStore) {
+                                    fsStore.getState().updateBuffer(normPath, {
+                                        content: newText,
+                                        originalContent: newText,
+                                        fullText: newText,
+                                        baseHash: newHash
+                                    });
+                                }
+                            }
+                        })
+                        .catch(() => {});
+                }
+            }
+        });
+
         this.registerGlobalListener('insetu:editor-insert-text', window, (e) => {
             if (e.detail.filepath === this.filepath || e.detail.filepath === this.dataset.subId) {
                 const m = this._buffer;
@@ -2101,9 +2179,10 @@ export class InSetuEditorProjection extends InSetuElement {
         const m = this._buffer;
         const shouldBeReadOnly = !(m.isFS || m.forceEdit);
         const kbSize = Math.round((m.fullText?.length || 0) / 1024);
+        const isPopout = new URLSearchParams(window.location.search).get('popout') === 'true';
         return html`
             <div class="editor-header">
-                <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;">
                     <sutram-entity-actions   
                         variant="menu-bar"
                         .entityType=${'file:editor'} 
@@ -2119,6 +2198,23 @@ export class InSetuEditorProjection extends InSetuElement {
                         }}>
                     </sutram-entity-actions>
                 </div>
+                ${!isPopout ? html`
+                    <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                        <sutram-btn
+                            intent="neutral"
+                            variant="tinted"
+                            icon="external-link"
+                            label="Pop Out"
+                            title="Open in dedicated pop-out window"
+                            style="--btn-padding: 4px 10px; --btn-font-size: 0.8rem; margin: 0;"
+                            @click=${() => {
+                                if (window.inSetu?.ui?.popoutProjection) {
+                                    window.inSetu.ui.popoutProjection(m.filename);
+                                }
+                            }}>
+                        </sutram-btn>
+                    </div>
+                ` : ''}
             </div>
             ${m.isTruncated ? html`
                 <div style="display: flex; background: #f59e0b; color: #000; padding: 8px 20px; font-weight: bold; justify-content: space-between; align-items: center; flex-shrink: 0; border-bottom: 1px solid var(--border);">
@@ -2135,9 +2231,10 @@ export class InSetuEditorProjection extends InSetuElement {
                         .language=${m.codeMode} 
                         .readOnly=${shouldBeReadOnly}
                         ?writingMode=${this._writingMode}
-                        @content-changed=${(e) => window.inSetu.stores.Fs?.getState()?.updateBuffer(this.filepath, { content: e.detail.value })}
-                        @yenvui-editor-selection=${(e) => this._transientCursorPos = e.detail.cursor}
-                        @yenvui-editor-scroll=${(e) => this._transientScrollTop = e.detail.top}>
+                        @content-changed=${(e) => {
+                            window.inSetu.stores.Fs?.getState()?.updateBuffer(this.filepath, { content: e.detail.value });
+                            this._triggerDebouncedAutoSave();
+                        }}>
                     </insetu-markdown-editor>
                 ` : html`
                     <textarea 

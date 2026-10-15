@@ -117,6 +117,51 @@ window.Sutram.vendorizeLanguage = async (lang) => {
     }
     return null;
 };
+export async function popoutProjection(filepath) {
+    if (!filepath) return;
+    const ws = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';
+    const token = sessionStorage.getItem('insetu_boot_token') || '';
+    const normFp = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(filepath) : filepath;
+
+    const fsState = window.inSetu?.stores?.Fs?.getState() || {};
+    const buf = fsState.activeBuffers?.[normFp] || fsState.activeBuffers?.[filepath];
+    if (buf && buf.isFS && buf.content !== buf.originalContent && window.inSetu?.ui?.saveBufferFile) {
+        await window.inSetu.ui.saveBufferFile(filepath, true);
+    }
+
+    const url = `/?popout=true&token=${encodeURIComponent(token)}#/${encodeURIComponent(ws)}/center/${encodeURIComponent(normFp)}`;
+    window.open(url, '_blank', 'popup=yes,width=850,height=900');
+
+    const layout = window.Sutram?.stores?.Layout;
+    if (layout) {
+        const layoutState = layout.getState();
+        ['left', 'center', 'right'].forEach(col => {
+            const pinned = layoutState.columns[col]?.pinned || [];
+            pinned.forEach(p => {
+                if (p.id === normFp || p.id === filepath) {
+                    layoutState.unpinFromColumn(col, p.id);
+                }
+            });
+        });
+        layoutState.closeWindow(normFp);
+        if (filepath !== normFp) layoutState.closeWindow(filepath);
+        layoutState.evictProjection(normFp);
+        if (filepath !== normFp) layoutState.evictProjection(filepath);
+
+        const nextState = layout.getState();
+        const activeCol = nextState.focusedColumn || 'center';
+        const nextActiveId = nextState.columns[activeCol]?.active || '';
+        const deepPath = window.inSetu?.stores?.App?.getState()?.tabBrowsePaths?.[nextActiveId];
+        const deepStr = deepPath && deepPath.length > 0 ? '/' + deepPath.map(encodeURIComponent).join('/') : '';
+        const nextHash = `#/${encodeURIComponent(ws)}/${activeCol}/${encodeURIComponent(nextActiveId)}${deepStr}`;
+        if (window.location.hash !== nextHash) {
+            window.history.replaceState(null, '', nextHash);
+        }
+    }
+}
+
+window.inSetu.ui = window.inSetu.ui || {};
+window.inSetu.ui.popoutProjection = popoutProjection;
 
 window.inSetu.editor = window.inSetu.editor || {};
 window.inSetu.editor.getEditorContent = getEditorContent;
@@ -409,6 +454,12 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         if (this._escListener) {
             window.removeEventListener('keydown', this._escListener);
         }
+        if (this._beforeUnloadFlush) {
+            window.removeEventListener('beforeunload', this._beforeUnloadFlush);
+        }
+        if (this._autoSaveTimer) {
+            clearTimeout(this._autoSaveTimer);
+        }
     }
     updated(changedProperties) {
         super.updated(changedProperties);
@@ -552,7 +603,7 @@ export class InSetuFrontmatterEditor extends InSetuElement {
     }
     render() {
         if (this._loading) {
-            return html`<div style="padding: 20px;"><yenvui-spinner text="Loading file..."></yenvui-spinner></div>`;
+            return html`<div style="padding: 20px;"><sutram-spinner text="Loading file..."></sutram-spinner></div>`;
         }
         return html`
             <div style="display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); position: relative;"
@@ -674,6 +725,20 @@ if (window.ExtensionRegistry) {
                 intent: 'neutral',
                 order: 13,
                 emitEvent: (data) => ({ name: 'insetu:editor:clean-artifacts', detail: { filepath: data.filepath } })
+            },
+            {
+                targetEntity: 'editor',
+                id: 'editor-popout-window',
+                label: 'Pop Out',
+                icon: 'external-link',
+                group: 'tools',
+                vfsBound: false,
+                intent: 'neutral',
+                order: 14,
+                match: () => !new URLSearchParams(window.location.search).get('popout'),
+                onClick: (data) => {
+                    popoutProjection(data.filepath);
+                }
             }
         ],
         shortcuts: [

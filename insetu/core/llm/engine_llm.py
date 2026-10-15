@@ -138,17 +138,16 @@ def _stream_claude_cli(model: str, messages: list, system_prompt: str) -> Genera
         full_prompt += f"System: {system_prompt}\n\n"
     for m in messages:
         full_prompt += f"{m['role'].upper()}:\n{m['content']}\n\n"
-
     try:
-        # Utilizing execute_binary ensures cross-platform PATH resolution
-        process = subprocess.Popen(
+        process = execute_binary(
             ["claude", "-p", full_prompt],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1
+            bufsize=1,
+            popen=True
         )
-        
+
         for line in iter(process.stdout.readline, ''):
             if line:
                 yield f"data: {json.dumps({'text': line})}\n\n"

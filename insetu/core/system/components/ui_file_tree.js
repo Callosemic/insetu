@@ -52,18 +52,27 @@ constructor() {
 }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(window.inSetu.stores.App, state => {
-            this._pendingMutations = state.pendingMutations || new Set();
-            this._deletedMutations = state.deletedMutations || new Set();
-            const vfsManifest = state.manifest?.vfs || {};
-            const gitMod = new Set();
-            Object.values(vfsManifest).forEach(bucket => {
-                if (Array.isArray(bucket?.git_modified)) {
-                    bucket.git_modified.forEach(f => gitMod.add(f));
+        const appStore = window.inSetu.stores.App;
+        if (appStore) {
+            const init = appStore.getState();
+            this._pendingMutations = init.pendingMutations || new Set();
+            this._deletedMutations = init.deletedMutations || new Set();
+            this._gitModifiedFiles = init.derivedGitModifiedSet || new Set();
+
+            this.subscribe(
+                appStore,
+                state => ({
+                    pendingMutations: state.pendingMutations || new Set(),
+                    deletedMutations: state.deletedMutations || new Set(),
+                    gitModifiedFiles: state.derivedGitModifiedSet || new Set()
+                }),
+                ({ pendingMutations, deletedMutations, gitModifiedFiles }) => {
+                    this._pendingMutations = pendingMutations;
+                    this._deletedMutations = deletedMutations;
+                    this._gitModifiedFiles = gitModifiedFiles;
                 }
-            });
-            this._gitModifiedFiles = gitMod;
-        });
+            );
+        }
     }
 
     willUpdate(changedProperties) {

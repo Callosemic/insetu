@@ -20,6 +20,9 @@ export const AppStore = createExtensionStore('App', {
     activeWorkspace: window.inSetu.utils.getActiveWorkspace(),
     authToken: sessionStorage.getItem('insetu_boot_token') || '',
     manifest: { vfs: {}, ctx: {} },
+    derivedVfsFiles: [],
+    derivedGitModifiedSet: new Set(),
+    derivedCtxKeys: [],
     dirtyRepos: new Set(),
     dirtyBuckets: new Set(),
     instanceEmoji: '⚙️',
@@ -38,6 +41,23 @@ export const AppStore = createExtensionStore('App', {
     globalBrowsePath: [],
     tabBrowsePaths: {},
     currentBrowsePath: [],
+    setBrowsePath: (pathArray = [], subId = 'files') => {
+        const cleanPath = Array.isArray(pathArray) ? pathArray : [];
+        AppStore.setState(s => ({
+            globalBrowsePath: cleanPath,
+            tabBrowsePaths: { ...(s.tabBrowsePaths || {}), [subId]: cleanPath }
+        }));
+        const activeWs = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';
+        const focusedCol = window.Sutram?.stores?.Layout?.getState()?.focusedColumn || 'center';
+        const activeSubInCol = window.Sutram?.stores?.Layout?.getState()?.columns?.[focusedCol]?.active;
+        if (!activeSubInCol || activeSubInCol === subId) {
+            const deepStr = cleanPath.length > 0 ? '/' + cleanPath.map(encodeURIComponent).join('/') : '';
+            const hash = `#/${encodeURIComponent(activeWs)}/${focusedCol}/${encodeURIComponent(subId)}${deepStr}`;
+            if (window.location.hash !== hash) {
+                window.history.replaceState(null, '', hash);
+            }
+        }
+    },
     browserConfig: { mode: 'view', callback: null },
     warmingQueue: new Set(),
     enqueueWarming: (urls) => AppStore.setState(s => {
@@ -62,6 +82,55 @@ export const AppStore = createExtensionStore('App', {
     localSync: ['pinnedRepos', 'tabBrowsePaths']
 });
 window.inSetu.stores.App = AppStore;
+// Memoized VFS & CTX Manifest Derivation (computes once per manifest/targetConfigs change)
+AppStore.subscribe(
+    state => ({ vfs: state.manifest?.vfs, ctx: state.manifest?.ctx, targetConfigs: state.targetConfigs }),
+    ({ vfs, ctx, targetConfigs }) => {
+        const vfsManifest = vfs || {};
+        const ctxManifest = ctx || {};
+        const configs = targetConfigs || [];
+        const validPrefixes = configs.map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
+
+        const allFiles = new Set();
+        const gitMod = new Set();
+
+        Object.values(vfsManifest).forEach(bucket => {
+            if (bucket && Array.isArray(bucket.files)) {
+                bucket.files.forEach(f => {
+                    if (validPrefixes.length === 0 || validPrefixes.some(prefix => f.startsWith(prefix))) {
+                        allFiles.add(f);
+                    }
+                });
+            }
+            if (bucket && Array.isArray(bucket.git_modified)) {
+                bucket.git_modified.forEach(f => gitMod.add(f));
+            }
+        });
+
+        configs.forEach(cfg => {
+            if (cfg.repo_dir && !Array.from(allFiles).some(f => f.startsWith(cfg.repo_dir + '/'))) {
+                allFiles.add(cfg.repo_dir + '/.gitkeep');
+            }
+        });
+
+        const nextFiles = Array.from(allFiles);
+        const nextCtxKeys = Object.keys(ctxManifest);
+        const curState = AppStore.getState();
+        const shallowEqual = window.inSetu?.utils?.shallowEqual;
+        const filesUnchanged = shallowEqual ? shallowEqual(curState.derivedVfsFiles, nextFiles) : false;
+        const gitModUnchanged = shallowEqual ? shallowEqual(curState.derivedGitModifiedSet, gitMod) : false;
+        const ctxKeysUnchanged = shallowEqual ? shallowEqual(curState.derivedCtxKeys, nextCtxKeys) : false;
+
+        if (!filesUnchanged || !gitModUnchanged || !ctxKeysUnchanged) {
+            AppStore.setState({
+                derivedVfsFiles: filesUnchanged ? curState.derivedVfsFiles : nextFiles,
+                derivedGitModifiedSet: gitModUnchanged ? curState.derivedGitModifiedSet : gitMod,
+                derivedCtxKeys: ctxKeysUnchanged ? curState.derivedCtxKeys : nextCtxKeys
+            });
+        }
+    }
+);
+
 // Centralized Invalidation Listener (ADR 0103)
 window.addEventListener('insetu:compile-step-complete', (e) => {
     const artifact = e.detail?.artifact || {};

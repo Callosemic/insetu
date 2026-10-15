@@ -1,17 +1,29 @@
 import os
+import re
 import time
 import uuid
 import json
 import threading
+import traceback
 import queue
 from pathlib import Path
 from flask import jsonify
 from akasa.extension import ExtensionContext
 from insetu.core.sdk import InSetuExtension
 from akasa.db import get_connection
+from akasa.events import sse_bus
 from akasa.hooks import hooks
+from akasa.utils import (
+    thread_safe_cache,
+    fold_vfs_events,
+    parse_uri,
+    get_all_workspace_ids,
+    get_workspace_physics,
+    load_config
+)
+from akasa.vfs import mount_volume, execute_vfs_save, _resolve_physical_path
 from akasa.workers import submit_immediate_job, register_callback, cancel_job
-from insetu.core.utils_core import get_repo_path, execute_binary
+from insetu.core.utils_core import get_repo_path, execute_binary, InSetuURI
 TOPOLOGY_SCHEMA = {
     "topology_ledger": {
         "filepath": "TEXT PRIMARY KEY",
@@ -194,7 +206,6 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
             )
     conn.commit()
     return True
-from akasa.utils import thread_safe_cache
 
 @hooks.on('vfs_manifest_mutated')
 def _invalidate_topology_manifest(workspace_id=None, **kwargs):
@@ -246,12 +257,6 @@ def get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True):
 _TOPOLOGY_RAM_QUEUE = queue.Queue()
 _TOPOLOGY_SLEW_THREAD = None
 def _topology_slew_limiter_loop():
-    from akasa.utils import fold_vfs_events
-    try:
-        from akasa.events import sse_bus
-    except ImportError:
-        sse_bus = None
-
     while True:
         try:
             # Block until at least one event arrives
@@ -284,7 +289,6 @@ def _topology_slew_limiter_loop():
                     )
                     conn.commit()
                 except Exception as e:
-                    import traceback
                     print(f"⚠️ [Topology Slew] Bulk DB insert failed for {ws_id}: {e}")
                     try:
                         hooks.emit_background('system_error', source="Topology:Slew_Insert", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=f"Workspace: {ws_id}, Events: {len(folded)}", workspace_id=ws_id)
@@ -298,7 +302,6 @@ def _topology_slew_limiter_loop():
                 if sse_bus:
                     threading.Timer(0.25, lambda w=ws_id, f=folded: sse_bus.emit_sse('vfs_mutated', {"mutations": f, "workspace_id": w})).start()
         except Exception as e:
-            import traceback
             print(f"⚠️ [Topology Slew] Worker loop error: {e}")
             try:
                 hooks.emit_background('system_error', source="Topology:Slew_Loop", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload="", workspace_id="default")
@@ -324,7 +327,6 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
         if not filepath:
             continue
 
-        from akasa.utils import parse_uri
         is_dir = filepath.endswith('/') or filepath.endswith('\\')
 
         repo, rel_path = parse_uri(filepath)
@@ -353,12 +355,9 @@ def resolve_topology_buffer(workspace_id):
     dirty_repos = set()
     target_repos = ctx.config.get("target_repos", [])
     target_repos_map = {r.get("repo_dir"): r for r in target_repos if r and r.get("repo_dir")}
-    from akasa.utils import parse_uri
-    import os
 
     final_events = []
     # Safely expand directories without iterating over a mutating list
-    from insetu.core.utils_core import InSetuURI
     for e in events:
         raw_fp = e["filepath"]
         op = e["mutation_type"]
@@ -395,7 +394,7 @@ def resolve_topology_buffer(workspace_id):
                     final_events.append({"filepath": vfs_fp, "mutation_type": "save"})
         else:
             final_events.append({"filepath": raw_fp, "mutation_type": op})
-    from insetu.core.utils_core import InSetuURI
+
     for e in final_events:
         raw_fp = e["filepath"]
 
@@ -526,9 +525,6 @@ def resolve_topology_buffer(workspace_id):
 @hooks.on('mutate_workspace_config')
 def mount_topology_volumes_dynamically(cfg, workspace_id=None, **kwargs):
     """Dynamically remounts VFS volumes whenever the configuration changes."""
-    from akasa.vfs import mount_volume
-    from akasa.utils import get_workspace_physics
-
     _, ws_root = get_workspace_physics(workspace_id)
     mount_volume(workspace_id, 'vfs', '', ws_root)
     for repo_cfg in cfg.get("target_repos", []):
@@ -569,7 +565,6 @@ def _background_resolve_topology(ctx, job_id=None, **kwargs):
     Processes the event buffer after physical disk I/O settles, updates the tracking 
     ledger, and emits `topology_resolved` to awaken downstream compilers.
     """
-    import os
     if os.environ.get("INSETU_DEBUG") == "1":
         print(f"🌍 [TOPOLOGY TELEMETRY] Worker starting. Sleeping for 2s debounce...")
     # Absolute Settlement Barrier: 2.0 second debounce to outlast watchdog bursts (e.g. git checkout)
@@ -590,10 +585,6 @@ def _background_resolve_topology(ctx, job_id=None, **kwargs):
 
     return {"message": f"Topology settled. Resolved {total_resolved} events."}
 def get_valid_workspace_files(repo_path, config, workspace_id=None):
-    import os
-    from akasa.utils import load_config
-    from insetu.core.utils_core import execute_binary
-
     live_cfg = load_config(workspace_id)
 
     ignore_dirs = set(config.get("repo_ignore_dirs") if config.get("repo_ignore_dirs") is not None else (live_cfg.get("ignore_dirs") or []))
@@ -616,7 +607,6 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
                 if check_tree.returncode != 0 or 'true' not in check_tree.stdout.lower():
                     execute_binary(['git', 'init'], capture_output=True, cwd=repo_path)
                     if not os.listdir(repo_path) or (len(os.listdir(repo_path)) == 1 and '.git' in os.listdir(repo_path)):
-                        from akasa.vfs import execute_vfs_save
                         execute_vfs_save(workspace_id, f"vfs://{config.get('repo_dir')}/.gitkeep", "", data={"ignore_ledger": True})
             except Exception:
                 pass
@@ -673,9 +663,7 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
             valid_files.add(forced_file)
 
     return sorted(list(valid_files))
-
 def resolve_file_bucket(filepath, sub_buckets, repo_dir=""):
-    import re
     clean_filepath = re.sub(r'^(?:\[[A-Z?!\s]{1,2}\]\s+|[A-Z?!\s]{2}\s+)', '', filepath).strip()
 
     if ' -> ' in clean_filepath:
@@ -708,13 +696,9 @@ def resolve_file_bucket(filepath, sub_buckets, repo_dir=""):
 def resolve_owning_workspaces(event_name, **kwargs):
     """Domain-aware spatial router for OS lifecycle events."""
     if event_name != 'vfs_mutated': return set()
-
     mutations = kwargs.get('mutations', [])
     origin_workspace_id = kwargs.get('workspace_id')
     owning_workspaces = set()
-
-    from akasa.utils import get_all_workspace_ids, get_workspace_physics, load_config
-    from akasa.vfs import _resolve_physical_path
 
     all_ws_ids = get_all_workspace_ids()
 

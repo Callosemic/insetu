@@ -1,12 +1,20 @@
 import uuid
 import json
+import time
+import hashlib
+import zlib
+import traceback
+from typing import TypedDict, Literal, List, Dict
 from flask import jsonify
 from akasa.db import get_connection
 from akasa.hooks import hooks
+from akasa.vfs import VFSTransaction, _VFS_WRITE_QUEUE, _VFS_SHUTDOWN_SIGNAL
 from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
 from insetu.core.sdk import InSetuExtension
+from insetu.core.utils_core import InSetuURI
 
 # Import the extracted math & validation logic
+from .bridge_fuzzy import apply_block_in_memory
 from .bridge_vfs import execute_bridge_sync
 # 1. Initialize the Single Source of Truth Blueprint
 BRIDGE_SCHEMA = {
@@ -35,7 +43,7 @@ bridge_bp = InSetuExtension(
     schema=BRIDGE_SCHEMA,
     core=True
 )
-from typing import TypedDict, List
+
 class BridgeLedgerRecord(TypedDict):
     patch_id: str
     transaction_id: str
@@ -60,7 +68,6 @@ def bridge_history(ctx):
     # Explicitly exclude the 'compressed_state' BLOB to prevent JSON serialization crashes
     records = ctx.db.execute("SELECT patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, timestamp, ttl_expires_at, patch_count, chunks_json FROM bridge_ledger ORDER BY timestamp DESC LIMIT 100").fetchall()
     return jsonify({"history": [dict(r) for r in records]})
-from typing import TypedDict, Literal, List, Dict
 
 class BridgeRevertPayload(TypedDict, total=False):
     patch_id: str
@@ -89,9 +96,6 @@ def bridge_revert(ctx):
             if r['filepath'] not in seen:
                 targets.append(r)
                 seen.add(r['filepath'])
-    import time, hashlib, zlib
-    from akasa.vfs import VFSTransaction
-    from insetu.core.bridge.bridge_fuzzy import apply_block_in_memory
 
     new_tx_id = f"tx_rev_{uuid.uuid4().hex[:8]}"
     reverted_count = 0
@@ -133,10 +137,8 @@ def bridge_revert(ctx):
             # 3. Snapshot current state and save reconstructed state as a new transaction
             current_on_disk = vfs.read(filepath) or ""
             if current_on_disk == content: continue
-
             compressed_state = zlib.compress(current_on_disk.encode('utf-8'))
             post_patch_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
-            from insetu.core.utils_core import InSetuURI
             new_patch_id = f"ptc_{uuid.uuid4().hex[:12]}"
 
             uri = InSetuURI(filepath)
@@ -151,9 +153,7 @@ def bridge_revert(ctx):
             reverted_count += 1
 
         ctx.db.commit()
-
     return jsonify({"status": "success", "message": f"Atomic revert complete. Reverted {reverted_count} file(s)."})
-from typing import TypedDict, List, Dict, Literal
 
 class BridgeSyncPayload(TypedDict, total=False):
     text: str
@@ -208,11 +208,7 @@ def _background_bridge_sync(job_id, workspace_id, **kwargs):
             # Only block on the global VFS queue if we actually committed writes to it
             if sync_data.get("status") == "committed":
                 update_immediate_job_status(job_id, 'processing', "Awaiting VFS disk settlement...", workspace_id=workspace_id)
-
                 # VFS BARRIER: Block the completion signal until physical disk writes settle
-                from akasa.vfs import _VFS_WRITE_QUEUE, _VFS_SHUTDOWN_SIGNAL
-                import time
-
                 # Replace blocking .join() with an abortable polling lock. Add timeout to survive heavy I/O storms.
                 timeout_loops = 0
                 while _VFS_WRITE_QUEUE.unfinished_tasks > 0 and timeout_loops < 50:
@@ -227,18 +223,15 @@ def _background_bridge_sync(job_id, workspace_id, **kwargs):
             # Fallback if execution violently aborted outside the JSON envelope
             update_immediate_job_status(job_id, 'completed', sync_output_json, workspace_id=workspace_id)
     except Exception as e:
-        import traceback
         err = traceback.format_exc()
         update_immediate_job_status(job_id, 'failed', f"Bridge Fatal Error: {str(e)}\n\n{err}", workspace_id=workspace_id)
         try:
             hooks.emit_background('system_error', source="Bridge:Sync", error_type=type(e).__name__, message=str(e), traceback=err, payload=str(kwargs), workspace_id=workspace_id)
         except Exception: pass
 register_callback("bridge", "sync_task", _background_bridge_sync)
-
 @bridge_bp.worker("sweep_ledger")
 def _sweep_ledger_worker(ctx, job_id=None, **kwargs):
     """Metronome TTL Housekeeping: Purges historical rows older than 48 hours."""
-    import time
     now = time.time()
     try:
         ctx.db.execute("DELETE FROM bridge_ledger WHERE ttl_expires_at IS NOT NULL AND ttl_expires_at < ?", (now,))

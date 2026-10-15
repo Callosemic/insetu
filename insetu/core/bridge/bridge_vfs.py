@@ -10,16 +10,18 @@ import hashlib
 import zlib
 import time
 import uuid
+import difflib
+import traceback
 from pathlib import Path
 from akasa.utils import get_workspace_physics
-from insetu.core.utils_core import get_sister_repos, parse_blocks
+from insetu.core.utils_core import get_sister_repos, parse_blocks, InSetuURI, execute_binary
 from insetu.core.topology.engine_topology import get_omniscient_workspace_files
 from akasa.hooks import hooks
 from akasa.vfs import VFSTransaction
 from .bridge_fuzzy import apply_block_in_memory, clean_chevron_meltdown, expand_macros, is_effectively_identical
 def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
-    from insetu.core.bridge.engine_bridge import bridge_bp
-    ctx = bridge_bp.get_context(workspace_id)
+    from insetu.core.bridge.engine_bridge import bridge_bp as _bridge_bp
+    ctx = _bridge_bp.get_context(workspace_id)
     raw_text = clean_chevron_meltdown(data.get("text", ""))
     active_files = data.get("active_files", [])
     dry_run = data.get("dry_run", False)
@@ -54,7 +56,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
     patch_index = 0
     for raw_target_file, blocks in parsed_structure.items():
         if raw_target_file not in active_files or not blocks: continue
-        from insetu.core.utils_core import InSetuURI
         uri = InSetuURI.from_any(raw_target_file)
 
         # Enforce vfs:// logical boundary mapping natively
@@ -141,11 +142,9 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     patch_tel.update({"status": "auto_skipped", "error_message": "No-Op: The SEARCH and REPLACE blocks are perfectly identical."})
                     telemetry["summary"]["auto_skipped"] += 1
                     pctx.handled = True
-
             def resolve_genesis():
                 nonlocal omniscient_cache
                 if not is_genesis: return
-                from insetu.core.utils_core import InSetuURI
                 gen_uri = InSetuURI(norm_target)
                 explicit_repo = gen_uri.repo if gen_uri.repo else (gen_uri.path.partition('/')[0] if '/' in gen_uri.path else None)
                 if explicit_repo in allowed_repos:
@@ -260,7 +259,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     pctx.handled = True
             def resolve_anchor_failure():
                 if content is not None and not data.get("allow_deep_search"):
-                    import difflib
                     search_lines = search_str.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
                     file_lines = content.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
                     matcher = difflib.SequenceMatcher(None, file_lines, search_lines)
@@ -356,7 +354,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             # Apply patch to memory buffer
             ok, new_content, _ = apply_block_in_memory(content, b, silent=True)
             if not ok:
-                import difflib
                 search_lines = search_str.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
                 file_lines = content.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
                 matcher = difflib.SequenceMatcher(None, file_lines, search_lines)
@@ -388,24 +385,23 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     else:
                         try:
                             # Attempt high-performance, native Tree-sitter validation first
-                            from tree_sitter import Language, Parser
+                            from tree_sitter import Language as _Language, Parser as _Parser
 
                             lang_mod = None
                             if ext == '.py':
-                                import tree_sitter_python as ts_lang
-                                lang_mod = ts_lang
+                                import tree_sitter_python as _ts_lang
+                                lang_mod = _ts_lang
                             elif ext in ['.js', '.mjs', '.cjs', '.ts', '.tsx']:
-                                import tree_sitter_javascript as ts_lang
-                                lang_mod = ts_lang
+                                import tree_sitter_javascript as _ts_lang
+                                lang_mod = _ts_lang
 
                             if lang_mod:
                                 # Tree-sitter >=0.22.0 bindings
-                                parser = Parser(Language(lang_mod.language()))
+                                parser = _Parser(_Language(lang_mod.language()))
                                 tree = parser.parse(bytes(new_content, "utf8"))
                                 if tree.root_node.has_error:
                                     # Fallback verification: Tree-sitter language injections frequently panic on valid Lit template literals.
                                     if ext in ['.js', '.ts', '.mjs']:
-                                        from insetu.core.utils_core import execute_binary
                                         try:
                                             res = execute_binary(['node', '--input-type=module', '-c'], input=new_content, capture_output=True, text=True, encoding='utf-8', timeout=5.0)
                                             if res.returncode != 0:
@@ -424,7 +420,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                             if ext == '.py':
                                 ast.parse(new_content)
                             elif ext in ['.js', '.ts', '.mjs']:
-                                from insetu.core.utils_core import execute_binary
                                 try:
                                     res = execute_binary(['node', '--input-type=module', '-c'], input=new_content, capture_output=True, text=True, encoding='utf-8', timeout=5.0)
                                     if res.returncode != 0:
@@ -445,9 +440,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 if syntax_error:
                     patch_tel["status"] = "syntax_error"
                     patch_tel["error_message"] = err_str
-
                     # Generate a clean unified diff of the failed AST block for the UI modal
-                    import difflib
                     diff = list(difflib.unified_diff(content.splitlines(), new_content.splitlines(), lineterm=""))
                     diff_str = "\n".join(diff)
                     err_b64 = base64.b64encode(diff_str.encode('utf-8')).decode('utf-8')
@@ -528,7 +521,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     is_snapshot = True
             if is_snapshot:
                 compressed_state = zlib.compress(orig_content.encode('utf-8'))
-            from insetu.core.utils_core import InSetuURI
             file_uri = InSetuURI(filepath)
             current_repo = file_uri.repo if file_uri.repo else (file_uri.path.partition('/')[0] if '/' in file_uri.path else "")
             patch_id = f"ptc_{uuid.uuid4().hex[:12]}"
@@ -566,7 +558,6 @@ def execute_bridge_sync(workspace_id, data):
             telemetry = _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root)
             return json.dumps(telemetry)
     except Exception as e:
-        import traceback
         return json.dumps({
             "transaction_id": "tx_aborted",
             "mode": "live",

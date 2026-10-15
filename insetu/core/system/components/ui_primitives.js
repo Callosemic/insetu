@@ -61,7 +61,7 @@ export class InSetuJobTracker extends InSetuElement {
     render() {
         if (this._status === 'idle' || this._status === 'completed') return html``;
         if (this._status === 'failed') return html`<div style="color: var(--intent-danger); font-weight: bold; margin-top: 10px; display: flex; align-items: center; gap: 6px;"><yv-icon name="alert-triangle" style="width: 14px; height: 14px;"></yv-icon><span>Error: ${this._error}</span></div>`;
-        return html`<div style="margin-top: 10px;"><yenvui-spinner .text=${this._message || 'Processing...'}></yenvui-spinner></div>`;
+        return html`<div style="margin-top: 10px;"><sutram-spinner .text=${this._message || 'Processing...'}></sutram-spinner></div>`;
     }
 }
 customElements.define('insetu-job-tracker', InSetuJobTracker);
@@ -131,8 +131,26 @@ customElements.define('insetu-config-banner', InSetConfigBanner);
 window.inSetu.ui = window.inSetu.ui || {};
 window.inSetu.ui.viewTextBlob = (title, content, suggestedFilename = '') => {
     const filename = suggestedFilename || ('blob_' + Date.now() + '.txt');
-    if (window.inSetu.vfs?.openVirtualFile) {
-        window.inSetu.vfs.openVirtualFile(filename, content);
+    const virtualUri = `virtual://${filename}`;
+    const fsStore = window.inSetu?.stores?.Fs;
+    if (fsStore) {
+        fsStore.getState().openBuffer(virtualUri, {
+            filename: virtualUri,
+            content: content || '',
+            originalContent: content || '',
+            fullText: content || '',
+            isTruncated: false,
+            isFS: false,
+            forceEdit: true,
+            isMemoryOnly: true,
+            isMarkdown: filename.endsWith('.md'),
+            isSupportedEditor: true,
+            ext: filename.split('.').pop() || 'txt',
+            codeMode: filename.endsWith('.md') ? 'markdown' : 'javascript'
+        });
+    }
+    if (window.inSetu?.vfs?.routeToSpatialGrid) {
+        window.inSetu.vfs.routeToSpatialGrid(virtualUri, title || filename);
     }
 };
 export class InSetuSpinner extends LitElement {
