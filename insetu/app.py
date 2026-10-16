@@ -42,11 +42,10 @@ app.register_blueprint(security_bp.bp)
 
 from akasa.hooks import hooks
 from akasa.utils import register_core_module
-
 # Dependency Injection: Register host OS physics with the Kernel
 hooks.register_trusted_namespace('insetu.core.')
 hooks.register_extension_namespace('insetu.extensions.')
-for core_mod in ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline', 'llm', 'agent']:
+for core_mod in ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline', 'llm', 'agent', 'prompts']:
     register_core_module(core_mod)
 
 # Explicitly register system core routes first to prevent dynamic loader misfires

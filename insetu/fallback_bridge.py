@@ -5,7 +5,11 @@ import os
 import sys
 import json
 import re
-from flask import Flask, request, jsonify, send_file, render_template_string
+import time
+import zipfile
+import threading
+from datetime import datetime
+from flask import Flask, request, jsonify, send_file, render_template_string, redirect
 
 app = Flask(__name__)
 
@@ -267,7 +271,6 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def index_redirect():
-    from flask import redirect
     return redirect('/recovery')
 
 @app.route('/recovery')
@@ -348,9 +351,7 @@ def download(filepath):
 @app.route('/api/system/emergency_dump', methods=['POST'])
 def api_emergency_dump():
     """Zero-dependency hardcoded compiler that survives core config corruption."""
-    from datetime import datetime
     try:
-        import zipfile
         # Point to the repository root
         repo_root = Path(__file__).resolve().parent.parent.parent.as_posix()
         out_file = "emergency_core_context.zip"
@@ -499,9 +500,7 @@ def api_emergency_dump():
 
 @app.route('/api/system/reboot', methods=['POST'])
 def system_reboot():
-    import threading
     def restart():
-        import time
         time.sleep(1.0)
         python_exe = sys.executable
         cli_script = os.path.abspath(sys.argv[0])

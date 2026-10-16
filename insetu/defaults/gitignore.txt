@@ -1,10 +1,14 @@
-# inSetu Volatile State
-data/
+# inSetu Volatile Cache & Credentials
+cache/
+ext/
 contexts/
 diffs/
 workflows/
 *.db
+*.db-wal
+*.db-shm
 *.db-journal
+*.db.corrupt_*
 secrets.json
 master_key.txt
 *.env

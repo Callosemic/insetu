@@ -24,10 +24,8 @@ def scaffold_profiles(cwd):
         if not os.path.exists(target_p) and os.path.exists(src_p):
             shutil.copy(src_p, target_p)
 
-    wf_p = Path(base_dir).joinpath("workflows.json").as_posix()
-    if not os.path.exists(wf_p):
-        with open(wf_p, "w", encoding="utf-8") as f:
-            json.dump({"context_batches": []}, f, indent=2)
+    os.makedirs(Path(base_dir).joinpath("data").as_posix(), exist_ok=True)
+    os.makedirs(Path(base_dir).joinpath("cache", "db").as_posix(), exist_ok=True)
 
 
 def main():
