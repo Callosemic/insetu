@@ -104,16 +104,28 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(OfflineStore, state => {
-            this.cachedBlobs = state.cachedBlobs || [];
-            this.outboxItems = state.outboxItems || [];
-            this.deadLetters = state.deadLetters || [];
-            this.loading = state.loading;
-            this.storageUsage = state.storageUsage || 0;
-            this.storageQuota = state.storageQuota || 0;
-            this.storagePersisted = state.storagePersisted || false;
-            this.requestUpdate();
-        });
+        this.subscribe(
+            OfflineStore,
+            state => ({
+                cachedBlobs: state.cachedBlobs || [],
+                outboxItems: state.outboxItems || [],
+                deadLetters: state.deadLetters || [],
+                loading: !!state.loading,
+                storageUsage: state.storageUsage || 0,
+                storageQuota: state.storageQuota || 0,
+                storagePersisted: state.storagePersisted || false
+            }),
+            (slice) => {
+                this.cachedBlobs = slice.cachedBlobs;
+                this.outboxItems = slice.outboxItems;
+                this.deadLetters = slice.deadLetters;
+                this.loading = slice.loading;
+                this.storageUsage = slice.storageUsage;
+                this.storageQuota = slice.storageQuota;
+                this.storagePersisted = slice.storagePersisted;
+                this.requestUpdate();
+            }
+        );
         // Auto-refresh when outbox drains or fills
         this.subscribe(window.inSetu.stores.App, state => state.outboxCount, () => {
             OfflineStore.getState().fetchOfflineState();
@@ -323,15 +335,22 @@ export class InSetuCoreOfflineSettings extends InSetuElement {
         this.storageModalOpen = false;
         this.targetConfigs = [];
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(OfflineStore, state => {
-            this.storageModalOpen = state.storageModalOpen || false;
-        });
-        this.subscribe(window.inSetu.stores.App, state => {
-            this.targetConfigs = this.utils.clone(state.targetConfigs || []);
-        });
+        this.subscribe(
+            OfflineStore,
+            state => !!state.storageModalOpen,
+            (storageModalOpen) => {
+                this.storageModalOpen = storageModalOpen;
+            }
+        );
+        this.subscribe(
+            window.inSetu.stores.App,
+            state => state.targetConfigs || [],
+            (targetConfigs) => {
+                this.targetConfigs = this.utils.clone(targetConfigs);
+            }
+        );
         this.targetConfigs = this.utils.clone(window.inSetu.stores.App.getState().targetConfigs || []);
     }
     async _toggleOffline(repoDir, isEnabled) {
@@ -448,13 +467,16 @@ export class InSetuCoreOfflineLog extends InSetuElement {
         this.logs = [];
         this.searchQuery = '';
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(OfflineStore, state => {
-            this.logs = state.logs || [];
-            this.requestUpdate();
-        });
+        this.subscribe(
+            OfflineStore,
+            state => state.logs || [],
+            (logs) => {
+                this.logs = logs;
+                this.requestUpdate();
+            }
+        );
         this.logs = OfflineStore.getState().logs || [];
     }
     onWorkspaceLoad() { this.requestUpdate(); }

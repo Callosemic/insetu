@@ -171,17 +171,14 @@ window.addEventListener('insetu:vfs-mutated', () => {
     _lastPackItemsHash = '';
 });
 
-const packSelectionPayload = async (items) => {
+const _computePackSelectionPayload = (items) => {
     const payloadItems = items.map(i => {
         const d = i.data || i;
-        if (d?.folderpath) return { folderpath: d.folderpath };
-        if (d?.filepath) return { filepath: d.filepath };
+        if (d?.folderpath || d?.isDir) return { folderpath: d.folderpath || d.filepath, isDir: true };
+        if (d?.filepath) return { filepath: d.filepath, isDir: false };
         return null;
     }).filter(i => i !== null);
-    if (payloadItems.length === 0) throw new Error("No valid items to pack.");
 
-    // Stateful Hash: Incorporate the live VFS/CTX manifest timestamps into the hash.
-    // If a file is edited, its timestamp changes, naturally busting this cache statelessly.
     const manifest = window.inSetu?.stores?.App?.getState()?.manifest || { vfs: {}, ctx: {} };
     const statefulItems = payloadItems.map(p => {
         const fp = p.filepath || p.folderpath;
@@ -190,7 +187,13 @@ const packSelectionPayload = async (items) => {
         return `${fp}@${ts}`;
     });
 
-    const itemsHash = JSON.stringify(statefulItems);
+    return { payloadItems, itemsHash: JSON.stringify(statefulItems) };
+};
+
+const packSelectionPayload = async (items) => {
+    const { payloadItems, itemsHash } = _computePackSelectionPayload(items);
+    if (payloadItems.length === 0) throw new Error("No valid items to pack.");
+
     if (_lastPackItemsHash === itemsHash && _lastPackSelection) {
         return _lastPackSelection;
     }
@@ -204,12 +207,21 @@ const packSelectionPayload = async (items) => {
         window.inSetu.utils.pollJob(data.job_id, {
             onProgress: (msg) => { if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null); },
             onComplete: async (statusData) => {
-                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
+                const artifact = statusData.artifact || {};
+                if (artifact.base_filename && artifact.manifest_entry) {
+                    const curManifest = AppStore.getState().manifest || { vfs: {}, ctx: {} };
+                    AppStore.setState({
+                        manifest: {
+                            vfs: curManifest.vfs || {},
+                            ctx: { ...(curManifest.ctx || {}), [artifact.base_filename]: artifact.manifest_entry }
+                        }
+                    });
+                } else if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
                     await window.inSetu.sys.refreshManifest();
                 }
                 _lastPackItemsHash = itemsHash;
-                _lastPackSelection = statusData.artifact;
-                resolve(statusData.artifact);
+                _lastPackSelection = artifact;
+                resolve(artifact);
             },
             onError: (err) => reject(err)
         });
@@ -629,10 +641,47 @@ window.ExtensionRegistry.registerExtension('gather', {
         {
             targetEntity: '*',
             targetEntities: ['*'],
+            id: 'gather-pack-share',
+            bulkGroupKey: 'pack-share',
+            label: 'Share',
+            bulkLabel: 'Share',
+            icon: 'share',
+            intent: 'primary',
+            group: 'share',
+            vfsBound: true,
+            order: 25,
+            bulkable: true,
+            bulkOnly: true,
+            match: (data) => !!(data?.filepath || data?.folderpath) && !!navigator.share && !!navigator.canShare,
+            bulkOnClick: (items, e) => {
+                if (e) e.stopPropagation();
+
+                const { itemsHash } = _computePackSelectionPayload(items);
+                // Synchronous Fast-Path if Quickpack is already compiled (preserves WebKit user gesture)
+                if (_lastPackItemsHash === itemsHash && _lastPackSelection) {
+                    SelectionStore.getState().clearSelection();
+                    window.inSetu.vfs.shareFiles(_lastPackSelection.base_filename, _lastPackSelection.chunks);
+                    return;
+                }
+
+                if (window.inSetu.ui?.setGlobalStatus) {
+                    window.inSetu.ui.setGlobalStatus("⏳ Compiling Quickpack for Share...", null);
+                }
+                packSelectionPayload(items).then(artifact => {
+                    SelectionStore.getState().clearSelection();
+                    window.inSetu.vfs.shareFiles(artifact.base_filename, artifact.chunks);
+                }).catch(err => {
+                    alert("Packing failed: " + err.message);
+                });
+            }
+        },
+        {
+            targetEntity: '*',
+            targetEntities: ['*'],
             id: 'gather-pack-compile',
             bulkGroupKey: 'pack-compile',
-            label: 'Compile Pack',
-            bulkLabel: 'Compile Pack',
+            label: 'Compile Only',
+            bulkLabel: 'Compile Only',
             icon: 'zap',
             intent: 'warning',
             emphasis: true,
@@ -642,40 +691,27 @@ window.ExtensionRegistry.registerExtension('gather', {
             bulkable: true,
             bulkOnly: true,
             match: (data) => !!(data?.filepath || data?.folderpath),
-            bulkOnClick: (items, e) => {
-                if (e) e.stopPropagation();
-
-                const canNativeShare = !!navigator.share && !!navigator.canShare;
-                const payloadItems = items.map(i => {
-                    const d = i.data || i;
-                    if (d?.folderpath) return { folderpath: d.folderpath };
-                    if (d?.filepath) return { filepath: d.filepath };
-                    return null;
-                }).filter(i => i !== null);
-
-                const itemsHash = JSON.stringify(payloadItems);
-                // Synchronous Fast-Path if Quickpack already exists (preserves WebKit user gesture)
-                if (canNativeShare && _lastPackItemsHash === itemsHash && _lastPackSelection) {
+            bulkAction: async (items) => {
+                try {
+                    const { itemsHash } = _computePackSelectionPayload(items);
+                    if (_lastPackItemsHash === itemsHash && _lastPackSelection) {
+                        SelectionStore.getState().clearSelection();
+                        if (window.inSetu.ui?.setGlobalStatus) {
+                            window.inSetu.ui.setGlobalStatus("⚡ Quickpack already in Gather!", 2000);
+                        }
+                        return;
+                    }
+                    if (window.inSetu.ui?.setGlobalStatus) {
+                        window.inSetu.ui.setGlobalStatus("⏳ Compiling Quickpack...", null);
+                    }
+                    await packSelectionPayload(items);
                     SelectionStore.getState().clearSelection();
-                    window.inSetu.vfs.shareFiles(_lastPackSelection.base_filename, _lastPackSelection.chunks);
-                    return;
-                }
-
-                if (window.inSetu.ui?.setGlobalStatus) {
-                    window.inSetu.ui.setGlobalStatus("⏳ Compiling Quickpack...", null);
-                }
-                packSelectionPayload(items).then(artifact => {
-                    _lastPackItemsHash = itemsHash;
-                    _lastPackSelection = artifact;
-                    SelectionStore.getState().clearSelection();
-                    if (canNativeShare) {
-                        window.inSetu.vfs.shareFiles(artifact.base_filename, artifact.chunks);
-                    } else if (window.inSetu.ui?.setGlobalStatus) {
+                    if (window.inSetu.ui?.setGlobalStatus) {
                         window.inSetu.ui.setGlobalStatus("⚡ Quickpack compiled to Gather!", 3000);
                     }
-                }).catch(err => {
+                } catch (err) {
                     alert("Packing failed: " + err.message);
-                });
+                }
             }
         }
     ]

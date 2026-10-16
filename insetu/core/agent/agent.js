@@ -125,13 +125,16 @@ export class InSetuCoreAgent extends InSetuElement {
         this.promptInput = '';
         this.activeJobMessage = '';
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(AgentStore, state => {
-            this.sessions = state.sessions || [];
-            this.loading = state.loading;
-        });
+        this.subscribe(
+            AgentStore,
+            state => ({ sessions: state.sessions || [], loading: !!state.loading }),
+            ({ sessions, loading }) => {
+                this.sessions = sessions;
+                this.loading = loading;
+            }
+        );
 
         // Listen for live job progress emitted by worker chain
         this.registerGlobalListener('sutram-compile-progress', window, (e) => {

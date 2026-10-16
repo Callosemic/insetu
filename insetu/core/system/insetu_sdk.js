@@ -6,6 +6,37 @@ import { getEventPath, getEventTarget } from '/static/vendor/yenvui/js/physics.j
 import * as jsYaml from '/static/vendor/js-yaml/js-yaml.min.js';
 
 export { bindStoreInput };
+
+/**
+* Standardized filename truncation for compact UI chrome (tabs, action drawers, window headers).
+* Preserves the front of the basename and the file extension (e.g., "this-is-part…md").
+*
+* @param {string} filename - Full path or basename to shorten.
+* @param {number} [maxLen=24] - Maximum allowed character length.
+* @param {string} [ellipsis='…'] - Ellipsis character or string.
+* @returns {string} Truncated string.
+*/
+export function truncateFilename(filename, maxLen = 24, ellipsis = '…') {
+    if (!filename || typeof filename !== 'string') return '';
+    const base = filename.replace(/\\/g, '/').split('/').pop() || '';
+    if (base.length <= maxLen) return base;
+
+    const lastDot = base.lastIndexOf('.');
+    if (lastDot <= 0) {
+        const sliceLen = Math.max(1, maxLen - ellipsis.length);
+        return base.slice(0, sliceLen) + ellipsis;
+    }
+
+    const ext = base.slice(lastDot);
+    if (ext.length + ellipsis.length >= maxLen) {
+        const sliceLen = Math.max(1, maxLen - ellipsis.length);
+        return base.slice(0, sliceLen) + ellipsis;
+    }
+
+    const frontLen = maxLen - ext.length - ellipsis.length;
+    return `${base.slice(0, frontLen)}${ellipsis}${ext}`;
+}
+
 export function createExtensionStore(name, initialState, persistenceSchema = {}) {
     const getWs = () => window.inSetu.utils.getActiveWorkspace();
     const processedState = { ...initialState };
@@ -150,6 +181,7 @@ export class InSetuElement extends SutramElement {
         return {
             fuzzyFilterObjects: window.inSetu.utils.fuzzyFilterObjects,
             normalizeAccentText: window.inSetu.utils.normalizeAccentText,
+            truncateFilename: window.inSetu.utils.truncateFilename,
             pollJob: window.inSetu.utils.pollJob,
             slugify: window.inSetu.utils.slugify,
             copyToClipboard: window.inSetu.utils.copyToClipboard,
@@ -343,7 +375,7 @@ export class InSetuElement extends SutramElement {
 }
 window.inSetu = window.inSetu || {};
 // Pre-seed foundational OS chassis modules to protect against offline cache misses or backend latency
-const _baseCore = ['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'cartographer', 'offline', 'topology', 'llm', 'agent'];
+const _baseCore = ['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'cartographer', 'offline', 'topology', 'llm', 'agent', 'prompts'];
 window.inSetu.CORE_MODULES = window.inSetu.CORE_MODULES && window.inSetu.CORE_MODULES.size > 0 
     ? window.inSetu.CORE_MODULES 
     : new Set(_baseCore);
@@ -359,7 +391,8 @@ export const CORE_UI_SCRIPTS = [
     '/static/extensions/gather/gather.js',
     '/static/extensions/config/config.js',
     '/static/extensions/offline/offline_ui.js',
-    '/static/extensions/agent/agent.js'
+    '/static/extensions/agent/agent.js',
+    '/static/extensions/prompts/prompts.js'
 ];
 
 window.inSetu.stores = window.inSetu.stores || {};
@@ -506,6 +539,7 @@ window.inSetu.utils.coalescedAsync = coalescedAsync;
 window.inSetu.utils.nativeShareFiles = nativeShareFiles;
 window.inSetu.utils.cleanCodeArtifacts = cleanCodeArtifacts;
 window.inSetu.utils.shallowEqual = shallowEqual;
+window.inSetu.utils.truncateFilename = truncateFilename;
 window.inSetu.utils.formatArtifactSize = function(meta) {
     if (!meta) return "";
     if (meta.size_bytes !== undefined) {

@@ -6,10 +6,8 @@ import zlib
 import traceback
 from typing import TypedDict, Literal, List, Dict
 from flask import jsonify
-from akasa.db import get_connection
 from akasa.hooks import hooks
-from akasa.vfs import VFSTransaction, _VFS_WRITE_QUEUE, _VFS_SHUTDOWN_SIGNAL
-from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
+from akasa.vfs import VFSTransaction
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import InSetuURI
 
@@ -179,56 +177,24 @@ class BridgeSyncPayload(TypedDict, total=False):
 def bridge_sync(ctx):
     """Receives Yomama payloads from the UI and dispatches the sync."""
     data = ctx.req.json or {}
-    args_json = json.dumps(data)
-
-    # Idempotency Guardrail: Prevent duplicate overlapping patches
-    conn = get_connection("workers", workspace_id=ctx.workspace_id)
-    existing_job = conn.execute(
-        "SELECT id FROM immediate_jobs WHERE ext_name='bridge' AND status IN ('pending', 'processing') AND args_json=?",
-        (args_json,)
-    ).fetchone()
-    if existing_job:
-        return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to existing transaction."}), 202
-    job_id = f"brg_{uuid.uuid4().hex[:8]}"
-    submit_immediate_job(job_id, "bridge", "sync_task", args_json, workspace_id=ctx.workspace_id, job_category="ui_blocking")
-
+    job_id = ctx.jobs.submit("sync_task", coalesce="args", job_category="ui_blocking", **data)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 # 3. Background Workers
-def _background_bridge_sync(job_id, workspace_id, **kwargs):
+@bridge_bp.worker("sync_task")
+def _background_bridge_sync(ctx, job_id=None, **kwargs):
     """Executes the bridge matrix off-thread and enforces the VFS synchronization barrier."""
+    ctx.jobs.update_progress("Analyzing patch matrices and running AST validation...")
+    sync_output_json = execute_bridge_sync(ctx.workspace_id, kwargs)
+
     try:
-        update_immediate_job_status(job_id, 'processing', "Analyzing patch matrices and running AST validation...", workspace_id=workspace_id)
-        # Execute the pure operational logic
-        sync_output_json = execute_bridge_sync(workspace_id, kwargs)
-
-        try:
-            sync_data = json.loads(sync_output_json)
-
-            # Only block on the global VFS queue if we actually committed writes to it
-            if sync_data.get("status") == "committed":
-                update_immediate_job_status(job_id, 'processing', "Awaiting VFS disk settlement...", workspace_id=workspace_id)
-                # VFS BARRIER: Block the completion signal until physical disk writes settle
-                # Replace blocking .join() with an abortable polling lock. Add timeout to survive heavy I/O storms.
-                timeout_loops = 0
-                while _VFS_WRITE_QUEUE.unfinished_tasks > 0 and timeout_loops < 50:
-                    if _VFS_SHUTDOWN_SIGNAL.is_set():
-                        update_immediate_job_status(job_id, 'failed', "Transaction aborted mid-flight due to system shutdown or workspace context swap.", workspace_id=workspace_id)
-                        return
-                    time.sleep(0.1)
-                    timeout_loops += 1
-
-            update_immediate_job_status(job_id, 'completed', "Transaction evaluated.", artifact=sync_data, workspace_id=workspace_id)
-        except Exception:
-            # Fallback if execution violently aborted outside the JSON envelope
-            update_immediate_job_status(job_id, 'completed', sync_output_json, workspace_id=workspace_id)
-    except Exception as e:
-        err = traceback.format_exc()
-        update_immediate_job_status(job_id, 'failed', f"Bridge Fatal Error: {str(e)}\n\n{err}", workspace_id=workspace_id)
-        try:
-            hooks.emit_background('system_error', source="Bridge:Sync", error_type=type(e).__name__, message=str(e), traceback=err, payload=str(kwargs), workspace_id=workspace_id)
-        except Exception: pass
-register_callback("bridge", "sync_task", _background_bridge_sync)
+        sync_data = json.loads(sync_output_json)
+        if sync_data.get("status") == "committed":
+            ctx.jobs.update_progress("Awaiting VFS disk settlement...")
+            ctx.sync_vfs_barrier(timeout=5.0)
+        return {"message": "Transaction evaluated.", "artifact": sync_data}
+    except Exception:
+        return {"message": sync_output_json}
 @bridge_bp.worker("sweep_ledger")
 def _sweep_ledger_worker(ctx, job_id=None, **kwargs):
     """Metronome TTL Housekeeping: Purges historical rows older than 48 hours."""

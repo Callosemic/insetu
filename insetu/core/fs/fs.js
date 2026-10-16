@@ -63,11 +63,13 @@ export function isFileGitModified(filepath) {
     }
     return false;
 }
-
 export async function viewFileGitDiff(filepath) {
     if (!filepath) return;
     const normPath = normalizeVfsURI(filepath);
-    const cleanName = normPath.split('/').pop();
+    const baseName = normPath.split('/').pop();
+    const cleanName = window.inSetu?.utils?.truncateFilename 
+        ? window.inSetu.utils.truncateFilename(baseName, 22) 
+        : baseName;
 
     if (window.Sutram?.stores?.Layout) {
         const layout = window.Sutram.stores.Layout.getState();
@@ -163,11 +165,11 @@ function injectTextToBuffer(filepath, text, isSupportedEditor, isMarkdown, isFS,
         forceEdit: forceAllowEdit
     });
 }
-
 export function routeToSpatialGrid(filepath, label = null) {
     if (!window.Sutram?.stores?.Layout) return;
     const layout = window.Sutram.stores.Layout.getState();
-    const safeLabel = label || filepath.split('/').pop();
+    const baseName = filepath.split('/').pop();
+    const safeLabel = label || (window.inSetu?.utils?.truncateFilename ? window.inSetu.utils.truncateFilename(baseName, 24) : baseName);
 
     let existingCol = null;
     ['left', 'center', 'right'].forEach(col => {
@@ -676,13 +678,16 @@ export class InSetuMoveFileProjection extends InSetuElement {
         super();
         this.moveState = FsStore.getState().modals.move || { currentFile: '', destPath: '', initialParts: [] };
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(FsStore, state => {
-            this.moveState = state.modals?.move || { currentFile: '', destPath: '', initialParts: [] };
-            this.requestUpdate();
-        });
+        this.subscribe(
+            FsStore,
+            state => state.modals?.move || { currentFile: '', destPath: '', initialParts: [] },
+            (moveState) => {
+                this.moveState = moveState;
+                this.requestUpdate();
+            }
+        );
     }
 
     render() {
@@ -1155,19 +1160,26 @@ export class InSetuVFSExplorerActions extends InSetuElement {
         this._selectedCount = 0;
         this._selectedItems = new Map();
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(AppStore, state => {
-            this.globalBrowsePath = state.globalBrowsePath || [];
-            this._rebuildMenu();
-        });
-        this.subscribe(SelectionStore, state => {
-            this._selectedItems = state.selectedItems || new Map();
-            this._selectedCount = this._selectedItems.size;
-            this._rebuildMenu();
-            this.requestUpdate();
-        });
+        this.subscribe(
+            AppStore,
+            state => state.globalBrowsePath || [],
+            (globalBrowsePath) => {
+                this.globalBrowsePath = globalBrowsePath;
+                this._rebuildMenu();
+            }
+        );
+        this.subscribe(
+            SelectionStore,
+            state => state.selectedItems || new Map(),
+            (selectedItems) => {
+                this._selectedItems = selectedItems;
+                this._selectedCount = this._selectedItems.size;
+                this._rebuildMenu();
+                this.requestUpdate();
+            }
+        );
         this.globalBrowsePath = AppStore.getState().globalBrowsePath || [];
         this._selectedItems = SelectionStore.getState()?.selectedItems || new Map();
         this._selectedCount = this._selectedItems.size;
@@ -1759,6 +1771,9 @@ export async function viewSourceFile(filepath, isFS = false, bypassHook = false)
             if (intercepted) return;
         }
     }
+    const isUserTemplate = normPath.includes('/.templates/user/') || normPath.startsWith('ctx://prompts/.templates/user/');
+    const isReadOnlyTemplate = !isUserTemplate && (normPath.includes('/.templates/') || normPath.startsWith('ctx://prompts/.templates/'));
+    const effectiveIsFS = isReadOnlyTemplate ? false : isFS;
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(normPath);
     FsStore.getState().openBuffer(normPath, {
         filename: normPath,
@@ -1766,7 +1781,7 @@ export async function viewSourceFile(filepath, isFS = false, bypassHook = false)
         originalContent: 'Loading...',
         fullText: 'Loading...',
         isTruncated: false,
-        isFS,
+        isFS: effectiveIsFS,
         forceEdit: false,
         isMemoryOnly: false,
         isMarkdown,
@@ -2064,15 +2079,21 @@ export class InSetuEditorProjection extends InSetuElement {
     connectedCallback() {
         super.connectedCallback();
         if (!this.filepath) this.filepath = this.dataset.subId; // Inherit identity from spatial viewport router
-        this.subscribe('Fs', state => {
-            this._buffer = state.activeBuffers[this.filepath] || null;
-        });
+        this.subscribe(
+            'Fs',
+            state => state.activeBuffers[this.filepath] || null,
+            (buffer) => {
+                this._buffer = buffer;
+            }
+        );
         // Pointer Relaunch: Fetch the file from the VFS if the layout mounted this component but memory is empty
         setTimeout(() => {
             if (!this._buffer && this.filepath && !this.filepath.startsWith('yomama://') && !this.filepath.startsWith('virtual://')) {
                 if (window.inSetu?.vfs?.viewSourceFile) {
-                    const isEditableCtx = this.filepath.startsWith('ctx://notes/') || this.filepath.startsWith('ctx://prompts/');
-                    const isPhysical = !this.filepath.startsWith('ctx://') || isEditableCtx;
+                    const isUserTemplate = this.filepath.includes('/.templates/user/');
+                    const isReadOnlyTemplate = !isUserTemplate && this.filepath.includes('/.templates/');
+                    const isEditableCtx = !isReadOnlyTemplate && (this.filepath.startsWith('ctx://notes/') || this.filepath.startsWith('ctx://prompts/'));
+                    const isPhysical = !isReadOnlyTemplate && (!this.filepath.startsWith('ctx://') || isEditableCtx);
                     window.inSetu.vfs.viewSourceFile(this.filepath, isPhysical, true);
                 }
             }
@@ -2370,6 +2391,7 @@ export function openPartsModal(filepath) {
     }
 }
 window.inSetu.vfs.resolveFileFetchUrl = resolveFileFetchUrl;
+window.inSetu.vfs.renameFileTracking = renameFileTracking;
 window.inSetu.vfs.getChunks = getChunks;
 window.inSetu.vfs.openPartsModal = openPartsModal;
 window.inSetu.vfs.openVirtualFile = openVirtualFile;
@@ -2539,10 +2561,14 @@ export class InSetuNewFileProjection extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(FsStore, state => {
-            this.newFileState = state.modals?.newFile || {};
-            this.requestUpdate();
-        });
+        this.subscribe(
+            FsStore,
+            state => state.modals?.newFile || {},
+            (newFileState) => {
+                this.newFileState = newFileState;
+                this.requestUpdate();
+            }
+        );
     }
     _getActionNode(componentTag) {
         if (!this._cachedActionNodes.has(componentTag)) {
@@ -2609,10 +2635,14 @@ export class InSetuNewFolderProjection extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(FsStore, state => {
-            this.newFolderState = state.modals?.newFolder || {};
-            this.requestUpdate();
-        });
+        this.subscribe(
+            FsStore,
+            state => state.modals?.newFolder || {},
+            (newFolderState) => {
+                this.newFolderState = newFolderState;
+                this.requestUpdate();
+            }
+        );
     }
     render() {
         const nf = this.newFolderState || {};
@@ -2664,10 +2694,14 @@ export class InSetuLinkInsertProjection extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(FsStore, state => {
-            this.linkState = state.modals?.linkInsert || {};
-            this.requestUpdate();
-        });
+        this.subscribe(
+            FsStore,
+            state => state.modals?.linkInsert || {},
+            (linkState) => {
+                this.linkState = linkState;
+                this.requestUpdate();
+            }
+        );
     }
     render() {
         const li = this.linkState || {};
@@ -2741,15 +2775,26 @@ export class InSetuBrowserProjection extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(FsStore, state => {
-            this.browserModal = state.modals?.browser || {};
-            this.requestUpdate();
-        });
-        this.subscribe(AppStore, state => {
-            this.browserConfig = state.browserConfig || {};
-            this.currentBrowsePath = state.currentBrowsePath || [];
-            this.requestUpdate();
-        });
+        this.subscribe(
+            FsStore,
+            state => state.modals?.browser || {},
+            (browserModal) => {
+                this.browserModal = browserModal;
+                this.requestUpdate();
+            }
+        );
+        this.subscribe(
+            AppStore,
+            state => ({
+                browserConfig: state.browserConfig || {},
+                currentBrowsePath: state.currentBrowsePath || []
+            }),
+            ({ browserConfig, currentBrowsePath }) => {
+                this.browserConfig = browserConfig;
+                this.currentBrowsePath = currentBrowsePath;
+                this.requestUpdate();
+            }
+        );
     }
     render() {
         const b = this.browserModal || {};
@@ -2864,15 +2909,24 @@ export class InSetuFileDiffProjection extends InSetuElement {
         if (!this.filepath && this.dataset.subId?.startsWith('vfs:diff:')) {
             this.filepath = this.dataset.subId.replace('vfs:diff:', '');
         }
-        this.subscribe(FsStore, state => {
-            if (!this.filepath) return;
-            const normFp = normalizeVfsURI(this.filepath);
-            const buf = state.activeBuffers?.[normFp] || state.activeBuffers?.[this.filepath];
-            if (buf && buf.isFS && buf.content !== undefined && buf.content !== 'Loading...') {
-                this._workingContent = buf.content;
-                this._hasUnsavedBuffer = buf.content !== buf.originalContent;
+        this.subscribe(
+            FsStore,
+            state => {
+                if (!this.filepath) return null;
+                const normFp = normalizeVfsURI(this.filepath);
+                const buf = state.activeBuffers?.[normFp] || state.activeBuffers?.[this.filepath];
+                return (buf && buf.isFS && buf.content !== undefined && buf.content !== 'Loading...')
+                    ? { content: buf.content, originalContent: buf.originalContent }
+                    : null;
+            },
+            (buf) => {
+                if (buf) {
+                    this._workingContent = buf.content;
+                    this._hasUnsavedBuffer = buf.content !== buf.originalContent;
+                    this.requestUpdate();
+                }
             }
-        });
+        );
         if (this.filepath) {
             this._fetchDiff();
         }

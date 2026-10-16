@@ -8,7 +8,6 @@ import time
 import traceback
 from typing import TypedDict, Optional, List, Dict, Any
 from flask import request, jsonify
-from akasa.db import get_connection
 from akasa.utils import load_config, save_json_config, load_json_config, get_workspace_physics, sniff_tenant_id
 import akasa.utils as utils
 from akasa.hooks import hooks
@@ -391,12 +390,8 @@ class PipelineSubmitPayload(TypedDict, total=False):
 def api_system_pipeline_submit(ctx):
     data = ctx.req.get_json(force=True, silent=True) or {}
     force_full = data.get("force_full", False)
-    from akasa.db import get_connection as _get_connection
-    w_conn = _get_connection("workers", workspace_id=ctx.workspace_id)
     # Reattach check: Attach to any active stage of the compilation pipeline to prevent concurrent chain collisions.
-    cutoff = time.time() - 300.0
-    from akasa.workers import resolve_dag_chain as _resolve_dag_chain
-    ordered_steps = _resolve_dag_chain(ctx, 'register_compilation_steps')
+    ordered_steps = ctx.resolve_dag_chain('register_compilation_steps')
 
     start_step = data.get("start_step")
     upstream_worker_names = []
@@ -411,21 +406,9 @@ def api_system_pipeline_submit(ctx):
             upstream_worker_names = [s.get('worker_name') for s in ordered_steps if s.get('worker_name')]
     else:
         upstream_worker_names = [s.get('worker_name') for s in ordered_steps if s.get('worker_name')]
-    if upstream_worker_names:
-        placeholders = ", ".join(["?"] * len(upstream_worker_names))
-        existing_job = w_conn.execute(
-            f"SELECT id, args_json FROM immediate_jobs WHERE callback_name IN ({placeholders}) AND status IN ('pending', 'processing') AND updated_at > ?", 
-            tuple(upstream_worker_names) + (cutoff,)
-        ).fetchone()
-
-        if existing_job:
-            try:
-                job_args = json.loads(existing_job['args_json'])
-                # Safely merge if the active job satisfies our force_full requirement
-                if job_args.get("force_full") or not force_full:
-                    return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to active compilation."}), 202
-            except Exception:
-                pass
+    active_job_id = ctx.jobs.find_active_pipeline_job(upstream_worker_names, force_full=force_full)
+    if active_job_id:
+        return jsonify({"status": "accepted", "job_id": active_job_id, "message": "Reattached to active compilation."}), 202
     if not ordered_steps:
         return jsonify({"error": "No compilation steps registered."}), 400
 
@@ -765,20 +748,10 @@ class JobStatusResponse(TypedDict):
 @system_bp.route('jobs/<job_id>', methods=['GET'], response_schema=JobStatusResponse, docstring="Polls the status of an asynchronous background job using the job_id returned by a 202 Accepted response. Status will be 'pending', 'processing', 'completed', or 'failed'.")
 def api_job_status(ctx, job_id):
     try:
-        conn = get_connection("workers", workspace_id=ctx.workspace_id)
-        job = conn.execute("SELECT ext_name, status, status_message, artifact_json, created_at, updated_at FROM immediate_jobs WHERE id=?", (job_id,)).fetchone()
-        if not job:
+        status_payload = ctx.jobs.get_status(job_id)
+        if not status_payload:
             return jsonify({"error": "Job not found in active workspace context."}), 404
-
-        return jsonify({
-            "id": job_id,
-            "ext_name": job['ext_name'],
-            "status": job['status'],
-            "message": job['status_message'],
-            "artifact": json.loads(job['artifact_json']) if job['artifact_json'] else {},
-            "created_at": job['created_at'],
-            "updated_at": job['updated_at']
-        })
+        return jsonify(status_payload)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 class WorkspacesResponse(TypedDict):
@@ -817,7 +790,7 @@ def api_system_config_test_bucketing(ctx):
         data = ctx.req.get_json(silent=True) or {}
         repo_cfg = data.get("repo_cfg", {})
 
-        cfg_path, ws_root, _ = get_workspace_physics(ctx.workspace_id)
+        cfg_path, ws_root = get_workspace_physics(ctx.workspace_id)
         repo_dir = repo_cfg.get("repo_dir")
         if not repo_dir:
             return jsonify({"error": "repo_dir missing"}), 400

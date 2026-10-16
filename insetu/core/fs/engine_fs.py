@@ -13,10 +13,8 @@ from insetu.core.sdk import InSetuExtension
 from akasa.db import get_connection
 from akasa.hooks import hooks
 from akasa.utils import sniff_tenant_id
-from akasa.vfs import execute_vfs_move, execute_vfs_delete, execute_vfs_save, execute_vfs_bulk
-from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
+from akasa.vfs import execute_vfs_move, execute_vfs_delete, execute_vfs_save, execute_vfs_bulk, _cache_evict
 from insetu.core.utils_core import InSetuURI, get_repo_path, execute_binary
-
 fs_bp = InSetuExtension(
     'fs', 
     __name__, 
@@ -25,6 +23,13 @@ fs_bp = InSetuExtension(
     core=True
 )
 __depends__ = []
+def _is_readonly_template_path(filepath: str) -> bool:
+    if not filepath:
+        return False
+    norm = str(filepath).replace('\\', '/')
+    if '/.templates/user/' in norm or norm.endswith('/.templates/user') or norm.startswith(('.templates/user/', 'ctx://prompts/.templates/user/')):
+        return False
+    return '/.templates/' in norm or norm.startswith(('.templates/', 'ctx://prompts/.templates/'))
 class FileTargetPayload(TypedDict):
     file: str
 @fs_bp.route('exists', methods=['GET'], request_schema=FileTargetPayload, docstring="Verifies if a file exists on the Virtual File System.")
@@ -116,32 +121,27 @@ def download_file(filename):
     res.headers['Pragma'] = 'no-cache'
     res.headers['Expires'] = '0'
     return res
-def _background_fs_search(job_id, workspace_id, query, **kwargs):
-    try:
-        update_immediate_job_status(job_id, 'processing', "Searching workspace files...", workspace_id=workspace_id)
-        results = []
-        search_responses = hooks.emit('vfs_search', workspace_id=workspace_id, query=query)
-        for res in search_responses:
-            if res: results.extend(res)
-        results.sort(key=lambda x: x["score"], reverse=True)
-        results = results[:50]
-        update_immediate_job_status(job_id, 'completed', "Search complete.", artifact={"results": results}, workspace_id=workspace_id)
-    except Exception as e:
-        update_immediate_job_status(job_id, 'failed', f"Search failed: {str(e)}", workspace_id=workspace_id)
-register_callback("fs", "search_task", _background_fs_search)
+@fs_bp.worker("search_task")
+def _background_fs_search(ctx, query="", **kwargs):
+    ctx.jobs.update_progress("Searching workspace files...")
+    results = []
+    search_responses = ctx.emit('vfs_search', query=query)
+    for res in search_responses:
+        if res: results.extend(res)
+    results.sort(key=lambda x: x["score"], reverse=True)
+    results = results[:50]
+    return {"message": "Search complete.", "artifact": {"results": results}}
 
 class FileSearchPayload(TypedDict):
     q: str
 
 @fs_bp.route('search', methods=['POST'], request_schema=FileSearchPayload, docstring="Fuzzy search across workspace files.")
 def api_fs_search(ctx):
-    workspace_id = ctx.workspace_id
     try:
         data = ctx.req.get_json(silent=True) or {}
         query = data.get('q', '').lower()
         if not query: return jsonify({"results": []})
-        job_id = f"sch_{uuid.uuid4().hex[:8]}"
-        submit_immediate_job(job_id, "fs", "search_task", json.dumps({"query": query}), workspace_id=workspace_id, job_category="system_background")
+        job_id = ctx.jobs.submit("search_task", job_category="system_background", query=query)
         return jsonify({"status": "accepted", "job_id": job_id}), 202
     except Exception as e:
         return jsonify({"error": f"Search dispatch failed: {str(e)}"}), 500
@@ -158,6 +158,8 @@ def api_fs_move(ctx):
         dest_path = data.get("dest_path", "").strip()
         if not filepath or not dest_path:
                 return jsonify({"error": "Filepath and destination required"}), 400
+        if _is_readonly_template_path(filepath) or _is_readonly_template_path(dest_path):
+                return jsonify({"error": "403 Forbidden: Built-in module templates are read-only. Fork the template to your workspace prompts to edit it."}), 403
         res, code = execute_vfs_move(workspace_id, filepath, dest_path)
         return jsonify(res), code
     except Exception as e:
@@ -176,6 +178,8 @@ def api_fs_archive(ctx):
         filepath = data.get("filepath", "").strip()
         if not filepath:
                 return jsonify({"error": "Filepath required"}), 400
+        if _is_readonly_template_path(filepath):
+                return jsonify({"error": "403 Forbidden: Built-in module templates are read-only."}), 403
         uri = InSetuURI.from_any(filepath)
 
         parent_path = uri.path.rpartition('/')[0] if '/' in uri.path else ''
@@ -206,6 +210,8 @@ def api_fs_delete(ctx):
         filepath = data.get("filepath", "").strip()
         if not filepath:
                 return jsonify({"error": "Filepath required"}), 400
+        if _is_readonly_template_path(filepath):
+                return jsonify({"error": "403 Forbidden: Built-in module templates are read-only."}), 403
         res, code = execute_vfs_delete(workspace_id, filepath)
         return jsonify(res), code
     except Exception as e:
@@ -237,6 +243,8 @@ def api_fs_bulk(ctx):
             act = (item.get("action") or "").strip().lower()
             fp = (item.get("filepath") or "").strip()
             if not fp or act not in ("move", "archive", "delete"):
+                continue
+            if _is_readonly_template_path(fp) or _is_readonly_template_path(item.get("dest_path", "")):
                 continue
 
             if act == "delete":
@@ -315,10 +323,10 @@ def api_fs_upload(ctx):
             resolved_path = ctx.resolve_path(filepath)
             if not resolved_path:
                 continue
-
             is_new = not os.path.exists(resolved_path)
             os.makedirs(Path(resolved_path).parent, exist_ok=True)
 
+            _cache_evict(resolved_path)
             file.save(resolved_path)
             uploaded_paths.append(filepath)
             mutations.append({"filepath": filepath, "operation": "save", "ignore_ledger": False})
@@ -353,10 +361,11 @@ def api_fs_save(ctx):
                 del data["is_absolute_artifact"]
         if "ignore_ledger" in data:
                 del data["ignore_ledger"]
-
         filepath, content = data.get("filepath", "").strip(), data.get("content", "")
         if not filepath: 
                 return jsonify({"error": "Filepath is required"}), 400
+        if _is_readonly_template_path(filepath):
+                return jsonify({"error": "403 Forbidden: Built-in module templates are read-only. Fork the template to your workspace prompts to edit it."}), 403
         base_hash = data.get("base_hash")
         if base_hash:
             current_disk_content = ctx.vfs.read(filepath)

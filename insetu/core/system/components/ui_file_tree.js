@@ -189,21 +189,23 @@ constructor() {
                         .renderItem=${filepath => {
                             if (!filepath || typeof filepath !== 'string') return html``;
                             const key = filepath.split('/').pop();
-                            const fullFilepath = `${this.basePath}${filepath}`;
+                            const fullFilepath = (filepath.startsWith('vfs://') || filepath.startsWith('ctx://')) ? filepath : `${this.basePath}${filepath}`;
                             const isGitMod = this._gitModifiedFiles.has(fullFilepath) || this._gitModifiedFiles.has(fullFilepath.replace(/^vfs:\/\//, ''));
+                            const isUserTemplate = fullFilepath.includes('/.templates/user/') || fullFilepath.startsWith('.templates/user/');
+                            const isReadOnlyTemplate = !isUserTemplate && (fullFilepath.includes('/.templates/') || fullFilepath.startsWith('.templates/'));
                             return html`
                                 <div style="width: 100%; box-sizing: border-box; padding: 0 var(--tree-item-px) 8px var(--tree-item-px);">
                                     <sutram-card
                                         style="margin-bottom: 0;"
                                         .filename=${fullFilepath}
                                         .detailText=${fullFilepath}
-                                        .detailSuffix=${isGitMod ? 'M' : ''}
+                                        .detailSuffix=${isUserTemplate ? 'User Template' : (isReadOnlyTemplate ? 'Template' : (isGitMod ? 'M' : ''))}
                                         .titleText=${key}
                                         descriptionText=""
-                                        intent=${isGitMod ? 'highlight' : 'primary'}
-                                        icon=${(this._pendingMutations.has(fullFilepath) || this._pendingMutations.has(`vfs://${fullFilepath}`)) ? 'cloud-upload' : 'file-code-2'}
+                                        intent=${(isReadOnlyTemplate || isUserTemplate) ? 'highlight' : (isGitMod ? 'highlight' : 'primary')}
+                                        icon=${isReadOnlyTemplate ? 'book-open' : ((this._pendingMutations.has(fullFilepath) || this._pendingMutations.has(`vfs://${fullFilepath}`)) ? 'cloud-upload' : 'file-code-2')}
                                         .entityType=${this.entityType || 'file'}
-                                        .entityData=${{ filepath: fullFilepath, isFS: true, git_modified: isGitMod }}>
+                                        .entityData=${{ filepath: fullFilepath, isFS: !isReadOnlyTemplate, isTemplate: isReadOnlyTemplate || isUserTemplate, git_modified: isGitMod }}>
                                     </sutram-card>
                                 </div>
                             `;
@@ -214,7 +216,10 @@ constructor() {
                         .items=${directoryEntries}
                         .renderItem=${node => {
                             if (!node || typeof node !== 'object') return html``;
-                            const fullTarget = `${this.basePath}${node.fullPath}`;
+                            const fullTarget = (node.fullPath.startsWith('vfs://') || node.fullPath.startsWith('ctx://')) ? node.fullPath : `${this.basePath}${node.fullPath}`;
+                            const isUserTemplateSub = fullTarget.includes('/.templates/user/') || node.fullPath.startsWith('.templates/user/');
+                            const isUserTemplateRoot = fullTarget.endsWith('/.templates/user') || node.fullPath === '.templates/user';
+                            const isReadOnlyTemplateNode = !isUserTemplateSub && (fullTarget.includes('/.templates') || node.fullPath.startsWith('.templates'));
                             if (node.type === 'directory') {
                                 const nextPath = node.fullPath.split('/').filter(Boolean);
                                 return html`
@@ -222,10 +227,10 @@ constructor() {
                                         <sutram-card
                                             style="margin-bottom: 0;"
                                             .titleText=${node.name}
-                                            icon="folder"
-                                            intent="warning"
+                                            icon=${isUserTemplateRoot ? 'user' : (isReadOnlyTemplateNode ? 'library' : 'folder')}
+                                            intent=${(isReadOnlyTemplateNode || isUserTemplateRoot) ? 'highlight' : 'warning'}
                                             .entityType=${'folder'}
-                                            .entityData=${{ id: fullTarget, folderpath: fullTarget, isDir: true }}
+                                            .entityData=${{ id: fullTarget, folderpath: fullTarget, isDir: !isReadOnlyTemplateNode, isSkeleton: isReadOnlyTemplateNode, isTemplate: isReadOnlyTemplateNode || isUserTemplateSub }}
                                             @card-clicked=${(e) => { e.stopPropagation(); this._setPath(nextPath); }}>
                                         </sutram-card>
                                     </div>
@@ -239,13 +244,13 @@ constructor() {
                                         style="margin-bottom: 0;"
                                         .filename=${fullTarget}
                                         .detailText=${fullTarget}
-                                        .detailSuffix=${isGitMod ? 'M' : ''}
+                                        .detailSuffix=${isUserTemplateSub ? 'User Template' : (isReadOnlyTemplateNode ? 'Template' : (isGitMod ? 'M' : ''))}
                                         .titleText=${node.name}
                                         descriptionText=""
-                                        intent=${isGitMod ? 'highlight' : 'primary'}
-                                        icon=${isPending ? 'cloud-upload' : 'file-code-2'}
+                                        intent=${(isReadOnlyTemplateNode || isUserTemplateSub) ? 'highlight' : (isGitMod ? 'highlight' : 'primary')}
+                                        icon=${isReadOnlyTemplateNode ? 'book-open' : (isPending ? 'cloud-upload' : 'file-code-2')}
                                         .entityType=${this.entityType || 'file'}
-                                        .entityData=${{ filepath: fullTarget, isFS: true, git_modified: isGitMod, is_dirty: isPending }}>
+                                        .entityData=${{ filepath: fullTarget, isFS: !isReadOnlyTemplateNode, isTemplate: isReadOnlyTemplateNode || isUserTemplateSub, git_modified: isGitMod, is_dirty: isPending }}>
                                     </sutram-card>
                                 </div>
                             `;

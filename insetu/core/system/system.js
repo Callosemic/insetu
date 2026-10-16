@@ -158,7 +158,9 @@ async function bootExtensions() {
         const subId = parts.slice(2).join('/') || '';
         let matchingExt = activeExts.find(ext => ext === subId || subId.startsWith(`${ext}:`));
         if (!matchingExt) {
-            if (subId.startsWith('ctx://notes/')) matchingExt = 'notes';
+            const dataMatch = subId.match(/\.(?:insetu-data|insetu\/data)\/([a-z0-9_]+)\//);
+            if (dataMatch) matchingExt = dataMatch[1];
+            else if (subId.startsWith('ctx://notes/')) matchingExt = 'notes';
             else if (subId.includes('.tracker/')) matchingExt = 'tracker';
             else if (subId.startsWith('ctx://prompts/')) matchingExt = 'prompts';
         }
@@ -460,10 +462,22 @@ import { createJobPoller } from '/static/vendor/sutram/js/poller.js';
 window.inSetu.utils.pollJob = (jobId, options = {}) => {
     const initWs = window.inSetu.utils.getActiveWorkspace();
     const safeOptions = { ...options };
+    let settled = false;
+
+    const cleanupSseFastPath = () => {
+        settled = true;
+        window.removeEventListener('sutram-compile-progress', sseHandler);
+    };
+
     ['onProgress', 'onComplete', 'onError'].forEach(cbName => {
         if (options[cbName]) {
             safeOptions[cbName] = (...args) => {
                 if (window.inSetu.utils.getActiveWorkspace() !== initWs) return;
+                if (settled && (cbName === 'onComplete' || cbName === 'onError')) return;
+
+                if (cbName === 'onComplete' || cbName === 'onError') {
+                    cleanupSseFastPath();
+                }
 
                 // UI Telemetry Mutex: Silence redundant HTTP polling updates if SSE is healthy
                 if (cbName === 'onProgress' && window.inSetu?.sse?.isConnected) {
@@ -475,9 +489,28 @@ window.inSetu.utils.pollJob = (jobId, options = {}) => {
         }
     });
 
+    const sseHandler = (e) => {
+        if (settled) return;
+        const d = e.detail;
+        if (!d || (d.job_id !== jobId && d.id !== jobId)) return;
+        if (window.inSetu.utils.getActiveWorkspace() !== initWs) return;
+
+        if (d.status === 'completed' && ! d.artifact?.next_job_id) {
+            cleanupSseFastPath();
+            if (options.onComplete) options.onComplete(d);
+        } else if (d.status === 'failed') {
+            cleanupSseFastPath();
+            if (options.onError) options.onError(new Error(d.message || 'Job failed'));
+        }
+    };
+    window.addEventListener('sutram-compile-progress', sseHandler);
+
     // Instantiate a dynamically bound poller to strictly lock network requests to the originating tenant
     const scopedPoller = createJobPoller({
-        get: async (path) => window.inSetu.api.request(`/api/${initWs}/system/${path}`, { method: 'GET' }, initWs)
+        get: async (path) => {
+            if (settled) return new Response(JSON.stringify({ status: 'completed', _aborted_by_sse: true }), { status: 200 });
+            return window.inSetu.api.request(`/api/${initWs}/system/${path}`, { method: 'GET' }, initWs);
+        }
     });
 
     return scopedPoller(jobId, safeOptions);
@@ -981,19 +1014,16 @@ export async function executeBootSequence() {
             }
         }
         if (deepPath.length > 0) {
-            AppStore.setState(s => ({ 
-                globalBrowsePath: deepPath,
-                tabBrowsePaths: { ...(s.tabBrowsePaths || {}), [subId]: deepPath }
-            }));
+            AppStore.getState().setBrowsePath(deepPath, subId);
         } else {
             const savedPath = AppStore.getState().tabBrowsePaths?.[subId];
             if (savedPath && savedPath.length > 0) {
                 const deepStr = '/' + savedPath.map(encodeURIComponent).join('/');
                 const newHash = `#/${encodeURIComponent(ws)}/${colId}/${encodeURIComponent(subId)}${deepStr}`;
                 history.replaceState(null, '', newHash);
-                AppStore.setState({ globalBrowsePath: savedPath });
+                AppStore.getState().setBrowsePath(savedPath, subId);
             } else {
-                AppStore.setState({ globalBrowsePath: [] });
+                AppStore.getState().setBrowsePath([], subId);
             }
         }
 
@@ -1239,6 +1269,11 @@ window.alert = function(msg, intent = null) {
         } else {
             resolvedIntent = 'danger';
         }
+    }
+    if (resolvedIntent === 'danger') {
+        console.error("[inSetu Alert]:", msg);
+    } else if (resolvedIntent === 'warning') {
+        console.warn("[inSetu Alert]:", msg);
     }
     const toastStore = window.inSetu?.stores?.Toast || window.Sutram?.stores?.Toast;
     if (toastStore && typeof toastStore.getState === 'function') {

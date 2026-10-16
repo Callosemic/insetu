@@ -5,7 +5,6 @@ from typing import TypedDict, List, Dict, Any
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import parse_blocks
-from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
 
 AGENT_SCHEMA = {
     "chat_sessions": {
@@ -84,19 +83,19 @@ def submit_prompt(ctx):
     })
     ctx.db.execute("UPDATE chat_sessions SET updated_at=? WHERE session_id=?", (now, session_id))
     ctx.db.commit()
-
-    job_id = f"agt_{uuid.uuid4().hex[:8]}"
-    args_json = json.dumps({
-        "session_id": session_id,
-        "user_prompt": prompt,
-        "attached_files": attached_files,
-        "retry_count": 0
-    })
-
-    submit_immediate_job(job_id, "agent", "agent_turn_task", args_json, workspace_id=ctx.workspace_id, job_category="ui_blocking")
+    job_id = ctx.jobs.submit(
+        "agent_turn_task",
+        job_category="ui_blocking",
+        session_id=session_id,
+        user_prompt=prompt,
+        attached_files=attached_files,
+        retry_count=0
+    )
 
     return jsonify({"status": "accepted", "job_id": job_id, "message_id": user_msg_id}), 202
-def _execute_agent_turn(job_id, workspace_id, session_id, user_prompt, attached_files=None, retry_count=0, **kwargs):
+
+@agent_bp.worker("agent_turn_task")
+def _execute_agent_turn(ctx, job_id=None, session_id=None, user_prompt="", attached_files=None, retry_count=0, **kwargs):
     from insetu.core.llm.engine_llm import (
         _stream_anthropic as __stream_anthropic,
         _stream_gemini as __stream_gemini,
@@ -104,7 +103,7 @@ def _execute_agent_turn(job_id, workspace_id, session_id, user_prompt, attached_
     )
     from insetu.core.bridge.bridge_vfs import execute_bridge_sync as _execute_bridge_sync
 
-    ctx = agent_bp.get_context(workspace_id, job_id=job_id)
+    workspace_id = ctx.workspace_id
     attached_files = attached_files or []
 
     # --- Phase 1: Context Assembly (Gather) ---
@@ -161,14 +160,13 @@ def _execute_agent_turn(job_id, workspace_id, session_id, user_prompt, attached_
                         chunk_obj = json.loads(data_str)
                         if "text" in chunk_obj:
                             full_response += chunk_obj["text"]
-                            update_immediate_job_status(job_id, "processing", full_response, workspace_id=workspace_id)
+                            ctx.jobs.update_progress(full_response)
                         elif "error" in chunk_obj:
                             raise RuntimeError(chunk_obj["error"])
                     except json.JSONDecodeError:
                         continue
     except Exception as e:
-        update_immediate_job_status(job_id, "failed", f"LLM Generation Error: {str(e)}", workspace_id=workspace_id)
-        return
+        raise RuntimeError(f"LLM Generation Error: {str(e)}")
 
     # --- Phase 3: Patch Application & Verification (Yomama Bridge) ---
     if "<<<<<<< FILE:" in full_response:
@@ -208,10 +206,8 @@ def _execute_agent_turn(job_id, workspace_id, session_id, user_prompt, attached_
                     "timestamp": time.time()
                 })
                 ctx.db.commit()
-
                 # Re-queue turn with incremented retry count
-                _execute_agent_turn(job_id, workspace_id, session_id, user_prompt, attached_files, retry_count=retry_count+1)
-                return
+                return _execute_agent_turn(ctx, job_id=job_id, session_id=session_id, user_prompt=user_prompt, attached_files=attached_files, retry_count=retry_count+1)
             else:
                 full_response += f"\n\n⚠️ **Patch Verification Failed After 3 Retries:**\n```\n{bridge_raw}\n```"
 
@@ -226,6 +222,4 @@ def _execute_agent_turn(job_id, workspace_id, session_id, user_prompt, attached_
     })
     ctx.db.commit()
 
-    update_immediate_job_status(job_id, "completed", "Turn complete.", artifact={"message_id": asst_msg_id, "response": full_response}, workspace_id=workspace_id)
-
-register_callback("agent", "agent_turn_task", _execute_agent_turn)
+    return {"message": "Turn complete.", "artifact": {"message_id": asst_msg_id, "response": full_response}}

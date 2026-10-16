@@ -77,13 +77,28 @@ export class InSetuSystemSettings extends InSetuElement {
     connectedCallback() {
         super.connectedCallback();
         this.currentTheme = document.body.getAttribute('data-theme') || localStorage.getItem('insetu_theme') || 'dark';
-        this.subscribe(AppStore, state => {
-            this.workspaces = state.workspaces || {};
-            this.emoji = state.instanceEmoji || '⚙️';
-        });
-        this.subscribe('Layout', state => {
-            this.layoutCapacity = state.capacity || 3;
-        });
+        const initApp = AppStore.getState();
+        this.workspaces = initApp.workspaces || {};
+        this.emoji = initApp.instanceEmoji || '⚙️';
+        this.subscribe(
+            AppStore,
+            state => ({ workspaces: state.workspaces, emoji: state.instanceEmoji || '⚙️' }),
+            ({ workspaces, emoji }) => {
+                this.workspaces = workspaces || {};
+                this.emoji = emoji;
+                this.requestUpdate();
+            }
+        );
+        const initLayout = window.Sutram?.stores?.Layout?.getState?.();
+        if (initLayout?.capacity) this.layoutCapacity = initLayout.capacity;
+        this.subscribe(
+            'Layout',
+            state => state.capacity || 3,
+            (capacity) => {
+                this.layoutCapacity = capacity;
+                this.requestUpdate();
+            }
+        );
         this.registerGlobalListener('click', document, this._handleOutsideClick);
         this.registerGlobalListener('insetu:system:close-settings', window, () => {
             this.modalOpen = false;
@@ -445,14 +460,17 @@ export class InSetuWorkspaceEditor extends InSetuElement {
         this._newWsId = '';
         this._newWsRoot = '';
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(AppStore, state => {
-            if (state.isWorkspaceEditorOpen !== this.open) {
-                this.open = !!state.isWorkspaceEditorOpen;
+        this.subscribe(
+            AppStore,
+            state => !!state.isWorkspaceEditorOpen,
+            (isWorkspaceEditorOpen) => {
+                if (isWorkspaceEditorOpen !== this.open) {
+                    this.open = isWorkspaceEditorOpen;
+                }
             }
-        });
+        );
     }
 
     async _openHostBrowser() {

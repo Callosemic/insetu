@@ -77,13 +77,16 @@ export class InSetuRebootOverlay extends InSetuElement {
         this.isRebooting = false;
         this.rebootType = 'reboot';
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(window.inSetu.stores.App, state => { 
-            this.isRebooting = !!state.isRebooting;
-            this.rebootType = state.rebootType || 'reboot';
-        });
+        this.subscribe(
+            window.inSetu.stores.App,
+            state => ({ isRebooting: !!state.isRebooting, rebootType: state.rebootType || 'reboot' }),
+            ({ isRebooting, rebootType }) => {
+                this.isRebooting = isRebooting;
+                this.rebootType = rebootType;
+            }
+        );
     }
     render() {
         if (!this.isRebooting) return html``;
@@ -109,12 +112,15 @@ export class InSetConfigBanner extends InSetuElement {
         super();
         this.configMissing = false;
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(window.inSetu.stores.App, state => {
-            this.configMissing = !!state.configMissing;
-        });
+        this.subscribe(
+            window.inSetu.stores.App,
+            state => !!state.configMissing,
+            (configMissing) => {
+                this.configMissing = configMissing;
+            }
+        );
     }
     render() {
         if (!this.configMissing) return html``;

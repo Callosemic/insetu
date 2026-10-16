@@ -22,7 +22,6 @@ from akasa.utils import (
     load_config
 )
 from akasa.vfs import mount_volume, execute_vfs_save, _resolve_physical_path
-from akasa.workers import submit_immediate_job, register_callback, cancel_job
 from insetu.core.utils_core import get_repo_path, execute_binary, InSetuURI
 TOPOLOGY_SCHEMA = {
     "topology_ledger": {
@@ -60,8 +59,6 @@ def _register_topology_compilation_step(workspace_id=None, **kwargs):
     }]
 @topology_bp.worker("scan_topology_task")
 def _background_scan_topology(ctx, ledger_events=None, force_full=False, target_repos=None, **kwargs):
-    w_conn = get_connection('workers', workspace_id=ctx.workspace_id)
-
     if force_full and force_full != "compile_only":
         sweep_label = "Full Sweep" if not target_repos else f"Targeted Sweep: {target_repos}"
         ctx.jobs.update_progress(f"Scanning physical disk ({sweep_label})...")
@@ -74,15 +71,9 @@ def _background_scan_topology(ctx, ledger_events=None, force_full=False, target_
         ctx.sync_vfs_barrier(timeout=10.0)
     except TimeoutError as e:
         print(f"⚠️ [Topology] {str(e)} Proceeding with partial disk state.")
-
-    timeout_loops = 0
-    while timeout_loops < 20:
-        active_tpl = w_conn.execute("SELECT id FROM immediate_jobs WHERE id LIKE 'tpl_%' AND status IN ('pending', 'processing')").fetchone()
-        if not active_tpl:
-            break
+    if ctx.jobs.is_in_flight(prefix="tpl_"):
         ctx.jobs.update_progress("Waiting for concurrent topology mappers to settle...")
-        time.sleep(0.5)
-        timeout_loops += 1
+        ctx.jobs.wait_for(prefix="tpl_", timeout=10.0)
 
     drained_events = resolve_topology_buffer(ctx.workspace_id)
     all_events = ledger_events or []
@@ -91,21 +82,17 @@ def _background_scan_topology(ctx, ledger_events=None, force_full=False, target_
     for de in drained_events:
         event_dict[de['filepath']] = de
 
-    # EVENT TRAP HEALER: Steal trapped events from the 12-second delayed job and assassinate it.
+    # EVENT TRAP HEALER: Steal trapped events from the 12-second delayed job and cancel it.
     delayed_job_id = f"cmp_del_{ctx.workspace_id}"
-    delayed_job = w_conn.execute("SELECT args_json FROM jobs WHERE id=? AND status IN ('pending', 'running')", (delayed_job_id,)).fetchone()
+    delayed_args = ctx.jobs.get_scheduled_args(delayed_job_id)
 
-    if delayed_job and delayed_job['args_json']:
-        try:
-            delayed_args = json.loads(delayed_job['args_json'])
-            for de in delayed_args.get('ledger_events', []):
-                event_dict[de['filepath']] = de
-        except Exception:
-            pass
+    if delayed_args:
+        for de in delayed_args.get('ledger_events', []):
+            event_dict[de['filepath']] = de
 
     all_events = list(event_dict.values())
 
-    cancel_job(delayed_job_id, workspace_id=ctx.workspace_id)
+    ctx.jobs.cancel(delayed_job_id)
 
     return {
         "message": "Topology mapped successfully.",
@@ -184,27 +171,30 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
             conn.execute(f"DELETE FROM topology_ledger WHERE repo NOT IN ({placeholders})", tuple(active_repo_dirs))
         else:
             conn.execute("DELETE FROM topology_ledger")
+    now_ts = time.time()
+    with conn:
+        for repo_cfg in target_configs:
+            repo_dir = repo_cfg.get("repo_dir")
+            if not repo_dir: continue
 
-    for repo_cfg in target_configs:
-        repo_dir = repo_cfg.get("repo_dir")
-        if not repo_dir: continue
+            repo_path = get_repo_path(repo_dir, workspace_id)
+            valid_files = get_valid_workspace_files(repo_path, repo_cfg, workspace_id)
+            git_status_map = _get_repo_git_status_map(repo_path)
+            sub_buckets = repo_cfg.get("sub_buckets", [])
 
-        repo_path = get_repo_path(repo_dir, workspace_id)
-        valid_files = get_valid_workspace_files(repo_path, repo_cfg, workspace_id)
-        git_status_map = _get_repo_git_status_map(repo_path)
-        sub_buckets = repo_cfg.get("sub_buckets", [])
-
-        conn.execute("DELETE FROM topology_ledger WHERE repo = ?", (repo_dir,))
-        for f in valid_files:
-            b, module = resolve_file_bucket(f, sub_buckets, repo_dir=repo_dir)
-            bucket_id = module if (b and module) else (b.get("id") if b else "main")
-            filepath = f"{repo_dir}/{f}"
-            g_status = git_status_map.get(f, "")
-            conn.execute(
-                "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp, git_status) VALUES (?, ?, ?, ?, ?)",
-                (filepath, repo_dir, bucket_id, time.time(), g_status)
-            )
-    conn.commit()
+            conn.execute("DELETE FROM topology_ledger WHERE repo = ?", (repo_dir,))
+            rows_to_insert = []
+            for f in valid_files:
+                b, module = resolve_file_bucket(f, sub_buckets, repo_dir=repo_dir)
+                bucket_id = module if (b and module) else (b.get("id") if b else "main")
+                filepath = f"{repo_dir}/{f}"
+                g_status = git_status_map.get(f, "")
+                rows_to_insert.append((filepath, repo_dir, bucket_id, now_ts, g_status))
+            if rows_to_insert:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp, git_status) VALUES (?, ?, ?, ?, ?)",
+                    rows_to_insert
+                )
     return True
 
 @hooks.on('vfs_manifest_mutated')
@@ -295,7 +285,7 @@ def _topology_slew_limiter_loop():
                     except Exception: pass
                 # Trigger macro-resolution worker FIRST (as a silent background task)
                 job_id = f"tpl_res_{ws_id}"
-                submit_immediate_job(job_id, "topology", "resolve_topology_task", "{}", workspace_id=ws_id, coalesce=True, job_category="system_background")
+                topology_bp.get_context(ws_id).jobs.submit("resolve_topology_task", coalesce=True, job_category="system_background", job_id=job_id)
 
                 # Guardrail: Delay the SSE broadcast by 250ms to ensure the worker has finished updating 
                 # the SQLite ledger. Otherwise, the UI fetches a stale manifest and flashes the cards.
@@ -339,13 +329,13 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
         _TOPOLOGY_RAM_QUEUE.put_nowait((workspace_id, {"filepath": norm_path, "operation": op}))
 def resolve_topology_buffer(workspace_id):
     """Processes any pending events in topology_event_buffer, updates topology_ledger, and emits topology_resolved."""
-    hooks.emit('vfs_manifest_mutated', workspace_id=workspace_id)
     ctx = topology_bp.get_context(workspace_id)
     conn = ctx.db
     events = conn.execute("SELECT id, filepath, mutation_type FROM topology_event_buffer ORDER BY timestamp ASC").fetchall()
     if not events:
         return []
 
+    hooks.emit('vfs_manifest_mutated', workspace_id=workspace_id)
     event_ids = [e["id"] for e in events]
     placeholders = ",".join(["?"] * len(event_ids))
     conn.execute(f"DELETE FROM topology_event_buffer WHERE id IN ({placeholders})", tuple(event_ids))
@@ -496,8 +486,9 @@ def resolve_topology_buffer(workspace_id):
                 )
                 dirty_repos.add(repo_dir)
                 dirty_buckets.add(f"{repo_dir}::{bucket_id}")
-
     # Refresh git_status across any touched repositories
+    now_ts = time.time()
+    status_updates = []
     for touched_repo in dirty_repos:
         if touched_repo == "global":
             continue
@@ -509,8 +500,10 @@ def resolve_topology_buffer(workspace_id):
             rel_f = fp[len(touched_repo)+1:] if fp.startswith(f"{touched_repo}/") else fp
             new_st = g_map.get(rel_f, "")
             if (r_row["git_status"] or "") != new_st:
-                conn.execute("UPDATE topology_ledger SET git_status = ?, timestamp = ? WHERE filepath = ?", (new_st, time.time(), fp))
+                status_updates.append((new_st, now_ts, fp))
 
+    if status_updates:
+        conn.executemany("UPDATE topology_ledger SET git_status = ?, timestamp = ? WHERE filepath = ?", status_updates)
     conn.commit()
 
     hooks.emit(
@@ -551,7 +544,7 @@ def init_topology_on_boot(workspace_id=None, **kwargs):
     except Exception:
         pass
     job_id = f"tpl_boot_{uuid.uuid4().hex[:8]}"
-    submit_immediate_job(job_id, "topology", "boot_scan_task", '{"is_pipeline": true}', workspace_id=workspace_id, job_category="ui_blocking")
+    ctx.jobs.submit("boot_scan_task", job_category="ui_blocking", job_id=job_id, is_pipeline=True)
 @topology_bp.worker("boot_scan_task")
 def _background_boot_scan(ctx, job_id=None, **kwargs):
     ctx.jobs.update_progress("Initializing workspace topology...")
@@ -621,7 +614,8 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
 
     repo_p = Path(repo_path)
 
-    for m_dir in (live_cfg.get("managed_dirs") or []):
+    managed_scan_dirs = set(live_cfg.get("managed_dirs") or []) | {".insetu-data"}
+    for m_dir in managed_scan_dirs:
         m_path = repo_p / m_dir
         if m_path.exists() and m_path.is_dir():
             for p in m_path.rglob('*'):
@@ -646,7 +640,7 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
                 if set(p.lower() for p in norm_path.split('/')).intersection(ignore_dirs): continue
                 if any(pattern in norm_path for pattern in ignore_patterns): continue
 
-        if repo_p.name == '.insetu' and (norm_path.startswith('data/') or '/data/' in norm_path):
+        if repo_p.name == '.insetu' and (norm_path.startswith(('cache/', 'ext/')) or '/cache/' in norm_path or '/ext/' in norm_path):
             continue
         if target_f.name.lower() in (".gitkeep", ".keep"):
             valid_files.add(norm_path)

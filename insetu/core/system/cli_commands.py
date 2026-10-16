@@ -24,10 +24,8 @@ def scaffold_profiles(cwd):
         if os.path.exists(src_config):
             shutil.copy(src_config, target_config)
 
-    target_workflows = Path(base_dir).joinpath("workflows.json").as_posix()
-    if not os.path.exists(target_workflows):
-        with open(target_workflows, "w", encoding="utf-8") as f:
-            json.dump({"context_batches": []}, f, indent=2)
+    os.makedirs(Path(base_dir).joinpath("data").as_posix(), exist_ok=True)
+    os.makedirs(Path(base_dir).joinpath("cache", "db").as_posix(), exist_ok=True)
 
     target_sys = Path(base_dir).joinpath("system.json").as_posix()
     if not os.path.exists(target_sys):
@@ -161,7 +159,7 @@ def handle_init(cwd, args):
     default_port = 5005
     discovered_repos = _discover_candidate_repos(cwd)
     available_exts = _discover_available_extensions()
-    default_exts = [e for e in ["git", "notes", "prompts", "update"] if e in available_exts]
+    default_exts = [e for e in ["git", "notes", "update"] if e in available_exts]
     llm_provider = None
     llm_model = None
     llm_api_key = ""
@@ -218,7 +216,7 @@ def handle_init(cwd, args):
         "ignore_files": [".DS_Store"],
         "ignore_patterns": ["*.pyc", "*.log"],
         "include_extensions": [".py", ".js", ".ts", ".json", ".md", ".txt", ".html", ".css", ".sh", ".yaml", ".yml", ".toml"],
-        "managed_dirs": [".tracker"],
+        "managed_dirs": [".insetu-data"],
         "target_repos": selected_repos,
         "extensions": final_exts
     }

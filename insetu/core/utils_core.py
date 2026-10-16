@@ -530,6 +530,7 @@ def start_filesystem_observer(**kwargs):
 
             filename = Path(src_path).name
             if filename.startswith('.') or filename.endswith('~') or filename.upper() == 'CODE_INDEX.MD' or filename == 'manifest.json': return
+            if filename.endswith(('.db', '.db-wal', '.db-shm', '.db-journal')): return
 
             op = op_override or ('delete' if event.event_type == 'deleted' else 'save')
             try:
@@ -541,9 +542,12 @@ def start_filesystem_observer(**kwargs):
                     logical_path += '/'
                 # CPU Optimization: Drop events for ignored directories/patterns before waking the Event Bus
                 parts = set(p.lower() for p in logical_path.strip('/').split('/'))
+                norm_rel_lower = rel_to_target.lower()
 
-                # Hardcoded OS Guardrails to prevent Watchdog infinite I/O loops and UI flooding
-                if parts.intersection({'.git', '.insetu', 'node_modules', '__pycache__', 'venv'}): return
+                # Hardcoded OS Guardrails to prevent Watchdog infinite I/O loops on cache/db while allowing .insetu/data/
+                if parts.intersection({'.git', 'node_modules', '__pycache__', 'venv'}): return
+                if '.insetu' in parts and not (norm_rel_lower.startswith('.insetu/data/') or '/.insetu/data/' in norm_rel_lower):
+                    return
 
                 is_excepted = any(rel_to_target.startswith(exc) or exc in rel_to_target for exc in self.ignore_exceptions)
                 if not is_excepted:
@@ -626,11 +630,6 @@ def stop_filesystem_observer(**kwargs):
         except Exception: pass
         _WATCHDOG_OBSERVER = None
 
-def load_workflows(workspace_id=None):
-    cfg_path, _ = get_workspace_physics(workspace_id)
-    wf_path = Path(cfg_path).parent.joinpath("workflows.json").as_posix()
-    return load_json_config(wf_path, {"context_batches": []})
-
 def generate_text_chunks(blocks, chunk_limit=400000):
     current_chunk = []
     current_length = 0
@@ -648,15 +647,23 @@ def is_naked_diff_uri(raw_uri: str) -> bool:
     if not raw_uri or not isinstance(raw_uri, str):
         return False
     clean = raw_uri.replace('\\', '/').strip()
-    if clean.startswith(('ctx://diffs/', 'diffs/', '.insetu/ext/git/data/diffs/')):
+    if clean.startswith(('ctx://diffs/', 'diffs/', '.insetu/cache/diffs/', '.insetu/ext/git/data/diffs/')):
         return True
     return clean.endswith('_diffs.txt')
+
+def is_naked_workflow_uri(raw_uri: str) -> bool:
+    if not raw_uri or not isinstance(raw_uri, str):
+        return False
+    clean = raw_uri.replace('\\', '/').strip()
+    if clean.startswith(('ctx://workflows/', 'workflows/', '.insetu/cache/workflows/', '.insetu/ext/flow/data/workflows/')):
+        return True
+    return clean.startswith('workflow_') and clean.endswith('_context.txt')
 
 def is_naked_context_uri(raw_uri: str) -> bool:
     if not raw_uri or not isinstance(raw_uri, str):
         return False
     clean = raw_uri.replace('\\', '/').strip()
-    if clean.startswith(('ctx://contexts/', 'contexts/', '.insetu/ext/gather/data/contexts/')):
+    if clean.startswith(('ctx://contexts/', 'contexts/', '.insetu/cache/contexts/', '.insetu/ext/gather/data/contexts/')):
         return True
     return clean.endswith('_context.txt')
 
@@ -699,20 +706,53 @@ def extract_manifest_files(manifest_data, target_key=None, domain='auto', exclud
                 if isinstance(f, str):
                     all_files.add(f)
     return sorted(list(all_files))
-def get_domain_artifact_path(workspace_id, domain_name, ext_name=None):
-    """Resolves and ensures physical existence of standard .insetu/ext/<ext_name>/data/<domain_name> directory."""
-    ext = ext_name or domain_name
+def get_domain_cache_path(workspace_id, domain_name):
+    """Resolves and ensures physical existence of .insetu/cache/<domain_name> for disposable compiled outputs."""
     try:
         cfg_path, _ = get_workspace_physics(workspace_id)
-        domain_dir = Path(cfg_path).parent.joinpath("ext", ext, "data", domain_name).resolve().as_posix()
+        domain_dir = Path(cfg_path).parent.joinpath("cache", domain_name).resolve().as_posix()
         os.makedirs(domain_dir, exist_ok=True)
         return domain_dir
     except Exception:
-        return f".insetu/ext/{ext}/data/{domain_name}"
+        return f".insetu/cache/{domain_name}"
+
+def get_domain_data_path(workspace_id, domain_name):
+    """Resolves and ensures physical existence of .insetu/data/<domain_name> for sovereign workspace data."""
+    try:
+        cfg_path, _ = get_workspace_physics(workspace_id)
+        domain_dir = Path(cfg_path).parent.joinpath("data", domain_name).resolve().as_posix()
+        os.makedirs(domain_dir, exist_ok=True)
+        return domain_dir
+    except Exception:
+        return f".insetu/data/{domain_name}"
+
+def get_domain_artifact_path(workspace_id, domain_name, ext_name=None):
+    """Backward-compatible router directing compiled artifacts to .insetu/cache/<domain_name>."""
+    return get_domain_cache_path(workspace_id, domain_name)
 def get_safe_repo_id(repo_dir):
     if not repo_dir: return ""
     safe_dir = f"dot_{repo_dir[1:]}" if repo_dir.startswith('.') else repo_dir
     return safe_dir.replace('-', '_').lower()
+
+def truncate_filename(filename: str, max_len: int = 24, ellipsis: str = "…") -> str:
+    """
+    Standardized filename truncation for compact UI chrome and CLI displays.
+    Preserves the front of the basename and the file extension (e.g., 'this-is-part…md').
+    """
+    if not filename:
+        return ""
+    base = Path(filename).name
+    if len(base) <= max_len:
+        return base
+
+    last_dot = base.rfind('.')
+    if last_dot <= 0 or (len(base) - last_dot) + len(ellipsis) >= max_len:
+        slice_len = max(1, max_len - len(ellipsis))
+        return base[:slice_len] + ellipsis
+
+    ext = base[last_dot:]
+    front_len = max_len - len(ext) - len(ellipsis)
+    return f"{base[:front_len]}{ellipsis}{ext}"
 def vacuum_manifest_artifacts(ctx, domain_dir, expected_artifacts_set, exempt_abs_paths=None):
     """
     Centralized garbage collector for compiled context artifacts.
@@ -897,38 +937,59 @@ def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kw
         return []
 
     files = []
+    repo_files_cache = {}
+    all_ledger_files_cache = None
+
     with VFSTransaction(workspace_id) as vfs:
         for item in items:
-            uri = InSetuURI.from_any(item)
-            if not uri.path and not uri.volume:
-                continue
+            if isinstance(item, dict) and item.get("isDir") is False and item.get("filepath"):
+                uri = InSetuURI.from_any(item["filepath"])
+                is_folder = False
+            elif isinstance(item, dict) and (item.get("isDir") is True or item.get("folderpath")):
+                uri = InSetuURI.from_any(item.get("folderpath") or item.get("filepath"))
+                is_folder = True
+            else:
+                uri = InSetuURI.from_any(item)
+                if not uri.path and not uri.volume:
+                    continue
+                if uri.scheme == 'ctx':
+                    is_folder = False
+                elif uri.is_dir:
+                    is_folder = True
+                elif '.' in uri.basename and not uri.basename.startswith('.'):
+                    # Fast-path: paths with standard file extensions avoid synchronous os.stat syscalls
+                    is_folder = False
+                else:
+                    is_folder = uri.is_dir_physical(workspace_id)
 
-            is_folder = uri.is_dir_physical(workspace_id) or uri.is_dir
-
-            if is_folder or (uri.scheme == 'vfs' and uri.is_dir):
+            if is_folder:
                 if gather_only:
                     repo_dir = uri.repo
                     folder_rel_path = uri.path.strip('/')
 
-                    gather_files = []
                     if repo_dir:
-                        from insetu.core.topology.engine_topology import get_topology_files_for_repo as _get_topology_files_for_repo
-                        gather_files = _get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=False)
-                        if not gather_files:
-                            repo_path = get_repo_path(repo_dir, workspace_id)
-                            if os.path.exists(repo_path):
-                                cfg = load_config(workspace_id)
-                                target_configs = cfg.get("target_repos", [])
-                                repo_cfg = next((c for c in target_configs if c and c.get("repo_dir") == repo_dir), None)
-                                if repo_cfg:
-                                    from insetu.core.topology.engine_topology import get_valid_workspace_files as _get_valid_workspace_files
-                                    rel_valid = _get_valid_workspace_files(repo_path, repo_cfg, workspace_id)
-                                    gather_files = [f"{repo_dir}/{f}" for f in rel_valid]
+                        if repo_dir not in repo_files_cache:
+                            from insetu.core.topology.engine_topology import get_topology_files_for_repo as _get_topology_files_for_repo
+                            g_list = _get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=False)
+                            if not g_list:
+                                repo_path = get_repo_path(repo_dir, workspace_id)
+                                if os.path.exists(repo_path):
+                                    cfg = load_config(workspace_id)
+                                    target_configs = cfg.get("target_repos", [])
+                                    repo_cfg = next((c for c in target_configs if c and c.get("repo_dir") == repo_dir), None)
+                                    if repo_cfg:
+                                        from insetu.core.topology.engine_topology import get_valid_workspace_files as _get_valid_workspace_files
+                                        rel_valid = _get_valid_workspace_files(repo_path, repo_cfg, workspace_id)
+                                        g_list = [f"{repo_dir}/{f}" for f in rel_valid]
+                            repo_files_cache[repo_dir] = g_list
+                        gather_files = repo_files_cache[repo_dir]
                     else:
-                        from akasa.db import get_connection as _get_connection
-                        conn = _get_connection("topology", workspace_id=workspace_id)
-                        rows = conn.execute("SELECT filepath FROM topology_ledger").fetchall()
-                        gather_files = [r['filepath'] for r in rows]
+                        if all_ledger_files_cache is None:
+                            from akasa.db import get_connection as _get_connection
+                            conn = _get_connection("topology", workspace_id=workspace_id)
+                            rows = conn.execute("SELECT filepath FROM topology_ledger").fetchall()
+                            all_ledger_files_cache = [r['filepath'] for r in rows]
+                        gather_files = all_ledger_files_cache
 
                     for g_file in gather_files:
                         g_uri = InSetuURI.from_any(g_file)

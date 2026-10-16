@@ -34,12 +34,27 @@ editor_bp = InSetuExtension(
     core=True
 )
 __depends__ = []
+def _ensure_editor_prefs_hydrated(ctx):
+    count = ctx.db.execute("SELECT count(*) FROM file_preferences").fetchone()[0]
+    saved = ctx.store.get("preferences.json", "items", None)
+    if count == 0 and saved:
+        for pref in saved:
+            if pref.get("filepath"):
+                ctx.db.insert_or_replace("file_preferences", {
+                    "filepath": pref["filepath"],
+                    "writing_mode": 1 if pref.get("writing_mode") else 0,
+                    "doc_type": pref.get("doc_type")
+                })
+    elif count > 0 and saved is None:
+        all_rows = ctx.db.get_all("file_preferences")
+        ctx.store.set("preferences.json", "items", all_rows)
 
 @editor_bp.route('preference', methods=['GET'])
 def get_preference(ctx):
     filepath = ctx.req.args.get('file', '').strip()
     if not filepath:
         return jsonify({"writing_mode": False, "doc_type": None})
+    _ensure_editor_prefs_hydrated(ctx)
     row = ctx.db.get_by_id("file_preferences", filepath, id_col="filepath")
     if not row:
         return jsonify({"writing_mode": False, "doc_type": None})
@@ -47,6 +62,7 @@ def get_preference(ctx):
         "writing_mode": bool(row.get('writing_mode')),
         "doc_type": row.get('doc_type')
     })
+
 @editor_bp.route('preference', methods=['POST'], docstring="[sync] Updates the editor writing mode and document type for a specific file.")
 def set_preference(ctx):
     data = ctx.req.json or {}
@@ -54,6 +70,7 @@ def set_preference(ctx):
     if not filepath:
         return jsonify({"error": "filepath required"}), 400
 
+    _ensure_editor_prefs_hydrated(ctx)
     writing_mode = 1 if data.get("writing_mode") else 0
     doc_type = data.get("doc_type")
     ctx.db.insert_or_replace("file_preferences", {
@@ -61,6 +78,8 @@ def set_preference(ctx):
         "writing_mode": writing_mode,
         "doc_type": doc_type
     })
+    all_rows = ctx.db.get_all("file_preferences")
+    ctx.store.set("preferences.json", "items", all_rows)
     return jsonify({"status": "success"})
 
 class VendorizePayload(TypedDict):

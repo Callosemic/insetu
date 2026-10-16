@@ -1,4 +1,5 @@
 import os
+import threading
 import subprocess
 import concurrent.futures
 from pathlib import Path
@@ -10,8 +11,9 @@ from akasa.hooks import hooks
 from insetu.core.sdk import InSetuExtension
 
 cartographer_bp = InSetuExtension('cartographer', __name__, title="Cartographer", description="Code index mapping.", core=True)
-
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
+_CARTOGRAPHER_SIG_CACHE = {}
+_CARTOGRAPHER_CACHE_LOCK = threading.Lock()
 
 @hooks.on('register_compilation_steps')
 def _register_cartographer_compilation_step(workspace_id=None, **kwargs):
@@ -47,13 +49,16 @@ def extract_existing_comments(index_path, repo_path=None):
                     cmap[clean_name.rstrip('/')] = comment
                     cmap[clean_name.rstrip('/') + '/'] = comment
         return cmap
-
     live_comments = {}
+    needs_git_fallback = True
     if os.path.exists(index_path):
         with open(index_path, "r", encoding="utf-8") as f:
-            live_comments = parse_text_for_comments(f.read())
+            raw_index = f.read()
+            live_comments = parse_text_for_comments(raw_index)
+            if live_comments and "[comment required]" not in raw_index:
+                needs_git_fallback = False
     git_comments = {}
-    if repo_path:
+    if repo_path and needs_git_fallback:
         try:
             rel_index = os.path.relpath(index_path, repo_path)
             res = execute_binary(['git', 'show', f'HEAD:{rel_index}'], capture_output=True, text=True, cwd=repo_path)
@@ -133,9 +138,19 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         valid_files = get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True)
 
         if not valid_files: return
-
-        filtered_files = [f for f in valid_files if not f.startswith('.tracker/') and '/.tracker/' not in f]
+        hidden_managed = {d for d in (set(cfg.get("managed_dirs", [])) | {".insetu-data"}) if d.startswith('.')}
+        filtered_files = [
+            f for f in valid_files
+            if not any(f.startswith(f"{d}/") or f"/{d}/" in f for d in hidden_managed)
+        ]
         if not filtered_files: return
+
+        index_mtime = index_path.stat().st_mtime_ns if index_path.exists() else 0
+        repo_sig = (tuple(filtered_files), index_mtime, tuple(cfg.get("managed_dirs", [])), tuple(config.get("repo_managed_dirs", [])))
+        cache_key = (workspace_id or "default", repo_dir)
+        with _CARTOGRAPHER_CACHE_LOCK:
+            if _CARTOGRAPHER_SIG_CACHE.get(cache_key) == repo_sig and index_mtime > 0:
+                return
 
         tree_dict = build_tree_dict(filtered_files)
         if config.get("is_core_chassis"):
@@ -146,8 +161,9 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         tree_lines = render_ascii_tree(tree_dict, comments, managed_dirs)
         footer = "\n```\n"
         logical_index_path = f"vfs://{repo_dir}/docs/CODE_INDEX.md" if config.get("is_core_chassis") else f"vfs://{repo_dir}/CODE_INDEX.md"
-
         execute_vfs_save(workspace_id, logical_index_path, header + "\n".join(tree_lines) + footer, data={"ignore_ledger": True})
+        with _CARTOGRAPHER_CACHE_LOCK:
+            _CARTOGRAPHER_SIG_CACHE[cache_key] = repo_sig
 
         missing = sum(1 for line in tree_lines if "[comment required]" in line)
         if not silent:

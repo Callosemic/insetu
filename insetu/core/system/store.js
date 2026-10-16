@@ -18,6 +18,7 @@ window.inSetu.stores.Toast = ToastStore;
 window.inSetu.stores.Selection = SelectionStore;
 export const AppStore = createExtensionStore('App', {
     activeWorkspace: window.inSetu.utils.getActiveWorkspace(),
+    workspaces: {},
     authToken: sessionStorage.getItem('insetu_boot_token') || '',
     manifest: { vfs: {}, ctx: {} },
     derivedVfsFiles: [],
