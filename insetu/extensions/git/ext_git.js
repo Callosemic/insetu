@@ -113,20 +113,38 @@ export class InSetuExtGitDiffs extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(GitStore, (state) => {
-            this.activeDiffJobId = state.activeDiffJobId;
-            this.diffJobError = state.diffJobError;
-            this.activePushJobId = state.activePushJobId;
-            this.requestUpdate();
-        });
-        this.subscribe(AppStore, state => {
-            this.activeModules = state.activeModules || [];
-            this.pendingModules = state.pendingModules || [];
-            this.isPipelineActive = state.isPipelineActive || false;
-            this.categoryOrder = state.categoryOrder || [];
-            this.hiddenOutputs = state.hiddenOutputs || [];
-            this.requestUpdate();
-        });
+        this.subscribe(
+            GitStore,
+            state => ({
+                activeDiffJobId: state.activeDiffJobId,
+                diffJobError: state.diffJobError,
+                activePushJobId: state.activePushJobId
+            }),
+            (slice) => {
+                this.activeDiffJobId = slice.activeDiffJobId;
+                this.diffJobError = slice.diffJobError;
+                this.activePushJobId = slice.activePushJobId;
+                this.requestUpdate();
+            }
+        );
+        this.subscribe(
+            AppStore,
+            state => ({
+                activeModules: state.activeModules || [],
+                pendingModules: state.pendingModules || [],
+                isPipelineActive: state.isPipelineActive || false,
+                categoryOrder: state.categoryOrder || [],
+                hiddenOutputs: state.hiddenOutputs || []
+            }),
+            (slice) => {
+                this.activeModules = slice.activeModules;
+                this.pendingModules = slice.pendingModules;
+                this.isPipelineActive = slice.isPipelineActive;
+                this.categoryOrder = slice.categoryOrder;
+                this.hiddenOutputs = slice.hiddenOutputs;
+                this.requestUpdate();
+            }
+        );
         const gitState = GitStore.getState();
         const appState = AppStore.getState();
         this.activeDiffJobId = gitState.activeDiffJobId;
@@ -515,13 +533,22 @@ export class InSetuGitPushProjection extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(GitStore, state => {
-            this.currentPushRepo = state.currentPushRepo || '';
-            this.currentPushDiffFile = state.currentPushDiffFile || '';
-            this.pushChangelogs = state.pushChangelogs || [];
-            this.gitPushMessage = state.gitPushMessage || '';
-            this.requestUpdate();
-        });
+        this.subscribe(
+            GitStore,
+            state => ({
+                currentPushRepo: state.currentPushRepo || '',
+                currentPushDiffFile: state.currentPushDiffFile || '',
+                pushChangelogs: state.pushChangelogs || [],
+                gitPushMessage: state.gitPushMessage || ''
+            }),
+            (slice) => {
+                this.currentPushRepo = slice.currentPushRepo;
+                this.currentPushDiffFile = slice.currentPushDiffFile;
+                this.pushChangelogs = slice.pushChangelogs;
+                this.gitPushMessage = slice.gitPushMessage;
+                this.requestUpdate();
+            }
+        );
     }
     _getPushAction() {
         let pushedRepo = '';
@@ -603,17 +630,30 @@ export class InSetuExtGitCtrl extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(GitStore, (state) => {
-            this.reposStatus = state.reposStatus || {};
-            this.branchModalOpen = !!state.branchModalOpen;
-            this.remoteModalOpen = !!state.remoteModalOpen;
-            this.activeRepo = state.activeRepo || '';
-            this.newBranchName = state.newBranchName || '';
-            this.activeRemoteRepo = state.activeRemoteRepo || '';
-            this.remoteUrlInput = state.remoteUrlInput || '';
-            this.remoteConflict = !!state.remoteConflict;
-            this.requestUpdate();
-        });
+        this.subscribe(
+            GitStore,
+            state => ({
+                reposStatus: state.reposStatus || {},
+                branchModalOpen: !!state.branchModalOpen,
+                remoteModalOpen: !!state.remoteModalOpen,
+                activeRepo: state.activeRepo || '',
+                newBranchName: state.newBranchName || '',
+                activeRemoteRepo: state.activeRemoteRepo || '',
+                remoteUrlInput: state.remoteUrlInput || '',
+                remoteConflict: !!state.remoteConflict
+            }),
+            (slice) => {
+                this.reposStatus = slice.reposStatus;
+                this.branchModalOpen = slice.branchModalOpen;
+                this.remoteModalOpen = slice.remoteModalOpen;
+                this.activeRepo = slice.activeRepo;
+                this.newBranchName = slice.newBranchName;
+                this.activeRemoteRepo = slice.activeRemoteRepo;
+                this.remoteUrlInput = slice.remoteUrlInput;
+                this.remoteConflict = slice.remoteConflict;
+                this.requestUpdate();
+            }
+        );
         this.registerGlobalListener('insetu:git:ctrl-init', window, (e) => {
             const branch = prompt(`Initialize Git repository for '${e.detail.repoDir}' on branch:`, 'main');
             if (branch) this._initRepo(e.detail.repoDir, branch.trim());

@@ -151,37 +151,42 @@ export class InSetuExtSkills extends InSetuElement {
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
-            const touchedSkill = payload.mutations.some(m => m.filepath && m.filepath.includes('.insetu/skills/'));
+            const touchedSkill = payload.mutations.some(m => m.filepath && (m.filepath.includes('.insetu/data/skills/') || m.filepath.includes('.insetu/skills/')));
             if (touchedSkill) {
                 SkillsStore.getState().fetchPlaylist(true);
                 SkillsStore.getState().fetchAllSkills();
             }
         });
-
-        this.subscribe(SkillsStore, state => {
-            this.playlist = state.playlist;
-            this.allSkills = state.allSkills;
-            this.domainConfig = state.domainConfig;
-            this.groupsList = state.groupsList;
-            this.loading = state.loading;
-            this.selectedItem = state.selectedItem;
-            this.newSkillModalOpen = state.newSkillModalOpen;
-            this.formScore = state.formScore;
-            this.formStatus = state.formStatus;
-            this.formMetrics = state.formMetrics;
-            this.modalMode = state.modalMode;
-            if (state.selectedItem && (this._lastSelectedFile !== state.selectedItem.filepath)) {
-                this._lastSelectedFile = state.selectedItem.filepath;
-                this._editName = state.selectedItem.name;
-                this._editTags = state.selectedItem.tags || '';
-                this._editGroup = state.selectedItem.group_name || '';
-            } else if (!state.selectedItem) {
-                this._lastSelectedFile = null;
-                this._editName = '';
-                this._editTags = '';
-                this._editGroup = '';
+        this.subscribe(
+            SkillsStore,
+            state => ({
+                playlist: state.playlist,
+                allSkills: state.allSkills,
+                domainConfig: state.domainConfig,
+                groupsList: state.groupsList,
+                loading: state.loading,
+                selectedItem: state.selectedItem,
+                newSkillModalOpen: state.newSkillModalOpen,
+                formScore: state.formScore,
+                formStatus: state.formStatus,
+                formMetrics: state.formMetrics,
+                modalMode: state.modalMode
+            }),
+            (slice) => {
+                Object.assign(this, slice);
+                if (slice.selectedItem && (this._lastSelectedFile !== slice.selectedItem.filepath)) {
+                    this._lastSelectedFile = slice.selectedItem.filepath;
+                    this._editName = slice.selectedItem.name;
+                    this._editTags = slice.selectedItem.tags || '';
+                    this._editGroup = slice.selectedItem.group_name || '';
+                } else if (!slice.selectedItem) {
+                    this._lastSelectedFile = null;
+                    this._editName = '';
+                    this._editTags = '';
+                    this._editGroup = '';
+                }
             }
-        });
+        );
 
         this.registerGlobalListener('sutram-sync-complete', window, () => {
             this._reloadAll(true);
@@ -673,14 +678,24 @@ export class InSetuSkillsSessionProjection extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(SkillsStore, state => {
-            this.selectedItem = state.selectedItem;
-            this.domainConfig = state.domainConfig || {};
-            this.formScore = state.formScore;
-            this.formStatus = state.formStatus;
-            this.formMetrics = state.formMetrics || {};
-            this.requestUpdate();
-        });
+        this.subscribe(
+            SkillsStore,
+            state => ({
+                selectedItem: state.selectedItem,
+                domainConfig: state.domainConfig || {},
+                formScore: state.formScore,
+                formStatus: state.formStatus,
+                formMetrics: state.formMetrics || {}
+            }),
+            (slice) => {
+                this.selectedItem = slice.selectedItem;
+                this.domainConfig = slice.domainConfig;
+                this.formScore = slice.formScore;
+                this.formStatus = slice.formStatus;
+                this.formMetrics = slice.formMetrics;
+                this.requestUpdate();
+            }
+        );
     }
     _handleStatusChange(newStatus) {
         if (this.selectedItem && newStatus !== this.selectedItem.status) {

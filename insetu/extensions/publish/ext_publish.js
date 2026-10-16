@@ -33,13 +33,19 @@ export class InSetuExtPublishModals extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(PublishStore, state => {
-            this.publishModalOpen = state.publishModalOpen;
-            this.currentPublishTarget = state.currentPublishTarget;
-            this.publishMode = state.publishMode;
-            this.activePublishJobId = state.activePublishJobId;
-            this.publishError = state.publishError;
-        });
+        this.subscribe(
+            PublishStore,
+            state => ({
+                publishModalOpen: state.publishModalOpen,
+                currentPublishTarget: state.currentPublishTarget,
+                publishMode: state.publishMode,
+                activePublishJobId: state.activePublishJobId,
+                publishError: state.publishError
+            }),
+            (slice) => {
+                Object.assign(this, slice);
+            }
+        );
     }
     disconnectedCallback() {
         super.disconnectedCallback();

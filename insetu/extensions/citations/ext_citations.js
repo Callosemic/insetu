@@ -80,25 +80,37 @@ export class InSetuExtCitations extends InSetuElement {
     get currentViewMode() {
         return this.dataset.subId || 'lib-main';
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(CitationStore, state => {
-            this.localLibrary = state.localLibrary || [];
-            this.cachedPublications = state.cachedPublications || [];
-            this.cachedAuthors = state.cachedAuthors || [];
-            this.activeAttachCitation = state.activeAttachCitation;
-            this.activeEditCitation = state.activeEditCitation;
-            this.currentEditAuthors = state.currentEditAuthors || [];
-            this.attachForm = state.attachForm || { repo: '', bucket: 'None' };
-            this.editForm = state.editForm || { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' };
-            this.importingIds = state.importingIds || new Set();
-        });
-        this.subscribe(AppStore, state => {
-            this.allRepos = state.allRepos || [];
-            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
-            this.requestUpdate();
-        });
+        this.subscribe(
+            CitationStore,
+            state => ({
+                localLibrary: state.localLibrary || [],
+                cachedPublications: state.cachedPublications || [],
+                cachedAuthors: state.cachedAuthors || [],
+                activeAttachCitation: state.activeAttachCitation,
+                activeEditCitation: state.activeEditCitation,
+                currentEditAuthors: state.currentEditAuthors || [],
+                attachForm: state.attachForm || { repo: '', bucket: 'None' },
+                editForm: state.editForm || { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' },
+                importingIds: state.importingIds || new Set()
+            }),
+            (slice) => {
+                Object.assign(this, slice);
+            }
+        );
+        this.subscribe(
+            AppStore,
+            state => ({
+                allRepos: state.allRepos || [],
+                pinnedRepos: state.pinnedRepos || new Set(['ALL'])
+            }),
+            ({ allRepos, pinnedRepos }) => {
+                this.allRepos = allRepos;
+                this.pinnedRepos = pinnedRepos;
+                this.requestUpdate();
+            }
+        );
 
         this.registerGlobalListener('insetu:citations:notes', window, (e) => this._openCitationNotes(e.detail.id));
         this.registerGlobalListener('insetu:citations:edit', window, (e) => this._openEditModal(e.detail.data));
@@ -656,14 +668,22 @@ export class InSetuExtCitationsModals extends InSetuElement {
         this.citationSearchQuery = '';
         this.citationLibraryCache = [];
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(CitationStore, state => {
-            this.citationModalOpen = state.citationModalOpen || false;
-            this.citationSearchQuery = state.citationSearchQuery || '';
-            this.citationLibraryCache = state.citationLibraryCache || [];
-        });
+        this.subscribe(
+            CitationStore,
+            state => ({
+                citationModalOpen: !!state.citationModalOpen,
+                citationSearchQuery: state.citationSearchQuery || '',
+                citationLibraryCache: state.citationLibraryCache || []
+            }),
+            (slice) => {
+                this.citationModalOpen = slice.citationModalOpen;
+                this.citationSearchQuery = slice.citationSearchQuery;
+                this.citationLibraryCache = slice.citationLibraryCache;
+                this.requestUpdate();
+            }
+        );
     }
     disconnectedCallback() {
         super.disconnectedCallback();

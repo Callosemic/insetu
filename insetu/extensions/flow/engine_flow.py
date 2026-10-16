@@ -7,6 +7,7 @@ import traceback
 from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
+from insetu.core.system.legacy import move_tree_contents
 from akasa.hooks import hooks
 from akasa.utils import slugify, generate_ascii_tree, get_all_workspace_ids
 from akasa.vfs import mount_volume, register_driver, DefaultVFSDriver
@@ -14,16 +15,18 @@ from insetu.core.utils_core import (
     InSetuURI,
     reconcile_and_vacuum_domain,
     get_domain_artifact_path,
-    get_available_contexts
+    get_available_contexts,
+    is_naked_workflow_uri
 )
 from insetu.core.gather.engine_gather import compile_context_payload
+
 flow_bp = InSetuExtension(
     'flow', 
     __name__,
     title="Workflows",
     description="Workflow batch automation and UI prompts."
 )
-__depends__ = ['prompts', 'gather']
+__depends__ = ['gather']
 
 @hooks.on('mutate_workspace_config')
 def inject_flow_metadata(cfg, workspace_id=None, **kwargs):
@@ -44,19 +47,21 @@ def hook_flow_request_paths(workspace_id=None, **kwargs):
     return {
         "workflows_dir": get_domain_artifact_path(workspace_id, "workflows", "flow")
     }
-@hooks.on('workspace_boot')
+@hooks.on('workspace_boot', priority=10)
 def mount_flow_volumes(workspace_id=None, **kwargs):
     register_driver('ctx', DefaultVFSDriver())
     ctx = flow_bp.get_context(workspace_id)
-    mount_volume(workspace_id, 'ctx', 'workflows', ctx.paths.get("workflows_dir"))
-
+    control_dir = Path(ctx.paths.get("control_dir"))
+    workflows_dir = Path(ctx.paths.get("workflows_dir"))
+    move_tree_contents(control_dir.joinpath("ext", "flow", "data", "workflows"), workflows_dir)
+    mount_volume(workspace_id, 'ctx', 'workflows', workflows_dir.as_posix())
 @hooks.on('coerce_naked_uri')
 def coerce_flow_uris(raw_uri=None, **kwargs):
     if not raw_uri or not isinstance(raw_uri, str):
         return None
-    clean = raw_uri.replace('\\', '/').strip()
-    if clean.startswith(('ctx://workflows/', 'workflows/', '.insetu/ext/flow/data/workflows/')) or (clean.startswith('workflow_') and clean.endswith('_context.txt')):
-        clean_w = clean.replace('.insetu/ext/flow/data/workflows/', '').replace('workflows/', '').replace('ctx://workflows/', '')
+    if is_naked_workflow_uri(raw_uri):
+        clean = raw_uri.replace('\\', '/').strip()
+        clean_w = clean.replace('.insetu/cache/workflows/', '').replace('.insetu/ext/flow/data/workflows/', '').replace('workflows/', '').replace('ctx://workflows/', '')
         return f"ctx://workflows/{clean_w}"
     return None
 

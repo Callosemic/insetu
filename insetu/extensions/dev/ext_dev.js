@@ -32,17 +32,27 @@ export class InSetuExtDevDash extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(DevStore, state => {
-            this.thrashingFiles = state.thrashingFiles || [];
-            this.bridgeErrors = state.bridgeErrors || [];
-            this.systemErrors = state.systemErrors || [];
-            this.lastUpdate = state.lastUpdate;
+        this.subscribe(
+            DevStore,
+            state => ({
+                thrashingFiles: state.thrashingFiles || [],
+                bridgeErrors: state.bridgeErrors || [],
+                systemErrors: state.systemErrors || [],
+                lastUpdate: state.lastUpdate,
+                forceRefreshTick: state.forceRefreshTick
+            }),
+            (slice) => {
+                this.thrashingFiles = slice.thrashingFiles;
+                this.bridgeErrors = slice.bridgeErrors;
+                this.systemErrors = slice.systemErrors;
+                this.lastUpdate = slice.lastUpdate;
 
-            if (state.forceRefreshTick && state.forceRefreshTick !== this._lastTick) {
-                this._lastTick = state.forceRefreshTick;
-                this.fetchMetrics();
+                if (slice.forceRefreshTick && slice.forceRefreshTick !== this._lastTick) {
+                    this._lastTick = slice.forceRefreshTick;
+                    this.fetchMetrics();
+                }
             }
-        });
+        );
 
         this.registerGlobalListener('sutram-route-changed', window, (e) => {
             if (e.detail.tab === 'dev' && (!e.detail.subTabs['dev'] || e.detail.subTabs['dev'] === 'dash')) {
@@ -255,12 +265,16 @@ export class InSetuExtDevLogs extends InSetuElement {
         this.backendLogs = '';
         this.loading = false;
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(DevStore, state => {
-            this.backendLogs = state.backendLogs || '';
-        });
+        this.subscribe(
+            DevStore,
+            state => state.backendLogs || '',
+            (backendLogs) => {
+                this.backendLogs = backendLogs;
+                this.requestUpdate();
+            }
+        );
     }
 
     onWorkspaceLoad() { this.fetchLogs(); }

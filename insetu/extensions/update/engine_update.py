@@ -1,4 +1,10 @@
 import os
+import re
+import shlex
+import time
+import zipfile
+import tarfile
+import urllib.request
 import subprocess
 import sys
 import shutil
@@ -6,7 +12,6 @@ import json
 from pathlib import Path
 from typing import TypedDict, Optional
 from flask import jsonify
-from akasa.workers import cancel_job, resolve_dag_chain
 from insetu.core.sdk import InSetuExtension
 from insetu.extensions.git.engine_git import execute_git
 from insetu.core.utils_core import get_repo_path, execute_binary
@@ -95,11 +100,9 @@ def _require_clean_tree(repo_path, action_name):
     status_check = execute_git(repo_path, ['status', '--porcelain', '-uall'], check=False)
     if status_check.stdout.strip():
         raise RuntimeError(f"Working tree is not clean. Please commit or stash your changes before {action_name}.")
-
 def _clean_semantic_release_logs(log_text):
     """Helper to strip timestamps, file references, and commit parsing verbosity from semantic-release output."""
     if not log_text: return ""
-    import re
 
     noise_patterns = [
         r'^\s*INFO\s+parsing commit',
@@ -126,9 +129,8 @@ def _background_bump_task(ctx, repo, prerelease=False, **kwargs):
     repo_path = _get_valid_repo_path(ctx, repo)
     ctx.jobs.update_progress("Validating working tree integrity...")
     _require_clean_tree(repo_path, "initiating a release bump")
-
     delayed_job_id = f"cmp_del_{ctx.workspace_id}"
-    cancel_job(delayed_job_id, workspace_id=ctx.workspace_id)
+    ctx.jobs.cancel(delayed_job_id)
 
     dist_dir = Path(repo_path) / "dist"
     if dist_dir.exists():
@@ -136,7 +138,6 @@ def _background_bump_task(ctx, repo, prerelease=False, **kwargs):
     ctx.jobs.update_progress("Calculating semantic version and bumping repository...")
     logical_pyproject = f"vfs://{repo}/pyproject.toml"
     pyproject_content = ctx.vfs.read(logical_pyproject) or ""
-    import re
     cp_match = re.search(r'^commit_parser\s*=\s*[\'"]([^\'"]*)[\'"]', pyproject_content, re.MULTILINE)
     toml_commit_parser = cp_match.group(1) if cp_match else None
 
@@ -184,10 +185,10 @@ def _background_bump_task(ctx, repo, prerelease=False, **kwargs):
         err_msg = res.stderr.strip() if res.stderr else res.stdout.strip()
         raise RuntimeError(f"Semantic Release Engine Failed:\n{err_msg}")
     # Cancel any delayed compile queued by the watchdog during semantic-release writes
-    cancel_job(delayed_job_id, workspace_id=ctx.workspace_id)
+    ctx.jobs.cancel(delayed_job_id)
 
     # Reconcile code index and RAG contexts with the newly committed release artifacts
-    ordered_steps = resolve_dag_chain(ctx, 'register_compilation_steps')
+    ordered_steps = ctx.resolve_dag_chain('register_compilation_steps')
     if ordered_steps:
         ctx.jobs.submit_chain(
             ordered_steps,
@@ -218,8 +219,6 @@ def _execute_twine_upload(ctx, repo, repo_path, base_env):
 
     return log
 def _build_and_validate_distribution(ctx, repo_path):
-    import zipfile
-
     dist_dir = Path(repo_path) / "dist"
     if dist_dir.exists():
         shutil.rmtree(dist_dir)
@@ -254,9 +253,6 @@ def _build_and_validate_distribution(ctx, repo_path):
 @update_bp.worker("first_release_task")
 def _background_first_release_task(ctx, repo, **kwargs):
     """Initial Release: Builds distribution, validates wheel contents, uploads to PyPI, and tags baseline version."""
-    import zipfile
-    import tarfile
-
     repo_path = _get_valid_repo_path(ctx, repo)
     log_lines = []
 
@@ -272,7 +268,6 @@ def _background_first_release_task(ctx, repo, **kwargs):
     ctx.jobs.update_progress("Tagging initial release in Git...")
     logical_pyproject = f"vfs://{repo}/pyproject.toml"
     content = ctx.vfs.read(logical_pyproject) or ""
-    import re
     v_match = re.search(r'^version\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
     version_str = v_match.group(1) if v_match else "0.1.0"
 
@@ -286,7 +281,6 @@ def _background_first_release_task(ctx, repo, **kwargs):
         log_lines.append(f"=== GIT PUSH [SKIPPED] ===\nTarget is 'disabled'. Local tag only.")
         msg_suffix = "tagged locally (VCS push disabled)"
 
-    import time
     if dist_target == "python_pypi":
         ctx.store.set(f"update_{repo}.json", "last_publish_time", time.time())
 
@@ -304,7 +298,6 @@ def _background_preview_first_release_task(ctx, repo, **kwargs):
 
     logical_pyproject = f"vfs://{repo}/pyproject.toml"
     content = ctx.vfs.read(logical_pyproject) or ""
-    import re
     v_match = re.search(r'^version\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
     version_str = v_match.group(1) if v_match else "0.1.0"
     log_lines = [
@@ -376,7 +369,6 @@ def _background_publish_task(ctx, repo, **kwargs):
         if clean_log or vcs_res.stdout.strip():
             log_lines.append(f"=== VCS PUBLISH ===\n{clean_log}\n{vcs_res.stdout.strip()}".strip())
 
-        import time
         if dist_target == "python_pypi":
             ctx.store.set(f"update_{repo}.json", "last_publish_time", time.time())
 
@@ -387,8 +379,6 @@ def _background_publish_task(ctx, repo, **kwargs):
         raise RuntimeError(f"Semantic Release Publish Failed:\n{err_msg}")
 @update_bp.worker("preview_bump_task")
 def _background_preview_bump_task(ctx, repo, prerelease=False, **kwargs):
-    import re
-
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
@@ -461,7 +451,6 @@ def api_update_bump(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("preview_publish_task")
 def _background_preview_publish_task(ctx, repo, **kwargs):
-    import re
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
@@ -538,11 +527,9 @@ def _background_status_task(ctx, repo, **kwargs):
     has_pyproject = content is not None
     if content is None:
         content = ""
-
     configured = "[tool.semantic_release]" in content
     version = None
     has_release = False
-    import re
     # 1. Parse package name and static baseline version from pyproject.toml
     name_match = re.search(r'^name\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
     package_name = name_match.group(1) if name_match else repo
@@ -625,7 +612,6 @@ def _background_status_task(ctx, repo, **kwargs):
     pypi_package_exists = False
     if version:
         try:
-            import urllib.request
             clean_version = version.lstrip('v')
             req = urllib.request.Request(f"https://pypi.org/pypi/{package_name}/json", headers={'User-Agent': 'inSetu-OS/1.0'})
             with urllib.request.urlopen(req, timeout=3) as response:
@@ -663,7 +649,6 @@ def _background_status_task(ctx, repo, **kwargs):
     }}
 @update_bp.worker("update_toml_config_task")
 def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=None, prerelease_token=None, commit_parser=None, **kwargs):
-    import re
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
@@ -726,7 +711,6 @@ def api_update_toml_config(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("manual_build_task")
 def _background_manual_build(ctx, repo, build_command, **kwargs):
-    import shlex
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
@@ -775,7 +759,6 @@ def api_update_status(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("force_version_task")
 def _background_force_version(ctx, repo, new_version, **kwargs):
-    import re
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
@@ -817,7 +800,6 @@ def api_update_force_version(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("scaffold_task")
 def _background_scaffold_task(ctx, repo, initial_version, **kwargs):
-    import re
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError("Target repository path not found.")

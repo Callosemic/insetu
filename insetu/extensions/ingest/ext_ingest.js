@@ -49,14 +49,25 @@ export class InSetuExtIngestModals extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(IngestStore, state => {
-            this.ingestModalOpen = state.ingestModalOpen;
-            this.ingestUrl = state.ingestUrl;
-            this.ingestMethod = state.ingestMethod;
-            this.ingestStatus = state.ingestStatus;
-            this.ingestError = state.ingestError;
-            this.activeIngestJobId = state.activeIngestJobId;
-        });
+        this.subscribe(
+            IngestStore,
+            state => ({
+                ingestModalOpen: !!state.ingestModalOpen,
+                ingestUrl: state.ingestUrl || '',
+                ingestMethod: state.ingestMethod || 'jina',
+                ingestStatus: state.ingestStatus || null,
+                ingestError: state.ingestError || null,
+                activeIngestJobId: state.activeIngestJobId || null
+            }),
+            (slice) => {
+                this.ingestModalOpen = slice.ingestModalOpen;
+                this.ingestUrl = slice.ingestUrl;
+                this.ingestMethod = slice.ingestMethod;
+                this.ingestStatus = slice.ingestStatus;
+                this.ingestError = slice.ingestError;
+                this.activeIngestJobId = slice.activeIngestJobId;
+            }
+        );
     }
     _getImportAction() {
         return this.api.bindJobAction('url', () => {

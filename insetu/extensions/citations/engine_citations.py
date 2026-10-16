@@ -1,11 +1,13 @@
 from pathlib import Path
 import os
+import re
 import json
 import urllib.request
 import urllib.parse
 from typing import TypedDict, Optional, List
 from flask import request, jsonify
 from insetu.core.sdk import InSetuExtension
+from insetu.core.utils_core import InSetuURI
 from akasa.hooks import hooks
 CITATIONS_SCHEMA = {
     "citations": {
@@ -51,6 +53,7 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
         if not is_full_sweep:
             return
         ctx = citations_bp.get_context(workspace_id)
+        _ensure_citations_hydrated(ctx)
         paths = ctx.paths
 
         conn = ctx.db
@@ -133,10 +136,38 @@ def get_metadata_index(ctx):
         return jsonify({"publications": pubs, "authors": sorted(list(authors))})
     except Exception as e:
         return jsonify({"publications": [], "authors": []})
+def _ensure_citations_hydrated(ctx):
+    count = ctx.db.execute("SELECT count(*) FROM citations").fetchone()[0]
+    saved = ctx.store.get("library.json", "citations", None)
+    if count == 0 and saved:
+        for item in saved:
+            csl_id = item.get("id")
+            if not csl_id:
+                continue
+            item_copy = dict(item)
+            atts = item_copy.pop("_attachments", [])
+            ctx.db.execute(
+                "INSERT OR REPLACE INTO citations (id, type, title, raw_json, attachments) VALUES (?, ?, ?, ?, ?)",
+                (str(csl_id), str(item_copy.get("type", "unknown")), str(item_copy.get("title", "Untitled")), json.dumps(item_copy), json.dumps(atts))
+            )
+        ctx.db.commit()
+    elif count > 0 and saved is None:
+        _flush_citations_to_json(ctx)
+
+def _flush_citations_to_json(ctx):
+    rows = ctx.db.get_all(table="citations", order_by="id ASC")
+    items = []
+    for row in rows:
+        item = json.loads(row['raw_json'])
+        item['_attachments'] = json.loads(row['attachments']) if row['attachments'] else []
+        items.append(item)
+    ctx.store.set("library.json", "citations", items)
+
 @citations_bp.route('list', methods=['GET'], docstring="Retrieves all stored academic citations with their associated attachment metadata.")
 def get_citations(ctx):
     """Retrieves all stored academic citations with their associated attachment metadata."""
     try:
+        _ensure_citations_hydrated(ctx)
         rows = ctx.db.get_all(table="citations", order_by="id ASC")
         items = []
         for row in rows:
@@ -154,9 +185,11 @@ def attach_citation(ctx, csl_id):
     data = ctx.req.json
     attachments = data.get("attachments", [])
     try:
+        _ensure_citations_hydrated(ctx)
         conn = ctx.db
         conn.execute("UPDATE citations SET attachments = ? WHERE id = ?", (json.dumps(attachments), csl_id))
         conn.commit()
+        _flush_citations_to_json(ctx)
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -214,7 +247,6 @@ def _background_citation_search(ctx, query, source, field, category, page, **kwa
                     with urllib.request.urlopen(cat_req) as cr:
                         cat_data = json.loads(cr.read().decode())
                         if cat_data.get('results'):
-                            from insetu.core.utils_core import InSetuURI
                             topic_id = InSetuURI(cat_data['results'][0]['id']).basename
                             filters.append(f"topics.id:{topic_id}")
                 except Exception:
@@ -231,7 +263,6 @@ def _background_citation_search(ctx, query, source, field, category, page, **kwa
             req = urllib.request.Request(url, headers={'User-Agent': 'mailto:insetu-dev@localhost'})
             with urllib.request.urlopen(req) as response:
                 data = json.loads(response.read().decode())
-            from insetu.core.utils_core import InSetuURI
             for work in data.get('results', []):
                 csl_items.append({
                     "id": InSetuURI(work.get('id', '')).basename,
@@ -280,10 +311,10 @@ def import_citations(ctx):
 
     strategy = data.get("strategy", "overwrite") # overwrite, skip, or manual
     items = data.get("citations", []) if isinstance(data, dict) and "citations" in data else data
-
     if not isinstance(items, list):
         return jsonify({"error": "Invalid format.\nExpecting array of CSL-JSON objects."}), 400
     try:
+        _ensure_citations_hydrated(ctx)
         conn = ctx.db
         count = 0
         conflicts = []
@@ -312,6 +343,7 @@ def import_citations(ctx):
             )
             count += 1
         conn.commit()
+        _flush_citations_to_json(ctx)
 
         return jsonify({
             "status": "success",  
@@ -323,16 +355,17 @@ def import_citations(ctx):
         return jsonify({"error": str(e)}), 500
 class DeleteCitationPayload(TypedDict, total=False):
     pass
-
 @citations_bp.route('<path:csl_id>', methods=['DELETE'], request_schema=DeleteCitationPayload, docstring="Permanently removes a citation from the global library.")
 def delete_citation(ctx, csl_id):
     """Permanently removes a citation from the global library."""
     try:
+        _ensure_citations_hydrated(ctx)
         conn = ctx.db
         cursor = conn.execute("DELETE FROM citations WHERE id = ?", (csl_id,))
         if cursor.rowcount == 0:
             return jsonify({"error": "Citation not found"}), 404
         conn.commit()
+        _flush_citations_to_json(ctx)
 
         return jsonify({"status": "success", "message": f"Deleted citation {csl_id}"})
     except Exception as e:
@@ -340,7 +373,6 @@ def delete_citation(ctx, csl_id):
 @hooks.on('pre_compile_document')
 def inject_citation_middleware(text, workspace_id=None, **kwargs):
     """Parses text for citation macros and injects bibliography temp files and citeproc flags into the compiler."""
-    import re
     true_ids = list(set(re.findall(r'\[@([^\]]+)\]', text)))
     if not true_ids:
         return None

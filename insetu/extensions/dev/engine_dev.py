@@ -1,9 +1,12 @@
+import os
 import time
+from pathlib import Path
 from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from akasa.hooks import hooks
-from insetu.core.utils_core import InSetuURI
+from akasa.utils import resolve_system_artifact_path
+from insetu.core.utils_core import InSetuURI, execute_binary
 
 __depends__ = []
 
@@ -131,8 +134,8 @@ def get_dev_metrics(ctx):
     now = time.time()
     cutoff = now - 3600  
     # Fetch all telemetry in the last hour from the correct workers ledger
-    import akasa.db as kernel_db
-    w_conn = kernel_db.get_connection("workers", workspace_id=ctx.workspace_id)
+    import akasa.db as _kernel_db
+    w_conn = _kernel_db.get_connection("workers", workspace_id=ctx.workspace_id)
     raw_telemetry = w_conn.execute("SELECT filepath, timestamp FROM vfs_event_log WHERE timestamp >= ?", (cutoff,)).fetchall()
 
     file_buckets = {}
@@ -187,20 +190,14 @@ def get_dev_metrics(ctx):
         "bridge_errors": [dict(r) for r in error_rows],
         "system_errors": [dict(r) for r in system_error_rows]
     })
-@dev_bp.route('sql/databases', methods=['GET'], docstring="Lists all available SQLite databases within the tenant data directory.")
+@dev_bp.route('sql/databases', methods=['GET'], docstring="Lists all available SQLite databases within the tenant cache/db directory.")
 def list_sql_databases(ctx):
-    """Lists all available SQLite databases within the tenant data directory."""
-    from pathlib import Path
-    import os
-    ext_base = Path(ctx.paths['control_dir']).joinpath("ext")
+    """Lists all available SQLite databases within the tenant cache/db directory."""
+    db_dir = Path(ctx.paths['control_dir']).joinpath("cache", "db")
     dbs = []
-    if ext_base.exists() and ext_base.is_dir():
-        for ext_dir in ext_base.iterdir():
-            if ext_dir.is_dir():
-                db_dir = ext_dir.joinpath("db")
-                if db_dir.exists() and db_dir.is_dir():
-                    for p in db_dir.glob("*.db"):
-                        dbs.append(p.stem)
+    if db_dir.exists() and db_dir.is_dir():
+        for p in db_dir.glob("*.db"):
+            dbs.append(p.stem)
     return jsonify({"databases": sorted(list(set(dbs)))})
 class SqlQueryPayload(TypedDict, total=False):
     db_name: str
@@ -214,12 +211,11 @@ def execute_sql_query(ctx):
     query = data.get("query", "").strip()
     if not query:
         return jsonify({"error": "SQL query string is required."}), 400
-    from pathlib import Path
-    import akasa.db as kernel_db
+    import akasa.db as _kernel_db
     clean_db_name = Path(db_name).stem or "workers"
 
     try:
-        conn = kernel_db.get_connection(clean_db_name, workspace_id=ctx.workspace_id)
+        conn = _kernel_db.get_connection(clean_db_name, workspace_id=ctx.workspace_id)
         t0 = time.time()
         cursor = conn.execute(query)
         elapsed_ms = round((time.time() - t0) * 1000, 2)
@@ -255,7 +251,6 @@ def execute_sql_query(ctx):
 @dev_bp.route('logs', methods=['GET'], docstring="Retrieves the systemd journal logs for the background backend daemon.")
 def get_backend_logs(ctx):
     """Retrieves the systemd journal logs for the background backend daemon."""
-    from insetu.core.utils_core import execute_binary
     try:
         # Query the systemd journal for the user service if running in background
         res = execute_binary(
@@ -273,10 +268,6 @@ def get_backend_logs(ctx):
         return jsonify({"status": "error", "logs": f"Failed to fetch logs: {str(e)}"})
 @dev_bp.worker("download_boot_logs_task")
 def download_boot_logs_worker(ctx, **kwargs):
-    from insetu.core.utils_core import execute_binary
-    from pathlib import Path
-    from akasa.workers import register_ephemeral_artifact
-
     ctx.jobs.update_progress("Extracting current invocation systemd logs...")
     try:
         # 1. Retrieve the unique InvocationID for the current service run
@@ -301,10 +292,8 @@ def download_boot_logs_worker(ctx, **kwargs):
 
     out_file = f"ctx://contexts/insetu_boot_log_{int(time.time())}.txt"
     ctx.vfs.save(out_file, log_content, data={"ignore_ledger": True})
-
-    from akasa.utils import resolve_system_artifact_path
     abs_out_path = resolve_system_artifact_path(out_file, ctx.workspace_id)
-    register_ephemeral_artifact(abs_out_path, "dev_logs", 3600, workspace_id=ctx.workspace_id)
+    ctx.jobs.register_ephemeral(abs_out_path, ttl_seconds=3600, owner="dev_logs")
 
     return {
         "message": "Invocation logs exported successfully.",
@@ -338,7 +327,7 @@ def sweep_telemetry_worker(ctx, **kwargs):
 @hooks.on('topology_boot_complete')
 def init_dev_workers(workspace_id=None, **kwargs):
     try:
-        from akasa.workers import submit_job
-        submit_job("dev_telemetry_sweeper", "dev", "sweep_telemetry", interval_ms=60000, workspace_id=workspace_id)
+        ctx = dev_bp.get_context(workspace_id)
+        ctx.jobs.schedule("sweep_telemetry", interval_ms=60000, job_id="dev_telemetry_sweeper")
     except Exception:
         pass

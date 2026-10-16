@@ -1,16 +1,17 @@
 from pathlib import Path
 import os
+import time
 import uuid
 from datetime import datetime
 import urllib.request
 import urllib.parse
+import urllib.error
 import json
 from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
-from akasa.workers import submit_job, register_callback
 from akasa.hooks import hooks
-from akasa.utils import is_extension_enabled
+from akasa.utils import is_extension_enabled, get_workspace_physics
 RESEARCH_SCHEMA = {
     "research_jobs": {
         "id": "TEXT PRIMARY KEY",
@@ -50,11 +51,10 @@ __depends__ = ['ingest']
 class SearchProvider:
     def execute_search(self, query, max_results=10, date_range=None, start_index=0):
         raise NotImplementedError
-
 class DuckDuckGoHTMLProvider(SearchProvider):
     def execute_search(self, query, max_results=10, date_range=None, start_index=0):
         try:
-            from bs4 import BeautifulSoup
+            from bs4 import BeautifulSoup as _BeautifulSoup
         except ImportError:
             raise Exception("BeautifulSoup4 is required for DuckDuckGo local parsing.")
             
@@ -72,8 +72,7 @@ class DuckDuckGoHTMLProvider(SearchProvider):
                 html = response.read().decode('utf-8', errors='ignore')
         except Exception as e:
             raise Exception(f"Search request failed: {str(e)}")
-            
-        soup = BeautifulSoup(html, 'html.parser')
+        soup = _BeautifulSoup(html, 'html.parser')
         results = []
         
         for a in soup.find_all('a', class_='result__url', limit=max_results):
@@ -94,13 +93,13 @@ class DuckDuckGoHTMLProvider(SearchProvider):
 class GooglePlaywrightProvider(SearchProvider):
     def execute_search(self, query, max_results=10, date_range=None, start_index=0):
         try:
-            from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+            from playwright.sync_api import sync_playwright as _sync_playwright, TimeoutError as _PlaywrightTimeoutError
         except ImportError:
             raise Exception("Playwright is required for Google Search. Run: pip install playwright && playwright install chromium")
         safe_query = urllib.parse.quote(query)
         # Drop the &num parameter. Requesting 150 results on a single page triggers bot defenses.
         # The Metronome naturally pages through 10 standard results at a time via &start=
-        url = f"https://www.google.com/search?q={safe_query}&start={start_index}"
+        url = f"https://www.google.com/search?q={safe_query}"
 
         # Handle Google's specific date range formatting
         if date_range:
@@ -115,9 +114,8 @@ class GooglePlaywrightProvider(SearchProvider):
                         url += f"&tbs=cdr:1,cd_min:{s_parts[1]}/{s_parts[2]}/{s_parts[0]},cd_max:{e_parts[1]}/{e_parts[2]}/{e_parts[0]}"
                 except Exception:
                     pass
-
         results = []
-        with sync_playwright() as p:
+        with _sync_playwright() as p:
             # Stealth flags to bypass basic headless detection
             browser = p.chromium.launch(
                 headless=True,
@@ -129,16 +127,16 @@ class GooglePlaywrightProvider(SearchProvider):
             )
             page = context.new_page()
             try:
-                start_index = 0
+                current_start = start_index
                 while len(results) < max_results:
-                    paged_url = url + f"&start={start_index}"
+                    paged_url = f"{url}&start={current_start}"
                     page.goto(paged_url, wait_until="domcontentloaded", timeout=15000)
 
                     # Auto-clear EU Cookie Consent if intercepted
                     if page.locator('form[action*="consent.google.com"]').count() > 0:
                         try:
                             page.locator('button:has-text("Reject all"), button:has-text("Accept all")').first.click(timeout=3000)
-                        except PlaywrightTimeoutError:
+                        except _PlaywrightTimeoutError:
                             pass
 
                     # Hard fail if we hit a CAPTCHA wall
@@ -147,7 +145,7 @@ class GooglePlaywrightProvider(SearchProvider):
                     try:
                         # 2026 Update: Broaden selector to capture modern SERP links and avoid strict div.g dependence
                         page.wait_for_selector("div.g, a:has(h3), h3 a", timeout=8000)
-                    except PlaywrightTimeoutError:
+                    except _PlaywrightTimeoutError:
                         if page.locator('text="did not match any documents"').count() > 0:
                           break # Cleanly exit if no more documents
                         if results:
@@ -180,16 +178,13 @@ class GooglePlaywrightProvider(SearchProvider):
                     # Circuit Breaker: If iterating the page yielded no new valid links, we've hit the end of the SERP
                     if len(results) == initial_count:
                         break
-
                     # Increment index to fetch the next page of SERP results
-                    start_index += 10
+                    current_start += 10
             except Exception as e:
                 # Drop an audit log of the raw SERP DOM to debug layout changes or CAPTCHAs
                 try:
-                    from akasa.utils import get_workspace_physics
-                    import time
                     cfg_path, _ = get_workspace_physics()
-                    log_dir = Path(cfg_path).parent / "data" / "logs" / "research_dumps"
+                    log_dir = Path(cfg_path).parent / "cache" / "logs" / "research_dumps"
                     os.makedirs(log_dir.as_posix(), exist_ok=True)
                     dump_path = log_dir / f"google_serp_fail_{int(time.time())}.html"
                     dump_ctx = research_bp.get_context('default')
@@ -203,7 +198,6 @@ class GooglePlaywrightProvider(SearchProvider):
         return results
 class SerperDevProvider(SearchProvider):
     def execute_search(self, query, max_results=10, date_range=None, start_index=0, workspace_id='default'):
-        import urllib.error
         ctx = research_bp.get_context(workspace_id)
 
         api_key = ctx.settings.get("serper_api_key")
@@ -266,15 +260,15 @@ def get_provider(provider_name):
         return SerperDevProvider()
     raise ValueError(f"Unknown provider: {provider_name}")
 # --- ASYNCHRONOUS EVENT LOOP (METRONOME DISPATCHER) ---
-def gather_next_page(job_id, workspace_id=None):
+@research_bp.worker("gather_next_page")
+def gather_next_page(ctx, research_job_id=None, job_id=None, **kwargs):
   """Metronome callback to fetch a single SERP page, preventing rate limits."""
-  import akasa.db as kernel_db
-  ctx = research_bp.get_context(workspace_id)
+  target_id = research_job_id or job_id
+  workspace_id = ctx.workspace_id
   conn = ctx.db
-  job = conn.execute("SELECT * FROM research_jobs WHERE id=?", (job_id,)).fetchone()
+  job = conn.execute("SELECT * FROM research_jobs WHERE id=?", (target_id,)).fetchone()
   if not job or job['status'] != 'gathering':
-    from akasa.workers import cancel_job
-    cancel_job(f"research_gather_{job_id}", workspace_id=workspace_id)
+    ctx.jobs.cancel(f"research_gather_{target_id}")
     return
 
   meta = json.loads(job['meta_json'])
@@ -286,14 +280,14 @@ def gather_next_page(job_id, workspace_id=None):
     links = provider.execute_search(job['query'], max_results=max_results, date_range=date_range, start_index=start_index, workspace_id=workspace_id)
     new_links_count = 0
     for link in links:
-      exists = conn.execute("SELECT id FROM research_inbox WHERE job_id=? AND url=?", (job_id, link['url'])).fetchone()
+      exists = conn.execute("SELECT id FROM research_inbox WHERE job_id=? AND url=?", (target_id, link['url'])).fetchone()
       if not exists:
         prior_scrape = conn.execute("SELECT id FROM research_inbox WHERE url=? AND scraped_at IS NOT NULL", (link['url'],)).fetchone()
         prior_cit = None
         if is_extension_enabled("citations", workspace_id=workspace_id):
           try:
-            from insetu.extensions.citations.engine_citations import citations_bp
-            cit_ctx = citations_bp.get_context(workspace_id)
+            from insetu.extensions.citations.engine_citations import citations_bp as _citations_bp
+            cit_ctx = _citations_bp.get_context(workspace_id)
             cit_conn = cit_ctx.db
             # Utilize SQLite JSON1 extension to natively query the CSL-JSON matrix
             prior_cit = cit_conn.execute("SELECT id FROM citations WHERE json_extract(raw_json, '$.URL') = ?", (link['url'],)).fetchone()
@@ -307,70 +301,63 @@ def gather_next_page(job_id, workspace_id=None):
           inbox_status = 'duplicate'
 
         inbox_id = str(uuid.uuid4())
-        conn.execute("INSERT INTO research_inbox (id, job_id, url, title, status) VALUES (?, ?, ?, ?, ?)", (inbox_id, job_id, link['url'], link['title'], inbox_status))
+        conn.execute("INSERT INTO research_inbox (id, job_id, url, title, status) VALUES (?, ?, ?, ?, ?)", (inbox_id, target_id, link['url'], link['title'], inbox_status))
         new_links_count += 1
 
-    conn.execute("UPDATE research_jobs SET total_links = total_links + ? WHERE id=?", (new_links_count, job_id))
-    current_total = conn.execute("SELECT total_links FROM research_jobs WHERE id=?", (job_id,)).fetchone()['total_links']
+    conn.execute("UPDATE research_jobs SET total_links = total_links + ? WHERE id=?", (new_links_count, target_id))
+    current_total = conn.execute("SELECT total_links FROM research_jobs WHERE id=?", (target_id,)).fetchone()['total_links']
     if new_links_count == 0 or current_total >= max_results:
-      conn.execute("UPDATE research_jobs SET status='paused' WHERE id=?", (job_id,))
-      from akasa.workers import cancel_job
-      cancel_job(f"research_gather_{job_id}", workspace_id=workspace_id)
+      conn.execute("UPDATE research_jobs SET status='paused' WHERE id=?", (target_id,))
+      ctx.jobs.cancel(f"research_gather_{target_id}")
     else:
       meta['start_index'] = start_index + 10
-      conn.execute("UPDATE research_jobs SET meta_json=? WHERE id=?", (json.dumps(meta), job_id))
+      conn.execute("UPDATE research_jobs SET meta_json=? WHERE id=?", (json.dumps(meta), target_id))
 
     conn.commit()
   except Exception as e:
       print(f"❌ [Research Gather] Failed: {e}")
       meta['error'] = str(e)
-      conn.execute("UPDATE research_jobs SET status='failed', meta_json=? WHERE id=?", (json.dumps(meta), job_id))
+      conn.execute("UPDATE research_jobs SET status='failed', meta_json=? WHERE id=?", (json.dumps(meta), target_id))
       conn.commit()
-      from akasa.workers import cancel_job
-      cancel_job(f"research_gather_{job_id}", workspace_id=workspace_id)
-def scrape_next_link(job_id, workspace_id=None):
+      ctx.jobs.cancel(f"research_gather_{target_id}")
+
+@research_bp.worker("scrape_next_link")
+def scrape_next_link(ctx, research_job_id=None, job_id=None, **kwargs):
     """Executes a single link scrape inside the centralized ThreadPool."""
-    import akasa.db as kernel_db
-    ctx = research_bp.get_context(workspace_id)
+    target_id = research_job_id or job_id
     conn = ctx.db
-    job_status = conn.execute("SELECT status FROM research_jobs WHERE id=?", (job_id,)).fetchone()
+    job_status = conn.execute("SELECT status FROM research_jobs WHERE id=?", (target_id,)).fetchone()
     if not job_status or job_status['status'] in ('paused', 'cancelled', 'completed', 'failed'):
         # Terminate the job in the metronome ledger
-        from akasa.workers import cancel_job
-        cancel_job(f"research_{job_id}", workspace_id=workspace_id)
+        ctx.jobs.cancel(f"research_{target_id}")
         return
-    row = conn.execute("SELECT id, url FROM research_inbox WHERE job_id=? AND status='pending' AND scraped_at IS NULL LIMIT 1", (job_id,)).fetchone()
+    row = conn.execute("SELECT id, url FROM research_inbox WHERE job_id=? AND status='pending' AND scraped_at IS NULL LIMIT 1", (target_id,)).fetchone()
     if not row:
-        pending_unreviewed = conn.execute("SELECT count(*) as c FROM research_inbox WHERE job_id=? AND status='pending'", (job_id,)).fetchone()['c']
+        pending_unreviewed = conn.execute("SELECT count(*) as c FROM research_inbox WHERE job_id=? AND status='pending'", (target_id,)).fetchone()['c']
         final_status = 'reviewed' if pending_unreviewed == 0 else 'completed'
-        conn.execute("UPDATE research_jobs SET status=? WHERE id=?", (final_status, job_id,))
+        conn.execute("UPDATE research_jobs SET status=? WHERE id=?", (final_status, target_id,))
         conn.commit()
-        from akasa.workers import cancel_job
-        cancel_job(f"research_{job_id}", workspace_id=workspace_id)
-        print(f"✅ [Research] Job {job_id} finished scraping (Status: {final_status}).")
+        ctx.jobs.cancel(f"research_{target_id}")
+        print(f"✅ [Research] Job {target_id} finished scraping (Status: {final_status}).")
         return
     inbox_id = row['id']
     target_url = row['url']
     print(f"🔍 [Research] Scraping: {target_url}")
     try:
-      job_data = conn.execute("SELECT meta_json FROM research_jobs WHERE id=?", (job_id,)).fetchone()
+      job_data = conn.execute("SELECT meta_json FROM research_jobs WHERE id=?", (target_id,)).fetchone()
       meta = json.loads(job_data['meta_json']) if job_data and job_data['meta_json'] else {}
       parser_type = meta.get('parser', 'jina')
 
-      from insetu.extensions.ingest.engine_ingest import extract_markdown_from_url
-      extracted = extract_markdown_from_url(target_url, method=parser_type)
+      from insetu.extensions.ingest.engine_ingest import extract_markdown_from_url as _extract_markdown_from_url
+      extracted = _extract_markdown_from_url(target_url, method=parser_type)
       now_str = datetime.now().isoformat(timespec='seconds')
       conn.execute("UPDATE research_inbox SET raw_markdown=?, title=?, scraped_at=? WHERE id=?", (extracted["clean_markdown"], extracted["title"], now_str, inbox_id))
     except Exception as e:
         now_str = datetime.now().isoformat(timespec='seconds')
         conn.execute("UPDATE research_inbox SET raw_markdown=?, scraped_at=? WHERE id=?", (f"Extraction Error: {str(e)}", now_str, inbox_id))
 
-    conn.execute("UPDATE research_jobs SET processed_links = processed_links + 1 WHERE id=?", (job_id,))
+    conn.execute("UPDATE research_jobs SET processed_links = processed_links + 1 WHERE id=?", (target_id,))
     conn.commit()
-
-# Register the callback tightly with the central ledger
-register_callback("research", "scrape_next_link", scrape_next_link)
-register_callback("research", "gather_next_page", gather_next_page)
 def _get_research_intervals():
     """Reads dynamic pacing configurations from the workspace config."""
     ctx = research_bp.get_context('default')
@@ -424,9 +411,8 @@ def start_job(ctx):
             (job_id, query, provider_name, 'gathering', 0, now_str, meta_json))
       conn.commit()
       g_int, g_jit, _, _ = _get_research_intervals()
-
       # Dispatch to Metronome: Fetch a SERP page dynamically to avoid rate limits
-      submit_job(f"research_gather_{job_id}", "research", "gather_next_page", g_int, json.dumps({"job_id": job_id}), g_jit, workspace_id=workspace_id)
+      ctx.jobs.schedule("gather_next_page", g_int, jitter_ms=g_jit, job_id=f"research_gather_{job_id}", research_job_id=job_id)
 
       # Return immediately so the UI doesn't hang
       return jsonify({"status": "success", "job_id": job_id, "message": "Gathering links asynchronously."})
@@ -464,9 +450,8 @@ def job_action(ctx, job_id):
         conn.execute("UPDATE research_jobs SET status='running' WHERE id=?", (job_id,))
         conn.commit()
         _, _, s_int, s_jit = _get_research_intervals()
-
         # Dispatch to the Metronome
-        submit_job(f"research_{job_id}", "research", "scrape_next_link", s_int, json.dumps({"job_id": job_id}), s_jit, workspace_id=workspace_id)
+        ctx.jobs.schedule("scrape_next_link", s_int, jitter_ms=s_jit, job_id=f"research_{job_id}", research_job_id=job_id)
         return jsonify({"status": "success", "message": "Job resumed"})
     elif action == 'update_meta':
         job_data = conn.execute("SELECT meta_json FROM research_jobs WHERE id=?", (job_id,)).fetchone()
@@ -480,10 +465,8 @@ def job_action(ctx, job_id):
         conn.execute("DELETE FROM research_jobs WHERE id=?", (job_id,))
         conn.execute("DELETE FROM research_inbox WHERE job_id=?", (job_id,))
         conn.commit()
-
-        from akasa.workers import cancel_job
-        cancel_job(f"research_{job_id}", workspace_id=workspace_id)
-        cancel_job(f"research_gather_{job_id}", workspace_id=workspace_id)
+        ctx.jobs.cancel(f"research_{job_id}")
+        ctx.jobs.cancel(f"research_gather_{job_id}")
 
         return jsonify({"status": "success", "message": "Job permanently deleted"})
 
@@ -504,9 +487,9 @@ def job_action(ctx, job_id):
         g_int, g_jit, s_int, s_jit = _get_research_intervals()
 
         if target_status == 'gathering':
-            submit_job(f"research_gather_{job_id}", "research", "gather_next_page", g_int, json.dumps({"job_id": job_id}), g_jit, workspace_id=workspace_id)
+            ctx.jobs.schedule("gather_next_page", g_int, jitter_ms=g_jit, job_id=f"research_gather_{job_id}", research_job_id=job_id)
         else:
-            submit_job(f"research_{job_id}", "research", "scrape_next_link", s_int, json.dumps({"job_id": job_id}), s_jit, workspace_id=workspace_id)
+            ctx.jobs.schedule("scrape_next_link", s_int, jitter_ms=s_jit, job_id=f"research_{job_id}", research_job_id=job_id)
 
         return jsonify({"status": "success", "message": f"Job retrying in {target_status} phase"})
 
@@ -528,8 +511,6 @@ def list_inbox(ctx):
     return jsonify({"items": items})
 @research_bp.worker("export_context_task")
 def _background_export_context(ctx, research_job_id, **kwargs):
-    from akasa.workers import register_ephemeral_artifact
-
     ctx.jobs.update_progress("Compiling research context...")
     conn = ctx.db
     cursor = conn.execute("SELECT id, title, raw_markdown FROM research_inbox WHERE job_id=? AND status='pending' AND scraped_at IS NOT NULL", (research_job_id,))
@@ -559,7 +540,7 @@ def _background_export_context(ctx, research_job_id, **kwargs):
         filename = f"context_{research_job_id[:8]}_part_{i+1}.txt"
         out_path = Path(ctx.paths["artifacts_base"]).joinpath(filename).as_posix()
         ctx.vfs.save(out_path, chunk, data={"is_absolute_artifact": True})
-        register_ephemeral_artifact(out_path, "research", 3600, workspace_id=ctx.workspace_id)
+        ctx.jobs.register_ephemeral(out_path, ttl_seconds=3600, owner="research")
         artifacts.append({"filename": filename, "download_url": f"/download/{filename}"})
 
     return {"message": "Context packed.", "artifact": {"files": artifacts}}
@@ -591,7 +572,7 @@ def inbox_disposition(ctx, inbox_id):
             conn.execute("UPDATE research_jobs SET status='running' WHERE id=? AND status='completed'", (job_id,))
             conn.commit()
             _, _, s_int, s_jit = _get_research_intervals()
-            submit_job(f"research_{job_id}", "research", "scrape_next_link", s_int, json.dumps({"job_id": job_id}), s_jit, workspace_id=workspace_id)
+            ctx.jobs.schedule("scrape_next_link", s_int, jitter_ms=s_jit, job_id=f"research_{job_id}", research_job_id=job_id)
         return jsonify({"status": "success"})
     conn.execute("UPDATE research_inbox SET status=? WHERE id=?", (status, inbox_id))
 

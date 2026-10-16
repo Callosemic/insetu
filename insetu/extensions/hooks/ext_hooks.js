@@ -72,18 +72,38 @@ export class InSetuExtHooks extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(HooksStore, state => {
-            this.rules = state.rules || [];
-            this.logs = state.logs || [];
-            this.loading = state.loading;
-            this.ruleModalOpen = state.ruleModalOpen;
-            this.editingRule = state.editingRule;
-            this.ruleForm = state.ruleForm;
-        });
-        this.subscribe(AppStore, state => {
-            this.allRepos = state.allRepos || [];
-            this.targetConfigs = state.targetConfigs || [];
-        });
+        this.subscribe(
+            HooksStore,
+            state => ({
+                rules: state.rules || [],
+                logs: state.logs || [],
+                loading: !!state.loading,
+                ruleModalOpen: !!state.ruleModalOpen,
+                editingRule: state.editingRule,
+                ruleForm: state.ruleForm
+            }),
+            (slice) => {
+                this.rules = slice.rules;
+                this.logs = slice.logs;
+                this.loading = slice.loading;
+                this.ruleModalOpen = slice.ruleModalOpen;
+                this.editingRule = slice.editingRule;
+                this.ruleForm = slice.ruleForm;
+                this.requestUpdate();
+            }
+        );
+        this.subscribe(
+            AppStore,
+            state => ({
+                allRepos: state.allRepos || [],
+                targetConfigs: state.targetConfigs || []
+            }),
+            (slice) => {
+                this.allRepos = slice.allRepos;
+                this.targetConfigs = slice.targetConfigs;
+                this.requestUpdate();
+            }
+        );
         const aState = AppStore.getState();
         this.allRepos = aState?.allRepos || [];
         this.targetConfigs = aState?.targetConfigs || [];

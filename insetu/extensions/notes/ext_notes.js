@@ -66,7 +66,10 @@ export const NotesStore = createExtensionStore('Notes', {
         const noteId = `note-${Math.random().toString(36).substr(2, 8)}`;
         const slug = window.inSetu.utils.slugify(title);
         const filename = `${slug}-${noteId}.md`;
-        const filepath = `ctx://notes/${filename}`;
+        const targetRepo = repo || 'global';
+        const filepath = targetRepo !== 'global'
+            ? `vfs://${targetRepo}/.insetu-data/notes/${filename}`
+            : `ctx://notes/${filename}`;
 
         const tagsArr = tags ? tags.split(',').map(t => t.trim()).filter(t=>t) : [];
         const now = new Date().toISOString().split('.')[0];
@@ -203,13 +206,14 @@ export class InSetuExtNotesEditor extends InSetuElement {
     connectedCallback() {
         super.connectedCallback();
         const subId = this.dataset?.subId;
-        this.filepath = (subId && subId.startsWith('ctx://notes/')) ? subId : NotesStore.getState().editNoteFilepath;
+        const isNoteSub = subId && (subId.startsWith('ctx://notes/') || subId.includes('.insetu-data/notes/'));
+        this.filepath = isNoteSub ? subId : NotesStore.getState().editNoteFilepath;
         this.subscribe(
             NotesStore,
             state => state.editNoteFilepath,
             (editNoteFilepath) => {
                 const currentSubId = this.dataset?.subId;
-                if (currentSubId && currentSubId.startsWith('ctx://notes/')) {
+                if (currentSubId && (currentSubId.startsWith('ctx://notes/') || currentSubId.includes('.insetu-data/notes/'))) {
                     this.filepath = currentSubId;
                 } else if (editNoteFilepath) {
                     this.filepath = editNoteFilepath;
@@ -221,6 +225,21 @@ export class InSetuExtNotesEditor extends InSetuElement {
             const mutations = e.detail?.mutations || [];
             if (this.filepath && mutations.some(m => m.filepath === this.filepath && m.operation === 'delete')) {
                 const deletedFp = this.filepath;
+                const baseName = deletedFp.split('/').pop();
+                const movedSave = mutations.find(m => m.operation === 'save' && m.filepath !== deletedFp && m.filepath.endsWith('/' + baseName));
+                if (movedSave) {
+                    const newFp = movedSave.filepath;
+                    this.filepath = newFp;
+                    this.dataset.subId = newFp;
+                    if (NotesStore.getState().editNoteFilepath === deletedFp) {
+                        NotesStore.setState({ editNoteFilepath: newFp });
+                    }
+                    if (window.inSetu?.vfs?.renameFileTracking) {
+                        window.inSetu.vfs.renameFileTracking(deletedFp, newFp);
+                    }
+                    this.requestUpdate();
+                    return;
+                }
                 if (NotesStore.getState().editNoteFilepath === deletedFp) {
                     NotesStore.setState({ editNoteFilepath: null });
                 }
@@ -389,7 +408,7 @@ export class InSetuExtNotes extends InSetuElement {
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
-            const touchedNote = payload.mutations.some(m => m.filepath && m.filepath.startsWith('ctx://notes/'));
+            const touchedNote = payload.mutations.some(m => m.filepath && (m.filepath.startsWith('ctx://notes/') || m.filepath.includes('.insetu-data/notes/')));
             if (touchedNote) NotesStore.getState().fetchNotes();
         });
         this.subscribe(
@@ -576,7 +595,7 @@ window.ExtensionRegistry.registerExtension('notes', {
     customEditors: [
         {
             component: 'insetu-ext-notes-editor',
-            match: (filepath) => filepath && filepath.startsWith('ctx://notes/'),
+            match: (filepath) => filepath && (filepath.startsWith('ctx://notes/') || filepath.includes('.insetu-data/notes/')),
             onOpen: (filepath) => {
                 const existingNote = (NotesStore.getState().notes || []).find(n => n.filepath === filepath);
                 NotesStore.getState().openNoteEditor(filepath, existingNote?.title);

@@ -28,25 +28,25 @@ def _background_format_code(ctx, filepath=None, **kwargs):
         raise ValueError(f"Unable to read file content: {filepath}")
     if ext in ('.js', '.json', '.css', '.html'):
         try:
-            import jsbeautifier
-            opts = jsbeautifier.default_options()
+            import jsbeautifier as _jsbeautifier
+            opts = _jsbeautifier.default_options()
             opts.indent_size = 4
             opts.space_in_empty_paren = True
             opts.end_with_newline = True
 
-            formatted = jsbeautifier.beautify(content, opts)
+            formatted = _jsbeautifier.beautify(content, opts)
             ctx.vfs.save(filepath, formatted)
             return {"message": "Source code formatted successfully.", "artifact": {"filepath": filepath}}
         except ImportError:
             raise RuntimeError("jsbeautifier is required for JS/JSON/CSS formatting. Run: pip install jsbeautifier")
     elif ext == '.py':
         try:
-            import autopep8
-            formatted = autopep8.fix_code(content, options={'indent_size': 4})
+            import autopep8 as _autopep8
+            formatted = _autopep8.fix_code(content, options={'indent_size': 4})
         except ImportError:
             try:
-                import black
-                formatted = black.format_str(content, mode=black.Mode())
+                import black as _black
+                formatted = _black.format_str(content, mode=_black.Mode())
             except ImportError:
                 raise RuntimeError("autopep8 or black is required for Python code formatting. Run: pip install autopep8")
 
@@ -67,15 +67,14 @@ def api_format_code(ctx):
 
     job_id = ctx.jobs.submit("format_code_task", filepath=filepath, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
 def run_formatter():
     try:
-        import jsbeautifier
+        import jsbeautifier as _jsbeautifier
     except ImportError:
         print("❌ Missing jsbeautifier. Please run: pip install jsbeautifier")
         sys.exit(1)
     # Standardize to your 4-space indentation rule
-    opts = jsbeautifier.default_options()
+    opts = _jsbeautifier.default_options()
     opts.indent_size = 4
     opts.space_in_empty_paren = True
     opts.end_with_newline = True
@@ -114,7 +113,7 @@ def run_formatter():
     for filepath in js_files:
         if os.path.exists(filepath):
             try:
-                res = jsbeautifier.beautify_file(filepath, opts)
+                res = _jsbeautifier.beautify_file(filepath, opts)
                 Path(filepath).write_text(res, encoding="utf-8")
                 
                 # Display relative path for cleaner terminal output

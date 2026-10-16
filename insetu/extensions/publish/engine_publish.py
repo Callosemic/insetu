@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import re
 import io
 import tempfile
 import subprocess
@@ -7,7 +8,7 @@ import shutil
 from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
-from akasa.workers import register_ephemeral_artifact
+from insetu.core.utils_core import InSetuURI
 from akasa.hooks import hooks
 
 publish_bp = InSetuExtension(
@@ -39,7 +40,7 @@ def _background_compile(ctx, filepath, target_format, job_id=None, **kwargs):
     out_path = Path(paths["artifacts_base"]).joinpath(safe_name).as_posix()
     Path(out_path).write_bytes(mem_file.read())
 
-    register_ephemeral_artifact(out_path, "publish", 3600, workspace_id=ctx.workspace_id)
+    ctx.jobs.register_ephemeral(out_path, ttl_seconds=3600, owner="publish")
 
     return {
         "message": "Compilation successful.",
@@ -61,13 +62,10 @@ def api_publish_compile_document(ctx):
 
     job_id = ctx.jobs.submit("compile_task", filepath=filepath, target_format=data.get('format', 'pdf'), job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
 def compile_document_payload(workspace_id, filepath, target_format):
-    import re
     ctx = publish_bp.get_context(workspace_id)
 
     responses = ctx.emit('resolve_payload_chunks', uri=filepath)
-    from insetu.core.utils_core import InSetuURI
     chunks = next((r for r in responses if r), [filepath])
     content = ""
     for c in chunks:

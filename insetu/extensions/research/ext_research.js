@@ -74,19 +74,24 @@ export class InSetuExtResearch extends InSetuElement {
         this.searchForm = {};
         this._aiJsonInput = '';
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(ResearchStore, state => {
-            this.jobs = state.jobs;
-            this.inbox = state.inbox;
-            this.selectedJobId = state.selectedJobId;
-            this.selectedItemId = state.selectedItemId;
-            this.targetDir = state.targetDir;
-            this.aiTriageMode = state.aiTriageMode;
-            this.newJobModalOpen = state.newJobModalOpen;
-            this.searchForm = state.searchForm;
-        });
+        this.subscribe(
+            ResearchStore,
+            state => ({
+                jobs: state.jobs,
+                inbox: state.inbox,
+                selectedJobId: state.selectedJobId,
+                selectedItemId: state.selectedItemId,
+                targetDir: state.targetDir,
+                aiTriageMode: state.aiTriageMode,
+                newJobModalOpen: state.newJobModalOpen,
+                searchForm: state.searchForm
+            }),
+            (slice) => {
+                Object.assign(this, slice);
+            }
+        );
         // Initial sync
         const state = ResearchStore.getState();
         this.jobs = state.jobs;
@@ -468,12 +473,20 @@ export class InSetuResearchPreviewProjection extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(ResearchStore, state => {
-            this.inbox = state.inbox || [];
-            this.selectedItemId = state.selectedItemId;
-            this.targetDir = state.targetDir || 'research/';
-            this.requestUpdate();
-        });
+        this.subscribe(
+            ResearchStore,
+            state => ({
+                inbox: state.inbox || [],
+                selectedItemId: state.selectedItemId,
+                targetDir: state.targetDir || 'research/'
+            }),
+            (slice) => {
+                this.inbox = slice.inbox;
+                this.selectedItemId = slice.selectedItemId;
+                this.targetDir = slice.targetDir;
+                this.requestUpdate();
+            }
+        );
     }
     async handleDisposition(inboxId, status) {
         const item = this.inbox.find(i => i.id === inboxId);
@@ -546,7 +559,13 @@ export class InSetuExtResearchActions extends InSetuElement {
     constructor() { super(); this.selectedJobId = null; }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(ResearchStore, state => this.selectedJobId = state.selectedJobId);
+        this.subscribe(
+            ResearchStore,
+            state => state.selectedJobId,
+            (selectedJobId) => {
+                this.selectedJobId = selectedJobId;
+            }
+        );
         this.selectedJobId = ResearchStore.getState().selectedJobId;
     }
     render() {

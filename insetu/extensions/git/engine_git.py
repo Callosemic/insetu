@@ -1,6 +1,9 @@
 from pathlib import Path
 import os
+import inspect
 import subprocess
+import threading
+import concurrent.futures
 import uuid
 import json
 from typing import TypedDict, Optional
@@ -8,7 +11,22 @@ from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from akasa.utils import get_workspace_physics
 from akasa.hooks import hooks
-from insetu.core.utils_core import get_repo_path, execute_binary, is_naked_diff_uri
+from akasa.vfs import mount_volume
+from insetu.core.utils_core import (
+    get_repo_path,
+    execute_binary,
+    get_domain_artifact_path,
+    BucketAddress,
+    get_safe_repo_id,
+    reconcile_and_vacuum_domain,
+    InSetuURI,
+    get_available_contexts,
+    is_naked_diff_uri
+)
+from insetu.core.system.legacy import move_tree_contents
+from insetu.core.topology.engine_topology import resolve_file_bucket, topology_bp
+from insetu.core.gather.engine_gather import compile_context_payload
+from insetu.core.cartographer.cartographer import map_repositories
 def get_headless_git_env():
     """Returns a secure OS environment block pre-configured for non-interactive SSH connections."""
     env = os.environ.copy()
@@ -16,7 +34,6 @@ def get_headless_git_env():
     return env
 def execute_git(*args_tuple, **kwargs):
     """Universal Git command wrapper supporting both logical volumes and physical paths."""
-    import inspect
     env = get_headless_git_env()
 
     # Handle overloaded signatures: (ctx, repo, args) vs (repo_path, args)
@@ -69,31 +86,30 @@ def coerce_git_uris(raw_uri=None, **kwargs):
     if not raw_uri:
         return None
     if is_naked_diff_uri(raw_uri):
-        clean_d = raw_uri.replace('.insetu/ext/git/data/diffs/', '').replace('diffs/', '').replace('ctx://diffs/', '')
+        clean_d = raw_uri.replace('.insetu/cache/diffs/', '').replace('.insetu/ext/git/data/diffs/', '').replace('diffs/', '').replace('ctx://diffs/', '')
         return f"ctx://diffs/{clean_d}"
     return None
-
 @hooks.on('request_paths')
 def hook_git_request_paths(workspace_id=None, **kwargs):
-    from insetu.core.utils_core import get_domain_artifact_path
     return {
         "diffs_dir": get_domain_artifact_path(workspace_id, "diffs", "git")
     }
 
-@hooks.on('workspace_boot')
+@hooks.on('workspace_boot', priority=10)
 def mount_git_volumes(workspace_id=None, **kwargs):
-    from akasa.vfs import mount_volume
     ctx = git_bp.get_context(workspace_id)
-    mount_volume(workspace_id, 'ctx', 'diffs', ctx.paths.get("diffs_dir"))
+    control_dir = Path(ctx.paths.get("control_dir"))
+    diffs_dir = Path(ctx.paths.get("diffs_dir"))
+    move_tree_contents(control_dir.joinpath("ext", "git", "data", "diffs"), diffs_dir)
+    mount_volume(workspace_id, 'ctx', 'diffs', diffs_dir.as_posix())
 @hooks.on('register_compilation_steps')
 def _register_git_compilation_step(workspace_id=None, **kwargs):
     return [{
         "id": "git_diffs",
-        "depends_on": ["gather_base"],
+        "depends_on": ["topology_scan"],
         "ext_name": "git",
         "worker_name": "compile_diffs_task"
     }]
-import threading
 _DIFF_FILE_CACHE = {}
 _DIFF_FILE_CACHE_LOCK = threading.Lock()
 @git_bp.worker("compile_diffs_task")
@@ -105,7 +121,6 @@ def _background_compile_diffs(ctx, force_full=False, target_repos=None, **kwargs
     touched_buckets = chain_state.get('touched_buckets')
     _, manifest_deltas, truly_modified_diffs = generate_diff_context(ctx.workspace_id, target_repos=target_repos, manifest_ref=manifest, touched_buckets=touched_buckets)
 
-    from insetu.core.utils_core import BucketAddress
     evaluated_bucket_keys = set(touched_buckets or [])
     for filepath, entry in manifest_deltas.items():
         if entry and isinstance(entry, dict):
@@ -125,9 +140,6 @@ def _background_compile_diffs(ctx, force_full=False, target_repos=None, **kwargs
         }
     }
 def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None, touched_buckets=None):
-    from insetu.core.utils_core import get_safe_repo_id
-    from insetu.core.topology.engine_topology import resolve_file_bucket
-    import concurrent.futures
     ctx = git_bp.get_context(workspace_id)
     paths = ctx.paths
     live_cfg = ctx.config
@@ -156,11 +168,9 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
             result = execute_git(str(repo_path), ['status', '--porcelain', '-uall'], check=False)
             lines = result.stdout.splitlines()
             if not lines: return None
-
             git_root_res = execute_git(str(repo_path), ['rev-parse', '--show-toplevel'], check=False)
             git_root = Path(git_root_res.stdout.strip()).resolve() if git_root_res.returncode == 0 else repo_path.resolve()
             changed_files = []
-            from insetu.core.utils_core import InSetuURI
             for line in lines:
                 if len(line) < 3: continue
                 status = line[:2]
@@ -326,8 +336,6 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                             'block': block_text
                         }
                 if text_blocks:
-                    from insetu.core.gather.engine_gather import compile_context_payload
-
                     new_content_full = header_str + "".join(text_blocks)
                     existing_content = ""
                     try:
@@ -381,7 +389,6 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                 manifest_deltas.update(lm_delta)
                 working_manifest.update(lm_delta)
                 truly_modified_diffs.update(l_mod)
-    from insetu.core.utils_core import reconcile_and_vacuum_domain
     reconcile_and_vacuum_domain(
         ctx,
         domain_uri_prefix="ctx://diffs/",
@@ -393,7 +400,6 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
     return diff_manifest, manifest_deltas, truly_modified_diffs
 @git_bp.worker("sweep_status_task")
 def _background_sweep_status(ctx, **kwargs):
-    from insetu.core.topology.engine_topology import topology_bp
     cfg = ctx.config
     results = {}
     ctx.jobs.update_progress("Scanning workspaces for untracked files...")
@@ -472,7 +478,6 @@ def _background_sweep_push(ctx, selections, message, **kwargs):
         if not os.path.exists(repo_path): continue
         try:
             # Guarantee topology is perfectly mapped before staging
-            from insetu.core.cartographer.cartographer import map_repositories
             map_repositories(ctx.workspace_id)
             execute_git(repo_path, ['add', '-A', '--'] + files)
 
@@ -549,11 +554,8 @@ def _background_git_push(ctx, repo, message, diff_file, **kwargs):
     if not os.path.exists(repo_path): 
         raise ValueError("Repo not found")
     files_to_stage = set()
-    from insetu.core.topology.engine_topology import resolve_file_bucket
-    from insetu.core.utils_core import get_safe_repo_id
     repo_cfg = next((c for c in cfg.get("target_repos", []) if c.get("repo_dir") == repo), None)
     sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []
-    from insetu.core.utils_core import InSetuURI
     safe_r_dir = get_safe_repo_id(repo)
     target_diff_name = InSetuURI(diff_file).basename if diff_file else None
     # SSOT Enforcement: Query the Git tree directly rather than parsing diff artifacts
@@ -599,7 +601,6 @@ def _background_git_push(ctx, repo, message, diff_file, **kwargs):
     if not remote_check.stdout.strip():
         raise ValueError(f"No remote configured for '{repo}'. Please add a remote (e.g., 'git remote add origin <url>') via the terminal first.")
     try:
-        from insetu.core.cartographer.cartographer import map_repositories
         map_repositories(ctx.workspace_id)
 
         ctx.jobs.update_progress(f"Committing and pushing {repo}...")
@@ -661,13 +662,11 @@ def api_git_push(ctx):
 @hooks.on('request_available_diffs')
 def provide_available_diffs(workspace_id=None, **kwargs):
     """Soft-dependency provider: Supplies expected diffs to the Gather/Flow UI dropdowns."""
-    from insetu.core.utils_core import get_available_contexts
     ctx = git_bp.get_context(workspace_id)
     paths = ctx.paths
     # 1. Derive the baseline topology directly from the SSOT using exclusion flags array
     base_contexts = get_available_contexts(workspace_id, exclusion_flags=["exclude_from_diffs", "exclude_from_context"], include_types=["gather"])
     expected_diffs = set()
-    from insetu.core.utils_core import InSetuURI
     # 2. Map SOTU contexts to diff payloads seamlessly
     for context_path in base_contexts:
         filename = InSetuURI(context_path).basename

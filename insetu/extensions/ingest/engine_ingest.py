@@ -1,3 +1,6 @@
+import datetime
+import gzip
+import zlib
 import urllib.request
 import urllib.parse
 import uuid
@@ -5,6 +8,7 @@ import json
 from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
+from insetu.core.utils_core import update_frontmatter
 ingest_bp = InSetuExtension('ingest', __name__, title="URL Ingestion", description="Webpage fetching and Markdown conversion.")
 __depends__ = []
 @ingest_bp.worker("ingest_task")
@@ -35,11 +39,10 @@ def extract_markdown_from_url(target_url, method="jina"):
     extracted_url = target_url
     published_time = "Unknown"
     clean_markdown = ""
-
     if method == "bs4":
         try:
-            from bs4 import BeautifulSoup
-            import markdownify
+            from bs4 import BeautifulSoup as _BeautifulSoup
+            import markdownify as _markdownify
         except ImportError:
             raise Exception("Missing optional dependencies for local parsing. Please install them via: pip install beautifulsoup4 markdownify")
         req = urllib.request.Request(target_url, headers={'User-Agent': 'Mozilla/5.0', 'Accept-Encoding': 'gzip, deflate'})
@@ -47,14 +50,12 @@ def extract_markdown_from_url(target_url, method="jina"):
             raw_data = response.read()
             encoding = response.info().get('Content-Encoding', '').lower()
             if encoding == 'gzip':
-                import gzip
                 raw_data = gzip.decompress(raw_data)
             elif encoding == 'deflate':
-                import zlib
                 raw_data = zlib.decompress(raw_data)
             html_content = raw_data.decode('utf-8', errors='ignore')
 
-        soup = BeautifulSoup(html_content, 'html.parser')
+        soup = _BeautifulSoup(html_content, 'html.parser')
         if soup.title and soup.title.string:
             extracted_title = soup.title.string.strip()
 
@@ -65,9 +66,9 @@ def extract_markdown_from_url(target_url, method="jina"):
         # Attempt to target the main article container to reduce noise, fallback to body
         main_content = soup.find('article') or soup.find('main') or soup.body
         if main_content:
-            clean_markdown = markdownify.markdownify(str(main_content), heading_style="ATX").strip()
+            clean_markdown = _markdownify.markdownify(str(main_content), heading_style="ATX").strip()
         else:
-            clean_markdown = markdownify.markdownify(html_content, heading_style="ATX").strip()
+            clean_markdown = _markdownify.markdownify(html_content, heading_style="ATX").strip()
 
     else:
         # Use Jina Reader API to cleanly convert HTML to Markdown without heavy local dependencies
@@ -76,10 +77,8 @@ def extract_markdown_from_url(target_url, method="jina"):
             raw_data = response.read()
             encoding = response.info().get('Content-Encoding', '').lower()
             if encoding == 'gzip':
-                import gzip
                 raw_data = gzip.decompress(raw_data)
             elif encoding == 'deflate':
-                import zlib
                 raw_data = zlib.decompress(raw_data)
             markdown_content = raw_data.decode('utf-8', errors='ignore')
 
@@ -106,8 +105,6 @@ def extract_markdown_from_url(target_url, method="jina"):
         first_line = clean_markdown.lstrip().split('\n')[0]
         if first_line.startswith('# '):
             extracted_title = first_line[2:].strip()
-    import datetime
-    from insetu.core.utils_core import update_frontmatter
 
     now_str = datetime.datetime.now().isoformat(timespec='seconds')
     safe_title = extracted_title.replace('"', "'")

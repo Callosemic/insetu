@@ -79,9 +79,13 @@ export class InSetuFavLabel extends InSetuElement {
     constructor() { super(); this._isPinned = false; }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(FavoritesStore, state => {
-            this._isPinned = state.items.some(i => i.path === this.targetPath);
-        });
+        this.subscribe(
+            FavoritesStore,
+            state => state.items || [],
+            (items) => {
+                this._isPinned = items.some(i => i.path === this.targetPath);
+            }
+        );
     }
     render() {
         return html`${this._isPinned ? 'Unpin Favorite' : 'Pin Favorite'}`;
@@ -97,22 +101,25 @@ export class InSetuFavBtn extends InSetuElement {
     static styles = [sharedStyles];
 
     constructor() { super(); this._isPinned = false; this._favId = null; }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(FavoritesStore, state => this._evaluateState(state));
+        this.subscribe(
+            FavoritesStore,
+            state => state.items || [],
+            (items) => this._evaluateState(items)
+        );
     }
 
     updated(changedProperties) {
         super.updated(changedProperties);
         if (changedProperties.has('filepath') || changedProperties.has('folderpath')) {
-            this._evaluateState(FavoritesStore.getState());
+            this._evaluateState(FavoritesStore.getState().items || []);
         }
     }
-    _evaluateState(state) {
+    _evaluateState(items) {
         const targetPath = this.folderpath || this.filepath;
         if (!targetPath) return;
-        const fav = state.items.find(i => i.path === targetPath);
+        const fav = (items || []).find(i => i.path === targetPath);
         this._isPinned = !!fav;
         this._favId = fav ? fav.id : null;
     }
@@ -157,10 +164,14 @@ export class InSetuExtFavorites extends InSetuElement {
     connectedCallback() {
         super.connectedCallback();
         // InSetuElement SDK automatically tracks and destroys this subscription on unmount
-        this.subscribe(FavoritesStore, state => {
-            this.items = state.items;
-            this.loading = state.loading;
-        });
+        this.subscribe(
+            FavoritesStore,
+            state => ({ items: state.items || [], loading: !!state.loading }),
+            ({ items, loading }) => {
+                this.items = items;
+                this.loading = loading;
+            }
+        );
         this.registerGlobalListener('sutram-sync-complete', window, () => {
             FavoritesStore.getState().fetchFavorites();
         });

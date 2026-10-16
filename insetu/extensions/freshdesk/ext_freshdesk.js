@@ -75,26 +75,31 @@ export class InSetuExtFreshdesk extends InSetuElement {
         this.registerGlobalListener('insetu:freshdesk:resolve', window, (e) => this.resolveTicket(e.detail.id));
         this.registerGlobalListener('insetu:freshdesk:ignore', window, (e) => this.ignoreTicket(e.detail.id));
         this.registerGlobalListener('insetu:freshdesk:fetch', window, () => this.fetchTickets());
-
         // The SDK automatically cleans up this subscription on unmount
-        this.subscribe(FreshdeskStore, state => {
-            this.tickets = state.tickets;
-            this.loadingMsg = state.loadingMsg;
-            this.activeJobId = state.activeJobId;
-            this.selectedTicket = state.selectedTicket;
-            this.isModalOpen = state.isModalOpen;
-            this.conversations = state.conversations;
-            this.conversationsLoading = state.conversationsLoading;
-            this.myAgentId = state.myAgentId;
-            this.filterAssignee = state.filterAssignee;
-            this.filterStatus = state.filterStatus;
-            this.replyContent = state.replyContent;
-            this.editorFocused = state.editorFocused;
-            this.ignoredTickets = state.ignoredTickets || [];
-            this.syncLedger = state.syncLedger || [];
-            this.contiguousCount = state.contiguousCount || 0;
-            this.lastFetchedPage = state.lastFetchedPage || 0;
-        });
+        this.subscribe(
+            FreshdeskStore,
+            state => ({
+                tickets: state.tickets,
+                loadingMsg: state.loadingMsg,
+                activeJobId: state.activeJobId,
+                selectedTicket: state.selectedTicket,
+                isModalOpen: state.isModalOpen,
+                conversations: state.conversations,
+                conversationsLoading: state.conversationsLoading,
+                myAgentId: state.myAgentId,
+                filterAssignee: state.filterAssignee,
+                filterStatus: state.filterStatus,
+                replyContent: state.replyContent,
+                editorFocused: state.editorFocused,
+                ignoredTickets: state.ignoredTickets || [],
+                syncLedger: state.syncLedger || [],
+                contiguousCount: state.contiguousCount || 0,
+                lastFetchedPage: state.lastFetchedPage || 0
+            }),
+            (slice) => {
+                Object.assign(this, slice);
+            }
+        );
         this.loadIgnored();
     }
     onWorkspaceLoad(workspaceId) {
@@ -210,7 +215,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
         const ticketId = this.selectedTicket?.id;
         if (!ticketId) return;
         try {
-            const res = await window.inSetu.api.get(`fs/fetch?file=.insetu/freshdesk/${ticketId}.md`);
+            const res = await this.api.get(`tickets/${ticketId}/thread`);
             if (res.ok) {
                 const txt = await res.text();
                 // Enforce DRY Utility Centralization Mandate
@@ -340,7 +345,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
                                 <span>Initial Description</span>
                                 <span>${this.selectedTicket?.created_at ? this.utils.formatDate(this.selectedTicket.created_at) : ''}</span>
                             </summary>
-                            <div style="padding: 0 15px 15px 15px; font-size: 0.95rem; word-break: break-word; border-top: 1px dashed var(--border); margin-top: 5px; padding-top: 15px;" .innerHTML=${this.selectedTicket?.description || this.selectedTicket?.description_text || 'No description provided.'}></div>
+                            <div style="padding: 0 15px 15px 15px; font-size: 0.95rem; word-break: break-word; border-top: 1px dashed var(--border); margin-top: 5px; padding-top: 15px; white-space: pre-wrap;">${this.selectedTicket?.description_text || this.selectedTicket?.description || 'No description provided.'}</div>
                         </details>
 
                         ${this.conversationsLoading ? html`<div class="spinner" style="display:block; text-align:center; padding: 20px;">Loading thread...</div>` : ''}
@@ -353,7 +358,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
                                     </span>
                                     <span>${this.utils.formatDate(conv.created_at)}</span>
                                 </summary>
-                                <div style="padding: 0 15px 15px 15px; font-size: 0.95rem; word-break: break-word; color: var(--text); border-top: 1px dashed var(--border); margin-top: 5px; padding-top: 15px;" .innerHTML=${conv.body || conv.body_text || 'No text content.'}></div>
+                                <div style="padding: 0 15px 15px 15px; font-size: 0.95rem; word-break: break-word; color: var(--text); border-top: 1px dashed var(--border); margin-top: 5px; padding-top: 15px; white-space: pre-wrap;">${conv.body_text || conv.body || 'No text content.'}</div>
                             </details>
                         `)}
                     </div>

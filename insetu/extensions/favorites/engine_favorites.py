@@ -6,6 +6,7 @@ import datetime
 from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
+from insetu.core.utils_core import InSetuURI
 
 FAVORITES_SCHEMA = {
     "favorites": {
@@ -18,10 +19,25 @@ FAVORITES_SCHEMA = {
 }
 favorites_bp = InSetuExtension('favorites', __name__, title="Favorites Bar", description="Pin files and folders for quick access.", schema=FAVORITES_SCHEMA)
 __depends__ = []
+def _ensure_favorites_hydrated(ctx):
+    count = ctx.db.execute("SELECT count(*) FROM favorites").fetchone()[0]
+    saved = ctx.store.get("bookmarks.json", "favorites", None)
+    if count == 0 and saved:
+        for item in saved:
+            if item.get("id") and item.get("path"):
+                ctx.db.insert_or_replace("favorites", item)
+    elif count > 0 and saved is None:
+        _flush_favorites_to_json(ctx)
+
+def _flush_favorites_to_json(ctx):
+    items = ctx.db.get_all(table="favorites", order_by="created_at DESC")
+    ctx.store.set("bookmarks.json", "favorites", items)
+
 @favorites_bp.route('list', methods=['GET'], docstring="Lists all favorited files, folders, and resources.")
 def list_favorites(ctx):
     """Lists all favorited files, folders, and resources."""
     try:
+        _ensure_favorites_hydrated(ctx)
         items = ctx.db.get_all(table="favorites", order_by="created_at DESC")
         return jsonify({"favorites": items})
     except Exception as e:
@@ -36,19 +52,17 @@ class FavoriteAddPayload(TypedDict, total=False):
 def add_favorite(ctx):
     """Pins a new file or folder to the favorites bar."""
     data = ctx.req.json or {}
-
     # Support both legacy paths and the new explicit folderpath/filepath paradigm
     folderpath = data.get('folderpath', '').strip()
     filepath = data.get('filepath', '').strip()
-    from insetu.core.utils_core import InSetuURI
     path = folderpath if folderpath else (filepath or data.get('path', '').strip())
     fav_type = 'folder' if folderpath else data.get('type', 'file').strip()
     name = data.get('name', '').strip() or InSetuURI(path).basename
 
     if not path:
         return jsonify({"error": "Filepath or folderpath is required"}), 400
-
     try:
+        _ensure_favorites_hydrated(ctx)
         # Prevent duplication entries
         exists = ctx.db.execute("SELECT id FROM favorites WHERE path = ?", (path,)).fetchone()
         if exists:
@@ -58,17 +72,19 @@ def add_favorite(ctx):
         ctx.db.insert_or_replace("favorites", {
             "id": fav_id, "path": path, "type": fav_type, "name": name, "created_at": now
         })
+        _flush_favorites_to_json(ctx)
         return jsonify({"status": "success", "id": fav_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 class FavoriteDeletePayload(TypedDict, total=False):
     pass
-
 @favorites_bp.route('delete/<fav_id>', methods=['DELETE', 'POST'], request_schema=FavoriteDeletePayload, docstring="Removes a pinned item from the favorites bar.")
 def delete_favorite(ctx, fav_id):
     """Removes a pinned item from the favorites bar."""
     try:
+        _ensure_favorites_hydrated(ctx)
         ctx.db.delete("favorites", "id", fav_id)
+        _flush_favorites_to_json(ctx)
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

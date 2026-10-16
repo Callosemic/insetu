@@ -541,49 +541,60 @@ export class InSetuExtUpdate extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(UpdateStore, state => {
-            const previousRepo = this.targetRepo;
-            this.targetRepo = state.targetRepo;
-            this.repoVersion = state.repoVersion;
-            this.nextVersion = state.nextVersion;
-            this.hasPendingBump = !!state.hasPendingBump;
-            this.bumpReason = state.bumpReason || '';
-            this.repoLoading = !!state.repoLoading;
-            this.repoConfigured = state.repoConfigured;
-            this.hasPyproject = state.hasPyproject !== false;
-            this.isClean = state.isClean !== false;
-            this.hasRelease = state.hasRelease === true;
-            this.pypiPublished = state.pypiPublished === true;
-            this.pypiPackageExists = state.pypiPackageExists === true;
-            this.packageName = state.packageName || '';
-            this.repoBuildCommand = state.repoBuildCommand ?? 'python -m build';
-            this.repoPrereleaseToken = state.repoPrereleaseToken || 'rc';
-            this.repoCommitParser = state.repoCommitParser || 'conventional';
-            this.autoPublish = !!state.autoPublish;
-            this.repoVcsRelease = state.repoVcsRelease !== false;
-            this.hasToken = state.hasToken !== false;
-            this.hasPypiToken = state.hasPypiToken === true;
-            this.distributionTarget = state.distributionTarget || 'python_pypi';
-            this.lastReleaseLog = state.lastReleaseLog || '';
-            this.missingDependencies = state.missingDependencies || [];
-            this.missingBinaries = state.missingBinaries || [];
-            this.eligibleRepos = state.eligibleRepos || {};
-            this.lastPublishTime = state.lastPublishTime || 0;
-            this.latestBuildArtifact = state.latestBuildArtifact || null;
-            this.isPrerelease = state.isPrerelease || false;
-            this.requestUpdate();
+        this.subscribe(
+            UpdateStore,
+            state => ({
+                targetRepo: state.targetRepo || '',
+                repoVersion: state.repoVersion,
+                nextVersion: state.nextVersion,
+                hasPendingBump: !!state.hasPendingBump,
+                bumpReason: state.bumpReason || '',
+                repoLoading: !!state.repoLoading,
+                repoConfigured: state.repoConfigured,
+                hasPyproject: state.hasPyproject !== false,
+                isClean: state.isClean !== false,
+                hasRelease: state.hasRelease === true,
+                pypiPublished: state.pypiPublished === true,
+                pypiPackageExists: state.pypiPackageExists === true,
+                packageName: state.packageName || '',
+                repoBuildCommand: state.repoBuildCommand ?? 'python -m build',
+                repoPrereleaseToken: state.repoPrereleaseToken || 'rc',
+                repoCommitParser: state.repoCommitParser || 'conventional',
+                autoPublish: !!state.autoPublish,
+                repoVcsRelease: state.repoVcsRelease !== false,
+                hasToken: state.hasToken !== false,
+                hasPypiToken: state.hasPypiToken === true,
+                distributionTarget: state.distributionTarget || 'python_pypi',
+                lastReleaseLog: state.lastReleaseLog || '',
+                missingDependencies: state.missingDependencies || [],
+                missingBinaries: state.missingBinaries || [],
+                eligibleRepos: state.eligibleRepos || {},
+                lastPublishTime: state.lastPublishTime || 0,
+                latestBuildArtifact: state.latestBuildArtifact || null,
+                isPrerelease: state.isPrerelease || false
+            }),
+            (slice) => {
+                const previousRepo = this.targetRepo;
+                Object.assign(this, slice);
+                this.requestUpdate();
 
-            // Fetch status when the selected repo changes
-            if (this.targetRepo && this.targetRepo !== previousRepo) {
-                UpdateStore.getState().fetchRepoStatus(this.targetRepo);
+                // Fetch status when the selected repo changes
+                if (this.targetRepo && this.targetRepo !== previousRepo) {
+                    UpdateStore.getState().fetchRepoStatus(this.targetRepo);
+                }
             }
-        });
-        this.subscribe(AppStore, state => {
-            this.allRepos = state.allRepos || [];
-            if (!this.targetRepo && this.allRepos.length > 0) {
-                UpdateStore.setState({ targetRepo: this.allRepos[0] });
+        );
+        this.subscribe(
+            AppStore,
+            state => state.allRepos || [],
+            (allRepos) => {
+                this.allRepos = allRepos;
+                if (!this.targetRepo && allRepos.length > 0) {
+                    UpdateStore.setState({ targetRepo: allRepos[0] });
+                }
+                this.requestUpdate();
             }
-        });
+        );
 
         const appState = AppStore.getState();
         this.allRepos = appState.allRepos || [];

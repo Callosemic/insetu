@@ -4,13 +4,26 @@ import shutil
 import re
 import json
 import uuid
+import random
 from typing import TypedDict
 from datetime import datetime, timedelta
 from flask import request, jsonify
 from akasa.utils import sniff_tenant_id
 from akasa.hooks import hooks
 from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import get_repo_path, InSetuURI
+from insetu.core.system.legacy import move_tree_contents
+from insetu.core.topology.engine_topology import get_topology_files_for_repo
+from insetu.core.utils_core import (
+    get_repo_path,
+    InSetuURI,
+    parse_frontmatter,
+    update_frontmatter,
+    clean_date_str,
+    parse_list_field,
+    parse_string_enum,
+    get_earlier_date,
+    get_safe_repo_id
+)
 TRACKER_SCHEMA = {
     "tracker_tickets": {
         "id": "TEXT PRIMARY KEY",
@@ -37,6 +50,19 @@ DEFAULT_KANBAN_PROFILES = []
 DEFAULT_PARENT_TABS = [
     {"id": "tasks", "label": "Tasks"}
 ]
+
+def _is_tracker_path(path_str: str) -> bool:
+    if not path_str:
+        return False
+    return (".insetu-data/tracker/" in path_str or ".tracker/" in path_str) and path_str.endswith(".md")
+
+def _split_tracker_rel(path_str: str) -> str:
+    if ".insetu-data/tracker/" in path_str:
+        return path_str.split(".insetu-data/tracker/", 1)[1]
+    if ".tracker/" in path_str:
+        return path_str.split(".tracker/", 1)[1]
+    return path_str
+
 def _normalize_status(raw_status, fallback="open"):
     if not raw_status: return fallback
     s = str(raw_status).lower()
@@ -130,11 +156,23 @@ def _background_archive_stale_tickets(ctx, **kwargs):
     ctx.jobs.update_progress("Sweeping for stale entries...")
     count = archive_stale_tickets(workspace_id=ctx.workspace_id)
     return f"Archived {count} stale tickets."
-@hooks.on('workspace_boot')
+@hooks.on('workspace_boot', priority=10)
 def initialize_tracker_schemas(workspace_id=None, **kwargs):
-    # Phase 1: Initialize hardware-accelerated query indexes on the tickets ledger
+    # Phase 1: Migrate legacy .tracker directories before Topology scans the workspace
     ctx = tracker_bp.get_context(workspace_id)
+    migrated_any = False
+    for repo_cfg in ctx.config.get("target_repos", []):
+        r_dir = repo_cfg.get("repo_dir")
+        if r_dir:
+            r_path = Path(get_repo_path(r_dir, workspace_id))
+            legacy_tr = r_path.joinpath(".tracker")
+            new_tr = r_path.joinpath(".insetu-data", "tracker")
+            if legacy_tr.exists() and legacy_tr.is_dir():
+                move_tree_contents(legacy_tr, new_tr)
+                migrated_any = True
     try:
+        if migrated_any:
+            ctx.db.execute("DELETE FROM tracker_tickets WHERE filepath LIKE '%/.tracker/%'")
         ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_repo ON tracker_tickets(repo)")
         ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_status ON tracker_tickets(status)")
         ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_tier ON tracker_tickets(tier)")
@@ -142,12 +180,11 @@ def initialize_tracker_schemas(workspace_id=None, **kwargs):
         ctx.db.commit()
     except Exception:
         pass
-
 @hooks.on('topology_boot_complete')
 def schedule_tracker_archiving(workspace_id=None, **kwargs):
     # Phase 2: Schedule background archiving to run silently every 1 hour
-    from akasa.workers import submit_job
-    submit_job(f"trk_arch_{workspace_id}", "tracker", "archive_stale_task", interval_ms=3600000, jitter_ms=300000, workspace_id=workspace_id)
+    ctx = tracker_bp.get_context(workspace_id)
+    ctx.jobs.schedule("archive_stale_task", interval_ms=3600000, jitter_ms=300000, job_id=f"trk_arch_{workspace_id}")
 @hooks.on('vfs_mutated')
 def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
     if not mutations: return
@@ -162,7 +199,7 @@ def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
             continue
         repo_dir, clean_rel = uri.repo, uri.path
         canonical_rel_path = f"{repo_dir}/{clean_rel}" if repo_dir else clean_rel
-        if ".tracker/" in canonical_rel_path and canonical_rel_path.endswith(".md"):
+        if _is_tracker_path(canonical_rel_path):
             if op in ("save", "added", "modified", "create", "created"):
                 abs_path = ctx.resolve_path(canonical_rel_path, must_exist=True)
                 if abs_path:
@@ -174,7 +211,6 @@ def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
                 ctx.db.commit()
 def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     """Surgically parses a single markdown ticket and UPSERTs it into the cache."""
-    from insetu.core.utils_core import parse_frontmatter, clean_date_str, parse_list_field, parse_string_enum
     ctx = tracker_bp.get_context(workspace_id)
     try:
         content = ctx.vfs.read(rel_path)
@@ -234,7 +270,6 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     except Exception as e:
         print(f"Error parsing ticket {rel_path}: {e}")
 def _sync_disk_to_db(workspace_id=None):
-    from insetu.core.topology.engine_topology import get_topology_files_for_repo
     ctx = tracker_bp.get_context(workspace_id)
     ctx.db.execute("DELETE FROM tracker_tickets")
     repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
@@ -242,7 +277,7 @@ def _sync_disk_to_db(workspace_id=None):
     for repo in repos:
         # SSOT Elimination of manual OS walking: Fetch tracked paths from Topology Ledger
         repo_files = get_topology_files_for_repo(workspace_id, repo, strip_prefix=False)
-        tracker_files = [f for f in repo_files if '.tracker/' in f and f.endswith('.md')]
+        tracker_files = [f for f in repo_files if _is_tracker_path(f)]
         for ws_rel_path in tracker_files:
             abs_path = ctx.resolve_path(ws_rel_path, must_exist=True)
             if abs_path:
@@ -253,22 +288,23 @@ def _sync_disk_to_db(workspace_id=None):
 def inject_tracker_config(cfg, workspace_id=None, **kwargs):
     """Dynamically injects the .tracker logic into the core OS pipelines."""
     if "tracker" not in cfg.get("extensions", []): return
-    from insetu.core.utils_core import get_safe_repo_id
 
     ctx = tracker_bp.get_context(workspace_id)
     tracker_cfg = ctx.settings.get_all()
-    # 1. Register .tracker as a Cartographer managed directory
+    # 1. Register .insetu-data and .tracker as Cartographer managed directories
     if "managed_dirs" not in cfg:
         cfg["managed_dirs"] = []
-    if ".tracker" not in cfg["managed_dirs"]:
-        cfg["managed_dirs"].append(".tracker")
+    for m_dir in (".insetu-data", ".tracker"):
+        if m_dir not in cfg["managed_dirs"]:
+            cfg["managed_dirs"].append(m_dir)
 
-    # 2. Force Topology Engine to map .tracker even if the user ignored it
+    # 2. Force Topology Engine to map .insetu-data and .tracker even if the user ignored them
     for repo_cfg in cfg.get("target_repos", []):
         if "ignore_exceptions" not in repo_cfg:
             repo_cfg["ignore_exceptions"] = []
-        if ".tracker/" not in repo_cfg["ignore_exceptions"]:
-            repo_cfg["ignore_exceptions"].append(".tracker/")
+        for exc_dir in (".insetu-data/", ".tracker/"):
+            if exc_dir not in repo_cfg["ignore_exceptions"]:
+                repo_cfg["ignore_exceptions"].append(exc_dir)
 
     # 3. Inject the tracker sub-bucket into all mapped repositories
     strat = tracker_cfg.get("domain_strategy", "default")
@@ -294,10 +330,18 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
         closed_prefixes = []
         for vt in valid_types:
             folder = vt if vt.endswith('s') or vt == 'queue' else f"{vt}s"
-            main_prefixes.extend([f".tracker/{folder}/open", f".tracker/{folder}/active"])
-            closed_prefixes.append(f".tracker/{folder}/closed")
+            main_prefixes.extend([
+                f".insetu-data/tracker/{folder}/open",
+                f".insetu-data/tracker/{folder}/active",
+                f".tracker/{folder}/open",
+                f".tracker/{folder}/active"
+            ])
+            closed_prefixes.extend([
+                f".insetu-data/tracker/{folder}/closed",
+                f".tracker/{folder}/closed"
+            ])
 
-        log_prefixes = [".tracker/log/"]
+        log_prefixes = [".insetu-data/tracker/log/", ".tracker/log/"]
 
         if include_closed == "grace_period":
             main_prefixes.extend(closed_prefixes)
@@ -333,7 +377,7 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
                 "id": "tracker_omitted",
                 "title": f"OMITTED TICKETS ({repo_cfg.get('repo_dir', '').upper()})",
                 "domain": "Hidden Context",
-                "match_prefixes": [".tracker/"],
+                "match_prefixes": [".insetu-data/tracker/", ".tracker/"],
                 "exclude_from_diffs": True,
                 "is_system": True
             })
@@ -390,8 +434,8 @@ def _resolve_tier(ctx, repo, ticket_type):
         elif ticket_type in t2: return 2
     return 3
 def get_tracker_path(repo, ticket_type, status):
-    """Resolves the relative directory for a ticket based on your taxonomy."""
-    base = f"{repo}/.tracker"
+    """Resolves the relative directory for a ticket inside <repo>/.insetu-data/tracker."""
+    base = f"{repo}/.insetu-data/tracker"
     if status == "archived":
         return f"{base}/log/archived"
     elif status == "logged":
@@ -402,7 +446,6 @@ def get_tracker_path(repo, ticket_type, status):
     return f"{base}/{folder_type}/{status}"
 def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", sub_bucket="None", delivery_date=None, parent_id=None, depends_on="", priority="", size="", ticket_id=None, tier=None):
     """Generates the physical Markdown file with YAML frontmatter."""
-    from insetu.core.utils_core import update_frontmatter
     if tier is None:
         tier = _resolve_tier(ctx, repo, ticket_type)
 
@@ -413,7 +456,6 @@ def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", s
         if not repo_prefix: repo_prefix = "TKT"
 
         timestamp = now.strftime("%Y%m%d_%H%M%S") # Include seconds to prevent rapid-fire collisions
-        import random
         entropy = f"{random.getrandbits(16):04x}".upper()
         ticket_id = f"{repo_prefix}-{ticket_type.upper()}-{timestamp}-{entropy}"
 
@@ -460,7 +502,6 @@ def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", s
 def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
     """Background Metronome job to migrate physical Markdown files to new semantic types."""
     if not renames: return
-    from insetu.core.utils_core import parse_frontmatter
     conn = ctx.db
     try:
         for rename in renames:
@@ -488,7 +529,6 @@ def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
                 filename = Path(old_rel_path).name
                 new_rel_path = Path(get_tracker_path(repo, new_type, status)).joinpath(filename).as_posix()
                 # Reconstruct MaC payload (preserving structure, updating type)
-                from insetu.core.utils_core import update_frontmatter
                 new_content = update_frontmatter(content, yaml_data)
                 # Execute async VFS transactions
                 ctx.vfs.save(new_rel_path, new_content)
@@ -504,8 +544,6 @@ def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
         ctx.settings.set("tracker_is_migrating", False)
 def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
     """Moves a ticket across the ecosystem and stamps the close date if applicable."""
-    from insetu.core.utils_core import update_frontmatter, parse_frontmatter, parse_list_field
-
     uri = InSetuURI.from_any(current_rel_path)
     repo_dir, clean_rel = uri.repo, uri.path
     canonical_current_rel = f"{repo_dir}/{clean_rel}" if repo_dir else clean_rel
@@ -576,8 +614,6 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
     If the physical path contradicts the YAML, the YAML wins -> file is moved.
     If the YAML is missing fields, the physical path infers them -> YAML is rewritten.
     """
-    from insetu.core.topology.engine_topology import topology_bp
-    from insetu.core.utils_core import clean_date_str, parse_list_field, parse_string_enum
     ctx = tracker_bp.get_context(workspace_id)
     repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
     cfg = ctx.config
@@ -597,10 +633,9 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
         repo_dir, rel_path = uri.repo, uri.path
         target_files.append((repo_dir, f"{repo_dir}/{rel_path}" if repo_dir else rel_path))
     else:
-        from insetu.core.topology.engine_topology import get_topology_files_for_repo
         for current_repo in repos:
             repo_files = get_topology_files_for_repo(workspace_id, current_repo, strip_prefix=False)
-            tracker_files = [f for f in repo_files if '.tracker/' in f and f.endswith('.md')]
+            tracker_files = [f for f in repo_files if _is_tracker_path(f)]
             for f in tracker_files:
                 target_files.append((current_repo, f))
 
@@ -614,12 +649,10 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
         pass
 
     for current_repo, ws_rel_path in target_files:
-        tracker_rel_base = f"{current_repo}/.tracker"
-
         if True:
             filename = Path(ws_rel_path).name
             filepath = ctx.resolve_path(ws_rel_path)
-            rel_dir = Path(ws_rel_path[len(tracker_rel_base)+1:]).parent.as_posix()
+            rel_dir = Path(_split_tracker_rel(ws_rel_path)).parent.as_posix()
             if rel_dir == '.': rel_dir = ''
             rel_dir_lower = rel_dir.lower()
             # Infer current state from path as fallback
@@ -638,7 +671,6 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                 if content is None:
                     continue
 
-                from insetu.core.utils_core import parse_frontmatter, update_frontmatter
                 yaml_data, body, yaml_match = parse_frontmatter(content)
                 # Read declarative values or fallback to inferred values if missing
                 raw_repo = yaml_data.get('repo')
@@ -790,7 +822,6 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                     decl_priority = parse_string_enum(yaml_data.get('priority', db_prio))
                     decl_size = parse_string_enum(yaml_data.get('size', db_size))
                     # Reconstruct pristine YAML
-                    from insetu.core.utils_core import update_frontmatter
                     new_data = {
                         "repo": decl_repo,
                         "type": decl_type,
@@ -943,11 +974,10 @@ def archive_stale_tickets(workspace_id=None):
         schema = _get_schema(ctx, repo)
         valid_types = _get_valid_types(schema)
         folders_to_sweep = set([vt if vt.endswith('s') or vt == 'queue' else f"{vt}s" for vt in valid_types])
-        from insetu.core.utils_core import parse_frontmatter, update_frontmatter, clean_date_str
 
         # Sweep 1: Move >grace_period day closed tickets to log
         for folder_type in folders_to_sweep:
-            closed_dir_rel = f"{repo}/.tracker/{folder_type}/closed"
+            closed_dir_rel = f"{repo}/.insetu-data/tracker/{folder_type}/closed"
             for ws_rel_path in ctx.vfs.walk(closed_dir_rel, exts=['.md']):
                 filename = Path(ws_rel_path).name
                 content = ctx.vfs.read(ws_rel_path)
@@ -960,7 +990,7 @@ def archive_stale_tickets(workspace_id=None):
                             if closed_date < date_grace:
                                 yaml_data['status'] = "logged"
                                 new_content = update_frontmatter(content, yaml_data)
-                                new_rel_path = Path(f"{repo}/.tracker/log").joinpath(filename).as_posix()
+                                new_rel_path = Path(f"{repo}/.insetu-data/tracker/log").joinpath(filename).as_posix()
                                 ctx.vfs.save(new_rel_path, new_content, data={"delete_source": ws_rel_path})
 
                                 ctx.emit('vfs_mutated', mutations=[
@@ -973,7 +1003,7 @@ def archive_stale_tickets(workspace_id=None):
 
         # Sweep 2: Move >archive_days day logged tickets to archive
         if auto_archive:
-            log_dir_rel = f"{repo}/.tracker/log"
+            log_dir_rel = f"{repo}/.insetu-data/tracker/log"
             for ws_rel_path in ctx.vfs.walk(log_dir_rel, exts=['.md']):
                 filename = Path(ws_rel_path).name
                 # Skip archived folder contents
@@ -990,7 +1020,7 @@ def archive_stale_tickets(workspace_id=None):
                             if closed_date < date_archive:
                                 yaml_data['status'] = "archived"
                                 new_content = update_frontmatter(content, yaml_data)
-                                new_rel_path = Path(f"{repo}/.tracker/log/archived").joinpath(filename).as_posix()
+                                new_rel_path = Path(f"{repo}/.insetu-data/tracker/log/archived").joinpath(filename).as_posix()
                                 ctx.vfs.save(new_rel_path, new_content, data={"delete_source": ws_rel_path})
 
                                 ctx.emit('vfs_mutated', mutations=[
@@ -1179,9 +1209,7 @@ def api_tracker_restore_metadata(ctx):
     job_id = ctx.jobs.submit("restore_metadata_task", job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 def restore_ticket_metadata_from_git(workspace_id=None):
-    from insetu.core.topology.engine_topology import get_topology_files_for_repo
-    from insetu.extensions.git.engine_git import execute_git
-    from insetu.core.utils_core import parse_frontmatter, update_frontmatter, clean_date_str, parse_list_field, parse_string_enum, get_earlier_date
+    from insetu.extensions.git.engine_git import execute_git as _execute_git
     ctx = tracker_bp.get_context(workspace_id)
     repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
     restored_count = 0
@@ -1190,7 +1218,7 @@ def restore_ticket_metadata_from_git(workspace_id=None):
         if not os.path.exists(repo_path): continue
 
         repo_files = get_topology_files_for_repo(workspace_id, current_repo, strip_prefix=False)
-        tracker_files = [f for f in repo_files if '.tracker/' in f and f.endswith('.md')]
+        tracker_files = [f for f in repo_files if _is_tracker_path(f)]
 
         for ws_rel_path in tracker_files:
             try:
@@ -1198,8 +1226,8 @@ def restore_ticket_metadata_from_git(workspace_id=None):
                 if not content: continue
 
                 yaml_data, body, _ = parse_frontmatter(content)
-                rel_to_repo = ws_rel_path.split('.tracker/', 1)[1]
-                git_file_path = f".tracker/{rel_to_repo}"
+                rel_to_repo = _split_tracker_rel(ws_rel_path)
+                git_file_path = f".insetu-data/tracker/{rel_to_repo}" if ".insetu-data/tracker/" in ws_rel_path else f".tracker/{rel_to_repo}"
 
                 modified = False
                 curr_repo_yaml = yaml_data.get('repo')
@@ -1223,9 +1251,8 @@ def restore_ticket_metadata_from_git(workspace_id=None):
                 earliest_created = curr_created
                 earliest_closed = curr_closed
                 earliest_delivery = curr_delivery
-
                 try:
-                    log_res = execute_git(repo_path, ['log', '-p', '--follow', '--', git_file_path], check=False)
+                    log_res = _execute_git(repo_path, ['log', '-p', '--follow', '--', git_file_path], check=False)
                     git_log_text = log_res.stdout if log_res.returncode == 0 else ""
 
                     matches = re.findall(r'---\s*\n([\s\S]*?)\n---', git_log_text)
@@ -1290,16 +1317,15 @@ def restore_ticket_metadata_from_git(workspace_id=None):
                 except Exception as ge:
                     print(f"Git log parse warning for {ws_rel_path}: {ge}")
                 try:
-                    date_res = execute_git(repo_path, ['log', '--format=%aI', '--reverse', '--', git_file_path], check=False)
+                    date_res = _execute_git(repo_path, ['log', '--format=%aI', '--reverse', '--', git_file_path], check=False)
                     first_commit_date = clean_date_str(date_res.stdout.strip().splitlines()[0]) if date_res.returncode == 0 and date_res.stdout.strip() else None
                     if first_commit_date:
                         earliest_created = get_earlier_date(earliest_created, first_commit_date)
                 except Exception:
                     pass
-
                 if curr_status in ('closed', 'logged', 'archived') and not earliest_closed:
                     try:
-                        date_res = execute_git(repo_path, ['log', '-1', '--format=%aI', '--', git_file_path], check=False)
+                        date_res = _execute_git(repo_path, ['log', '-1', '--format=%aI', '--', git_file_path], check=False)
                         last_commit_date = clean_date_str(date_res.stdout.strip().splitlines()[0]) if date_res.returncode == 0 and date_res.stdout.strip() else None
                         if last_commit_date:
                             earliest_closed = last_commit_date

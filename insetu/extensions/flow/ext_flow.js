@@ -216,8 +216,8 @@ export class InSetuExtFlow extends InSetuElement {
     openEditBatchModal(batch = null) {
         const savedPrompt = batch && batch.include_prompt ? batch.include_prompt : '';
         const gatherOptions = FlowStore.getState().availableOptions || window.inSetu.stores.Gather?.getState()?.gatherOptions || {};
-        const cleanSavedPrompt = savedPrompt.replace(/^\.insetu\/prompts\//, '').replace(/^prompts\//, '');
-        const availablePrompts = (gatherOptions.prompts || []).map(p => p.replace(/^\.insetu\/prompts\//, '').replace(/^prompts\//, ''));
+        const cleanSavedPrompt = savedPrompt.replace(/^ctx:\/\/prompts\//, '').replace(/^\.insetu\/(?:data\/)?prompts\//, '').replace(/^prompts\//, '');
+        const availablePrompts = (gatherOptions.prompts || []).map(p => p.replace(/^ctx:\/\/prompts\//, '').replace(/^\.insetu\/(?:data\/)?prompts\//, '').replace(/^prompts\//, ''));
         const matchedPrompt = (() => {
             if (cleanSavedPrompt && !availablePrompts.includes(cleanSavedPrompt)) {
                 return availablePrompts.find(p => p.endsWith(cleanSavedPrompt)) || cleanSavedPrompt;
@@ -838,7 +838,7 @@ export class InSetuFlowEditProjection extends InSetuElement {
                     </div>
                     ${this.editForm?.hasPrompt ? html`
                         <div style="display: flex; gap: 8px;">
-                            <sutram-select style="flex: 1;" .value=${this.editForm.prompt} .options=${[{value: '', label: '-- Select a Prompt --'}, ...(gatherOptions.prompts || []).map(p => { const v = p.replace(/^\.insetu\/prompts\//, '').replace(/^prompts\//, ''); return {value: v, label: v}; })]} @sutram-input-changed=${(e) => this._updateForm({ prompt: e.detail.value })}></sutram-select>
+                            <sutram-select style="flex: 1;" .value=${this.editForm.prompt} .options=${[{value: '', label: '-- Select a Prompt --'}, ...(gatherOptions.prompts || []).map(p => { const v = p.replace(/^ctx:\/\/prompts\//, '').replace(/^\.insetu\/(?:data\/)?prompts\//, '').replace(/^prompts\//, ''); return {value: v, label: v}; })]} @sutram-input-changed=${(e) => this._updateForm({ prompt: e.detail.value })}></sutram-select>
                         </div>
                     ` : ''}
                 </div>

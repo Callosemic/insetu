@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import TypedDict, Optional, Any
 from flask import request, jsonify
 from insetu.core.sdk import InSetuExtension
+from insetu.core.system.legacy import move_tree_contents
+from insetu.core.utils_core import parse_frontmatter, update_frontmatter
 from akasa.hooks import hooks
+from akasa.utils import slugify
 SKILLS_SCHEMA = {
     "skills_ledger": {
         "id": "TEXT PRIMARY KEY",
@@ -51,16 +54,40 @@ SKILLS_SETTINGS_SCHEMA = [
 skills_bp = InSetuExtension('skills', __name__, title="Skills Tracker", description="Spaced-repetition tracking for musical and technical skills.", schema=SKILLS_SCHEMA, settings_schema=SKILLS_SETTINGS_SCHEMA)
 __depends__ = []
 def _get_user_skills_dir(workspace_id=None):
-    """Resolves and commands the localized workspace skills directory structure."""
+    """Resolves and commands the localized workspace skills directory structure in .insetu/data/skills."""
     ctx = skills_bp.get_context(workspace_id)
-    base_dir = Path(ctx.paths["artifacts_base"]).joinpath("skills").as_posix()
+    base_dir = ctx.paths["data_dir"]
     os.makedirs(base_dir, exist_ok=True)
     return base_dir
+
+@hooks.on('workspace_boot')
+def init_skills_storage(workspace_id=None, **kwargs):
+    ctx = skills_bp.get_context(workspace_id)
+    control_dir = Path(ctx.paths.get("control_dir"))
+    skills_dir = Path(_get_user_skills_dir(workspace_id))
+    move_tree_contents(control_dir.joinpath("ext", "skills", "data", "skills"), skills_dir)
+    move_tree_contents(control_dir.joinpath("ext", "skills", "data"), skills_dir)
+
+@hooks.on('topology_boot_complete')
+def hydrate_skills_on_boot(workspace_id=None, **kwargs):
+    try:
+        ctx = skills_bp.get_context(workspace_id)
+        _ensure_skills_hydrated(ctx)
+    except Exception:
+        pass
+
+def _ensure_skills_hydrated(ctx):
+    count = ctx.db.execute("SELECT count(*) FROM skills_ledger").fetchone()[0]
+    if count == 0:
+        skills_dir = Path(_get_user_skills_dir(ctx.workspace_id))
+        if skills_dir.exists() and skills_dir.is_dir():
+            for item in os.listdir(skills_dir.as_posix()):
+                if item.endswith(".md"):
+                    _parse_and_upsert_skill(skills_dir.joinpath(item).as_posix(), item, workspace_id=ctx.workspace_id)
 def _parse_and_upsert_skill(abs_path, filename, workspace_id=None):
     try:
-        from insetu.core.utils_core import parse_frontmatter
         ctx = skills_bp.get_context(workspace_id)
-        content = ctx.vfs.read(abs_path) or ""
+        content = ctx.vfs.read(abs_path, is_absolute_artifact=True) or ""
         yaml_data, _, _ = parse_frontmatter(content)
 
         s_id = yaml_data.get('id', "SKL-" + uuid.uuid4().hex[:8].upper())
@@ -97,6 +124,7 @@ def _parse_and_upsert_skill(abs_path, filename, workspace_id=None):
 def get_practice_playlist(ctx):
     """Compiles a unified practice batch across all domains sorted globally."""
     try:
+        _ensure_skills_hydrated(ctx)
         conn = ctx.db
         today_str = datetime.date.today().isoformat()
         cursor = conn.execute("""
@@ -146,10 +174,8 @@ def log_skill_practice(ctx):
             next_interval = 1
         today = datetime.date.today()
         next_review_date = today + datetime.timedelta(days=next_interval)
-        from insetu.core.utils_core import update_frontmatter
-        from akasa.utils import slugify
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
-        content = ctx.vfs.read(abs_path) or ""
+        content = ctx.vfs.read(abs_path, is_absolute_artifact=True) or ""
 
         existing_metrics = json.loads(row['metrics_json']) if row['metrics_json'] else {}
         existing_metrics.update(updates)
@@ -176,7 +202,7 @@ def log_skill_practice(ctx):
             new_filename = f"{slugify(name)}.md"
             new_abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(new_filename).as_posix()
             if os.path.exists(abs_path):
-                ctx.vfs.delete(abs_path)
+                ctx.vfs.delete(abs_path, data={"is_absolute_artifact": True})
             abs_path = new_abs_path
             final_filename = new_filename
             conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
@@ -209,10 +235,8 @@ def update_skill_structure(ctx):
         row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (filename,)).fetchone()
         if not row:
             return jsonify({"error": "Global user skill record not found"}), 404
-        from insetu.core.utils_core import update_frontmatter
-        from akasa.utils import slugify
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
-        content = ctx.vfs.read(abs_path) or ""
+        content = ctx.vfs.read(abs_path, is_absolute_artifact=True) or ""
 
         existing_metrics = json.loads(row['metrics_json']) if row['metrics_json'] else {}
         name = data.get('name', row['name']).strip()
@@ -241,7 +265,7 @@ def update_skill_structure(ctx):
             new_filename = f"{slugify(name)}.md"
             new_abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(new_filename).as_posix()
             if os.path.exists(abs_path):
-                ctx.vfs.delete(abs_path)
+                ctx.vfs.delete(abs_path, data={"is_absolute_artifact": True})
             abs_path = new_abs_path
             final_filename = new_filename
             conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
@@ -266,9 +290,8 @@ def delete_skill_item(ctx):
     try:
         conn = ctx.db
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
-
         if os.path.exists(abs_path):
-            ctx.vfs.delete(abs_path)
+            ctx.vfs.delete(abs_path, data={"is_absolute_artifact": True})
 
         conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
         conn.commit()
@@ -279,6 +302,7 @@ def delete_skill_item(ctx):
 def get_all_skills(ctx):
     """Returns every tracking item registered across the user profile layout."""
     try:
+        _ensure_skills_hydrated(ctx)
         conn = ctx.db
         cursor = conn.execute("SELECT * FROM skills_ledger ORDER BY name ASC")
         items = []
@@ -314,8 +338,6 @@ def create_new_skill(ctx):
     if not name:
         return jsonify({"error": "Name required"}), 400
     try:
-        from akasa.utils import slugify
-        from insetu.core.utils_core import update_frontmatter
         filename = f"{slugify(name)}.md"
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
         s_id = "SKL-" + uuid.uuid4().hex[:8].upper()

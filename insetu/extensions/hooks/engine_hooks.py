@@ -1,4 +1,6 @@
 import os
+import time
+import hashlib
 import subprocess
 import json
 import shlex
@@ -9,6 +11,7 @@ from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from akasa.hooks import hooks
+from akasa.utils import _cwd, load_json_config, save_json_config
 from insetu.core.topology.engine_topology import resolve_file_bucket
 
 HOOKS_SCHEMA = {
@@ -85,11 +88,11 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
     print(f"🔎 [HOOKS TELEMETRY] has_valid_event: {has_valid_event}")
     if not has_valid_event:
         return
-
     ctx = hooks_bp.get_context(workspace_id)
 
     # Fetch enabled rules for this workspace
     try:
+        _ensure_hooks_hydrated(ctx)
         active_rules = ctx.db.execute(
             "SELECT * FROM hooks_rules WHERE enabled = 1"
         ).fetchall()
@@ -116,34 +119,14 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
         elif r_type == 'repo_bucket_update':
             if r_target in touched_buckets or (r_target.startswith('ALL::') and any(b.endswith('::' + r_target.split('::')[1]) for b in touched_buckets)):
                 should_trigger = True
-
         print(f"🔎 [HOOKS TELEMETRY] Evaluating Rule: '{rule['name']}'. Type: {r_type}, Target: {r_target}. should_trigger: {should_trigger}")
-
         if should_trigger:
-            import time
-            import akasa.db as kernel_db
             try:
-                w_conn = kernel_db.get_connection('workers', workspace_id=workspace_id)
-                # Deduplication / Debounce: Prevent the same rule from firing multiple times within 3 seconds      
-                # due to overlapping individual and transaction-level VFS hooks.
-                # Added a 300-second expiration to 'processing' locks to prevent eternal deadlocks if a process hangs.
-                recent = w_conn.execute("""
-                    SELECT id, status, created_at FROM immediate_jobs 
-                    WHERE ext_name = 'hooks' 
-                    AND callback_name = 'execute_rule_task' 
-                    AND (
-                        (status IN ('pending', 'processing') AND created_at > ?) 
-                        OR created_at > ?
-                    )
-                    AND args_json LIKE ?
-                """, (time.time() - 300.0, time.time() - 3.0, f'%"rule_id": "{rule["id"]}"%')).fetchone()
-
-                if recent:
-                    print(f"🔎 [HOOKS TELEMETRY] Skipping Rule '{rule['name']}' due to active/recent lock: Job ID {recent['id']}, Status: {recent['status']}, Created: {recent['created_at']}")
+                if ctx.jobs.is_in_flight("execute_rule_task", args_like=f'%"rule_id": "{rule["id"]}"%', window_sec=3.0):
+                    print(f"🔎 [HOOKS TELEMETRY] Skipping Rule '{rule['name']}' due to active/recent debounce lock.")
                     continue
             except Exception as db_err:
                 print(f"⚠️ [Hooks] Warning: Deduplication query failed: {db_err}")
-                pass
             print(f"🔎 [HOOKS TELEMETRY] Submitting Rule '{rule['name']}' to worker queue.")
             ctx.jobs.submit(
                 "execute_rule_task", 
@@ -152,9 +135,52 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
                 command=rule['command'],
                 job_category="system_background"
             )
+def _get_approved_hook_ids(ctx) -> set:
+    sys_path = Path(_cwd).joinpath(".insetu", "system.json").as_posix()
+    sys_data = load_json_config(sys_path, {})
+    return set(sys_data.get("approved_hooks", {}).get(ctx.workspace_id, []))
+
+def _mark_hook_approved(ctx, rule_id: str, command: str):
+    sig = f"{rule_id}:{hashlib.sha256(command.encode('utf-8')).hexdigest()[:16]}"
+    sys_path = Path(_cwd).joinpath(".insetu", "system.json").as_posix()
+    sys_data = load_json_config(sys_path, {})
+    approved = set(sys_data.setdefault("approved_hooks", {}).get(ctx.workspace_id, []))
+    approved.add(sig)
+    sys_data["approved_hooks"][ctx.workspace_id] = sorted(list(approved))
+    save_json_config(sys_path, sys_data, workspace_id="default")
+
+def _ensure_hooks_hydrated(ctx):
+    count = ctx.db.execute("SELECT count(*) FROM hooks_rules").fetchone()[0]
+    saved = ctx.store.get("rules.json", "rules", None)
+    if count == 0 and saved:
+        approved = _get_approved_hook_ids(ctx)
+        for r in saved:
+            if r.get("id") and r.get("command"):
+                sig = f"{r['id']}:{hashlib.sha256(r['command'].encode('utf-8')).hexdigest()[:16]}"
+                is_safe = 1 if (r.get("enabled") and sig in approved) else 0
+                ctx.db.insert_or_replace("hooks_rules", {
+                    "id": r["id"],
+                    "name": r.get("name", "Unnamed Rule"),
+                    "trigger_type": r.get("trigger_type", "repo_update"),
+                    "trigger_target": r.get("trigger_target", "ALL"),
+                    "command": r["command"],
+                    "enabled": is_safe,
+                    "created_at": r.get("created_at", datetime.datetime.now().isoformat())
+                })
+    elif count > 0 and saved is None:
+        for r in ctx.db.get_all("hooks_rules"):
+            if r.get("enabled"):
+                _mark_hook_approved(ctx, r["id"], r["command"])
+        _flush_hooks_to_json(ctx)
+
+def _flush_hooks_to_json(ctx):
+    rules = ctx.db.get_all("hooks_rules", order_by="created_at DESC")
+    ctx.store.set("rules.json", "rules", rules)
+
 @hooks_bp.route('list', methods=['GET'], docstring="Lists all configured automation rules.")
 def list_rules(ctx):
     """Lists all configured automation rules."""
+    _ensure_hooks_hydrated(ctx)
     rules = ctx.db.get_all("hooks_rules", order_by="created_at DESC")
     return jsonify({"rules": rules})
 class HookSavePayload(TypedDict, total=False):
@@ -175,10 +201,10 @@ def save_rule(ctx):
     command = data.get('command', '').strip()
     enabled = 1 if data.get('enabled', True) else 0
     now = datetime.datetime.now().isoformat()
-
     if not name or not command:
         return jsonify({"error": "Rule name and command are required."}), 400
 
+    _ensure_hooks_hydrated(ctx)
     ctx.db.insert_or_replace("hooks_rules", {
         "id": rule_id,
         "name": name,
@@ -188,6 +214,8 @@ def save_rule(ctx):
         "enabled": enabled,
         "created_at": now
     })
+    _mark_hook_approved(ctx, rule_id, command)
+    _flush_hooks_to_json(ctx)
     return jsonify({"status": "success", "id": rule_id})
 class HookTogglePayload(TypedDict):
     id: str
@@ -198,12 +226,17 @@ def toggle_rule(ctx):
     data = ctx.req.json or {}
     rule_id = data.get('id')
     enabled = 1 if data.get('enabled') else 0
-
     if not rule_id:
         return jsonify({"error": "Rule ID required."}), 400
 
+    _ensure_hooks_hydrated(ctx)
     ctx.db.execute("UPDATE hooks_rules SET enabled = ? WHERE id = ?", (enabled, rule_id))
     ctx.db.commit()
+    if enabled:
+        row = ctx.db.get_by_id("hooks_rules", rule_id)
+        if row:
+            _mark_hook_approved(ctx, rule_id, row["command"])
+    _flush_hooks_to_json(ctx)
     return jsonify({"status": "success"})
 class HookIdPayload(TypedDict):
     id: str
@@ -231,34 +264,17 @@ def delete_rule(ctx):
     """Permanently deletes an automation rule."""
     data = ctx.req.json or {}
     rule_id = data.get('id')
-
     if not rule_id:
         return jsonify({"error": "Rule ID required."}), 400
 
+    _ensure_hooks_hydrated(ctx)
     ctx.db.delete("hooks_rules", "id", rule_id)
+    _flush_hooks_to_json(ctx)
     return jsonify({"status": "success"})
 @hooks_bp.route('logs', methods=['GET'], docstring="Retrieves logs for executed automation rules.")
 def get_logs(ctx):
     """Retrieves logs for executed automation rules."""
-    import akasa.db as kernel_db
-    # Use the central workers ledger, not the extension's local DB
-    conn = kernel_db.get_connection('workers', workspace_id=ctx.workspace_id)
-
     try:
-        cursor = conn.execute(
-            "SELECT id, callback_name, status, status_message, artifact_json, updated_at "
-            "FROM immediate_jobs WHERE ext_name = 'hooks' ORDER BY updated_at DESC LIMIT 20"
-        )
-        logs = []
-        for row in cursor.fetchall():
-            logs.append({
-                "id": row['id'],
-                "action": row['callback_name'],
-                "status": row['status'],
-                "message": row['status_message'],
-                "artifact": json.loads(row['artifact_json']) if row['artifact_json'] else {},
-                "updated_at": row['updated_at']
-            })
-        return jsonify({"logs": logs})
+        return jsonify({"logs": ctx.jobs.get_recent_logs(limit=20)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

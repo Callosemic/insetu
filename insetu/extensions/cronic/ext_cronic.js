@@ -76,13 +76,24 @@ export class InSetuExtCronic extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(CronicStore, state => {
-            this.jobs = state.jobs || [];
-            this.loading = state.loading;
-            this.selectedLog = state.selectedLog;
-            this.selectedJobId = state.selectedJobId;
-            this.hasCrontab = state.hasCrontab !== false;
-        });
+        this.subscribe(
+            CronicStore,
+            state => ({
+                jobs: state.jobs || [],
+                loading: !!state.loading,
+                selectedLog: state.selectedLog || '',
+                selectedJobId: state.selectedJobId,
+                hasCrontab: state.hasCrontab !== false
+            }),
+            (slice) => {
+                this.jobs = slice.jobs;
+                this.loading = slice.loading;
+                this.selectedLog = slice.selectedLog;
+                this.selectedJobId = slice.selectedJobId;
+                this.hasCrontab = slice.hasCrontab;
+                this.requestUpdate();
+            }
+        );
         CronicStore.getState().fetchStatus();
         CronicStore.getState().fetchJobs();
 

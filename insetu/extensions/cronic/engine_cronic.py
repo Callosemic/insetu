@@ -1,5 +1,7 @@
 import os
+import re
 import sys
+import shlex
 import subprocess
 import shutil
 import uuid
@@ -9,6 +11,7 @@ from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from akasa.hooks import hooks
+from akasa.utils import is_extension_enabled
 
 CRONIC_SCHEMA = {
     "cronic_jobs": {
@@ -76,9 +79,24 @@ def get_status(ctx):
     """Checks if the underlying OS environment supports crontab scheduling."""
     return jsonify({"has_crontab": has_crontab()})
 
+def _ensure_cronic_hydrated(ctx):
+    count = ctx.db.execute("SELECT count(*) FROM cronic_jobs").fetchone()[0]
+    saved = ctx.store.get("schedules.json", "jobs", None)
+    if count == 0 and saved:
+        for j in saved:
+            if j.get("id") and j.get("filepath"):
+                ctx.db.insert_or_replace("cronic_jobs", j)
+    elif count > 0 and saved is None:
+        _flush_cronic_to_json(ctx)
+
+def _flush_cronic_to_json(ctx):
+    jobs = ctx.db.get_all("cronic_jobs")
+    ctx.store.set("schedules.json", "jobs", jobs)
+
 @cronic_bp.route('list', methods=['GET'], docstring="Lists all configured cronic jobs and their current execution status.")
 def list_jobs(ctx):
     """Lists all configured cronic jobs and their current execution status."""
+    _ensure_cronic_hydrated(ctx)
     return jsonify({"jobs": ctx.db.get_all("cronic_jobs")})
 class CronicSchedulePayload(TypedDict):
     filepath: str
@@ -89,10 +107,10 @@ def schedule_job(ctx):
     data = ctx.req.json or {}
     filepath = data.get("filepath", "").strip()
     schedule = data.get("schedule", "0 * * * *").strip()
-
     if not filepath or not (filepath.endswith('.py') or filepath.endswith('.sh')):
         return jsonify({"error": "Only .py or .sh files can be scheduled."}), 400
 
+    _ensure_cronic_hydrated(ctx)
     job_id = f"job_{uuid.uuid4().hex[:8]}"
     ctx.db.insert_or_replace("cronic_jobs", {
         "id": job_id,
@@ -102,6 +120,7 @@ def schedule_job(ctx):
         "last_status": "pending"
     })
 
+    _flush_cronic_to_json(ctx)
     _sync_system_crontab(ctx)
     return jsonify({"status": "success", "job_id": job_id})
 class CronicTogglePayload(TypedDict):
@@ -114,7 +133,9 @@ def toggle_job(ctx):
     job_id = data.get("job_id")
     enabled = 1 if data.get("enabled") else 0
 
+    _ensure_cronic_hydrated(ctx)
     ctx.db.update("cronic_jobs", {"enabled": enabled}, "id", job_id)
+    _flush_cronic_to_json(ctx)
     _sync_system_crontab(ctx)
     return jsonify({"status": "success"})
 class CronicIdPayload(TypedDict):
@@ -125,7 +146,9 @@ def delete_job(ctx):
     data = ctx.req.json or {}
     job_id = data.get("job_id")
 
+    _ensure_cronic_hydrated(ctx)
     ctx.db.delete("cronic_jobs", "id", job_id)
+    _flush_cronic_to_json(ctx)
     _sync_system_crontab(ctx)
     return jsonify({"status": "success"})
 @cronic_bp.route('logs', methods=['GET'], docstring="Retrieves the recent execution logs for a specified job ID.")
@@ -151,10 +174,8 @@ def _run_manual_worker(ctx, job_id=None, **kwargs):
         raise ValueError(f"File path for job '{cronic_job_id}' could not be resolved.")
     abs_path = str(resolved)
     ext = os.path.splitext(abs_path)[1].lower()
-
     log_file = Path(ctx.paths["artifacts_base"]).joinpath(f"cronic_{job['id']}.log").as_posix()
     Path(log_file).parent.mkdir(parents=True, exist_ok=True)
-    import shlex
     if ext == '.py':
         cmd = f'{shlex.quote(sys.executable)} {shlex.quote(abs_path)}'
     else:
@@ -189,9 +210,7 @@ def _kill_task_worker(ctx, job_id=None, **kwargs):
     if not resolved:
         raise ValueError(f"File path for job '{cronic_job_id}' could not be resolved.")
     abs_path = str(resolved)
-
     # Issue a SIGTERM to any process executing this exact script path
-    import re
     safe_pattern = re.escape(str(abs_path))
     cmd = f'pkill -f "{safe_pattern}"'
     res = ctx.exec.run(cmd, shell=True)
@@ -240,16 +259,13 @@ def cronic_workspace_boot(workspace_id=None, **kwargs):
         return
 
     try:
-        from akasa.utils import is_extension_enabled
         if not is_extension_enabled("cronic", workspace_id):
             return
 
         ctx = cronic_bp.get_context(workspace_id)
-
         # 1. Schedule the background log sweeper (Runs once every 24 hours)
-        from akasa.workers import submit_job
         job_id = f"cronic_sweep_{workspace_id}"
-        submit_job(job_id, "cronic", "sweep_logs_task", interval_ms=86400000, jitter_ms=3600000, workspace_id=workspace_id)
+        ctx.jobs.schedule("sweep_logs_task", interval_ms=86400000, jitter_ms=3600000, job_id=job_id)
 
         # 2. Heal state drift & reconstruct missing jobs from system crontab
         try:
@@ -261,7 +277,6 @@ def cronic_workspace_boot(workspace_id=None, **kwargs):
         workspace_tag = f"# managed-by-insetu:cronic:{workspace_id}:"
         active_cron_jobs = {}
 
-        import re
         ws_root = ctx.paths["workspace_root"]
 
         for line in current_cron.splitlines():

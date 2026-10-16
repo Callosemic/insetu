@@ -1,12 +1,13 @@
 import os
 import subprocess
 import threading
+import traceback
 import json
 from typing import TypedDict
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from akasa.hooks import hooks
-from akasa.utils import get_all_workspace_ids
+from akasa.utils import get_all_workspace_ids, is_extension_enabled
 try:
     from flask_sock import Sock
     HAS_SOCK = True
@@ -50,7 +51,6 @@ def term_status(ctx):
         "has_sock": HAS_SOCK,
         "support_pty": SUPPORT_PTY
     })
-
 if HAS_SOCK:
     @sock.route('/api/<workspace_id>/term/stream')
     def term_stream(ws, workspace_id):
@@ -58,7 +58,6 @@ if HAS_SOCK:
         try:
             _run_term_stream(ws, workspace_id)
         except Exception as e:
-            import traceback
             err = traceback.format_exc().replace('\n', '\r\n')
             try:
                 ws.send(f"\r\n\x1b[31m[Fatal Terminal Error]\r\n{err}\x1b[0m\r\n")
@@ -66,7 +65,6 @@ if HAS_SOCK:
             except:
                 pass
 def _run_term_stream(ws, workspace_id):
-    from akasa.utils import is_extension_enabled
     if not is_extension_enabled('term', workspace_id):
         ws.close()
         return

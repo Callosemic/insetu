@@ -1,5 +1,7 @@
 import base64
+import datetime
 import json
+import re
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -28,7 +30,6 @@ DB_SCHEMA = {
 }
 def _merge_time_intervals(intervals):
     """Merges overlapping timestamp intervals into contiguous blocks."""
-    import datetime
     if not intervals: return []
     intervals.sort(key=lambda x: x['start_time'])
     merged = [intervals[0]]
@@ -189,13 +190,12 @@ def _background_take_ticket(ctx, ticket_id=None, **kwargs):
     return {"message": f"Ticket assigned to {my_name}.", "artifact": {"ticket": updated_ticket}}
 @freshdesk_bp.worker("post_reply_task")
 def _background_post_reply(ctx, ticket_id=None, body=None, **kwargs):
-    import re
     ctx.jobs.update_progress('Sending reply...')
     if not body:
         raise ValueError("Reply body is missing.")
 
-    import mistune
-    html_body = mistune.html(body)
+    import mistune as _mistune
+    html_body = _mistune.html(body)
 
     _fd_request(ctx, f"tickets/{ticket_id}/reply", method='POST', payload={"body": html_body})
 
@@ -222,7 +222,7 @@ def _background_post_reply(ctx, ticket_id=None, body=None, **kwargs):
                 if clean_c and clean_c not in seen:
                     t_text += f"{clean_c}\n\n---\n\n"
                     seen.add(clean_c)
-        ticket_archive_path = Path(ctx.paths["artifacts_base"]).joinpath("freshdesk", f"{ticket_id}.md").as_posix()
+        ticket_archive_path = Path(ctx.paths["cache_dir"]).joinpath(f"{ticket_id}.md").as_posix()
         ctx.vfs.save(ticket_archive_path, t_text, data={"is_absolute_artifact": True})
     except Exception as backup_err:
         print(f"⚠️ Freshdesk local archival failed: {backup_err}")
@@ -255,6 +255,15 @@ def take_freshdesk_ticket(ctx, ticket_id):
     """Assigns the specified Freshdesk ticket to the current authenticated agent."""
     job_id = ctx.jobs.submit("take_ticket_task", ticket_id=ticket_id, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
+@freshdesk_bp.route('tickets/<int:ticket_id>/thread', methods=['GET'], docstring="[sync] Returns the cached markdown thread for a specific ticket.")
+def get_freshdesk_thread(ctx, ticket_id):
+    """Returns the cached markdown thread for a specific ticket."""
+    ticket_archive_path = Path(ctx.paths["cache_dir"]).joinpath(f"{ticket_id}.md").as_posix()
+    content = ctx.vfs.read(ticket_archive_path, is_absolute_artifact=True)
+    if content is not None:
+        return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
+    return jsonify({"error": "Thread not cached yet."}), 404
+
 @freshdesk_bp.route('tickets/<int:ticket_id>/conversations', methods=['POST'], request_schema=FreshdeskTicketPayload, docstring="Fetches the conversation thread for a specific ticket.")
 def get_freshdesk_conversations(ctx, ticket_id):
     """Fetches the conversation thread for a specific ticket."""
