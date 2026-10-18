@@ -52,10 +52,10 @@ export const BridgeStore = createExtensionStore('Bridge', {
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
             const trimmed = line.trim();
-
             if (line.startsWith('<<<<<<< FILE:')) {
                 flushFileFallback();
-                currentFile = line.substring(13).trim();
+                const rawTarget = line.substring(13).trim();
+                currentFile = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(rawTarget) : (rawTarget.includes('://') ? rawTarget : `vfs://${rawTarget.replace(/^\/+/, '')}`);
                 isInsideChunk = false;
                 chunkLines = [];
                 fileRawLines = [];
@@ -369,7 +369,8 @@ export class InSetuExtBridge extends InSetuElement {
                     if (buffer && buffer.content) {
                         const text = buffer.content;
                         const fileMatch = text.match(/^<<<<<<< FILE:\s*(.+)$/m);
-                        const newFile = fileMatch ? fileMatch[1].trim() : BridgeStore.getState().editCellOriginalFile;
+                        const rawNewFile = fileMatch ? fileMatch[1].trim() : BridgeStore.getState().editCellOriginalFile;
+                        const newFile = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(rawNewFile) : rawNewFile;
                         const rawContent = text.replace(/^<<<<<<< FILE:.*\n?/m, '').trim();
 
                         BridgeStore.getState().updateCellFile(cellId, newFile);
@@ -1002,7 +1003,8 @@ export class InSetuBridgeEditProjection extends InSetuElement {
         if (buffer) {
             const text = buffer.content;
             const fileMatch = text.match(/^<<<<<<< FILE:\s*(.+)$/m);
-            const newFile = fileMatch ? fileMatch[1].trim() : this.editCellOriginalFile;
+            const rawNewFile = fileMatch ? fileMatch[1].trim() : this.editCellOriginalFile;
+            const newFile = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(rawNewFile) : rawNewFile;
             const rawContent = text.replace(/^<<<<<<< FILE:.*\n?/m, '').trim();
             BridgeStore.getState().updateCellFile(this.editCellId, newFile);
             BridgeStore.getState().updateCellContent(this.editCellId, rawContent);
@@ -1246,11 +1248,11 @@ export class InSetuExtBridgeHistory extends InSetuElement {
         const filteredRecords = this.searchQuery
             ? this.utils.fuzzyFilterObjects(this.historyRecords, this.searchQuery, r => `${r.filepath} ${r.transaction_id} ${r.post_patch_hash}`)
             : this.historyRecords;
-
         const activeRepos = this.ecosystem.pinnedRepos;
         const repoFilteredRecords = filteredRecords.filter(r => {
             if (activeRepos.has('ALL')) return true;
-            return activeRepos.has(r.repo) || activeRepos.has(r.filepath?.split('/')[0]);
+            const parsedRepo = this.utils.parseURI(r.filepath || '').repo;
+            return activeRepos.has(r.repo) || activeRepos.has(parsedRepo);
         });
 
         // 1. Transaction-Centric Grouping

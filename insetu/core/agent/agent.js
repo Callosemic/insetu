@@ -127,13 +127,10 @@ export class InSetuCoreAgent extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(
+        this.bindStore(
             AgentStore,
             state => ({ sessions: state.sessions || [], loading: !!state.loading }),
-            ({ sessions, loading }) => {
-                this.sessions = sessions;
-                this.loading = loading;
-            }
+            { autoFetch: 'fetchSessions' }
         );
 
         // Listen for live job progress emitted by worker chain
@@ -143,10 +140,6 @@ export class InSetuCoreAgent extends InSetuElement {
                 this.requestUpdate();
             }
         });
-    }
-
-    onWorkspaceLoad(workspaceId) {
-        AgentStore.getState().fetchSessions();
     }
 
     async _selectSession(id) {

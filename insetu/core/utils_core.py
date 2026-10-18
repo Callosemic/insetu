@@ -64,44 +64,44 @@ def execute_binary(cmd, cwd=None, env=None, check=False, capture_output=True, te
         text=text,
         **kwargs
     )
-
 class InSetuURI(AkasaURI):
     """
-    Host application subclass injecting domain-specific routing aliases,
-    polymorphic coercion, and physical disk inspection methods.
+    Host application URI class enforcing strict canonical scheme:// prefixes
+    for all internal operations, with explicit boundary parsing for external user/LLM inputs.
     """
+    def __init__(self, raw: Any = ""):
+        if isinstance(raw, (InSetuURI, AkasaURI)):
+            raw_str = str(raw)
+        elif isinstance(raw, dict):
+            raw_str = str(raw.get('folderpath') or raw.get('filepath') or '').replace('\\', '/').strip()
+        else:
+            raw_str = str(raw or "").replace('\\', '/').strip()
+        if raw_str and "://" not in raw_str and not raw_str.startswith('/'):
+            raise ValueError(f"Non-canonical URI rejected (missing scheme:// prefix): '{raw_str}'")
+        super().__init__(raw_str)
+
     @classmethod
-    def from_any(cls, raw: Any) -> 'InSetuURI':
-        if isinstance(raw, InSetuURI):
+    def from_external_input(cls, raw: Any, default_scheme: str = "vfs") -> 'InSetuURI':
+        """Explicit boundary normalizer strictly for raw LLM, HTTP route, or human text inputs."""
+        if isinstance(raw, cls):
             return raw
-        if isinstance(raw, AkasaURI):
-            return cls(str(raw))
         if isinstance(raw, dict):
             raw = raw.get('folderpath') or raw.get('filepath') or ''
-
-        raw_str = str(raw).replace('\\', '/').strip()
+        raw_str = str(raw or "").replace('\\', '/').strip()
         if not raw_str:
             return cls("")
-        if "://" not in raw_str:
-            if raw_str.startswith('ctx://') or raw_str.startswith('vfs://'):
-                pass
-            else:
-                # Inversion of Control: Extensions explicitly claim their own URI namespaces
-                coerced = next((r for r in hooks.emit('coerce_naked_uri', raw_uri=raw_str) if r), None)
-                if coerced:
-                    raw_str = coerced
-                else:
-                    raw_str = f"vfs://{raw_str.lstrip('/')}"
-
+        raw_str = re.sub(r'^(vfs|ctx|ws|virtual|yomama):/(?!/)', r'\1://', raw_str)
+        if "://" not in raw_str and not raw_str.startswith('/'):
+            raw_str = f"{default_scheme}://{raw_str.lstrip('/')}"
         return cls(raw_str)
 
     @property
     def repo(self) -> str:
         return self.volume
-
     @property
     def is_diff(self) -> bool:
         return self.scheme == 'ctx' and self.volume == 'diffs'
+
     def resolve(self, workspace_id: Optional[str] = None, is_absolute_artifact: bool = False) -> Optional[str]:
         return _vfs_resolve_physical_path(str(self), workspace_id, is_absolute_artifact=is_absolute_artifact)
 
@@ -150,6 +150,28 @@ class InSetuURI(AkasaURI):
                 return module if b and module else (b.get("id") if b else "main")
         return "main"
 
+
+@hooks.on('vfs_mount_missing')
+def _lazy_mount_missing_volume(workspace_id=None, scheme=None, volume=None, **kwargs):
+    """
+    Inversion of Control Lazy Volume Mounter:
+    If a request arrives before workspace_boot completes, queries declared extension paths
+    via 'request_paths' and mounts the corresponding volume dynamically without hardcoding extension names.
+    """
+    wid = workspace_id or "default"
+    if scheme == 'ctx' and volume:
+        from akasa.vfs import mount_volume as _mount_volume, register_driver as _register_driver, DefaultVFSDriver as _DefaultVFSDriver
+        _register_driver('ctx', _DefaultVFSDriver())
+        path_key = f"{volume}_dir"
+        for p_dict in hooks.emit('request_paths', workspace_id=wid):
+            if isinstance(p_dict, dict) and path_key in p_dict:
+                _mount_volume(wid, 'ctx', volume, p_dict[path_key])
+                return
+    elif scheme == 'vfs':
+        from insetu.core.topology.engine_topology import mount_topology_volumes_dynamically as _mount_topology
+        _mount_topology(load_config(wid), workspace_id=wid)
+
+
 class BucketAddress:
     """
     Immutable value object representing a canonical structural bucket address.
@@ -190,10 +212,9 @@ class BucketAddress:
         meta = meta or {}
         repo = meta.get("repo")
         bucket_id = meta.get("bucket_id")
-
         # Explicit None check allows the root repository (repo="") to bypass guessing
         if repo is None:
-            uri = InSetuURI.from_any(uri_str)
+            uri = InSetuURI(uri_str)
             repo = uri.repo
             if not repo and uri.scheme == 'ctx':
                 repo = "global"
@@ -268,29 +289,40 @@ def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth
     if depth > 5:
         return text + "\n[!] INCLUSION DEPTH LIMIT EXCEEDED"
     def replacer(match):
-        include_path = match.group(1).strip()
+        include_path = match.group(1).strip().strip('\'"')
         params_str = match.group(2) if len(match.groups()) > 1 and match.group(2) else ""
-
-        if include_path.startswith('./') or include_path.startswith('../'):
-            parts = current_filepath.split('/')[:-1]
+        cur_uri = InSetuURI(current_filepath)
+        if "://" in include_path:
+            target_path = str(InSetuURI(include_path))
+        elif include_path.startswith('./') or include_path.startswith('../'):
+            base_prefix = f"{cur_uri.scheme}://{cur_uri.volume}" if cur_uri.volume else f"{cur_uri.scheme}://"
+            rel_parts = [p for p in cur_uri.path.split('/')[:-1] if p]
             for p in include_path.split('/'):
-                if p == '.': continue
-                elif p == '..': 
-                    if parts: parts.pop()
-                else: parts.append(p)
-            target_path = '/'.join(parts)
+                if p == '.' or not p:
+                    continue
+                elif p == '..':
+                    if rel_parts:
+                        rel_parts.pop()
+                else:
+                    rel_parts.append(p)
+            joined_rel = '/'.join(rel_parts)
+            target_path = f"{base_prefix}/{joined_rel}".rstrip('/') if joined_rel else base_prefix
         else:
-            target_path = include_path.lstrip('/')
+            # Strict contract: non-relative macro includes without a scheme are rejected by read_callback
+            target_path = include_path
 
         inc_content = read_callback(target_path)
         if inc_content is not None:
             if params_str:
-                param_matches = re.finditer(r'([a-zA-Z0-9_]+)\s*:\s*(?:"([^"]*)"|([^;}]*))', params_str)
+                param_matches = re.finditer(r'([a-zA-Z0-9_]+)\s*:\s*(?:"((?:[^"\\]|\\.)*)"|([^;}]*))', params_str)
                 for pm in param_matches:
                     key = pm.group(1)
-                    val = pm.group(2) if pm.group(2) is not None else pm.group(3).strip()
+                    if pm.group(2) is not None:
+                        val = pm.group(2).replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
+                    else:
+                        val = pm.group(3).strip()
                     macro_pattern = r'\{\{\s*macro_' + re.escape(key) + r'\s*\}\}'
-                    inc_content = re.sub(macro_pattern, val, inc_content)
+                    inc_content = re.sub(macro_pattern, lambda _: val, inc_content)
             return resolve_macro_includes(inc_content, target_path, pattern, read_callback, depth + 1)
         else:
             return f"[!] MACRO TARGET NOT FOUND: {include_path}"
@@ -489,7 +521,7 @@ def start_filesystem_observer(**kwargs):
     from akasa.extension import SettingsManager as _SettingsManager
     from akasa.utils import get_all_workspace_ids as _get_all_workspace_ids
     workspace_ids = _get_all_workspace_ids()
-    if not _SettingsManager('core_system', 'default').get("enable_watchdog", True):
+    if not _SettingsManager('system', 'default').get("enable_watchdog", True):
         return None
 
     active_configs = []
@@ -643,29 +675,7 @@ def generate_text_chunks(blocks, chunk_limit=400000):
         current_length += block_len
     if current_chunk:
         yield "".join(current_chunk)
-def is_naked_diff_uri(raw_uri: str) -> bool:
-    if not raw_uri or not isinstance(raw_uri, str):
-        return False
-    clean = raw_uri.replace('\\', '/').strip()
-    if clean.startswith(('ctx://diffs/', 'diffs/', '.insetu/cache/diffs/', '.insetu/ext/git/data/diffs/')):
-        return True
-    return clean.endswith('_diffs.txt')
 
-def is_naked_workflow_uri(raw_uri: str) -> bool:
-    if not raw_uri or not isinstance(raw_uri, str):
-        return False
-    clean = raw_uri.replace('\\', '/').strip()
-    if clean.startswith(('ctx://workflows/', 'workflows/', '.insetu/cache/workflows/', '.insetu/ext/flow/data/workflows/')):
-        return True
-    return clean.startswith('workflow_') and clean.endswith('_context.txt')
-
-def is_naked_context_uri(raw_uri: str) -> bool:
-    if not raw_uri or not isinstance(raw_uri, str):
-        return False
-    clean = raw_uri.replace('\\', '/').strip()
-    if clean.startswith(('ctx://contexts/', 'contexts/', '.insetu/cache/contexts/', '.insetu/ext/gather/data/contexts/')):
-        return True
-    return clean.endswith('_context.txt')
 
 def evaluate_circuit_breaker(touched_count, total_count, threshold=0.5):
     if not total_count or total_count <= 0:
@@ -774,42 +784,36 @@ def vacuum_manifest_artifacts(ctx, domain_dir, expected_artifacts_set, exempt_ab
                 pass
 def reconcile_and_vacuum_domain(ctx, domain_uri_prefix, manifest_deltas, domain_dir, filename_suffix="_context.txt", target_repos=None):
     """
-    SSOT reconciler: Identifies orphaned domain manifest entries, merges deltas,
-    persists manifest state, and vacuums orphaned text artifacts on disk.
+    Make-Before-Break Domain Reconciler:
+    1. Flushes any pending VFS writes for newly compiled chunks BEFORE publishing metadata.
+    2. Tombstones obsolete manifest keys strictly within the evaluated repository scope
+        (supporting both single 'repo' strings and multi-repo 'repos' lists).
+    3. Commits manifest deltas to SQLite. Physical file garbage collection is deferred
+        to the terminal 'compilation_sequence_complete' sink.
     """
-    current_manifest = ctx.manifest.get("ctx", {})
-    expected_artifacts = set()
-    active_keys = set()
-    # 1. Register new/updated deltas
-    for filename, entry in manifest_deltas.items():
-        if entry:
-            active_keys.add(filename)
-            chunks = entry.get("chunks", [filename])
-            expected_artifacts.update(InSetuURI(c).basename for c in chunks)
+    # 1. Ensure all newly written chunk files are physically on disk before updating SQLite
+    ctx.sync_vfs_barrier()
 
-    # 2. Identify orphaned manifest keys in this domain
+    current_manifest = ctx.manifest.get("ctx", {})
+    active_keys = {filename for filename, entry in manifest_deltas.items() if entry}
+
+    # 2. Identify orphaned manifest keys in this domain that were in-scope for this run
+    target_repos_set = set(target_repos) if target_repos else None
     for k, v in list(current_manifest.items()):
         if domain_uri_prefix in k and k.endswith(filename_suffix):
-            repo = v.get("meta", {}).get("repo") if isinstance(v, dict) else None
-            is_targeted = target_repos and (repo in target_repos if repo else True)
-            if k not in active_keys and (target_repos is None or is_targeted):
-                manifest_deltas[k] = None
-            else:
-                chunks = v.get("chunks", [k]) if isinstance(v, dict) else [k]
-                expected_artifacts.update(InSetuURI(c).basename for c in chunks)
+            if k in active_keys:
+                continue
+            if target_repos_set is not None:
+                meta = v.get("meta", {}) if isinstance(v, dict) else {}
+                entry_repos = set(meta.get("repos") or ([meta["repo"]] if meta.get("repo") else []))
+                # Only tombstone during a targeted sweep if this entry belongs to the targeted repos
+                if not entry_repos or not (entry_repos & target_repos_set):
+                    continue
+            manifest_deltas[k] = None
 
-    # 3. Commit manifest changes & sync barrier
+    # 3. Commit manifest changes to SQLite
     if manifest_deltas:
-        for k, v in manifest_deltas.items():
-            if v is None:
-                current_manifest.pop(k, None)
-            else:
-                current_manifest[k] = v
         ctx.save_manifest(manifest_deltas, is_full_compile=False)
-        ctx.sync_vfs_barrier()
-
-    # 4. Sweep disk for orphaned files
-    vacuum_manifest_artifacts(ctx, domain_dir, expected_artifacts)
 
 def get_flattened_buckets(workspace_id=None, target_configs=None):
     """Backend SSOT helper for resolving flattened sub-buckets with defensive null-safety."""
@@ -885,22 +889,17 @@ def resolve_logical_path(path, workspace_id=None):
     if not path:
         return ""
 
+    raw_str = str(path).replace('\\', '/').strip()
+    if "://" not in raw_str and Path(raw_str).is_absolute():
+        return Path(raw_str).resolve().as_posix()
+
     cfg = load_config(workspace_id)
     _, workspace_root = get_workspace_physics(workspace_id)
     ws_root_path = Path(workspace_root).resolve()
 
-    uri = InSetuURI(str(path))
-
-    # If absolute, bypass normal boundaries but safely attempt stripping
-    if Path(uri.path).is_absolute():
-        resolved_abs = Path(uri.path).resolve()
-        if resolved_abs.exists():
-            return resolved_abs.as_posix()
-        try:
-            norm_path = resolved_abs.relative_to(ws_root_path).as_posix()
-        except ValueError:
-            norm_path = resolved_abs.name
-        uri = InSetuURI(norm_path)
+    uri = InSetuURI(raw_str)
+    if Path(uri.path).is_absolute() and not uri.volume:
+        return Path(uri.path).resolve().as_posix()
 
     target_repos = cfg.get("target_repos", [])
 
@@ -939,17 +938,16 @@ def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kw
     files = []
     repo_files_cache = {}
     all_ledger_files_cache = None
-
     with VFSTransaction(workspace_id) as vfs:
         for item in items:
             if isinstance(item, dict) and item.get("isDir") is False and item.get("filepath"):
-                uri = InSetuURI.from_any(item["filepath"])
+                uri = InSetuURI(item["filepath"])
                 is_folder = False
             elif isinstance(item, dict) and (item.get("isDir") is True or item.get("folderpath")):
-                uri = InSetuURI.from_any(item.get("folderpath") or item.get("filepath"))
+                uri = InSetuURI(item.get("folderpath") or item.get("filepath"))
                 is_folder = True
             else:
-                uri = InSetuURI.from_any(item)
+                uri = InSetuURI(str(item))
                 if not uri.path and not uri.volume:
                     continue
                 if uri.scheme == 'ctx':
@@ -980,7 +978,7 @@ def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kw
                                     if repo_cfg:
                                         from insetu.core.topology.engine_topology import get_valid_workspace_files as _get_valid_workspace_files
                                         rel_valid = _get_valid_workspace_files(repo_path, repo_cfg, workspace_id)
-                                        g_list = [f"{repo_dir}/{f}" for f in rel_valid]
+                                        g_list = [f"vfs://{repo_dir}/{f}" for f in rel_valid]
                             repo_files_cache[repo_dir] = g_list
                         gather_files = repo_files_cache[repo_dir]
                     else:
@@ -992,14 +990,14 @@ def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kw
                         gather_files = all_ledger_files_cache
 
                     for g_file in gather_files:
-                        g_uri = InSetuURI.from_any(g_file)
+                        g_uri = InSetuURI(g_file)
                         g_rel_path = g_uri.path
                         if not folder_rel_path or g_rel_path == folder_rel_path or g_rel_path.startswith(folder_rel_path + '/'):
                             files.append(str(g_uri))
                 else:
                     target_walk = str(uri)
                     for f in vfs.walk(target_walk):
-                        f_uri = InSetuURI.from_any(f)
+                        f_uri = InSetuURI(f)
                         files.append(str(f_uri))
             else:
                 if uri.scheme == 'ctx':
@@ -1025,22 +1023,25 @@ def find_path_candidates(query_path=None, workspace_id=None, allowed_repos=None,
     if not query_path:
         return []
     from insetu.core.topology.engine_topology import get_omniscient_workspace_files as _get_omniscient_workspace_files
-    clean_query = InSetuURI(str(query_path)).path.replace('\\', '/').strip('/')
+    q_uri = InSetuURI.from_external_input(query_path)
+    clean_query = (f"{q_uri.repo}/{q_uri.path}".strip('/') if q_uri.repo else q_uri.path).replace('\\', '/').strip('/')
     query_basename = Path(clean_query).name.lower()
 
     omniscient = _get_omniscient_workspace_files(workspace_id, allowed_repos)
     candidates = []
-
-    for cand_basename, cand_rel in omniscient:
+    for cand_basename, cand_fp in omniscient:
+        c_uri = InSetuURI(cand_fp)
+        cand_canonical = str(c_uri)
+        cand_rel = f"{c_uri.repo}/{c_uri.path}".strip('/') if c_uri.repo else c_uri.path
         cand_basename_lower = cand_basename.lower()
         cand_rel_lower = cand_rel.lower()
         if cand_rel_lower == clean_query.lower():
-            candidates.append({"filepath": f"vfs://{cand_rel}", "score": 1.0, "match_type": "exact_match"})
+            candidates.append({"filepath": cand_canonical, "score": 1.0, "match_type": "exact_match"})
         elif cand_basename_lower == query_basename:
             score = 0.9 if clean_query.lower() in cand_rel_lower else 0.8
-            candidates.append({"filepath": f"vfs://{cand_rel}", "score": score, "match_type": "basename_match"})
+            candidates.append({"filepath": cand_canonical, "score": score, "match_type": "basename_match"})
         elif clean_query.lower() in cand_rel_lower or cand_rel_lower.endswith(clean_query.lower()):
-            candidates.append({"filepath": f"vfs://{cand_rel}", "score": 0.7, "match_type": "subpath_match"})
+            candidates.append({"filepath": cand_canonical, "score": 0.7, "match_type": "subpath_match"})
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
     return candidates
@@ -1057,7 +1058,18 @@ def get_default_repo_template(repo_dir, title=None, domain=None, description=Non
         "sub_buckets": []
     }
 def sanitize_workspace_config(cfg):
-    cfg.pop("_settings_schemas", None)
+    for non_topology_key in (
+        "_settings_schemas",
+        "bypassed_extensions",
+        "extensions",
+        "instance_title",
+        "instance_emoji",
+        "port",
+        "enable_watchdog",
+        "preload_all_extensions",
+        "offline_cache_limit_mb"
+    ):
+        cfg.pop(non_topology_key, None)
     raw_targets = cfg.get("target_repos", [])
     valid_repos = []
     seen_dirs = set()

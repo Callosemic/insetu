@@ -5,33 +5,18 @@ import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
-function normalizePromptEntry(p) {
-    if (!p) return '';
-    if (p.startsWith('vfs://') || p.startsWith('ctx://') || p.startsWith('ws://')) return p;
-    const marker = 'prompts/';
-    const idx = p.indexOf(marker);
-    if (idx !== -1) {
-        return 'ctx://prompts/' + p.slice(idx + marker.length);
-    }
-    return 'ctx://prompts/' + p.split('/').pop();
-}
-
 const syncPromptsState = window.inSetu.utils.coalescedAsync(async () => {
     try {
         const res = await window.inSetu.api.get('prompts/list?t=' + Date.now(), { cache: 'no-store' });
         if (res.ok) {
             const data = await res.json();
-            const rawPrompts = data.prompts || [];
-            const cleanPrompts = rawPrompts.map(normalizePromptEntry);
+            const cleanPrompts = data.prompts || [];
             const currentPrompts = PromptsStore.getState().prompts;
             if (JSON.stringify(currentPrompts) !== JSON.stringify(cleanPrompts)) {
                 PromptsStore.setState({ prompts: cleanPrompts });
             }
             const activeWs = window.inSetu.utils.getActiveWorkspace();
-            const urlsToWarm = cleanPrompts.map(p => {
-                const fullPath = (p.startsWith('vfs://') || p.startsWith('ctx://')) ? p : `ctx://prompts/${p}`;
-                return `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(fullPath)}`;
-            });
+            const urlsToWarm = cleanPrompts.map(p => `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(p)}`);
             if (urlsToWarm.length > 0 && window.inSetu?.stores?.App) {
                 const currentQueue = window.inSetu.stores.App.getState().warmingQueue || new Set();
                 const hasNew = urlsToWarm.some(u => !currentQueue.has(u));
@@ -39,15 +24,14 @@ const syncPromptsState = window.inSetu.utils.coalescedAsync(async () => {
                     window.inSetu.stores.App.getState().enqueueWarming(urlsToWarm);
                 }
             }
-
             const gatherStore = window.inSetu?.stores?.Gather;
             if (gatherStore && typeof gatherStore.setState === 'function') {
                 const currentOpts = gatherStore.getState().gatherOptions || {};
-                if (JSON.stringify(currentOpts.prompts) !== JSON.stringify(rawPrompts)) {
+                if (JSON.stringify(currentOpts.prompts) !== JSON.stringify(cleanPrompts)) {
                     gatherStore.setState(state => ({
                         gatherOptions: {
                             ...(state?.gatherOptions || {}),
-                            prompts: rawPrompts,
+                            prompts: cleanPrompts,
                             profileDir: data.profile_dir || ".insetu/data/prompts"
                         }
                     }));
@@ -125,7 +109,7 @@ export class InSetuExtPrompts extends InSetuElement {
             if (tick) PromptsStore.getState().fetchPrompts();
         });
         this.registerGlobalListener('insetu:context-metadata', window, (e) => {
-            if (e.detail === 'ctx://contexts/prompts_context.txt' || e.detail === 'prompts_context.txt') {
+            if (e.detail === 'ctx://contexts/prompts_context.txt') {
                 e.inSetuResponses.push({
                     cat: "Prompts & State",
                     desc: "The Master Ingestion Prompt and CLI templates.",
@@ -184,8 +168,7 @@ export class InSetuExtPrompts extends InSetuElement {
                 files: rawPrompts,
                 autoDrilldown: true,
                 callback: (val) => {
-                    const cleanVal = val.replace(/^ctx:\/\/prompts\//, '');
-                    const embedString = `{{include_prompt: ${cleanVal}}}`;
+                    const embedString = `{{include_prompt: ${val}}}`;
                     if (window.inSetu.editor && window.inSetu.editor.insertTextAtCursor) {
                         window.inSetu.editor.insertTextAtCursor(embedString);
                     }
@@ -303,25 +286,29 @@ window.ExtensionRegistry.registerExtension('prompts', {
         {
             targetEntity: 'prompt',
             id: 'prompt-fork-template',
-            label: 'Fork to Workspace',
+            label: (data) => data?.filepath?.startsWith('ws://') ? 'Import to Local Prompts' : 'Fork to Workspace',
             icon: 'git-fork',
             intent: 'highlight',
             group: 'edit',
             vfsBound: false,
             order: 5,
-            match: (data) => Boolean(data?.filepath && data.filepath.includes('/.templates/')),
+            match: (data) => Boolean(data?.filepath && (data.filepath.includes('/.templates/') || data.filepath.startsWith('ws://'))),
             asyncAction: async (data) => {
                 const srcUri = data.filepath;
-                const destUri = srcUri.replace('/.templates/', '/');
+                const isWs = srcUri.startsWith('ws://');
+                const destUri = isWs
+                    ? `ctx://prompts/${srcUri.split('/').pop()}`
+                    : srcUri.replace('/.templates/', '/');
                 const activeWs = window.inSetu.utils.getActiveWorkspace();
                 const res = await window.inSetu.api.request(`/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(srcUri)}`, {}, activeWs);
-                if (!res.ok) throw new Error("Failed to read template content.");
+                if (!res.ok) throw new Error("Failed to read prompt content.");
                 const text = await res.text();
+                const relDest = window.inSetu.utils.parseURI(destUri).relativePath || destUri;
                 await window.inSetu.sys.executeWorkspaceMutation('fs/save', {
                     filepath: destUri,
                     content: text
                 }, {
-                    successMessage: `Forked template to ${destUri.replace('ctx://prompts/', '')}`
+                    successMessage: `Imported prompt to ${relDest}`
                 });
                 await syncPromptsState();
                 if (window.inSetu.vfs?.viewSourceFile) {

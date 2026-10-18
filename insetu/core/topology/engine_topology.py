@@ -181,13 +181,12 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
             valid_files = get_valid_workspace_files(repo_path, repo_cfg, workspace_id)
             git_status_map = _get_repo_git_status_map(repo_path)
             sub_buckets = repo_cfg.get("sub_buckets", [])
-
             conn.execute("DELETE FROM topology_ledger WHERE repo = ?", (repo_dir,))
             rows_to_insert = []
             for f in valid_files:
                 b, module = resolve_file_bucket(f, sub_buckets, repo_dir=repo_dir)
                 bucket_id = module if (b and module) else (b.get("id") if b else "main")
-                filepath = f"{repo_dir}/{f}"
+                filepath = f"vfs://{repo_dir}/{f}"
                 g_status = git_status_map.get(f, "")
                 rows_to_insert.append((filepath, repo_dir, bucket_id, now_ts, g_status))
             if rows_to_insert:
@@ -229,21 +228,12 @@ def get_omniscient_workspace_files(workspace_id, allowed_repos):
     placeholders = ','.join(['?'] * len(allowed_repos))
     rows = ctx.db.execute(f"SELECT filepath FROM topology_ledger WHERE repo IN ({placeholders})", tuple(allowed_repos)).fetchall()
     return [(Path(r['filepath']).name, r['filepath']) for r in rows]
-
-def get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True):
-    """SSOT accessor to retrieve ledger paths and format them cleanly for downstream modules."""
+def get_topology_files_for_repo(workspace_id, repo_dir):
+    """SSOT accessor returning canonical vfs://<repo>/<path> URIs from topology_ledger."""
     resolve_topology_buffer(workspace_id)
     ctx = topology_bp.get_context(workspace_id)
     rows = ctx.db.execute("SELECT filepath FROM topology_ledger WHERE repo = ?", (repo_dir,)).fetchall()
-
-    result = []
-    for r in rows:
-        fp = r['filepath']
-        if strip_prefix and fp.startswith(f"{repo_dir}/"):
-            result.append(fp[len(repo_dir)+1:])
-        else:
-            result.append(fp)
-    return result
+    return [str(InSetuURI(r['filepath'])) for r in rows]
 _TOPOLOGY_RAM_QUEUE = queue.Queue()
 _TOPOLOGY_SLEW_THREAD = None
 def _topology_slew_limiter_loop():
@@ -296,6 +286,67 @@ def _topology_slew_limiter_loop():
             try:
                 hooks.emit_background('system_error', source="Topology:Slew_Loop", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload="", workspace_id="default")
             except Exception: pass
+@hooks.on('vfs_mutated', priority=90)
+def broadcast_cross_workspace_mutations(mutations=None, workspace_id=None, **kwargs):
+    """
+    Phase 4 Event Bus Synchronization: Propagates mutations on shared domains
+    to subscriber workspaces as virtual 'ws://' mutations for reactive RAG invalidation.
+    """
+    if not mutations or not workspace_id:
+        return
+    # Guardrail: Never re-broadcast synthetic ws:// mutations to prevent infinite loops
+    if any(m.get("filepath", "").startswith("ws://") for m in mutations):
+        return
+    from akasa.extension import SettingsManager as _SettingsManager
+
+    pub_settings = _SettingsManager('system', workspace_id)
+    exports = pub_settings.get("export_shared_domains", {})
+    if not exports:
+        return
+
+    all_workspaces = get_all_workspace_ids()
+    for target_ws in all_workspaces:
+        if target_ws == workspace_id:
+            continue
+
+        target_settings = _SettingsManager('system', target_ws)
+        mounts = target_settings.get("shared_mounts", [])
+        if not mounts:
+            continue
+
+        matched_mounts = [m for m in mounts if m.get("workspace_id") == workspace_id]
+        if not matched_mounts:
+            continue
+        translated = []
+        for m in mutations:
+            raw_fp = m.get("filepath", "")
+            if not raw_fp or not str(raw_fp).startswith("ctx://"):
+                continue
+            uri = InSetuURI(raw_fp)
+            domain = uri.volume
+            if not domain:
+                continue
+
+            domain_export = exports.get(domain) or exports.get("*")
+            if not domain_export:
+                continue
+
+            allowed = domain_export.get("allowed", [])
+            if "*" not in allowed and target_ws not in allowed:
+                continue
+
+            rel_in_domain = f"{domain}/{uri.path}".rstrip('/') if uri.path else domain
+            if any(mnt.get("domain") in (domain, "*") for mnt in matched_mounts):
+                translated.append({
+                    "filepath": f"ws://{workspace_id}/{rel_in_domain}",
+                    "operation": m.get("operation", "save"),
+                    "ignore_ledger": m.get("ignore_ledger", False)
+                })
+        if translated:
+            hooks.emit_background('vfs_mutated', workspace_id=target_ws, mutations=translated)
+            if sse_bus:
+                sse_bus.emit_sse('vfs_mutated', {"mutations": translated, "workspace_id": target_ws})
+
 
 @hooks.on('vfs_mutated', priority=10)
 def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
@@ -314,7 +365,7 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
         if m.get("ignore_ledger"):
             continue
         filepath = m.get("filepath")
-        if not filepath:
+        if not filepath or str(filepath).startswith("ws://"):
             continue
 
         is_dir = filepath.endswith('/') or filepath.endswith('\\')
@@ -407,7 +458,7 @@ def resolve_topology_buffer(workspace_id):
         vfs_fp = f"vfs://{clean_filepath}"
 
         e["filepath"] = vfs_fp
-        filepath = clean_filepath
+        filepath = vfs_fp
         op = e["mutation_type"]
         if op in ("delete", "deleted", "remove", "removed"):
             dirty_repos.add(repo_dir)
@@ -426,7 +477,7 @@ def resolve_topology_buffer(workspace_id):
             repo_cfg = target_repos_map.get(repo_dir)
 
             is_ignored = False
-            rel_to_repo = filepath[len(repo_dir)+1:] if filepath.startswith(f"{repo_dir}/") else filepath
+            rel_to_repo = rel_path
             if repo_cfg:
                 live_cfg = ctx.config
 
@@ -497,7 +548,7 @@ def resolve_topology_buffer(workspace_id):
         repo_rows = conn.execute("SELECT filepath, git_status FROM topology_ledger WHERE repo = ?", (touched_repo,)).fetchall()
         for r_row in repo_rows:
             fp = r_row["filepath"]
-            rel_f = fp[len(touched_repo)+1:] if fp.startswith(f"{touched_repo}/") else fp
+            rel_f = InSetuURI(fp).path
             new_st = g_map.get(rel_f, "")
             if (r_row["git_status"] or "") != new_st:
                 status_updates.append((new_st, now_ts, fp))
@@ -529,17 +580,17 @@ def mount_topology_volumes_dynamically(cfg, workspace_id=None, **kwargs):
             else:
                 repo_path = Path(ws_root).joinpath(repo_dir).resolve().as_posix()
             mount_volume(workspace_id, 'vfs', repo_dir, repo_path)
-@hooks.on('workspace_boot')
+@hooks.on('workspace_boot', priority=1)
 def init_topology_on_boot(workspace_id=None, **kwargs):
     """Topology owns the boot sequence. Maps the drive immediately."""
     ctx = topology_bp.get_context(workspace_id)
 
     # Force a mount evaluation during boot using the current config
     mount_topology_volumes_dynamically(ctx.config, workspace_id)
-
     try:
         ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_topology_repo ON topology_ledger(repo)")
         ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_topology_bucket ON topology_ledger(bucket_id)")
+        ctx.db.execute("UPDATE topology_ledger SET filepath = 'vfs://' || filepath WHERE filepath NOT LIKE '%://%'")
         ctx.db.commit()
     except Exception:
         pass

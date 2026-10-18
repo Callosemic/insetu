@@ -40,14 +40,19 @@ def _ensure_editor_prefs_hydrated(ctx):
     if count == 0 and saved:
         for pref in saved:
             if pref.get("filepath"):
+                fp = pref["filepath"]
+                canon_fp = fp if "://" in fp else f"vfs://{fp.lstrip('/')}"
                 ctx.db.insert_or_replace("file_preferences", {
-                    "filepath": pref["filepath"],
+                    "filepath": canon_fp,
                     "writing_mode": 1 if pref.get("writing_mode") else 0,
                     "doc_type": pref.get("doc_type")
                 })
-    elif count > 0 and saved is None:
-        all_rows = ctx.db.get_all("file_preferences")
-        ctx.store.set("preferences.json", "items", all_rows)
+    elif count > 0:
+        ctx.db.execute("UPDATE file_preferences SET filepath = 'vfs://' || filepath WHERE filepath NOT LIKE '%://%'")
+        ctx.db.commit()
+        if saved is None:
+            all_rows = ctx.db.get_all("file_preferences")
+            ctx.store.set("preferences.json", "items", all_rows)
 
 @editor_bp.route('preference', methods=['GET'])
 def get_preference(ctx):

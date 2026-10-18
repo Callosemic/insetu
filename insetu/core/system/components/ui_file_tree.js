@@ -1,8 +1,70 @@
 import { html, css } from 'lit';
-import { buildFileTree, resolveDirectoryState } from '../../../vendor/sutram/js/utils.js';
+import { resolveDirectoryState } from '../../../vendor/sutram/js/utils.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { SutramCard } from '../../../vendor/sutram/js/primitives.js';
 import { InSetuElement } from '/static/extensions/system/insetu_sdk.js';
+
+export function buildUriFileTree(uris, rootScope = '') {
+    const root = { name: 'root', type: 'directory', children: {}, fullPath: rootScope || 'vfs://', canonicalUri: rootScope || 'vfs://', treePath: [] };
+    const cleanScope = (rootScope || '').replace(/\/+$/, '');
+
+    (uris || []).forEach(rawUri => {
+        if (!rawUri || typeof rawUri !== 'string' || !rawUri.includes('://')) return;
+        let schemePrefix = '';
+        let relSegmentsStr = '';
+
+        if (cleanScope && rawUri.startsWith(cleanScope + '/')) {
+            schemePrefix = cleanScope + '/';
+            relSegmentsStr = rawUri.slice(schemePrefix.length);
+        } else if (cleanScope && rawUri === cleanScope) {
+            return;
+        } else {
+            const match = rawUri.match(/^([a-zA-Z0-9_-]+:\/\/)(.*)$/);
+            if (!match) return;
+            schemePrefix = match[1];
+            relSegmentsStr = match[2];
+        }
+
+        const parts = relSegmentsStr.split('/').filter(Boolean);
+        if (parts.length === 0) return;
+
+        let cursor = root;
+        const currentTreePath = [];
+
+        for (let i = 0; i < parts.length; i++) {
+            const part = parts[i];
+            currentTreePath.push(part);
+            const isLast = (i === parts.length - 1);
+            const nodeCanonicalUri = `${schemePrefix}${parts.slice(0, i + 1).join('/')}`;
+            if (isLast) {
+                const isSource = !rawUri.startsWith('ctx://contexts/') && !rawUri.startsWith('ctx://diffs/') && !rawUri.startsWith('ctx://workflows/');
+                cursor.children[part] = {
+                    name: part,
+                    type: 'file',
+                    isSource,
+                    fullPath: rawUri,
+                    canonicalUri: rawUri,
+                    treePath: [...currentTreePath]
+                };
+            } else {
+                if (!cursor.children[part] || cursor.children[part].type !== 'directory') {
+                    cursor.children[part] = {
+                        name: part,
+                        type: 'directory',
+                        children: {},
+                        fullPath: nodeCanonicalUri,
+                        canonicalUri: nodeCanonicalUri,
+                        treePath: [...currentTreePath]
+                    };
+                }
+                cursor = cursor.children[part];
+            }
+        }
+    });
+
+    return root;
+}
+
 export class InSetuFileTree extends InSetuElement {
     static properties = {
         files: { type: Array },
@@ -80,28 +142,29 @@ constructor() {
             this._cachedTree = null;
         }
     }
+    _getMergedUris() {
+        const rootScope = this.stripPrefix || this.basePath || 'vfs://';
+        const baseFiles = (this.files || []).filter(f => f && typeof f === 'string' && f.includes('://'));
+        const pendingFiles = Array.from(this._pendingMutations || [])
+            .filter(f => f && typeof f === 'string' && f.startsWith(rootScope));
+        let mergedFiles = Array.from(new Set([...baseFiles, ...pendingFiles]));
+        if (this._deletedMutations && this._deletedMutations.size > 0) {
+            const deletedSet = this._deletedMutations;
+            mergedFiles = mergedFiles.filter(f => {
+                if (deletedSet.has(f)) return false;
+                for (const d of deletedSet) {
+                    if (f.startsWith(String(d).replace(/\/+$/, '') + '/')) return false;
+                }
+                return true;
+            });
+        }
+        return { mergedFiles, rootScope };
+    }
+
     _getTree() {
         if (!this._cachedTree) {
-            const prefix = this.stripPrefix;
-            // CQRS Read-Path: Overlay pending offline mutations at render time
-            const normalizeToNaked = (p) => p.replace(/^vfs:\/\//, '');
-            const pendingFiles = Array.from(this._pendingMutations || []).filter(f => f && typeof f === 'string').map(normalizeToNaked);
-            let mergedFiles = Array.from(new Set([...this.files, ...pendingFiles]));
-            if (this._deletedMutations && this._deletedMutations.size > 0) {
-                const deletedSet = new Set(Array.from(this._deletedMutations).map(normalizeToNaked));
-                mergedFiles = mergedFiles.filter(f => {
-                    if (deletedSet.has(f)) return false;
-                    for (const d of deletedSet) {
-                        if (f.startsWith(d + '/')) return false;
-                    }
-                    return true;
-                });
-            }
-
-            const mappedFiles = prefix 
-                ? mergedFiles.map(f => f.startsWith(prefix) ? f.slice(prefix.length) : f)
-                : mergedFiles;
-            this._cachedTree = buildFileTree(mappedFiles);
+            const { mergedFiles, rootScope } = this._getMergedUris();
+            this._cachedTree = buildUriFileTree(mergedFiles, rootScope);
         }
         return this._cachedTree;
     }
@@ -123,27 +186,9 @@ constructor() {
 
         let directoryEntries = [];
         let flatResults = [];
-
         if (isSearching) {
-            const normalizeToNaked = (p) => p.replace(/^vfs:\/\//, '');
-            const pendingFiles = Array.from(this._pendingMutations || []).filter(f => f && typeof f === 'string').map(normalizeToNaked);
-            let mergedFiles = Array.from(new Set([...this.files, ...pendingFiles]));
-            if (this._deletedMutations && this._deletedMutations.size > 0) {
-                const deletedSet = new Set(Array.from(this._deletedMutations).map(normalizeToNaked));
-                mergedFiles = mergedFiles.filter(f => {
-                    if (deletedSet.has(f)) return false;
-                    for (const d of deletedSet) {
-                        if (f.startsWith(d + '/')) return false;
-                    }
-                    return true;
-                });
-            }
-
-            const filteredFiles = window.inSetu.utils.fuzzyFilterObjects(mergedFiles, this._searchQuery);
-            const prefix = this.stripPrefix;
-            flatResults = prefix 
-                ? filteredFiles.map(f => f.startsWith(prefix) ? f.slice(prefix.length) : f)
-                : filteredFiles;
+            const { mergedFiles } = this._getMergedUris();
+            flatResults = window.inSetu.utils.fuzzyFilterObjects(mergedFiles, this._searchQuery);
         } else {
             const tree = this._getTree();
             const { validPath, entries } = resolveDirectoryState(tree, this.currentPath, {
@@ -186,26 +231,32 @@ constructor() {
                 ${isSearching ? html`
                     <sutram-virtual-list
                         .items=${flatResults}
-                        .renderItem=${filepath => {
-                            if (!filepath || typeof filepath !== 'string') return html``;
-                            const key = filepath.split('/').pop();
-                            const fullFilepath = (filepath.startsWith('vfs://') || filepath.startsWith('ctx://')) ? filepath : `${this.basePath}${filepath}`;
-                            const isGitMod = this._gitModifiedFiles.has(fullFilepath) || this._gitModifiedFiles.has(fullFilepath.replace(/^vfs:\/\//, ''));
-                            const isUserTemplate = fullFilepath.includes('/.templates/user/') || fullFilepath.startsWith('.templates/user/');
-                            const isReadOnlyTemplate = !isUserTemplate && (fullFilepath.includes('/.templates/') || fullFilepath.startsWith('.templates/'));
+                        .renderItem=${fullFilepath => {
+                            if (!fullFilepath || typeof fullFilepath !== 'string') return html``;
+                            const parsed = this.utils.parseURI(fullFilepath);
+                            const isGitMod = this._gitModifiedFiles.has(fullFilepath);
+                            const cardSuffix = parsed.isSharedMount ? `🌐 ${parsed.volume}` : (parsed.isUserTemplate ? 'User Template' : (parsed.isReadOnlyTemplate ? 'Template' : (isGitMod ? 'M' : '')));
                             return html`
                                 <div style="width: 100%; box-sizing: border-box; padding: 0 var(--tree-item-px) 8px var(--tree-item-px);">
                                     <sutram-card
                                         style="margin-bottom: 0;"
                                         .filename=${fullFilepath}
                                         .detailText=${fullFilepath}
-                                        .detailSuffix=${isUserTemplate ? 'User Template' : (isReadOnlyTemplate ? 'Template' : (isGitMod ? 'M' : ''))}
-                                        .titleText=${key}
+                                        .detailSuffix=${cardSuffix}
+                                        .titleText=${parsed.filename}
                                         descriptionText=""
-                                        intent=${(isReadOnlyTemplate || isUserTemplate) ? 'highlight' : (isGitMod ? 'highlight' : 'primary')}
-                                        icon=${isReadOnlyTemplate ? 'book-open' : ((this._pendingMutations.has(fullFilepath) || this._pendingMutations.has(`vfs://${fullFilepath}`)) ? 'cloud-upload' : 'file-code-2')}
+                                        intent=${(parsed.isSharedMount || parsed.isTemplate || isGitMod) ? 'highlight' : 'primary'}
+                                        icon=${parsed.isSharedMount ? 'globe' : (parsed.isReadOnlyTemplate ? 'book-open' : (this._pendingMutations.has(fullFilepath) ? 'cloud-upload' : 'file-code-2'))}
                                         .entityType=${this.entityType || 'file'}
-                                        .entityData=${{ filepath: fullFilepath, isFS: !isReadOnlyTemplate, isTemplate: isReadOnlyTemplate || isUserTemplate, git_modified: isGitMod }}>
+                                        .entityData=${{ filepath: fullFilepath, isSource: parsed.isSource, isFS: parsed.isEditable, isTemplate: parsed.isTemplate, git_modified: isGitMod }}
+                                        @card-clicked=${(e) => {
+                                            e.stopPropagation();
+                                            this.dispatchEvent(new CustomEvent('card-clicked', {
+                                                detail: { filename: fullFilepath, isSource: parsed.isSource, isFS: parsed.isEditable },
+                                                bubbles: true,
+                                                composed: true
+                                            }));
+                                        }}>
                                     </sutram-card>
                                 </div>
                             `;
@@ -216,41 +267,51 @@ constructor() {
                         .items=${directoryEntries}
                         .renderItem=${node => {
                             if (!node || typeof node !== 'object') return html``;
-                            const fullTarget = (node.fullPath.startsWith('vfs://') || node.fullPath.startsWith('ctx://')) ? node.fullPath : `${this.basePath}${node.fullPath}`;
-                            const isUserTemplateSub = fullTarget.includes('/.templates/user/') || node.fullPath.startsWith('.templates/user/');
-                            const isUserTemplateRoot = fullTarget.endsWith('/.templates/user') || node.fullPath === '.templates/user';
-                            const isReadOnlyTemplateNode = !isUserTemplateSub && (fullTarget.includes('/.templates') || node.fullPath.startsWith('.templates'));
+                            const fullTarget = node.canonicalUri || node.fullPath;
+                            const parsed = this.utils.parseURI(fullTarget);
+                            const isUserTemplateRoot = fullTarget.endsWith('/.templates/user');
+                            const isReadOnlyTemplateNode = !parsed.isUserTemplate && !isUserTemplateRoot && fullTarget.includes('/.templates');
                             if (node.type === 'directory') {
-                                const nextPath = node.fullPath.split('/').filter(Boolean);
+                                const nextPath = Array.isArray(node.treePath) ? node.treePath : node.fullPath.split('/').filter(Boolean);
+                                const isSharedDirRoot = parsed.isSharedMount && nextPath.length === 1;
                                 return html`
                                     <div style="width: 100%; box-sizing: border-box; padding: 0 var(--tree-item-px) 8px var(--tree-item-px);">
                                         <sutram-card
                                             style="margin-bottom: 0;"
                                             .titleText=${node.name}
-                                            icon=${isUserTemplateRoot ? 'user' : (isReadOnlyTemplateNode ? 'library' : 'folder')}
-                                            intent=${(isReadOnlyTemplateNode || isUserTemplateRoot) ? 'highlight' : 'warning'}
+                                            icon=${isUserTemplateRoot ? 'user' : (isReadOnlyTemplateNode ? 'library' : (isSharedDirRoot ? 'globe' : 'folder'))}
+                                            intent=${(isReadOnlyTemplateNode || isUserTemplateRoot || isSharedDirRoot) ? 'highlight' : 'warning'}
                                             .entityType=${'folder'}
-                                            .entityData=${{ id: fullTarget, folderpath: fullTarget, isDir: !isReadOnlyTemplateNode, isSkeleton: isReadOnlyTemplateNode, isTemplate: isReadOnlyTemplateNode || isUserTemplateSub }}
+                                            .entityData=${{ id: fullTarget, folderpath: fullTarget, isDir: !isReadOnlyTemplateNode, isSkeleton: isReadOnlyTemplateNode, isTemplate: isReadOnlyTemplateNode || parsed.isUserTemplate }}
                                             @card-clicked=${(e) => { e.stopPropagation(); this._setPath(nextPath); }}>
                                         </sutram-card>
                                     </div>
                                 `;
                             }
-                            const isGitMod = this._gitModifiedFiles.has(fullTarget) || this._gitModifiedFiles.has(fullTarget.replace(/^vfs:\/\//, ''));
-                            const isPending = this._pendingMutations.has(fullTarget) || this._pendingMutations.has(`vfs://${fullTarget}`);
+                            const isGitMod = this._gitModifiedFiles.has(fullTarget);
+                            const isPending = this._pendingMutations.has(fullTarget);
+                            const cardSuffix = parsed.isSharedMount ? `🌐 ${parsed.volume}` : (parsed.isUserTemplate ? 'User Template' : (isReadOnlyTemplateNode ? 'Template' : (isGitMod ? 'M' : '')));
                             return html`
                                 <div style="width: 100%; box-sizing: border-box; padding: 0 var(--tree-item-px) 8px var(--tree-item-px);">
                                     <sutram-card
                                         style="margin-bottom: 0;"
                                         .filename=${fullTarget}
                                         .detailText=${fullTarget}
-                                        .detailSuffix=${isUserTemplateSub ? 'User Template' : (isReadOnlyTemplateNode ? 'Template' : (isGitMod ? 'M' : ''))}
+                                        .detailSuffix=${cardSuffix}
                                         .titleText=${node.name}
                                         descriptionText=""
-                                        intent=${(isReadOnlyTemplateNode || isUserTemplateSub) ? 'highlight' : (isGitMod ? 'highlight' : 'primary')}
-                                        icon=${isReadOnlyTemplateNode ? 'book-open' : (isPending ? 'cloud-upload' : 'file-code-2')}
+                                        intent=${(parsed.isSharedMount || isReadOnlyTemplateNode || parsed.isUserTemplate || isGitMod) ? 'highlight' : 'primary'}
+                                        icon=${parsed.isSharedMount ? 'globe' : (isReadOnlyTemplateNode ? 'book-open' : (isPending ? 'cloud-upload' : 'file-code-2'))}
                                         .entityType=${this.entityType || 'file'}
-                                        .entityData=${{ filepath: fullTarget, isFS: !isReadOnlyTemplateNode, isTemplate: isReadOnlyTemplateNode || isUserTemplateSub, git_modified: isGitMod, is_dirty: isPending }}>
+                                        .entityData=${{ filepath: fullTarget, isSource: parsed.isSource, isFS: parsed.isEditable, isTemplate: isReadOnlyTemplateNode || parsed.isUserTemplate, git_modified: isGitMod, is_dirty: isPending }}
+                                        @card-clicked=${(e) => {
+                                            e.stopPropagation();
+                                            this.dispatchEvent(new CustomEvent('card-clicked', {
+                                                detail: { filename: fullTarget, isSource: parsed.isSource, isFS: parsed.isEditable },
+                                                bubbles: true,
+                                                composed: true
+                                            }));
+                                        }}>
                                     </sutram-card>
                                 </div>
                             `;

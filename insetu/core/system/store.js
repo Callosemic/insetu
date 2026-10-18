@@ -90,27 +90,28 @@ AppStore.subscribe(
         const vfsManifest = vfs || {};
         const ctxManifest = ctx || {};
         const configs = targetConfigs || [];
-        const validPrefixes = configs.map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
+        const validPrefixes = configs.map(cfg => cfg.repo_dir ? `vfs://${cfg.repo_dir}/` : '').filter(Boolean);
 
         const allFiles = new Set();
         const gitMod = new Set();
-
         Object.values(vfsManifest).forEach(bucket => {
             if (bucket && Array.isArray(bucket.files)) {
                 bucket.files.forEach(f => {
-                    if (validPrefixes.length === 0 || validPrefixes.some(prefix => f.startsWith(prefix))) {
+                    if (f && typeof f === 'string' && (validPrefixes.length === 0 || validPrefixes.some(prefix => f.startsWith(prefix)))) {
                         allFiles.add(f);
                     }
                 });
             }
             if (bucket && Array.isArray(bucket.git_modified)) {
-                bucket.git_modified.forEach(f => gitMod.add(f));
+                bucket.git_modified.forEach(f => {
+                    if (f && typeof f === 'string') gitMod.add(f);
+                });
             }
         });
 
         configs.forEach(cfg => {
-            if (cfg.repo_dir && !Array.from(allFiles).some(f => f.startsWith(cfg.repo_dir + '/'))) {
-                allFiles.add(cfg.repo_dir + '/.gitkeep');
+            if (cfg.repo_dir && !Array.from(allFiles).some(f => f.startsWith(`vfs://${cfg.repo_dir}/`))) {
+                allFiles.add(`vfs://${cfg.repo_dir}/.gitkeep`);
             }
         });
 

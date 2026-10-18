@@ -5,7 +5,7 @@ import concurrent.futures
 from pathlib import Path
 from akasa.utils import get_workspace_physics, load_config, build_tree_dict
 from akasa.vfs import execute_vfs_save
-from insetu.core.utils_core import execute_binary
+from insetu.core.utils_core import execute_binary, InSetuURI
 from insetu.core.topology.engine_topology import get_valid_workspace_files, get_topology_files_for_repo
 from akasa.hooks import hooks
 from insetu.core.sdk import InSetuExtension
@@ -134,14 +134,13 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
             return
         if not silent: print(f"🗺️  Cartographing {repo_dir}...")
         comments = extract_existing_comments(index_path, repo_path)
+        valid_uris = get_topology_files_for_repo(workspace_id, repo_dir)
 
-        valid_files = get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True)
-
-        if not valid_files: return
+        if not valid_uris: return
         hidden_managed = {d for d in (set(cfg.get("managed_dirs", [])) | {".insetu-data"}) if d.startswith('.')}
         filtered_files = [
-            f for f in valid_files
-            if not any(f.startswith(f"{d}/") or f"/{d}/" in f for d in hidden_managed)
+            InSetuURI(u).path for u in valid_uris
+            if not any(InSetuURI(u).path.startswith(f"{d}/") or f"/{d}/" in InSetuURI(u).path for d in hidden_managed)
         ]
         if not filtered_files: return
 

@@ -1,13 +1,14 @@
 from pathlib import Path
 import os
 import re
+from typing import TypedDict, List
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from insetu.core.system.legacy import move_tree_contents
 from insetu.core.utils_core import resolve_macro_includes, InSetuURI, get_workspace_physics
 from akasa.hooks import hooks
-from akasa.utils import get_tenant_control_dir, is_extension_enabled, is_core_module, _CORE_MODULES, load_config
-from akasa.vfs import mount_volume, register_driver, DefaultVFSDriver, _resolve_physical_path, execute_vfs_save
+from akasa.utils import get_tenant_control_dir, is_extension_enabled, is_core_module, _CORE_MODULES, load_config, is_subpath
+from akasa.vfs import mount_volume, register_driver, DefaultVFSDriver, _resolve_physical_path
 
 
 def _ensure_global_user_templates_dir(workspace_id: str = "default") -> Path:
@@ -15,12 +16,6 @@ def _ensure_global_user_templates_dir(workspace_id: str = "default") -> Path:
     resolved = _resolve_physical_path("ws://default/prompts/.templates/user", workspace_id)
     user_dir = Path(resolved) if resolved else Path(get_tenant_control_dir("default")).joinpath("data", "prompts", ".templates", "user").resolve()
     os.makedirs(user_dir.as_posix(), exist_ok=True)
-    gitkeep = user_dir.joinpath(".gitkeep")
-    if not gitkeep.exists():
-        try:
-            execute_vfs_save("default", "ws://default/prompts/.templates/user/.gitkeep", "", data={"ignore_ledger": True})
-        except Exception:
-            pass
     return user_dir
 
 
@@ -67,7 +62,7 @@ class PromptsVFSDriver(DefaultVFSDriver):
             if not mod_rel:
                 return mod_prompts_dir.as_posix()
             resolved = mod_prompts_dir.joinpath(mod_rel).resolve()
-            if not str(resolved).startswith(str(mod_prompts_dir)):
+            if not is_subpath(resolved, mod_prompts_dir):
                 return None
             return resolved.as_posix()
         return super().resolve(uri_obj, workspace_id, physical_target)
@@ -81,25 +76,6 @@ prompts_bp = InSetuExtension(
     core=True
 )
 __depends__ = []
-
-
-@hooks.on('coerce_naked_uri')
-def coerce_prompts_uris(raw_uri=None, **kwargs):
-    if raw_uri and (
-        raw_uri.startswith('prompts/')
-        or raw_uri.startswith('.templates/')
-        or raw_uri.startswith('.insetu/prompts/')
-        or raw_uri.startswith('.insetu/data/prompts/')
-    ):
-        clean_p = (
-            raw_uri.replace('.insetu/data/prompts/', '')
-            .replace('.insetu/prompts/', '')
-            .replace('prompts/', '')
-        )
-        return f"ctx://prompts/{clean_p}"
-    return None
-
-
 @hooks.on('mutate_workspace_config')
 def inject_prompts_config(cfg, workspace_id=None, **kwargs):
     for repo_cfg in cfg.get("target_repos", []):
@@ -126,8 +102,6 @@ def hook_prompts_request_paths(workspace_id=None, **kwargs):
         return {"prompts_dir": prompts_dir}
     except Exception:
         return {}
-
-
 @hooks.on('workspace_boot', priority=10)
 def mount_prompts_volumes(workspace_id=None, **kwargs):
     register_driver('ctx', PromptsVFSDriver(), volume='prompts')
@@ -137,37 +111,68 @@ def mount_prompts_volumes(workspace_id=None, **kwargs):
     move_tree_contents(control_dir.joinpath("prompts"), prompts_dir)
     move_tree_contents(control_dir.joinpath("ext", "prompts", "data"), prompts_dir)
     mount_volume(workspace_id, 'ctx', 'prompts', prompts_dir.as_posix())
+
+
+@hooks.on('topology_boot_complete')
+def migrate_legacy_prompt_macros_on_boot(workspace_id=None, **kwargs):
+    """One-time boot migration upgrading legacy scheme-less {{include_prompt: ...}} tags in prompt files to canonical ctx://prompts/ URIs."""
+    try:
+        ctx = prompts_bp.get_context(workspace_id)
+        pattern = re.compile(r'(\{\{\s*include_prompt\s*:\s*)([^\s{}]+)(\s*(?:\{[\s\S]*?\})?\s*\}\})')
+        for prompt_uri in ctx.vfs.walk("ctx://prompts", exts=['.md', '.txt']):
+            if "/.templates/" in prompt_uri and "/.templates/user/" not in prompt_uri:
+                continue
+            content = ctx.vfs.read(prompt_uri)
+            if not content or "include_prompt" not in content:
+                continue
+            changed = False
+            def _upgrade_match(m):
+                nonlocal changed
+                prefix, raw_target, suffix = m.group(1), m.group(2).strip().strip('\'"'), m.group(3)
+                if "://" in raw_target or raw_target.startswith(('./', '../')):
+                    return m.group(0)
+                clean = raw_target
+                for p in ('.insetu/data/prompts/', '.insetu/prompts/', 'prompts/'):
+                    if clean.startswith(p):
+                        clean = clean[len(p):]
+                clean = clean.lstrip('/')
+                changed = True
+                return f"{prefix}ctx://prompts/{clean}{suffix}"
+            new_content = pattern.sub(_upgrade_match, content)
+            if changed and new_content != content:
+                ctx.vfs.save(prompt_uri, new_content, data={"ignore_ledger": True})
+    except Exception:
+        pass
 def _discover_module_template_prompts(workspace_id=None):
     """Scans global user templates (via ws://default/prompts/.templates/user) plus active Core and workspace-enabled extensions."""
     _ensure_global_user_templates_dir(workspace_id)
     ctx = prompts_bp.get_context(workspace_id)
     template_uris = []
-
+    user_templates_found = False
     for ws_user_path in ctx.vfs.walk("ws://default/prompts/.templates/user"):
         if ws_user_path.lower().endswith(('.md', '.txt', '.gitkeep', '.keep')):
-            rel_u = ws_user_path.replace("ws://default/prompts/.templates/user", "").lstrip('/')
+            uri_path = InSetuURI(ws_user_path).path
+            rel_u = uri_path[len("prompts/.templates/user"):].lstrip('/') if uri_path.startswith("prompts/.templates/user") else uri_path
             if rel_u:
                 template_uris.append(f"ctx://prompts/.templates/user/{rel_u}")
-
+                user_templates_found = True
+    if not user_templates_found:
+        template_uris.append("ctx://prompts/.templates/user/.gitkeep")
     cfg = load_config(workspace_id)
     active_modules = sorted(set(_CORE_MODULES) | set(cfg.get("extensions", [])))
     for mod_name in active_modules:
-        mod_dir = _resolve_module_prompts_dir(mod_name, workspace_id)
-        if mod_dir and mod_dir.exists():
-            for root, _, files in os.walk(mod_dir.as_posix()):
-                for f in sorted(files):
-                    if f.lower().endswith(('.md', '.txt')):
-                        abs_f = Path(root).joinpath(f)
-                        rel_f = abs_f.relative_to(mod_dir).as_posix()
-                        template_uris.append(f"ctx://prompts/.templates/{mod_name}/{rel_f}")
+        for mod_tpl_path in sorted(ctx.vfs.walk(f"ctx://prompts/.templates/{mod_name}", exts=['.md', '.txt'])):
+            template_uris.append(mod_tpl_path)
     return template_uris
+
+
 @hooks.on('request_available_prompts')
 def provide_available_prompts(workspace_id=None, **kwargs):
-    """Supplies global (ctx://prompts), virtual module templates (ctx://prompts/.templates), and repo-scoped (<repo>/.insetu-data/prompts) prompts."""
+    """Supplies global (ctx://prompts), virtual module templates (ctx://prompts/.templates), repo-scoped (<repo>/.insetu-data/prompts), and peer-mounted (ws://) prompts."""
     mount_prompts_volumes(workspace_id=workspace_id)
     ctx = prompts_bp.get_context(workspace_id)
     prompts = []
-    for ws_rel_path in ctx.vfs.walk("ctx://prompts"):
+    for ws_rel_path in ctx.vfs.walk("ctx://prompts", exts=['.md', '.txt', '.gitkeep', '.keep']):
         if "/.templates/" not in ws_rel_path:
             prompts.append(ws_rel_path)
 
@@ -178,13 +183,24 @@ def provide_available_prompts(workspace_id=None, **kwargs):
         r_dir = repo_cfg.get("repo_dir")
         if r_dir:
             repo_prompt_root = f"vfs://{r_dir}/.insetu-data/prompts"
-            for r_rel_path in ctx.vfs.walk(repo_prompt_root):
+            for r_rel_path in ctx.vfs.walk(repo_prompt_root, exts=['.md', '.txt', '.gitkeep', '.keep']):
                 prompts.append(r_rel_path)
+    for _, ws_prompt_uri in ctx.iter_shared_mount_files(domain="prompts", exts=['.md', '.txt', '.gitkeep', '.keep']):
+        prompts.append(ws_prompt_uri)
 
-    return [p for p in prompts if p.lower().endswith(('.md', '.txt', '.gitkeep', '.keep'))]
+    return prompts
 
 
-@prompts_bp.route('list', methods=['GET'])
+class PromptsListResponse(TypedDict):
+    prompts: List[str]
+    profile_dir: str
+
+
+class PromptResolveQuery(TypedDict):
+    file: str
+
+
+@prompts_bp.route('list', methods=['GET'], response_schema=PromptsListResponse, docstring="[sync] Lists all available workspace, repository, virtual module template, and mounted prompts.")
 def api_prompts_list(ctx):
     """Provides a list of available prompts (including virtual .templates) for the UI."""
     prompts = provide_available_prompts(workspace_id=ctx.workspace_id)
@@ -192,30 +208,22 @@ def api_prompts_list(ctx):
         "prompts": prompts,
         "profile_dir": Path(ctx.paths["config_path"]).parent.as_posix()
     })
-def _resolve_prompt_uri(raw_file: str) -> str:
-    clean = str(raw_file).replace('\\', '/').strip()
-    if clean.startswith(('ctx://', 'vfs://', 'ws://')):
-        return str(InSetuURI.from_any(clean))
-    if '/.insetu-data/prompts/' in clean or clean.startswith('.insetu-data/prompts/'):
-        return str(InSetuURI.from_any(f"vfs://{clean.lstrip('/')}"))
-    clean_p = clean.replace('.insetu/data/prompts/', '').replace('.insetu/prompts/', '').replace('prompts/', '').lstrip('/')
-    return f"ctx://prompts/{clean_p}"
-@prompts_bp.route('resolve', methods=['GET'])
+@prompts_bp.route('resolve', methods=['GET'], request_schema=PromptResolveQuery, docstring="[sync] Fetches a canonical prompt URI and recursively resolves {{include_prompt: ...}} macros.")
 def api_prompts_resolve(ctx):
-    """Fetches a prompt (or .templates/ prompt) and recursively resolves {{include_prompt: ...}} macros."""
+    """Fetches a canonical prompt URI and recursively resolves {{include_prompt: ...}} macros."""
     mount_prompts_volumes(workspace_id=ctx.workspace_id)
-    filename = ctx.req.args.get('file', '')
+    filename = ctx.req.args.get('file', '').strip()
     if not filename:
         return jsonify({"error": "File required"}), 400
 
-    target_path = _resolve_prompt_uri(filename)
-    content = ctx.vfs.read(target_path)
+    target_uri = str(InSetuURI(filename))
+    content = ctx.vfs.read(target_uri)
     if content is not None:
         def read_prompt(target_req):
-            return ctx.vfs.read(_resolve_prompt_uri(target_req))
+            return ctx.vfs.read(str(InSetuURI(target_req)))
 
         pattern = r'\{\{\s*include_prompt\s*:\s*([^\s{}]+)\s*(?:\{([\s\S]*?)\})?\s*\}\}'
-        resolved_content = resolve_macro_includes(content, target_path, pattern, read_prompt)
+        resolved_content = resolve_macro_includes(content, target_uri, pattern, read_prompt)
         return resolved_content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
     return "Prompt not found.", 404

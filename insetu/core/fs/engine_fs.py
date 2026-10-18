@@ -39,20 +39,32 @@ def api_fs_exists(ctx):
     filename = ctx.req.args.get('file', '').strip()
     if not filename:
         return jsonify({"exists": False, "path": filename})
-    uri = InSetuURI.from_any(filename)
+    uri = InSetuURI(filename)
     return jsonify({"exists": uri.exists(workspace_id), "path": str(uri)})
-@fs_bp.route('fetch', methods=['GET'], request_schema=FileTargetPayload, docstring="Fetches the raw text content of a target VFS path.")
+@fs_bp.route('fetch', methods=['GET'], request_schema=FileTargetPayload, docstring="Fetches or downloads the content of a target canonical VFS/CTX/WS URI.")
 def api_fs_fetch(ctx):
-    """Fetches raw content of a target VFS path for frontend viewing."""
+    """Unified URI read and download gateway for vfs://, ctx://, and ws:// resources."""
     workspace_id = ctx.workspace_id
     filename = ctx.req.args.get('file', '').strip()
 
     if not filename:
         return jsonify({"error": "Filepath required"}), 400
 
-    uri = InSetuURI.from_any(filename)
-    content = uri.read(workspace_id)
+    uri = InSetuURI(filename)
+    as_download = ctx.req.args.get('download') == '1'
 
+    if as_download:
+        resolved_path = uri.resolve_if_exists(workspace_id)
+        if not resolved_path:
+            return jsonify({"error": "File object not found"}), 404
+        safe_basename = Path(resolved_path).name
+        base, ext = os.path.splitext(safe_basename)
+        dl_name = f"{base}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+        res = send_file(resolved_path, as_attachment=True, download_name=dl_name, mimetype='application/octet-stream')
+        res.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        return res
+
+    content = uri.read(workspace_id)
     if content is not None:
         return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
     return "File not found.", 404
@@ -72,7 +84,7 @@ def api_fs_git_diff(ctx):
     if not filename:
         return jsonify({"error": "Filepath required"}), 400
 
-    uri = InSetuURI.from_any(filename)
+    uri = InSetuURI(filename)
     repo_dir = uri.repo
     rel_path = uri.path
 
@@ -108,7 +120,7 @@ def api_fs_git_diff(ctx):
 def download_file(filename):
     """Universal download gateway for contexts, artifacts, and vault files."""
     workspace_id = sniff_tenant_id()
-    uri = InSetuURI.from_any(filename)
+    uri = InSetuURI.from_external_input(filename)
     resolved_path = uri.resolve_if_exists(workspace_id)
     if not resolved_path:
         return jsonify({"error": "File object not found"}), 404
@@ -160,7 +172,9 @@ def api_fs_move(ctx):
                 return jsonify({"error": "Filepath and destination required"}), 400
         if _is_readonly_template_path(filepath) or _is_readonly_template_path(dest_path):
                 return jsonify({"error": "403 Forbidden: Built-in module templates are read-only. Fork the template to your workspace prompts to edit it."}), 403
-        res, code = execute_vfs_move(workspace_id, filepath, dest_path)
+        src_uri = str(InSetuURI(filepath))
+        dst_uri = str(InSetuURI(dest_path))
+        res, code = execute_vfs_move(workspace_id, src_uri, dst_uri)
         return jsonify(res), code
     except Exception as e:
         try:
@@ -180,7 +194,7 @@ def api_fs_archive(ctx):
                 return jsonify({"error": "Filepath required"}), 400
         if _is_readonly_template_path(filepath):
                 return jsonify({"error": "403 Forbidden: Built-in module templates are read-only."}), 403
-        uri = InSetuURI.from_any(filepath)
+        uri = InSetuURI(filepath)
 
         parent_path = uri.path.rpartition('/')[0] if '/' in uri.path else ''
 
@@ -188,11 +202,10 @@ def api_fs_archive(ctx):
             new_path = f"archived/{uri.basename}"
         else:
             new_path = f"{parent_path}/archived/{uri.basename}"
-
         scheme = uri.scheme or "vfs"
-        rel_dest = f"{scheme}://{uri.repo}/{new_path}" if uri.repo else new_path
+        rel_dest = f"{scheme}://{uri.repo}/{new_path}" if uri.repo else f"{scheme}://{new_path}"
 
-        res, code = execute_vfs_move(workspace_id, filepath, rel_dest)
+        res, code = execute_vfs_move(workspace_id, str(uri), rel_dest)
         # Retain payload signature compatibility for the frontend
         res["new_path"] = rel_dest
         res["message"] = "File archive queued."
@@ -212,7 +225,8 @@ def api_fs_delete(ctx):
                 return jsonify({"error": "Filepath required"}), 400
         if _is_readonly_template_path(filepath):
                 return jsonify({"error": "403 Forbidden: Built-in module templates are read-only."}), 403
-        res, code = execute_vfs_delete(workspace_id, filepath)
+        target_uri = str(InSetuURI(filepath))
+        res, code = execute_vfs_delete(workspace_id, target_uri)
         return jsonify(res), code
     except Exception as e:
         try:
@@ -246,34 +260,36 @@ def api_fs_bulk(ctx):
                 continue
             if _is_readonly_template_path(fp) or _is_readonly_template_path(item.get("dest_path", "")):
                 continue
-
+            src_uri_obj = InSetuURI(fp)
+            src_uri = str(src_uri_obj)
             if act == "delete":
                 normalized_ops.append({
                     "action": "delete",
-                    "filepath": fp,
+                    "filepath": src_uri,
                     "is_dir": bool(item.get("is_dir"))
                 })
             elif act == "move":
                 dest = (item.get("dest_path") or "").strip()
-                if dest and dest != fp:
-                    normalized_ops.append({
-                        "action": "move",
-                        "filepath": fp,
-                        "dest_path": dest,
-                        "is_dir": bool(item.get("is_dir"))
-                    })
+                if dest:
+                    dst_uri = str(InSetuURI(dest))
+                    if dst_uri != src_uri:
+                        normalized_ops.append({
+                            "action": "move",
+                            "filepath": src_uri,
+                            "dest_path": dst_uri,
+                            "is_dir": bool(item.get("is_dir"))
+                        })
             elif act == "archive":
-                uri = InSetuURI.from_any(fp)
-                parent_path = uri.path.rpartition('/')[0] if '/' in uri.path else ''
+                parent_path = src_uri_obj.path.rpartition('/')[0] if '/' in src_uri_obj.path else ''
                 if not parent_path or parent_path == '.':
-                    new_path = f"archived/{uri.basename}"
+                    new_path = f"archived/{src_uri_obj.basename}"
                 else:
-                    new_path = f"{parent_path}/archived/{uri.basename}"
-                scheme = uri.scheme or "vfs"
-                rel_dest = f"{scheme}://{uri.repo}/{new_path}" if uri.repo else new_path
+                    new_path = f"{parent_path}/archived/{src_uri_obj.basename}"
+                scheme = src_uri_obj.scheme or "vfs"
+                rel_dest = f"{scheme}://{src_uri_obj.repo}/{new_path}" if src_uri_obj.repo else f"{scheme}://{new_path}"
                 normalized_ops.append({
                     "action": "move",
-                    "filepath": fp,
+                    "filepath": src_uri,
                     "dest_path": rel_dest,
                     "is_dir": bool(item.get("is_dir"))
                 })
@@ -313,11 +329,10 @@ def api_fs_upload(ctx):
     for file in files:
             if file.filename == '':
                     continue
-
             filename = werkzeug.utils.secure_filename(file.filename)
-            target_path = f"{dest_dir}/{filename}".strip('/') if dest_dir else filename
+            target_path = f"{dest_dir.rstrip('/')}/{filename}" if dest_dir else f"vfs://{filename}"
 
-            uri = InSetuURI.from_any(target_path)
+            uri = InSetuURI(target_path)
             filepath = str(uri)
 
             resolved_path = ctx.resolve_path(filepath)
@@ -366,6 +381,7 @@ def api_fs_save(ctx):
                 return jsonify({"error": "Filepath is required"}), 400
         if _is_readonly_template_path(filepath):
                 return jsonify({"error": "403 Forbidden: Built-in module templates are read-only. Fork the template to your workspace prompts to edit it."}), 403
+        filepath = str(InSetuURI(filepath))
         base_hash = data.get("base_hash")
         if base_hash:
             current_disk_content = ctx.vfs.read(filepath)

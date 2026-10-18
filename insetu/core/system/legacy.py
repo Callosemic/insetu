@@ -93,7 +93,6 @@ def migrate_physical_sandboxes(**kwargs):
                     shutil.copy2(p.as_posix(), dst.as_posix())
                 try: os.remove(p.as_posix())
                 except Exception: pass
-
         # 3. Self-Healing DB Recovery inside .insetu/cache/db/
         if cache_db_dir.exists() and cache_db_dir.is_dir():
             for item in os.listdir(cache_db_dir.as_posix()):
@@ -127,3 +126,9 @@ def migrate_physical_sandboxes(**kwargs):
                             except Exception: pass
                     except Exception as e:
                         print(f"⚠️ [Legacy Recovery] Could not recover from {item}: {e}")
+        # 4. Migrate legacy extension store definitions into .insetu/data/<ext>/ via StoreManager SSOT
+        from akasa.extension import StoreManager as _StoreManager
+        for ext_name, filenames in [("flow", ["workflows.json"]), ("editor", ["preferences.json"])]:
+            store_mgr = _StoreManager(ws_id, ext_name=ext_name)
+            for fname in filenames:
+                store_mgr._resolve_store_path(fname)

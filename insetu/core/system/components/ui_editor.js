@@ -70,27 +70,19 @@ export function insertTextAtCursor(textToInsert) {
         composed: true
     }));
 }
-
 export function insertLinkToEditor(path, name) {
     let finalPath = path;
     const currentActiveFile = getActiveEditorPath();
-    if (currentActiveFile) {
-        const targetConfigs = AppStore.getState().targetConfigs || [];
-        const getRepo = (p) => {
-            const match = targetConfigs.find(c => p.startsWith(c.repo_dir + '/'));
-            return match ? match.repo_dir : p.split('/')[0];
-        };
+    if (currentActiveFile && window.inSetu?.utils?.parseURI) {
+        const curParsed = window.inSetu.utils.parseURI(currentActiveFile);
+        const targetParsed = window.inSetu.utils.parseURI(path);
 
-        const currentRepo = getRepo(currentActiveFile);
-        const targetRepo = getRepo(path);
-
-        if (currentRepo !== targetRepo) {
-            const targetPathWithinRepo = path.substring(targetRepo.length + 1);
-            finalPath = `${targetRepo}::${targetPathWithinRepo}`;
+        if (curParsed.repo && targetParsed.repo && curParsed.repo !== targetParsed.repo) {
+            finalPath = `vfs://${targetParsed.repo}/${targetParsed.relativePath}`;
         } else {
-            const currentParts = currentActiveFile.split('/');
+            const currentParts = (curParsed.relativePath || '').split('/').filter(Boolean);
             currentParts.pop();
-            const targetParts = path.split('/');
+            const targetParts = (targetParsed.relativePath || '').split('/').filter(Boolean);
             let commonLength = 0;
             while (commonLength < currentParts.length && commonLength < targetParts.length && currentParts[commonLength] === targetParts[commonLength]) {
                 commonLength++;
@@ -117,51 +109,101 @@ window.Sutram.vendorizeLanguage = async (lang) => {
     }
     return null;
 };
-export async function popoutProjection(filepath) {
-    if (!filepath) return;
+export function canUseMultiWindowPopout() {
+    const layout = window.Sutram?.stores?.Layout?.getState();
+    return layout && typeof layout.canPopout === 'function' ? layout.canPopout() : true;
+}
+
+export function focusActivePopout(filepath) {
+    const layout = window.Sutram?.stores?.Layout?.getState();
+    if (!layout || typeof layout.focusPopout !== 'function') return false;
     const ws = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';
-    const token = sessionStorage.getItem('insetu_boot_token') || '';
     const normFp = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(filepath) : filepath;
+    return layout.focusPopout(normFp, ws) || layout.focusPopout(filepath, ws);
+}
 
-    const fsState = window.inSetu?.stores?.Fs?.getState() || {};
-    const buf = fsState.activeBuffers?.[normFp] || fsState.activeBuffers?.[filepath];
-    if (buf && buf.isFS && buf.content !== buf.originalContent && window.inSetu?.ui?.saveBufferFile) {
-        await window.inSetu.ui.saveBufferFile(filepath, true);
-    }
+export function clearActivePopout(filepath, workspaceId = null) {
+    const layout = window.Sutram?.stores?.Layout?.getState();
+    if (!layout || typeof layout.clearPopout !== 'function') return;
+    const ws = workspaceId || (window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default');
+    const normFp = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(filepath) : filepath;
+    layout.clearPopout(normFp, ws);
+    layout.clearPopout(filepath, ws);
+}
 
-    const url = `/?popout=true&token=${encodeURIComponent(token)}#/${encodeURIComponent(ws)}/center/${encodeURIComponent(normFp)}`;
-    window.open(url, '_blank', 'popup=yes,width=850,height=900');
-
-    const layout = window.Sutram?.stores?.Layout;
-    if (layout) {
-        const layoutState = layout.getState();
-        ['left', 'center', 'right'].forEach(col => {
-            const pinned = layoutState.columns[col]?.pinned || [];
-            pinned.forEach(p => {
-                if (p.id === normFp || p.id === filepath) {
-                    layoutState.unpinFromColumn(col, p.id);
-                }
-            });
-        });
-        layoutState.closeWindow(normFp);
-        if (filepath !== normFp) layoutState.closeWindow(filepath);
-        layoutState.evictProjection(normFp);
-        if (filepath !== normFp) layoutState.evictProjection(filepath);
-
-        const nextState = layout.getState();
-        const activeCol = nextState.focusedColumn || 'center';
-        const nextActiveId = nextState.columns[activeCol]?.active || '';
-        const deepPath = window.inSetu?.stores?.App?.getState()?.tabBrowsePaths?.[nextActiveId];
-        const deepStr = deepPath && deepPath.length > 0 ? '/' + deepPath.map(encodeURIComponent).join('/') : '';
-        const nextHash = `#/${encodeURIComponent(ws)}/${activeCol}/${encodeURIComponent(nextActiveId)}${deepStr}`;
-        if (window.location.hash !== nextHash) {
-            window.history.replaceState(null, '', nextHash);
-        }
+export async function popoutProjection(filepath) {
+    const layout = window.Sutram?.stores?.Layout?.getState();
+    if (layout && typeof layout.popoutProjection === 'function') {
+        const ws = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';
+        return await layout.popoutProjection(filepath, { scopeId: ws });
     }
 }
 
+export async function dockInProjection(filepath = null) {
+    const layout = window.Sutram?.stores?.Layout?.getState();
+    if (layout && typeof layout.dockInProjection === 'function') {
+        return await layout.dockInProjection(filepath);
+    }
+}
+export class InSetuProjectionWindowControls extends InSetuElement {
+    static properties = {
+        filepath: { type: String },
+        beforeAction: { attribute: false }
+    };
+    static styles = [sharedStyles, css`:host { display: inline-flex; align-items: center; }`];
+
+    render() {
+        if (!this.filepath) return html``;
+        const isPopout = new URLSearchParams(window.location.search).get('popout') === 'true';
+        if (isPopout) {
+            return html`
+                <sutram-btn
+                    intent="highlight"
+                    variant="tinted"
+                    icon="minimize-2"
+                    label="Dock In"
+                    title="Return projection to main workbench window"
+                    style="--btn-padding: 4px 10px; --btn-font-size: 0.8rem; margin: 0;"
+                    @click=${async () => {
+                        if (typeof this.beforeAction === 'function') await this.beforeAction();
+                        if (window.inSetu?.ui?.dockInProjection) {
+                            window.inSetu.ui.dockInProjection(this.filepath);
+                        }
+                    }}>
+                </sutram-btn>
+            `;
+        }
+        if (canUseMultiWindowPopout()) {
+            return html`
+                <sutram-btn
+                    intent="neutral"
+                    variant="tinted"
+                    icon="external-link"
+                    label="Pop Out"
+                    title="Open in dedicated pop-out window"
+                    style="--btn-padding: 4px 10px; --btn-font-size: 0.8rem; margin: 0;"
+                    @click=${async () => {
+                        if (typeof this.beforeAction === 'function') await this.beforeAction();
+                        if (window.inSetu?.ui?.popoutProjection) {
+                            window.inSetu.ui.popoutProjection(this.filepath);
+                        }
+                    }}>
+                </sutram-btn>
+            `;
+        }
+        return html``;
+    }
+}
+if (!customElements.get('insetu-projection-window-controls')) {
+    customElements.define('insetu-projection-window-controls', InSetuProjectionWindowControls);
+}
+
 window.inSetu.ui = window.inSetu.ui || {};
+window.inSetu.ui.canUseMultiWindowPopout = canUseMultiWindowPopout;
 window.inSetu.ui.popoutProjection = popoutProjection;
+window.inSetu.ui.dockInProjection = dockInProjection;
+window.inSetu.ui.focusActivePopout = focusActivePopout;
+window.inSetu.ui.clearActivePopout = clearActivePopout;
 
 window.inSetu.editor = window.inSetu.editor || {};
 window.inSetu.editor.getEditorContent = getEditorContent;
@@ -349,7 +391,6 @@ export class InSetuFrontmatterEditor extends InSetuElement {
             :host([zen-mode]) .zen-exit-btn:active { transform: scale(0.95); }
         `
     ];
-
     constructor() {
         super();
         this.filepath = '';
@@ -363,6 +404,16 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         this._metadataExpanded = false;
         this._writingMode = false;
         this.zenMode = false;
+        this._autoSaveTimer = null;
+    }
+
+    _triggerDebouncedAutoSave() {
+        if (this._autoSaveTimer) clearTimeout(this._autoSaveTimer);
+        this._autoSaveTimer = setTimeout(() => {
+            if (this._isDirty && typeof this._handleSave === 'function') {
+                this._handleSave();
+            }
+        }, 2000);
     }
     _cleanArtifacts() {
         const cleanFn = window.inSetu?.utils?.cleanCodeArtifacts;
@@ -446,6 +497,49 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         this.registerGlobalListener('insetu:editor:save-frontmatter', window, () => {
             if (this._isDirty) {
                 this._handleSave();
+            }
+        });
+
+        // Emergency Flush on Window Close (Protects in-flight keystrokes during debounce)
+        this._beforeUnloadFlush = (e) => {
+            if (this._isDirty) {
+                if (e) {
+                    e.preventDefault();
+                    e.returnValue = '';
+                }
+                if (this.filepath && window.inSetu?.api?.keepalivePost) {
+                    let latestYaml = { ...this._yamlData };
+                    this.dispatchEvent(new CustomEvent('insetu:request-frontmatter', {
+                        detail: { currentYaml: latestYaml, respond: (newYaml) => { latestYaml = newYaml; } },
+                        bubbles: true, composed: true
+                    }));
+                    const newFileText = window.inSetu.utils.serializeFrontmatter(latestYaml, this._content);
+                    const normPath = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(this.filepath) : this.filepath;
+                    window.inSetu.api.keepalivePost('fs/save', {
+                        filepath: normPath,
+                        content: newFileText,
+                        base_hash: null
+                    });
+                }
+            }
+        };
+        window.addEventListener('beforeunload', this._beforeUnloadFlush);
+
+        // Focus-Aware Idle Hot-Swap Listener
+        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
+            const mutations = e.detail?.mutations || [];
+            const normPath = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(this.filepath) : this.filepath;
+            const isMatch = mutations.some(m => {
+                const mNorm = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(m.filepath) : m.filepath;
+                return mNorm === normPath || m.filepath === this.filepath;
+            });
+
+            if (isMatch) {
+                const cmEditor = this.shadowRoot.querySelector('insetu-markdown-editor');
+                const hasFocus = cmEditor?.shadowRoot?.activeElement || this.shadowRoot.activeElement;
+                if (!this._isDirty && !hasFocus) {
+                    this._loadFile();
+                }
             }
         });
     }
@@ -553,6 +647,9 @@ export class InSetuFrontmatterEditor extends InSetuElement {
             const yamlDirty = (JSON.stringify(latestYaml) !== this._originalYaml);
             this._isDirty = contentDirty || yamlDirty;
             this.dispatchEvent(new CustomEvent('editor-dirty', { detail: { isDirty: this._isDirty }, bubbles: true, composed: true }));
+            if (this._isDirty) {
+                this._triggerDebouncedAutoSave();
+            }
             this.requestUpdate();
         });
     }
@@ -632,11 +729,17 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                             }}>
                         </sutram-entity-actions>
                     </div>
-                    <button class="meta-btn ${this._metadataExpanded ? 'active' : ''}"
-                        @click=${() => this._metadataExpanded = !this._metadataExpanded}
-                        title="Toggle Metadata">
-                        <yv-icon name="settings" style="width: 14px; height: 14px;"></yv-icon><span class="meta-btn-text"> Metadata</span> <span style="font-size: 0.7rem; margin-left: 2px;">${this._metadataExpanded ? '▲' : '▼'}</span>
-                    </button>
+                    <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                        <insetu-projection-window-controls
+                            .filepath=${this.filepath}
+                            .beforeAction=${async () => { if (this._isDirty) await this._handleSave(); }}>
+                        </insetu-projection-window-controls>
+                        <button class="meta-btn ${this._metadataExpanded ? 'active' : ''}"
+                            @click=${() => this._metadataExpanded = !this._metadataExpanded}
+                            title="Toggle Metadata">
+                            <yv-icon name="settings" style="width: 14px; height: 14px;"></yv-icon><span class="meta-btn-text"> Metadata</span> <span style="font-size: 0.7rem; margin-left: 2px;">${this._metadataExpanded ? '▲' : '▼'}</span>
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Collapsible Metadata Drawer (Default Collapsed, BELOW Action Bar) -->
@@ -690,8 +793,68 @@ if (window.ExtensionRegistry) {
     window.ExtensionRegistry.registerExtension('editor', {
         name: "Editor Preferences",
         version: "2.0.0",
+        allow_popout: true,
         offline_mode: "full",
         uiHooks: {
+            'sutram:resolve-editor-component': (id) => {
+                return 'insetu-editor-projection';
+            },
+            'sutram:normalize-projection-id': (id) => {
+                return window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(id) : id;
+            },
+            'sutram:popout-fallback': (id) => {
+                window.inSetu?.events?.emit('insetu:editor:toggle-zen', { filepath: id });
+                if (window.inSetu?.ui?.setGlobalStatus) {
+                    window.inSetu.ui.setGlobalStatus(`🔍 Maximized in Focus Mode (PWA single-window environment)`, 2500);
+                }
+                return true;
+            },
+            'sutram:before-popout': (id) => {
+                const normFp = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(id) : id;
+                const fsState = window.inSetu?.stores?.Fs?.getState() || {};
+                const buf = fsState.activeBuffers?.[normFp] || fsState.activeBuffers?.[id];
+                if (buf && buf.isFS && buf.content !== buf.originalContent && window.inSetu?.ui?.saveBufferFile) {
+                    return window.inSetu.ui.saveBufferFile(normFp, true);
+                }
+                return null;
+            },
+            'sutram:before-dock-in': (id) => {
+                const normFp = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(id) : id;
+                const fsState = window.inSetu?.stores?.Fs?.getState() || {};
+                const buf = fsState.activeBuffers?.[normFp] || fsState.activeBuffers?.[id];
+                if (buf && buf.isFS && buf.content !== buf.originalContent && window.inSetu?.ui?.saveBufferFile) {
+                    return window.inSetu.ui.saveBufferFile(normFp, true);
+                }
+                return null;
+            },
+            'sutram:build-popout-url': ({ id, colId, scopeId }) => {
+                const ws = scopeId || (window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default');
+                const token = sessionStorage.getItem('insetu_boot_token') || '';
+                const isSlot = window.ExtensionRegistry?.getLayoutSlots?.().some(s => s.id === id || s.rawId === id);
+                if (isSlot) {
+                    return `/?popout=true&token=${encodeURIComponent(token)}#/${encodeURIComponent(ws)}/${encodeURIComponent(colId)}/${encodeURIComponent(id)}`;
+                }
+                return `/?popout=true&token=${encodeURIComponent(token)}#/${encodeURIComponent(ws)}/${encodeURIComponent(colId)}/editor/${encodeURIComponent(id)}`;
+            },
+            'sutram:restore-docked-projection': ({ id, colId }) => {
+                if (id.startsWith('ctx://notes/') || id.includes('.insetu-data/notes/')) {
+                    if (window.inSetu?.stores?.Notes?.getState()?.openNoteEditor) {
+                        window.inSetu.stores.Notes.getState().openNoteEditor(id);
+                        return true;
+                    }
+                } else if (id.includes('.insetu-data/tracker/') || id.includes('.tracker/')) {
+                    const normTaskUri = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(id) : id;
+                    window.inSetu.events.emit('insetu:tracker:open-edit-task', { filepath: normTaskUri });
+                    return true;
+                } else if (window.inSetu?.vfs?.viewSourceFile) {
+                    const isReadOnlyTpl = !id.includes('/.templates/user/') && id.includes('/.templates/');
+                    const isShared = id.startsWith('ws://');
+                    const isEditable = !isReadOnlyTpl && !isShared && (!id.startsWith('ctx://') || id.startsWith('ctx://prompts/'));
+                    window.inSetu.vfs.viewSourceFile(id, isEditable);
+                    return true;
+                }
+                return false;
+            },
             'sutram:popout-projection': (id) => {
                 if (id) {
                     popoutProjection(id);
@@ -744,7 +907,7 @@ if (window.ExtensionRegistry) {
                 vfsBound: false,
                 intent: 'neutral',
                 order: 14,
-                match: () => !new URLSearchParams(window.location.search).get('popout'),
+                match: () => canUseMultiWindowPopout(),
                 onClick: (data) => {
                     popoutProjection(data.filepath);
                 }

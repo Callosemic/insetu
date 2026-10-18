@@ -22,8 +22,7 @@ from insetu.core.utils_core import (
     extract_manifest_files,
     get_domain_artifact_path,
     BucketAddress,
-    InSetuURI,
-    is_naked_context_uri
+    InSetuURI
 )
 from insetu.core.system.legacy import move_tree_contents
 from insetu.core.topology.engine_topology import resolve_file_bucket
@@ -31,7 +30,8 @@ from akasa.extension import ExtensionContext
 from insetu.core.sdk import InSetuExtension
 from akasa.hooks import hooks
 from akasa.db import register_schema, get_connection
-from akasa.vfs import VFSTransaction, execute_vfs_delete, mount_volume, register_driver, DefaultVFSDriver
+from akasa.vfs import mount_volume, register_driver, DefaultVFSDriver
+from akasa.sync import get_active_pipeline_modules
 
 register_schema('vfs_index', {
     'manifest_ledger': {
@@ -89,15 +89,11 @@ def compile_context_payload(workspace_id, output_dir, base_uri, header_block, te
             hasher.update(tb.encode('utf-8'))
         hasher.update(json.dumps(files).encode('utf-8'))
         content_hash = hasher.hexdigest()
-
         existing_entry = ctx.manifest.get("ctx", {}).get(base_uri)
         if existing_entry and existing_entry.get("meta", {}).get("content_hash") == content_hash:
-            # Physical disk guardrail: Heal the context if it was deleted or misrouted by a previous bug
-            resolved_disk_path = ctx.resolve_path(base_uri, must_exist=True)
-            if resolved_disk_path:
-                return existing_entry  # Skip all disk I/O. The content hasn't changed and file physically exists.
-
-    vfs = VFSTransaction(workspace_id)
+            if ctx.is_context_on_disk(base_uri, existing_entry):
+                return existing_entry  # Skip all disk I/O. The content hasn't changed and all chunks physically exist.
+    vfs = ctx.vfs
     max_bytes = (max_kb * 1024) if max_kb and max_kb > 0 else float('inf')
     chunks = []
 
@@ -198,7 +194,7 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
             old_events = old_args.get('ledger_events', [])
             def _get_fp(item):
                 raw_fp = item['filepath'] if isinstance(item, dict) and 'filepath' in item else str(item)
-                uri = InSetuURI.from_any(raw_fp)
+                uri = InSetuURI(raw_fp)
                 clean_fp = str(uri)
                 if raw_fp.endswith('/') and not clean_fp.endswith('/'):
                     clean_fp += '/'
@@ -326,8 +322,8 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
         if not os.path.exists(repo_path):  
             debug_log_lines.append(f"\n[REPO SKIP] {repo_dir} (Path not found: {repo_path})")
             continue
-        # Pull strictly from the SSOT Topology Ledger, avoiding disk I/O
-        final_list = _get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True)
+        # Pull canonical vfs:// URIs strictly from the SSOT Topology Ledger, avoiding disk I/O
+        final_list = _get_topology_files_for_repo(workspace_id, repo_dir)
 
         debug_log_lines.append(f"\n[REPO] {repo_dir} (Path: {repo_path})")
         debug_log_lines.append(f"  - Total files from Topology Ledger: {len(final_list)}")
@@ -337,23 +333,22 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
         if archive_type == "media-vault":
             vault_name = f"ctx://contexts/{repo_dir}_vault.json"
             r_title = config.get("title", repo_dir.replace('-', ' ').title())
-
-            def make_vault_gen(files, current_repo_dir):
+            def make_vault_gen(files):
                 def _gen():
-                    return {"header": "", "blocks": [], "files": [f"{current_repo_dir}/{f}" for f in files]}
+                    return {"header": "", "blocks": [], "files": list(files)}
                 return _gen
             def make_vault_recall(files, current_repo_dir):
                 def _recall(events):
                     vfs_prefix = f"vfs://{current_repo_dir.lower()}/"
                     if any(e['filepath'].lower().startswith(vfs_prefix) for e in events):
-                        return make_vault_gen(files, current_repo_dir)()
+                        return make_vault_gen(files)()
                     return None
                 return _recall
             if final_list:
                 declarations.append({
                     "filename": vault_name,
                     "meta": {"title": r_title, "domain": config.get("domain", "Media Vault"), "desc": config.get("description", "Media vault assets."), "type": "gather", "repo": repo_dir, "bucket_id": "main"},
-                    "generator_callback": make_vault_gen(final_list, repo_dir),
+                    "generator_callback": make_vault_gen(final_list),
                     "recall_callback": make_vault_recall(final_list, repo_dir)
                 })
             continue
@@ -372,15 +367,16 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                     b["id"] = b_id
                     buckets[b_id] = {"files": [], "cfg": b}
 
-            for filepath in final_list:
-                b, module = resolve_file_bucket(filepath, sub_buckets, repo_dir=repo_dir)
+            for file_uri in final_list:
+                rel_path = InSetuURI(file_uri).path
+                b, module = resolve_file_bucket(rel_path, sub_buckets, repo_dir=repo_dir)
                 if b and module:
                     if module not in dynamic_files: dynamic_files[module] = {"files": [], "cfg": b}
-                    dynamic_files[module]["files"].append(filepath)
+                    dynamic_files[module]["files"].append(file_uri)
                 elif b:
                     b_id = b.get("id") or slugify(b.get("title", "untitled_bucket"))
                     if b_id in buckets:
-                        buckets[b_id]["files"].append(filepath)
+                        buckets[b_id]["files"].append(file_uri)
                 else:
                     if "main" not in buckets:
                         buckets["main"] = {
@@ -390,7 +386,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                                 "exclude_from_context": config.get("exclude_from_context", False)
                             }
                         }
-                    buckets["main"]["files"].append(filepath)
+                    buckets["main"]["files"].append(file_uri)
         else:
             out_filename = f"{safe_r_dir}_context.txt"
             buckets["main"] = {
@@ -405,17 +401,18 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
             def _gen():
                 if not data["files"]:
                     return {"header": "", "blocks": [], "files": []}
-                vfs = VFSTransaction(workspace_id)
-                filepaths = data["files"]
-                header_str = "="*60 + f"\nINSETU TOPOLOGY ({b_title.upper()})\n" + "="*60 + "\n" + generate_ascii_tree(filepaths) + "\n\n"
+                vfs = ctx.vfs
+                file_uris = data["files"]
+                display_paths = [InSetuURI(u).path for u in file_uris]
+                header_str = "="*60 + f"\nINSETU TOPOLOGY ({b_title.upper()})\n" + "="*60 + "\n" + generate_ascii_tree(display_paths) + "\n\n"
                 text_blocks = []
-                for f in filepaths:
+                for f_uri in file_uris:
                     try:
-                        content = vfs.read(f"vfs://{current_repo_dir}/{f}")
+                        content = vfs.read(f_uri)
                         if content is not None:
-                            text_blocks.append(f"\n\n{'='*60}\n>>>NEW FILE :: {current_repo_dir}/{f} | {b_domain}\n{'='*60}\n\n{content}")
+                            text_blocks.append(f"\n\n{'='*60}\n>>>NEW FILE :: {f_uri} | {b_domain}\n{'='*60}\n\n{content}")
                     except Exception: pass
-                return {"header": header_str, "blocks": text_blocks, "files": [f"{current_repo_dir}/{f}" for f in filepaths]}
+                return {"header": header_str, "blocks": text_blocks, "files": list(file_uris)}
             def _recall(events):
                 is_dirty = False
                 vfs_prefix = f"vfs://{current_repo_dir.lower()}/"
@@ -503,7 +500,7 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
             raw_fp = item['filepath'] if isinstance(item, dict) and 'filepath' in item else str(item)
             m_type = item.get('mutation_type', default_op) if isinstance(item, dict) else default_op
 
-            uri = InSetuURI.from_any(raw_fp)
+            uri = InSetuURI(raw_fp)
             clean_fp = str(uri)
 
             if raw_fp.endswith('/') and not clean_fp.endswith('/'):
@@ -536,11 +533,10 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         ledger_events = list(event_dict.values())
         if not ledger_events:
             return
-
         affected_repos = set()
         for e in ledger_events:
             fp = e.get('filepath', '') if isinstance(e, dict) else str(e)
-            repo = InSetuURI.from_any(fp).repo
+            repo = InSetuURI(fp).repo
             if repo:
                 affected_repos.add(repo)
         # Collect context declarations across the OS
@@ -599,8 +595,8 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
                     if not chunks: chunks = [old_key]
                     for chunk in chunks:
                         ctx.vfs.delete(chunk, data={"ignore_ledger": True})
-
         if dirty:
+            # Flush all written chunks to disk BEFORE publishing updated timestamps in SQLite
             ctx.sync_vfs_barrier()
             ctx.save_manifest(touched_manifest, is_full_compile=False)
             return list(touched_manifest.keys())
@@ -645,14 +641,14 @@ def generate_context_file(workspace_id=None, target_repos=None):
                 # Track all constituent chunks for the global vacuum
                 chunks = entry.get("chunks", [filename])
                 expected_artifacts.update(InSetuURI(c).basename for c in chunks)
-    # 3. Global Vacuum: Purge physical files that aren't explicitly declared
-    if target_repos is None:
-        vacuum_manifest_artifacts(ctx, "ctx://contexts", expected_artifacts, exempt_abs_paths=active_ephemerals)
+    # Flush all newly generated/updated context chunks to disk first (Make-Before-Break)
+    ctx.sync_vfs_barrier()
+
     # Re-inject surviving Ephemeral Artifacts into the manifest
     old_manifest = ctx.manifest.get("ctx", {})
     restored_ephemerals = set()
     for k, v in old_manifest.items():
-        if v.get("meta", {}).get("domain") in ("Quickpacks", "Exported Contexts"):
+        if isinstance(v, dict) and v.get("meta", {}).get("domain") in ("Quickpacks", "Exported Contexts"):
             safe_k = InSetuURI(k).basename
             base_path = Path(paths["contexts_dir"]).joinpath(safe_k).as_posix()
             if base_path in active_ephemerals:
@@ -676,22 +672,66 @@ def generate_context_file(workspace_id=None, target_repos=None):
                     "files": [uri_key],
                     "meta": {"type": "gather", "title": title_name, "domain": domain_name, "desc": "Ephemeral context payload.", "size_bytes": size_bytes}
                 }
-    # Add tombstones and execute targeted physical vacuum for orphaned contexts 
-    # to prevent Targeted Sweeps from leaking empty bucket artifacts.
+    # Only tombstone obsolete gather entries if we actually evaluated declarations for that repo
+    evaluated_repos = {d.get("meta", {}).get("repo") for d in declarations if d.get("meta", {}).get("repo")}
     for k, v in old_manifest.items():
-        is_gather = isinstance(v, dict) and v.get("meta", {}).get("type") == "gather"
-        if is_gather and k not in manifest:
-            repo = v.get("meta", {}).get("repo")
-            if target_repos is None or repo in target_repos:
-                manifest[k] = None
-                if target_repos is not None:
-                    chunks = v.get("chunks", [k]) if isinstance(v, dict) else [k]
-                    for chunk in chunks:
-                        ctx.vfs.delete(chunk, data={"ignore_ledger": True})
+        if not isinstance(v, dict):
+            continue
+        meta = v.get("meta", {})
+        if meta.get("type") == "gather" and meta.get("domain") not in ("Quickpacks", "Exported Contexts"):
+            if k not in manifest:
+                repo = meta.get("repo")
+                if (target_repos is None and repo in evaluated_repos) or (target_repos and repo in target_repos):
+                    manifest[k] = None
 
     ctx.save_manifest(manifest, is_full_compile=False)
-    ctx.sync_vfs_barrier()
     return [k for k, v in manifest.items() if v is not None]
+
+
+@hooks.on('compilation_sequence_complete')
+def vacuum_unaccounted_cache_on_complete(workspace_id=None, **kwargs):
+    """
+    Terminal Mark-and-Sweep Garbage Collector:
+    Runs strictly AFTER all compilation DAG steps (Topology, Cartographer, Gather, Git, Flow)
+    have updated their contexts in-place and committed their manifests.
+    Sweeps each isolated cache volume and deletes only physical files that have zero
+    references in the settled manifest_ledger or ephemeral_artifacts table.
+    """
+    try:
+        ctx = gather_bp.get_context(workspace_id)
+        ctx.sync_vfs_barrier()
+        active_ephemerals = set(ctx.jobs.get_ephemerals())
+        conn = get_connection("vfs_index", workspace_id=workspace_id)
+        total_ledger_rows = conn.execute("SELECT COUNT(*) as cnt FROM manifest_ledger").fetchone()
+        if not total_ledger_rows or total_ledger_rows["cnt"] == 0:
+            return
+
+        rows = conn.execute("SELECT filepath, entry_json FROM manifest_ledger WHERE entry_json IS NOT NULL").fetchall()
+        expected_by_volume = {
+            "contexts": set(),
+            "diffs": set(),
+            "workflows": set()
+        }
+
+        for r in rows:
+            try:
+                entry = json.loads(r["entry_json"])
+            except Exception:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            chunks = entry.get("chunks") or [r["filepath"]]
+            for c in chunks:
+                uri = InSetuURI(c)
+                vol = uri.volume if uri.volume in expected_by_volume else "contexts"
+                expected_by_volume[vol].add(uri.basename)
+
+        vacuum_manifest_artifacts(ctx, "ctx://contexts", expected_by_volume["contexts"], exempt_abs_paths=active_ephemerals)
+        vacuum_manifest_artifacts(ctx, "ctx://diffs", expected_by_volume["diffs"], exempt_abs_paths=active_ephemerals)
+        vacuum_manifest_artifacts(ctx, "ctx://workflows", expected_by_volume["workflows"], exempt_abs_paths=active_ephemerals)
+        ctx.sync_vfs_barrier()
+    except Exception as e:
+        print(f"⚠️ [Gather Vacuum] Post-compilation cache sweep warning: {e}")
 @gather_bp.worker("pack_selection_task")
 def _pack_selection_worker(ctx, items=None, gather_only=True, job_id=None, **kwargs):
     if items is None:
@@ -713,7 +753,7 @@ def _pack_selection_worker(ctx, items=None, gather_only=True, job_id=None, **kwa
     header_str += "============================================================\n\n"
     header_str += generate_ascii_tree(clean_tree_files) + "\n\n"
     text_blocks = []
-    with VFSTransaction(ctx.workspace_id) as vfs:
+    with ctx.vfs as vfs:
         for filepath in files:
             try:
                 content = vfs.read(filepath)
@@ -735,10 +775,9 @@ def _pack_selection_worker(ctx, items=None, gather_only=True, job_id=None, **kwa
         {"type": "gather", "title": "Quickpack", "domain": "Quickpacks", "desc": "Ad-hoc context export."},
         is_ephemeral=True
     )
-
-    # Pure Granular Routing: Only save the specific quickpack to the ledger
-    ctx.save_manifest({base_uri: manifest_entry}, is_full_compile=False)
+    # Write-First, Index-Second: Flush quickpack chunks to disk BEFORE publishing to manifest_ledger
     ctx.sync_vfs_barrier()
+    ctx.save_manifest({base_uri: manifest_entry}, is_full_compile=False)
     chunks = manifest_entry.get("chunks", [base_uri])
     for chunk in chunks:
         out_path = ctx.resolve_path(chunk) or resolve_system_artifact_path(chunk, ctx.workspace_id)
@@ -819,6 +858,14 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
         except Exception as e:
             print(f"Warning: Pre-compile hooks failed: {str(e)}")
         touched_files = []
+        # Self-Healing Cache Guardrail: If any declared gather context in the manifest is missing its physical chunk files on disk, promote to a full compile
+        if not needs_full_compile and not forced_repos:
+            for k, v in manifest_data.items():
+                if isinstance(v, dict) and v.get("meta", {}).get("type") == "gather":
+                    if not ctx.is_context_on_disk(k, v):
+                        needs_full_compile = True
+                        break
+
         if not needs_full_compile and not forced_repos:
             try:
                 if ledger_events:
@@ -848,8 +895,8 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
         # This eliminates the need to load, diff, or overwrite the global manifest.
         delta_manifest = {}
         ctx.emit('compile_contexts', manifest=delta_manifest, is_full_sweep=needs_full_compile if not forced_repos else forced_repos, ledger_events=ledger_events)
-
         if delta_manifest:
+            ctx.sync_vfs_barrier()
             ctx.save_manifest(delta_manifest, is_full_compile=False)
             touched_files.extend(list(delta_manifest.keys()))
         # Map compiled output URIs back to their abstract architectural bucket IDs
@@ -916,7 +963,6 @@ def hook_request_paths(workspace_id=None, **kwargs):
     return {
         "contexts_dir": get_domain_artifact_path(workspace_id, "contexts", "gather")
     }
-
 @hooks.on('workspace_boot', priority=10)
 def mount_gather_volumes(workspace_id=None, **kwargs):
     register_driver('ctx', DefaultVFSDriver())
@@ -925,15 +971,12 @@ def mount_gather_volumes(workspace_id=None, **kwargs):
     contexts_dir = Path(ctx.paths.get("contexts_dir"))
     move_tree_contents(control_dir.joinpath("ext", "gather", "data", "contexts"), contexts_dir)
     mount_volume(workspace_id, 'ctx', 'contexts', contexts_dir.as_posix())
-
-@hooks.on('coerce_naked_uri')
-def coerce_gather_uris(raw_uri=None, **kwargs):
-    if not raw_uri:
-        return None
-    if is_naked_context_uri(raw_uri):
-        clean_c = raw_uri.replace('.insetu/cache/contexts/', '').replace('.insetu/ext/gather/data/contexts/', '').replace('contexts/', '').replace('ctx://contexts/', '')
-        return f"ctx://contexts/{clean_c}"
-    return None
+    try:
+        conn = get_connection("vfs_index", workspace_id=workspace_id)
+        conn.execute("UPDATE manifest_ledger SET filepath = 'ctx://contexts/' || filepath WHERE filepath NOT LIKE '%://%'")
+        conn.commit()
+    except Exception:
+        pass
 
 @hooks.on('manifest_mutated')
 def _invalidate_gather_manifest(workspace_id=None, **kwargs):
@@ -942,6 +985,7 @@ def _invalidate_gather_manifest(workspace_id=None, **kwargs):
 @thread_safe_cache(ttl=2.0, key_maker=lambda workspace_id=None, **kwargs: str(workspace_id))
 def hook_request_manifest(workspace_id=None, **kwargs):
     try:
+        mount_gather_volumes(workspace_id=workspace_id)
         conn = get_connection("vfs_index", workspace_id=workspace_id)
         cursor = conn.execute("SELECT filepath, entry_json, timestamp FROM manifest_ledger")
         manifest = {}
@@ -1032,8 +1076,7 @@ def hook_save_manifest(manifest_data=None, is_full_compile=False, workspace_id=N
         conn.commit()
     except Exception as e:
         print(f"Warning: hook_save_manifest failed: {e}")
-
-@gather_bp.route('manifest/version', methods=['GET'])
+@gather_bp.route('manifest/version', methods=['GET'], docstring="[sync] Returns the latest modification timestamp across the context manifest ledger.")
 def api_manifest_version(ctx):
     try:
         conn = get_connection("vfs_index", workspace_id=ctx.workspace_id)

@@ -4,6 +4,7 @@ import { InSetuElement, createExtensionStore } from '/static/extensions/system/i
 import { resolveEditorMode } from '/static/extensions/system/components/ui_editor.js';
 import { AppStore, SelectionStore } from '/static/extensions/system/store.js';
 import { buildFileTree, resolveDirectoryState, downloadFile as sutramDownloadFile, downloadBlob, bindGhostDrag } from '../../vendor/sutram/js/utils.js';
+import { buildUriFileTree } from '/static/extensions/system/components/ui_file_tree.js';
 export function bindDownloadDrag(e, filename, fetchUrl) {
     const absoluteUrl = window.location.origin + fetchUrl;
     const safeName = filename.split('/').pop();
@@ -42,14 +43,11 @@ export function normalizeVfsURI(path) {
     if (path.includes('://')) return path;
     return `vfs://${path.replace(/^\/+/, '')}`;
 }
-
 export function isFileGitModified(filepath) {
     if (!filepath || typeof filepath !== 'string') return false;
-    const cleanFp = filepath.replace(/^vfs:\/\//, '');
-    const normFp = normalizeVfsURI(filepath);
 
     // 1. Check if the file has unsaved changes in the active editor buffer
-    const activeBuf = FsStore.getState().activeBuffers?.[normFp] || FsStore.getState().activeBuffers?.[cleanFp];
+    const activeBuf = FsStore.getState().activeBuffers?.[filepath];
     if (activeBuf && activeBuf.isFS && activeBuf.content !== activeBuf.originalContent) {
         return true;
     }
@@ -57,7 +55,7 @@ export function isFileGitModified(filepath) {
     // 2. Check the SSOT VFS manifest's git_modified set
     const vfsManifest = AppStore.getState().manifest?.vfs || {};
     for (const bucket of Object.values(vfsManifest)) {
-        if (Array.isArray(bucket?.git_modified) && (bucket.git_modified.includes(cleanFp) || bucket.git_modified.includes(normFp))) {
+        if (Array.isArray(bucket?.git_modified) && bucket.git_modified.includes(filepath)) {
             return true;
         }
     }
@@ -65,8 +63,7 @@ export function isFileGitModified(filepath) {
 }
 export async function viewFileGitDiff(filepath) {
     if (!filepath) return;
-    const normPath = normalizeVfsURI(filepath);
-    const baseName = normPath.split('/').pop();
+    const baseName = filepath.split('/').pop();
     const cleanName = window.inSetu?.utils?.truncateFilename 
         ? window.inSetu.utils.truncateFilename(baseName, 22) 
         : baseName;
@@ -74,7 +71,7 @@ export async function viewFileGitDiff(filepath) {
     if (window.Sutram?.stores?.Layout) {
         const layout = window.Sutram.stores.Layout.getState();
         layout.openWindow({
-            id: `vfs:diff:${normPath}`,
+            id: `vfs:diff:${filepath}`,
             component: 'insetu-file-diff-projection',
             label: `Diff: ${cleanName}`,
             icon: 'git-compare',
@@ -82,7 +79,7 @@ export async function viewFileGitDiff(filepath) {
             extName: 'fs',
             windowOnly: true,
             props: {
-                filepath: normPath
+                filepath
             }
         }, layout.focusedColumn || 'center', 1);
     }
@@ -92,23 +89,19 @@ export const FsStore = createExtensionStore('Fs', {
     searchQuery: '',
     activeBuffers: {}, // Maps filepath -> buffer state for multi-projection editing
     openBuffer: (filepath, data) => {
-        const normPath = normalizeVfsURI(filepath);
         FsStore.setState(s => ({  
-            activeBuffers: { ...s.activeBuffers, [normPath]: { ...(s.activeBuffers[normPath] || {}), ...data, filename: normPath } } 
+            activeBuffers: { ...s.activeBuffers, [filepath]: { ...(s.activeBuffers[filepath] || {}), ...data, filename: filepath } } 
         }));
     },
     updateBuffer: (filepath, data) => {
-        const normPath = normalizeVfsURI(filepath);
         FsStore.setState(s => ({ 
-            activeBuffers: { ...s.activeBuffers, [normPath]: { ...(s.activeBuffers[normPath] || {}), ...data } } 
+            activeBuffers: { ...s.activeBuffers, [filepath]: { ...(s.activeBuffers[filepath] || {}), ...data } } 
         }));
     },
     closeBuffer: (filepath) => {
-        const normPath = normalizeVfsURI(filepath);
         FsStore.setState(s => { 
             const newBufs = {...s.activeBuffers}; 
-            delete newBufs[normPath]; 
-            if (filepath !== normPath) delete newBufs[filepath];
+            delete newBufs[filepath]; 
             return { activeBuffers: newBufs }; 
         });
     },
@@ -165,8 +158,11 @@ function injectTextToBuffer(filepath, text, isSupportedEditor, isMarkdown, isFS,
         forceEdit: forceAllowEdit
     });
 }
-export function routeToSpatialGrid(filepath, label = null) {
+export function routeToSpatialGrid(filepath, label = null, preferredCol = null) {
     if (!window.Sutram?.stores?.Layout) return;
+    if (window.inSetu?.ui?.focusActivePopout && window.inSetu.ui.focusActivePopout(filepath)) {
+        return;
+    }
     const layout = window.Sutram.stores.Layout.getState();
     const baseName = filepath.split('/').pop();
     const safeLabel = label || (window.inSetu?.utils?.truncateFilename ? window.inSetu.utils.truncateFilename(baseName, 24) : baseName);
@@ -192,21 +188,22 @@ export function routeToSpatialGrid(filepath, label = null) {
         return;
     }
 
+    const destCol = (preferredCol && ['left', 'center', 'right'].includes(preferredCol)) ? preferredCol : 'center';
     const entity = {
         id: filepath,
         component: 'insetu-editor-projection',
         label: safeLabel,
         extName: 'fs',
-        targetParent: 'center'
+        targetParent: destCol
     };
 
     if (layout.capacity === 1) {
-        layout.openWindow(entity, layout.focusedColumn || 'center', 1);
+        layout.openWindow(entity, layout.focusedColumn || destCol, 1);
     } else {
-        layout.pinToColumn('center', entity);
-        layout.setFocusedColumn('center');
+        layout.pinToColumn(destCol, entity);
+        layout.setFocusedColumn(destCol);
         if (typeof layout.setActiveProjection === 'function') {
-            layout.setActiveProjection('center', filepath);
+            layout.setActiveProjection(destCol, filepath);
         }
     }
 }
@@ -357,10 +354,10 @@ export async function viewInWindow(filename) {
 
     routeToSpatialGrid(targetFile);
     closeBrowseModal();
-
     try {
         const activeWs = window.inSetu.utils.getActiveWorkspace();
-        const res = await window.inSetu.api.request(`/download/${encodeURIComponent(targetFile)}`, {}, activeWs);
+        const fetchUrl = resolveFileFetchUrl(targetFile, false);
+        const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
         if (!res.ok) throw new Error("Failed to fetch");
         const text = await res.text();
         injectTextToBuffer(targetFile, text, isSupportedEditor, isMarkdown, false);
@@ -399,7 +396,8 @@ export async function viewAndCopy(filename) {
     }
     try {
         const activeWs = window.inSetu.utils.getActiveWorkspace();
-        const res = await window.inSetu.api.request(`/download/${encodeURIComponent(targetFile)}`, {}, activeWs);
+        const fetchUrl = resolveFileFetchUrl(targetFile, false);
+        const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
         if (!res.ok) throw new Error("Failed to fetch");
         const text = await res.text();
         injectTextToBuffer(targetFile, text, isSupportedEditor, isMarkdown, false);
@@ -420,7 +418,7 @@ export function updateManifestState(mutations) {
     const { manifest } = AppStore.getState();
     let changed = false;
     const newManifest = { vfs: { ...(manifest?.vfs || {}) }, ctx: { ...(manifest?.ctx || {}) } };
-    const cleanPath = (p) => p ? p.replace(/^vfs:\/\//, '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/^\.\//, '') : '';
+    const trimTrailingSlash = (p) => (p && typeof p === 'string') ? p.replace(/\\/g, '/').replace(/\/+$/, '') : '';
 
     // Detect move/rename logic directly from the payload
     let moveSource = null;
@@ -429,17 +427,17 @@ export function updateManifestState(mutations) {
         const delMut = mutations.find(m => m.operation === 'delete');
         const savMut = mutations.find(m => m.operation === 'save');
         if (delMut && savMut) {
-            moveSource = cleanPath(delMut.filepath);
-            moveDest = cleanPath(savMut.filepath);
+            moveSource = trimTrailingSlash(delMut.filepath);
+            moveDest = trimTrailingSlash(savMut.filepath);
         }
     }
     (mutations || []).forEach(m => {
-        const normPath = cleanPath(m.filepath);
+        const normPath = trimTrailingSlash(m.filepath);
         if (!normPath) return;
 
         // Centralized Cache Invalidation
-        if (window.inSetu?.vfs?.shareTextCache?.has(m.filepath)) {
-            window.inSetu.vfs.shareTextCache.delete(m.filepath);
+        if (window.inSetu?.vfs?.shareTextCache?.has(normPath)) {
+            window.inSetu.vfs.shareTextCache.delete(normPath);
         }
 
         if (m.operation === 'delete') {
@@ -450,13 +448,12 @@ export function updateManifestState(mutations) {
                         const origLen = obj.files.length;
                         const newFiles = [];
                         obj.files.forEach(f => {
-                            const fClean = cleanPath(f);
-                            if (fClean === normPath) {
+                            if (f === normPath) {
                                 if (moveDest && !newFiles.includes(moveDest)) newFiles.push(moveDest);
                                 changed = true;
-                            } else if (fClean.startsWith(normPath + '/')) {
+                            } else if (f.startsWith(normPath + '/')) {
                                 if (moveDest) {
-                                    const newChild = moveDest + fClean.substring(normPath.length);
+                                    const newChild = moveDest + f.substring(normPath.length);
                                     if (!newFiles.includes(newChild)) newFiles.push(newChild);
                                 }
                                 changed = true;
@@ -478,9 +475,10 @@ export function updateManifestState(mutations) {
         } else if (m.operation === 'save') {
             if (moveSource) return;
 
-            const alreadyInManifest = Object.values(newManifest.vfs).some(obj => obj.files && obj.files.some(f => cleanPath(f) === normPath));
-            if (!alreadyInManifest) {
-                const repoDir = normPath.split('/')[0] || 'global';
+            const alreadyInManifest = Object.values(newManifest.vfs).some(obj => obj.files && obj.files.includes(normPath));
+            if (!alreadyInManifest && normPath.startsWith('vfs://')) {
+                const parsed = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(normPath) : { repo: 'global' };
+                const repoDir = parsed.repo || 'global';
                 let added = false;
                 for (const key of Object.keys(newManifest.vfs)) {
                     if (key.startsWith(repoDir + '::')) {
@@ -518,8 +516,7 @@ window.addEventListener('insetu:vfs-mutated', (e) => {
 });
 export async function saveBufferFile(filepath, autoSave = false) {
     if (autoSave !== true) autoSave = false;
-    const normPath = normalizeVfsURI(filepath);
-    const state = FsStore.getState().activeBuffers[normPath] || FsStore.getState().activeBuffers[filepath];
+    const state = FsStore.getState().activeBuffers[filepath];
     if (!state) return;
 
     let content = state.content.replace(/\u00A0/g, ' ');
@@ -527,10 +524,10 @@ export async function saveBufferFile(filepath, autoSave = false) {
         try { JSON.parse(content); } catch (e) { return alert("Invalid JSON syntax: " + e.message); }
     }
     const baseHash = state.baseHash || null;
-    await window.inSetu.sys.executeWorkspaceMutation('fs/save', { filepath: normPath, content, base_hash: baseHash }, {
-        collapseKey: `vfs:save:${normPath}`,
-        pendingMutations: [normPath],
-        cacheBlobUrl: `/api/${window.inSetu.utils.getActiveWorkspace()}/fs/fetch?file=${encodeURIComponent(normPath)}`,
+    await window.inSetu.sys.executeWorkspaceMutation('fs/save', { filepath, content, base_hash: baseHash }, {
+        collapseKey: `vfs:save:${filepath}`,
+        pendingMutations: [filepath],
+        cacheBlobUrl: `/api/${window.inSetu.utils.getActiveWorkspace()}/fs/fetch?file=${encodeURIComponent(filepath)}`,
         cacheBlobContent: content,
         loadingText: 'Saving...',
         silent: autoSave,
@@ -540,26 +537,23 @@ export async function saveBufferFile(filepath, autoSave = false) {
                 const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
                 nextHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
             } catch(e) {}
-            FsStore.getState().updateBuffer(normPath, { originalContent: content, content, baseHash: nextHash, saveStatus: 'idle' });
-            refreshActiveFileViews(null, normPath);
+            FsStore.getState().updateBuffer(filepath, { originalContent: content, content, baseHash: nextHash, saveStatus: 'idle' });
+            refreshActiveFileViews(null, filepath);
         }
     });
 }
 export function renameFileTracking(oldPath, newPath) {
-    const normOld = normalizeVfsURI(oldPath);
-    const normNew = normalizeVfsURI(newPath);
     const fsState = window.inSetu.stores.Fs.getState();
-    const oldBuf = fsState.activeBuffers[normOld] || fsState.activeBuffers[oldPath];
+    const oldBuf = fsState.activeBuffers[oldPath];
     if (oldBuf) {
-        fsState.openBuffer(normNew, { ...oldBuf, filename: normNew });
-        fsState.closeBuffer(normOld);
-        if (oldPath !== normOld) fsState.closeBuffer(oldPath);
+        fsState.openBuffer(newPath, { ...oldBuf, filename: newPath });
+        fsState.closeBuffer(oldPath);
     }
 
     // Migrate open buffer tracking when parent directories are renamed or moved
     Object.keys(fsState.activeBuffers || {}).forEach(k => {
-        if (k.startsWith(normOld + '/')) {
-            const childNew = normNew + k.substring(normOld.length);
+        if (k.startsWith(oldPath + '/')) {
+            const childNew = newPath + k.substring(oldPath.length);
             const buf = fsState.activeBuffers[k];
             fsState.openBuffer(childNew, { ...buf, filename: childNew });
             fsState.closeBuffer(k);
@@ -576,36 +570,34 @@ export function renameFileTracking(oldPath, newPath) {
             const colState = newCols[col];
             if (colState && colState.pinned) {
                 colState.pinned = colState.pinned.map(p => {
-                    const normPId = normalizeVfsURI(p.id);
-                    if (p.id === oldPath || normPId === normOld) {
+                    if (p.id === oldPath) {
                         changed = true;
-                        return { ...p, id: normNew, label: normNew.split('/').pop() };
+                        return { ...p, id: newPath, label: newPath.split('/').pop() };
                     }
                     return p;
                 });
-                if (colState.active === oldPath || (colState.active && normalizeVfsURI(colState.active) === normOld)) {
-                    colState.active = normNew;
+                if (colState.active === oldPath) {
+                    colState.active = newPath;
                     changed = true;
                 }
                 if (Array.isArray(colState.history)) {
-                    colState.history = colState.history.map(hId => (hId === oldPath || normalizeVfsURI(hId) === normOld) ? normNew : hId);
+                    colState.history = colState.history.map(hId => hId === oldPath ? newPath : hId);
                 }
             }
         });
 
         const newFocusHistory = (layout.focusHistory || []).map(h => {
-            if (h.id === oldPath || normalizeVfsURI(h.id) === normOld) {
+            if (h.id === oldPath) {
                 changed = true;
-                return { ...h, id: normNew };
+                return { ...h, id: newPath };
             }
             return h;
         });
 
         const newWindows = (layout.windows || []).map(w => {
-            const normWId = normalizeVfsURI(w.id);
-            if (w.id === oldPath || normWId === normOld) {
+            if (w.id === oldPath) {
                 changed = true;
-                return { ...w, id: normNew, label: normNew.split('/').pop(), titleText: normNew.split('/').pop() };
+                return { ...w, id: newPath, label: newPath.split('/').pop(), titleText: newPath.split('/').pop() };
             }
             return w;
         });
@@ -614,10 +606,10 @@ export function renameFileTracking(oldPath, newPath) {
 
             const activeWs = window.inSetu.utils.getActiveWorkspace();
             const focused = layout.focusedColumn || 'center';
-            if (newCols[focused] && newCols[focused].active === normNew) {
-                const deepPath = window.inSetu.stores.App?.getState()?.tabBrowsePaths?.[normOld] || window.inSetu.stores.App?.getState()?.tabBrowsePaths?.[oldPath];
+            if (newCols[focused] && newCols[focused].active === newPath) {
+                const deepPath = window.inSetu.stores.App?.getState()?.tabBrowsePaths?.[oldPath];
                 const deepStr = deepPath && deepPath.length > 0 ? '/' + deepPath.map(encodeURIComponent).join('/') : '';
-                const hash = `#/${activeWs}/${focused}/${encodeURIComponent(normNew)}${deepStr}`;
+                const hash = `#/${activeWs}/${focused}/${encodeURIComponent(newPath)}${deepStr}`;
                 if (window.location.hash !== hash) {
                     window.history.replaceState(null, '', hash);
                 }
@@ -705,8 +697,10 @@ export class InSetuMoveFileProjection extends InSetuElement {
                     placeholder="path/to/destination/file.ext"
                     style="font-family: var(--font-mono); --bg-input: var(--bg);"
                     @sutram-input-changed=${e => {
-                        const newDest = e.detail.value;
-                        const parts = newDest.split('/').filter(p => p);
+                        const newDest = normalizeVfsURI(e.detail.value);
+                        const parsed = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(newDest) : { repo: '', relativePath: '' };
+                        const relJoined = parsed.repo ? `${parsed.repo}/${parsed.relativePath}` : parsed.relativePath;
+                        const parts = relJoined.split('/').filter(Boolean);
                         parts.pop();
                         FsStore.getState().setModal('move', { destPath: newDest, initialParts: parts });
                     }}>
@@ -725,8 +719,9 @@ export class InSetuMoveFileProjection extends InSetuElement {
                         const pathArr = e.detail.path || [];
                         const folderPrefix = pathArr.join('/');
                         const filename = m.currentFile ? m.currentFile.split('/').pop() : '';
+                        const nextDest = folderPrefix ? `vfs://${folderPrefix}/${filename}` : `vfs://${filename}`;
                         FsStore.getState().setModal('move', {
-                            destPath: folderPrefix ? `${folderPrefix}/${filename}` : filename,
+                            destPath: nextDest,
                             initialParts: pathArr
                         });
                     }}>
@@ -794,7 +789,7 @@ export function createFileCard(fileInfo, container) {
 export const getGlobalManifest = () => {
     const state = AppStore.getState();
     const targetConfigs = state.targetConfigs || [];
-    const validPrefixes = targetConfigs.map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
+    const validPrefixes = targetConfigs.map(cfg => cfg.repo_dir ? `vfs://${cfg.repo_dir}/` : '');
 
     // Query Stage 1 (vfs) EXCLUSIVELY for physical workspace files
     const vfsManifest = state.manifest?.vfs || {};
@@ -817,7 +812,7 @@ export const getGlobalManifest = () => {
     const isAllowed = (f) => {
         if (allowedPrefixes.some(p => f.startsWith(p))) return true;
         if (validPrefixes.length === 0) return true;
-        return validPrefixes.some(prefix => f.startsWith(prefix));
+        return validPrefixes.some(prefix => prefix && f.startsWith(prefix));
     };
 
     return allFiles.filter(isAllowed);
@@ -916,18 +911,19 @@ export class InSetuVFSExplorer extends InSetuElement {
 }
 customElements.define('insetu-vfs-explorer', InSetuVFSExplorer);
 export function pruneSubsumedTargets(items) {
-    const rawTargets = items.map(i => ({
-        path: (i.data?.filepath || i.data?.folderpath || i.data?.id || i.filepath || i.folderpath || '').replace(/^vfs:\/\//, ''),
-        isDir: !!(i.data?.isDir || i.isDir)
-    })).filter(t => t.path);
+    const rawTargets = items.map(i => {
+        const raw = i.data?.filepath || i.data?.folderpath || i.data?.id || i.filepath || i.folderpath || '';
+        return {
+            path: String(raw).replace(/\/+$/, ''),
+            isDir: !!(i.data?.isDir || i.isDir)
+        };
+    }).filter(t => t.path);
     if (rawTargets.length === 0) return [];
 
-    const selectedDirs = new Set(rawTargets.filter(t => t.isDir).map(t => t.path.replace(/\/+$/, '')));
+    const selectedDirs = new Set(rawTargets.filter(t => t.isDir).map(t => t.path));
     return rawTargets.filter(target => {
-        const parts = target.path.split('/').filter(Boolean);
-        for (let i = 1; i < parts.length; i++) {
-            const parentSubpath = parts.slice(0, i).join('/');
-            if (selectedDirs.has(parentSubpath)) {
+        for (const dirUri of selectedDirs) {
+            if (target.path !== dirUri && target.path.startsWith(dirUri + '/')) {
                 return false;
             }
         }
@@ -1210,21 +1206,19 @@ export class InSetuVFSExplorerActions extends InSetuElement {
             });
             items.push({ divider: true });
         }
-
         if (!currentPath) {
             items.push({ label: 'New Repository', icon: 'package', onClick: () => openNewFolderModal() });
         } else {
-            const prefix = currentPath + '/';
+            const prefix = `vfs://${currentPath}/`;
             items.push({ label: 'New Folder', icon: 'folder-plus', onClick: () => openNewFolderModal(prefix) });
             items.push({ label: 'New File', icon: 'file-plus', onClick: () => openNewFileModal(prefix) });
-            items.push({ label: 'Upload File', icon: 'upload', onClick: () => uploadFileToWorkspace(currentPath) });
+            items.push({ label: 'Upload File', icon: 'upload', onClick: () => uploadFileToWorkspace(`vfs://${currentPath}`) });
 
             const manifestFiles = getGlobalManifest();
-            const prefixWithSlash = currentPath + '/';
-            const hasFiles = manifestFiles.some(f => f.startsWith(prefixWithSlash) && !f.endsWith('.gitkeep'));
+            const hasFiles = manifestFiles.some(f => f.startsWith(prefix) && !f.endsWith('.gitkeep'));
             if (!hasFiles) {
                 items.push({ divider: true });
-                items.push({ label: 'Delete Folder', icon: 'trash-2', onClick: () => deleteEmptyFolder(currentPath) });
+                items.push({ label: 'Delete Folder', icon: 'trash-2', onClick: () => deleteEmptyFolder(`vfs://${currentPath}`) });
             }
         }
         window.inSetu.events.emitHook('insetu:fs-dropdown-menu', { currentPath, menuItems: items });
@@ -1303,16 +1297,18 @@ window.ExtensionRegistry.registerExtension('fs', {
                         await _relocateVfsNode(data.folderpath, destPath, true, { loadingText: 'Moving folder...' });
                     });
                 } else {
-                    const cleanFp = (data.filepath || '').replace(/^vfs:\/\//, '');
-                    const parts = cleanFp ? cleanFp.split('/').filter(p => p) : [];
+                    const normFp = normalizeVfsURI(data.filepath || '');
+                    const parsed = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(normFp) : { repo: '', relativePath: '' };
+                    const relJoined = parsed.repo ? `${parsed.repo}/${parsed.relativePath}` : parsed.relativePath;
+                    const parts = relJoined ? relJoined.split('/').filter(Boolean) : [];
                     parts.pop();
-                    window.inSetu.stores.Fs.getState().setModal('move', { open: false, currentFile: cleanFp, destPath: cleanFp, initialParts: parts });
+                    window.inSetu.stores.Fs.getState().setModal('move', { open: false, currentFile: normFp, destPath: normFp, initialParts: parts });
                     if (window.Sutram?.stores?.Layout) {
                         const layout = window.Sutram.stores.Layout.getState();
                         layout.openWindow({
                             id: 'vfs:move-file',
                             component: 'insetu-move-file-projection',
-                            label: `Move: ${cleanFp.split('/').pop()}`,
+                            label: `Move: ${normFp.split('/').pop()}`,
                             icon: 'truck',
                             intent: 'warning',
                             extName: 'fs',
@@ -1431,10 +1427,10 @@ window.ExtensionRegistry.registerExtension('fs', {
             order: 12,
             match: (data) => !data.isSkeleton,
             asyncAction: async (data, e) => {
-                const normPath = normalizeVfsURI(data.filepath);
-                const activeBuf = FsStore.getState().activeBuffers?.[normPath] || FsStore.getState().activeBuffers?.[data.filepath];
+                const activeBuf = FsStore.getState().activeBuffers?.[data.filepath];
                 const transientText = data.transientContent !== undefined ? data.transientContent : activeBuf?.content;
-                if (transientText !== undefined) {
+                const hasUnresolvedMacro = typeof transientText === 'string' && /\{\{\s*include_prompt\s*:/.test(transientText);
+                if (transientText !== undefined && !hasUnresolvedMacro) {
                     await navigator.clipboard.writeText(transientText).then(() => {
                         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("✅ Copied!", 2000);
                     }).catch(err => alert("Clipboard API failed. Please manually select the text and copy it directly."));
@@ -1552,12 +1548,13 @@ window.ExtensionRegistry.registerExtension('fs', {
                 if (chunks && chunks.length > 1) {
                     if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⬇️ Downloading multi-part context...", 2000);
                     for (const f of chunks) {
-                        const fetchUrl = `/download/${encodeURIComponent(f)}`;
+                        const fetchUrl = `${resolveFileFetchUrl(f, false)}&download=1`;
                         await window.inSetu.vfs.fetchAndDownloadState(f, fetchUrl);
                         await new Promise(r => setTimeout(r, 300));
                     }
                 } else {
-                    const fetchUrl = resolveFileFetchUrl(data.filepath, data.isFS);
+                    const baseFetchUrl = resolveFileFetchUrl(data.filepath, data.isFS);
+                    const fetchUrl = baseFetchUrl.includes('/fs/fetch?') ? `${baseFetchUrl}&download=1` : baseFetchUrl;
                     await window.inSetu.vfs.fetchAndDownloadState(data.filepath, fetchUrl);
                 }
             }
@@ -1586,7 +1583,8 @@ window.ExtensionRegistry.registerExtension('fs', {
 });
 export function getFileExtensionWarning(filename, basePath = '') {
     if (!filename) return '';
-    const pathParts = (basePath || '').split('/').filter(Boolean);
+    const cleanBase = (basePath || '').replace(/^[a-zA-Z0-9_-]+:\/\//, '');
+    const pathParts = cleanBase.split('/').filter(Boolean);
     const gbPath = pathParts.length > 0 ? pathParts : (AppStore.getState().globalBrowsePath || []);
     if (gbPath.length > 0) {
         const repoDir = gbPath[0];
@@ -1614,7 +1612,8 @@ export function checkFileExtension(filename) {
 }
 function openNewFileModal(overridePath = null) {
     const gbPath = AppStore.getState().globalBrowsePath || [];
-    const prefix = typeof overridePath === 'string' ? overridePath : (gbPath.length > 0 ? gbPath.join('/') + '/' : '');
+    const rawPrefix = typeof overridePath === 'string' ? overridePath : (gbPath.length > 0 ? `vfs://${gbPath.join('/')}/` : '');
+    const prefix = rawPrefix ? normalizeVfsURI(rawPrefix) : '';
     FsStore.getState().setModal('newFile', { open: true, basePath: prefix, fileName: '', content: '' });
     if (window.Sutram?.stores?.Layout) {
         const layout = window.Sutram.stores.Layout.getState();
@@ -1667,7 +1666,8 @@ async function saveNewFile() {
 async function openNewFolderModal(overridePath = null) {
     const gbPath = AppStore.getState().globalBrowsePath || [];
     const isRoot = overridePath === null && gbPath.length === 0;
-    const prefix = typeof overridePath === 'string' ? overridePath : (isRoot ? '' : gbPath.join('/') + '/');
+    const rawPrefix = typeof overridePath === 'string' ? overridePath : (isRoot ? '' : `vfs://${gbPath.join('/')}/`);
+    const prefix = rawPrefix ? normalizeVfsURI(rawPrefix) : '';
     let exts = '.py, .json, .md, .sh, .txt, .html, .css, .js';
     let domain = 'Workspaces';
     if (isRoot) {
@@ -1719,7 +1719,7 @@ async function saveNewFolder() {
             repo_exts: mState.repoExts.trim()
         };
     }
-    const filepath = basePath + folderName + "/.gitkeep";
+    const filepath = normalizeVfsURI(basePath + folderName + "/.gitkeep");
     await window.inSetu.sys.executeWorkspaceMutation('fs/save', {
         filepath,
         content: "",
@@ -1748,8 +1748,7 @@ async function saveNewFolder() {
 }
 export async function viewSourceFile(filepath, isFS = false, bypassHook = false) {
     if (!filepath || typeof filepath !== 'string') return;
-    const normPath = normalizeVfsURI(filepath);
-    if (!normPath) return;
+    const normPath = filepath;
 
     if (!bypassHook) {
         // ADR 0041: Declarative Custom Editors Engine
@@ -1771,9 +1770,8 @@ export async function viewSourceFile(filepath, isFS = false, bypassHook = false)
             if (intercepted) return;
         }
     }
-    const isUserTemplate = normPath.includes('/.templates/user/') || normPath.startsWith('ctx://prompts/.templates/user/');
-    const isReadOnlyTemplate = !isUserTemplate && (normPath.includes('/.templates/') || normPath.startsWith('ctx://prompts/.templates/'));
-    const effectiveIsFS = isReadOnlyTemplate ? false : isFS;
+    const parsedUri = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(normPath) : { isEditable: isFS };
+    const effectiveIsFS = parsedUri.isReadOnly ? false : (isFS || parsedUri.isEditable);
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(normPath);
     FsStore.getState().openBuffer(normPath, {
         filename: normPath,
@@ -1851,11 +1849,10 @@ export function openWorkspaceBrowser(options = {}) {
         isParts = false
     } = options;
     AppStore.setState({ browserConfig: { mode, callback, isParts, title } });
-
     let targetManifest = files || getGlobalManifest();
     let cbPath = [];
     if (autoDrilldown) {
-        let cursor = buildFileTree(targetManifest);
+        let cursor = buildUriFileTree(targetManifest, 'vfs://');
         while (cursor && cursor.type === 'directory' && cursor.children) {
             const children = Object.values(cursor.children);
             if (children.length === 1 && children[0].type === 'directory') {
@@ -1902,7 +1899,7 @@ function confirmFolderSelection() {
     const { currentBrowsePath, browserConfig } = AppStore.getState();
     const selectedPath = (currentBrowsePath || []).join('/');
     if (browserConfig && browserConfig.callback) {
-        const finalPath = selectedPath ? (selectedPath.endsWith('/') ? selectedPath : selectedPath + '/') : '/';
+        const finalPath = selectedPath ? `vfs://${selectedPath.replace(/\/+$/, '')}/` : 'vfs://';
         browserConfig.callback(finalPath);
     }
     closeBrowseModal();
@@ -2092,8 +2089,9 @@ export class InSetuEditorProjection extends InSetuElement {
                 if (window.inSetu?.vfs?.viewSourceFile) {
                     const isUserTemplate = this.filepath.includes('/.templates/user/');
                     const isReadOnlyTemplate = !isUserTemplate && this.filepath.includes('/.templates/');
+                    const isSharedMount = this.filepath.startsWith('ws://');
                     const isEditableCtx = !isReadOnlyTemplate && (this.filepath.startsWith('ctx://notes/') || this.filepath.startsWith('ctx://prompts/'));
-                    const isPhysical = !isReadOnlyTemplate && (!this.filepath.startsWith('ctx://') || isEditableCtx);
+                    const isPhysical = !isReadOnlyTemplate && !isSharedMount && (!this.filepath.startsWith('ctx://') || isEditableCtx);
                     window.inSetu.vfs.viewSourceFile(this.filepath, isPhysical, true);
                 }
             }
@@ -2113,27 +2111,17 @@ export class InSetuEditorProjection extends InSetuElement {
                 this._toggleZenMode();
             }
         });
-
         // Emergency Flush on Window Close (Protects in-flight keystrokes during debounce)
         this._beforeUnloadFlush = () => {
             if (this.isDirty && this.filepath) {
                 const normPath = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(this.filepath) : this.filepath;
-                const ws = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';
-                const token = sessionStorage.getItem('insetu_boot_token') || '';
                 const state = window.inSetu?.stores?.Fs?.getState()?.activeBuffers?.[normPath] || window.inSetu?.stores?.Fs?.getState()?.activeBuffers?.[this.filepath];
-                if (state && state.content !== state.originalContent) {
-                    const headers = { 'Content-Type': 'application/json' };
-                    if (token) headers['Authorization'] = `Bearer ${token}`;
-                    fetch(`/api/${encodeURIComponent(ws)}/fs/save`, {
-                        method: 'POST',
-                        headers,
-                        body: JSON.stringify({
-                            filepath: normPath,
-                            content: state.content,
-                            base_hash: state.baseHash || null
-                        }),
-                        keepalive: true
-                    }).catch(() => {});
+                if (state && state.content !== state.originalContent && window.inSetu?.api?.keepalivePost) {
+                    window.inSetu.api.keepalivePost('fs/save', {
+                        filepath: normPath,
+                        content: state.content,
+                        base_hash: state.baseHash || null
+                    });
                 }
             }
         };
@@ -2252,7 +2240,6 @@ export class InSetuEditorProjection extends InSetuElement {
         const m = this._buffer;
         const shouldBeReadOnly = !(m.isFS || m.forceEdit);
         const kbSize = Math.round((m.fullText?.length || 0) / 1024);
-        const isPopout = new URLSearchParams(window.location.search).get('popout') === 'true';
         return html`
             <div class="editor-header">
                 <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;">
@@ -2271,23 +2258,12 @@ export class InSetuEditorProjection extends InSetuElement {
                         }}>
                     </sutram-entity-actions>
                 </div>
-                ${!isPopout ? html`
-                    <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
-                        <sutram-btn
-                            intent="neutral"
-                            variant="tinted"
-                            icon="external-link"
-                            label="Pop Out"
-                            title="Open in dedicated pop-out window"
-                            style="--btn-padding: 4px 10px; --btn-font-size: 0.8rem; margin: 0;"
-                            @click=${() => {
-                                if (window.inSetu?.ui?.popoutProjection) {
-                                    window.inSetu.ui.popoutProjection(m.filename);
-                                }
-                            }}>
-                        </sutram-btn>
-                    </div>
-                ` : ''}
+                <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                    <insetu-projection-window-controls 
+                        .filepath=${m.filename}
+                        .beforeAction=${async () => { if (this.isDirty) await window.inSetu.ui.saveBufferFile(this.filepath, true); }}>
+                    </insetu-projection-window-controls>
+                </div>
             </div>
             ${m.isTruncated ? html`
                 <div style="display: flex; background: #f59e0b; color: #000; padding: 8px 20px; font-weight: bold; justify-content: space-between; align-items: center; flex-shrink: 0; border-bottom: 1px solid var(--border);">
@@ -2335,6 +2311,12 @@ export class InSetuEditorProjection extends InSetuElement {
         if (this._escListener) {
             window.removeEventListener('keydown', this._escListener);
         }
+        if (this._beforeUnloadFlush) {
+            window.removeEventListener('beforeunload', this._beforeUnloadFlush);
+        }
+        if (this._autoSaveTimer) {
+            clearTimeout(this._autoSaveTimer);
+        }
         // Stateless UX Teardown (only update if buffer has not been explicitly closed)
         const normPath = normalizeVfsURI(this.filepath);
         const activeBuffers = window.inSetu.stores.Fs?.getState()?.activeBuffers || {};
@@ -2350,19 +2332,15 @@ customElements.define('insetu-editor-projection', InSetuEditorProjection);
 export const extractManifestFiles = (...args) => window.inSetu.utils.extractManifestFiles(...args);
 
 window.inSetu.vfs.normalizeVfsURI = normalizeVfsURI;
-
 export function resolveFileFetchUrl(filepath, isFS = false) {
+    if (!filepath) return '';
     if (filepath.startsWith('/download/') || filepath.startsWith('http://') || filepath.startsWith('https://')) {
         return filepath;
     }
     const overrideUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', filepath);
     if (overrideUrl) return overrideUrl;
     const activeWs = window.inSetu.utils.getActiveWorkspace();
-    const isCtx = !isFS && (filepath.startsWith('ctx://') || filepath.endsWith('_context.txt') || filepath.endsWith('_diffs.txt'));
-
-    return !isFS && !isCtx
-        ? `/download/${encodeURIComponent(filepath)}`
-        : `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(filepath)}`;
+    return `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(filepath)}`;
 }
 
 export function getChunks(filepath) {
@@ -2811,7 +2789,7 @@ export class InSetuBrowserProjection extends InSetuElement {
                                 <span style="font-weight: bold; color: var(--intent-highlight); word-break: break-all;">${manifest[0].includes('/') ? manifest[0].split('/').pop() : manifest[0]}</span>
                             </div>
                             ${manifest.map((f, idx) => {
-                                const fetchUrl = `/download/${encodeURIComponent(f)}`;
+                                const fetchUrl = `${resolveFileFetchUrl(f, false)}&download=1`;
                                 const partMatch = f.match(/_part(\d+)/i);
                                 const displayTitle = partMatch ? `Part ${partMatch[1]}` : `Part ${idx + 1}`;
                                 return html`
@@ -2847,7 +2825,7 @@ export class InSetuBrowserProjection extends InSetuElement {
                 <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; gap: 10px; flex-shrink: 0;">
                     <sutram-async-btn label="Download All" icon="download" intent="primary" style="flex: 1; margin: 0;" .onClick=${async () => {
                         for (const f of manifest) {
-                            await window.inSetu.vfs.fetchAndDownloadState(f, `/download/${encodeURIComponent(f)}`);
+                            await window.inSetu.vfs.fetchAndDownloadState(f, `${resolveFileFetchUrl(f, false)}&download=1`);
                             await new Promise(r => setTimeout(r, 300));
                         }
                     }}></sutram-async-btn>
@@ -2983,11 +2961,10 @@ export class InSetuFileDiffProjection extends InSetuElement {
         const leftLabel = this._isUntracked
             ? 'Git HEAD (Untracked / New File)'
             : 'Git HEAD (Committed)';
-
         return html`
             <div style="padding: 8px 15px; background: var(--input-bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-shrink: 0;">
                 <span style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                    ${this.filepath.replace(/^vfs:\/\//, '')}
+                    ${normalizeVfsURI(this.filepath)}
                 </span>
                 <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0;">
                     <sutram-btn size="sm" intent="neutral" icon="refresh-cw" label="Refresh" @click=${() => this._fetchDiff()}></sutram-btn>

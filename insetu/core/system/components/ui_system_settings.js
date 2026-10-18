@@ -8,6 +8,15 @@ export class InSetuSystemSettings extends InSetuElement {
         modalOpen: { type: Boolean },
         manageExtOpen: { type: Boolean },
         docsModalOpen: { type: Boolean },
+        mountsModalOpen: { type: Boolean },
+        _mountsLoading: { type: Boolean },
+        _sharedMounts: { type: Array },
+        _exportSharedDomains: { type: Object },
+        _newMountWs: { type: String },
+        _newMountDomain: { type: String },
+        _newExportDomain: { type: String },
+        _newExportWildcard: { type: Boolean },
+        _newExportAllowed: { type: Array },
         _docsStatus: { type: Array },
         activeTab: { type: String },
         workspaces: { type: Object },
@@ -36,6 +45,85 @@ export class InSetuSystemSettings extends InSetuElement {
         this._sysConfigForm = {};
         this._sysConfigMeta = {};
         this._handleOutsideClick = this._handleOutsideClick.bind(this);
+        this.mountsModalOpen = false;
+        this._mountsLoading = false;
+        this._sharedMounts = [];
+        this._exportSharedDomains = {};
+        this._newMountWs = '';
+        this._newMountDomain = 'prompts';
+        this._newExportDomain = 'prompts';
+        this._newExportWildcard = true;
+        this._newExportAllowed = [];
+    }
+    async _openMountsModal() {
+        this.mountsModalOpen = true;
+        this._mountsLoading = true;
+        this.requestUpdate();
+        try {
+            const res = await this.api.workspace.get(`system/settings?t=${Date.now()}`);
+            if (res.ok) {
+                const data = await res.json();
+                this._sharedMounts = Array.isArray(data.shared_mounts) ? [...data.shared_mounts] : [];
+                this._exportSharedDomains = (typeof data.export_shared_domains === 'object' && data.export_shared_domains !== null) 
+                    ? { ...data.export_shared_domains } 
+                    : {};
+            }
+        } catch (e) {
+            console.error("Failed to load mounts settings:", e);
+        } finally {
+            this._mountsLoading = false;
+            this.requestUpdate();
+        }
+    }
+    _addMount(targetWs, domain) {
+        if (!targetWs || !domain) return;
+        const exists = (this._sharedMounts || []).some(m => m.workspace_id === targetWs && m.domain === domain);
+        if (exists) {
+            alert(`Virtual mount for '${targetWs}/${domain}' is already active.`);
+            return;
+        }
+        this._sharedMounts = [...(this._sharedMounts || []), { workspace_id: targetWs, domain }];
+        this.requestUpdate();
+    }
+    _removeMount(index) {
+        this._sharedMounts = (this._sharedMounts || []).filter((_, i) => i !== index);
+        this.requestUpdate();
+    }
+    _addExport() {
+        const domain = (this._newExportDomain || '').trim();
+        if (!domain) return;
+        const allowed = this._newExportWildcard ? ['*'] : [...this._newExportAllowed];
+        this._exportSharedDomains = {
+            ...(this._exportSharedDomains || {}),
+            [domain]: { allowed }
+        };
+        this.requestUpdate();
+    }
+    _revokeExport(domain) {
+        const next = { ...(this._exportSharedDomains || {}) };
+        delete next[domain];
+        this._exportSharedDomains = next;
+        this.requestUpdate();
+    }
+    async _saveMountsAndExports() {
+        try {
+            const res = await this.api.workspace.post('system/settings', {
+                shared_mounts: this._sharedMounts || [],
+                export_shared_domains: this._exportSharedDomains || {}
+            });
+            if (res.ok) {
+                this.mountsModalOpen = false;
+                this.setStatus("Mount configurations and sharing permissions saved.", 2500);
+                if (window.inSetu?.stores?.Prompts?.getState()?.fetchPrompts) {
+                    window.inSetu.stores.Prompts.getState().fetchPrompts();
+                }
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert(`Failed to save mount settings: ${err.error || res.statusText}`);
+            }
+        } catch (e) {
+            alert(`Network error: ${e.message}`);
+        }
     }
     async _openGenericSettings(extName, filteredSchema = null) {
         const genericModal = document.getElementById('insetu-generic-settings-root');
@@ -317,7 +405,7 @@ export class InSetuSystemSettings extends InSetuElement {
                     <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-bottom: 20px;">
                         ${this.activeTab === 'system' ? html`
                             ${renderBtn('settings', 'System Preferences', () => this._openGenericSettings('system'))}
-                            ${renderBtn('layers', 'Add / Remove Workspaces', () => AppStore.setState({ isWorkspaceEditorOpen: true }))}
+                            ${renderBtn('globe', 'Virtual Mounts & Sharing', () => this._openMountsModal())}${renderBtn('layers', 'Add / Remove Workspaces', () => AppStore.setState({ isWorkspaceEditorOpen: true }))}
                             ${renderBtn('folder-cog', 'Configure Current Workspace', () => AppStore.setState({ isConfigOpen: true }))}
                             ${renderBtn('blocks', 'Manage Workspace Extensions', () => this.manageExtOpen = true)}
                         ` : ''}
@@ -375,6 +463,190 @@ export class InSetuSystemSettings extends InSetuElement {
                 })}
                 <div slot="footer" style="width: 100%;">
                     <sutram-async-btn style="width: 100%; display: block;" label="Save Active Extensions" intent="success" .onClick=${() => this._saveActiveExtensions()}></sutram-async-btn>
+                </div>
+            </sutram-modal>
+            ` : ''}
+            ${this.mountsModalOpen ? html`
+            <sutram-modal 
+                ?open=${true} 
+                titleText="Virtual Mounts & Asset Sharing"  
+                ?fullscreen=${true} 
+                @sutram-modal-closed=${() => this.mountsModalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+                    ${this._mountsLoading ? html`
+                        <div style="padding: 20px;"><sutram-spinner text="Loading mount configurations..."></sutram-spinner></div>
+                    ` : (() => {
+                        const activeWs = window.inSetu?.utils?.getActiveWorkspace() || 'default';
+                        const otherWorkspaces = Object.keys(this.workspaces || {}).filter(w => w !== activeWs);
+                        const domainOptions = [
+                            { value: 'prompts', label: 'prompts (.insetu/data/prompts)' },
+                            { value: 'notes', label: 'notes (.insetu/data/notes)' },
+                            { value: 'flow', label: 'flow (.insetu/data/flow)' },
+                            { value: '*', label: '* (All Domains)' }
+                        ];
+
+                        return html`
+                            <!-- SUBSCRIBER SECTION -->
+                            <sutram-collapsible titleText="Virtual Mounts (Subscriber)" intent="primary" ?open=${true}>
+                                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0 0 12px 0;">
+                                    External workspace assets mounted read-only into this tenant via <code>ws://</code> URIs.
+                                </p>
+
+                                <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px;">
+                                    <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Mount Remote Domain</span>
+                                    ${otherWorkspaces.length === 0 ? html`
+                                        <span style="font-size: 0.8rem; color: var(--intent-warning); font-style: italic;">
+                                            At least two registered workspaces are required to configure peer-to-peer virtual mounts.
+                                        </span>
+                                    ` : html`
+                                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+                                            <sutram-select 
+                                                label="Source Workspace"
+                                                .value=${this._newMountWs || otherWorkspaces[0]}
+                                                .options=${otherWorkspaces.map(w => {
+                                                    const wsTitle = (this.workspaces && this.workspaces[w] && this.workspaces[w].title) ? this.workspaces[w].title : w;
+                                                    return { value: w, label: `${wsTitle} (${w})` };
+                                                })}
+                                                @sutram-input-changed=${(e) => { this._newMountWs = e.detail.value; this.requestUpdate(); }}
+                                                ?flush=${true}>
+                                            </sutram-select>
+                                            <sutram-select 
+                                                label="Target Domain"
+                                                .value=${this._newMountDomain}
+                                                .options=${domainOptions}
+                                                @sutram-input-changed=${(e) => { this._newMountDomain = e.detail.value; this.requestUpdate(); }}
+                                                ?flush=${true}>
+                                            </sutram-select>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+                                            <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--intent-highlight);">
+                                                URI: ws://${this._newMountWs || otherWorkspaces[0]}/${this._newMountDomain}/
+                                            </span>
+                                            <sutram-btn 
+                                                size="sm"
+                                                intent="primary"
+                                                icon="plus"
+                                                label="Add Mount"
+                                                @click=${() => this._addMount(this._newMountWs || otherWorkspaces[0], this._newMountDomain)}>
+                                            </sutram-btn>
+                                        </div>
+                                    `}
+                                </div>
+
+                                <div style="display: flex; flex-direction: column; gap: 8px;">
+                                    ${this._sharedMounts.length === 0 ? html`
+                                        <sutram-empty-state text="No external domains mounted in this workspace."></sutram-empty-state>
+                                    ` : this._sharedMounts.map((m, idx) => html`
+                                        <sutram-card 
+                                            .titleText=${`🌐 ws://${m.workspace_id}/${m.domain}/`}
+                                            .descriptionText=${`Read-only mount from tenant "${m.workspace_id}" • Domain: ${m.domain}`}
+                                            .detailText=${`Virtual Mount`}
+                                            icon="globe"
+                                            intent="highlight"
+                                            ?disableSelection=${true}>
+                                            <div slot="header-actions">
+                                                <sutram-btn size="sm" intent="danger" icon="trash-2" label="Unmount" @click=${(e) => { e.stopPropagation(); this._removeMount(idx); }}></sutram-btn>
+                                            </div>
+                                        </sutram-card>
+                                    `)}
+                                </div>
+                            </sutram-collapsible>
+
+                            <!-- PUBLISHER SECTION -->
+                            <sutram-collapsible titleText="Exported Domains (Publisher)" intent="neutral" ?open=${true}>
+                                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0 0 12px 0;">
+                                    Local directories declared accessible to other workspace tenants on this system.
+                                </p>
+
+                                <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px;">
+                                    <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Export Local Domain</span>
+                                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+                                        <sutram-select 
+                                            label="Local Domain"
+                                            .value=${this._newExportDomain}
+                                            .options=${domainOptions.filter(d => d.value !== '*')}
+                                            @sutram-input-changed=${(e) => { this._newExportDomain = e.detail.value; this.requestUpdate(); }}
+                                            ?flush=${true}>
+                                        </sutram-select>
+                                        <div style="display: flex; align-items: center; padding-top: 18px;">
+                                            <sutram-toggle 
+                                                label="Authorize All Workspaces (*)"
+                                                .checked=${this._newExportWildcard}
+                                                @sutram-input-changed=${(e) => { this._newExportWildcard = e.detail.value; this.requestUpdate(); }}
+                                                ?flush=${true}>
+                                            </sutram-toggle>
+                                        </div>
+                                    </div>
+
+                                    ${!this._newExportWildcard ? html`
+                                        <div style="display: flex; flex-direction: column; gap: 6px;">
+                                            <span style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">Permitted Subscribers</span>
+                                            <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                                                ${otherWorkspaces.map(w => {
+                                                    const isAllowed = this._newExportAllowed.includes(w);
+                                                    const wsLabel = (this.workspaces && this.workspaces[w] && this.workspaces[w].title) ? this.workspaces[w].title : w;
+                                                    return html`
+                                                        <sutram-pill 
+                                                            pillId=${w}
+                                                            labelText=${`${wsLabel} (${w})`}
+                                                            ?active=${isAllowed}
+                                                            @sutram-pill-toggled=${() => {
+                                                                const s = new Set(this._newExportAllowed);
+                                                                s.has(w) ? s.delete(w) : s.add(w);
+                                                                this._newExportAllowed = Array.from(s);
+                                                                this.requestUpdate();
+                                                            }}>
+                                                        </sutram-pill>
+                                                    `;
+                                                })}
+                                            </div>
+                                        </div>
+                                    ` : ''}
+
+                                    <div style="display: flex; justify-content: flex-end; margin-top: 4px;">
+                                        <sutram-btn 
+                                            size="sm"
+                                            intent="primary"
+                                            icon="plus"
+                                            label="Export Domain"
+                                            @click=${() => this._addExport()}>
+                                        </sutram-btn>
+                                    </div>
+                                </div>
+
+                                <div style="display: flex; flex-direction: column; gap: 8px;">
+                                    ${Object.keys(this._exportSharedDomains).length === 0 ? html`
+                                        <sutram-empty-state text="No local domains currently exported to peer workspaces."></sutram-empty-state>
+                                    ` : Object.entries(this._exportSharedDomains).map(([domain, policy]) => {
+                                        const isWildcard = (policy.allowed || []).includes('*');
+                                        const allowedSummary = isWildcard ? 'All Workspaces (*)' : ((policy.allowed || []).join(', ') || 'None (Private)');
+                                        return html`
+                                            <sutram-card 
+                                                .titleText=${`📂 ${domain}`}
+                                                .descriptionText=${`Access Policy: ${allowedSummary}`}
+                                                .detailText=${`Publisher Export`}
+                                                icon="share-2"
+                                                intent="neutral"
+                                                ?disableSelection=${true}>
+                                                <div slot="header-actions">
+                                                    <sutram-btn size="sm" intent="danger" icon="trash-2" label="Revoke" @click=${(e) => { e.stopPropagation(); this._revokeExport(domain); }}></sutram-btn>
+                                                </div>
+                                            </sutram-card>
+                                        `;
+                                    })}
+                                </div>
+                            </sutram-collapsible>
+                        `;
+                    })()}
+                </div>
+                <div slot="footer" style="display: flex; gap: 8px; width: 100%;">
+                    <sutram-btn intent="neutral" label="Cancel" style="flex: 1;" @click=${() => this.mountsModalOpen = false}></sutram-btn>
+                    <sutram-async-btn 
+                        intent="primary" 
+                        label="Save Mounts & Sharing" 
+                        style="flex: 2;" 
+                        .onClick=${() => this._saveMountsAndExports()}>
+                    </sutram-async-btn>
                 </div>
             </sutram-modal>
             ` : ''}

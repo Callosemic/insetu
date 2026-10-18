@@ -206,19 +206,14 @@ def handle_init(cwd, args):
             return
 
     scaffold_profiles(cwd)
-
     final_exts = ["config"] + [e for e in selected_exts if e != "config"]
     config_payload = {
-        "instance_title": title,
-        "instance_emoji": "⚙️",
-        "port": port,
         "ignore_dirs": ["node_modules", "__pycache__", "venv", ".venv", ".git", ".insetu", "dist", "build"],
         "ignore_files": [".DS_Store"],
         "ignore_patterns": ["*.pyc", "*.log"],
         "include_extensions": [".py", ".js", ".ts", ".json", ".md", ".txt", ".html", ".css", ".sh", ".yaml", ".yml", ".toml"],
         "managed_dirs": [".insetu-data"],
-        "target_repos": selected_repos,
-        "extensions": final_exts
+        "target_repos": selected_repos
     }
 
     with open(config_path, "w", encoding="utf-8") as f:
@@ -238,7 +233,10 @@ def handle_init(cwd, args):
         ws_settings = json.loads(ws_settings_path.read_text(encoding="utf-8")) if ws_settings_path.exists() else {}
     except Exception:
         ws_settings = {}
-    ws_settings.setdefault("system", {})["instance_title"] = title
+    sys_ws_block = ws_settings.setdefault("system", {})
+    sys_ws_block["instance_title"] = title
+    sys_ws_block["instance_emoji"] = "⚙️"
+    sys_ws_block["extensions"] = final_exts
     if llm_provider:
         ws_settings.setdefault("llm", {})["provider"] = llm_provider
         ws_settings["llm"]["model"] = llm_model
@@ -298,6 +296,7 @@ WorkingDirectory={cwd}
 ExecStart={insetu_bin} serve
 Restart=always
 RestartSec=3
+LimitNOFILE=65536
 Environment="PATH={os.environ.get('PATH', '')}"
 Environment="PYTHONUNBUFFERED=1"
 

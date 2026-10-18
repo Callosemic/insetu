@@ -14,10 +14,9 @@ import difflib
 import traceback
 from pathlib import Path
 from akasa.utils import get_workspace_physics
-from insetu.core.utils_core import get_sister_repos, parse_blocks, InSetuURI, execute_binary
+from insetu.core.utils_core import get_sister_repos, parse_blocks, InSetuURI
 from insetu.core.topology.engine_topology import get_omniscient_workspace_files
 from akasa.hooks import hooks
-from akasa.vfs import VFSTransaction
 from .bridge_fuzzy import apply_block_in_memory, clean_chevron_meltdown, expand_macros, is_effectively_identical
 def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
     from insetu.core.bridge.engine_bridge import bridge_bp as _bridge_bp
@@ -53,14 +52,31 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             original_buffers[filepath] = content
             memory_buffers[filepath] = content
         return content
+    active_uris = {str(InSetuURI.from_external_input(af)) for af in active_files} | set(active_files)
     patch_index = 0
     for raw_target_file, blocks in parsed_structure.items():
-        if raw_target_file not in active_files or not blocks: continue
-        uri = InSetuURI.from_any(raw_target_file)
-
-        # Enforce vfs:// logical boundary mapping natively
-        target_file = str(uri) if uri.scheme else (f"{uri.repo}/{uri.path}".strip('/') if uri.repo else uri.path)
-        norm_target = target_file
+        uri = InSetuURI.from_external_input(raw_target_file)
+        target_file = str(uri)
+        if (raw_target_file not in active_uris and target_file not in active_uris) or not blocks:
+            continue
+        norm_target = f"{uri.repo}/{uri.path}".strip('/') if uri.repo else uri.path
+        if target_file.startswith("ws://"):
+            telemetry["can_commit"] = False
+            patch_tel = {
+                "patch_index": patch_index,
+                "original_file": target_file,
+                "resolved_file": target_file,
+                "status": "failed",
+                "error_message": "Security Guardrail: Cross-workspace virtual mounts ('ws://') are strictly read-only and cannot be modified via the Yomama Bridge.",
+                "flags": ["read_only_mount"],
+                "candidates": [],
+                "available_actions": []
+            }
+            patch_index += 1
+            telemetry["summary"]["total_patches"] += 1
+            telemetry["summary"]["failed"] += 1
+            telemetry["patches"].append(patch_tel)
+            continue
 
         if uri.basename in ('cli.py', 'fallback_bridge.py') and 'insetu/' in norm_target:
             telemetry["can_commit"] = False
@@ -145,8 +161,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             def resolve_genesis():
                 nonlocal omniscient_cache
                 if not is_genesis: return
-                gen_uri = InSetuURI(norm_target)
-                explicit_repo = gen_uri.repo if gen_uri.repo else (gen_uri.path.partition('/')[0] if '/' in gen_uri.path else None)
+                explicit_repo = uri.repo if uri.repo else (uri.path.partition('/')[0] if '/' in uri.path else None)
                 if explicit_repo in allowed_repos:
                     pctx.resolved_path = target_file
                     pctx.resolution_type = "genesis"
@@ -164,16 +179,18 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 cand_list = []
                 if target_dirname:
                     known_dirs = set()
-                    for _, cand_rel in omniscient_cache:
-                        cand_parent = Path(cand_rel).parent.as_posix()
+                    for _, cand_fp in omniscient_cache:
+                        c_uri = InSetuURI(cand_fp)
+                        c_rel = f"{c_uri.repo}/{c_uri.path}".strip('/') if c_uri.repo else c_uri.path
+                        cand_parent = Path(c_rel).parent.as_posix()
                         known_dirs.add(cand_parent if cand_parent != '.' else '')
                     target_dir_suffix = target_dirname if target_dirname.startswith('/') else '/' + target_dirname
                     for kd in known_dirs:
                         if kd == target_dirname or kd.endswith(target_dir_suffix):
-                            cand_list.append({"filepath": f"{kd}/{target_basename}", "score": 0.9, "match_type": "genesis_guess"})
+                            cand_list.append({"filepath": f"vfs://{kd}/{target_basename}", "score": 0.9, "match_type": "genesis_guess"})
 
                 if not cand_list and len(allowed_repos) == 1:
-                    cand_list.append({"filepath": f"{allowed_repos[0]}/{norm_target}", "score": 1.0, "match_type": "genesis_pinned"})
+                    cand_list.append({"filepath": f"vfs://{allowed_repos[0]}/{norm_target}", "score": 1.0, "match_type": "genesis_pinned"})
                 if cand_list:
                     patch_tel.update({"status": "needs_confirmation", "resolution_type": "genesis_guess", "candidates": cand_list})
                     patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
@@ -207,10 +224,9 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                             pctx.resolved_path = target_file
                             pctx.resolution_type = "direct_match"
                         pctx.handled = True
-
             def resolve_pinned_shortcut():
                 if len(allowed_repos) == 1:
-                    cand = f"{allowed_repos[0]}/{norm_target}"
+                    cand = f"vfs://{allowed_repos[0]}/{norm_target}"
                     cand_content = get_file_content(cand)
                     if cand_content is not None:
                         ok_search, _, s_status = apply_block_in_memory(cand_content, b, silent=True)
@@ -295,14 +311,14 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     longest_line = max(s_lines, key=len).strip()
                     if omniscient_cache is None:
                         omniscient_cache = get_omniscient_workspace_files(workspace_id, allowed_repos)
-
                     cand_list = []
-                    for cand_basename, cand_rel in omniscient_cache:
-                        cand_content = get_file_content(cand_rel)
+                    for cand_basename, cand_fp in omniscient_cache:
+                        cand_uri = str(InSetuURI(cand_fp))
+                        cand_content = get_file_content(cand_uri)
                         if cand_content and longest_line in cand_content:
                             ok_search, _, s_status = apply_block_in_memory(cand_content, b, silent=True)
                             if ok_search and s_status != "idempotent":
-                                cand_list.append({"filepath": f"vfs://{cand_rel}", "score": 1.0, "match_type": "deep_search"})
+                                cand_list.append({"filepath": cand_uri, "score": 1.0, "match_type": "deep_search"})
                     if cand_list:
                         patch_tel.update({"status": "needs_confirmation", "resolution_type": "deep_search", "candidates": cand_list})
                         patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
@@ -403,7 +419,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                                     # Fallback verification: Tree-sitter language injections frequently panic on valid Lit template literals.
                                     if ext in ['.js', '.ts', '.mjs']:
                                         try:
-                                            res = execute_binary(['node', '--input-type=module', '-c'], input=new_content, capture_output=True, text=True, encoding='utf-8', timeout=5.0)
+                                            res = ctx.exec.run(['node', '--input-type=module', '-c'], input=new_content, encoding='utf-8', timeout=5.0)
                                             if res.returncode != 0:
                                                 syntax_error = True
                                                 err_str = res.stderr.strip()
@@ -421,7 +437,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                                 ast.parse(new_content)
                             elif ext in ['.js', '.ts', '.mjs']:
                                 try:
-                                    res = execute_binary(['node', '--input-type=module', '-c'], input=new_content, capture_output=True, text=True, encoding='utf-8', timeout=5.0)
+                                    res = ctx.exec.run(['node', '--input-type=module', '-c'], input=new_content, encoding='utf-8', timeout=5.0)
                                     if res.returncode != 0:
                                         syntax_error = True
                                         err_str = res.stderr.strip()
@@ -550,11 +566,13 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
 
     return telemetry
 def execute_bridge_sync(workspace_id, data):
+    from insetu.core.bridge.engine_bridge import bridge_bp as _bridge_bp
+    ctx = _bridge_bp.get_context(workspace_id)
     sister_repos = get_sister_repos(workspace_id)
     _, ws_root = get_workspace_physics(workspace_id)
 
     try:
-        with VFSTransaction(workspace_id) as vfs:
+        with ctx.vfs as vfs:
             telemetry = _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root)
             return json.dumps(telemetry)
     except Exception as e:

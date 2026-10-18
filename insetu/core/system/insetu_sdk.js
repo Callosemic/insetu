@@ -97,18 +97,17 @@ export class BucketAddress {
         const filename = filepath.split('/').pop();
         return new BucketAddress('orphan', filename);
     }
-
     static fromVfsPath(filepath) {
         const manifestVfs = window.inSetu?.stores?.App?.getState()?.manifest?.vfs || {};
-        const normPath = filepath.replace(/^vfs:\/\//, '');
+        const normUri = filepath && filepath.includes('://') ? filepath : `vfs://${String(filepath || '').replace(/^\/+/, '')}`;
 
         for (const [key, bucket] of Object.entries(manifestVfs)) {
-            if (bucket.files && bucket.files.includes(normPath)) {
+            if (bucket.files && (bucket.files.includes(normUri) || bucket.files.includes(filepath))) {
                 return BucketAddress.fromKey(key);
             }
         }
-        const parts = normPath.split('/');
-        return new BucketAddress(parts[0] || 'global', 'main');
+        const parsed = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(normUri) : { repo: 'global' };
+        return new BucketAddress(parsed.repo || 'global', 'main');
     }
 }
 
@@ -126,6 +125,69 @@ export class InSetuElement extends SutramElement {
         this.workspaceId = window.inSetu?.utils?.getActiveWorkspace() || 'default';
         /** @type {import('./types.js').WorkspaceConfig} */
         this.ecosystem = { activeWorkspace: this.workspaceId, allRepos: [], pinnedRepos: new Set(['ALL']), targetConfigs: [] };
+    }
+    bindStore(store, stateMapper, options = {}) {
+        const { autoFetch = 'fetchData', equalityFn } = options;
+
+        this.subscribe(store, stateMapper, (mappedSlice) => {
+            Object.assign(this, mappedSlice);
+            this.requestUpdate();
+        }, equalityFn);
+
+        if (autoFetch) {
+            const triggerFetch = (workspaceId) => {
+                if (!this.isExtensionActive()) return;
+
+                if (typeof autoFetch === 'function') {
+                    autoFetch(workspaceId);
+                } else if (typeof autoFetch === 'string') {
+                    const state = typeof store?.getState === 'function' ? store.getState() : store;
+                    if (state && typeof state[autoFetch] === 'function') {
+                        state[autoFetch](workspaceId);
+                    }
+                }
+            };
+
+            this._autoFetchFns = this._autoFetchFns || [];
+            this._autoFetchFns.push(triggerFetch);
+
+            triggerFetch(this.workspaceId);
+        }
+    }
+
+    filterItems(items, options = {}) {
+        if (!Array.isArray(items) || items.length === 0) return [];
+
+        const {
+            repoField = 'repo',
+            pinnedRepos = (this.ecosystem?.pinnedRepos || new Set(['ALL'])),
+            searchQuery = (this.searchQuery || ''),
+            searchFields = (item) => {
+                const title = item.titleText || item.title || item.name || '';
+                const path = item.filepath || item.filename || item.path || '';
+                const repo = item[repoField] || '';
+                return `${title} ${repo} ${path}`;
+            }
+        } = options;
+
+        const currentPins = pinnedRepos instanceof Set 
+            ? pinnedRepos 
+            : new Set(Array.isArray(pinnedRepos) ? pinnedRepos : [pinnedRepos]);
+
+        const repoFiltered = items.filter(item => {
+            if (!item) return false;
+            if (currentPins.has('ALL')) return true;
+            const itemRepo = item[repoField] || (
+                item.filepath ? (this.utils.parseURI(item.filepath).repo || '') : ''
+            );
+
+            return currentPins.has(itemRepo);
+        });
+
+        const cleanQuery = searchQuery.trim();
+        if (!cleanQuery) return repoFiltered;
+
+        return this.utils.fuzzyFilterObjects(repoFiltered, cleanQuery, searchFields);
     }
 
     get extName() {
@@ -371,7 +433,16 @@ export class InSetuElement extends SutramElement {
             );
         }
     }
-    onWorkspaceLoad(workspaceId) {}
+    onWorkspaceLoad(workspaceId) {
+        if (Array.isArray(this._autoFetchFns)) {
+            this._autoFetchFns.forEach(fn => fn(workspaceId));
+        }
+    }
+    onForceRefresh() {
+        if (Array.isArray(this._autoFetchFns)) {
+            this._autoFetchFns.forEach(fn => fn());
+        }
+    }
 }
 window.inSetu = window.inSetu || {};
 // Pre-seed foundational OS chassis modules to protect against offline cache misses or backend latency
@@ -423,6 +494,38 @@ window.inSetu.events = window.inSetu.events || {
 // Forward the central registry
 window.inSetu.extensions.Registry = SutramRegistry;
 window.ExtensionRegistry = SutramRegistry;
+window.ExtensionRegistry.executeJobAction = (route, payloadGenerator, pollOptions = {}) => {
+    return async (e) => {
+        const payload = typeof payloadGenerator === 'function' ? await payloadGenerator(e) : (payloadGenerator || {});
+        if (pollOptions.closeWindowId && window.Sutram?.stores?.Layout) {
+            window.Sutram.stores.Layout.getState().closeWindow(pollOptions.closeWindowId);
+        }
+        const cleanRoute = String(route || '').replace(/^\/+/, '');
+        const res = await window.inSetu.api.workspace.post(cleanRoute, payload);
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        if (!data.job_id) {
+            if (pollOptions.onComplete) pollOptions.onComplete(data);
+            return data;
+        }
+        return new Promise((resolve, reject) => {
+            window.inSetu.utils.pollJob(data.job_id, {
+                ...pollOptions,
+                onComplete: (statusData) => {
+                    if (pollOptions.onComplete) pollOptions.onComplete(statusData);
+                    resolve(statusData);
+                },
+                onError: (err) => {
+                    if (pollOptions.onError) pollOptions.onError(err);
+                    reject(err);
+                }
+            });
+        });
+    };
+};
 window.inSetu.extensions.InSetuElement = InSetuElement;
 window.inSetu.extensions.createExtensionStore = createExtensionStore;
 // Wire inSetu's active extension policy into Sutram's agnostic filter slot
@@ -466,8 +569,15 @@ window.ExtensionRegistry.getLayoutSlots = function() {
 const _baseGetEntityActions = window.ExtensionRegistry.getEntityActions.bind(window.ExtensionRegistry);
 window.ExtensionRegistry.getEntityActions = function(compoundType, data) {
     const actions = _baseGetEntityActions(compoundType, data);
+    const rawFp = data?.filepath || data?.folderpath || data?.id || '';
+    const isSharedAsset = Boolean(rawFp && String(rawFp).startsWith('ws://'));
+    const MUTATIVE_ACTION_IDS = ['file-edit', 'vfs-move', 'vfs-rename', 'vfs-archive', 'vfs-delete'];
+
     return actions.filter(act => {
         if (act.extName && !window.inSetu.isCore(act.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(act.extName)) {
+            return false;
+        }
+        if (isSharedAsset && MUTATIVE_ACTION_IDS.includes(act.id)) {
             return false;
         }
         return true;
@@ -613,7 +723,13 @@ window.inSetu.utils.copyRawText = async function(text, successMsg = "✅ Copied!
     }
 };
 window.inSetu.utils.parseURI = function(pathStr) {
-    if (!pathStr) return { scheme: '', repo: '', relativePath: '', filename: '', raw: '' };
+    if (!pathStr) {
+        return {
+            scheme: '', volume: '', repo: '', relativePath: '', filename: '',
+            isCompiledArtifact: false, isTemplate: false, isUserTemplate: false,
+            isReadOnly: true, isEditable: false, isSource: false, raw: ''
+        };
+    }
 
     let str = String(pathStr).replace(/\\/g, '/').trim();
     let scheme = '';
@@ -624,12 +740,26 @@ window.inSetu.utils.parseURI = function(pathStr) {
         str = schemeMatch[2];
     }
     str = str.replace(/^\/+/, '');
-    const parts = str.split('/');
-    const repo = parts.length > 1 ? parts[0] : '';
-    const relativePath = parts.length > 1 ? parts.slice(1).join('/') : str;
+    const parts = str.split('/').filter(Boolean);
+    const volume = parts.length > 0 ? parts[0] : '';
+    const repo = parts.length > 1 ? parts[0] : (scheme === 'vfs' ? volume : '');
+    const relativePath = parts.length > 1 ? parts.slice(1).join('/') : (scheme === 'vfs' ? '' : str);
     const filename = parts[parts.length - 1] || '';
 
-    return { scheme, repo, relativePath, filename, raw: pathStr };
+    const isCompiledArtifact = scheme === 'ctx' && ['contexts', 'diffs', 'workflows'].includes(volume);
+    const isUserTemplate = pathStr.includes('/.templates/user/');
+    const isReadOnlyTemplate = !isUserTemplate && pathStr.includes('/.templates/');
+    const isTemplate = isUserTemplate || isReadOnlyTemplate;
+    const isSharedMount = scheme === 'ws';
+    const isReadOnly = isSharedMount || isCompiledArtifact || isReadOnlyTemplate;
+    const isEditable = !isReadOnly && (scheme === 'vfs' || (scheme === 'ctx' && ['prompts', 'notes', 'skills'].includes(volume)) || scheme === 'virtual' || scheme === 'yomama');
+    const isSource = !isCompiledArtifact;
+
+    return {
+        scheme, volume, repo, relativePath, filename,
+        isCompiledArtifact, isTemplate, isUserTemplate, isReadOnlyTemplate,
+        isSharedMount, isReadOnly, isEditable, isSource, raw: pathStr
+    };
 };
 
 window.inSetu.utils.parseFrontmatter = function(text) {
@@ -824,9 +954,10 @@ window.ExtensionRegistry.registerExtension('system', {
                 if (data.textContent && window.inSetu.ui && window.inSetu.ui.openFolderBrowser) {
                     window.inSetu.ui.openFolderBrowser(async (selectedPath) => {
                         if (selectedPath === undefined || selectedPath === null) return; // User cancelled
-
                         const filename = data.suggestedFilename || ('blob_' + Date.now() + '.txt');
-                        const filepath = selectedPath ? (selectedPath + '/' + filename) : filename;
+                        const cleanFolder = String(selectedPath || '').replace(/\/+$/, '');
+                        const rawTarget = cleanFolder ? `${cleanFolder}/${filename}` : filename;
+                        const filepath = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(rawTarget) : rawTarget;
 
                         if (window.inSetu.sys) {
                             await window.inSetu.sys.executeWorkspaceMutation('fs/save', { filepath, content: data.textContent });

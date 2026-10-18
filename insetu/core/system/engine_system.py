@@ -1,8 +1,12 @@
 from pathlib import Path
 import os
+import re
 import sys
 import json
+import shutil
 import socket
+import importlib
+import importlib.util
 import threading
 import time
 import traceback
@@ -12,9 +16,31 @@ from akasa.utils import load_config, save_json_config, load_json_config, get_wor
 import akasa.utils as utils
 from akasa.hooks import hooks
 from akasa.sync import get_system_deltas
-from akasa.vfs import execute_vfs_delete
+from akasa.vfs import execute_vfs_delete, set_mount_authorizer
+from akasa.extension import SettingsManager
 from insetu.core.sdk import InSetuExtension
 import insetu.core.system.legacy  # Mount one-off migration hooks
+
+
+def _authorize_inter_workspace_mount(target_ws: str, subscriber_ws: str, domain: str, rel_path: str = "") -> bool:
+    """Tier 2 Policy Evaluator for ws:// virtual mounts."""
+    if target_ws == "default" and rel_path.startswith("prompts/.templates/user"):
+        return True
+    sub_settings = SettingsManager('system', subscriber_ws)
+    mounts = sub_settings.get("shared_mounts") or []
+    if not any(m.get("workspace_id") == target_ws and m.get("domain") in (domain, "*") for m in mounts):
+        return False
+    pub_settings = SettingsManager('system', target_ws)
+    exports = pub_settings.get("export_shared_domains") or {}
+    domain_export = exports.get(domain) or exports.get("*")
+    if not domain_export:
+        return False
+
+    allowed = domain_export.get("allowed") or []
+    return "*" in allowed or subscriber_ws in allowed
+
+
+set_mount_authorizer(_authorize_inter_workspace_mount)
 
 SYSTEM_SETTINGS_SCHEMA = [
     {
@@ -58,12 +84,36 @@ SYSTEM_SETTINGS_SCHEMA = [
         "description": "The emoji used in the top-right application menu."
     },
     {
+        "id": "extensions",
+        "label": "Active Workspace Extensions",
+        "type": "hidden",
+        "scope": "workspace",
+        "default": ["config"],
+        "description": "List of enabled extension identifiers for this workspace."
+    },
+    {
         "id": "offline_cache_limit_mb",
         "label": "Offline Cache Limit (MB)",
         "type": "number",
         "scope": "daemon",
         "default": 250,
         "description": "Maximum IndexedDB storage quota for VFS cache warming."
+    },
+    {
+        "id": "export_shared_domains",
+        "label": "Exported Domains (Publisher)",
+        "type": "object",
+        "scope": "workspace",
+        "default": {},
+        "description": "Expose internal directories to other workspaces. Format: {'prompts': {'allowed': ['*']}}"
+    },
+    {
+        "id": "shared_mounts",
+        "label": "Virtual Mounts (Subscriber)",
+        "type": "json",
+        "scope": "workspace",
+        "default": [],
+        "description": "Mount external workspace domains. Format: [{'workspace_id': 'hub', 'domain': 'prompts'}]"
     }
 ]
 system_bp = InSetuExtension(
@@ -77,6 +127,56 @@ system_bp = InSetuExtension(
 def core_system_settings_updated(workspace_id=None, **kwargs):
     # Core OS settings (ports, titles, watchdogs) mandate an environment refresh
     return {"requires_refresh": True}
+@hooks.on('mutate_workspace_config', priority=1)
+def hydrate_and_migrate_cascade_settings(cfg, workspace_id=None, **kwargs):
+    """
+    Transparent 3-Tier Cascade Bridge:
+    1. Lazily migrates legacy `extensions`, `instance_title`, `instance_emoji`, and `port`
+        from `config.json` into `workspace.settings.json` / `system.json` if not yet present.
+    2. Hydrates the in-memory `cfg` dictionary so all runtime consumers (`is_extension_enabled`,
+        hooks, and UI config endpoints) see the authoritative settings without polluting `config.json`.
+    """
+    wid = workspace_id or "default"
+    settings = SettingsManager('system', wid)
+    ws_filepath = settings._resolve_filepath('workspace')
+    ws_data = load_json_config(ws_filepath, {})
+    sys_ws_block = ws_data.get('system', {}) if isinstance(ws_data.get('system'), dict) else {}
+
+    daemon_filepath = settings._resolve_filepath('daemon')
+    daemon_data = load_json_config(daemon_filepath, {})
+    sys_daemon_block = daemon_data.get('system', {}) if isinstance(daemon_data.get('system'), dict) else {}
+    ws_dirty = False
+    if "extensions" not in sys_ws_block and "extensions" in cfg and isinstance(cfg["extensions"], list):
+        ext_list = list(cfg["extensions"])
+        if "config" not in ext_list:
+            ext_list.insert(0, "config")
+        sys_ws_block["extensions"] = ext_list
+        ws_dirty = True
+
+    if "instance_title" not in sys_ws_block and "instance_title" in cfg and cfg["instance_title"]:
+        sys_ws_block["instance_title"] = cfg["instance_title"]
+        ws_dirty = True
+
+    if "instance_emoji" not in sys_ws_block and "instance_emoji" in cfg and cfg["instance_emoji"]:
+        sys_ws_block["instance_emoji"] = cfg["instance_emoji"]
+        ws_dirty = True
+    if ws_dirty and ws_filepath:
+        ws_data["system"] = sys_ws_block
+        save_json_config(ws_filepath, ws_data, workspace_id=wid)
+
+    if "port" not in daemon_data and "port" not in sys_daemon_block and "port" in cfg and cfg["port"] is not None:
+        daemon_data["port"] = cfg["port"]
+        if daemon_filepath:
+            save_json_config(daemon_filepath, daemon_data, workspace_id="default")
+    raw_exts = sys_ws_block.get("extensions") or settings.get("extensions", ["config"]) or ["config"]
+    resolved_exts = list(raw_exts)
+    if "config" not in resolved_exts:
+        resolved_exts.insert(0, "config")
+
+    cfg["extensions"] = resolved_exts
+    cfg["instance_title"] = sys_ws_block.get("instance_title") or settings.get("instance_title", "inSetu Workbench")
+    cfg["instance_emoji"] = sys_ws_block.get("instance_emoji") or settings.get("instance_emoji", "⚙️")
+    cfg["port"] = daemon_data.get("port") or sys_daemon_block.get("port") or settings.get("port", 5005)
 @hooks.on('execute_identity_handshake')
 def host_identity_handshake(request=None, client_ip=None, config=None, **kwargs):
     """Tier 2 Core OS: Evaluates daemon-level host identity protocols (e.g., Tailscale WHOIS)."""
@@ -130,7 +230,6 @@ def api_system_openapi():
     """Phase 3 Tool Calling: Generates a real-time OpenAPI 3.0 specification from mounted SDK routes."""
     from flask import current_app as _current_app
     from akasa.utils import typeddict_to_openapi as _typeddict_to_openapi
-    import re as _re
 
     paths = {}
     # 1. Manually inject the bootstrap route since it lives outside the standard extension SDK
@@ -225,8 +324,8 @@ def api_system_openapi():
         for url_rule, method_schemas in bp.route_schemas.items():
             path_item = {}
             # Extract path parameters from Werkzeug rule string (e.g. /api/<workspace_id>/...)
-            path_vars = _re.findall(r'<([^>:]+:)?([^>]+)>', url_rule)
-            openapi_url = _re.sub(r'<([^>:]+:)?([^>]+)>', r'{\2}', url_rule)
+            path_vars = re.findall(r'<([^>:]+:)?([^>]+)>', url_rule)
+            openapi_url = re.sub(r'<([^>:]+:)?([^>]+)>', r'{\2}', url_rule)
             for method, meta in method_schemas.items():
                 method_lower = method.lower()
                 if method_lower == "options": continue
@@ -388,42 +487,46 @@ class PipelineSubmitPayload(TypedDict, total=False):
     start_step: str
 @system_bp.route('pipeline/submit', methods=['POST'], request_schema=PipelineSubmitPayload, docstring="Triggers the background context compilation sequence. Handles differential deltas or full sweeps via the Akasa DAG Orchestrator.")
 def api_system_pipeline_submit(ctx):
-    data = ctx.req.get_json(force=True, silent=True) or {}
-    force_full = data.get("force_full", False)
-    # Reattach check: Attach to any active stage of the compilation pipeline to prevent concurrent chain collisions.
-    ordered_steps = ctx.resolve_dag_chain('register_compilation_steps')
+    try:
+        data = ctx.req.get_json(force=True, silent=True) or {}
+        force_full = data.get("force_full", False)
+        # Reattach check: Attach to any active stage of the compilation pipeline to prevent concurrent chain collisions.
+        ordered_steps = ctx.resolve_dag_chain('register_compilation_steps')
 
-    start_step = data.get("start_step")
-    upstream_worker_names = []
+        start_step = data.get("start_step")
+        upstream_worker_names = []
 
-    if start_step:
-        try:
-            start_idx = next(i for i, s in enumerate(ordered_steps) if s['id'] == start_step)
-            # Filter to upstream workers (including the start_step itself) that cascade down to our target
-            upstream_worker_names = [s.get('worker_name') for s in ordered_steps[:start_idx + 1] if s.get('worker_name')]
-            ordered_steps = ordered_steps[start_idx:]
-        except StopIteration:
+        if start_step:
+            try:
+                start_idx = next(i for i, s in enumerate(ordered_steps) if s['id'] == start_step)
+                # Filter to upstream workers (including the start_step itself) that cascade down to our target
+                upstream_worker_names = [s.get('worker_name') for s in ordered_steps[:start_idx + 1] if s.get('worker_name')]
+                ordered_steps = ordered_steps[start_idx:]
+            except StopIteration:
+                upstream_worker_names = [s.get('worker_name') for s in ordered_steps if s.get('worker_name')]
+        else:
             upstream_worker_names = [s.get('worker_name') for s in ordered_steps if s.get('worker_name')]
-    else:
-        upstream_worker_names = [s.get('worker_name') for s in ordered_steps if s.get('worker_name')]
-    active_job_id = ctx.jobs.find_active_pipeline_job(upstream_worker_names, force_full=force_full)
-    if active_job_id:
-        return jsonify({"status": "accepted", "job_id": active_job_id, "message": "Reattached to active compilation."}), 202
-    if not ordered_steps:
-        return jsonify({"error": "No compilation steps registered."}), 400
+        active_job_id = ctx.jobs.find_active_pipeline_job(upstream_worker_names, force_full=force_full)
+        if active_job_id:
+            return jsonify({"status": "accepted", "job_id": active_job_id, "message": "Reattached to active compilation."}), 202
+        if not ordered_steps:
+            return jsonify({"error": "No compilation steps registered."}), 400
 
-    payload = {"force_full": force_full}
-    if "target_repos" in data:
-        payload["target_repos"] = data["target_repos"]
+        payload = {"force_full": force_full}
+        if "target_repos" in data:
+            payload["target_repos"] = data["target_repos"]
 
-    job_id = ctx.jobs.submit_chain(
-        ordered_steps, 
-        on_complete_hook="compilation_sequence_complete", 
-        job_category="ui_blocking", 
-        **payload
-    )
+        job_id = ctx.jobs.submit_chain(
+            ordered_steps, 
+            on_complete_hook="compilation_sequence_complete", 
+            job_category="ui_blocking", 
+            **payload
+        )
 
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+        return jsonify({"status": "accepted", "job_id": job_id}), 202
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"status": "error", "error": f"Pipeline Dispatch Error ({type(e).__name__}): {str(e)}"}), 500
 @hooks.on('pre_file_save')
 def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=None, **kwargs):
     if data and data.get("is_new_repo") and data.get("repo_dir"):
@@ -476,12 +579,10 @@ def get_system_config(workspace_id):
                             mod = sys.modules.get(f"insetu.extensions.{ext_name}.engine_{ext_name}") or \
                                         sys.modules.get(f"insetu.extensions.engine_{ext_name}") or \
                                         sys.modules.get(f"insetu.engine_{ext_name}")
-
                             if not mod:
-                                    import importlib as _importlib
                                     def safe_import(target):
                                             try:
-                                                    return _importlib.import_module(target), None
+                                                    return importlib.import_module(target), None
                                             except ModuleNotFoundError as e:
                                                     if e.name == target.split('.')[-1] or e.name == target or (e.name and target.startswith(f"{e.name}.")):
                                                             return None, None
@@ -497,6 +598,7 @@ def get_system_config(workspace_id):
                                             mod, err = safe_import(target)
                                             if mod or err: break
                             missing_exts = []
+                            missing_bins = []
                             if err:
                                     title = f"⚠️ {title} (Broken)"
                                     desc = f"Failed to load: {err}"
@@ -506,14 +608,11 @@ def get_system_config(workspace_id):
                                             title = getattr(bp_obj, 'title', title)
                                             desc = getattr(bp_obj, 'description', desc)
                                     for dep in getattr(mod, '__external_depends__', []):
-                                            import importlib.util as _importlib_util
-                                            if _importlib_util.find_spec(dep) is None:
+                                            if importlib.util.find_spec(dep) is None:
                                                     missing_exts.append(dep)
 
-                                    missing_bins = []
                                     for binary in getattr(mod, '__external_binaries__', []):
-                                            import shutil as _shutil
-                                            if not _shutil.which(binary):
+                                            if not shutil.which(binary):
                                                     missing_bins.append(binary)
                             available.append({"id": ext_name, "title": title, "description": desc, "missing_externals": missing_exts, "missing_binaries": missing_bins})
             from akasa.extension import _REGISTERED_SETTINGS_SCHEMAS as _REGISTERED_SETTINGS_SCHEMAS
@@ -542,9 +641,22 @@ def save_system_config(workspace_id, payload):
     existing_cfg = load_json_config(cfg_path, {})
     merged_cfg = {**existing_cfg, **payload}
 
-    # Security Guardrail: Enforce the core config UI is never locked out
-    if "extensions" in merged_cfg and "config" not in merged_cfg["extensions"]:
-        merged_cfg["extensions"].insert(0, "config")
+    settings = SettingsManager('system', workspace_id)
+    settings_updates = {}
+
+    if "extensions" in payload and isinstance(payload["extensions"], list):
+        ext_list = list(payload["extensions"])
+        if "config" not in ext_list:
+            ext_list.insert(0, "config")
+        settings_updates["extensions"] = ext_list
+
+    for ws_key in ("instance_title", "instance_emoji", "port"):
+        if ws_key in payload and payload[ws_key] is not None:
+            settings_updates[ws_key] = payload[ws_key]
+
+    if settings_updates:
+        settings.update(settings_updates)
+
     from insetu.core.utils_core import sanitize_workspace_config as _sanitize_workspace_config
 
     merged_cfg = _sanitize_workspace_config(merged_cfg)
@@ -631,7 +743,7 @@ def api_system_topology(ctx):
             "virtual_contexts": cfg.get("virtual_contexts", []),
             "category_order": cfg.get("category_order", []),
             "tab_order": cfg.get("tab_order", ["context", "edit", "tasks", "ctrl", "library"]),
-            "hidden_outputs": cfg.get("hidden_outputs", ["context_prompt.md", "context_prompt_diffs.txt"]),
+            "hidden_outputs": cfg.get("hidden_outputs", ["ctx://contexts/context_prompt.md", "ctx://diffs/context_prompt_diffs.txt"]),
             "config_missing": not os.path.exists(cfg_path)
         })
     except Exception as e:
@@ -680,7 +792,6 @@ def api_create_workspace(ctx):
         config_rel_path = config_abs_path
         starter_config = {
             "workspace_root": resolved_root,
-            "extensions": ["config"],
             "ignore_dirs": ["node_modules", "__pycache__", "venv", ".git", ".insetu"]
         }
         os.makedirs(starter_config["workspace_root"], exist_ok=True)
@@ -692,13 +803,15 @@ def api_create_workspace(ctx):
 
         # Use save_json_config to ensure _JSON_CACHE is updated synchronously for immediate reads
         save_json_config(index_path, w_data, workspace_id="default")
-
         # 2. Save the pure topology mapping
         save_json_config(config_abs_path, starter_config, workspace_id=ws_id)
         # 3. Seed the Tier 2 Workspace Settings safely
-        from akasa.extension import SettingsManager as _SettingsManager
-        settings = _SettingsManager('system', ws_id)
-        settings.set("instance_title", f"inSetu Workspace: {ws_id}")
+        settings = SettingsManager('system', ws_id)
+        settings.update({
+            "instance_title": f"inSetu Workspace: {ws_id}",
+            "instance_emoji": "⚙️",
+            "extensions": ["config"]
+        })
         # 4. Provision databases and trigger the boot sequence for the new workspace
         from akasa.db import apply_declarative_schema as _apply_declarative_schema, _REGISTERED_SCHEMAS as _REGISTERED_SCHEMAS
         for ext_name, schema in _REGISTERED_SCHEMAS.items():

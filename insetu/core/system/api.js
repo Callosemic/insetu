@@ -4,13 +4,18 @@ import { SutramDB, OfflineHttpProvider, NetworkHysteresisManager, OutboxReconcil
 import { AppStore } from '/static/extensions/system/store.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+const _telemetryChannel = new BroadcastChannel('insetu_telemetry');
 
 const offlineProvider = new OfflineHttpProvider({
     checkOfflineState: () => window.inSetu?.stores?.App?.getState()?.isOffline,
     setOfflineState: (val) => {
+        const prev = window.inSetu?.stores?.App?.getState()?.isOffline;
         window.inSetu.stores.App.setState({ isOffline: val });
         // Synchronize the chassis EnvironmentStore so offline buttons natively heal
         if (window.Sutram?.stores?.Environment) window.Sutram.stores.Environment.setState({ isOffline: val });
+        if (prev !== val) {
+            _telemetryChannel.postMessage({ type: 'network_state', data: { isOffline: val } });
+        }
     },
     isOfflineCapable: (url) => {
         const extName = url.split('/api/')[1]?.split('/')[1] || '';
@@ -46,6 +51,16 @@ const offlineProvider = new OfflineHttpProvider({
                 window.inSetu.stores.Offline.getState().fetchOfflineState();
             }
         }
+        // Notify peer/host windows so their outbox counts, file trees, and offline ledgers stay in lockstep
+        _telemetryChannel.postMessage({
+            type: 'outbox_mutated',
+            data: {
+                scopeId,
+                count,
+                pendingMutations: pendingItems,
+                deletedMutations: deletedItems
+            }
+        });
         window.inSetu?.offlineLog?.(`Enqueued mutation [${method}] (${count} pending): ${url}`, 'info', bodyString);
         if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`🌩️ Queued for sync (${count})`, 3000);
     },
@@ -218,6 +233,18 @@ window.inSetu.api = {
         const headers = isFD ? { ...(options.headers || {}) } : { 'Content-Type': 'application/json', ...(options.headers || {}) };
         const body = isFD ? payload : JSON.stringify(payload);
         return this.workspace(path, { ...options, method: 'POST', headers, body });
+    },
+    keepalivePost: function(path, payload, workspaceId = null) {
+        const ws = workspaceId || (window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default');
+        const cleanPath = path.startsWith('/') ? path.substring(1) : path;
+        const headers = this._getHeaders(true);
+        headers.set('Content-Type', 'application/json');
+        return fetch(`/api/${encodeURIComponent(ws)}/${cleanPath}`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload || {}),
+            keepalive: true
+        }).catch(() => {});
     }
 };
 window.inSetu.api.delete = function(path, options = {}) {
@@ -252,10 +279,35 @@ class SSEPipeline {
             this.isConnected = true;
             console.log("🟢 [SSE TELEMETRY] Connected to real-time system stream. Fallback polling relaxed.");
         };
-        const bc = new BroadcastChannel('insetu_telemetry');
+        const bc = _telemetryChannel;
         bc.onmessage = (ev) => {
-            if (ev.data?.type === 'presence_ping') {
+            const { type, data } = ev.data || {};
+            if (type === 'presence_ping') {
                 bc.postMessage({ type: 'presence_pong' });
+            } else if (type === 'outbox_mutated') {
+                const activeWs = window.inSetu.utils.getActiveWorkspace();
+                if (data?.scopeId && data.scopeId !== activeWs) return;
+                const appState = window.inSetu.stores.App.getState();
+                const pendingSet = new Set(appState.pendingMutations);
+                const deletedSet = new Set(appState.deletedMutations);
+                (data.pendingMutations || []).forEach(p => pendingSet.add(p));
+                (data.deletedMutations || []).forEach(p => deletedSet.add(p));
+                window.inSetu.stores.App.setState({
+                    outboxCount: data.count ?? appState.outboxCount,
+                    pendingMutations: pendingSet,
+                    deletedMutations: deletedSet,
+                    isOffline: true
+                });
+                if (window.Sutram?.stores?.Environment) window.Sutram.stores.Environment.setState({ isOffline: true });
+                if (window.inSetu?.stores?.Offline?.getState()?.fetchOfflineState) {
+                    window.inSetu.stores.Offline.getState().fetchOfflineState();
+                }
+            } else if (type === 'network_state') {
+                const isOff = Boolean(data?.isOffline);
+                if (window.inSetu.stores.App.getState().isOffline !== isOff) {
+                    window.inSetu.stores.App.setState({ isOffline: isOff });
+                    if (window.Sutram?.stores?.Environment) window.Sutram.stores.Environment.setState({ isOffline: isOff });
+                }
             }
         };
         this.source.addEventListener('vfs_mutated', (e) => {
@@ -407,8 +459,9 @@ const attemptReconciliation = async () => {
                 if (remaining === 0) {
                     window.inSetu?.offlineLog?.('Outbox fully reconciled.', 'success');
                     if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus('✅ System Synced', 3000);
-                    // Clear the ephemeral tracking sets once the queue is fully drained
+                    // Clear the ephemeral tracking sets once the queue is fully drained and notify pop-out peers
                     window.inSetu.stores.App.setState({ pendingMutations: new Set(), deletedMutations: new Set() });
+                    _telemetryChannel.postMessage({ type: 'outbox_reconciled', data: { scopeId: window.inSetu.utils.getActiveWorkspace() } });
                     window.dispatchEvent(new CustomEvent('sutram-sync-complete'));
                 }
             }
@@ -448,6 +501,9 @@ setInterval(async () => {
             } catch(e) {}
         }
     }
-
-    await attemptReconciliation();
+    // Only the authoritative host window (or a standalone pop-out whose host was closed) drives reconciliation
+    const isPopout = new URLSearchParams(window.location.search).get('popout') === 'true';
+    if (!isPopout || window.inSetu?.sse?.isConnected) {
+        await attemptReconciliation();
+    }
 }, 5000);

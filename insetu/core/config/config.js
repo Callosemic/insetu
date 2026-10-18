@@ -100,13 +100,12 @@ export class InSetuExtConfig extends InSetuElement {
             if (repo.repo_dir) repo.repo_dir = repo.repo_dir.trim();
             if (repo.physical_path) repo.physical_path = repo.physical_path.trim();
         }
-
         if (this._isNewRepo && repo && this._createDirIfNeeded && repo.repo_dir) {
             try {
                 const safeRepoDir = repo.repo_dir || '';
                 const targetPath = repo.physical_path 
                     ? `${repo.physical_path.replace(/\/+$/, '')}/.gitkeep` 
-                    : `${safeRepoDir.replace(/^\/+|\/+$/g, '')}/.gitkeep`;
+                    : `vfs://${safeRepoDir.replace(/^\/+|\/+$/g, '')}/.gitkeep`;
                 await window.inSetu.sys.executeWorkspaceMutation('fs/save', {
                     filepath: targetPath,
                     content: '',

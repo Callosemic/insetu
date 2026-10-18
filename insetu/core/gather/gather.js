@@ -26,7 +26,15 @@ export const executeCompile = async (onProgress = null, forceFull = false, start
             if (startStep) payload.start_step = startStep;
             if (targetRepos) payload.target_repos = targetRepos;
             const response = await window.inSetu.api.system.post('pipeline/submit', payload);
-            const data = await response.json();
+            let data = {};
+            try {
+                data = await response.json();
+            } catch (parseErr) {
+                throw new Error(`Pipeline request failed (HTTP ${response.status})`);
+            }
+            if (!response.ok && response.status !== 202) {
+                throw new Error(data.error || data.message || `Pipeline error (HTTP ${response.status})`);
+            }
             let result = null;
             if (response.status === 202) {
                 if (data.job_id === 'offline_queue') {
@@ -267,20 +275,16 @@ export class InSetuExtGather extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        GatherStore.getState().fetchSettings();
-        this.subscribe(
+        this.bindStore(
             GatherStore,
             state => ({
                 loading: state.loading,
                 searchQuery: state.searchQuery,
                 domainColors: state.domainColors
             }),
-            ({ loading, searchQuery }) => {
-                this.loading = loading;
-                this.searchQuery = searchQuery;
-                this.requestUpdate();
-            }
+            { autoFetch: 'fetchSettings' }
         );
+
         this.subscribe(
             AppStore,
             state => ({
@@ -321,37 +325,30 @@ export class InSetuExtGather extends InSetuElement {
         };
         this.registerGlobalListener('insetu:gather-compile-completed', window, () => handleGatherCompleted());
         this.registerGlobalListener('insetu:compile-step-complete', window, (e) => {
-            if (e.detail && e.detail.ext_name === 'gather') {
+            if (e.detail && e.detail.ext_name === 'gather' && e.detail.artifact?.step_id !== 'pack_selection_task') {
                 handleGatherCompleted();
             }
         });
-        const aState = AppStore.getState();
-        this.manifestFiles = aState.derivedCtxKeys || Object.keys(aState.manifest?.ctx || {});
-        this.activeModules = aState.activeModules || [];
-        this.pendingModules = aState.pendingModules || [];
-        this.isPipelineActive = aState.isPipelineActive || false;
-        this.categoryOrder = aState.categoryOrder || [];
-        this.hiddenOutputs = aState.hiddenOutputs || [];
-        const gState = GatherStore.getState();
-        this.loading = gState.loading;
-        this.searchQuery = gState.searchQuery;
     }
     disconnectedCallback() {
         super.disconnectedCallback();
     }
     onForceRefresh() {
-        this.loadContext(false);
+        super.onForceRefresh();
+        this.loadContext(true);
     }
     async loadContext(forceFull = false) {
         GatherStore.setState({ loading: true });
         try {
             const result = await GatherStore.getState().executeCompile(null, forceFull);
             if (result && result.status === 'error') {
-                alert("❌ " + result.message);
+                alert("❌ " + (result.message || result.error || "Compilation failed."));
             }
         } catch (error) {
             console.error("Compilation error:", error);
-            alert("❌ Network or syntax error compiling files. Check console for details.");
+            alert(`❌ Compilation error: ${error.message || "Check console for details."}`);
+        } finally {
+            GatherStore.setState({ loading: false });
         }
     }
     render() {
@@ -399,17 +396,10 @@ export class InSetuExtGather extends InSetuElement {
                 });
             }
         }
-        const repoFilteredFiles = enrichedFiles.filter(f => {
-            if (f.finalCat === 'Quickpacks') return true;
-            if (this.ecosystem.pinnedRepos.has('ALL')) return true;
-            if (f.repoDir && this.ecosystem.pinnedRepos.has(f.repoDir)) return true;
-            return Array.from(this.ecosystem.pinnedRepos).some(repo => f.filename.startsWith(repo + '_') || f.filename.includes('_' + repo + '_') || (f.finalTitle && f.finalTitle.toLowerCase().includes(repo.toLowerCase())));
+        const filteredFiles = this.filterItems(enrichedFiles, {
+            repoField: 'repoDir',
+            searchFields: f => `${f.repoDir || ''} ${f.finalTitle} ${f.finalCat} ${f.finalDesc}`
         });
-
-        // 2. Apply Fuzzy Search
-        const filteredFiles = this.searchQuery  
-                ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredFiles, this.searchQuery, f => `${f.repoDir || ''} ${f.finalTitle} ${f.finalCat} ${f.finalDesc}`)
-                : repoFilteredFiles;
         return html`
             <sutram-toolbar
                 searchPlaceholder="Fuzzy search contexts..."
@@ -621,7 +611,7 @@ window.ExtensionRegistry.registerExtension('gather', {
                     if (artifact.chunks && artifact.chunks.length > 1) {
                         if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading Parts...", 2000);
                         for (const f of artifact.chunks) {
-                            const fetchUrl = `/download/${encodeURIComponent(f)}`;
+                            const fetchUrl = `${window.inSetu.vfs.resolveFileFetchUrl(f, false)}&download=1`;
                             if (window.inSetu.vfs.fetchAndDownloadState) {
                                 await window.inSetu.vfs.fetchAndDownloadState(f, fetchUrl);
                                 await new Promise(r => setTimeout(r, 300));
@@ -630,7 +620,8 @@ window.ExtensionRegistry.registerExtension('gather', {
                     } else {
                         if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading...", 2000);
                         if (window.inSetu.vfs.fetchAndDownloadState) {
-                            await window.inSetu.vfs.fetchAndDownloadState(artifact.base_filename, `/download/${encodeURIComponent(artifact.base_filename)}`);
+                            const fetchUrl = `${window.inSetu.vfs.resolveFileFetchUrl(artifact.base_filename, false)}&download=1`;
+                            await window.inSetu.vfs.fetchAndDownloadState(artifact.base_filename, fetchUrl);
                         }
                     }
                 } catch (err) {

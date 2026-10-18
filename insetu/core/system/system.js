@@ -156,13 +156,16 @@ async function bootExtensions() {
         const hash = window.location.hash.replace(/^#\/?/, '');
         const parts = hash.split('/').map(decodeURIComponent);
         const subId = parts.slice(2).join('/') || '';
-        let matchingExt = activeExts.find(ext => ext === subId || subId.startsWith(`${ext}:`));
+        const targetPath = (parts.length >= 4 && parts[2] === 'editor') ? parts.slice(3).join('/') : subId;
+        const subParts = targetPath.includes(':') ? targetPath.split(':') : [targetPath];
+        let matchingExt = activeExts.find(ext => subParts.includes(ext) || ext === targetPath || targetPath.startsWith(`${ext}:`));
         if (!matchingExt) {
-            const dataMatch = subId.match(/\.(?:insetu-data|insetu\/data)\/([a-z0-9_]+)\//);
+            const dataMatch = targetPath.match(/\.(?:insetu-data|insetu\/data)\/([a-z0-9_]+)\//);
             if (dataMatch) matchingExt = dataMatch[1];
-            else if (subId.startsWith('ctx://notes/')) matchingExt = 'notes';
-            else if (subId.includes('.tracker/')) matchingExt = 'tracker';
-            else if (subId.startsWith('ctx://prompts/')) matchingExt = 'prompts';
+            else if (targetPath.startsWith('ctx://notes/') || targetPath.includes('/notes/')) matchingExt = 'notes';
+            else if (targetPath.includes('.tracker/')) matchingExt = 'tracker';
+            else if (targetPath.startsWith('ctx://prompts/')) matchingExt = 'prompts';
+            else if (targetPath.includes('term')) matchingExt = 'term';
         }
         if (matchingExt && matchingExt !== 'fs' && activeExts.includes(matchingExt)) {
             popoutScripts.push(`/static/extensions/${matchingExt}/ext_${matchingExt}.js`);
@@ -239,10 +242,10 @@ async function checkManifestVersion() {
         const locks = { ...currentLocks };
         const lockedRepos = new Set();
         let expiredLocks = false;
-
         for (const [path, lock] of Object.entries(locks)) {
             if (lock.expires > now) {
-                lockedRepos.add(path.split('/')[0]);
+                const parsed = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(path) : { repo: path.split('/')[0] };
+                if (parsed.repo) lockedRepos.add(parsed.repo);
             } else {
                 delete locks[path];
                 expiredLocks = true;
@@ -309,15 +312,22 @@ async function checkManifestVersion() {
                         if (entryData.entry) {
                             currentManifest.ctx[path] = entryData.entry;
                             SutramDB.deleteVFSBlob(activeWs, fetchUrl).catch(()=>{});
-                            const sep = fetchUrl.includes('?') ? '&' : '?';
-                            pathsToWarm.push(`${fetchUrl}${sep}t=${Date.now()}`);
-                        } else {
+                            // Only warm the primary base artifact if it is a valid ctx:// or vfs:// URI and not a multi-part virtual key
+                            const chunks = entryData.entry.chunks || [path];
+                            chunks.forEach(chunkUri => {
+                                if (chunkUri && (chunkUri.startsWith('ctx://') || chunkUri.startsWith('vfs://'))) {
+                                    const chunkFetchUrl = window.inSetu.vfs?.resolveFileFetchUrl ? window.inSetu.vfs.resolveFileFetchUrl(chunkUri, false) : `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(chunkUri)}`;
+                                    const sep = chunkFetchUrl.includes('?') ? '&' : '?';
+                                    pathsToWarm.push(`${chunkFetchUrl}${sep}t=${Date.now()}`);
+                                }
+                            });
+                        } else if (!deltaData.is_pipeline_active) {
                             delete currentManifest.ctx[path];
                             SutramDB.deleteVFSBlob(activeWs, fetchUrl).catch(()=>{});
                         }
                         localCtxSignatures[path] = ts;
                         manifestUpdated = true;
-                    } else if (entryRes.status === 404) {
+                    } else if (entryRes.status === 404 && !deltaData.is_pipeline_active) {
                         delete currentManifest.ctx[path];
                         delete localCtxSignatures[path];
                         SutramDB.deleteVFSBlob(activeWs, fetchUrl).catch(()=>{});
@@ -418,11 +428,15 @@ async function checkManifestVersion() {
             const currentLocks = AppStore.getState().resolvingLocks || {};
             let locksChanged = false;
             const nextLocks = { ...currentLocks };
-
             deltaData.mutations.forEach(m => {
-                const normPath = m.filepath ? m.filepath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/^\.\//, '') : '';
-                if (nextLocks[normPath]) {
-                    delete nextLocks[normPath];
+                const rawFp = m.filepath ? m.filepath.replace(/\\/g, '/').replace(/\/+$/, '') : '';
+                const canonFp = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(rawFp) : rawFp;
+                if (nextLocks[canonFp]) {
+                    delete nextLocks[canonFp];
+                    locksChanged = true;
+                }
+                if (nextLocks[rawFp]) {
+                    delete nextLocks[rawFp];
                     locksChanged = true;
                 }
             });
@@ -527,9 +541,11 @@ function updateBootProgress(statusMsg) {
 
     const fillBar = document.getElementById('retro-bar-fill');
     const statusEl = document.getElementById('retro-status-msg');
-
     if (statusEl && statusMsg) {
-        statusEl.innerHTML = `${statusMsg} (${percent}%) <span class="retro-cursor"></span>`;
+        statusEl.textContent = `${statusMsg} (${percent}%) `;
+        const cursorSpan = document.createElement('span');
+        cursorSpan.className = 'retro-cursor';
+        statusEl.appendChild(cursorSpan);
     }
     if (fillBar) {
         fillBar.style.width = `${percent}%`;
@@ -623,9 +639,11 @@ async function executeSecurityHandshake() {
     }
     return false;
 }
-export async function executeBootSequence() {
+export async function executeBootSequence(options = {}) {
     console.log("[BOOT] Starting sequence...");
-    const isPopout = new URLSearchParams(window.location.search).get('popout') === 'true';
+    const isPopout = options.isPopout !== undefined 
+        ? options.isPopout 
+        : new URLSearchParams(window.location.search).get('popout') === 'true';
     // Fast-track pop-out UI suppression before rendering cycles begin
     if (isPopout) {
         const retroBoot = document.getElementById('js-panic-button');
@@ -747,6 +765,16 @@ export async function executeBootSequence() {
                     const newBuckets = new Set([...state.dirtyBuckets, ...(data.dirty_buckets || [])]);
                     AppStore.setState({ dirtyRepos: newRepos, dirtyBuckets: newBuckets });
                 }
+            } else if (type === 'network_state') {
+                const isOff = Boolean(data?.isOffline);
+                AppStore.setState({ isOffline: isOff });
+                if (window.Sutram?.stores?.Environment) window.Sutram.stores.Environment.setState({ isOffline: isOff });
+            } else if (type === 'outbox_reconciled') {
+                if (data?.scopeId && data.scopeId !== activeWs) return;
+                AppStore.setState({ isOffline: false, isReconciling: false, outboxCount: 0, pendingMutations: new Set(), deletedMutations: new Set() });
+                if (window.Sutram?.stores?.Environment) window.Sutram.stores.Environment.setState({ isOffline: false });
+                if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus('✅ System Synced', 3000);
+                window.dispatchEvent(new CustomEvent('sutram-sync-complete'));
             }
         };
 
@@ -1123,7 +1151,10 @@ window.addEventListener('unhandledrejection', (e) => {
         // Paint the exact missing module error directly to the boot screen UI
         const statusEl = document.getElementById('retro-status-msg');
         if (statusEl) {
-            statusEl.innerHTML = `<span style="color:var(--intent-danger)">Boot Error: ${errorMsg}</span>`;
+            const errSpan = document.createElement('span');
+            errSpan.style.color = 'var(--intent-danger)';
+            errSpan.textContent = `Boot Error: ${errorMsg}`;
+            statusEl.replaceChildren(errSpan);
         }
     }
 });
@@ -1359,7 +1390,23 @@ export const refreshManifest = window.inSetu.utils.coalescedAsync(async () => {
         const res = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
         if (res.ok) {
             const rawManifest = await res.json();
-            const safeManifest = { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} };
+            const curState = AppStore.getState();
+            const prevVfs = curState.manifest?.vfs || {};
+            const prevCtx = curState.manifest?.ctx || {};
+            const nextVfs = rawManifest?.vfs || {};
+            const nextCtx = rawManifest?.ctx || {};
+
+            const finalCtx = (Object.keys(nextCtx).length === 0 && Object.keys(prevCtx).length > 0) ? prevCtx : nextCtx;
+            Object.entries(finalCtx).forEach(([p, entry]) => {
+                if (entry && entry.meta && entry.meta.timestamp) {
+                    localCtxSignatures[p] = entry.meta.timestamp;
+                }
+            });
+
+            const safeManifest = {
+                vfs: (Object.keys(nextVfs).length === 0 && Object.keys(prevVfs).length > 0) ? prevVfs : nextVfs,
+                ctx: finalCtx
+            };
             AppStore.setState({ manifest: safeManifest });
             return safeManifest;
         }
@@ -1640,7 +1687,13 @@ async function initializeWorkspaceTopology() {
             manifestData = AppStore.getState().manifest;
         }
         if (mRes.ok || manifestData) {
-            AppStore.setState({ manifest: { vfs: manifestData?.vfs || {}, ctx: manifestData?.ctx || {} } });
+            const ctxMap = manifestData?.ctx || {};
+            Object.entries(ctxMap).forEach(([p, entry]) => {
+                if (entry && entry.meta && entry.meta.timestamp) {
+                    localCtxSignatures[p] = entry.meta.timestamp;
+                }
+            });
+            AppStore.setState({ manifest: { vfs: manifestData?.vfs || {}, ctx: ctxMap } });
         }
     } catch (e) {
         console.error("Auto-hydration failed:", e);

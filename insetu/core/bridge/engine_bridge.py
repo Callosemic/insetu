@@ -7,7 +7,6 @@ import traceback
 from typing import TypedDict, Literal, List, Dict
 from flask import jsonify
 from akasa.hooks import hooks
-from akasa.vfs import VFSTransaction
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import InSetuURI
 
@@ -94,10 +93,9 @@ def bridge_revert(ctx):
             if r['filepath'] not in seen:
                 targets.append(r)
                 seen.add(r['filepath'])
-
     new_tx_id = f"tx_rev_{uuid.uuid4().hex[:8]}"
     reverted_count = 0
-    with VFSTransaction(ctx.workspace_id) as vfs:
+    with ctx.vfs as vfs:
         target_state = data.get("target_state", "final")
         is_initial = target_state == "initial"
 
@@ -176,9 +174,17 @@ class BridgeSyncPayload(TypedDict, total=False):
 ))
 def bridge_sync(ctx):
     """Receives Yomama payloads from the UI and dispatches the sync."""
-    data = ctx.req.json or {}
-    job_id = ctx.jobs.submit("sync_task", coalesce="args", job_category="ui_blocking", **data)
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    try:
+        raw_data = ctx.req.get_json(silent=True) or {}
+        safe_kwargs = {
+            k: v for k, v in raw_data.items()
+            if k not in ("task_name", "coalesce", "job_category", "job_id")
+        }
+        job_id = ctx.jobs.submit("sync_task", coalesce="args", job_category="ui_blocking", **safe_kwargs)
+        return jsonify({"status": "accepted", "job_id": job_id}), 202
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Bridge Dispatch Error ({type(e).__name__}): {str(e)}"}), 500
 
 # 3. Background Workers
 @bridge_bp.worker("sync_task")
