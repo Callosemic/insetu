@@ -10,13 +10,12 @@ Extensions define their SQLite requirements and UI settings schemas upon initial
 
 ```python
 from insetu.sdk import InSetuExtension
-
 my_ext_bp = InSetuExtension(
     name='my_ext', 
     module_name=__name__, 
     title="My Extension", 
     schema={"my_table": {"id": "TEXT PRIMARY KEY", "val": "TEXT"}},
-    settings_schema=[{"id": "api_key", "label": "API Key", "type": "text", "default": ""}]
+    settings_schema=[{"id": "api_key", "label": "API Key", "type": "text", "scope": "workspace", "default": ""}]
 )
 
 # Retrieve a fully hydrated ExtensionContext bound to a tenant workspace
@@ -30,8 +29,14 @@ Route handlers (`@my_ext_bp.route('path')`) and background workers (`@my_ext_bp.
 * **`ctx.workspace_id`** *(String)*: The active multi-tenant tracking scope.
 * **`ctx.config`** *(Dict)*: Lazy configuration access to the active workspace configuration map.
 * **`ctx.paths`** *(Dict)*: Platform paths directory mappings (e.g., `ctx.paths['workspace_root']`).
-* **`ctx.resolve_path(filepath, is_absolute_artifact=False, must_exist=False)`** *(Method)*: Safely anchors a relative path to physical workspace bounds; returns `None` if `must_exist=True` and path does not exist on disk.
+* **`ctx.resolve_path(filepath, is_absolute_artifact=False, must_exist=False)`** *(Method)*: Safely resolves a canonical URI (`vfs://`, `ctx://`, `ws://`) to physical disk coordinates; returns `None` if `must_exist=True` and the file does not physically exist.
+* **`ctx.create_entity_file(folder, title, yaml_data, body_content="", prefix=None, filename=None)`** *(Method)*: Standardized Markdown entity generator. Creates a Markdown file with structured YAML frontmatter, slugifies the title, and commits the file atomically to the tenant VFS.
+* **`ctx.is_context_on_disk(base_uri, entry=None)`** *(Method)*: Verifies that all constituent chunk files for a compiled context entry physically exist on disk before bypassing compilation.
+* **`ctx.compile_context(base_uri, header_block, text_blocks, files, meta, max_kb=None, is_ephemeral=False)`** *(Method)*: SDK gateway delegating context chunking and compilation to the core Gather engine.
+* **`ctx.reconcile_domain(domain_uri_prefix, manifest_deltas, domain_dir, filename_suffix="_context.txt", target_repos=None)`** *(Method)*: SDK gateway for flushing VFS barrier sentinels and reconciling domain manifest deltas in SQLite.
 * **`ctx.settings.get(key)`** *(Method)*: Retrieves configuration values from the extension's isolated settings UI.
+* **`ctx.get_shared_mounts(domain=None)`** *(Method)*: Queries active inter-workspace virtual mounts (`ws://`) declared for the specified domain in `shared_mounts`.
+* **`ctx.iter_shared_mount_files(domain, exts=None)`** *(Method)*: Traverses virtual mount trees for a specified domain across authorized publisher workspaces, yielding `(target_ws, ws_uri)`.
 * **`ctx.get_manifest_files(target_key)`** *(Method)*: SSOT helper to extract polymorphic lists of files or chunks from the active manifest.
 * **`ctx.expand_selection(items)`** *(Method)*: SSOT helper to expand polymorphic selection payloads (files, folders, virtual URIs) into deduplicated physical/logical paths.
 * **`ctx.emit(event_name, **kwargs)`** *(Method)*: Emits a synchronous event, automatically injecting the tenant workspace ID.
@@ -71,7 +76,7 @@ Extensions are strictly forbidden from relative-importing OS chassis functions. 
 * **`this.sys`**: `.executeWorkspaceMutation(path, payload)`, `.executeSystemCompile()`, `.switchTab(tabId)`, `.refreshManifest()`
 * **`AppStore.getState().setBrowsePath(pathArray, subId)`**: Updates active browse paths and automatically reflects directory navigation in the URL hash.
 * **`this.editor`**: `.getEditorContent()`, `.setEditorContent(text)`, `.insertTextAtCursor(text)`
-* **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.copyRawText(text)`, `.normalizeEntityData(data)`, `.extractManifestFiles(manifest, targetKey, domain)`, `.debounce(fn, ms)`, `.formatArtifactSize(meta)`, `.getScopedStorage(key, defaultVal, wsId)`, `.setScopedStorage(key, value, wsId)`, `.removeScopedStorage(key, wsId)`, `.nativeShareFiles(files)`, `BucketAddress.fromFilepath(path, meta)`
+* **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.truncateFilename(filename, maxLen, ellipsis)`, `.copyRawText(text)`, `.normalizeEntityData(data)`, `.extractManifestFiles(manifest, targetKey, domain)`, `.debounce(fn, ms)`, `.formatArtifactSize(meta)`, `.getScopedStorage(key, defaultVal, wsId)`, `.setScopedStorage(key, value, wsId)`, `.removeScopedStorage(key, wsId)`, `.nativeShareFiles(files)`, `BucketAddress.fromFilepath(path, meta)`
 * **`.getOfflineMode(extName)`**: Retrieves the declarative offline mode capability (`"full"`, `"read_only"`, `"none"`) for a targeted extension.
 ### 3.2 Client Network Gateway (ADR 0016)
 
@@ -85,13 +90,16 @@ Network synchronization must route through the client API abstraction to inherit
 * `this.api.fetchImmutableText(path, options)`
 * `this.api.bindJobAction(endpoint, payloadGetter, options)`
 * `this.api.pollJob(jobId, { interval, onProgress, onComplete, onError })`
-
 ### 3.3 Brokered Lifecycle Managers
 * `this.subscribe(store, selector, listener)`: Unified Zustand observer that cleanly unmounts itself on element disconnection to eliminate memory bleed.
+* `this.bindStore(store, selector, options)`: Declarative store binding helper on `InSetuElement`. Configures selector-scoped store subscriptions with structural equality checking, custom `equalityFn` overrides, and declarative `autoFetch` callbacks (`autoFetch: () => ...` or `autoFetch: 'fetchData'`) executed automatically on mount and workspace swaps.
+* `this.filterItems(items, options)`: Standardized two-tier list filtering utility on `InSetuElement`. Combines active pinned repository filtering (`pinnedRepos`, `repoField`) with fuzzy query matching across item titles, tags, and paths in a single pass.
 * `this.registerInterval(callback, delayMs)`: Tracked scheduling mechanism dismantled automatically on component destruction.
 * `this.registerGlobalListener(type, target, callback)`: Base-managed event routing wrapper preventing global namespace contamination.
 * `this.onWorkspaceLoad(workspaceId)`: Class lifecycle hook invoked reactively when the active workspace context hot-swaps.
 * `this.onForceRefresh()`: Class lifecycle hook invoked reactively when the active tab/sub-tab is re-selected or force-refreshed by the user.
+* `buildUriFileTree(uris, rootScope)`: Hierarchical virtual file tree constructor. Operates natively on canonical URIs (`vfs://`, `ctx://`, `ws://`), preserving `node.canonicalUri` across directories and files.
+* `<insetu-projection-window-controls>`: Reusable projection toolbar control rendering Pop Out and Dock In actions with automated pre-action save hooks.
 
 ---
 
