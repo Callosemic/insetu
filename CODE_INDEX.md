@@ -53,7 +53,11 @@ insetu/
 │       ├── 0060-git-aware-topology-manifest-sync-and-spatial-diff-projections.md # Git-aware topology CQRS ledger, real-time manifest delta sync, and spatial diff projections.
 │       ├── 0061-polymorphic-bulk-entity-actions-subsumption-pruning-and-recursive-vfs-eviction.md # Polymorphic bulk entity actions, subsumption pruning, and recursive VFS eviction.
 │       ├── 0062-projection-popouts-occ-concurrency-and-memoized-manifest-cqrs.md # Ephemeral pop-out windows, SHA-256 OCC conflict detection, and memoized manifest derivations.
-│       ├── 0063-atomic-vfs-bulk-mutations-popout-presence-and-sw-consolidation.md # [comment required]
+│       ├── 0063-atomic-vfs-bulk-mutations-popout-presence-and-sw-consolidation.md # Atomic VFS bulk mutations, popout presence heartbeat, and Service Worker consolidation.
+│       ├── 0064-core-prompt-engine-virtual-module-templates-and-job-api-unification.md # Core prompt engine graduation, virtual module template projection, and Akasa job API unification.
+│       ├── 0065-repository-data-containment-extension-state-hydration-and-security-hardening.md # Repository data containment (.insetu-data/), dual-scope notes migration, and cryptographic hook gating.
+│       ├── 0066-canonical-uris-inter-workspace-mounts-and-config-cascade-hardening.md # [comment required]
+│       ├── 0067-universal-extension-suite-modernization-and-domain-mounts.md # [comment required]
 │       └── archived/               # Superseded and historical ADR documents.
 │           ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │           ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -98,7 +102,9 @@ insetu/
 │   │   │   ├── bridge_fuzzy.py     # Fuzzy matching and fallback regex algorithms.
 │   │   │   ├── bridge_parser.py    # Deprecated string parsing engine.
 │   │   │   ├── bridge_vfs.py       # Async VFS commit pipelines and concurrency locks.
-│   │   │   └── engine_bridge.py    # [Yomama Sync Bridge Transaction Logic]
+│   │   │   ├── engine_bridge.py    # [Yomama Sync Bridge Transaction Logic]
+│   │   │   └── prompts/            # Management of global prompt templates and macro inclusions.
+│   │   │       └── yomama_patch_protocol.md # Built-in prompt template defining the Yomama Bridge SEARCH/REPLACE patch syntax.
 │   │   ├── cartographer/           # Autonomous topology mapping and CODE_INDEX generation.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   └── cartographer.py     # [VFS Topology Mapper]
@@ -120,6 +126,10 @@ insetu/
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── engine_offline.py   # Offline data provider and sync reconciliation handlers.
 │   │   │   └── offline_ui.js       # Client offline status indicator and outbox telemetry UI.
+│   │   ├── prompts/                # Management of global prompt templates and macro inclusions.
+│   │   │   ├── __init__.py         # Module initialization.
+│   │   │   ├── engine_prompts.py   # Prompt discovery and resolution.
+│   │   │   └── prompts.js          # Core Prompt Library UI, virtual module .templates browser, and macro embedding.
 │   │   ├── sdk/                    # Developer SDK namespace.
 │   │   │   └── __init__.py         # Module initialization.
 │   │   ├── system/                 # System lifecycle, settings, and recovery controllers.
@@ -189,9 +199,6 @@ insetu/
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── engine_notes.py     # SQLite ledger tracking for markdown notes.
 │   │   │   └── ext_notes.js        # Note-taking editor and browser.
-│   │   ├── prompts/                # Management of global prompt templates and macro inclusions.
-│   │   │   ├── engine_prompts.py   # Prompt discovery and resolution.
-│   │   │   └── ext_prompts.js      # Prompt UI and embedding tool.
 │   │   ├── publish/                # Standalone Pandoc/LaTeX document publishing extension.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── engine_publish.py   # Document publishing and compilation engine.
@@ -199,7 +206,9 @@ insetu/
 │   │   │   └── vendor.json         # Map of core third-party UI dependencies (Lit, CodeMirror).
 │   │   ├── research/               # Map-Reduce web scraping, SERP indexing, and AI triage.
 │   │   │   ├── engine_research.py  # [Web Search & Triage Inbox]
-│   │   │   └── ext_research.js     # [Research Inbox UI & Triage]
+│   │   │   ├── ext_research.js     # [Research Inbox UI & Triage]
+│   │   │   └── prompts/            # Management of global prompt templates and macro inclusions.
+│   │   │       └── batch_triage_filter.md # Prompt template for AI-assisted batch triage of scraped research inbox items.
 │   │   ├── skills/                 # Spaced-repetition tracking for discrete musical/technical skills.
 │   │   │   ├── engine_skills.py    # Skill tracking algorithms and SQLite storage.
 │   │   │   └── ext_skills.js       # Spaced-repetition training UI.
@@ -213,7 +222,9 @@ insetu/
 │   │   ├── tracker/                # Local offline Kanban board using Markdown-as-Code tickets.
 │   │   │   ├── README.md           # Primary project overview, architecture, and installation guide.
 │   │   │   ├── engine_tracker.py   # [Kanban Issue Tracker & Cache]
-│   │   │   └── ext_tracker.js      # [Kanban Board UI & Store]
+│   │   │   ├── ext_tracker.js      # [Kanban Board UI & Store]
+│   │   │   └── prompts/            # Management of global prompt templates and macro inclusions.
+│   │   │       └── ticket_authoring_guide.md # Prompt template guiding LLMs on authoring Markdown-as-Code Kanban tickets.
 │   │   └── update/                 # Automated Python semantic versioning and PyPI distribution.
 │   │       ├── __init__.py         # Module initialization.
 │   │       ├── engine_update.py    # Python-semantic-release orchestration.
@@ -247,6 +258,13 @@ insetu/
     │   ├── rules_css.py            # CSS linter enforcing intent tokens and banning !important.
     │   ├── rules_javascript.py     # JS linter enforcing UDF, declarative UI, and API contracts.
     │   └── rules_python.py         # Python AST linter enforcing async barriers and context accessors.
-    ├── fitness_functions.py        # The master script for executing the architectural validation suite.
-    └── results.txt                 # The output log of the last fitness test run.
+    ├── fitness_functions.py        # Master CLI runner for the architectural fitness linter suite.
+    ├── results.txt                 # Output log of the last architectural fitness validation sweep.
+    ├── run_unit_tests.py           # Master CLI runner for behavioral unit and integration test suite.
+    └── unit/                       # Dynamic behavioral unit and integration test suite.
+        ├── __init__.py             # Module initialization.
+        ├── test_canonical_uris.py  # Unit tests for canonical URI enforcement, InSetuURI normalization, and legacy ledger migrations.
+        ├── test_config_cascade.py  # Unit tests for the 3-tier configuration cascade, secret encryption, and lazy migration.
+        ├── test_sdk_improvements.py # Unit tests for ctx.create_entity_file and worker lifecycle isolation for disabled extensions.
+        └── test_workspace_mounts.py # Unit tests for InterWorkspaceVFSDriver, ws:// read-only write barriers, and cross-workspace event broadcasting.
 ```

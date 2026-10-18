@@ -107,7 +107,11 @@ def check_javascript_files():
     coarse_store_sub_pattern = re.compile(r'this\.subscribe\(\s*([^,\n]+|\n\s*[^,\n]+)\s*,\s*(?:(?:(?:\(?\s*(?:state|s)\s*\)?)|(?:\(?\s*\{[^}]+\}\s*\)?))\s*=>\s*\{|function\s*\([^)]*\)\s*\{)', re.MULTILINE)
     direct_browse_path_setstate_pattern = re.compile(r'\.setState\(\s*\{[^\}]*\bglobalBrowsePath\s*:')
     dirty_alert_triangle_pattern = re.compile(r'isDirty\s*\?\s*[\'"]alert-triangle[\'"]')
-    n_plus_one_bulk_vfs_pattern = re.compile(r'export\s+async\s+function\s+executeBulk(?:Move|Archive|Delete)[\s\S]*?for\s*\([^)]*\)\s*\{[\s\S]*?await\s+_(?:relocate|archive|delete)VfsNode\b')
+    n_plus_one_bulk_vfs_pattern = re.compile(r'export\s+async\s+function\s+executeBulk(?:Move|Archive|Delete)(?:(?!export\s+)[\s\S])*?for\s*\([^)]*\)\s*\{(?:(?!export\s+)[\s\S])*?await\s+_(?:relocate|archive|delete)VfsNode\b')
+    duplicated_filter_pattern = re.compile(r'pinnedRepos\.has\([^\)]+\)[\s\S]*?fuzzyFilterObjects')
+    uri_scheme_strip_ban_pattern = re.compile(r'\.replace\(\s*(?:/\^?(?:vfs|ctx|ws):\\\/\\\/[^/]*/g?|[\'"](?:vfs|ctx|ws):\/\/[^\'"]*[\'"])\s*,\s*[\'"][\'"]\s*\)')
+    download_uri_path_ban_pattern = re.compile(r'/download/\$\{encodeURIComponent\(')
+    legacy_build_file_tree_call_pattern = re.compile(r'\bbuildFileTree\s*\(')
 
     # Initialize Tree-sitter for Hybrid Parsing
     ts_available = False
@@ -162,8 +166,8 @@ def check_javascript_files():
                     line_n = node.start_point[0] + 1
                     if verb_name not in allowed_verbs and file not in ["api.js", "sdk.js"]:
                         report_violation("APPROVED_API_VERB_MANDATE", filepath, line_n, f"Unapproved method '.{verb_name}' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).")
-                    if verb_name == "pollJob" and is_extension and file != "ext_tracker.js":
-                        print(f"⚠️ [WARNING: BIND_JOB_ACTION_PREFERENCE] {filepath}:{line_n}\n   ↳ Imperative this.api.pollJob detected. Prefer declarative this.api.bindJobAction when possible.")
+                    if verb_name == "pollJob" and is_extension and file not in ("ext_tracker.js", "ext_flow.js"):
+                        print(f"⚠️ [WARNING: BIND_JOB_ACTION_PREFERENCE] {file}:{line_n}\n   ↳ Imperative this.api.pollJob detected. Prefer declarative this.api.bindJobAction when possible.")
             # Debounce Mandate (clearTimeout)
             debounce_query = Query(JS_LANG, '(call_expression function: (identifier) @func (#eq? @func "clearTimeout")) @call')
             for match in QueryCursor(debounce_query).matches(tree.root_node):
@@ -204,6 +208,14 @@ def check_javascript_files():
                 filepath,
                 1,
                 "Sequential N+1 VFS mutation loop detected inside executeBulk*. Dispatch a single atomic 'fs/bulk' mutation instead."
+            )
+
+        if is_extension and duplicated_filter_pattern.search(full_content):
+            report_violation(
+                "DUPLICATED_FILTER_PIPELINE_BAN",
+                filepath,
+                1,
+                "Manual two-tier pinned repo check and fuzzyFilterObjects detected. Use 'this.filterItems(items, options)' on InSetuElement instead."
             )
         if not ts_available and file not in ["store.js", "system.js", "insetu_sdk.js", "sutram_sdk.js"]:
             for m in coarse_store_sub_pattern.finditer(full_content):
@@ -265,13 +277,12 @@ def check_javascript_files():
 
                 if is_extension and floating_global_pattern.match(line.strip()):
                     report_violation("UDF_STATE_BLEED", filepath, line_num, "Floating global state detected. Migrate variable into the centralized Zustand AppStore.")
-
                 if file not in ["api.js", "sdk.js"] and re.search(r'\bthis\.api\.(?!(?:get|post|delete|getJson|postJson|deleteJson|bindJobAction|pollJob|request|workspace|system)\b)\w+', line):
                     report_violation("APPROVED_API_VERB_MANDATE", filepath, line_num, "Unapproved method called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).")
-                
-                if is_extension and raw_poll_job_pattern.search(line) and file != "ext_tracker.js":
-                    print(f"⚠️ [WARNING: BIND_JOB_ACTION_PREFERENCE] {filepath}:{line_num}\n   ↳ Imperative this.api.pollJob detected. Prefer declarative this.api.bindJobAction when possible.")
-                    
+
+                if is_extension and raw_poll_job_pattern.search(line) and file not in ("ext_tracker.js", "ext_flow.js"):
+                    print(f"⚠️ [WARNING: BIND_JOB_ACTION_PREFERENCE] {file}:{line_num}\n   ↳ Imperative this.api.pollJob detected. Prefer declarative this.api.bindJobAction when possible.")
+
                 if is_extension and is_lit_component and global_dispatch_pattern.search(line):
                     report_violation("CUSTOM_EVENT_DISPATCH_MANDATE", filepath, line_num, "Raw window.dispatchEvent detected. Route through this.dispatch(eventName, detail) for streamlined multi-tenant boundaries.")
             if dom_annihilation_pattern.search(line):
@@ -430,6 +441,12 @@ def check_javascript_files():
                 report_violation("SETTINGS_ACTION_EXPLICIT_API_MANDATE", filepath, line_num, "Event handler for sutram-settings-action/save uses raw fetch(). Route through window.inSetu.api.workspace instead.")
             if legacy_system_uri_pattern.search(line):
                 report_violation("LEGACY_SYSTEM_URI_BAN", filepath, line_num, "Legacy 'system://' URI scheme detected. Migrate to 'ctx://' URI scheme.")
+            if uri_scheme_strip_ban_pattern.search(line):
+                report_violation("URI_SCHEME_STRIP_BAN", filepath, line_num, "Stripping 'vfs://', 'ctx://', or 'ws://' scheme via .replace() is banned. Preserve canonical URIs or use this.utils.parseURI(uri).")
+            if download_uri_path_ban_pattern.search(line):
+                report_violation("DOWNLOAD_URI_PATH_BAN", filepath, line_num, "Embedding encoded URIs in '/download/${encodeURIComponent(...)}' path segments causes WSGI slash collapsing. Route through resolveFileFetchUrl(uri) ('/api/<ws>/fs/fetch?file=...&download=1') instead.")
+            if legacy_build_file_tree_call_pattern.search(line):
+                report_violation("URI_NATIVE_FILE_TREE_MANDATE", filepath, line_num, "Legacy flat buildFileTree() call detected. Use URI-native buildUriFileTree(uris, rootScope) from ui_file_tree.js to preserve node.canonicalUri.")
             if is_extension and legacy_refresh_pattern.search(line):
                 report_violation("LIFECYCLE_CONSOLIDATION_MANDATE", filepath, line_num, "Legacy onNavReselected or onSubNavReselected detected. Migrate to unified onForceRefresh() lifecycle method.")
             if is_extension and "onWorkspaceChanged(" in line:

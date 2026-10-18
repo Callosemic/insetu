@@ -46,9 +46,14 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                         node.lineno,
                         f"Setting field '{setting_id}' contains sensitive keywords but is missing 'secure': True."
                     )
-
-            # Hierarchical Scope Enforcement
-            if 'label' in dict_keys and 'type' in dict_keys:
+            # Hierarchical Scope Enforcement (includes 'type': 'hidden' settings)
+            setting_type_node = dict_keys.get('type')
+            is_setting_schema = ('label' in dict_keys and 'type' in dict_keys) or (
+                isinstance(setting_type_node, ast.Constant)
+                and setting_type_node.value == 'hidden'
+                and ('default' in dict_keys or 'scope' in dict_keys)
+            )
+            if is_setting_schema:
                 if 'scope' not in dict_keys:
                     report_violation(
                         "SETTINGS_SCOPE_MANDATE",
@@ -56,10 +61,19 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                         node.lineno,
                         f"Setting field '{setting_id}' is missing the mandatory 'scope' parameter ('daemon', 'workspace', or 'repo')."
                     )
+                else:
+                    scope_node = dict_keys['scope']
+                    if not (isinstance(scope_node, ast.Constant) and scope_node.value in ('daemon', 'workspace', 'repo')):
+                        report_violation(
+                            "INVALID_SETTINGS_SCOPE",
+                            self.filepath,
+                            node.lineno,
+                            f"Setting field '{setting_id}' has an invalid 'scope'. Must be 'daemon', 'workspace', or 'repo'."
+                        )
 
         self.generic_visit(node)
     def visit_Subscript(self, node):
-        if self.filename not in ('extension.py', 'engine_hooks.py', 'engine_gather.py', 'utils_core.py'):
+        if self.filename not in ('extension.py', 'engine_hooks.py', 'engine_gather.py', 'utils_core.py', 'engine_fs.py'):
             if isinstance(node.value, ast.Name) and node.value.id == 'item':
                 if isinstance(node.slice, ast.Constant) and node.slice.value in ('filepath', 'folderpath'):
                     report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
@@ -104,10 +118,9 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             func_name = node.func.id
         elif isinstance(node.func, ast.Attribute):
             func_name = node.func.attr
-
         is_jobs_submit = (
             isinstance(node.func, ast.Attribute)
-            and node.func.attr in ("submit", "submit_job", "submit_one_shot_job")
+            and node.func.attr in ("submit", "submit_chain")
             and (
                 (isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "jobs")
                 or (isinstance(node.func.value, ast.Name) and node.func.value.id == "jobs")
@@ -145,25 +158,37 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     report_violation("BANNED_EMPTY_ROUTE", self.filepath, node.lineno, f"Empty or root route selection ('{node.args[0].value}') detected in extension engine. Use an explicit endpoint name instead to prevent reverse proxy redirect traps.")
             if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'hooks' and node.func.attr == 'emit':
                 report_violation("BACKEND_EXTENSION_EVENT_EMIT_MANDATE", self.filepath, node.lineno, "Global hooks.emit() call detected in extension module. Use ctx.emit() instead.")
-        if self.filename not in ('extension.py', 'engine_hooks.py', 'engine_gather.py', 'utils_core.py'):
+        if self.filename not in ('extension.py', 'engine_hooks.py', 'engine_gather.py', 'utils_core.py', 'engine_fs.py'):
             if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'item' and node.func.attr == 'get':
                 if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value in ('filepath', 'folderpath'):
                     report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
-        # AkasaURI Migration Guardrails
-        if isinstance(node.func, ast.Attribute) and node.func.attr in ('startswith', 'replace'):
-            if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
-                if node.args[0].value in ('vfs://', 'ctx://', 'system://'):
-                    if self.filename != "utils_core.py":
-                        report_violation("URI_SCHEME_MANDATE", self.filepath, node.lineno, f"Manual scheme manipulation ({node.func.attr}) detected. Use InSetuURI(path).scheme or .path instead.")
 
+        # Markdown Entity Creation Helper Mandate
+        if is_ext and isinstance(node.func, ast.Name) and node.func.id == 'update_frontmatter':
+            report_violation(
+                "MANUAL_ENTITY_CREATION_BAN",
+                self.filepath,
+                node.lineno,
+                "Manual frontmatter formatting detected in extension. Use 'ctx.create_entity_file(folder, title, yaml_data, ...)' instead."
+            )
+        # AkasaURI Migration Guardrails: Ban stripping vfs://, ctx://, or ws:// schemes via .replace()
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'replace':
+            if len(node.args) >= 2 and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                if any( node.args[0].value.startswith(s) for s in ('vfs://', 'ctx://', 'ws://', 'system://') ):
+                    if isinstance(node.args[1], ast.Constant) and node.args[1].value == '':
+                        report_violation("URI_SCHEME_STRIP_BAN", self.filepath, node.lineno, f"Stripping URI scheme ({node.args[0].value}) via .replace() is banned. Preserve canonical URIs or use InSetuURI(uri).path for internal math.")
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'endswith':
             if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
                 if node.args[0].value in ('_diffs.txt', '_context.txt', '_workflow_context.txt'):
-                    if self.filename != "utils_core.py":
+                    if self.filename not in ("utils_core.py", "engine_git.py", "engine_flow.py"):
                         report_violation("URI_EXTENSION_MATCHING_BAN", self.filepath, node.lineno, f"Manual suffix matching ('{node.args[0].value}') detected. Rely on InSetuURI(path) domain resolution instead.")
-
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'parse_uri':
-            report_violation("PARSE_URI_DEPRECATION", self.filepath, node.lineno, "ctx.parse_uri() is deprecated. Instantiate InSetuURI.from_any(path) to access .repo and .path natively.")
+            report_violation("PARSE_URI_DEPRECATION", self.filepath, node.lineno, "ctx.parse_uri() is deprecated. Instantiate InSetuURI(uri) to access .repo and .path natively.")
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'from_any':
+            report_violation("BANNED_URI_FROM_ANY_COERCION", self.filepath, node.lineno, "InSetuURI.from_any() is banned. All internal paths must be canonical scheme:// URIs passed to InSetuURI(uri).")
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'from_external_input':
+            if self.filename not in ("utils_core.py", "bridge_vfs.py", "engine_fs.py"):
+                report_violation("EXTERNAL_URI_COERCION_BOUNDARY_VIOLATION", self.filepath, node.lineno, "InSetuURI.from_external_input() is restricted to external ingress boundaries (bridge_vfs.py, engine_fs.py, utils_core.py). Use strict InSetuURI(uri) internally.")
 
         if isinstance(node.func, ast.Name):
             if node.func.id == 'open' and self.filename not in VFS_WRITE_WHITELIST:
@@ -223,9 +248,26 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             if getattr(node.func.value.value, 'id', '') == 'os' and node.func.value.attr == 'path' and node.func.attr in ('join', 'basename', 'dirname'):
                 report_violation("PATHLIB_MANDATE", self.filepath, node.lineno, f"os.path.{node.func.attr} detected. Migrate to pathlib.Path.")
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'get':
-            if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value == "targets":
-                if self.filename != "rules_python.py":
+            if len(node.args) > 0 and isinstance(node.args[0], ast.Constant):
+                arg_val = node.args[0].value
+                if arg_val == "targets" and self.filename != "rules_python.py":
                     report_violation("TARGET_REPOS_KEY_MANDATE", self.filepath, node.lineno, "Deprecated config key 'targets' accessed. Normalize to 'target_repos' instead.")
+                if arg_val == "extension_config" and self.filename != "rules_python.py":
+                    report_violation("LEGACY_EXTENSION_CONFIG_BAN", self.filepath, node.lineno, "Legacy 'extension_config' dictionary accessed. Use ctx.settings.get() with a declarative settings_schema instead.")
+                # Ensure Tier 3 extensions only query topology keys on ctx.config
+                if is_ext and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == 'config':
+                    allowed_topology_keys = {
+                        "target_repos", "extensions", "managed_dirs", "virtual_contexts",
+                        "ignore_dirs", "ignore_files", "ignore_patterns", "include_extensions",
+                        "workspace_root", "category_order", "tab_order", "hidden_outputs"
+                    }
+                    if isinstance(arg_val, str) and arg_val not in allowed_topology_keys:
+                        report_violation(
+                            "CTX_CONFIG_TOPOLOGY_ONLY_MANDATE",
+                            self.filepath,
+                            node.lineno,
+                            f"Extension queries non-topology key '{arg_val}' via ctx.config.get(). Use ctx.settings.get('{arg_val}') instead."
+                        )
             if isinstance(node.func.value, ast.Attribute) and node.func.value.attr == 'headers':
                 if getattr(node.func.value.value, 'id', '') == 'request':
                     if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value == 'X-Workspace-ID':
@@ -295,9 +337,9 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                         report_violation("REDUNDANT_INLINE_IMPORT", self.filepath, child.lineno, f"Redundant inline import 'from {module} import {alias.name}' inside '{node.name}' (already imported at module level).")
                     elif not (alias.asname and alias.asname.startswith('_')):
                         report_violation("UNALIASED_INLINE_IMPORT", self.filepath, child.lineno, f"Inline import 'from {module} import {alias.name}' inside '{node.name}' must be placed at the module top-level or aliased with a leading underscore (e.g. 'from {module} import {alias.name} as _{alias.name}').")
-        for legacy_hook in ['vfs_transaction_committed', 'post_file_save', 'post_file_delete']:
+        for legacy_hook in ['vfs_transaction_committed', 'post_file_save', 'post_file_delete', 'coerce_naked_uri']:
             if legacy_hook in hook_events:
-                report_violation("LEGACY_HOOK_BAN", self.filepath, node.lineno, f"Function subscribes to deprecated '{legacy_hook}'. Use unified 'vfs_mutated' instead.")
+                report_violation("LEGACY_HOOK_BAN", self.filepath, node.lineno, f"Function subscribes to deprecated '{legacy_hook}'. Use canonical URIs natively instead.")
 
         if 'vfs_mutated' in hook_events or 'topology_resolved' in hook_events:
             has_uri_check = False
@@ -523,3 +565,14 @@ def check_python_files():
                                 report_violation("SDK_EXTENSION_MANDATE", filepath, 1, "Extension engine does not utilize InSetuExtension framework.")
                     except SyntaxError:
                         print(f"⚠️  Skipping {file} due to SyntaxError.")
+
+# Validate defaults/ templates for 3-Tier Configuration Cascade compliance
+defaults_dir = BACKEND_DIR / "defaults"
+engine_tpl_path = defaults_dir / "engine_template_py.txt"
+if engine_tpl_path.exists():
+    tpl_source = engine_tpl_path.read_text(encoding="utf-8").replace("{{ext_name}}", "sample").replace("{{cap_name}}", "Sample")
+    try:
+        tpl_tree = ast.parse(tpl_source, filename=str(engine_tpl_path))
+        BackendFitnessVisitor(engine_tpl_path, engine_tpl_path.name).visit(tpl_tree)
+    except SyntaxError as e:
+        report_violation("TEMPLATE_SYNTAX_ERROR", engine_tpl_path, e.lineno or 1, f"Syntax error in engine_template_py.txt: {e}")
