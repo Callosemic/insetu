@@ -1,7 +1,8 @@
 {
-    "instance_title": "inSetu Developer OS",
-    "instance_emoji": "⚙️",
-    "port": 5005,
-    "target_repos": [],
-    "extensions": []
+    "ignore_dirs": ["node_modules", "__pycache__", "venv", ".venv", ".git", ".insetu", "dist", "build"],
+    "ignore_files": [".DS_Store"],
+    "ignore_patterns": ["*.pyc", "*.log"],
+    "include_extensions": [".py", ".js", ".ts", ".json", ".md", ".txt", ".html", ".css", ".sh", ".yaml", ".yml", ".toml"],
+    "managed_dirs": [".insetu-data"],
+    "target_repos": []
 }

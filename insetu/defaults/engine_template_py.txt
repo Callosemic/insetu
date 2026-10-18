@@ -7,9 +7,8 @@ SCHEMA = {
         "name": "TEXT NOT NULL"
     }
 }
-
 SETTINGS = [
-    {"id": "example_setting", "label": "Example Setting", "type": "text", "default": ""}
+    {"id": "example_setting", "label": "Example Setting", "type": "text", "scope": "workspace", "default": ""}
 ]
 
 {{ext_name}}_bp = InSetuExtension(

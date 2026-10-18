@@ -321,7 +321,7 @@ import{html as n,css as z}from"lit";import{SutramElement as C}from"./sutram_sdk.
             border: 2px solid var(--border, #000000) !important;
             box-shadow: 4px 4px 0 var(--border, #000000) !important;
         }
-    `;constructor(){super(),this._activeMode="tab",this._lastDragActive=!1}connectedCallback(){super.connectedCallback()}willUpdate(t){if(super.willUpdate(t),t.has("dragState")){const o=!!this.dragState?.active;if(o&&!this._lastDragActive){const i=this.dragState?.entity,e=this.dragState?.sourceCol;this._activeMode=i?.windowOnly||e==="window"?"window":"tab"}this._lastDragActive=o;const r=this.dragState?.currentZone;r==="mode-tab"||["left","center","right"].includes(r)||r&&r.startsWith("reorder-")?!this.dragState?.entity?.windowOnly&&this._activeMode!=="tab"&&(this._activeMode="tab"):(r==="mode-window"||r==="window"||r&&r.startsWith("span-"))&&this._activeMode!=="window"&&(this._activeMode="window")}}updated(t){super.updated(t),(t.has("dragState")||t.has("_activeMode"))&&(this._dropZonesCache=null,this.dragState?.active&&this.dragState.currentX!==void 0&&this.dragState.currentY!==void 0&&this.updatePointer(this.dragState.currentX,this.dragState.currentY))}getHoveredZone(t,o){this._dropZonesCache||(this._dropZonesCache=Array.from(this.shadowRoot.querySelectorAll("yenvui-drop-target")).map(e=>{const a=e.getBoundingClientRect();return{zone:e.zone,left:a.left,right:a.right,top:a.top,bottom:a.bottom}}));const r=this._dropZonesCache.find(e=>t>=e.left&&t<=e.right&&o>=e.top&&o<=e.bottom),i=r?r.zone:null;return i==="mode-tab"&&!this.dragState?.entity?.windowOnly&&this._activeMode!=="tab"?(this._activeMode="tab",this._dropZonesCache=null,this.requestUpdate()):i==="mode-window"&&this._activeMode!=="window"&&(this._activeMode="window",this._dropZonesCache=null,this.requestUpdate()),i}updatePointer(t,o){const r=this.shadowRoot.querySelector(".drag-floater");r&&(r.style.transform=`translate3d(${t}px, ${o}px, 0) translate(-50%, -50%)`)}render(){if(!this.dragState||!this.dragState.active)return n`<yenvui-drop-overlay></yenvui-drop-overlay>`;const{entity:t,currentX:o,currentY:r,sourceCol:i,currentZone:e,sourceRect:a}=this.dragState,d=this.spatialState?.capacity||3,s=a||{left:0,top:0,width:window.innerWidth,height:window.innerHeight},m=!!(t?.allow_popout||t?.id&&window.ExtensionRegistry?.resolveCustomEditor?.(t.id)||t?.id&&window.ExtensionRegistry?.executeUIHook?.("sutram:is-popoutable",t.id)||t?.id&&t.id.includes("://")),v=t?.windowOnly?"window":this._activeMode,y=`left: ${s.left}px; top: ${s.top}px; width: ${s.width}px; height: ${s.height}px;`,u=`transform: translate3d(${o||0}px, ${r||0}px, 0) translate(-50%, -50%);`,w=`mode-switcher-btn tab-mode ${v==="tab"?"active-mode":""}`,f=`mode-switcher-btn win-mode ${v==="window"?"active-mode":""}`,k=d===2?"opacity: 0.4; pointer-events: none;":"";return n`
+    `;constructor(){super(),this._activeMode="tab",this._lastDragActive=!1}connectedCallback(){super.connectedCallback()}willUpdate(t){if(super.willUpdate(t),t.has("dragState")){const i=!!this.dragState?.active;if(i&&!this._lastDragActive){const o=this.dragState?.entity,e=this.dragState?.sourceCol;this._activeMode=o?.windowOnly||e==="window"?"window":"tab"}this._lastDragActive=i;const r=this.dragState?.currentZone;r==="mode-tab"||["left","center","right"].includes(r)||r&&r.startsWith("reorder-")?!this.dragState?.entity?.windowOnly&&this._activeMode!=="tab"&&(this._activeMode="tab"):(r==="mode-window"||r==="window"||r&&r.startsWith("span-"))&&this._activeMode!=="window"&&(this._activeMode="window")}}updated(t){super.updated(t),(t.has("dragState")||t.has("_activeMode"))&&(this._dropZonesCache=null,this.dragState?.active&&this.dragState.currentX!==void 0&&this.dragState.currentY!==void 0&&this.updatePointer(this.dragState.currentX,this.dragState.currentY))}getHoveredZone(t,i){this._dropZonesCache||(this._dropZonesCache=Array.from(this.shadowRoot.querySelectorAll("yenvui-drop-target")).map(e=>{const a=e.getBoundingClientRect();return{zone:e.zone,left:a.left,right:a.right,top:a.top,bottom:a.bottom}}));const r=this._dropZonesCache.find(e=>t>=e.left&&t<=e.right&&i>=e.top&&i<=e.bottom),o=r?r.zone:null;return o==="mode-tab"&&!this.dragState?.entity?.windowOnly&&this._activeMode!=="tab"?(this._activeMode="tab",this._dropZonesCache=null,this.requestUpdate()):o==="mode-window"&&this._activeMode!=="window"&&(this._activeMode="window",this._dropZonesCache=null,this.requestUpdate()),o}updatePointer(t,i){const r=this.shadowRoot.querySelector(".drag-floater");r&&(r.style.transform=`translate3d(${t}px, ${i}px, 0) translate(-50%, -50%)`)}render(){if(!this.dragState||!this.dragState.active)return n`<yenvui-drop-overlay></yenvui-drop-overlay>`;const{entity:t,currentX:i,currentY:r,sourceCol:o,currentZone:e,sourceRect:a}=this.dragState,s=this.spatialState?.capacity||3,d=a||{left:0,top:0,width:window.innerWidth,height:window.innerHeight},m=(window.Sutram?.stores?.Layout?.getState()?.canPopout?window.Sutram.stores.Layout.getState().canPopout():!0)&&!!(t?.allow_popout||t?.id&&window.ExtensionRegistry?.resolveCustomEditor?.(t.id)||t?.id&&window.ExtensionRegistry?.executeUIHook?.("sutram:is-popoutable",t.id)||t?.id&&t.id.includes("://")),v=t?.windowOnly?"window":this._activeMode,y=`left: ${d.left}px; top: ${d.top}px; width: ${d.width}px; height: ${d.height}px;`,u=`transform: translate3d(${i||0}px, ${r||0}px, 0) translate(-50%, -50%);`,w=`mode-switcher-btn tab-mode ${v==="tab"?"active-mode":""}`,f=`mode-switcher-btn win-mode ${v==="window"?"active-mode":""}`,k=s===2?"opacity: 0.4; pointer-events: none;":"";return n`
             <yenvui-drop-overlay class="hud-overlay" ?active=${!0}>
                 <div class="hud-hud-card" style=${y}>
                     <div class="top-anchor-row">
@@ -376,7 +376,7 @@ import{html as n,css as z}from"lit";import{SutramElement as C}from"./sutram_sdk.
                                 </div>
                             </div>
 
-                            ${i&&i!=="window"&&this.spatialState?.columns?.[i]?.pinned?.length>1?n`
+                            ${o&&o!=="window"&&this.spatialState?.columns?.[o]?.pinned?.length>1?n`
                                 <div class="section-box arrange-tabs" style="margin-bottom: 0;">
                                     <div class="section-header arrange-tabs">
                                         <span style="display: flex; align-items: center; gap: 6px;">
@@ -385,7 +385,7 @@ import{html as n,css as z}from"lit";import{SutramElement as C}from"./sutram_sdk.
                                         <span style="opacity: 0.7;">Drop to reorder</span>
                                     </div>
                                     <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                                        ${(()=>{const x=this.spatialState.columns[i].pinned;let p=[...x];const c=p.findIndex(h=>h.id===t?.id);let l=c;if(e&&e.startsWith("reorder-")&&(l=parseInt(e.replace("reorder-",""),10)),c!==-1&&l!==-1&&c!==l){const[h]=p.splice(c,1);p.splice(l,0,h)}return x.map((h,g)=>{const b=p[g],$=e==="reorder-"+g,S="reorder-"+g;return n`
+                                        ${(()=>{const x=this.spatialState.columns[o].pinned;let p=[...x];const c=p.findIndex(h=>h.id===t?.id);let l=c;if(e&&e.startsWith("reorder-")&&(l=parseInt(e.replace("reorder-",""),10)),c!==-1&&l!==-1&&c!==l){const[h]=p.splice(c,1);p.splice(l,0,h)}return x.map((h,g)=>{const b=p[g],$=e==="reorder-"+g,S="reorder-"+g;return n`
                                                     ${g>0?n`<span style="color: var(--text-muted); font-size: 0.8rem;">•</span>`:""}
                                                     <yenvui-drop-target zone=${S} class="drop-target-btn intent-highlight" .intent=${"highlight"} ?hovered=${$}>
                                                         <yv-icon name=${b.icon||"component"} style="width: 14px; height: 14px;"></yv-icon>
@@ -413,7 +413,7 @@ import{html as n,css as z}from"lit";import{SutramElement as C}from"./sutram_sdk.
                                             <yv-icon name="square" style="width: 18px; height: 18px;"></yv-icon>
                                             <span>Center</span>
                                         </yenvui-drop-target>
-                                        ${d>=3?n`
+                                        ${s>=3?n`
                                             <yenvui-drop-target zone="span-1-right" class="screen-drop-btn intent-warning" .intent=${"warning"} ?hovered=${e==="span-1-right"}>
                                                 <yv-icon name="panel-right" style="width: 18px; height: 18px;"></yv-icon>
                                                 <span>Right</span>
@@ -421,13 +421,13 @@ import{html as n,css as z}from"lit";import{SutramElement as C}from"./sutram_sdk.
                                         `:""}
                                     </div>
 
-                                    ${d>=2?n`
+                                    ${s>=2?n`
                                         <div style="display: flex; gap: 10px;">
                                             <yenvui-drop-target zone="span-2-left" class="screen-drop-btn intent-warning" .intent=${"warning"} ?hovered=${e==="span-2-left"}>
                                                 <yv-icon name="columns" style="width: 18px; height: 18px;"></yv-icon>
                                                 <span>Left + Center</span>
                                             </yenvui-drop-target>
-                                            ${d>=3?n`
+                                            ${s>=3?n`
                                                 <yenvui-drop-target zone="span-2-center" class="screen-drop-btn intent-warning" .intent=${"warning"} ?hovered=${e==="span-2-center"}>
                                                     <yv-icon name="columns" style="width: 18px; height: 18px;"></yv-icon>
                                                     <span>Center + Right</span>
@@ -436,7 +436,7 @@ import{html as n,css as z}from"lit";import{SutramElement as C}from"./sutram_sdk.
                                         </div>
                                     `:""}
 
-                                    ${d>=3?n`
+                                    ${s>=3?n`
                                         <yenvui-drop-target zone="span-3-left" class="screen-drop-btn intent-warning" .intent=${"warning"} ?hovered=${e==="span-3-left"} style="height: 60px;">
                                             <yv-icon name="maximize-2" style="width: 18px; height: 18px;"></yv-icon>
                                             <span>Span Across</span>

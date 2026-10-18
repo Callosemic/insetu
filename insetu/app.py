@@ -14,6 +14,15 @@ import time
 import logging
 from contextlib import redirect_stdout
 
+try:
+    import resource as _resource
+    soft_lim, hard_lim = _resource.getrlimit(_resource.RLIMIT_NOFILE)
+    target_lim = min(hard_lim, 65536) if hard_lim > 0 else 65536
+    if soft_lim < target_lim:
+        _resource.setrlimit(_resource.RLIMIT_NOFILE, (target_lim, hard_lim))
+except Exception:
+    pass
+
 # Enforce host-specific control directory for the Akasa kernel
 os.environ["AKASA_CONTROL_DIR"] = ".insetu"
 
@@ -40,6 +49,7 @@ from akasa.auth import auth_bp, security_bp, BOOT_TOKEN
 app.register_blueprint(auth_bp)
 app.register_blueprint(security_bp.bp)
 
+from akasa.db import close_thread_connections
 from akasa.hooks import hooks
 from akasa.utils import register_core_module
 # Dependency Injection: Register host OS physics with the Kernel
@@ -59,6 +69,11 @@ try:
         app.register_blueprint(fs_bp.bp)
 except Exception as e:
     print(f"⚠️ Failed to mount core system routes explicitly: {e}")
+@app.teardown_appcontext
+def cleanup_request_db_connections(exception=None):
+    """Deterministically closes thread-local SQLite handles spawned by ephemeral WSGI request threads."""
+    close_thread_connections()
+
 @app.after_request
 def disable_http_caching(response):
     """Disable browser HTTP caching. Rely exclusively on the Service Worker for offline performance."""
@@ -84,14 +99,16 @@ def enforce_token_gate():
 # --- INSETU EXTENSION ARCHITECTURE ROUTINE ---
 def load_workspace_extensions():
     from akasa.utils import load_config as _load_config, _cwd as __cwd
+    from akasa.extension import SettingsManager as _SettingsManager
 
     raw_extensions = set()
 
-    # 0. Check global preload preference
+    # 0. Check global preload preference from Tier 1 Daemon Scope (system.json)
     preload_all = False
     try:
+        sys_settings = _SettingsManager('system', 'default')
         cfg = _load_config()
-        preload_all = cfg.get("preload_all_extensions", False)
+        preload_all = bool(sys_settings.get("preload_all_extensions", cfg.get("preload_all_extensions", False)))
     except Exception:
         pass
     # 1. Sweep system.json for a Union of all required extensions globally
@@ -543,18 +560,20 @@ def inject_bypassed_extensions(cfg, workspace_id=None, **kwargs):
     cfg["bypassed_extensions"] = getattr(app, '_bypassed_extensions', [])
 
 # Fire the system boot hook to ignite the worker pools and VFS queues globally
-# Guardrail: Prevent the Werkzeug master reloader process from executing background threads,
-# but allow ignition if running under standard WSGI servers where the reloader is absent.
+# Guardrail: Prevent the Werkzeug master reloader process from executing background threads
+# when INSETU_RELOADER=1 is active, while allowing standard single-process `insetu serve` and WSGI boots.
 is_werkzeug_worker = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+use_reloader = os.environ.get("INSETU_RELOADER", "0") == "1"
 is_cli_serve = "serve" in sys.argv
 
-if is_werkzeug_worker or not is_cli_serve:
+if not (is_cli_serve and use_reloader and not is_werkzeug_worker):
     try:
         hooks.emit('system_boot')
     except Exception as e:
         print(f"Warning: system_boot failed: {e}")
 def run_app():
     from akasa.utils import load_config as _load_config
+    from akasa.extension import SettingsManager as _SettingsManager
 
     class QuietPollingFilter(logging.Filter):
         def filter(self, record):
@@ -568,14 +587,17 @@ def run_app():
     logging.getLogger('werkzeug').addFilter(QuietPollingFilter())
 
     cfg = _load_config()
+    sys_settings = _SettingsManager('system', 'default')
     if "INSETU_PORT" not in os.environ:
-        os.environ["INSETU_PORT"] = str(cfg.get("port", 5005))
+        resolved_port = sys_settings.get("port", cfg.get("port", 5005))
+        os.environ["INSETU_PORT"] = str(resolved_port)
 
     port = int(os.environ["INSETU_PORT"])
 
     print(f"🚀 Starting inSetu Developer OS (Port {port})...")
     print(f"👉 Open http://127.0.0.1:{port} in your browser")
-    app.run(debug=True, port=port)
+    use_reloader = os.environ.get("INSETU_RELOADER", "0") == "1"
+    app.run(debug=True, use_reloader=use_reloader, port=port)
 
 if __name__ == "__main__":
     run_app()
