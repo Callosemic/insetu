@@ -42,6 +42,38 @@ RESEARCH_SETTINGS_SCHEMA = [
         "scope": "workspace",
         "default": "",
         "description": "Required for Google Search provider. Obtain a free key at serper.dev."
+    },
+    {
+        "id": "gather_interval_ms",
+        "label": "SERP Gather Interval (ms)",
+        "type": "number",
+        "scope": "workspace",
+        "default": 4000,
+        "description": "Base delay in milliseconds between SERP pagination requests."
+    },
+    {
+        "id": "gather_jitter_ms",
+        "label": "SERP Gather Jitter (ms)",
+        "type": "number",
+        "scope": "workspace",
+        "default": 1500,
+        "description": "Random jitter in milliseconds added to SERP pagination requests."
+    },
+    {
+        "id": "scrape_interval_ms",
+        "label": "Article Scrape Interval (ms)",
+        "type": "number",
+        "scope": "workspace",
+        "default": 15000,
+        "description": "Base delay in milliseconds between individual URL scrapes."
+    },
+    {
+        "id": "scrape_jitter_ms",
+        "label": "Article Scrape Jitter (ms)",
+        "type": "number",
+        "scope": "workspace",
+        "default": 5000,
+        "description": "Random jitter in milliseconds added to individual URL scrapes."
     }
 ]
 research_bp = InSetuExtension('research', __name__, title="Research Inbox", description="Web search, scraping, and AI triage inbox.", schema=RESEARCH_SCHEMA, settings_schema=RESEARCH_SETTINGS_SCHEMA)
@@ -237,7 +269,7 @@ class SerperDevProvider(SearchProvider):
                 data = json.loads(response.read().decode('utf-8'))
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
-                raise Exception("Invalid Serper.dev API Key. Please check your config.json.")
+                raise Exception("Invalid Serper.dev API Key. Please check your Research Settings in the Settings Hub.")
             raise Exception(f"Serper API request failed: HTTP {e.code}")
         except Exception as e:
             raise Exception(f"Serper API request failed: {str(e)}")
@@ -358,16 +390,14 @@ def scrape_next_link(ctx, research_job_id=None, job_id=None, **kwargs):
 
     conn.execute("UPDATE research_jobs SET processed_links = processed_links + 1 WHERE id=?", (target_id,))
     conn.commit()
-def _get_research_intervals():
-    """Reads dynamic pacing configurations from the workspace config."""
-    ctx = research_bp.get_context('default')
-    cfg = ctx.config
-    r_cfg = cfg.get("extension_config", {}).get("research", {})
+def _get_research_intervals(workspace_id='default'):
+    """Reads dynamic pacing configurations from the workspace settings."""
+    ctx = research_bp.get_context(workspace_id or 'default')
     return (
-        r_cfg.get("gather_interval_ms", 4000),
-        r_cfg.get("gather_jitter_ms", 1500),
-        r_cfg.get("scrape_interval_ms", 15000),
-        r_cfg.get("scrape_jitter_ms", 5000)
+        int(ctx.settings.get("gather_interval_ms", 4000)),
+        int(ctx.settings.get("gather_jitter_ms", 1500)),
+        int(ctx.settings.get("scrape_interval_ms", 15000)),
+        int(ctx.settings.get("scrape_jitter_ms", 5000))
     )
 
 # --- API ENDPOINTS ---
@@ -410,7 +440,7 @@ def start_job(ctx):
       conn.execute("INSERT INTO research_jobs (id, query, provider, status, total_links, created_at, meta_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (job_id, query, provider_name, 'gathering', 0, now_str, meta_json))
       conn.commit()
-      g_int, g_jit, _, _ = _get_research_intervals()
+      g_int, g_jit, _, _ = _get_research_intervals(workspace_id)
       # Dispatch to Metronome: Fetch a SERP page dynamically to avoid rate limits
       ctx.jobs.schedule("gather_next_page", g_int, jitter_ms=g_jit, job_id=f"research_gather_{job_id}", research_job_id=job_id)
 
@@ -449,7 +479,7 @@ def job_action(ctx, job_id):
     elif action == 'resume' and current_status == 'paused':
         conn.execute("UPDATE research_jobs SET status='running' WHERE id=?", (job_id,))
         conn.commit()
-        _, _, s_int, s_jit = _get_research_intervals()
+        _, _, s_int, s_jit = _get_research_intervals(workspace_id)
         # Dispatch to the Metronome
         ctx.jobs.schedule("scrape_next_link", s_int, jitter_ms=s_jit, job_id=f"research_{job_id}", research_job_id=job_id)
         return jsonify({"status": "success", "message": "Job resumed"})
@@ -481,10 +511,9 @@ def job_action(ctx, job_id):
         # Determine which phase failed based on if we hit our target URL count
         max_results = meta.get('max_results', 10)
         target_status = 'gathering' if job_data['total_links'] < max_results else 'running'
-
         conn.execute("UPDATE research_jobs SET status=?, meta_json=? WHERE id=?", (target_status, json.dumps(meta), job_id))
         conn.commit()
-        g_int, g_jit, s_int, s_jit = _get_research_intervals()
+        g_int, g_jit, s_int, s_jit = _get_research_intervals(workspace_id)
 
         if target_status == 'gathering':
             ctx.jobs.schedule("gather_next_page", g_int, jitter_ms=g_jit, job_id=f"research_gather_{job_id}", research_job_id=job_id)
@@ -571,7 +600,7 @@ def inbox_disposition(ctx, inbox_id):
             job_id = job_data['job_id']
             conn.execute("UPDATE research_jobs SET status='running' WHERE id=? AND status='completed'", (job_id,))
             conn.commit()
-            _, _, s_int, s_jit = _get_research_intervals()
+            _, _, s_int, s_jit = _get_research_intervals(workspace_id)
             ctx.jobs.schedule("scrape_next_link", s_int, jitter_ms=s_jit, job_id=f"research_{job_id}", research_job_id=job_id)
         return jsonify({"status": "success"})
     conn.execute("UPDATE research_inbox SET status=? WHERE id=?", (status, inbox_id))

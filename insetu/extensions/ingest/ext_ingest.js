@@ -15,6 +15,7 @@ export const IngestStore = createExtensionStore('Ingest', {
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 window.inSetu.stores.Ingest = IngestStore;
 export class InSetuExtIngestActions extends InSetuElement {
+    static get extensionName() { return 'ingest'; }
     static styles = [sharedStyles];
     render() {
         return html`

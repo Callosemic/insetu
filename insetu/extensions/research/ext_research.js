@@ -11,7 +11,7 @@ export const ResearchStore = createExtensionStore('Research', {
     inbox: [],
     selectedJobId: null,
     selectedItemId: null,
-    targetDir: 'research/',
+    targetDir: 'vfs://research/',
     aiTriageMode: false,
     isTabActive: false,
     newJobModalOpen: false,
@@ -68,7 +68,7 @@ export class InSetuExtResearch extends InSetuElement {
         this.inbox = [];
         this.selectedJobId = null;
         this.selectedItemId = null;
-        this.targetDir = 'research/';
+        this.targetDir = 'vfs://research/';
         this.aiTriageMode = false;
         this.newJobModalOpen = false;
         this.searchForm = {};
@@ -76,7 +76,7 @@ export class InSetuExtResearch extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(
+        this.bindStore(
             ResearchStore,
             state => ({
                 jobs: state.jobs,
@@ -88,25 +88,11 @@ export class InSetuExtResearch extends InSetuElement {
                 newJobModalOpen: state.newJobModalOpen,
                 searchForm: state.searchForm
             }),
-            (slice) => {
-                Object.assign(this, slice);
-            }
+            { autoFetch: () => this.fetchState() }
         );
-        // Initial sync
-        const state = ResearchStore.getState();
-        this.jobs = state.jobs;
-        this.inbox = state.inbox;
-        this.selectedJobId = state.selectedJobId;
-        this.selectedItemId = state.selectedItemId;
-        this.targetDir = state.targetDir;
-        this.aiTriageMode = state.aiTriageMode;
-        this.newJobModalOpen = state.newJobModalOpen;
-        this.searchForm = state.searchForm;
 
         this.registerGlobalListener('insetu:research:action', window, (e) => this.handleJobAction(e.detail.id, e.detail.action));
         this.registerGlobalListener('insetu:research:fetch', window, () => this.fetchState());
-
-        this.fetchState();
     }
     disconnectedCallback() {
         super.disconnectedCallback();
@@ -141,19 +127,17 @@ export class InSetuExtResearch extends InSetuElement {
             console.error("Failed to fetch research state:", e);
         }
     }
-    onWorkspaceLoad(workspaceId) {
-        this.fetchState();
-    }
     onViewActivated() {
         this.fetchState();
     }
     onForceRefresh() {
+        super.onForceRefresh();
         ResearchStore.setState({ isTabActive: true });
         this.fetchState();
     }
     async startJob(e) {
         const { query, provider, parser, dateStart, dateEnd, yearStart, yearEnd, maxResults: formMax, maxCustom, dateRange: rawDateRange } = this.searchForm;
-        const targetDir = this.targetDir || 'research/';
+        const targetDir = this.targetDir || 'vfs://research/';
 
         const dateRange = (() => {
             if (rawDateRange === 'custom') {
@@ -195,14 +179,14 @@ export class InSetuExtResearch extends InSetuElement {
     async handleDisposition(inboxId, status) {
         const item = this.inbox.find(i => i.id === inboxId);
         if (!item) return;
-
         if (status === 'accepted') {
             const targetDir = (this.targetDir || 'research/').replace(/\/+$/, '') + '/';
             const slug = (() => {
                 const generated = this.utils.slugify(item.title);
                 return (generated || 'research-note').replace(/^-+|-+$/g, '').substring(0, 60);
             })();
-            const filepath = targetDir + slug + '.md';
+            const rawFp = targetDir + slug + '.md';
+            const filepath = this.vfs?.normalizeVfsURI ? this.vfs.normalizeVfsURI(rawFp) : rawFp;
 
             const success = await this.sys.executeWorkspaceMutation('fs/save', { filepath, content: item.raw_markdown }, { silent: true });
             if (!success) return alert("Failed to write Markdown to disk.");
@@ -281,17 +265,17 @@ export class InSetuExtResearch extends InSetuElement {
     }
     _renderJobCard(job) {
         const meta = job.meta || {};
-        const statusColor = (() => {
-            if (job.status === 'running') return 'var(--intent-primary)';
-            if (job.status === 'gathering') return 'var(--intent-highlight)';
-            if (job.status === 'completed') return 'var(--intent-primary)';
-            if (job.status === 'reviewed') return 'var(--intent-success)';
-            if (job.status === 'failed') return 'var(--intent-danger)';
-            return 'var(--text-muted)';
+        const statusIntent = (() => {
+            if (job.status === 'running') return 'primary';
+            if (job.status === 'gathering') return 'highlight';
+            if (job.status === 'completed') return 'primary';
+            if (job.status === 'reviewed') return 'success';
+            if (job.status === 'failed') return 'danger';
+            return 'neutral';
         })();
         const safeDate = this.utils.formatDate(job.created_at);
         const cardStatusExtra = job.status === 'gathering'  
-            ? `(Page ${Math.floor((meta.start_index || 0) / 10) + 1} - ${job.total_links} found)`
+            ? `(Page ${Math.floor((meta.start_index || 0) / 10) + 1} -${job.total_links} found)`
             : `(${job.processed_links}/${job.total_links} scraped)`;
         return html`
             <sutram-card
@@ -299,8 +283,8 @@ export class InSetuExtResearch extends InSetuElement {
                 .titleText=${`🔍 ${job.query}`}
                 .descriptionText=${`Status: ${job.status.toUpperCase()}${cardStatusExtra}`}
                 .detailText=${`Created: ${safeDate} | Range:${meta.date_range || 'Any Time'}`}
-                icon=""
-                intentColor=${statusColor}
+                icon="search"
+                intent=${statusIntent}
                 entityType="research_job"
                 .entityData=${job}
                 @card-clicked=${() => ResearchStore.setState({ selectedJobId: job.id, selectedItemId: null })}>
@@ -369,7 +353,7 @@ export class InSetuExtResearch extends InSetuElement {
                 <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
                     <div style="flex: 1; display: flex; flex-direction: column; min-height: 200px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg);">
                         <div style="display: flex; flex-direction: column; gap: 8px; overflow-y: auto; padding: 10px; flex: 1;">
-                            ${activeInbox.length === 0 ? html`<insetu-empty-state text="No pending items for this job."></insetu-empty-state>` : activeInbox.map(item => {
+                            ${activeInbox.length === 0 ? html`<sutram-empty-state text="No pending items for this job."></sutram-empty-state>` : activeInbox.map(item => {
                                 const statusBadge = item.scraped_at ? '✅' : '⏳';
                                 const isSelected = this.selectedItemId === item.id;
                                 return html`
@@ -491,14 +475,14 @@ export class InSetuResearchPreviewProjection extends InSetuElement {
     async handleDisposition(inboxId, status) {
         const item = this.inbox.find(i => i.id === inboxId);
         if (!item) return;
-
         if (status === 'accepted') {
             const targetDir = (this.targetDir || 'research/').replace(/\/+$/, '') + '/';
             const slug = (() => {
                 const generated = this.utils.slugify(item.title);
                 return (generated || 'research-note').replace(/^-+|-+$/g, '').substring(0, 60);
             })();
-            const filepath = targetDir + slug + '.md';
+            const rawFp = targetDir + slug + '.md';
+            const filepath = this.vfs?.normalizeVfsURI ? this.vfs.normalizeVfsURI(rawFp) : rawFp;
 
             const success = await this.sys.executeWorkspaceMutation('fs/save', { filepath, content: item.raw_markdown }, { silent: true });
             if (!success) return alert("Failed to write Markdown to disk.");
@@ -547,8 +531,8 @@ export class InSetuResearchPreviewProjection extends InSetuElement {
     }
 }
 customElements.define('insetu-research-preview-projection', InSetuResearchPreviewProjection);
-
 export class InSetuExtResearchActions extends InSetuElement {
+    static get extensionName() { return 'research'; }
     static properties = { selectedJobId: { type: String } };
     static styles = [sharedStyles, css`
         .research-back-btn { 

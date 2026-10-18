@@ -76,7 +76,7 @@ export class InSetuExtCronic extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(
+        this.bindStore(
             CronicStore,
             state => ({
                 jobs: state.jobs || [],
@@ -85,17 +85,13 @@ export class InSetuExtCronic extends InSetuElement {
                 selectedJobId: state.selectedJobId,
                 hasCrontab: state.hasCrontab !== false
             }),
-            (slice) => {
-                this.jobs = slice.jobs;
-                this.loading = slice.loading;
-                this.selectedLog = slice.selectedLog;
-                this.selectedJobId = slice.selectedJobId;
-                this.hasCrontab = slice.hasCrontab;
-                this.requestUpdate();
+            {
+                autoFetch: () => {
+                    CronicStore.getState().fetchStatus();
+                    CronicStore.getState().fetchJobs();
+                }
             }
         );
-        CronicStore.getState().fetchStatus();
-        CronicStore.getState().fetchJobs();
 
         // Auto-refresh the execution output log every 10 seconds if one is actively open
         this.registerInterval(() => {

@@ -72,7 +72,7 @@ export class InSetuExtHooks extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(
+        this.bindStore(
             HooksStore,
             state => ({
                 rules: state.rules || [],
@@ -82,14 +82,11 @@ export class InSetuExtHooks extends InSetuElement {
                 editingRule: state.editingRule,
                 ruleForm: state.ruleForm
             }),
-            (slice) => {
-                this.rules = slice.rules;
-                this.logs = slice.logs;
-                this.loading = slice.loading;
-                this.ruleModalOpen = slice.ruleModalOpen;
-                this.editingRule = slice.editingRule;
-                this.ruleForm = slice.ruleForm;
-                this.requestUpdate();
+            {
+                autoFetch: () => {
+                    HooksStore.getState().fetchRules();
+                    HooksStore.getState().fetchLogs();
+                }
             }
         );
         this.subscribe(
@@ -112,22 +109,9 @@ export class InSetuExtHooks extends InSetuElement {
         this.registerGlobalListener('insetu:hooks:execute', window, (e) => this.executeRule(e.detail.id));
         this.registerGlobalListener('insetu:hooks:edit', window, (e) => this.openCreateModal(e.detail.data));
         this.registerGlobalListener('insetu:hooks:delete', window, (e) => this.deleteRule(e.detail.id));
-
-        HooksStore.getState().fetchRules();
-        HooksStore.getState().fetchLogs();
-    }
-    onWorkspaceLoad(workspaceId) {
-        HooksStore.setState({ rules: [], logs: [] });
-        HooksStore.getState().fetchRules();
-        HooksStore.getState().fetchLogs();
     }
 
     onViewActivated() {
-        HooksStore.getState().fetchRules();
-        HooksStore.getState().fetchLogs();
-    }
-
-    onForceRefresh() {
         HooksStore.getState().fetchRules();
         HooksStore.getState().fetchLogs();
     }

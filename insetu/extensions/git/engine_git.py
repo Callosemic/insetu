@@ -18,14 +18,11 @@ from insetu.core.utils_core import (
     get_domain_artifact_path,
     BucketAddress,
     get_safe_repo_id,
-    reconcile_and_vacuum_domain,
     InSetuURI,
-    get_available_contexts,
-    is_naked_diff_uri
+    get_available_contexts
 )
 from insetu.core.system.legacy import move_tree_contents
 from insetu.core.topology.engine_topology import resolve_file_bucket, topology_bp
-from insetu.core.gather.engine_gather import compile_context_payload
 from insetu.core.cartographer.cartographer import map_repositories
 def get_headless_git_env():
     """Returns a secure OS environment block pre-configured for non-interactive SSH connections."""
@@ -81,20 +78,12 @@ GIT_SETTINGS_SCHEMA = [
 ]
 git_bp = InSetuExtension('git', __name__, title="Version Control", description="Version control integration, diff generation, and workspace sweeping.", settings_schema=GIT_SETTINGS_SCHEMA)
 __depends__ = ['gather']
-@hooks.on('coerce_naked_uri')
-def coerce_git_uris(raw_uri=None, **kwargs):
-    if not raw_uri:
-        return None
-    if is_naked_diff_uri(raw_uri):
-        clean_d = raw_uri.replace('.insetu/cache/diffs/', '').replace('.insetu/ext/git/data/diffs/', '').replace('diffs/', '').replace('ctx://diffs/', '')
-        return f"ctx://diffs/{clean_d}"
-    return None
+
 @hooks.on('request_paths')
 def hook_git_request_paths(workspace_id=None, **kwargs):
     return {
         "diffs_dir": get_domain_artifact_path(workspace_id, "diffs", "git")
     }
-
 @hooks.on('workspace_boot', priority=10)
 def mount_git_volumes(workspace_id=None, **kwargs):
     ctx = git_bp.get_context(workspace_id)
@@ -176,7 +165,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                 status = line[:2]
                 filepath = line[3:].strip().strip('"')
                 if '->' in filepath: filepath = filepath.split('->')[-1].strip().strip('"')
-                if InSetuURI.from_any(filepath).is_diff: continue
+                if filepath.endswith('_diffs.txt'): continue
 
                 abs_filepath = git_root / filepath
                 try:
@@ -362,13 +351,11 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         "repo": config['repo_dir'],
                         "bucket_id": b_meta.get("bucket_id", "main")
                     }
-                    manifest_entry = compile_context_payload(
-                        workspace_id, 
-                        None, 
+                    manifest_entry = ctx.compile_context(
                         out_filename, 
                         header_str, 
                         text_blocks, 
-                        [f"{config['repo_dir']}/{f}" for f, s, _ in files_in_bucket if 'D' not in s], 
+                        [f"vfs://{config['repo_dir']}/{f}" for f, s, _ in files_in_bucket if 'D' not in s], 
                         meta
                     )
                     local_manifest_deltas[out_filename] = manifest_entry
@@ -389,8 +376,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                 manifest_deltas.update(lm_delta)
                 working_manifest.update(lm_delta)
                 truly_modified_diffs.update(l_mod)
-    reconcile_and_vacuum_domain(
-        ctx,
+    ctx.reconcile_domain(
         domain_uri_prefix="ctx://diffs/",
         manifest_deltas=manifest_deltas,
         domain_dir="ctx://diffs",
@@ -435,12 +421,11 @@ def _background_sweep_status(ctx, **kwargs):
                 status = line[:2]
                 filepath = line[3:]
                 if '->' in filepath: filepath = filepath.split('->')[-1].strip()
-
-                full_rel_path = f"{repo}/{filepath}"
+                full_vfs_path = f"vfs://{repo}/{filepath}"
 
                 # A file qualifies for the "Sweepable State" tray if it exists in Git but is NOT 
                 # in the active topology ledger (i.e. ignored) OR if it is explicitly excluded from diffs
-                is_excluded = repo_excluded or (full_rel_path not in tracked_info) or (tracked_info.get(full_rel_path) in excluded_buckets)
+                is_excluded = repo_excluded or (full_vfs_path not in tracked_info) or (tracked_info.get(full_vfs_path) in excluded_buckets)
 
                 if is_excluded:
                     files.append({"path": filepath, "status": status.strip()})
@@ -568,7 +553,7 @@ def _background_git_push(ctx, repo, message, diff_file, **kwargs):
             filepath = line[3:].strip().strip('"')
             if '->' in filepath: 
                 filepath = filepath.split('->')[-1].strip().strip('"')
-            if InSetuURI.from_any(filepath).is_diff: continue
+            if filepath.endswith('_diffs.txt'): continue
 
             abs_filepath = git_root / filepath
             try:
@@ -674,7 +659,7 @@ def provide_available_diffs(workspace_id=None, **kwargs):
     # 3. Include ad-hoc diffs currently tracked in the manifest
     manifest = ctx.manifest.get("ctx", {})
     for key in manifest.keys():
-        if InSetuURI.from_any(key).is_diff:
+        if InSetuURI(key).is_diff:
             expected_diffs.add(key)
 
     return list(expected_diffs)

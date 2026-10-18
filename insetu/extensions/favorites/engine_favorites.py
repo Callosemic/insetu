@@ -25,9 +25,15 @@ def _ensure_favorites_hydrated(ctx):
     if count == 0 and saved:
         for item in saved:
             if item.get("id") and item.get("path"):
-                ctx.db.insert_or_replace("favorites", item)
-    elif count > 0 and saved is None:
-        _flush_favorites_to_json(ctx)
+                norm_item = dict(item)
+                p = norm_item["path"]
+                norm_item["path"] = str(InSetuURI(p if "://" in p else f"vfs://{p.lstrip('/')}"))
+                ctx.db.insert_or_replace("favorites", norm_item)
+    elif count > 0:
+        ctx.db.execute("UPDATE favorites SET path = 'vfs://' || path WHERE path NOT LIKE '%://%'")
+        ctx.db.commit()
+        if saved is None:
+            _flush_favorites_to_json(ctx)
 
 def _flush_favorites_to_json(ctx):
     items = ctx.db.get_all(table="favorites", order_by="created_at DESC")
@@ -55,12 +61,13 @@ def add_favorite(ctx):
     # Support both legacy paths and the new explicit folderpath/filepath paradigm
     folderpath = data.get('folderpath', '').strip()
     filepath = data.get('filepath', '').strip()
-    path = folderpath if folderpath else (filepath or data.get('path', '').strip())
-    fav_type = 'folder' if folderpath else data.get('type', 'file').strip()
-    name = data.get('name', '').strip() or InSetuURI(path).basename
-
-    if not path:
+    raw_path = folderpath if folderpath else (filepath or data.get('path', '').strip())
+    if not raw_path:
         return jsonify({"error": "Filepath or folderpath is required"}), 400
+    uri = InSetuURI(raw_path)
+    path = str(uri)
+    fav_type = 'folder' if folderpath else data.get('type', 'file').strip()
+    name = data.get('name', '').strip() or uri.basename
     try:
         _ensure_favorites_hydrated(ctx)
         # Prevent duplication entries

@@ -77,7 +77,7 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
                     content_lines.append(f"Raw CSL-JSON: {json.dumps(item)}\n")
                 ctx.vfs.save(uri, "\n".join(content_lines), data={"is_absolute_artifact": True})
                 manifest[uri] = {
-                    "files": ["data/citations.db"],
+                    "files": [uri],
                     "meta": {"type": "citation", "title": list_title, "domain": "Reference Library", "desc": f"Academic citations scoped to {list_title}."}
                 }
 

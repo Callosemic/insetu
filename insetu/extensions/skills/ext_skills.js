@@ -134,30 +134,24 @@ export class InSetuExtSkills extends InSetuElement {
         this._editGroup = '';
     }
     get currentViewMode() {
-        // Strictly prefer the dataset attribute injected by the OS layout engine
-        if (this.dataset.subId) return this.dataset.subId;
-
-        // Fallback for legacy static mounting
+        if (this.dataset.subId) {
+            return this.dataset.subId.includes(':') ? this.dataset.subId.split(':').pop() : this.dataset.subId;
+        }
         const parentId = this.parentNode?.id || '';
         return parentId.replace('sub-', '') || 'repertoire';
     }
-    get isActiveTab() {
-        // Strict UI boundary isolation: Read layout state from the DOM tree, not global storage
-        return this.closest('.sub-tab-content')?.classList.contains('active') ?? false;
-    }
     connectedCallback() {
         super.connectedCallback();
-
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
-            const touchedSkill = payload.mutations.some(m => m.filepath && (m.filepath.includes('.insetu/data/skills/') || m.filepath.includes('.insetu/skills/')));
+            const touchedSkill = payload.mutations.some(m => m.filepath && m.filepath.startsWith('ctx://skills/'));
             if (touchedSkill) {
                 SkillsStore.getState().fetchPlaylist(true);
                 SkillsStore.getState().fetchAllSkills();
             }
         });
-        this.subscribe(
+        this.bindStore(
             SkillsStore,
             state => ({
                 playlist: state.playlist,
@@ -172,18 +166,22 @@ export class InSetuExtSkills extends InSetuElement {
                 formMetrics: state.formMetrics,
                 modalMode: state.modalMode
             }),
-            (slice) => {
-                Object.assign(this, slice);
-                if (slice.selectedItem && (this._lastSelectedFile !== slice.selectedItem.filepath)) {
-                    this._lastSelectedFile = slice.selectedItem.filepath;
-                    this._editName = slice.selectedItem.name;
-                    this._editTags = slice.selectedItem.tags || '';
-                    this._editGroup = slice.selectedItem.group_name || '';
-                } else if (!slice.selectedItem) {
-                    this._lastSelectedFile = null;
-                    this._editName = '';
-                    this._editTags = '';
-                    this._editGroup = '';
+            {
+                autoFetch: () => this._reloadAll(),
+                equalityFn: (a, b) => {
+                    Object.assign(this, b);
+                    if (b.selectedItem && (this._lastSelectedFile !== b.selectedItem.filepath)) {
+                        this._lastSelectedFile = b.selectedItem.filepath;
+                        this._editName = b.selectedItem.name;
+                        this._editTags = b.selectedItem.tags || '';
+                        this._editGroup = b.selectedItem.group_name || '';
+                    } else if (!b.selectedItem) {
+                        this._lastSelectedFile = null;
+                        this._editName = '';
+                        this._editTags = '';
+                        this._editGroup = '';
+                    }
+                    return this.utils.shallowEqual(a, b);
                 }
             }
         );
@@ -195,13 +193,11 @@ export class InSetuExtSkills extends InSetuElement {
     disconnectedCallback() {
         super.disconnectedCallback();
     }
-    onWorkspaceLoad(workspaceId) {
-        this._reloadAll();
-    }
     onViewActivated() {
         this._reloadAll();
     }
     onForceRefresh() {
+        super.onForceRefresh();
         SkillsStore.getState().fetchPlaylist(true);
         SkillsStore.getState().fetchAllSkills();
     }
@@ -241,7 +237,7 @@ export class InSetuExtSkills extends InSetuElement {
             const data = await res.json();
             SkillsStore.setState({ newSkillModalOpen: false });
             if (data.job_id === 'offline_queue') {
-                const tempFilepath = `${domain}/${window.inSetu.utils.slugify(payload.name)}.md`;
+                const tempFilepath = `ctx://skills/${window.inSetu.utils.slugify(payload.name)}.md`;
                 const newItem = { ...payload, filepath: tempFilepath, id: 'SKL-' + Date.now() };
                 SkillsStore.setState(s => ({ allSkills: [...s.allSkills, newItem] }));
             }
@@ -471,8 +467,6 @@ export class InSetuExtSkills extends InSetuElement {
         `;
     }
     render() {
-        if (!this.isActiveTab) return '';
-
         const viewMode = this.currentViewMode;
         const activeNewDomain = this._newSkillDomain || Object.keys(this.domainConfig)[0] || 'musical_repertoire';
 

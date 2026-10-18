@@ -225,6 +225,7 @@ export const KanbanStore = createExtensionStore('Kanban', {
                                     id: view.id,
                                     label: view.label,
                                     order: idx + 1,
+                                    allow_popout: true,
                                     component: "insetu-ext-tracker"
                                 });
                                 manifest.layoutSlots.push({
@@ -304,6 +305,7 @@ function _isRepoActive(activePins, repo) {
 import { LitElement, html, css } from 'lit';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 export class InSetuTrackerTicket extends InSetuElement {
+    static get extensionName() { return 'tracker'; }
     static properties = {
         task: { type: Object },
         allTasks: { type: Array }
@@ -447,10 +449,10 @@ constructor() {
 }
     connectedCallback() {
         super.connectedCallback();
-        const parsedTab = this.dataset.subId || this.parentElement?.id?.replace('sub-', '');
-        this.activeTab = parsedTab || 'todos';
+        const rawTab = this.dataset.subId || this.parentElement?.id?.replace('sub-', '') || 'todos';
+        this.activeTab = rawTab.includes(':') ? rawTab.split(':').pop() : rawTab;
         if (typeof KanbanStore !== 'undefined' && KanbanStore) {
-            this.subscribe(
+            this.bindStore(
                 KanbanStore,
                 state => ({
                     tasks: state?.tasks || [],
@@ -462,27 +464,13 @@ constructor() {
                     pinnedTags: state?.pinnedTags || new Set(['ALL']),
                     pinnedBuckets: state?.pinnedBuckets || new Set(['ALL'])
                 }),
-                (slice) => {
-                    this.tasks = slice.tasks;
-                    this.cachedTags = slice.cachedTags;
-                    this.cachedSubBuckets = slice.cachedSubBuckets;
-                    this.customViews = slice.customViews;
-                    this.settings = slice.settings;
-                    this.systemSchemas = slice.systemSchemas;
-                    this.pinnedTags = slice.pinnedTags;
-                    this.pinnedBuckets = slice.pinnedBuckets;
-                    this.requestUpdate();
+                {
+                    autoFetch: () => {
+                        KanbanStore.getState().fetchTasks();
+                        KanbanStore.getState().fetchSettings();
+                    }
                 }
             );
-            const kState = KanbanStore.getState ? KanbanStore.getState() : {};
-            this.tasks = kState?.tasks || [];
-            this.cachedTags = kState?.cachedTags || [];
-            this.cachedSubBuckets = kState?.cachedSubBuckets || [];
-            this.customViews = kState?.customViews || [];
-            this.settings = kState?.settings || {};
-            this.systemSchemas = kState?.systemSchemas || [];
-            this.pinnedTags = kState?.pinnedTags || new Set(['ALL']);
-            this.pinnedBuckets = kState?.pinnedBuckets || new Set(['ALL']);
         }
         this.registerGlobalListener('insetu:tracker:generate-changelog', window, (e) => {
             if (this.activeTab === 'log') {
@@ -506,16 +494,15 @@ constructor() {
                     for (const m of touchedTracker) {
                         if (m.operation === 'save') {
                             try {
-                                const { repo, relativePath } = window.inSetu.utils.parseURI(m.filepath);
-                                const cleanFp = repo ? `${repo}/${relativePath}` : relativePath;
+                                const canonFp = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(m.filepath) : m.filepath;
 
-                                const res = await window.inSetu.api.get(`fs/fetch?file=${encodeURIComponent(cleanFp)}`);
+                                const res = await window.inSetu.api.get(`fs/fetch?file=${encodeURIComponent(canonFp)}`);
                                 if (res.ok) {
                                     const content = await res.text();
                                     const { meta } = window.inSetu.utils.parseFrontmatter(content);
                                     KanbanStore.setState(state => {
                                         const tasks = [...state.tasks];
-                                        const idx = tasks.findIndex(t => t.filepath === m.filepath || t.filepath === cleanFp);
+                                        const idx = tasks.findIndex(t => t.filepath === canonFp || t.filepath === m.filepath);
                                         if (idx !== -1) {
                                             const old = tasks[idx];
                                             tasks[idx] = {
@@ -561,15 +548,7 @@ constructor() {
             KanbanStore.getState().fetchTasks();
         });
     }
-    onWorkspaceLoad(workspaceId) {
-        KanbanStore.getState().fetchTasks();
-        KanbanStore.getState().fetchSettings();
-    }
     onViewActivated() {
-        KanbanStore.getState().fetchTasks();
-        KanbanStore.getState().fetchSettings();
-    }
-    onForceRefresh() {
         KanbanStore.getState().fetchTasks();
         KanbanStore.getState().fetchSettings();
     }
@@ -858,12 +837,13 @@ constructor() {
         });
         // Consume hardware-accelerated SQL index payloads directly
         const tagsArray = this.cachedTags || [];
-
         const hasFilters = !activeRepoPins.has('ALL') || !activeTagPins.has('ALL') || !activeBucketPins.has('ALL');
 
-        const textFilteredTasks = this.searchQuery 
-            ? window.inSetu.utils.fuzzyFilterObjects(fullyFilteredTasks, this.searchQuery, t => `${t.title} ${t.id} ${t.description} ${(t.tags || []).join(' ')}`) 
-            : fullyFilteredTasks;
+        const textFilteredTasks = this.filterItems(fullyFilteredTasks, {
+            pinnedRepos: new Set(['ALL']),
+            searchQuery: this.searchQuery,
+            searchFields: t => `${t.title} ${t.id} ${t.description} ${(t.tags || []).join(' ')}`
+        });
 
         const setPinnedRepos = (reposSet) => repoStrategy === 'global' ? AppStore.getState().setPinnedRepos(reposSet) : (this._localPinnedRepos = reposSet, this.requestUpdate());
         const setPinnedBuckets = (bucketsSet) => repoStrategy === 'global' ? KanbanStore.setState({ pinnedBuckets: bucketsSet }) : (this._localPinnedBuckets = bucketsSet, this.requestUpdate());
@@ -1006,7 +986,7 @@ constructor() {
         const closedTasks = state.tasks.filter(t => {
             const isClosed = t.status === 'closed' || t.status === 'archived' || t.status === 'logged';
             if (allRepos) return isClosed;
-            const matchesRepo = this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(t.repo);
+            const matchesRepo = _isRepoActive(this.ecosystem.pinnedRepos, t.repo);
             const matchesTag = state.pinnedTags.has('ALL') || (t.tags && t.tags.some(tag => state.pinnedTags.has(tag)));
             return isClosed && matchesRepo && matchesTag;
         });
@@ -1058,13 +1038,15 @@ constructor() {
 }
 customElements.define('insetu-ext-tracker', InSetuExtTracker);
 export class InSetuExtTrackerActions extends InSetuElement {
+    static get extensionName() { return 'tracker'; }
     get extName() { return 'tracker'; }
     static styles = [sharedStyles, css`:host { display: flex; align-items: stretch; height: 100%; }`];
     get _menuItems() {
         const layout = window.Sutram?.stores?.Layout?.getState?.();
         const focusedCol = layout?.focusedColumn || 'center';
         const activeInCol = layout?.columns?.[focusedCol]?.active || '';
-        const activeSubTab = this.dataset.subId || this.parentElement?.id?.replace('sub-', '') || activeInCol.split(':').pop() || 'todos';
+        const rawSubTab = this.dataset.subId || this.parentElement?.id?.replace('sub-', '') || activeInCol || 'todos';
+        const activeSubTab = rawSubTab.includes(':') ? rawSubTab.split(':').pop() : rawSubTab;
         const items = [];
         if (activeSubTab !== 'log') {
             items.push({ label: 'New Task', icon: '🎫', onClick: () => { 
@@ -1432,15 +1414,15 @@ export class InSetuExtTrackerModals extends InSetuElement {
             parent_id: parentId, depends_on: (dependsOn || []).join(', '), priority, size
         });
         KanbanStore.getState().setModal('new', false);
-
         if (res.job_id === 'offline_queue') {
             const tempId = `TKT-OFFLINE-${Date.now()}`;
+            const folderType = (type.endsWith('s') || type === 'queue') ? type : `${type}s`;
             KanbanStore.setState(s => ({
                 tasks: [...s.tasks, {
                     id: tempId, repo, tier, ticket_type: type, status, title, description: desc, 
                     tags: tags ? tags.split(',').map(t=>t.trim()) : [], subBucket: sub_bucket, 
                     timestamp: new Date().toISOString(), parentId, dependsOn: dependsOn || [], 
-                    priority, size, filepath: `${repo}/.insetu-data/tracker/${type}s/${status}/${tempId}.md`
+                    priority, size, filepath: `vfs://${repo}/.insetu-data/tracker/${folderType}/${status}/${tempId}.md`
                 }]
             }));
         } else {
@@ -1449,7 +1431,8 @@ export class InSetuExtTrackerModals extends InSetuElement {
     }
     _openEditTaskModal(filepath) {
         if (!filepath) return;
-        KanbanStore.getState().setEditTaskField('filepath', filepath);
+        const normFp = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(filepath) : filepath;
+        KanbanStore.getState().setEditTaskField('filepath', normFp);
         KanbanStore.getState().setModal('edit', true);
         if (window.Sutram?.stores?.Layout) {
             const layout = window.Sutram.stores.Layout.getState();
@@ -1462,6 +1445,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 icon: 'check-square',
                 intent: 'primary',
                 extName: 'tracker',
+                allow_popout: true,
                 windowOnly: true
             }, layout.focusedColumn || 'center', 1);
         }
@@ -1689,10 +1673,11 @@ export class InSetuExtTrackerModals extends InSetuElement {
 
                                 return true;
                             });
-
-                            const candidates = this._pickerSearchQuery 
-                                ? this.utils.fuzzyFilterObjects(baseCandidates, this._pickerSearchQuery, t => `${t.id} ${t.title} ${t.repo} ${t.subBucket || ''} ${(t.tags || []).join(' ')}`)
-                                : baseCandidates;
+                            const candidates = this.filterItems(baseCandidates, {
+                                pinnedRepos: new Set(['ALL']),
+                                searchQuery: this._pickerSearchQuery,
+                                searchFields: t => `${t.id} ${t.title} ${t.repo} ${t.subBucket || ''} ${(t.tags || []).join(' ')}`
+                            });
 
                             const displayed = candidates.slice(0, 40);
 
@@ -2078,7 +2063,8 @@ export class InSetuTrackerEditProjection extends InSetuElement {
         super.connectedCallback();
         const subId = this.dataset?.subId;
         if (subId && (subId.includes('.insetu-data/tracker/') || subId.includes('.tracker/')) && !KanbanStore.getState().editTaskForm?.filepath) {
-            KanbanStore.getState().setEditTaskField('filepath', subId.replace(/^vfs:\/\//, ''));
+            const normSub = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(subId) : subId;
+            KanbanStore.getState().setEditTaskField('filepath', normSub);
         }
         this.subscribe(
             KanbanStore,
@@ -2236,6 +2222,7 @@ customElements.define('insetu-tracker-edit-projection', InSetuTrackerEditProject
 
 // OS Registration Hook
 export class InSetuExtTrackerSettings extends InSetuElement {
+    static get extensionName() { return 'tracker'; }
     static styles = [sharedStyles, css`
         :host { display: contents; }
     `];
@@ -2492,7 +2479,7 @@ export class InSetuExtTrackerSettings extends InSetuElement {
             parent_tabs: cleanParentTabs,
             renames: renames 
         });
-
+        const toastStore = window.inSetu?.stores?.Toast || window.Sutram?.stores?.Toast;
         if (res.status === 202) {
             const data = await res.json();
             window.inSetu.utils.pollJob(data.job_id, {
@@ -2500,13 +2487,13 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                 onComplete: () => {
                     KanbanStore.getState().fetchSettings();
                     KanbanStore.setState({ settingsModalOpen: false });
-                    window.inSetu.stores.Toast.getState().addToast(`Migration complete. Schemas and views applied successfully.`);
+                    if (toastStore?.getState) toastStore.getState().addToast(`Migration complete. Schemas and views applied successfully.`, 'success');
                 }
             });
         } else {
             KanbanStore.getState().fetchSettings();
             KanbanStore.setState({ settingsModalOpen: false });
-            window.inSetu.stores.Toast.getState().addToast(`Tracker schemas and views applied successfully.`);
+            if (toastStore?.getState) toastStore.getState().addToast(`Tracker schemas and views applied successfully.`, 'success');
         }
     }
     render() {
@@ -2965,6 +2952,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             icon: "check-square",
             intent: "primary",
             order: 1,
+            allow_popout: true,
             component: "insetu-ext-tracker"
         },
         {
@@ -2975,6 +2963,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             icon: "bug",
             intent: "danger",
             order: 2,
+            allow_popout: true,
             component: "insetu-ext-tracker"
         },
         {
@@ -2985,6 +2974,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             icon: "list",
             intent: "highlight",
             order: 3,
+            allow_popout: true,
             component: "insetu-ext-tracker"
         },
         {
@@ -2995,6 +2985,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             icon: "history",
             intent: "neutral",
             order: 4,
+            allow_popout: true,
             component: "insetu-ext-tracker"
         },
         {

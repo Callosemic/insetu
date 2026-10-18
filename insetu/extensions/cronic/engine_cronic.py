@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
+from insetu.core.utils_core import InSetuURI
 from akasa.hooks import hooks
 from akasa.utils import is_extension_enabled
 
@@ -35,11 +36,10 @@ __depends__ = []
 
 def has_crontab():
     return shutil.which("crontab") is not None
-
 def _sync_system_crontab(ctx):
+    """Rebuilds system crontab entries specifically for the active workspace."""
     if not has_crontab():
         return
-    """Rebuilds system crontab entries specifically for the active workspace."""
     jobs = ctx.db.get_all("cronic_jobs")
     crontab_lines = []
     workspace_tag = f"# managed-by-insetu:cronic:{ctx.workspace_id}:"
@@ -78,16 +78,21 @@ def _sync_system_crontab(ctx):
 def get_status(ctx):
     """Checks if the underlying OS environment supports crontab scheduling."""
     return jsonify({"has_crontab": has_crontab()})
-
 def _ensure_cronic_hydrated(ctx):
     count = ctx.db.execute("SELECT count(*) FROM cronic_jobs").fetchone()[0]
     saved = ctx.store.get("schedules.json", "jobs", None)
     if count == 0 and saved:
         for j in saved:
             if j.get("id") and j.get("filepath"):
-                ctx.db.insert_or_replace("cronic_jobs", j)
-    elif count > 0 and saved is None:
-        _flush_cronic_to_json(ctx)
+                norm_j = dict(j)
+                fp = norm_j["filepath"]
+                norm_j["filepath"] = str(InSetuURI(fp if "://" in fp else f"vfs://{fp.lstrip('/')}"))
+                ctx.db.insert_or_replace("cronic_jobs", norm_j)
+    elif count > 0:
+        ctx.db.execute("UPDATE cronic_jobs SET filepath = 'vfs://' || filepath WHERE filepath NOT LIKE '%://%'")
+        ctx.db.commit()
+        if saved is None:
+            _flush_cronic_to_json(ctx)
 
 def _flush_cronic_to_json(ctx):
     jobs = ctx.db.get_all("cronic_jobs")
@@ -109,8 +114,8 @@ def schedule_job(ctx):
     schedule = data.get("schedule", "0 * * * *").strip()
     if not filepath or not (filepath.endswith('.py') or filepath.endswith('.sh')):
         return jsonify({"error": "Only .py or .sh files can be scheduled."}), 400
-
     _ensure_cronic_hydrated(ctx)
+    filepath = str(InSetuURI(filepath))
     job_id = f"job_{uuid.uuid4().hex[:8]}"
     ctx.db.insert_or_replace("cronic_jobs", {
         "id": job_id,
@@ -261,8 +266,8 @@ def cronic_workspace_boot(workspace_id=None, **kwargs):
     try:
         if not is_extension_enabled("cronic", workspace_id):
             return
-
         ctx = cronic_bp.get_context(workspace_id)
+        _ensure_cronic_hydrated(ctx)
         # 1. Schedule the background log sweeper (Runs once every 24 hours)
         job_id = f"cronic_sweep_{workspace_id}"
         ctx.jobs.schedule("sweep_logs_task", interval_ms=86400000, jitter_ms=3600000, job_id=job_id)
@@ -293,9 +298,9 @@ def cronic_workspace_boot(workspace_id=None, **kwargs):
 
                         fp_match = re.search(r'"([^"]+)"(?:\s*>>)?$', cmd) or re.search(r'([^\s]+)$', cmd)
                         abs_fp = fp_match.group(1) if fp_match else ""
-
                         rel_fp = os.path.relpath(abs_fp, ws_root) if abs_fp.startswith(ws_root) else abs_fp
-                        active_cron_jobs[c_job_id] = (schedule, rel_fp)
+                        canon_fp = rel_fp if "://" in rel_fp else f"vfs://{rel_fp.lstrip('/')}"
+                        active_cron_jobs[c_job_id] = (schedule, str(InSetuURI(canon_fp)))
 
         existing_jobs = {j['id']: j for j in ctx.db.get_all("cronic_jobs")}
 

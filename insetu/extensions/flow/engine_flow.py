@@ -8,17 +8,42 @@ from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from insetu.core.system.legacy import move_tree_contents
+from insetu.core.utils_core import (
+    InSetuURI,
+    get_domain_artifact_path,
+    get_available_contexts
+)
 from akasa.hooks import hooks
 from akasa.utils import slugify, generate_ascii_tree, get_all_workspace_ids
 from akasa.vfs import mount_volume, register_driver, DefaultVFSDriver
-from insetu.core.utils_core import (
-    InSetuURI,
-    reconcile_and_vacuum_domain,
-    get_domain_artifact_path,
-    get_available_contexts,
-    is_naked_workflow_uri
-)
-from insetu.core.gather.engine_gather import compile_context_payload
+
+
+def _discover_mounted_batches(ctx) -> list:
+    """Reads workflows.json from peer workspaces mounted for the 'flow' domain."""
+    mounted_batches = []
+    for mount in ctx.get_shared_mounts(domain="flow"):
+        target_ws = mount["workspace_id"]
+        raw_json = ctx.vfs.read(f"{mount['uri']}/workflows.json")
+        if not raw_json:
+            continue
+        try:
+            parsed = json.loads(raw_json)
+            remote_list = parsed.get("context_batches", []) if isinstance(parsed, dict) else []
+            for rb in remote_list:
+                if not isinstance(rb, dict) or not rb.get("id"):
+                    continue
+                b_copy = dict(rb)
+                b_copy["id"] = f"{target_ws}__{rb['id']}"
+                b_copy["title"] = f"[🌐 {target_ws}] {rb.get('title') or rb['id']}"
+                b_copy["is_shared"] = True
+                b_copy["source_workspace"] = target_ws
+                if b_copy.get("include_prompt") and not str(b_copy["include_prompt"]).startswith("ws://"):
+                    p_uri = InSetuURI(str(b_copy["include_prompt"]))
+                    b_copy["include_prompt"] = f"ws://{target_ws}/prompts/{p_uri.path}"
+                mounted_batches.append(b_copy)
+        except Exception:
+            pass
+    return mounted_batches
 
 flow_bp = InSetuExtension(
     'flow', 
@@ -33,19 +58,18 @@ def inject_flow_metadata(cfg, workspace_id=None, **kwargs):
     if "flow" not in cfg.get("extensions", []): return
     if "virtual_contexts" not in cfg:
         cfg["virtual_contexts"] = []
-
     vc = {
         "title": "Workflow Batches",
         "domain": "Workflows",
         "description": "Compiled workflow batch automation payloads.",
-        "out_file": "workflows_context.txt"
+        "out_file": "ctx://workflows/workflows_context.txt"
     }
     if not any(v.get("out_file") == vc["out_file"] for v in cfg["virtual_contexts"]):
         cfg["virtual_contexts"].append(vc)
 @hooks.on('request_paths')
 def hook_flow_request_paths(workspace_id=None, **kwargs):
     return {
-        "workflows_dir": get_domain_artifact_path(workspace_id, "workflows", "flow")
+        "workflows_dir": get_domain_artifact_path(workspace_id, "flow/contexts", "flow")
     }
 @hooks.on('workspace_boot', priority=10)
 def mount_flow_volumes(workspace_id=None, **kwargs):
@@ -53,17 +77,38 @@ def mount_flow_volumes(workspace_id=None, **kwargs):
     ctx = flow_bp.get_context(workspace_id)
     control_dir = Path(ctx.paths.get("control_dir"))
     workflows_dir = Path(ctx.paths.get("workflows_dir"))
+    move_tree_contents(control_dir.joinpath("cache", "workflows"), workflows_dir)
     move_tree_contents(control_dir.joinpath("ext", "flow", "data", "workflows"), workflows_dir)
     mount_volume(workspace_id, 'ctx', 'workflows', workflows_dir.as_posix())
-@hooks.on('coerce_naked_uri')
-def coerce_flow_uris(raw_uri=None, **kwargs):
-    if not raw_uri or not isinstance(raw_uri, str):
-        return None
-    if is_naked_workflow_uri(raw_uri):
-        clean = raw_uri.replace('\\', '/').strip()
-        clean_w = clean.replace('.insetu/cache/workflows/', '').replace('.insetu/ext/flow/data/workflows/', '').replace('workflows/', '').replace('ctx://workflows/', '')
-        return f"ctx://workflows/{clean_w}"
-    return None
+def _migrate_batch_uris(batch: dict) -> bool:
+    """One-time migration helper to upgrade legacy scheme-less paths in workflows.json to canonical URIs."""
+    changed = False
+    for list_key in ("includes", "show_if_exists", "show_if_missing"):
+        if isinstance(batch.get(list_key), list):
+            new_list = []
+            for item in batch[list_key]:
+                if isinstance(item, str) and "://" not in item:
+                    s = item.replace("\\", "/").strip()
+                    if s.endswith("_diffs.txt") or "diffs/" in s:
+                        canon = f"ctx://diffs/{Path(s).name}"
+                    elif (s.startswith("workflow_") and s.endswith("_context.txt")) or "workflows/" in s:
+                        canon = f"ctx://workflows/{Path(s).name}"
+                    elif s.endswith("_context.txt") or "contexts/" in s:
+                        canon = f"ctx://contexts/{Path(s).name}"
+                    elif "prompts/" in s:
+                        canon = f"ctx://prompts/{s.split('prompts/')[-1].lstrip('/')}"
+                    else:
+                        canon = f"vfs://{s.lstrip('/')}"
+                    new_list.append(canon)
+                    changed = True
+                else:
+                    new_list.append(item)
+            batch[list_key] = new_list
+    if batch.get("include_prompt") and isinstance(batch["include_prompt"], str) and "://" not in batch["include_prompt"]:
+        clean_p = batch["include_prompt"].replace("\\", "/").split("prompts/")[-1].lstrip("/")
+        batch["include_prompt"] = f"ctx://prompts/{clean_p}"
+        changed = True
+    return changed
 
 @hooks.on('register_compilation_steps')
 def _register_flow_compilation_step(workspace_id=None, **kwargs):
@@ -81,20 +126,28 @@ def _background_compile_workflows(ctx, **kwargs):
     if ctx.config.get("extensions") and "flow" not in ctx.config.get("extensions", []): return
     # Ensure all preceding VFS writes (such as newly generated gather context parts) settle on disk
     ctx.sync_vfs_barrier()
-
-    context_batches = ctx.store.get("workflows.json", "context_batches", [])
-    if not context_batches: return {"message": "No active workflows to pack."}
-
+    stored_batches = list(ctx.store.get("workflows.json", "context_batches", []))
+    if any(_migrate_batch_uris(b) for b in stored_batches if isinstance(b, dict)):
+        ctx.store.set("workflows.json", "context_batches", stored_batches)
+    context_batches = stored_batches + _discover_mounted_batches(ctx)
     full_manifest = ctx.manifest
     current_manifest = full_manifest.get("ctx", {})
     manifest_deltas = {}
+    if not context_batches:
+        ctx.reconcile_domain(
+            domain_uri_prefix="ctx://workflows/workflow_",
+            manifest_deltas={},
+            domain_dir="ctx://workflows",
+            target_repos=target_repos
+        )
+        return {"message": "No active workflows to pack. Cleared stale workflow entries."}
     def process_batch(batch):
         batch_id = batch.get("id")
         if not batch_id: return None, None
         includes = batch.get("includes", [])
         target_repos_set = set()
         for i in includes:
-            repo_cand = InSetuURI.from_any(i).repo
+            repo_cand = InSetuURI(i).repo
             if repo_cand and repo_cand not in ('contexts', 'diffs', 'prompts', 'workflows'):
                 target_repos_set.add(repo_cand)
         base_uri = f"ctx://workflows/workflow_{batch_id}_context.txt"
@@ -102,10 +155,10 @@ def _background_compile_workflows(ctx, **kwargs):
         header_str = f"========== BATCH: {batch.get('title', batch.get('id'))} ==========\n\n"
         text_blocks = []
         resolved_files = []
-        # Canonicalize includes to InSetuURIs natively
+        # Validate canonical InSetuURIs natively
         healed_includes = []
         for inc in includes:
-            uri = InSetuURI.from_any(inc)
+            uri = InSetuURI(inc)
             if uri.scheme == 'vfs' and not uri.is_dir and uri.is_dir_physical(ctx.workspace_id):
                 healed_includes.append(f"{str(uri)}/")
             else:
@@ -124,7 +177,7 @@ def _background_compile_workflows(ctx, **kwargs):
                 if content is not None:
                     text_blocks.append(f"--- {display_name} ---\n{content}\n\n")
                     resolved_files.append(display_name)
-                elif InSetuURI.from_any(chunk_identifier).is_diff:
+                elif InSetuURI(chunk_identifier).is_diff:
                     text_blocks.append(f"--- {display_name} (NO PENDING DIFFS) ---\n[Working tree clean. No uncommitted changes detected.]\n\n")
                     resolved_files.append(display_name)
                 else:
@@ -148,17 +201,20 @@ def _background_compile_workflows(ctx, **kwargs):
                 repo_cand = chunk_uri.repo
                 if repo_cand and repo_cand not in ('contexts', 'diffs', 'prompts', 'workflows'):
                     batch_repos.add(repo_cand)
+        existing_entry = current_manifest.get(base_uri)
+        chunks_exist_on_disk = ctx.is_context_on_disk(base_uri, existing_entry)
 
-        # Skip recompiling clean batches if target_repos is specified
-        if target_repos and not (batch_repos & set(target_repos)):
-            return None, None
+        # Skip recompiling clean batches if target_repos is specified AND the compiled chunks physically exist on disk
+        if target_repos and not (batch_repos & set(target_repos)) and chunks_exist_on_disk:
+            return base_uri, existing_entry
+
         # Incremental Speed Boost: Skip workflows that don't depend on the specific context/diffs that just changed
         chain_state = kwargs.get("chain_state", {})
         touched_buckets = chain_state.get("touched_buckets")
         touched_diffs = chain_state.get("touched_diffs")
         ledger_events = kwargs.get("ledger_events", [])
 
-        if touched_buckets is not None and touched_diffs is not None:
+        if touched_buckets is not None and touched_diffs is not None and chunks_exist_on_disk:
             changed_deps = set(touched_buckets + touched_diffs)
 
             # Derive active repos from the event ledger
@@ -167,7 +223,7 @@ def _background_compile_workflows(ctx, **kwargs):
                 active_repos.update(target_repos)
             for e in ledger_events:
                 fp = e.get("filepath", "") if isinstance(e, dict) else str(e)
-                r = InSetuURI.from_any(fp).repo
+                r = InSetuURI(fp).repo
                 if r: active_repos.add(r)
             # If the batch includes raw VFS files from repositories that just triggered an event, assume they changed and recompile.
             has_targeted_raw_files = False
@@ -180,11 +236,8 @@ def _background_compile_workflows(ctx, **kwargs):
                         break
             if not has_targeted_raw_files and not (expanded_base_uris & changed_deps):
                 if os.environ.get("INSETU_DEBUG") == "1":
-                    print(f"🌊 [FLOW TELEMETRY] ⏭️ Incremental Skip: Batch {batch_id} untouched. Preserving manifest entry.")
-                existing_entry = current_manifest.get(base_uri)
-                if existing_entry:
-                    return base_uri, existing_entry
-                return None, None
+                    print(f"🌊 [FLOW TELEMETRY] ⏭️ Incremental Skip: Batch {batch_id} untouched and verified on disk. Preserving manifest entry.")
+                return base_uri, existing_entry
 
         meta = {
             "type": "flow",
@@ -193,9 +246,8 @@ def _background_compile_workflows(ctx, **kwargs):
             "desc": "Compiled workflow batch payload.",
             "repos": sorted(list(batch_repos))
         }
-        entry = compile_context_payload(
-            ctx.workspace_id, None, base_uri,
-            header_str, text_blocks, resolved_files, meta
+        entry = ctx.compile_context(
+            base_uri, header_str, text_blocks, resolved_files, meta
         )
         return base_uri, entry
 
@@ -203,8 +255,7 @@ def _background_compile_workflows(ctx, **kwargs):
         filename, entry = process_batch(b)
         if entry:
             manifest_deltas[filename] = entry
-    reconcile_and_vacuum_domain(
-        ctx,
+    ctx.reconcile_domain(
         domain_uri_prefix="ctx://workflows/workflow_",
         manifest_deltas=manifest_deltas,
         domain_dir="ctx://workflows",
@@ -223,6 +274,7 @@ def _background_compile_workflows(ctx, **kwargs):
 @flow_bp.route('batches', methods=['GET'], docstring="Retrieves compiled workflow batches and available contexts.")
 def api_flow_batches(ctx):
     """Retrieves compiled workflow batches and available contexts."""
+    mount_flow_volumes(workspace_id=ctx.workspace_id)
     batches = ctx.store.get("workflows.json", "context_batches", [])
 
     # Auto-migrate IDs to match titles to prevent legacy recursion
@@ -248,16 +300,17 @@ def api_flow_batches(ctx):
             print(f"⚠️ [Flow] Schema Error: Batch '{title}' is missing the 'includes' array. Auto-healing.")
             b["includes"] = []
             changed = True
-
         for array_field in ["show_if_exists", "show_if_missing"]:
             if array_field in b and not isinstance(b[array_field], list):
                 print(f"⚠️ [Flow] Schema Error: Batch '{title}' has a malformed '{array_field}'. Auto-healing.")
                 val = b[array_field]
                 b[array_field] = [val] if val and isinstance(val, str) else []
                 changed = True
-
+        if _migrate_batch_uris(b):
+            changed = True
     if changed:
         ctx.store.set("workflows.json", "context_batches", batches)
+    all_batches = list(batches) + _discover_mounted_batches(ctx)
     paths = ctx.paths
     expected_contexts = get_available_contexts(ctx.workspace_id, exclusion_flags=["exclude_from_context"], exclude_types=["diff", "flow"])
 
@@ -280,7 +333,7 @@ def api_flow_batches(ctx):
 
     try:
         return jsonify({
-            "batches": batches,
+            "batches": all_batches,
             "available_contexts": sorted([c for c in expected_contexts if _is_base(c)]),
             "available_diffs": sorted([d for d in set(available_diffs) if _is_base(d)]),
             "available_prompts": sorted([p for p in available_prompts if isinstance(p, str)]),
@@ -298,10 +351,7 @@ def handle_flow_pre_save(workspace_id=None, filepath=None, content=None, data=No
             ctx = flow_bp.get_context(workspace_id)
             basename = Path(original_response_path).name
             prefix = basename.split("{date}")[0]
-
-            parts = filepath.split('/')
-            parts.pop()
-            logical_target_dir = "/".join(parts)
+            logical_target_dir = str(InSetuURI(filepath).parent).rstrip('/')
 
             for walk_path in ctx.vfs.walk(logical_target_dir):
                 # Ensure we only check immediate children, not deep recursion

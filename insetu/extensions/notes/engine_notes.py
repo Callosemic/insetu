@@ -11,7 +11,31 @@ from insetu.core.system.legacy import move_tree_contents
 from insetu.core.utils_core import get_domain_data_path, parse_frontmatter, update_frontmatter, InSetuURI
 from akasa.hooks import hooks
 from akasa.utils import slugify
-from akasa.vfs import mount_volume
+from akasa.vfs import mount_volume, register_driver, DefaultVFSDriver
+
+_SYNCED_NOTES_WORKSPACES = set()
+
+class NotesVFSDriver(DefaultVFSDriver):
+    """VFS Driver for ctx://notes that transparently resolves notes relocated to <repo>/.insetu-data/notes/."""
+    def resolve(self, uri_obj, workspace_id, physical_target):
+        primary_path = super().resolve(uri_obj, workspace_id, physical_target)
+        if primary_path and os.path.exists(primary_path):
+            return primary_path
+
+        rel_name = Path(uri_obj.path).name if uri_obj.path else ""
+        if rel_name and rel_name.endswith(".md"):
+            try:
+                ctx = notes_bp.get_context(workspace_id)
+                for repo_cfg in ctx.config.get("target_repos", []):
+                    r_dir = repo_cfg.get("repo_dir")
+                    if r_dir:
+                        cand_uri = f"vfs://{r_dir}/.insetu-data/notes/{rel_name}"
+                        cand_phys = ctx.resolve_path(cand_uri, must_exist=True)
+                        if cand_phys:
+                            return cand_phys
+            except Exception:
+                pass
+        return primary_path
 
 NOTES_SCHEMA = {
     "notes_ledger": {
@@ -46,16 +70,22 @@ def _resolve_intended_note_uri(repo: str, filename: str, valid_repos: set) -> st
 
 def _sync_all_notes_to_db(ctx):
     valid_repos = {r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")}
+    seen_ids = set()
     for rel_path in ctx.vfs.walk("ctx://notes", exts=['.md']):
         abs_path = ctx.resolve_path(rel_path, must_exist=True)
         if abs_path:
-            _parse_and_upsert_note(abs_path, rel_path, ctx.workspace_id, valid_repos=valid_repos)
+            nid = _parse_and_upsert_note(abs_path, rel_path, ctx.workspace_id, valid_repos=valid_repos)
+            if nid:
+                seen_ids.add(nid)
     for r_dir in valid_repos:
         repo_notes_uri = f"vfs://{r_dir}/.insetu-data/notes"
         for rel_path in ctx.vfs.walk(repo_notes_uri, exts=['.md']):
             abs_path = ctx.resolve_path(rel_path, must_exist=True)
             if abs_path:
-                _parse_and_upsert_note(abs_path, rel_path, ctx.workspace_id, valid_repos=valid_repos)
+                nid = _parse_and_upsert_note(abs_path, rel_path, ctx.workspace_id, valid_repos=valid_repos)
+                if nid:
+                    seen_ids.add(nid)
+    _SYNCED_NOTES_WORKSPACES.add(ctx.workspace_id)
 
 @hooks.on('request_paths')
 def hook_notes_request_paths(workspace_id=None, **kwargs):
@@ -81,6 +111,7 @@ def inject_notes_config(cfg, workspace_id=None, **kwargs):
 
 @hooks.on('workspace_boot', priority=10)
 def mount_notes_volumes(workspace_id=None, **kwargs):
+    register_driver('ctx', NotesVFSDriver(), volume='notes')
     ctx = notes_bp.get_context(workspace_id)
     notes_dir = Path(ctx.paths.get("notes_dir"))
     control_dir = Path(ctx.paths.get("control_dir"))
@@ -112,9 +143,8 @@ def _parse_and_upsert_note(abs_path, rel_path, workspace_id, valid_repos=None):
         content = ctx.vfs.read(abs_path, is_absolute_artifact=True)
     if content is None:
         return
-
     yaml_data, body, match = parse_frontmatter(content)
-    uri = InSetuURI.from_any(rel_path)
+    uri = InSetuURI(rel_path)
     inferred_repo = uri.repo if (uri.scheme == 'vfs' and uri.repo in valid_repos) else 'global'
 
     note_id = yaml_data.get('id', uuid.uuid4().hex[:8])
@@ -151,6 +181,7 @@ def _parse_and_upsert_note(abs_path, rel_path, workspace_id, valid_repos=None):
         "sub_bucket": sub_bucket, "filepath": rel_path,
         "created_at": created_at, "updated_at": updated_at
     })
+    return note_id
 
 @hooks.on('vfs_mutated')
 def handle_notes_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
@@ -161,7 +192,7 @@ def handle_notes_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
     for m in mutations:
         filepath = m.get("filepath", "")
         if _is_note_path(filepath):
-            norm_fp = str(InSetuURI.from_any(filepath))
+            norm_fp = str(InSetuURI(filepath))
             if m.get("operation") in ("save", "added", "modified", "create", "created"):
                 abs_path = ctx.resolve_path(norm_fp, must_exist=True)
                 if abs_path:
@@ -169,20 +200,53 @@ def handle_notes_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
             elif m.get("operation") in ("delete", "deleted", "remove", "removed"):
                 ctx.db.delete("notes_ledger", "filepath", norm_fp)
                 ctx.db.delete("notes_ledger", "filepath", filepath)
+def _discover_mounted_notes(ctx) -> list:
+    """Traverses peer workspaces mounted for the 'notes' domain and returns virtual ws:// note entries."""
+    mounted_notes = []
+    for target_ws, ws_uri in ctx.iter_shared_mount_files(domain="notes", exts=['.md']):
+        content = ctx.vfs.read(ws_uri)
+        if not content:
+            continue
+        yaml_data, _, _ = parse_frontmatter(content)
+        fname = Path(ws_uri).name
+        tags_raw = yaml_data.get('tags', [])
+        if isinstance(tags_raw, str):
+            tags_list = [t.strip() for t in tags_raw.split(',') if t.strip()]
+        elif isinstance(tags_raw, list):
+            tags_list = [str(t).strip() for t in tags_raw if str(t).strip()]
+        else:
+            tags_list = []
+        mounted_notes.append({
+            "id": yaml_data.get('id', f"ws-{target_ws}-{fname}"),
+            "repo": f"🌐 {target_ws}",
+            "title": yaml_data.get('title', fname),
+            "tags": tags_list,
+            "sub_bucket": yaml_data.get('sub_bucket', 'None'),
+            "filepath": ws_uri,
+            "created_at": str(yaml_data.get('created_at', '')),
+            "updated_at": str(yaml_data.get('updated_at', '')),
+            "is_shared": True,
+            "source_workspace": target_ws
+        })
+    return mounted_notes
 
-@notes_bp.route('list', methods=['GET'], docstring="Fetches the library of markdown notes.")
+
+@notes_bp.route('list', methods=['GET'], docstring="Fetches the library of markdown notes including mounted ws:// notes.")
 def api_notes_list(ctx):
-    """CQRS read-path: Fetches notes from DB, executing a disk-walk only if the DB is blank."""
+    """CQRS read-path: Fetches notes from DB, ensuring post-migration paths are synchronized."""
     count_check = ctx.db.execute("SELECT count(*) FROM notes_ledger").fetchone()[0]
-    if count_check == 0:
+    if count_check == 0 or ctx.workspace_id not in _SYNCED_NOTES_WORKSPACES:
+        ctx.db.execute("DELETE FROM notes_ledger")
+        ctx.db.commit()
         _sync_all_notes_to_db(ctx)
-    
+
     rows = ctx.db.get_all("notes_ledger", order_by="updated_at DESC")
     notes = []
     for r in rows:
         d = dict(r)
         d['tags'] = json.loads(d['tags'])
         notes.append(d)
+    notes.extend(_discover_mounted_notes(ctx))
     return jsonify({"notes": notes})
 class NoteNewPayload(TypedDict, total=False):
     title: str
@@ -193,29 +257,20 @@ class NoteNewPayload(TypedDict, total=False):
 def api_notes_new(ctx):
     """Generates a new note file with managed YAML frontmatter."""
     data = ctx.req.json or {}
-    note_id = f"note-{uuid.uuid4().hex[:8]}"
     title = data.get("title", "Untitled Note")
     repo = data.get("repo", "global")
     valid_repos = {r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")}
-    filename = f"{slugify(title)}-{note_id}.md"
-    filepath = _resolve_intended_note_uri(repo, filename, valid_repos)
-    yaml_data = {
-        "id": note_id,
-        "title": title.replace('"', "'"),
-        "repo": data.get("repo", "global"),
-        "sub_bucket": data.get("sub_bucket", "None"),
-        "created_at": datetime.now().isoformat(timespec='seconds'),
-        "updated_at": datetime.now().isoformat(timespec='seconds')
-    }
+    folder = f"vfs://{repo}/.insetu-data/notes" if (repo != "global" and repo in valid_repos) else "ctx://notes"
 
+    yaml_data = {
+        "repo": repo,
+        "sub_bucket": data.get("sub_bucket", "None"),
+    }
     tags = data.get("tags", "")
     if tags:
         yaml_data["tags"] = [t.strip() for t in tags.split(',') if t.strip()]
-    raw_content = f"## {title}\n\n"
-    content = update_frontmatter(raw_content, yaml_data)
 
-    # Save via VFS to trigger the Cartographer and Event Ledger
-    ctx.vfs.save(filepath, content)
+    filepath, _ = ctx.create_entity_file(folder, title, yaml_data, prefix="note")
     return jsonify({"status": "success", "filepath": filepath})
 @hooks.on('gather_declare_topology')
 def declare_notes_topology(target_repos=None, ledger_events=None, workspace_id=None, **kwargs):

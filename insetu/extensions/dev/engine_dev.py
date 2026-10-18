@@ -55,7 +55,7 @@ def log_vfs_telemetry(mutations=None, workspace_id="default", **kwargs):
         insert_data = []
         for m in mutations:
             if not m.get("ignore_ledger") and m.get("filepath"):
-                uri = InSetuURI.from_any(m.get("filepath"))
+                uri = InSetuURI(m.get("filepath"))
                 if uri.scheme == 'vfs':
                     insert_data.append((str(uri), m.get("operation"), now))
 

@@ -3,14 +3,16 @@ import subprocess
 from typing import TypedDict
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
+from insetu.core.utils_core import execute_binary
+from akasa.extension import SettingsManager
 from akasa.hooks import hooks
 
 __depends__ = []
 def _execute_serve_bind(workspace_id="default"):
     """Internal helper to safely trigger Tailscale Serve with dynamic port resolution."""
     ctx = tailscale_bp.get_context(workspace_id)
-
-    insetu_port = int(os.environ.get("INSETU_PORT", ctx.config.get("port", 5005)))
+    sys_port = SettingsManager('system', 'default').get("port", 5005)
+    insetu_port = int(os.environ.get("INSETU_PORT", sys_port))
     
     # Port Mode Resolution: 443 | sync | custom
     mode = str(ctx.settings.get("serve_port_mode", "443"))
@@ -26,11 +28,10 @@ def _execute_serve_bind(workspace_id="default"):
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-
     # 1. Try non-interactive sudo with an explicit 10-second timeout
     cmd_sudo = ["sudo", "-n", "tailscale", "serve", "--bg", f"--https={https_port}", f"http://127.0.0.1:{insetu_port}"]
     try:
-        res = subprocess.run(cmd_sudo, capture_output=True, text=True, timeout=10, env=env)
+        res = execute_binary(cmd_sudo, capture_output=True, text=True, timeout=10, env=env)
         if res.returncode == 0:
             return f"Successfully bound local port {insetu_port} to Tailscale Serve HTTPS port {https_port}."
     except (subprocess.TimeoutExpired, Exception):
@@ -39,7 +40,7 @@ def _execute_serve_bind(workspace_id="default"):
     # 2. Fallback without sudo for non-root / user-space Tailnet environments
     cmd_nosudo = ["tailscale", "serve", "--bg", f"--https={https_port}", f"http://127.0.0.1:{insetu_port}"]
     try:
-        res_nosudo = subprocess.run(cmd_nosudo, capture_output=True, text=True, timeout=10, env=env)
+        res_nosudo = execute_binary(cmd_nosudo, capture_output=True, text=True, timeout=10, env=env)
         if res_nosudo.returncode == 0:
             return f"Successfully bound local port {insetu_port} to Tailscale Serve HTTPS port {https_port}."
         raise RuntimeError(f"Tailscale Serve failed: {res_nosudo.stderr or res_nosudo.stdout}")

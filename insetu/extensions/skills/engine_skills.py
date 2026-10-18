@@ -8,9 +8,10 @@ from typing import TypedDict, Optional, Any
 from flask import request, jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.core.system.legacy import move_tree_contents
-from insetu.core.utils_core import parse_frontmatter, update_frontmatter
+from insetu.core.utils_core import parse_frontmatter, InSetuURI
 from akasa.hooks import hooks
 from akasa.utils import slugify
+from akasa.vfs import mount_volume, register_driver, DefaultVFSDriver
 SKILLS_SCHEMA = {
     "skills_ledger": {
         "id": "TEXT PRIMARY KEY",
@@ -59,14 +60,15 @@ def _get_user_skills_dir(workspace_id=None):
     base_dir = ctx.paths["data_dir"]
     os.makedirs(base_dir, exist_ok=True)
     return base_dir
-
-@hooks.on('workspace_boot')
+@hooks.on('workspace_boot', priority=10)
 def init_skills_storage(workspace_id=None, **kwargs):
+    register_driver('ctx', DefaultVFSDriver())
     ctx = skills_bp.get_context(workspace_id)
     control_dir = Path(ctx.paths.get("control_dir"))
     skills_dir = Path(_get_user_skills_dir(workspace_id))
     move_tree_contents(control_dir.joinpath("ext", "skills", "data", "skills"), skills_dir)
     move_tree_contents(control_dir.joinpath("ext", "skills", "data"), skills_dir)
+    mount_volume(workspace_id, 'ctx', 'skills', skills_dir.as_posix())
 
 @hooks.on('topology_boot_complete')
 def hydrate_skills_on_boot(workspace_id=None, **kwargs):
@@ -76,20 +78,31 @@ def hydrate_skills_on_boot(workspace_id=None, **kwargs):
     except Exception:
         pass
 
+def _canonical_skill_uri(filepath_or_name: str) -> str:
+    if not filepath_or_name:
+        return ""
+    if filepath_or_name.startswith("ctx://skills/"):
+        return filepath_or_name
+    base = InSetuURI(filepath_or_name).basename if "://" in filepath_or_name else Path(filepath_or_name).name
+    return f"ctx://skills/{base}"
+
 def _ensure_skills_hydrated(ctx):
+    init_skills_storage(workspace_id=ctx.workspace_id)
+    ctx.db.execute("UPDATE skills_ledger SET filepath = 'ctx://skills/' || filepath WHERE filepath NOT LIKE '%://%'")
+    ctx.db.commit()
     count = ctx.db.execute("SELECT count(*) FROM skills_ledger").fetchone()[0]
     if count == 0:
-        skills_dir = Path(_get_user_skills_dir(ctx.workspace_id))
-        if skills_dir.exists() and skills_dir.is_dir():
-            for item in os.listdir(skills_dir.as_posix()):
-                if item.endswith(".md"):
-                    _parse_and_upsert_skill(skills_dir.joinpath(item).as_posix(), item, workspace_id=ctx.workspace_id)
-def _parse_and_upsert_skill(abs_path, filename, workspace_id=None):
+        for skill_uri in ctx.vfs.walk("ctx://skills", exts=['.md']):
+            _parse_and_upsert_skill(skill_uri, workspace_id=ctx.workspace_id)
+
+def _parse_and_upsert_skill(skill_uri, workspace_id=None):
     try:
         ctx = skills_bp.get_context(workspace_id)
-        content = ctx.vfs.read(abs_path, is_absolute_artifact=True) or ""
+        canon_uri = _canonical_skill_uri(skill_uri)
+        content = ctx.vfs.read(canon_uri) or ""
         yaml_data, _, _ = parse_frontmatter(content)
 
+        filename = InSetuURI(canon_uri).basename
         s_id = yaml_data.get('id', "SKL-" + uuid.uuid4().hex[:8].upper())
         domain = yaml_data.get('domain', "general")
         tags = yaml_data.get('tags', "")
@@ -116,10 +129,10 @@ def _parse_and_upsert_skill(abs_path, filename, workspace_id=None):
             INSERT OR REPLACE INTO skills_ledger  
             (id, domain, tags, group_name, name, status, last_practiced, interval_days, next_review, filepath, metrics_json)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (s_id, domain, tags, group_name, name, status, last_practiced, interval_days, next_review, filename, json.dumps(metrics)))
+        """, (s_id, domain, tags, group_name, name, status, last_practiced, interval_days, next_review, canon_uri, json.dumps(metrics)))
         conn.commit()
     except Exception as e:
-        print(f"Error parsing global skill file {filename}: {e}")
+        print(f"Error parsing global skill file {skill_uri}: {e}")
 @skills_bp.route('playlist', methods=['GET'], docstring="Compiles a unified practice batch across all domains based on SM-2 spacing.")
 def get_practice_playlist(ctx):
     """Compiles a unified practice batch across all domains sorted globally."""
@@ -159,10 +172,11 @@ def log_skill_practice(ctx):
 
     if not filename:
         return jsonify({"error": "Filename tracking reference required"}), 400
-
     try:
+        init_skills_storage(workspace_id=ctx.workspace_id)
+        canon_uri = _canonical_skill_uri(filename)
         conn = ctx.db
-        row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (filename,)).fetchone()
+        row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (canon_uri,)).fetchone()
         if not row:
             return jsonify({"error": "Global user skill record not found"}), 404
         current_interval = row['interval_days'] or 1
@@ -174,8 +188,7 @@ def log_skill_practice(ctx):
             next_interval = 1
         today = datetime.date.today()
         next_review_date = today + datetime.timedelta(days=next_interval)
-        abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
-        content = ctx.vfs.read(abs_path, is_absolute_artifact=True) or ""
+        content = ctx.vfs.read(canon_uri) or ""
 
         existing_metrics = json.loads(row['metrics_json']) if row['metrics_json'] else {}
         existing_metrics.update(updates)
@@ -195,23 +208,19 @@ def log_skill_practice(ctx):
             "next_review": next_review_date.isoformat(),
             **existing_metrics
         }
-
-        final_content = update_frontmatter(content, yaml_data)
-        final_filename = filename
+        final_content = ctx.update_frontmatter(content, yaml_data)
+        final_uri = canon_uri
         if name.lower() != row['name'].lower():
-            new_filename = f"{slugify(name)}.md"
-            new_abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(new_filename).as_posix()
-            if os.path.exists(abs_path):
-                ctx.vfs.delete(abs_path, data={"is_absolute_artifact": True})
-            abs_path = new_abs_path
-            final_filename = new_filename
-            conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
+            final_uri = f"ctx://skills/{slugify(name)}.md"
+            ctx.vfs.delete(canon_uri)
+            conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (canon_uri,))
             conn.commit()
 
-        ctx.vfs.save(abs_path, final_content, data={"is_absolute_artifact": True})
+        ctx.vfs.save(final_uri, final_content)
+        ctx.sync_vfs_barrier()
 
-        _parse_and_upsert_skill(abs_path, final_filename, workspace_id=ctx.workspace_id)
-        return jsonify({"status": "success", "interval_days": next_interval, "next_review": next_review_date.isoformat()})
+        _parse_and_upsert_skill(final_uri, workspace_id=ctx.workspace_id)
+        return jsonify({"status": "success", "interval_days": next_interval, "next_review": next_review_date.isoformat(), "filepath": final_uri})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 class UpdateSkillPayload(TypedDict, total=False):
@@ -231,12 +240,13 @@ def update_skill_structure(ctx):
     if not filename:
         return jsonify({"error": "Filename tracking reference required"}), 400
     try:
+        init_skills_storage(workspace_id=ctx.workspace_id)
+        canon_uri = _canonical_skill_uri(filename)
         conn = ctx.db
-        row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (filename,)).fetchone()
+        row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (canon_uri,)).fetchone()
         if not row:
             return jsonify({"error": "Global user skill record not found"}), 404
-        abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
-        content = ctx.vfs.read(abs_path, is_absolute_artifact=True) or ""
+        content = ctx.vfs.read(canon_uri) or ""
 
         existing_metrics = json.loads(row['metrics_json']) if row['metrics_json'] else {}
         name = data.get('name', row['name']).strip()
@@ -258,23 +268,19 @@ def update_skill_structure(ctx):
             "next_review": row["next_review"] or datetime.date.today().isoformat(),
             **existing_metrics
         }
-
-        final_content = update_frontmatter(content, yaml_data)
-        final_filename = filename
+        final_content = ctx.update_frontmatter(content, yaml_data)
+        final_uri = canon_uri
         if name.lower() != row['name'].lower():
-            new_filename = f"{slugify(name)}.md"
-            new_abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(new_filename).as_posix()
-            if os.path.exists(abs_path):
-                ctx.vfs.delete(abs_path, data={"is_absolute_artifact": True})
-            abs_path = new_abs_path
-            final_filename = new_filename
-            conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
+            final_uri = f"ctx://skills/{slugify(name)}.md"
+            ctx.vfs.delete(canon_uri)
+            conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (canon_uri,))
             conn.commit()
 
-        ctx.vfs.save(abs_path, final_content, data={"is_absolute_artifact": True})
+        ctx.vfs.save(final_uri, final_content)
+        ctx.sync_vfs_barrier()
 
-        _parse_and_upsert_skill(abs_path, final_filename, workspace_id=ctx.workspace_id)
-        return jsonify({"status": "success", "filepath": final_filename})
+        _parse_and_upsert_skill(final_uri, workspace_id=ctx.workspace_id)
+        return jsonify({"status": "success", "filepath": final_uri})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 class DeleteSkillPayload(TypedDict):
@@ -288,12 +294,11 @@ def delete_skill_item(ctx):
     if not filename:
         return jsonify({"error": "Filename tracking reference required"}), 400
     try:
+        init_skills_storage(workspace_id=ctx.workspace_id)
+        canon_uri = _canonical_skill_uri(filename)
         conn = ctx.db
-        abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
-        if os.path.exists(abs_path):
-            ctx.vfs.delete(abs_path, data={"is_absolute_artifact": True})
-
-        conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
+        ctx.vfs.delete(canon_uri)
+        conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (canon_uri,))
         conn.commit()
         return jsonify({"status": "success"})
     except Exception as e:
@@ -339,7 +344,6 @@ def create_new_skill(ctx):
         return jsonify({"error": "Name required"}), 400
     try:
         filename = f"{slugify(name)}.md"
-        abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
         s_id = "SKL-" + uuid.uuid4().hex[:8].upper()
 
         yaml_data = {
@@ -358,12 +362,18 @@ def create_new_skill(ctx):
         if parts:
             yaml_data["parts"] = parts
             yaml_data["completed_parts"] = ""
-        raw_content = f"## Practice Logs: {name}\n"
-        final_content = update_frontmatter(raw_content, yaml_data)
+        init_skills_storage(workspace_id=ctx.workspace_id)
+        canon_uri, _ = ctx.create_entity_file(
+            folder="ctx://skills",
+            title=name,
+            yaml_data=yaml_data,
+            body_content=f"## {name}\n\nPractice Logs: {name}\n",
+            prefix="SKL",
+            filename=filename
+        )
+        ctx.sync_vfs_barrier()
 
-        ctx.vfs.save(abs_path, final_content, data={"is_absolute_artifact": True})
-
-        _parse_and_upsert_skill(abs_path, filename, workspace_id=ctx.workspace_id)
-        return jsonify({"status": "success", "filepath": filename})
+        _parse_and_upsert_skill(canon_uri, workspace_id=ctx.workspace_id)
+        return jsonify({"status": "success", "filepath": canon_uri})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

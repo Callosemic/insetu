@@ -16,6 +16,9 @@ export const NotesStore = createExtensionStore('Notes', {
     pinnedRepos: new Set(['ALL']),
     openNoteEditor: (filepath, title = null) => {
         if (!filepath) return;
+        if (window.inSetu?.ui?.focusActivePopout && window.inSetu.ui.focusActivePopout(filepath)) {
+            return;
+        }
         NotesStore.setState({ editNoteFilepath: filepath });
         if (window.Sutram?.stores?.Layout) {
             const layout = window.Sutram.stores.Layout.getState();
@@ -408,10 +411,14 @@ export class InSetuExtNotes extends InSetuElement {
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
-            const touchedNote = payload.mutations.some(m => m.filepath && (m.filepath.startsWith('ctx://notes/') || m.filepath.includes('.insetu-data/notes/')));
+            const touchedNote = payload.mutations.some(m => m.filepath && (
+                m.filepath.startsWith('ctx://notes/') || 
+                m.filepath.includes('.insetu-data/notes/') ||
+                (m.filepath.startsWith('ws://') && m.filepath.includes('/notes/'))
+            ));
             if (touchedNote) NotesStore.getState().fetchNotes();
         });
-        this.subscribe(
+        this.bindStore(
             NotesStore,
             state => ({
                 notes: state.notes || [],
@@ -419,12 +426,7 @@ export class InSetuExtNotes extends InSetuElement {
                 searchQuery: state.searchQuery,
                 pinnedRepos: state.pinnedRepos || new Set(['ALL'])
             }),
-            ({ notes, loading, searchQuery, pinnedRepos }) => {
-                this.notes = notes;
-                this.loading = loading;
-                this.searchQuery = searchQuery;
-                this.pinnedRepos = pinnedRepos;
-            }
+            { autoFetch: 'fetchNotes' }
         );
         this.subscribe(
             AppStore,
@@ -434,7 +436,6 @@ export class InSetuExtNotes extends InSetuElement {
                 this.requestUpdate();
             }
         );
-        NotesStore.getState().fetchNotes();
         this.registerGlobalListener('insetu:notes:new', window, () => {
             NotesStore.setState({ newNoteModalOpen: true });
         });
@@ -461,10 +462,11 @@ export class InSetuExtNotes extends InSetuElement {
     }
 
     render() {
-        const repoFilteredNotes = this.notes.filter(n => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(n.repo));
-        const filteredNotes = this.searchQuery 
-            ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredNotes, this.searchQuery, n => `${n.title} ${n.repo} ${(n.tags || []).join(' ')}`) 
-            : repoFilteredNotes;
+        const filteredNotes = this.filterItems(this.notes, {
+            repoField: 'repo',
+            pinnedRepos: this.pinnedRepos,
+            searchFields: n => `${n.title} ${n.repo} ${(n.tags || []).join(' ')}`
+        });
         return html`
             <sutram-toolbar
                 searchPlaceholder="Fuzzy search notes..."
@@ -481,21 +483,25 @@ export class InSetuExtNotes extends InSetuElement {
             </sutram-toolbar>
             <sutram-scroll-view>
                 ${this.loading ? html`<sutram-spinner text="Loading notes..."></sutram-spinner>` : ''}
-
                 <div style="display: flex; flex-direction: column; gap: 10px; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
-                    ${filteredNotes.length === 0 && !this.loading ? html`<insetu-empty-state text="No notes found. Open the menu in the top-right to create one."></insetu-empty-state>` : ''}
+                    ${filteredNotes.length === 0 && !this.loading ? html`<sutram-empty-state text="No notes found. Open the menu in the top-right to create one."></sutram-empty-state>` : ''}
                     ${filteredNotes.map(n => html`
                         <sutram-card
                             .filename=${n.filepath}
                             .titleText=${n.title}
                             .descriptionText=${`Repo: ${n.repo}${n.sub_bucket !== 'None' ? ` | Bucket: ${n.sub_bucket}` : ''}`}
                             .detailText=${this.utils.formatDate(n.updated_at)}
-                            icon="file-edit"
+                            .detailSuffix=${n.filepath?.startsWith('ws://') ? n.repo : ''}
+                            icon=${n.filepath?.startsWith('ws://') ? 'globe' : 'file-edit'}
                             intent="highlight"
                             entityType="file:note"
-                            .entityData=${{ filepath: n.filepath, isFS: true, repoDir: n.repo }}
+                            .entityData=${{ filepath: n.filepath, isFS: !n.filepath?.startsWith('ws://'), repoDir: n.repo }}
                             @card-clicked=${() => {
-                                NotesStore.getState().openNoteEditor(n.filepath, n.title);
+                                if (n.filepath?.startsWith('ws://')) {
+                                    if (this.vfs?.viewSourceFile) this.vfs.viewSourceFile(n.filepath, false, true);
+                                } else {
+                                    NotesStore.getState().openNoteEditor(n.filepath, n.title);
+                                }
                             }}>
 
                             <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px;">
@@ -582,6 +588,7 @@ window.ExtensionRegistry.registerExtension('notes', {
             icon: "file-text",
             intent: "highlight",
             order: 4,
+            allow_popout: true,
             component: "insetu-ext-notes"
         },
         {

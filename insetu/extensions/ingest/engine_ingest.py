@@ -8,13 +8,12 @@ import json
 from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import update_frontmatter
 ingest_bp = InSetuExtension('ingest', __name__, title="URL Ingestion", description="Webpage fetching and Markdown conversion.")
 __depends__ = []
 @ingest_bp.worker("ingest_task")
 def _background_ingest(ctx, url, method, **kwargs):
     ctx.jobs.update_progress('Fetching and converting URL content...')
-    extracted = extract_markdown_from_url(url, method)
+    extracted = extract_markdown_from_url(ctx, url, method)
     safe_title = extracted["title"].replace('"', "'")
     return {
         "message": "Ingestion successful.", 
@@ -25,7 +24,7 @@ def _background_ingest(ctx, url, method, **kwargs):
         }
     }
 
-def extract_markdown_from_url(target_url, method="jina"):
+def extract_markdown_from_url(ctx, target_url, method="jina"):
     # Intercept and unwrap Google search redirect links
     parsed_url = urllib.parse.urlparse(target_url)
     if 'google.com' in parsed_url.netloc and parsed_url.path == '/url':
@@ -120,7 +119,7 @@ def extract_markdown_from_url(target_url, method="jina"):
         "imported_at": now_str
     }
     raw_content = f"## Notes\n\n\n---\n\n{clean_markdown}"
-    final_markdown = update_frontmatter(raw_content, yaml_data)
+    final_markdown = ctx.update_frontmatter(raw_content, yaml_data)
 
     return {
         "title": extracted_title,

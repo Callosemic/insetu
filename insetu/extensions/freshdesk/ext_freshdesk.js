@@ -75,8 +75,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
         this.registerGlobalListener('insetu:freshdesk:resolve', window, (e) => this.resolveTicket(e.detail.id));
         this.registerGlobalListener('insetu:freshdesk:ignore', window, (e) => this.ignoreTicket(e.detail.id));
         this.registerGlobalListener('insetu:freshdesk:fetch', window, () => this.fetchTickets());
-        // The SDK automatically cleans up this subscription on unmount
-        this.subscribe(
+        this.bindStore(
             FreshdeskStore,
             state => ({
                 tickets: state.tickets,
@@ -96,16 +95,11 @@ export class InSetuExtFreshdesk extends InSetuElement {
                 contiguousCount: state.contiguousCount || 0,
                 lastFetchedPage: state.lastFetchedPage || 0
             }),
-            (slice) => {
-                Object.assign(this, slice);
-            }
+            { autoFetch: () => this.loadIgnored() }
         );
-        this.loadIgnored();
-    }
-    onWorkspaceLoad(workspaceId) {
-        this.loadIgnored();
     }
     onForceRefresh() {
+        super.onForceRefresh();
         this.fetchTickets();
     }
     _ticketMatchesFilters(t, filterStatus, filterAssignee, myAgentId) {

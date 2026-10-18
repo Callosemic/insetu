@@ -4,6 +4,7 @@ import sys
 from typing import TypedDict
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
+from insetu.core.utils_core import InSetuURI
 
 format_bp = InSetuExtension(
     'format',
@@ -17,7 +18,7 @@ def _background_format_code(ctx, filepath=None, **kwargs):
     ctx.jobs.update_progress("Formatting source code...")
     if not filepath:
         raise ValueError("Filepath is required for code formatting.")
-
+    filepath = str(InSetuURI(filepath))
     abs_path = ctx.resolve_path(filepath, must_exist=True)
     if not abs_path:
         raise FileNotFoundError(f"Target file not found: {filepath}")
@@ -100,28 +101,27 @@ def run_formatter():
         file_list = data.get("files", []) if isinstance(data, dict) else data
         for filepath in file_list:
             if filepath.endswith(".js") and not filepath.endswith(".min.js"):
-                abs_filepath = Path(workspace_root).joinpath(filepath).as_posix()
+                abs_filepath = ctx.resolve_path(filepath, must_exist=True)
                 # Guardrail: Only format files that are inside the current working directory
-                if abs_filepath.startswith(target_dir):
+                if abs_filepath and abs_filepath.startswith(target_dir):
                     js_files.add(abs_filepath)
 
     if not js_files:
         print("✅ No tracked JavaScript files found in the current context manifest.")
         return
-
     formatted_count = 0
-    for filepath in js_files:
-        if os.path.exists(filepath):
-            try:
-                res = _jsbeautifier.beautify_file(filepath, opts)
-                Path(filepath).write_text(res, encoding="utf-8")
-                
-                # Display relative path for cleaner terminal output
-                display_path = filepath.replace(workspace_root + os.sep, "")
-                print(f"  [+] Formatted: {display_path}")
-                formatted_count += 1
-            except Exception as e:
-                print(f"  [!] Failed to format {filepath}: {e}")
+    with ctx.vfs as vfs:
+        for filepath in js_files:
+            if os.path.exists(filepath):
+                try:
+                    res = _jsbeautifier.beautify_file(filepath, opts)
+                    rel_path = os.path.relpath(filepath, workspace_root).replace("\\", "/")
+                    vfs.save(f"vfs://{rel_path}", res)
+                    print(f"  [+] Formatted: {rel_path}")
+                    formatted_count += 1
+                except Exception as e:
+                    print(f"  [!] Failed to format {filepath}: {e}")
+    ctx.sync_vfs_barrier()
 
     print(f"✅ Formatting complete. {formatted_count} files normalized.")
 

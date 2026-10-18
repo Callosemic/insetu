@@ -227,7 +227,7 @@ disconnectedCallback() {
             layout.openWindow({
                 id: 'git:push',
                 component: 'insetu-git-push-projection',
-                label: `Commit & Push: ${repo || ''}`,
+                label: `Commit & Push: ${resolvedRepo || repo || ''}`,
                 icon: 'send',
                 intent: 'highlight',
                 extName: 'git',
@@ -334,15 +334,11 @@ disconnectedCallback() {
         }));
 
         const categories = {};
-        const repoFilteredFiles = diffFiles.filter(f => {
-            if (this.ecosystem.pinnedRepos.has('ALL')) return true;
-            const fileStr = typeof f === 'string' ? f : f.filename;
-            const repoDir = typeof f === 'object' ? f.repo : null;
-            if (repoDir && this.ecosystem.pinnedRepos.has(repoDir)) return true;
-            return Array.from(this.ecosystem.pinnedRepos).some(repo => fileStr.startsWith(repo + '_') || fileStr.includes('_' + repo + '_'));
+        const filteredFiles = this.filterItems(diffFiles, {
+            repoField: 'repo',
+            searchQuery: this.searchQuery,
+            searchFields: f => typeof f === 'string' ? f : `${f.repo || ''} ${f.filename}`
         });
-        const sq = this.searchQuery;
-        const filteredFiles = sq ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredFiles, sq, f => (typeof f === 'string' ? f : `${f.repo || ''} ${f.filename}`)) : repoFilteredFiles;
         filteredFiles.forEach(fileObj => {
             const file = typeof fileObj === 'string' ? fileObj : fileObj.filename;
             const repoDir = typeof fileObj === 'object' ? fileObj.repo : null;
@@ -694,19 +690,19 @@ export class InSetuExtGitCtrl extends InSetuElement {
     }
     async _loadSettings() {
         try {
-            const res = await this.api.get('settings');
-            if (res.ok) {
-                const data = await res.json();
-                const strategies = {};
-                Object.keys(data).forEach(key => {
-                    if (key.startsWith('strategy_')) {
-                        const repo = key.replace('strategy_', '');
-                        strategies[repo] = data[key];
+            const repos = this.ecosystem?.allRepos || AppStore.getState()?.allRepos || [];
+            const strategies = {};
+            await Promise.all(
+                repos.map(async (repo) => {
+                    const res = await this.api.get(`settings?repo=${encodeURIComponent(repo)}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        strategies[repo] = data.pull_strategy || 'rebase';
                     }
-                });
-                this._repoStrategies = strategies;
-                GitStore.setState({ repoStrategies: strategies });
-            }
+                })
+            );
+            this._repoStrategies = strategies;
+            GitStore.setState({ repoStrategies: strategies });
         } catch(e) { console.error("Failed to load extension settings", e); }
     }
     _getPreviewPullAction(repo) {
@@ -1124,7 +1120,7 @@ window.ExtensionRegistry.registerExtension('git', {
                 if (status && status.conflicts && status.conflicts.length > 0) {
                     const firstConflict = status.conflicts[0];
                     if (window.inSetu.vfs && window.inSetu.vfs.viewSourceFile) {
-                        window.inSetu.vfs.viewSourceFile(`${data.repoDir}/${firstConflict}`, true);
+                        window.inSetu.vfs.viewSourceFile(`vfs://${data.repoDir}/${firstConflict}`, true);
                     }
                 }
             }

@@ -29,10 +29,11 @@ export const FavoritesStore = createExtensionStore('Favorites', {
             FavoritesStore.setState({ loading: false });
         }
     },
-    addFavorite: async (targetPath, typeOverride = null) => {
+    addFavorite: async (rawTargetPath, typeOverride = null) => {
+        const targetPath = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(rawTargetPath) : rawTargetPath;
         const isFolder = typeOverride === 'folder' || targetPath.endsWith('/') || !targetPath.includes('.');
         const type = typeOverride || (isFolder ? 'folder' : 'file');
-        const name = targetPath.split('/').pop() || targetPath;
+        const name = targetPath.replace(/\/+$/, '').split('/').pop() || targetPath;
         const tempId = 'temp_' + Date.now();
         const newItem = { 
             id: tempId, 
@@ -75,6 +76,7 @@ export const FavoritesStore = createExtensionStore('Favorites', {
     }
 });
 export class InSetuFavLabel extends InSetuElement {
+    static get extensionName() { return 'favorites'; }
     static properties = { targetPath: { type: String }, _isPinned: { type: Boolean } };
     constructor() { super(); this._isPinned = false; }
     connectedCallback() {
@@ -163,30 +165,17 @@ export class InSetuExtFavorites extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        // InSetuElement SDK automatically tracks and destroys this subscription on unmount
-        this.subscribe(
+        this.bindStore(
             FavoritesStore,
             state => ({ items: state.items || [], loading: !!state.loading }),
-            ({ items, loading }) => {
-                this.items = items;
-                this.loading = loading;
-            }
+            { autoFetch: 'fetchFavorites' }
         );
         this.registerGlobalListener('sutram-sync-complete', window, () => {
             FavoritesStore.getState().fetchFavorites();
         });
-        FavoritesStore.getState().fetchFavorites();
-    }
-    // InSetuElement SDK lifecycle hook for stateless tenant swaps
-    onWorkspaceLoad(workspaceId) {
-        FavoritesStore.getState().fetchFavorites();
     }
 
     onViewActivated() {
-        FavoritesStore.getState().fetchFavorites();
-    }
-
-    onForceRefresh() {
         FavoritesStore.getState().fetchFavorites();
     }
 
@@ -200,7 +189,9 @@ export class InSetuExtFavorites extends InSetuElement {
                 this.vfs.viewAndCopy(item.path);
             }
         } else if (item.type === 'folder') {
-            const parts = item.path.replace(/^vfs:\/\//, '').split('/').filter(p => p);
+            const parsed = this.utils.parseURI(item.path);
+            const relJoined = parsed.repo ? `${parsed.repo}/${parsed.relativePath}` : parsed.relativePath;
+            const parts = (relJoined || '').split('/').filter(Boolean);
             const ws = window.inSetu.utils.getActiveWorkspace();
             const deepPath = parts.length > 0 ? '/' + parts.map(encodeURIComponent).join('/') : '';
             window.location.hash = `#/${encodeURIComponent(ws)}/left/files${deepPath}`;

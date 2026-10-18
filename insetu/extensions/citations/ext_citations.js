@@ -76,13 +76,13 @@ export class InSetuExtCitations extends InSetuElement {
 
         this.allRepos = [];
     }
-
     get currentViewMode() {
-        return this.dataset.subId || 'lib-main';
+        const raw = this.dataset.subId || 'lib-main';
+        return raw.includes(':') ? raw.split(':').pop() : raw;
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(
+        this.bindStore(
             CitationStore,
             state => ({
                 localLibrary: state.localLibrary || [],
@@ -95,9 +95,7 @@ export class InSetuExtCitations extends InSetuElement {
                 editForm: state.editForm || { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' },
                 importingIds: state.importingIds || new Set()
             }),
-            (slice) => {
-                Object.assign(this, slice);
-            }
+            { autoFetch: () => this.loadMainLibrary() }
         );
         this.subscribe(
             AppStore,
@@ -117,26 +115,17 @@ export class InSetuExtCitations extends InSetuElement {
         this.registerGlobalListener('insetu:citations:pin', window, (e) => this._openAttachModal(e.detail.data));
         this.registerGlobalListener('insetu:citations:import', window, (e) => this._importExploreCitation(e.detail.data));
         this.registerGlobalListener('sutram-sync-complete', window, () => this.loadMainLibrary());
-        const cState = CitationStore.getState();
-        this.localLibrary = cState.localLibrary || [];
-        const aState = AppStore.getState();
-        this.pinnedRepos = aState.pinnedRepos || new Set(['ALL']);
-        this.allRepos = aState.allRepos || [];
-        this.loadMainLibrary();
-    }
-    onWorkspaceLoad(workspaceId) {
-        this.loadMainLibrary();
     }
     onViewActivated() {
         this.loadMainLibrary();
     }
     onForceRefresh() {
+        super.onForceRefresh();
         CitationStore.setState({
             reposExpanded: false,
             bucketsExpanded: {}
         });
         this.dispatch('insetu:citations:load-main');
-        this.loadMainLibrary();
     }
 
     disconnectedCallback() {
@@ -425,17 +414,17 @@ export class InSetuExtCitations extends InSetuElement {
         `;
     }
     _renderMain() {
+        const activePins = Array.from(this.pinnedRepos || []);
         const pinnedSet = this.localLibrary.filter(c => {
             const atts = c._attachments || [];
-            const matchesRepo = (() => {
-                if (this.pinnedRepos.has('ALL')) return true;
-                return (this.pinnedRepos.has('ORPHANS') && atts.length === 0) || atts.some(a => this.pinnedRepos.has(a.repo));
-            })();
-            return matchesRepo;
+            if (activePins.includes('ALL')) return true;
+            return (activePins.includes('ORPHANS') && atts.length === 0) || atts.some(a => activePins.includes(a.repo));
         });
-        const filtered = this.mainSearchQuery 
-            ? window.inSetu.utils.fuzzyFilterObjects(pinnedSet, this.mainSearchQuery, c => `${c.title || ''} ${c.id || ''} ${c.author ? c.author.map(a => a.family).join(" ") : ''}`)
-            : pinnedSet;
+        const filtered = this.filterItems(pinnedSet, {
+            pinnedRepos: new Set(['ALL']),
+            searchQuery: this.mainSearchQuery,
+            searchFields: c => [c.title || '', c.id || '', c.author ? c.author.map(a => a.family).join(' ') : ''].join(' ')
+        });
         return html`
             <sutram-toolbar
                 searchPlaceholder="Fuzzy search personal library..."
@@ -691,7 +680,11 @@ export class InSetuExtCitationsModals extends InSetuElement {
     render() {
         if (!this.citationModalOpen) return html``;
         const q = this.citationSearchQuery.trim();
-        const results = q ? window.inSetu.utils.fuzzyFilterObjects(this.citationLibraryCache, q, c => `${c.title || ''} ${c.id || ''}${c.author ? c.author.map(a => a.family).join(" ") : ''}`).slice(0, 30) : [];
+        const results = q ? this.filterItems(this.citationLibraryCache, {
+            pinnedRepos: new Set(['ALL']),
+            searchQuery: q,
+            searchFields: c => [c.title || '', c.id || '', c.author ? c.author.map(a => a.family).join(' ') : ''].join(' ')
+        }).slice(0, 30) : [];
         return html`
             <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Insert Citation" @sutram-modal-closed=${() => CitationStore.setState({ citationModalOpen: false })}>
                 <div slot="body" style="display: contents;">
@@ -747,13 +740,9 @@ export class InSetuExtCitationsModals extends InSetuElement {
         const newBackmatter = "\n\n---\ncitations:\n" + Object.keys(citationsMap).map(k => `  ${k}: "${citationsMap[k]}"\n`).join('') + "---";
         const updatedText = match ? text.replace(match[0], newBackmatter) : text + newBackmatter;
         const linkText = `[@${finalPrettyId}]`;
-
         if (this.editor && this.editor.setEditorContent) this.editor.setEditorContent(updatedText);
         if (this.editor && this.editor.insertTextAtCursor) this.editor.insertTextAtCursor(linkText);
         CitationStore.setState({ citationModalOpen: false });
-        if (window.inSetu.stores.Fs?.getState()?.fileModal?.isFS && window.inSetu.ui?.saveModalFile) {
-            window.inSetu.ui.saveModalFile(true);
-        }
     }
 }
 customElements.define('insetu-ext-citations-modals', InSetuExtCitationsModals);

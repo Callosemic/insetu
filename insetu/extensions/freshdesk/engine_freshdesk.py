@@ -274,7 +274,7 @@ def get_ignored_tickets(ctx):
     """Retrieves a list of ticket IDs that the user has chosen to ignore."""
     try:
         rows = ctx.db.get_all("freshdesk_ignored")
-        return jsonify([r['ticket_id'] for row in rows])
+        return jsonify([row['ticket_id'] for row in rows])
     except Exception:
         return jsonify([])
 @freshdesk_bp.route('tickets/<int:ticket_id>/ignore', methods=['POST'], request_schema=FreshdeskTicketPayload, docstring="Marks a specific ticket as ignored so it no longer appears in the UI.")

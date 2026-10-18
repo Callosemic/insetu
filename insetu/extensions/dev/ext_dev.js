@@ -32,7 +32,7 @@ export class InSetuExtDevDash extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(
+        this.bindStore(
             DevStore,
             state => ({
                 thrashingFiles: state.thrashingFiles || [],
@@ -41,15 +41,14 @@ export class InSetuExtDevDash extends InSetuElement {
                 lastUpdate: state.lastUpdate,
                 forceRefreshTick: state.forceRefreshTick
             }),
-            (slice) => {
-                this.thrashingFiles = slice.thrashingFiles;
-                this.bridgeErrors = slice.bridgeErrors;
-                this.systemErrors = slice.systemErrors;
-                this.lastUpdate = slice.lastUpdate;
-
-                if (slice.forceRefreshTick && slice.forceRefreshTick !== this._lastTick) {
-                    this._lastTick = slice.forceRefreshTick;
-                    this.fetchMetrics();
+            {
+                autoFetch: () => this.fetchMetrics(),
+                equalityFn: (a, b) => {
+                    if (b.forceRefreshTick && b.forceRefreshTick !== this._lastTick) {
+                        this._lastTick = b.forceRefreshTick;
+                        this.fetchMetrics();
+                    }
+                    return this.utils.shallowEqual(a, b);
                 }
             }
         );
@@ -65,19 +64,14 @@ export class InSetuExtDevDash extends InSetuElement {
         this.registerGlobalListener('insetu:vfs-mutated', window, this.utils.debounce((e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
-            const activeTab = window.inSetu.stores.App?.getState()?.activeTab;
-            if (activeTab === 'dev') {
+            const layout = window.Sutram?.stores?.Layout?.getState?.();
+            const isDevVisible = ['left', 'center', 'right'].some(c => (layout?.columns?.[c]?.active || '').startsWith('dev:'));
+            if (isDevVisible) {
                 DevStore.setState({ forceRefreshTick: Date.now() });
             }
         }, 2000));
     }
-    onWorkspaceLoad(workspaceId) {
-        this.fetchMetrics();
-    }
     onViewActivated() {
-        this.fetchMetrics();
-    }
-    onForceRefresh() {
         this.fetchMetrics();
     }
     async fetchMetrics() {
@@ -267,19 +261,14 @@ export class InSetuExtDevLogs extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(
+        this.bindStore(
             DevStore,
-            state => state.backendLogs || '',
-            (backendLogs) => {
-                this.backendLogs = backendLogs;
-                this.requestUpdate();
-            }
+            state => ({ backendLogs: state.backendLogs || '' }),
+            { autoFetch: () => this.fetchLogs() }
         );
     }
 
-    onWorkspaceLoad() { this.fetchLogs(); }
     onViewActivated() { this.fetchLogs(); }
-    onForceRefresh() { this.fetchLogs(); }
     async fetchLogs() {
         this.loading = true;
         try {
@@ -315,7 +304,7 @@ export class InSetuExtDevLogs extends InSetuElement {
             onComplete: async (statusData) => {
                 const targetFile = statusData.artifact?.file;
                 if (targetFile) {
-                    const fetchUrl = `/download/${encodeURIComponent(targetFile)}`;
+                    const fetchUrl = `${window.inSetu.vfs.resolveFileFetchUrl(targetFile, false)}&download=1`;
                     await window.inSetu.vfs.fetchAndDownloadState(targetFile, fetchUrl);
                 } else {
                     alert("✅ Logs generated, but no download payload was returned.");

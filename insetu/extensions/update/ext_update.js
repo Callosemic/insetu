@@ -541,7 +541,7 @@ export class InSetuExtUpdate extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(
+        this.bindStore(
             UpdateStore,
             state => ({
                 targetRepo: state.targetRepo || '',
@@ -573,14 +573,19 @@ export class InSetuExtUpdate extends InSetuElement {
                 latestBuildArtifact: state.latestBuildArtifact || null,
                 isPrerelease: state.isPrerelease || false
             }),
-            (slice) => {
-                const previousRepo = this.targetRepo;
-                Object.assign(this, slice);
-                this.requestUpdate();
-
-                // Fetch status when the selected repo changes
-                if (this.targetRepo && this.targetRepo !== previousRepo) {
-                    UpdateStore.getState().fetchRepoStatus(this.targetRepo);
+            {
+                autoFetch: () => {
+                    if (this.targetRepo) UpdateStore.getState().fetchRepoStatus(this.targetRepo);
+                    UpdateStore.getState().fetchEligibleRepos();
+                    UpdateStore.getState().checkDependencies();
+                },
+                equalityFn: (a, b) => {
+                    const previousRepo = this.targetRepo;
+                    Object.assign(this, b);
+                    if (this.targetRepo && this.targetRepo !== previousRepo) {
+                        UpdateStore.getState().fetchRepoStatus(this.targetRepo);
+                    }
+                    return this.utils.shallowEqual(a, b);
                 }
             }
         );
@@ -596,15 +601,6 @@ export class InSetuExtUpdate extends InSetuElement {
             }
         );
 
-        const appState = AppStore.getState();
-        this.allRepos = appState.allRepos || [];
-        if (!this.targetRepo && this.allRepos.length > 0) {
-            UpdateStore.setState({ targetRepo: this.allRepos[0] });
-        } else if (this.targetRepo) {
-            UpdateStore.getState().fetchRepoStatus(this.targetRepo);
-        }
-        UpdateStore.getState().checkDependencies();
-        UpdateStore.getState().fetchEligibleRepos();
         this.registerGlobalListener('insetu:git:diffs-refreshed', window, () => {
             if (this.targetRepo) {
                 UpdateStore.getState().fetchRepoStatus(this.targetRepo, true);
@@ -625,20 +621,7 @@ export class InSetuExtUpdate extends InSetuElement {
             }
         });
     }
-    onWorkspaceLoad(workspaceId) {
-        if (this.targetRepo) {
-            UpdateStore.getState().fetchRepoStatus(this.targetRepo);
-        }
-        UpdateStore.getState().fetchEligibleRepos();
-    }
     onViewActivated() {
-        if (this.targetRepo) {
-            UpdateStore.getState().fetchRepoStatus(this.targetRepo);
-        }
-        UpdateStore.getState().fetchEligibleRepos();
-        UpdateStore.getState().checkDependencies();
-    }
-    onForceRefresh() {
         if (this.targetRepo) {
             UpdateStore.getState().fetchRepoStatus(this.targetRepo);
         }

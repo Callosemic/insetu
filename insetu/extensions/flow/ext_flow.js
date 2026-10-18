@@ -4,17 +4,16 @@ import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
 const AppStore = window.inSetu.stores.App;
-
 export function canonicalizeFlowUri(uri) {
     if (!uri) return '';
     let s = String(uri).replace(/\\/g, '/').trim();
-    if (s.startsWith('vfs://') || s.startsWith('ctx://')) return s;
+    if (s.startsWith('vfs://') || s.startsWith('ctx://') || s.startsWith('ws://')) return s;
     while (s.includes('://')) {
         s = s.split('://').pop();
     }
     if (uri.includes('diffs/') || s.endsWith('_diffs.txt')) return `ctx://diffs/${s.replace(/^diffs\//, '')}`;
     if (uri.includes('workflows/') || s.endsWith('_workflow_context.txt') || (s.startsWith('workflow_') && s.endsWith('_context.txt'))) {
-        return `ctx://workflows/${s.replace(/^workflows\//, '')}`;
+        return `ctx://workflows/${s.replace(/^workflows\//, '').replace(/^contexts\//, '')}`;
     }
     if (uri.includes('prompts/')) return `ctx://prompts/${s.replace(/^prompts\//, '')}`;
     if (s.endsWith('_context.txt')) return `ctx://contexts/${s.replace(/^contexts\//, '')}`;
@@ -123,9 +122,8 @@ export class InSetuExtFlow extends InSetuElement {
                 const itemRepos = meta.repos || (meta.repo ? [meta.repo] : []);
                 itemRepos.forEach(r => repos.add(r));
             } else {
-                // Ensure pure extraction of the volume mount/repo directory string from the VFS payload
-                const cleanUri = uri.replace('vfs://', '').split('/')[0];
-                if (cleanUri) repos.add(cleanUri);
+                const parsedRepo = this.utils.parseURI(uri).repo;
+                if (parsedRepo) repos.add(parsedRepo);
             }
         });
         return Array.from(repos);
@@ -138,25 +136,16 @@ export class InSetuExtFlow extends InSetuElement {
         this._debouncedFetchBatches = this._debouncedFetchBatches || this.utils.debounce(() => {
             FlowStore.getState().fetchBatches();
         }, 500);
-        const fState = FlowStore.getState();
-        this.batches = fState.batches || [];
-        this.loading = fState.loading || false;
-        this.searchQuery = fState.searchQuery || '';
-
-        this.subscribe(
+        this.bindStore(
             FlowStore,
             state => ({
                 batches: state.batches || [],
                 loading: state.loading || false,
                 searchQuery: state.searchQuery || ''
             }),
-            ({ batches, loading, searchQuery }) => {
-                this.batches = batches;
-                this.loading = loading;
-                this.searchQuery = searchQuery;
-                this.requestUpdate();
-            }
+            { autoFetch: 'fetchBatches' }
         );
+
         this.registerGlobalListener('insetu:flow:edit-batch', window, (e) => this.openEditBatchModal(e.detail));
         this.registerGlobalListener('insetu:flow:refresh-prompt', window, () => {
             const vb = FlowStore.getState().viewingBatch;
@@ -198,11 +187,8 @@ export class InSetuExtFlow extends InSetuElement {
         });
         this.registerGlobalListener('insetu:compile-step-complete', window, (e) => {
             if (e.detail?.ext_name === 'flow') {
-                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
-                    window.inSetu.sys.refreshManifest().then(() => {
-                        FlowStore.getState().fetchBatches();
-                    });
-                }
+                this._debouncedManifestRefresh();
+                this._debouncedFetchBatches();
             }
         });
 
@@ -216,22 +202,21 @@ export class InSetuExtFlow extends InSetuElement {
     openEditBatchModal(batch = null) {
         const savedPrompt = batch && batch.include_prompt ? batch.include_prompt : '';
         const gatherOptions = FlowStore.getState().availableOptions || window.inSetu.stores.Gather?.getState()?.gatherOptions || {};
-        const cleanSavedPrompt = savedPrompt.replace(/^ctx:\/\/prompts\//, '').replace(/^\.insetu\/(?:data\/)?prompts\//, '').replace(/^prompts\//, '');
-        const availablePrompts = (gatherOptions.prompts || []).map(p => p.replace(/^ctx:\/\/prompts\//, '').replace(/^\.insetu\/(?:data\/)?prompts\//, '').replace(/^prompts\//, ''));
+        const availablePrompts = gatherOptions.prompts || [];
         const matchedPrompt = (() => {
-            if (cleanSavedPrompt && !availablePrompts.includes(cleanSavedPrompt)) {
-                return availablePrompts.find(p => p.endsWith(cleanSavedPrompt)) || cleanSavedPrompt;
+            if (savedPrompt && !availablePrompts.includes(savedPrompt)) {
+                return availablePrompts.find(p => p.endsWith(savedPrompt.split('/').pop())) || savedPrompt;
             }
-            return cleanSavedPrompt;
+            return savedPrompt;
         })();
 
         const editForm = {
             id: batch ? batch.id : '',
             title: batch ? batch.title : '',
             domain: batch && batch.domain ? batch.domain : 'Workflows',
-            includes: batch && batch.includes ? batch.includes.map(canonicalizeFlowUri) : [],
-            showIfExists: batch && batch.show_if_exists ? batch.show_if_exists.map(canonicalizeFlowUri) : [],
-            showIfMissing: batch && batch.show_if_missing ? batch.show_if_missing.map(canonicalizeFlowUri) : [],
+            includes: batch && batch.includes ? [...batch.includes] : [],
+            showIfExists: batch && batch.show_if_exists ? [...batch.show_if_exists] : [],
+            showIfMissing: batch && batch.show_if_missing ? [...batch.show_if_missing] : [],
             hasPrompt: batch ? !!batch.include_prompt : false,
             prompt: matchedPrompt,
             hasResponse: batch ? !!batch.response_path : false,
@@ -315,16 +300,19 @@ export class InSetuExtFlow extends InSetuElement {
                     }
                 }
 
-                if (this.pinnedRepos.has('ALL')) return true;
-                return Array.from(this.pinnedRepos).some(pr => 
+                const activePins = Array.from(this.pinnedRepos || []);
+                if (activePins.includes('ALL')) return true;
+                return activePins.some(pr => 
                     (b._repos && b._repos.includes(pr)) || 
                     b.id.includes(pr) || 
                     (b.title && b.title.toLowerCase().includes(pr.toLowerCase()))
                 );
             });
-            const filteredBatches = this.searchQuery 
-                ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredBatches, this.searchQuery, b => `${(b._repos || []).join(' ')} ${b.title} ${b.id} ${b.domain}`) 
-                : repoFilteredBatches;
+            const filteredBatches = this.filterItems(repoFilteredBatches, {
+                pinnedRepos: new Set(['ALL']),
+                searchQuery: this.searchQuery,
+                searchFields: b => `${(b._repos || []).join(' ')} ${b.title} ${b.id} ${b.domain}`
+            });
             try {
                 return html`
                     <sutram-toolbar
@@ -541,7 +529,8 @@ export class InSetuFlowViewProjection extends InSetuElement {
                         <div style="display: flex; gap: 10px;">
                             ${(() => {
                                 const prompts = gatherOptions.prompts || [];
-                                const promptPath = prompts.includes(this.viewingBatch.include_prompt) ? this.viewingBatch.include_prompt : (prompts.find(p => p.endsWith(this.viewingBatch.include_prompt)) || `ctx://prompts/${this.viewingBatch.include_prompt.replace(/^ctx:\/\/prompts\//, '')}`);
+                                const rawPrompt = this.viewingBatch.include_prompt;
+                                const promptPath = prompts.includes(rawPrompt) ? rawPrompt : (prompts.find(p => p.endsWith(rawPrompt)) || (rawPrompt.includes('://') ? rawPrompt : `ctx://prompts/${rawPrompt}`));
                                 return html`
                                     <sutram-entity-actions 
                                         ?scrollable=${true}
@@ -729,13 +718,12 @@ export class InSetuFlowEditProjection extends InSetuElement {
         const includes = this.editForm?.includes || [];
         const showIfExists = this.editForm?.showIfExists || [];
         const showIfMissing = this.editForm?.showIfMissing || [];
-
         const renderIncludeRow = (inc, idx, listKey) => {
             const isSystem = inc.startsWith('ctx://');
             const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
             const isMissing = isContextOrDiff && !allFiles.includes(inc);
             const candidate = (listKey === 'includes' && isMissing) ? (() => {
-                const base = inc.split('/').pop().replace(/^ctx:\/\//, '');
+                const base = this.utils.parseURI(inc).filename;
                 return allFiles.find(f => f === `ctx://contexts/${base}` || f === `ctx://diffs/${base}` || f.endsWith(base));
             })() : null;
             const iconName = inc.includes('diffs/') ? "git-pull-request" : (inc.includes('contexts/') ? "package" : (inc.endsWith('/') || (!isSystem && !inc.includes('.')) ? "folder" : "file-text"));
@@ -838,7 +826,7 @@ export class InSetuFlowEditProjection extends InSetuElement {
                     </div>
                     ${this.editForm?.hasPrompt ? html`
                         <div style="display: flex; gap: 8px;">
-                            <sutram-select style="flex: 1;" .value=${this.editForm.prompt} .options=${[{value: '', label: '-- Select a Prompt --'}, ...(gatherOptions.prompts || []).map(p => { const v = p.replace(/^ctx:\/\/prompts\//, '').replace(/^\.insetu\/(?:data\/)?prompts\//, '').replace(/^prompts\//, ''); return {value: v, label: v}; })]} @sutram-input-changed=${(e) => this._updateForm({ prompt: e.detail.value })}></sutram-select>
+                            <sutram-select style="flex: 1;" .value=${this.editForm.prompt} .options=${[{value: '', label: '-- Select a Prompt --'}, ...(gatherOptions.prompts || []).map(p => { const canon = canonicalizeFlowUri(p.includes('://') ? p : `ctx://prompts/${p}`); return {value: canon, label: canon}; })]} @sutram-input-changed=${(e) => this._updateForm({ prompt: e.detail.value })}></sutram-select>
                         </div>
                     ` : ''}
                 </div>
@@ -862,7 +850,7 @@ export class InSetuFlowEditProjection extends InSetuElement {
                     <div slot="body" style="display: contents;">
                         <sutram-input placeholder="Fuzzy search contexts..." .value=${this.contextSearchQuery} @sutram-input-changed=${(e) => FlowStore.setState({ contextSearchQuery: e.detail.value })}></sutram-input>
                         <div style="display: flex; flex-direction: column; gap: 5px; overflow-y: auto; flex: 1;">
-                            ${(this.contextSearchQuery ? this.utils.fuzzyFilterObjects(allFiles, this.contextSearchQuery) : allFiles).map(file => {
+                            ${this.filterItems(allFiles, { pinnedRepos: new Set(['ALL']), searchQuery: this.contextSearchQuery, searchFields: f => String(f) }).map(file => {
                                 const systemUri = file;
                                 const isChecked = this.tempContexts.includes(systemUri);
                                 const isDiff = file.includes('diffs/');
@@ -948,6 +936,7 @@ window.ExtensionRegistry.registerExtension('flow', {
             group: 'edit',
             vfsBound: false,
             order: 10,
+            match: (data) => !data?.is_shared,
             emitEvent: (data) => ({ name: 'insetu:flow:edit-batch', detail: data })
         }
     ],

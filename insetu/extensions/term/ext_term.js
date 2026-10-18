@@ -458,12 +458,13 @@ export class InSetuExtTerm extends InSetuElement {
         return html`
             <link rel="stylesheet" href="/static/extensions/term/vendor/xterm.css" />
             ${this._actionBarVisible ? html`
-                <div style="padding: 4px; background: var(--input-bg); border-bottom: 1px solid var(--border); display: flex; flex-shrink: 0; overflow-x: auto; scrollbar-width: none; gap: 4px; z-index: 10;">
+                <div style="padding: 4px; background: var(--input-bg); border-bottom: 1px solid var(--border); display: flex; flex-shrink: 0; overflow-x: auto; scrollbar-width: none; gap: 4px; z-index: 10; justify-content: space-between; align-items: center;">
                     <sutram-entity-actions
                         ?scrollable=${true}
                         .entityType=${'virtual_keyboard'}
                         .entityData=${{ filepath: 'terminal', term: this, ctrlLatched: this._ctrlLatched, shiftLatched: this._shiftLatched }}>
                     </sutram-entity-actions>
+                    <insetu-projection-window-controls .filepath=${'term'}></insetu-projection-window-controls>
                 </div>
             ` : ''}
             <div id="terminal-container"
@@ -582,6 +583,7 @@ window.ExtensionRegistry.registerExtension('term', {
             icon: "terminal",
             intent: "danger",
             order: 1,
+            allow_popout: true,
             component: "insetu-ext-term"
         },
         {
