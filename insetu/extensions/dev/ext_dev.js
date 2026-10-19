@@ -6,6 +6,7 @@ export const DevStore = createExtensionStore('Dev', {
     bridgeErrors: [],
     systemErrors: [],
     backendLogs: '',
+    memoryTelemetry: null,
     lastUpdate: null,
     forceRefreshTick: 0
 });
@@ -166,14 +167,27 @@ export class InSetuExtDevDash extends InSetuElement {
                                     <yv-icon name="check-circle-2" style="width: 14px; height: 14px;"></yv-icon> No system errors recorded.
                                 </div>
                             ` : this.systemErrors.map(err => html`
-                                <div style="display: flex; flex-direction: column; background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
-                                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                <div style="display: flex; flex-direction: column; background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border); user-select: text;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; flex-wrap: wrap;">
                                         <div style="display: flex; align-items: center; gap: 8px;">
-                                            <span style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-danger); font-weight: bold;">[${err.source}] ${err.error_type}</span>
+                                            <span style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-danger); font-weight: bold;">[${err.source}]${err.error_type}</span>
                                         </div>
-                                        <span style="font-size: 0.75rem; color: var(--text-muted);">${this.utils.formatDate(err.timestamp * 1000)}</span>
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <span style="font-size: 0.75rem; color: var(--text-muted);">${this.utils.formatDate(err.timestamp * 1000)}</span>
+                                            <sutram-btn
+                                                size="sm"
+                                                intent="neutral"
+                                                icon="clipboard"
+                                                label="Copy"
+                                                style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.72rem;"
+                                                @click=${() => {
+                                                    const fullErrText = `[${err.source}] ${err.error_type} (${this.utils.formatDate(err.timestamp * 1000)})\nMessage: ${err.message || ''}${err.payload ? `\n\nPayload:\n${err.payload}` : ''}${err.traceback ? `\n\nTraceback:\n${err.traceback}` : ''}`;
+                                                    this.utils.copyRawText(fullErrText, "📋 Error copied to clipboard!");
+                                                }}>
+                                            </sutram-btn>
+                                        </div>
                                     </div>
-                                    <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); white-space: pre-wrap; background: var(--input-bg); padding: 6px; border-radius: 4px; margin-bottom: 8px;">${err.message}</div>
+                                    <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); white-space: pre-wrap; background: var(--input-bg); padding: 6px; border-radius: 4px; margin-bottom: 8px; user-select: text;">${err.message}</div>
                                     ${(err.traceback || err.payload) ? html`
                                         <sutram-collapsible titleText="🔍 View Details" intent="neutral" style="--title-size: 0.8rem;">
                                             <div style="display: flex; flex-direction: column; gap: 8px;">
@@ -530,6 +544,214 @@ export class InSetuExtDevSql extends InSetuElement {
 }
 customElements.define('insetu-ext-dev-sql', InSetuExtDevSql);
 
+export class InSetuExtDevMemory extends InSetuElement {
+    static get extensionName() { return 'dev'; }
+    static properties = {
+        memoryData: { type: Object },
+        loading: { type: Boolean }
+    };
+    static styles = [
+        sharedStyles,
+        css`
+            :host { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; background: var(--bg); overflow: hidden; container-type: inline-size; }
+            .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+            .stat-card { background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 15px; display: flex; flex-direction: column; gap: 4px; }
+            .stat-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold; letter-spacing: 0.04em; }
+            .stat-value { font-family: var(--font-mono); font-size: 1.15rem; font-weight: bold; color: var(--intent-primary); }
+            .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); }
+            table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); }
+            th { background: var(--bg); color: var(--intent-primary); text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border); white-space: nowrap; }
+            td { padding: 8px 12px; border-bottom: 1px solid var(--border); word-break: break-all; }
+            tr:hover td { background: rgba(255, 255, 255, 0.03); }
+        `
+    ];
+
+    constructor() {
+        super();
+        this.memoryData = DevStore.getState().memoryTelemetry || null;
+        this.loading = false;
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(
+            DevStore,
+            state => state.memoryTelemetry,
+            (memoryTelemetry) => {
+                this.memoryData = memoryTelemetry;
+                this.requestUpdate();
+            }
+        );
+        this.fetchMemory();
+    }
+
+    onViewActivated() { this.fetchMemory(); }
+    onForceRefresh() { this.fetchMemory(); }
+
+    async fetchMemory(action = null) {
+        this.loading = true;
+        try {
+            const res = action
+                ? await this.api.system.post('memory', { action })
+                : await this.api.system.get('memory?t=' + Date.now());
+            if (res.ok) {
+                const data = await res.json();
+                DevStore.setState({ memoryTelemetry: data });
+                if (action === 'trim' && this.ui?.setGlobalStatus) {
+                    this.ui.setGlobalStatus("🧹 Garbage collection & glibc malloc_trim completed", 2500);
+                }
+            }
+        } catch (e) {
+            console.error("Failed to fetch memory telemetry:", e);
+        } finally {
+            this.loading = false;
+        }
+    }
+
+    _formatKbToMb(valStr) {
+        if (!valStr) return 'N/A';
+        const match = String(valStr).match(/(\d+)/);
+        if (!match) return valStr;
+        const mb = (parseInt(match[1], 10) / 1024).toFixed(1);
+        return `${mb} MB`;
+    }
+
+    render() {
+        const proc = this.memoryData?.process || {};
+        const caches = this.memoryData?.caches || {};
+        const threadsList = this.memoryData?.threads || [];
+        const topObjects = this.memoryData?.top_object_types || [];
+        const traceActive = !!this.memoryData?.tracemalloc_active;
+        const traceTop = this.memoryData?.tracemalloc_top || [];
+
+        return html`
+            <sutram-scroll-view>
+                <div style="max-width: 1200px; margin: 0 auto; width: 100%; display: flex; flex-direction: column; gap: 18px; padding-bottom: 24px;">
+                    <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <h3 style="margin: 0; color: var(--text);">Backend Memory & Heap Profiler</h3>
+                            <span style="font-size: 0.85rem; color: var(--text-muted);">Live resident set size (RSS), glibc arena footprint, VFS cache occupancy, and Python GC object tables.</span>
+                        </div>
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                            <sutram-btn size="sm" icon="refresh-cw" label="Refresh" intent="neutral" @click=${() => this.fetchMemory()}></sutram-btn>
+                            <sutram-async-btn size="sm" icon="sparkles" label="GC + Trim Heap" intent="success" .onClick=${() => this.fetchMemory('trim')}></sutram-async-btn>
+                            <sutram-async-btn
+                                size="sm"
+                                icon=${traceActive ? 'square' : 'activity'}
+                                label=${traceActive ? 'Stop Tracemalloc' : 'Start Tracemalloc'}
+                                intent=${traceActive ? 'danger' : 'highlight'}
+                                .onClick=${() => this.fetchMemory(traceActive ? 'tracemalloc_stop' : 'tracemalloc_start')}>
+                            </sutram-async-btn>
+                        </div>
+                    </div>
+
+                    ${this.loading && !this.memoryData ? html`<sutram-spinner text="Inspecting backend heap..."></sutram-spinner>` : ''}
+
+                    <div class="stat-grid">
+                        <div class="stat-card">
+                            <span class="stat-label">Resident RAM (VmRSS)</span>
+                            <span class="stat-value" style="color: var(--intent-success);">${this._formatKbToMb(proc.VmRSS)}</span>
+                            <span style="font-size: 0.72rem; color: var(--text-muted);">Physical memory actively in use</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">Heap / Stack Data (VmData)</span>
+                            <span class="stat-value" style="color: var(--intent-warning);">${this._formatKbToMb(proc.VmData)}</span>
+                            <span style="font-size: 0.72rem; color: var(--text-muted);">Virtual heap + thread stack arenas</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">Active OS Threads</span>
+                            <span class="stat-value">${proc.Threads || 'N/A'}</span>
+                            <span style="font-size: 0.72rem; color: var(--text-muted);">Worker pool + Watchdog + WSGI</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">VFS Read Cache</span>
+                            <span class="stat-value" style="color: var(--intent-highlight);">${caches.vfs_read_cache_mb ?? 0} MB</span>
+                            <span style="font-size: 0.72rem; color: var(--text-muted);">${caches.vfs_read_cache_files ?? 0} files cached in RAM</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">JSON Config Cache</span>
+                            <span class="stat-value">${caches.json_config_cache_kb ?? 0} KB</span>
+                            <span style="font-size: 0.72rem; color: var(--text-muted);">${caches.json_config_cache_files ?? 0} config files</span>
+                        </div>
+                    </div>
+
+                    ${threadsList.length > 0 ? html`
+                        <sutram-collapsible titleText="Active OS Threads Breakdown (${proc.Threads || threadsList.reduce((a, b) => a + b.count, 0)})" intent="neutral" ?open=${true}>
+                            <div class="table-wrap">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Thread Class / Pool Prefix</th>
+                                            <th>Active Count</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${threadsList.map(t => html`
+                                            <tr>
+                                                <td style="font-weight: bold; color: var(--intent-highlight);">${t.group}</td>
+                                                <td>${t.count}</td>
+                                            </tr>
+                                        `)}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </sutram-collapsible>
+                    ` : ''}
+
+                    <sutram-collapsible titleText="Top Python Object Types in GC" intent="primary" ?open=${true}>
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Python Type</th>
+                                        <th>Instance Count</th>
+                                        <th>Shallow Size (MB)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${topObjects.map(obj => html`
+                                        <tr>
+                                            <td style="font-weight: bold; color: var(--intent-primary);">${obj.type}</td>
+                                            <td>${obj.count.toLocaleString()}</td>
+                                            <td>${obj.shallow_mb} MB</td>
+                                        </tr>
+                                    `)}
+                                </tbody>
+                            </table>
+                        </div>
+                    </sutram-collapsible>
+
+                    ${traceActive ? html`
+                        <sutram-collapsible titleText="Tracemalloc Top Line Allocations (Active)" intent="highlight" ?open=${true}>
+                            <div class="table-wrap">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Source File & Line</th>
+                                            <th>Allocations</th>
+                                            <th>Size (MB)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${traceTop.map(row => html`
+                                            <tr>
+                                                <td>${row.location}</td>
+                                                <td>${row.count.toLocaleString()}</td>
+                                                <td style="font-weight: bold; color: var(--intent-highlight);">${row.size_mb} MB</td>
+                                            </tr>
+                                        `)}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </sutram-collapsible>
+                    ` : ''}
+                </div>
+            </sutram-scroll-view>
+        `;
+    }
+}
+customElements.define('insetu-ext-dev-memory', InSetuExtDevMemory);
+
 window.ExtensionRegistry.registerExtension('dev', {
     name: "Developer Tools",
     version: "1.0.0",
@@ -576,6 +798,16 @@ window.ExtensionRegistry.registerExtension('dev', {
             intent: "highlight",
             order: 3,
             component: "insetu-ext-dev-sql"
+        },
+        {
+            slot: "slots:sub-navigation",
+            targetParent: "dev",
+            id: "memory",
+            label: "Memory",
+            icon: "cpu",
+            intent: "warning",
+            order: 4,
+            component: "insetu-ext-dev-memory"
         }
     ],
 });

@@ -327,7 +327,7 @@ export class InSetuExtHooks extends InSetuElement {
 
                     <div>
                         <label style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Command Line Command (THEN)</label>
-                        ${bindStoreInput(HooksStore, 'ruleForm.command', this.ruleForm.command, { placeholder: 'e.g., axnm compile local or npm test' })}
+                        ${bindStoreInput(HooksStore, 'ruleForm.command', this.ruleForm.command, { placeholder: 'e.g., bash ./insetu/scripts/vendor_sutram.sh or pytest' })}
                         <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px;">
                             Executed from workspace root by default. Use explicit <code>~</code> or <code>/</code> for host paths.
                         </span>

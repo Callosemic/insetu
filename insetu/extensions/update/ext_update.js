@@ -589,17 +589,25 @@ export class InSetuExtUpdate extends InSetuElement {
                 }
             }
         );
-        this.subscribe(
-            AppStore,
-            state => state.allRepos || [],
-            (allRepos) => {
-                this.allRepos = allRepos;
-                if (!this.targetRepo && allRepos.length > 0) {
-                    UpdateStore.setState({ targetRepo: allRepos[0] });
-                }
-                this.requestUpdate();
-            }
-        );
+const initRepos = AppStore.getState()?.allRepos || this.ecosystem?.allRepos || [];
+this.allRepos = initRepos;
+if (!UpdateStore.getState().targetRepo && initRepos.length > 0) {
+    this.targetRepo = initRepos[0];
+    UpdateStore.setState({ targetRepo: initRepos[0] });
+    UpdateStore.getState().fetchRepoStatus(initRepos[0]);
+}
+
+this.subscribe(
+    AppStore,
+    state => state.allRepos || [],
+    (allRepos) => {
+        this.allRepos = allRepos;
+        if (!this.targetRepo && allRepos.length > 0) {
+            UpdateStore.setState({ targetRepo: allRepos[0] });
+        }
+        this.requestUpdate();
+    }
+);
 
         this.registerGlobalListener('insetu:git:diffs-refreshed', window, () => {
             if (this.targetRepo) {
@@ -620,8 +628,32 @@ export class InSetuExtUpdate extends InSetuElement {
                 UpdateStore.getState().fetchRepoStatus(this.targetRepo, true);
             }
         });
+        this.registerGlobalListener('insetu-update-settings-changed', window, () => {
+            if (this.targetRepo) {
+                UpdateStore.getState().fetchRepoStatus(this.targetRepo, true);
+            }
+        });
     }
+    onWorkspaceLoad() {
+        const repos = AppStore.getState()?.allRepos || this.ecosystem?.allRepos || [];
+        this.allRepos = repos;
+        const firstRepo = repos[0] || '';
+        UpdateStore.setState({ targetRepo: firstRepo });
+        if (firstRepo) {
+            UpdateStore.getState().fetchRepoStatus(firstRepo);
+        }
+        UpdateStore.getState().fetchEligibleRepos();
+        UpdateStore.getState().checkDependencies();
+    }
+
     onViewActivated() {
+        const repos = AppStore.getState()?.allRepos || this.ecosystem?.allRepos || [];
+        if (repos.length > 0 && this.allRepos.length === 0) {
+            this.allRepos = repos;
+        }
+        if (!this.targetRepo && this.allRepos.length > 0) {
+            UpdateStore.setState({ targetRepo: this.allRepos[0] });
+        }
         if (this.targetRepo) {
             UpdateStore.getState().fetchRepoStatus(this.targetRepo);
         }

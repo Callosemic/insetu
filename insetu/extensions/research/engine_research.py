@@ -379,9 +379,8 @@ def scrape_next_link(ctx, research_job_id=None, job_id=None, **kwargs):
       job_data = conn.execute("SELECT meta_json FROM research_jobs WHERE id=?", (target_id,)).fetchone()
       meta = json.loads(job_data['meta_json']) if job_data and job_data['meta_json'] else {}
       parser_type = meta.get('parser', 'jina')
-
       from insetu.extensions.ingest.engine_ingest import extract_markdown_from_url as _extract_markdown_from_url
-      extracted = _extract_markdown_from_url(target_url, method=parser_type)
+      extracted = _extract_markdown_from_url(ctx, target_url, method=parser_type)
       now_str = datetime.now().isoformat(timespec='seconds')
       conn.execute("UPDATE research_inbox SET raw_markdown=?, title=?, scraped_at=? WHERE id=?", (extracted["clean_markdown"], extracted["title"], now_str, inbox_id))
     except Exception as e:

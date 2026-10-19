@@ -11,7 +11,8 @@ from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from akasa.hooks import hooks
-from akasa.utils import _cwd, load_json_config, save_json_config
+import akasa.utils as _akasa_utils
+from akasa.utils import load_json_config, save_json_config
 from insetu.core.topology.engine_topology import resolve_file_bucket
 
 HOOKS_SCHEMA = {
@@ -136,13 +137,13 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
                 job_category="system_background"
             )
 def _get_approved_hook_ids(ctx) -> set:
-    sys_path = Path(_cwd).joinpath(".insetu", "system.json").as_posix()
+    sys_path = Path(_akasa_utils._cwd).joinpath(".insetu", "system.json").as_posix()
     sys_data = load_json_config(sys_path, {})
     return set(sys_data.get("approved_hooks", {}).get(ctx.workspace_id, []))
 
 def _mark_hook_approved(ctx, rule_id: str, command: str):
     sig = f"{rule_id}:{hashlib.sha256(command.encode('utf-8')).hexdigest()[:16]}"
-    sys_path = Path(_cwd).joinpath(".insetu", "system.json").as_posix()
+    sys_path = Path(_akasa_utils._cwd).joinpath(".insetu", "system.json").as_posix()
     sys_data = load_json_config(sys_path, {})
     approved = set(sys_data.setdefault("approved_hooks", {}).get(ctx.workspace_id, []))
     approved.add(sig)

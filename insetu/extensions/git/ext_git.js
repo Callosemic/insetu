@@ -7,6 +7,7 @@ export const GitStore = createExtensionStore('Git', {
     reposStatus: {},
     currentPushRepo: '',
     currentPushDiffFile: '',
+    currentPushTargets: [],
     pushChangelogs: [],
     gitPushMessage: '',
     activeRepo: '',
@@ -36,7 +37,7 @@ export const GitStore = createExtensionStore('Git', {
     })
 }, {
     onEvict: {
-        'git:push': { currentPushRepo: '', currentPushDiffFile: '', gitPushMessage: '', pushChangelogs: [] },
+        'git:push': { currentPushRepo: '', currentPushDiffFile: '', currentPushTargets: [], gitPushMessage: '', pushChangelogs: [] },
         'git:preview': { runtimeStrategy: 'rebase' }
     }
 });
@@ -204,21 +205,41 @@ disconnectedCallback() {
     onForceRefresh() {
         generateDiffs(true);
     }
+    _resolveDiffRepo(diffFile, explicitRepo = '') {
+        if (explicitRepo) return explicitRepo;
+        if (!diffFile) return '';
+        const manifestObj = AppStore.getState().manifest?.ctx?.[diffFile];
+        if (manifestObj?.meta?.repo) return manifestObj.meta.repo;
+        const allRepos = AppStore.getState().allRepos || [];
+        const base = diffFile.split('/').pop().replace('_diffs.txt', '');
+        return allRepos.find(r => r.replace(/-/g, '_').toLowerCase() === base.toLowerCase() || base.toLowerCase().startsWith(r.replace(/-/g, '_').toLowerCase() + '_')) || '';
+    }
+
     async _handleOpenPush(e) {
-        const { diffFile, repo } = e.detail;
-        let resolvedRepo = repo;
-        if (!resolvedRepo && diffFile) {
-            const manifestObj = AppStore.getState().manifest?.ctx?.[diffFile];
-            resolvedRepo = manifestObj?.meta?.repo || '';
-            if (!resolvedRepo) {
-                const allRepos = AppStore.getState().allRepos || [];
-                const base = diffFile.split('/').pop().replace('_diffs.txt', '');
-                resolvedRepo = allRepos.find(r => r.replace(/-/g, '_').toLowerCase() === base.toLowerCase() || base.toLowerCase().startsWith(r.replace(/-/g, '_').toLowerCase() + '_')) || '';
+        const { diffFile, repo, targets } = e.detail || {};
+        let resolvedTargets = [];
+        if (Array.isArray(targets) && targets.length > 0) {
+            resolvedTargets = targets.map(t => ({
+                diff_file: t.diff_file || t.filepath,
+                repo: this._resolveDiffRepo(t.diff_file || t.filepath, t.repo || t.repoDir)
+            })).filter(t => t.repo);
+        } else {
+            const singleRepo = this._resolveDiffRepo(diffFile, repo);
+            if (singleRepo) {
+                resolvedTargets = [{ repo: singleRepo, diff_file: diffFile }];
             }
         }
+
+        const uniqueRepos = Array.from(new Set(resolvedTargets.map(t => t.repo)));
+        const resolvedRepo = uniqueRepos[0] || '';
+        const winLabel = resolvedTargets.length > 1
+            ? `Bulk Commit & Push (${resolvedTargets.length} diffs in ${uniqueRepos.join(', ')})`
+            : `Commit & Push: ${resolvedRepo || repo || ''}`;
+
         GitStore.setState({
-            currentPushDiffFile: diffFile,
+            currentPushDiffFile: diffFile || (resolvedTargets[0]?.diff_file || ''),
             currentPushRepo: resolvedRepo,
+            currentPushTargets: resolvedTargets,
             gitPushMessage: '',
             pushChangelogs: []
         });
@@ -227,7 +248,7 @@ disconnectedCallback() {
             layout.openWindow({
                 id: 'git:push',
                 component: 'insetu-git-push-projection',
-                label: `Commit & Push: ${resolvedRepo || repo || ''}`,
+                label: winLabel,
                 icon: 'send',
                 intent: 'highlight',
                 extName: 'git',
@@ -235,15 +256,21 @@ disconnectedCallback() {
             }, layout.focusedColumn || 'center', 1);
         }
         try {
-            const res = await this.api.get(`changelogs?repo=${encodeURIComponent(resolvedRepo || '')}&t=${Date.now()}`);
-            if (res.ok) {
-                const data = await res.json();
-                if (data.changelogs && data.changelogs.length > 0) {
-                    GitStore.setState({
-                        pushChangelogs: data.changelogs,
-                        gitPushMessage: data.changelogs[0].title
-                    });
+            const allChangelogs = [];
+            for (const r of uniqueRepos) {
+                const res = await this.api.get(`changelogs?repo=${encodeURIComponent(r)}&t=${Date.now()}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (Array.isArray(data.changelogs)) {
+                        allChangelogs.push(...data.changelogs);
+                    }
                 }
+            }
+            if (allChangelogs.length > 0) {
+                GitStore.setState({
+                    pushChangelogs: allChangelogs,
+                    gitPushMessage: allChangelogs[0].title
+                });
             }
         } catch (err) {
             console.error("Failed to load changelogs.");
@@ -507,12 +534,12 @@ disconnectedCallback() {
     }
 }
 customElements.define('insetu-ext-git-diffs', InSetuExtGitDiffs);
-
 export class InSetuGitPushProjection extends InSetuElement {
     static get extensionName() { return 'git'; }
     static properties = {
         currentPushRepo: { type: String },
         currentPushDiffFile: { type: String },
+        currentPushTargets: { type: Array },
         pushChangelogs: { type: Array },
         gitPushMessage: { type: String }
     };
@@ -524,6 +551,7 @@ export class InSetuGitPushProjection extends InSetuElement {
         const st = GitStore.getState();
         this.currentPushRepo = st.currentPushRepo || '';
         this.currentPushDiffFile = st.currentPushDiffFile || '';
+        this.currentPushTargets = st.currentPushTargets || [];
         this.pushChangelogs = st.pushChangelogs || [];
         this.gitPushMessage = st.gitPushMessage || '';
     }
@@ -534,12 +562,14 @@ export class InSetuGitPushProjection extends InSetuElement {
             state => ({
                 currentPushRepo: state.currentPushRepo || '',
                 currentPushDiffFile: state.currentPushDiffFile || '',
+                currentPushTargets: state.currentPushTargets || [],
                 pushChangelogs: state.pushChangelogs || [],
                 gitPushMessage: state.gitPushMessage || ''
             }),
             (slice) => {
                 this.currentPushRepo = slice.currentPushRepo;
                 this.currentPushDiffFile = slice.currentPushDiffFile;
+                this.currentPushTargets = slice.currentPushTargets;
                 this.pushChangelogs = slice.pushChangelogs;
                 this.gitPushMessage = slice.gitPushMessage;
                 this.requestUpdate();
@@ -547,22 +577,28 @@ export class InSetuGitPushProjection extends InSetuElement {
         );
     }
     _getPushAction() {
-        let pushedRepo = '';
+        let pushedLabel = '';
         return this.api.bindJobAction('push', () => {
             const msg = (this.gitPushMessage || '').trim();
             const repo = (this.currentPushRepo || '').trim();
             const diffFile = this.currentPushDiffFile || '';
+            const targets = Array.isArray(this.currentPushTargets) && this.currentPushTargets.length > 0
+                ? this.currentPushTargets
+                : (repo ? [{ repo, diff_file: diffFile }] : []);
             if (!msg) throw new Error("Please enter a commit message.");
-            if (!repo) throw new Error("Repository context missing.");
-            pushedRepo = repo;
+            if (targets.length === 0) throw new Error("Repository context missing.");
+            pushedLabel = Array.from(new Set(targets.map(t => t.repo))).join(', ');
             if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('git:push');
-            return { repo, message: msg, diff_file: diffFile };
+            if (window.inSetu?.stores?.Selection) {
+                window.inSetu.stores.Selection.getState().clearSelection();
+            }
+            return { repo: targets[0].repo, message: msg, diff_file: targets[0].diff_file, targets };
         }, {
             onProgress: (progressMsg) => {
                 if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`${progressMsg || "Pushing to remote..."}`, null);
             },
             onComplete: async (statusData) => {
-                alert(`Successfully pushed ${pushedRepo}!\n\n${statusData.message}`, 'success');
+                alert(`Successfully pushed ${pushedLabel}!\n\n${statusData.message}`, 'success');
             },
             onError: (err) => alert(`Push failed:\n\n${err.message}`, 'danger')
         });
@@ -571,6 +607,16 @@ export class InSetuGitPushProjection extends InSetuElement {
         const selectValue = this.pushChangelogs.some(cl => cl.title === this.gitPushMessage) ? this.gitPushMessage : '';
         return html`
             <sutram-scroll-view padding="15px" style="gap: 12px;">
+                ${this.currentPushTargets && this.currentPushTargets.length > 1 ? html`
+                    <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-size: 0.8rem;">
+                        <div style="font-weight: bold; color: var(--intent-highlight); margin-bottom: 6px;">Selected Diff Buckets (${this.currentPushTargets.length}):</div>
+                        <div style="display: flex; flex-wrap: wrap; gap: 6px; font-family: var(--font-mono);">
+                            ${this.currentPushTargets.map(t => html`
+                                <span style="background: var(--bg); border: 1px solid var(--border); padding: 2px 8px; border-radius: 4px;">[${t.repo}]${(t.diff_file || '').split('/').pop()}</span>
+                            `)}
+                        </div>
+                    </div>
+                ` : ''}
                 <sutram-select 
                     label="Recent Changelogs"
                     .value=${selectValue}
@@ -671,6 +717,9 @@ export class InSetuExtGitCtrl extends InSetuElement {
                 newBranchName: '',
                 branchModalOpen: true
             });
+        });
+        this.registerGlobalListener('insetu-git-settings-changed', window, () => {
+            this._loadSettings();
         });
         this.reposStatus = GitStore.getState().reposStatus || {};
         GitStore.getState().fetchStatus();
@@ -946,14 +995,25 @@ window.ExtensionRegistry.registerExtension('git', {
     entityActions: [
         {
             targetEntity: 'diff',
+            targetEntities: ['diff'],
             id: 'git-push',
+            bulkGroupKey: 'git-push',
             label: 'Push',
+            bulkLabel: (items) => `Commit & Push (${items.length})`,
             icon: 'send',
             intent: 'highlight',
             group: 'share',
             vfsBound: true,
+            bulkable: true,
             order: 10,
-            emitEvent: (data) => ({ name: 'insetu:git:open-push-modal', detail: { diffFile: data.filepath, repo: data.repoDir } })
+            emitEvent: (data) => ({ name: 'insetu:git:open-push-modal', detail: { diffFile: data.filepath, repo: data.repoDir } }),
+            bulkAction: async (items) => {
+                const targets = (items || []).map(item => {
+                    const d = item.data || item;
+                    return { diff_file: d.filepath, repo: d.repoDir };
+                }).filter(t => t.diff_file);
+                window.inSetu.events.emit('insetu:git:open-push-modal', { targets });
+            }
         },
         {
             targetEntity: 'repo',

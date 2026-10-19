@@ -3,7 +3,6 @@ import os
 import inspect
 import subprocess
 import threading
-import concurrent.futures
 import uuid
 import json
 from typing import TypedDict, Optional
@@ -311,7 +310,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     # Store in the shadow cache with thread-safe capacity eviction
                     cache_key = (workspace_id, str(abs_filepath))
                     with _DIFF_FILE_CACHE_LOCK:
-                        if len(_DIFF_FILE_CACHE) > 5000:
+                        if len(_DIFF_FILE_CACHE) > 250:
                             try:
                                 oldest_key = next(iter(_DIFF_FILE_CACHE))
                                 _DIFF_FILE_CACHE.pop(oldest_key, None)
@@ -365,17 +364,14 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
 
         return (local_diff_manifest, local_manifest_deltas, local_modified_diffs)
 
-    # OPTIMIZATION 2: ThreadPoolExecutor processes independent repositories in parallel
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [executor.submit(process_repo, config) for config in live_cfg.get("target_repos", [])]
-        for future in concurrent.futures.as_completed(futures):
-            res = future.result()
-            if res:
-                lm_diff, lm_delta, l_mod = res
-                diff_manifest.extend(lm_diff)
-                manifest_deltas.update(lm_delta)
-                working_manifest.update(lm_delta)
-                truly_modified_diffs.update(l_mod)
+    # OPTIMIZATION 2: Shared Kernel I/O Pool processes independent repositories in parallel
+    for res in ctx.jobs.map_parallel(process_repo, live_cfg.get("target_repos", [])):
+        if res:
+            lm_diff, lm_delta, l_mod = res
+            diff_manifest.extend(lm_diff)
+            manifest_deltas.update(lm_delta)
+            working_manifest.update(lm_delta)
+            truly_modified_diffs.update(l_mod)
     ctx.reconcile_domain(
         domain_uri_prefix="ctx://diffs/",
         manifest_deltas=manifest_deltas,
@@ -531,116 +527,149 @@ def api_git_changelogs(ctx):
 
     return jsonify({"repo": repo, "changelogs": changelogs})
 @git_bp.worker("push_task")
-def _background_git_push(ctx, repo, message, diff_file, **kwargs):
-    ctx.jobs.update_progress(f"Preparing to push {repo}...")
+def _background_git_push(ctx, repo=None, message="", diff_file=None, targets=None, **kwargs):
     ctx.sync_vfs_barrier()
     cfg = ctx.config
-    repo_path = get_repo_path(repo, ctx.workspace_id)
-    if not os.path.exists(repo_path): 
-        raise ValueError("Repo not found")
-    files_to_stage = set()
-    repo_cfg = next((c for c in cfg.get("target_repos", []) if c.get("repo_dir") == repo), None)
-    sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []
-    safe_r_dir = get_safe_repo_id(repo)
-    target_diff_name = InSetuURI(diff_file).basename if diff_file else None
-    # SSOT Enforcement: Query the Git tree directly rather than parsing diff artifacts
-    status_res = execute_git(repo_path, ['status', '--porcelain', '-uall'], check=False)
-    git_root_res = execute_git(str(repo_path), ['rev-parse', '--show-toplevel'], check=False)
-    git_root = Path(git_root_res.stdout.strip()).resolve() if git_root_res.returncode == 0 else Path(repo_path).resolve()
-    resolved_repo_path = Path(repo_path).resolve()
-    for line in status_res.stdout.splitlines():
-        if len(line) >= 3:
-            filepath = line[3:].strip().strip('"')
-            if '->' in filepath: 
-                filepath = filepath.split('->')[-1].strip().strip('"')
-            if filepath.endswith('_diffs.txt'): continue
 
-            abs_filepath = git_root / filepath
-            try:
-                rel_to_repo = abs_filepath.relative_to(resolved_repo_path).as_posix()
-            except ValueError:
-                rel_to_repo = filepath
+    # Normalize single vs bulk targets into a mapping of repo -> set(target_diff_basenames)
+    repo_diff_map = {}
+    if targets and isinstance(targets, list):
+        for t in targets:
+            if not isinstance(t, dict):
+                continue
+            r = t.get("repo")
+            df = t.get("diff_file")
+            if not r:
+                continue
+            repo_diff_map.setdefault(r, set())
+            if df:
+                repo_diff_map[r].add(InSetuURI(df).basename)
+    elif repo:
+        repo_diff_map[repo] = {InSetuURI(diff_file).basename} if diff_file else set()
 
-            if target_diff_name:
-                if sub_buckets:
-                    b, module = resolve_file_bucket(rel_to_repo, sub_buckets, repo_dir=repo)
-                    if b and module:
-                        b_id = f"ctx://diffs/{module}_diffs.txt"
-                    elif b:
-                        b_id = f"ctx://diffs/{safe_r_dir}_{b.get('id', 'bucket')}_diffs.txt"
+    if not repo_diff_map:
+        raise ValueError("No target repository specified for push.")
+
+    map_repositories(ctx.workspace_id)
+    outputs = []
+
+    for curr_repo, target_diff_names in repo_diff_map.items():
+        ctx.jobs.update_progress(f"Preparing to push {curr_repo}...")
+        repo_path = get_repo_path(curr_repo, ctx.workspace_id)
+        if not os.path.exists(repo_path):
+            raise ValueError(f"Repo not found: {curr_repo}")
+
+        files_to_stage = set()
+        repo_cfg = next((c for c in cfg.get("target_repos", []) if c.get("repo_dir") == curr_repo), None)
+        sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []
+        safe_r_dir = get_safe_repo_id(curr_repo)
+
+        status_res = execute_git(repo_path, ['status', '--porcelain', '-uall'], check=False)
+        git_root_res = execute_git(str(repo_path), ['rev-parse', '--show-toplevel'], check=False)
+        git_root = Path(git_root_res.stdout.strip()).resolve() if git_root_res.returncode == 0 else Path(repo_path).resolve()
+        resolved_repo_path = Path(repo_path).resolve()
+
+        for line in status_res.stdout.splitlines():
+            if len(line) >= 3:
+                filepath = line[3:].strip().strip('"')
+                if '->' in filepath:
+                    filepath = filepath.split('->')[-1].strip().strip('"')
+                if filepath.endswith('_diffs.txt'):
+                    continue
+
+                abs_filepath = git_root / filepath
+                try:
+                    rel_to_repo = abs_filepath.relative_to(resolved_repo_path).as_posix()
+                except ValueError:
+                    rel_to_repo = filepath
+
+                if target_diff_names:
+                    if sub_buckets:
+                        b, module = resolve_file_bucket(rel_to_repo, sub_buckets, repo_dir=curr_repo)
+                        if b and module:
+                            b_id = f"ctx://diffs/{module}_diffs.txt"
+                        elif b:
+                            b_id = f"ctx://diffs/{safe_r_dir}_{b.get('id', 'bucket')}_diffs.txt"
+                        else:
+                            b_id = f"ctx://diffs/{safe_r_dir}_diffs.txt"
                     else:
                         b_id = f"ctx://diffs/{safe_r_dir}_diffs.txt"
+
+                    if InSetuURI(b_id).basename in target_diff_names:
+                        files_to_stage.add(rel_to_repo)
                 else:
-                    b_id = f"ctx://diffs/{safe_r_dir}_diffs.txt"
-
-                # Only stage the file if it maps to the exact bucket the user clicked
-                if InSetuURI(b_id).basename == target_diff_name:
                     files_to_stage.add(rel_to_repo)
-            else:
-                # Fallback to sweeping the whole repo if no specific diff bucket was targeted
-                files_to_stage.add(rel_to_repo)
-    if not files_to_stage:
-        raise ValueError("No files found to commit. Working tree is clean.")
-    # Pre-flight check: verify a remote actually exists before attempting to push
-    remote_check = execute_git(repo_path, ['remote'], check=False)
-    if not remote_check.stdout.strip():
-        raise ValueError(f"No remote configured for '{repo}'. Please add a remote (e.g., 'git remote add origin <url>') via the terminal first.")
-    try:
-        map_repositories(ctx.workspace_id)
 
-        ctx.jobs.update_progress(f"Committing and pushing {repo}...")
-        execute_git(repo_path, ['add', '-A', '--'] + list(files_to_stage))
+        if not files_to_stage:
+            continue
 
-        committed = False
-        staged_res = execute_git(repo_path, ['diff', '--cached', '--name-only'], check=False)
-        if staged_res.stdout.strip():
-            execute_git(repo_path, ['commit', '-m', message])
-            committed = True
+        remote_check = execute_git(repo_path, ['remote'], check=False)
+        if not remote_check.stdout.strip():
+            raise ValueError(f"No remote configured for '{curr_repo}'. Please add a remote (e.g., 'git remote add origin <url>') via the terminal first.")
+
         try:
-            push_res = execute_git(repo_path, ['push'])
-            output = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
+            ctx.jobs.update_progress(f"Committing and pushing {curr_repo} ({len(files_to_stage)} file(s))...")
+            execute_git(repo_path, ['add', '-A', '--'] + list(files_to_stage))
+
+            committed = False
+            staged_res = execute_git(repo_path, ['diff', '--cached', '--name-only'], check=False)
+            if staged_res.stdout.strip():
+                execute_git(repo_path, ['commit', '-m', message])
+                committed = True
+            try:
+                push_res = execute_git(repo_path, ['push'])
+                out = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
+            except subprocess.CalledProcessError as e:
+                err_out = e.stderr or e.stdout
+                err_str = err_out.decode('utf-8', errors='replace') if isinstance(err_out, bytes) else (err_out or str(e))
+
+                if "non-fast-forward" in err_str or "fetch first" in err_str or "Updates were rejected" in err_str:
+                    raise RuntimeError(f"Push rejected in '{curr_repo}': The remote branch has changes you don't have locally. Please pull first.")
+                elif "has no upstream branch" in err_str or "set-upstream" in err_str or "setUpstream" in err_str:
+                    curr_branch = execute_git(repo_path, ['branch', '--show-current'], check=False).stdout.strip()
+                    if curr_branch:
+                        push_res = execute_git(repo_path, ['push', '-u', 'origin', curr_branch])
+                        out = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
+                    else:
+                        raise RuntimeError(f"Cannot set upstream in '{curr_repo}': repository is in detached HEAD state.")
+                else:
+                    raise e
+            outputs.append(f"[{curr_repo}] {out.strip()}")
         except subprocess.CalledProcessError as e:
             err_out = e.stderr or e.stdout
-            err_str = err_out.decode('utf-8', errors='replace') if isinstance(err_out, bytes) else (err_out or str(e))
-
-            if "non-fast-forward" in err_str or "fetch first" in err_str or "Updates were rejected" in err_str:
-                raise RuntimeError(f"Push rejected: The remote branch has changes you don't have locally. Please pull first.")
-            elif "has no upstream branch" in err_str or "set-upstream" in err_str or "setUpstream" in err_str:
-                curr_branch = execute_git(repo_path, ['branch', '--show-current'], check=False).stdout.strip()
-                if curr_branch:
-                    push_res = execute_git(repo_path, ['push', '-u', 'origin', curr_branch])
-                    output = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
-                else:
-                    raise RuntimeError("Cannot set upstream: repository is in detached HEAD state.")
+            err_out = err_out.decode('utf-8', errors='replace') if isinstance(err_out, bytes) else (err_out or str(e))
+            if 'committed' in locals() and committed and hasattr(e, 'cmd') and 'push' in e.cmd:
+                raise RuntimeError(f"Local commit succeeded in '{curr_repo}', but pushing to remote failed.\n\nError: {err_out}")
             else:
-                raise e
+                raise RuntimeError(err_out)
 
-        return {"message": output.strip(), "artifact": {"git_state_mutated": True}}
-    except subprocess.CalledProcessError as e:
-        err_out = e.stderr or e.stdout
-        err_out = err_out.decode('utf-8', errors='replace') if isinstance(err_out, bytes) else (err_out or str(e))
+    if not outputs:
+        raise ValueError("No files found to commit across selected diff buckets. Working tree is clean.")
 
-        if 'committed' in locals() and committed and hasattr(e, 'cmd') and 'push' in e.cmd:
-            raise RuntimeError(f"Local commit succeeded, but pushing to remote failed.\n\nError: {err_out}")
-        else:
-            raise RuntimeError(err_out)
+    return {"message": "\n\n".join(outputs), "artifact": {"git_state_mutated": True}}
+
+
 class GitPushPayload(TypedDict, total=False):
     repo: str
     message: str
     diff_file: Optional[str]
-@git_bp.route('push', methods=['POST'], request_schema=GitPushPayload, docstring="Commits and pushes staged changes to the remote repository. Requires 'repo' and commit 'message'.")
+    targets: Optional[list]
+@git_bp.route('push', methods=['POST'], request_schema=GitPushPayload, docstring="Commits and pushes staged changes for one or more diff buckets/repositories. Requires commit 'message' and either 'repo' or 'targets'.")
 def api_git_push(ctx):
-    """Commits and pushes staged changes to the remote repository. Requires 'repo' and commit 'message'."""
-    data = ctx.req.json
+    """Commits and pushes staged changes to the remote repository. Supports single or bulk diff targets."""
+    data = ctx.req.json or {}
     repo = data.get('repo')
+    targets = data['targets'] if 'targets' in data else None
     message = data.get('message')
-    if not repo or not message: return jsonify({"error": "Repo and message required"}), 400
+    if (not repo and not targets) or not message:
+        return jsonify({"error": "Repo (or targets) and message required"}), 400
 
     job_id = ctx.jobs.submit(
         "push_task", 
         repo=repo, 
         message=message, 
         diff_file=data.get('diff_file'),
+        targets=targets,
         job_category="ui_blocking"
     )
     return jsonify({"status": "accepted", "job_id": job_id}), 202

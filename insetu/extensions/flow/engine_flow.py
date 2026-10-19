@@ -38,7 +38,8 @@ def _discover_mounted_batches(ctx) -> list:
                 b_copy["is_shared"] = True
                 b_copy["source_workspace"] = target_ws
                 if b_copy.get("include_prompt") and not str(b_copy["include_prompt"]).startswith("ws://"):
-                    p_uri = InSetuURI(str(b_copy["include_prompt"]))
+                    canon_prompt = InSetuURI.canonicalize(b_copy["include_prompt"], default_prefix="ctx://prompts/")
+                    p_uri = InSetuURI(canon_prompt)
                     b_copy["include_prompt"] = f"ws://{target_ws}/prompts/{p_uri.path}"
                 mounted_batches.append(b_copy)
         except Exception:
@@ -352,13 +353,13 @@ def handle_flow_pre_save(workspace_id=None, filepath=None, content=None, data=No
             basename = Path(original_response_path).name
             prefix = basename.split("{date}")[0]
             logical_target_dir = str(InSetuURI(filepath).parent).rstrip('/')
-
+            archive_uri = InSetuURI(InSetuURI.canonicalize(archive_path))
             for walk_path in ctx.vfs.walk(logical_target_dir):
-                # Ensure we only check immediate children, not deep recursion
-                if Path(walk_path).parent.as_posix() == logical_target_dir or (not logical_target_dir and '/' not in walk_path):
-                    f_name = Path(walk_path).name
+                walk_uri = InSetuURI(walk_path)
+                if str(walk_uri.parent).rstrip('/') == logical_target_dir:
+                    f_name = walk_uri.basename
                     if f_name.startswith(prefix):
-                        dest_path = Path(archive_path).joinpath(f_name).as_posix()
+                        dest_path = str(archive_uri.join(f_name))
 
                         content = ctx.vfs.read(walk_path)
                         if content is not None:

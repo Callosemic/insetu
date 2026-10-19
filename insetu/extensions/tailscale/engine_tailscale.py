@@ -1,4 +1,6 @@
 import os
+import json
+import shutil
 import subprocess
 from typing import TypedDict
 from flask import jsonify
@@ -8,12 +10,42 @@ from akasa.extension import SettingsManager
 from akasa.hooks import hooks
 
 __depends__ = []
-def _execute_serve_bind(workspace_id="default"):
+
+
+def _get_tailscale_backend_state(env=None) -> str:
+    """Checks 'tailscale status --json' to verify the local daemon is actively connected to a Tailnet."""
+    if not shutil.which("tailscale"):
+        return "MissingBinary"
+    try:
+        res = execute_binary(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5, env=env)
+        if res.stdout:
+            data = json.loads(res.stdout)
+            return str(data.get("BackendState") or "Unknown")
+    except Exception:
+        pass
+    return "Unknown"
+
+
+def _execute_serve_bind(workspace_id="default", manual=False):
     """Internal helper to safely trigger Tailscale Serve with dynamic port resolution."""
     ctx = tailscale_bp.get_context(workspace_id)
     sys_port = SettingsManager('system', 'default').get("port", 5005)
     insetu_port = int(os.environ.get("INSETU_PORT", sys_port))
-    
+
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+
+    backend_state = _get_tailscale_backend_state(env=env)
+    if backend_state == "MissingBinary":
+        if manual:
+            raise RuntimeError("Tailscale binary not found in system PATH.")
+        return "Tailscale Serve skipped: 'tailscale' binary not installed."
+
+    if backend_state in ("NoState", "Stopped", "NeedsLogin", "NeedsMachineAuth", "Starting"):
+        if manual:
+            raise RuntimeError(f"Tailscale is not connected (state: {backend_state}). Run 'tailscale up' first.")
+        return f"Tailscale Serve skipped on boot: daemon is not connected (state: {backend_state})."
+
     # Port Mode Resolution: 443 | sync | custom
     mode = str(ctx.settings.get("serve_port_mode", "443"))
     if mode == "sync":
@@ -26,8 +58,6 @@ def _execute_serve_bind(workspace_id="default"):
         except ValueError:
             https_port = 443
 
-    env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"
     # 1. Try non-interactive sudo with an explicit 10-second timeout
     cmd_sudo = ["sudo", "-n", "tailscale", "serve", "--bg", f"--https={https_port}", f"http://127.0.0.1:{insetu_port}"]
     try:
@@ -43,8 +73,13 @@ def _execute_serve_bind(workspace_id="default"):
         res_nosudo = execute_binary(cmd_nosudo, capture_output=True, text=True, timeout=10, env=env)
         if res_nosudo.returncode == 0:
             return f"Successfully bound local port {insetu_port} to Tailscale Serve HTTPS port {https_port}."
-        raise RuntimeError(f"Tailscale Serve failed: {res_nosudo.stderr or res_nosudo.stdout}")
+        err_out = (res_nosudo.stderr or res_nosudo.stdout or "").strip()
+        if not manual and any(s in err_out for s in ("NoState", "Stopped", "NeedsLogin", "not logged in")):
+            return f"Tailscale Serve skipped on boot: {err_out}"
+        raise RuntimeError(f"Tailscale Serve failed: {err_out}")
     except subprocess.TimeoutExpired:
+        if not manual:
+            return "Tailscale Serve skipped on boot: command timed out."
         raise RuntimeError("Tailscale Serve command timed out after 10 seconds.")
 
 
@@ -97,12 +132,10 @@ tailscale_bp = InSetuExtension(
     description="Auto-bind inSetu over Tailscale Serve on boot.",
     settings_schema=TAILSCALE_SETTINGS_SCHEMA
 )
-
-
 @tailscale_bp.worker("bind_serve_task")
-def _background_bind_serve(ctx, **kwargs):
+def _background_bind_serve(ctx, manual=False, **kwargs):
     ctx.jobs.update_progress("Configuring Tailscale Serve binding...")
-    return _execute_serve_bind(ctx.workspace_id)
+    return _execute_serve_bind(ctx.workspace_id, manual=bool(manual))
 @hooks.on('topology_boot_complete')
 def auto_bind_on_workspace_boot(workspace_id=None, **kwargs):
     """Tenant Boot Hook: Evaluates auto-bind preference off-thread when the workspace mounts."""
@@ -114,7 +147,7 @@ def auto_bind_on_workspace_boot(workspace_id=None, **kwargs):
         ctx = tailscale_bp.get_context(workspace_id)
         if ctx.settings.get("auto_bind", True):
             # Dispatch to worker queue with job coalescing to prevent thundering herds
-            ctx.jobs.submit("bind_serve_task", coalesce=True, job_category="system_background")
+            ctx.jobs.submit("bind_serve_task", coalesce=True, job_category="system_background", manual=False)
     except Exception as e:
         print(f"⚠️ [Tailscale] Auto-bind trigger failed for [{workspace_id}]: {e}")
 class TailscaleBindPayload(TypedDict, total=False):
@@ -123,5 +156,5 @@ class TailscaleBindPayload(TypedDict, total=False):
 @tailscale_bp.route('bind', methods=['POST'], request_schema=TailscaleBindPayload, docstring="Manually triggers 'tailscale serve' to expose the local inSetu port to the Tailnet.")
 def api_bind_tailscale(ctx):
     """Manually triggers 'tailscale serve' to expose the local inSetu port to the Tailnet."""
-    job_id = ctx.jobs.submit("bind_serve_task", job_category="ui_blocking")
+    job_id = ctx.jobs.submit("bind_serve_task", job_category="ui_blocking", manual=True)
     return jsonify({"status": "accepted", "job_id": job_id}), 202

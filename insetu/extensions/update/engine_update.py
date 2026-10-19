@@ -140,10 +140,9 @@ def _background_bump_task(ctx, repo, prerelease=False, **kwargs):
     pyproject_content = ctx.vfs.read(logical_pyproject) or ""
     cp_match = re.search(r'^commit_parser\s*=\s*[\'"]([^\'"]*)[\'"]', pyproject_content, re.MULTILINE)
     toml_commit_parser = cp_match.group(1) if cp_match else None
-
     # Environment Variable Injection for Parser Settings
     env = os.environ.copy()
-    parser_style = toml_commit_parser or ctx.settings.get("commit_parser", "conventional", repo=repo)
+    parser_style = ctx.settings.get("commit_parser", None, repo=repo) or toml_commit_parser or "conventional"
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
     auto_publish = bool(ctx.settings.get("auto_publish", False, repo=repo))
@@ -391,9 +390,8 @@ def _background_preview_bump_task(ctx, repo, prerelease=False, **kwargs):
     pyproject_content = ctx.vfs.read(logical_pyproject) or ""
     cp_match = re.search(r'^commit_parser\s*=\s*[\'"]([^\'"]*)[\'"]', pyproject_content, re.MULTILINE)
     toml_commit_parser = cp_match.group(1) if cp_match else None
-
     env = os.environ.copy()
-    parser_style = toml_commit_parser or ctx.settings.get("commit_parser", "conventional", repo=repo)
+    parser_style = ctx.settings.get("commit_parser", None, repo=repo) or toml_commit_parser or "conventional"
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
 
@@ -555,9 +553,8 @@ def _background_status_task(ctx, repo, **kwargs):
             wheels = list(dist_dir.glob("*.whl"))
             if wheels:
                 latest_build_artifact = max(wheels, key=lambda p: p.stat().st_mtime).name
-
     env = os.environ.copy()
-    parser_style = toml_commit_parser or ctx.settings.get("commit_parser", "conventional", repo=repo)
+    parser_style = ctx.settings.get("commit_parser", None, repo=repo) or toml_commit_parser or "conventional"
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
     auto_publish = bool(ctx.settings.get("auto_publish", False, repo=repo))

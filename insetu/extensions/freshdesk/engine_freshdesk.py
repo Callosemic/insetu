@@ -10,8 +10,23 @@ from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 # Declarative schema for settings so users can input credentials via the UI
 FRESHDESK_SETTINGS_SCHEMA = [
-    {"id": "api_key", "label": "Freshdesk API Key", "type": "password", "secure": True, "scope": "workspace", "default": ""},
-    {"id": "domain", "label": "Freshdesk Subdomain", "type": "text", "scope": "workspace", "default": ""}
+    {
+        "id": "api_key",
+        "label": "Freshdesk API Key",
+        "type": "password",
+        "secure": True,
+        "scope": "workspace",
+        "default": "",
+        "description": "Your personal Freshdesk agent API key (encrypted in secrets.json)."
+    },
+    {
+        "id": "domain",
+        "label": "Freshdesk Subdomain",
+        "type": "text",
+        "scope": "workspace",
+        "default": "",
+        "description": "Your Freshdesk subdomain prefix (e.g., 'acme' for acme.freshdesk.com)."
+    }
 ]
 DB_SCHEMA = {
     "freshdesk_ignored": {
@@ -56,6 +71,8 @@ def _merge_time_intervals(intervals):
 freshdesk_bp = InSetuExtension(
     'freshdesk', 
     __name__, 
+    title="Freshdesk Support",
+    description="B2B helpdesk ticket streaming, local thread caching, and agent replies.",
     schema=DB_SCHEMA,
     settings_schema=FRESHDESK_SETTINGS_SCHEMA
 )

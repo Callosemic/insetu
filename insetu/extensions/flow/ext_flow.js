@@ -720,8 +720,9 @@ export class InSetuFlowEditProjection extends InSetuElement {
         const showIfMissing = this.editForm?.showIfMissing || [];
         const renderIncludeRow = (inc, idx, listKey) => {
             const isSystem = inc.startsWith('ctx://');
-            const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
-            const isMissing = isContextOrDiff && !allFiles.includes(inc);
+            const isDiff = inc.startsWith('ctx://diffs/') || inc.includes('diffs/') || inc.endsWith('_diffs.txt');
+            const isContext = (isSystem && !isDiff) || inc.includes('contexts/') || inc.endsWith('_context.txt');
+            const isMissing = isContext && !allFiles.includes(inc);
             const candidate = (listKey === 'includes' && isMissing) ? (() => {
                 const base = this.utils.parseURI(inc).filename;
                 return allFiles.find(f => f === `ctx://contexts/${base}` || f === `ctx://diffs/${base}` || f.endsWith(base));

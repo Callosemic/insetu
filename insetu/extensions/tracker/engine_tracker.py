@@ -137,6 +137,12 @@ TRACKER_SETTINGS_SCHEMA = [
         "scope": "workspace",
         "default": {}
     },
+    {
+        "id": "tracker_is_migrating",
+        "type": "hidden",
+        "scope": "workspace",
+        "default": False
+    },
     {"id": "isolate_context", "label": "Spawn Separate Tracker Context", "type": "boolean", "scope": "workspace", "default": True},
     {"id": "exclude_from_diffs", "label": "Exclude Tracker from Git Diffs (Sends to Sweepable State)", "type": "boolean", "scope": "workspace", "default": True},
     {"id": "include_closed", "label": "Include Closed in Context", "type": "select", "scope": "workspace", "options": [{"value": "grace_period", "label": "Grace Period"}, {"value": "all", "label": "All"}, {"value": "none", "label": "None"}], "default": "grace_period"},

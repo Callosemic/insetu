@@ -85,7 +85,8 @@ export class InSetuFavLabel extends InSetuElement {
             FavoritesStore,
             state => state.items || [],
             (items) => {
-                this._isPinned = items.some(i => i.path === this.targetPath);
+                const normTarget = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(this.targetPath) : this.targetPath;
+                this._isPinned = items.some(i => i.path === normTarget || i.path === this.targetPath);
             }
         );
     }
@@ -119,9 +120,10 @@ export class InSetuFavBtn extends InSetuElement {
         }
     }
     _evaluateState(items) {
-        const targetPath = this.folderpath || this.filepath;
-        if (!targetPath) return;
-        const fav = (items || []).find(i => i.path === targetPath);
+        const rawTarget = this.folderpath || this.filepath;
+        if (!rawTarget) return;
+        const targetPath = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(rawTarget) : rawTarget;
+        const fav = (items || []).find(i => i.path === targetPath || i.path === rawTarget);
         this._isPinned = !!fav;
         this._favId = fav ? fav.id : null;
     }
@@ -257,15 +259,21 @@ window.ExtensionRegistry.registerExtension('favorites', {
             id: 'fave_toggle_repo',
             order: -1,
             group: 'file',
-            label: (data) => html`<insetu-fav-label .targetPath=${data.filepath || data.repoDir}></insetu-fav-label>`,
+            label: (data) => html`<insetu-fav-label .targetPath=${data.filepath || (data.repoDir ? `vfs://${data.repoDir}` : '')}></insetu-fav-label>`,
             icon: 'star',
-            intent: (data) => window.inSetu.stores.Favorites.getState().items.some(i => i.path === (data.filepath || data.repoDir)) ? 'warning' : 'neutral',
-            isActive: (data) => window.inSetu.stores.Favorites.getState().items.some(i => i.path === (data.filepath || data.repoDir)),
-            component: (data) => html`<insetu-fav-btn .filepath=${data.filepath || data.repoDir}></insetu-fav-btn>`,
+            intent: (data) => {
+                const p = data.filepath || (data.repoDir ? `vfs://${data.repoDir}` : '');
+                return window.inSetu.stores.Favorites.getState().items.some(i => i.path === p || i.path === data.repoDir) ? 'warning' : 'neutral';
+            },
+            isActive: (data) => {
+                const p = data.filepath || (data.repoDir ? `vfs://${data.repoDir}` : '');
+                return window.inSetu.stores.Favorites.getState().items.some(i => i.path === p || i.path === data.repoDir);
+            },
+            component: (data) => html`<insetu-fav-btn .filepath=${data.filepath || (data.repoDir ? `vfs://${data.repoDir}` : '')}></insetu-fav-btn>`,
             asyncAction: async (data) => {
-                const path = data.filepath || data.repoDir;
+                const path = data.filepath || (data.repoDir ? `vfs://${data.repoDir}` : '');
                 const store = window.inSetu.stores.Favorites.getState();
-                const fav = store.items.find(i => i.path === path);
+                const fav = store.items.find(i => i.path === path || i.path === data.repoDir);
                 if (fav) await store.removeFavorite(fav.id);
                 else await store.addFavorite(path, 'folder');
             }

@@ -185,9 +185,11 @@ export class InSetuExtSkills extends InSetuElement {
                 }
             }
         );
-
         this.registerGlobalListener('sutram-sync-complete', window, () => {
             this._reloadAll(true);
+        });
+        this.registerGlobalListener('insetu-skills-settings-changed', window, () => {
+            SkillsStore.getState().fetchDomainConfig();
         });
 }
     disconnectedCallback() {

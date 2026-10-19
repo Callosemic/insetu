@@ -547,6 +547,10 @@ constructor() {
         this.registerGlobalListener('sutram-sync-complete', window, () => {
             KanbanStore.getState().fetchTasks();
         });
+        this.registerGlobalListener('insetu-tracker-settings-changed', window, () => {
+            KanbanStore.getState().fetchSettings();
+            KanbanStore.getState().fetchTasks();
+        });
     }
     onViewActivated() {
         KanbanStore.getState().fetchTasks();
