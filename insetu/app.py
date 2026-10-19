@@ -22,6 +22,12 @@ try:
         _resource.setrlimit(_resource.RLIMIT_NOFILE, (target_lim, hard_lim))
 except Exception:
     pass
+# Bound Linux glibc arenas and thread stack size (1MB instead of 8MB) to prevent multi-thread VmData bloat
+os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+try:
+    threading.stack_size(1024 * 1024)
+except Exception:
+    pass
 
 # Enforce host-specific control directory for the Akasa kernel
 os.environ["AKASA_CONTROL_DIR"] = ".insetu"
@@ -98,7 +104,8 @@ def enforce_token_gate():
         return jsonify({"error": "401 Unauthorized: Invalid or missing execution credentials."}), 401
 # --- INSETU EXTENSION ARCHITECTURE ROUTINE ---
 def load_workspace_extensions():
-    from akasa.utils import load_config as _load_config, _cwd as __cwd
+    import akasa.utils as _akasa_utils
+    from akasa.utils import load_config as _load_config
     from akasa.extension import SettingsManager as _SettingsManager
 
     raw_extensions = set()
@@ -112,7 +119,7 @@ def load_workspace_extensions():
     except Exception:
         pass
     # 1. Sweep system.json for a Union of all required extensions globally
-    index_path = Path(__cwd).joinpath(".insetu", "system.json").as_posix()
+    index_path = Path(_akasa_utils._cwd).joinpath(".insetu", "system.json").as_posix()
     if os.path.exists(index_path):
         try:
             with open(index_path, 'r', encoding='utf-8') as f:

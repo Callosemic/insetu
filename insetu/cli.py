@@ -2,7 +2,14 @@ import os
 import sys
 import json
 import shutil
+import threading
 from pathlib import Path
+
+os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+try:
+    threading.stack_size(1024 * 1024)
+except Exception:
+    pass
 
 # Enforce host-specific control directory for the Akasa kernel
 os.environ["AKASA_CONTROL_DIR"] = ".insetu"
