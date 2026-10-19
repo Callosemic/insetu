@@ -17,7 +17,7 @@ from akasa.utils import get_workspace_physics
 from insetu.core.utils_core import get_sister_repos, parse_blocks, InSetuURI
 from insetu.core.topology.engine_topology import get_omniscient_workspace_files
 from akasa.hooks import hooks
-from .bridge_fuzzy import apply_block_in_memory, clean_chevron_meltdown, expand_macros, is_effectively_identical
+from .bridge_fuzzy import apply_block_in_memory, clean_chevron_meltdown, expand_macros, heal_llm_block_artifacts, is_effectively_identical
 def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
     from insetu.core.bridge.engine_bridge import bridge_bp as _bridge_bp
     ctx = _bridge_bp.get_context(workspace_id)
@@ -132,11 +132,10 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             }
             patch_index += 1
             telemetry["summary"]["total_patches"] += 1
-            
-            search_str = expand_macros(b["search"])
-            replace_str = expand_macros(b["replace"])
-            is_genesis = not search_str.strip()
             content = get_file_content(target_file)
+            search_str = heal_llm_block_artifacts(expand_macros(b["search"]), reference_content=content or "")
+            replace_str = heal_llm_block_artifacts(expand_macros(b["replace"]), reference_content=content or "")
+            is_genesis = not search_str.strip()
 
             # --- Chain of Responsibility Pipeline ---
             class ResolutionContext:

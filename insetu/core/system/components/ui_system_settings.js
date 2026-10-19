@@ -6,9 +6,12 @@ export class InSetuSystemSettings extends InSetuElement {
     static properties = {
         menuOpen: { type: Boolean },
         modalOpen: { type: Boolean },
-        manageExtOpen: { type: Boolean },
         docsModalOpen: { type: Boolean },
-        mountsModalOpen: { type: Boolean },
+        _activeView: { type: String },
+        _searchQuery: { type: String },
+        _categoryFilter: { type: String },
+        _extForms: { type: Object },
+        _selectedRepo: { type: String },
         _mountsLoading: { type: Boolean },
         _sharedMounts: { type: Array },
         _exportSharedDomains: { type: Object },
@@ -18,9 +21,7 @@ export class InSetuSystemSettings extends InSetuElement {
         _newExportWildcard: { type: Boolean },
         _newExportAllowed: { type: Array },
         _docsStatus: { type: Array },
-        activeTab: { type: String },
         workspaces: { type: Object },
-        emoji: { type: String },
         currentTheme: { type: String },
         layoutCapacity: { type: Number },
         _sysConfigForm: { type: Object },
@@ -28,24 +29,50 @@ export class InSetuSystemSettings extends InSetuElement {
     };
     static styles = [sharedStyles, css`
         :host { display: flex; align-items: stretch; height: 100%; }
-
+        .hub-breadcrumb-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 20px;
+            background: var(--input-bg);
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 20;
+        }
+        .hub-section-title {
+            font-size: 0.75rem;
+            font-weight: 800;
+            font-family: var(--font-mono);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--intent-primary);
+            margin: 16px 0 8px 0;
+            padding-bottom: 4px;
+            border-bottom: 1px solid color-mix(in srgb, var(--intent-primary) 25%, transparent);
+        }
+        .hub-section-title:first-child {
+            margin-top: 4px;
+        }
     `];
     constructor() {
         super();
         this.menuOpen = false;
         this.modalOpen = false;
-        this.manageExtOpen = false;
         this.docsModalOpen = false;
+        this._activeView = null;
+        this._searchQuery = '';
+        this._categoryFilter = 'ALL';
+        this._extForms = {};
+        this._selectedRepo = '';
         this._docsStatus = null;
-        this.activeTab = 'system';
         this.workspaces = {};
-        this.emoji = '⚙️️';
         this.currentTheme = document.body.getAttribute('data-theme') || 'dark';
         this.layoutCapacity = 3;
         this._sysConfigForm = {};
         this._sysConfigMeta = {};
         this._handleOutsideClick = this._handleOutsideClick.bind(this);
-        this.mountsModalOpen = false;
         this._mountsLoading = false;
         this._sharedMounts = [];
         this._exportSharedDomains = {};
@@ -55,12 +82,11 @@ export class InSetuSystemSettings extends InSetuElement {
         this._newExportWildcard = true;
         this._newExportAllowed = [];
     }
-    async _openMountsModal() {
-        this.mountsModalOpen = true;
+    async _loadMountsData() {
         this._mountsLoading = true;
         this.requestUpdate();
         try {
-            const res = await this.api.workspace.get(`system/settings?t=${Date.now()}`);
+            const res = await this.api.workspace.get('system/settings?t=' + Date.now());
             if (res.ok) {
                 const data = await res.json();
                 this._sharedMounts = Array.isArray(data.shared_mounts) ? [...data.shared_mounts] : [];
@@ -79,7 +105,7 @@ export class InSetuSystemSettings extends InSetuElement {
         if (!targetWs || !domain) return;
         const exists = (this._sharedMounts || []).some(m => m.workspace_id === targetWs && m.domain === domain);
         if (exists) {
-            alert(`Virtual mount for '${targetWs}/${domain}' is already active.`);
+            alert('Virtual mount for ' + targetWs + '/' + domain + ' is already active.');
             return;
         }
         this._sharedMounts = [...(this._sharedMounts || []), { workspace_id: targetWs, domain }];
@@ -112,68 +138,126 @@ export class InSetuSystemSettings extends InSetuElement {
                 export_shared_domains: this._exportSharedDomains || {}
             });
             if (res.ok) {
-                this.mountsModalOpen = false;
+                if (this._extForms?.system) {
+                    this._extForms = {
+                        ...this._extForms,
+                        system: {
+                            ...this._extForms.system,
+                            shared_mounts: this._sharedMounts || [],
+                            export_shared_domains: this._exportSharedDomains || {}
+                        }
+                    };
+                }
+                this._activeView = null;
                 this.setStatus("Mount configurations and sharing permissions saved.", 2500);
                 if (window.inSetu?.stores?.Prompts?.getState()?.fetchPrompts) {
                     window.inSetu.stores.Prompts.getState().fetchPrompts();
                 }
             } else {
                 const err = await res.json().catch(() => ({}));
-                alert(`Failed to save mount settings: ${err.error || res.statusText}`);
+                alert('Failed to save mount settings: ' + (err.error || res.statusText));
             }
         } catch (e) {
-            alert(`Network error: ${e.message}`);
+            alert('Network error: ' + e.message);
         }
     }
-    async _openGenericSettings(extName, filteredSchema = null) {
-        const genericModal = document.getElementById('insetu-generic-settings-root');
-        const schema = filteredSchema || window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas?.[extName];
-        let formData = {};
+    async _fetchExtSettings(extName, repo = '') {
         try {
-            const res = await window.inSetu.api.workspace.get(`${extName}/settings?t=${Date.now()}`);
-            if (res.ok) formData = await res.json();
-        } catch(e) {}
-        if (genericModal) genericModal.openModal(extName, schema, formData);
+            const allRepos = this.ecosystem?.allRepos || [];
+            const targetRepo = repo || this._selectedRepo || allRepos[0] || '';
+            const qs = targetRepo ? ('?repo=' + encodeURIComponent(targetRepo) + '&t=' + Date.now()) : ('?t=' + Date.now());
+            const res = await window.inSetu.api.workspace.get(extName + '/settings' + qs);
+            if (res.ok) {
+                const data = await res.json();
+                this._extForms = { ...this._extForms, [extName]: data };
+                this.requestUpdate();
+            }
+        } catch (e) {}
     }
-    _renderExtensionActions(ext, renderBtn) {
-        const manifest = window.ExtensionRegistry?._manifests?.get(ext.id);
-        const customActions = manifest?.settingsActions || [];
-        const btns = [];
+    async _drillIntoExtension(extName) {
+        const allRepos = this.ecosystem?.allRepos || [];
+        if (!this._selectedRepo && allRepos.length > 0) {
+            this._selectedRepo = allRepos[0];
+        }
+        this._activeView = 'ext:' + extName;
+        await this._fetchExtSettings(extName, this._selectedRepo);
+    }
+    _getCatalogModules() {
+        const allSchemas = { ...window.inSetu.settingsSchemas, ...window.inSetu.serverSchemas, ...(this._sysConfigMeta?.settings_schemas || {}) };
+        const coreList = [];
+        const extList = [];
+        const allExtKeys = new Set([
+            ...Object.keys(allSchemas),
+            ...Array.from(window.ExtensionRegistry?._manifests?.keys() || [])
+        ]);
 
-        let hasCompleteTakeover = false;
-        customActions.forEach(act => {
-            if (act.id === `${ext.id}_generic_settings`) {
-                hasCompleteTakeover = true;
-                btns.push(renderBtn(act.icon || 'settings', act.label || `${ext.title} Base Settings`, act.onClick));
+        const iconMap = {
+            system: 'settings',
+            security: 'shield',
+            llm: 'bot',
+            gather: 'hexagon',
+            editor: 'edit-3',
+            offline: 'hard-drive',
+            git: 'git-branch',
+            preview: 'monitor',
+            tracker: 'check-square',
+            notes: 'file-text',
+            research: 'globe',
+            citations: 'book-open',
+            cronic: 'clock',
+            freshdesk: 'headphones',
+            tailscale: 'radio',
+            update: 'package-check',
+            hooks: 'zap'
+        };
+
+        allExtKeys.forEach(ext => {
+            if (ext === 'core_system' || ext === 'config') return;
+            const rawSchema = allSchemas[ext] || [];
+            const visibleSchema = Array.isArray(rawSchema) ? rawSchema.filter(s => s && s.type !== 'hidden') : [];
+            const manifest = window.ExtensionRegistry?._manifests?.get(ext);
+            const customActions = (manifest?.settingsActions || []).filter(a => !a.id.endsWith('_generic_settings'));
+
+            if (visibleSchema.length === 0 && customActions.length === 0) return;
+            if (!window.inSetu.isCore(ext) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(ext)) {
+                return;
+            }
+
+            const metaEntry = (this._sysConfigMeta?.available_extensions || []).find(a => a.id === ext);
+            const title = manifest?.name || metaEntry?.title || (ext === 'system' ? 'System & Daemon Preferences' : ext.charAt(0).toUpperCase() + ext.slice(1));
+            const description = metaEntry?.description || (visibleSchema[0]?.description || (title + ' configuration and preferences.'));
+            const item = {
+                id: ext,
+                title,
+                description,
+                icon: iconMap[ext] || 'sliders',
+                schema: rawSchema,
+                visibleCount: visibleSchema.length,
+                customActions,
+                isCore: window.inSetu.isCore(ext)
+            };
+
+            if (ext === 'system' || item.isCore) {
+                coreList.push(item);
+            } else {
+                extList.push(item);
             }
         });
 
-        if (!hasCompleteTakeover) {
-            const rawSchema = window.inSetu.serverSchemas?.[ext.id] || window.inSetu.settingsSchemas?.[ext.id] || [];
-
-            const visibleSchema = rawSchema.filter(s => s.type !== 'hidden');
-            const embeddedActions = customActions.filter(act => !act.id.endsWith('_generic_settings'));
-
-            // If there are visible settings OR custom actions to display in the modal, render the Base Settings button
-            if (visibleSchema.length > 0 || embeddedActions.length > 0) {
-                btns.push(renderBtn('settings', `${ext.title} Base Settings`, () => this._openGenericSettings(ext.id, rawSchema)));
-            }
-        }
-
-        return btns;
+        coreList.sort((a, b) => (a.id === 'system' ? -1 : b.id === 'system' ? 1 : a.title.localeCompare(b.title)));
+        extList.sort((a, b) => a.title.localeCompare(b.title));
+        return { coreList, extList };
     }
     connectedCallback() {
         super.connectedCallback();
         this.currentTheme = document.body.getAttribute('data-theme') || localStorage.getItem('insetu_theme') || 'dark';
         const initApp = AppStore.getState();
         this.workspaces = initApp.workspaces || {};
-        this.emoji = initApp.instanceEmoji || '⚙️';
         this.subscribe(
             AppStore,
-            state => ({ workspaces: state.workspaces, emoji: state.instanceEmoji || '⚙️' }),
-            ({ workspaces, emoji }) => {
+            state => state.workspaces,
+            (workspaces) => {
                 this.workspaces = workspaces || {};
-                this.emoji = emoji;
                 this.requestUpdate();
             }
         );
@@ -190,6 +274,18 @@ export class InSetuSystemSettings extends InSetuElement {
         this.registerGlobalListener('click', document, this._handleOutsideClick);
         this.registerGlobalListener('insetu:system:close-settings', window, () => {
             this.modalOpen = false;
+            this._activeView = null;
+        });
+        this.registerGlobalListener('sutram-settings-repo-changed', this, (e) => {
+            const { extName, repo } = e.detail || {};
+            if (extName && repo) {
+                this._selectedRepo = repo;
+                this._fetchExtSettings(extName, repo);
+            }
+        });
+        this.registerGlobalListener('sutram-settings-custom-action', this, () => {
+            this.modalOpen = false;
+            this._activeView = null;
         });
     }
     disconnectedCallback() {
@@ -216,14 +312,24 @@ export class InSetuSystemSettings extends InSetuElement {
         this.menuOpen = false;
     }
     async _openSettings() {
-        this.menuOpen = false; 
+        this.menuOpen = false;
+        this._activeView = null;
+        this._searchQuery = '';
         this.modalOpen = true;
+        const allRepos = this.ecosystem?.allRepos || [];
+        if (!this._selectedRepo && allRepos.length > 0) {
+            this._selectedRepo = allRepos[0];
+        }
         try {
             const res = await window.inSetu.api.workspace.get('system/config?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
                 const data = await res.json();
                 this._sysConfigForm = data.config || {};
                 this._sysConfigMeta = data.meta || {};
+                if (data.meta?.settings_schemas) {
+                    window.inSetu.serverSchemas = { ...(window.inSetu.serverSchemas || {}), ...data.meta.settings_schemas };
+                }
+                this.requestUpdate();
             }
         } catch(e) {}
     }
@@ -290,50 +396,219 @@ export class InSetuSystemSettings extends InSetuElement {
             throw e;
         }
     }
+    _renderMountsDrillDown() {
+        const activeWs = window.inSetu?.utils?.getActiveWorkspace() || 'default';
+        const otherWorkspaces = Object.keys(this.workspaces || {}).filter(w => w !== activeWs);
+        const domainOptions = [
+            { value: 'prompts', label: 'prompts (.insetu/data/prompts)' },
+            { value: 'notes', label: 'notes (.insetu/data/notes)' },
+            { value: 'flow', label: 'flow (.insetu/data/flow)' },
+            { value: '*', label: '* (All Domains)' }
+        ];
+
+        if (this._mountsLoading) {
+            return html`<div style="padding: 20px;"><sutram-spinner text="Loading mount configurations..."></sutram-spinner></div>`;
+        }
+
+        return html`
+            <div style="display: flex; flex-direction: column; gap: 15px;">
+                <sutram-collapsible titleText="Virtual Mounts (Subscriber)" intent="primary" ?open=${true}>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0 0 12px 0;">
+                        External workspace assets mounted read-only into this tenant via <code>ws://</code> URIs.
+                    </p>
+                    <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px;">
+                        <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Mount Remote Domain</span>
+                        ${otherWorkspaces.length === 0 ? html`
+                            <span style="font-size: 0.8rem; color: var(--intent-warning); font-style: italic;">
+                                At least two registered workspaces are required to configure peer-to-peer virtual mounts.
+                            </span>
+                        ` : html`
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+                                <sutram-select 
+                                    label="Source Workspace"
+                                    .value=${this._newMountWs || otherWorkspaces[0]} .options=${otherWorkspaces.map(w => {
+                                        const wsTitle = (this.workspaces && this.workspaces[w] && this.workspaces[w].title) ? this.workspaces[w].title : w;
+                                        return { value: w, label: wsTitle + ' (' + w + ')' };
+                                    })}
+                                    @sutram-input-changed=${(e) => { this._newMountWs = e.detail.value; this.requestUpdate(); }}
+                                    ?flush=${true}>
+                                </sutram-select>
+                                <sutram-select 
+                                    label="Target Domain"
+                                    .value=${this._newMountDomain}
+                                    .options=${domainOptions}
+                                    @sutram-input-changed=${(e) => { this._newMountDomain = e.detail.value; this.requestUpdate(); }}
+                                    ?flush=${true}>
+                                </sutram-select>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+                                <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--intent-highlight);">
+                                    URI: ws://${this._newMountWs || otherWorkspaces[0]}/${this._newMountDomain}/
+                                </span>
+                                <sutram-btn 
+                                    size="sm"
+                                    intent="primary"
+                                    icon="plus"
+                                    label="Add Mount"
+                                    @click=${() => this._addMount(this._newMountWs || otherWorkspaces[0], this._newMountDomain)}>
+                                </sutram-btn>
+                            </div>
+                        `}
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                        ${this._sharedMounts.length === 0 ? html`
+                            <sutram-empty-state text="No external domains mounted in this workspace."></sutram-empty-state>
+                        ` : this._sharedMounts.map((m, idx) => html`
+                            <sutram-card 
+                                .titleText=${'ws://' + m.workspace_id + '/' + m.domain + '/'}
+                                .descriptionText=${'Read-only mount from tenant "' + m.workspace_id + '" • Domain: ' + m.domain}
+                                .detailText=${'Virtual Mount'}
+                                icon="globe"
+                                intent="highlight"
+                                ?disableSelection=${true}>
+                                <div slot="header-actions">
+                                    <sutram-btn size="sm" intent="danger" icon="trash-2" label="Unmount" @click=${(e) => { e.stopPropagation(); this._removeMount(idx); }}></sutram-btn>
+                                </div>
+                            </sutram-card>
+                        `)}
+                    </div>
+                </sutram-collapsible>
+
+                <sutram-collapsible titleText="Exported Domains (Publisher)" intent="neutral" ?open=${true}>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0 0 12px 0;">
+                        Local directories declared accessible to other workspace tenants on this system.
+                    </p>
+                    <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px;">
+                        <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Export Local Domain</span>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+                            <sutram-select 
+                                label="Local Domain"
+                                .value=${this._newExportDomain}
+                                .options=${domainOptions.filter(d => d.value !== '*')}
+                                @sutram-input-changed=${(e) => { this._newExportDomain = e.detail.value; this.requestUpdate(); }}
+                                ?flush=${true}>
+                            </sutram-select>
+                            <div style="display: flex; align-items: center; padding-top: 18px;">
+                                <sutram-toggle 
+                                    label="Authorize All Workspaces (*)"
+                                    .checked=${this._newExportWildcard}
+                                    @sutram-input-changed=${(e) => { this._newExportWildcard = e.detail.value; this.requestUpdate(); }}
+                                    ?flush=${true}>
+                                </sutram-toggle>
+                            </div>
+                        </div>
+                        ${!this._newExportWildcard ? html`
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <span style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">Permitted Subscribers</span>
+                                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                                    ${otherWorkspaces.map(w => {
+                                        const isAllowed = this._newExportAllowed.includes(w);
+                                        const wsLabel = (this.workspaces && this.workspaces[w] && this.workspaces[w].title) ? this.workspaces[w].title : w;
+                                        return html`
+                                            <sutram-pill 
+                                                pillId=${w}
+                                                labelText=${wsLabel + ' (' + w + ')'}
+                                                ?active=${isAllowed}
+                                                @sutram-pill-toggled=${() => {
+                                                    const s = new Set(this._newExportAllowed);
+                                                    s.has(w) ? s.delete(w) : s.add(w);
+                                                    this._newExportAllowed = Array.from(s);
+                                                    this.requestUpdate();
+                                                }}>
+                                            </sutram-pill>
+                                        `;
+                                    })}
+                                </div>
+                            </div>
+                        ` : ''}
+                        <div style="display: flex; justify-content: flex-end; margin-top: 4px;">
+                            <sutram-btn 
+                                size="sm"
+                                intent="primary"
+                                icon="plus"
+                                label="Export Domain"
+                                @click=${() => this._addExport()}>
+                            </sutram-btn>
+                        </div>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                        ${Object.keys(this._exportSharedDomains).length === 0 ? html`
+                            <sutram-empty-state text="No local domains currently exported to peer workspaces."></sutram-empty-state>
+                        ` : Object.entries(this._exportSharedDomains).map(([domain, policy]) => {
+                            const isWildcard = (policy.allowed || []).includes('*');
+                            const allowedSummary = isWildcard ? 'All Workspaces (*)' : ((policy.allowed || []).join(', ') || 'None (Private)');
+                            return html`
+                                <sutram-card 
+                                    .titleText=${domain}
+                                    .descriptionText=${'Access Policy: ' + allowedSummary}
+                                    .detailText=${'Publisher Export'}
+                                    icon="share-2"
+                                    intent="neutral"
+                                    ?disableSelection=${true}>
+                                    <div slot="header-actions">
+                                        <sutram-btn size="sm" intent="danger" icon="trash-2" label="Revoke" @click=${(e) => { e.stopPropagation(); this._revokeExport(domain); }}></sutram-btn>
+                                    </div>
+                                </sutram-card>
+                            `;
+                        })}
+                    </div>
+                </sutram-collapsible>
+            </div>
+        `;
+    }
+
+    _renderManageExtensionsDrillDown() {
+        return html`
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0 0 6px 0;">
+                    Enable or disable optional domain extensions for this workspace ecosystem.
+                </p>
+                ${(this._sysConfigMeta?.available_extensions || []).map(ext => {
+                    const isConfig = ext.id === 'config';
+                    const isChecked = (this._sysConfigForm.extensions || []).includes(ext.id) || isConfig;
+                    return html`
+                        <div style="display: flex; align-items: flex-start; gap: 12px; background: var(--input-bg); padding: 12px 15px; border: 1px solid var(--border); border-radius: 8px;">
+                            <sutram-toggle .checked=${isChecked} ?disabled=${isConfig} @sutram-input-changed=${(e) => { const current = this._sysConfigForm.extensions || []; const newExts = e.detail.value ? (current.includes(ext.id) ? current : [...current, ext.id]) : current.filter(x => x !== ext.id); this._sysConfigForm = { ...this._sysConfigForm, extensions: newExts }; this.requestUpdate(); }} ?flush=${true} style="margin-top: 2px;"></sutram-toggle>
+                            <div style="display: flex; flex-direction: column; gap: 2px; flex: 1;">
+                                <span style="font-size: 0.95rem; color: ${isConfig ? 'var(--text-muted)' : 'var(--text)'}; font-weight: bold; margin: 0;">
+                                    ${ext.title} <span style="font-weight: normal; color: var(--text-muted); font-size: 0.8rem;">(${ext.id})</span>
+                                </span>
+                                ${ext.description ? html`
+                                    <span style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.3;">
+                                        ${ext.description}
+                                    </span>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `;
+                })}
+            </div>
+        `;
+    }
+
     render() {
         const activeWs = window.inSetu.utils.getActiveWorkspace();
-        const allSchemas = { ...window.inSetu.settingsSchemas, ...window.inSetu.serverSchemas };
-        const coreList = [];
-        const extList = [];
+        const { coreList, extList } = this._getCatalogModules();
+        const allModules = [...coreList, ...extList];
+        const allRepos = this.ecosystem?.allRepos || [];
+        const q = (this._searchQuery || '').trim().toLowerCase();
 
-        // Create a union of all schemas and all registered frontend extensions
-        const allExtKeys = new Set([...Object.keys(allSchemas), ...Array.from(window.ExtensionRegistry?._manifests?.keys() || [])]);
+        let drillHeaderTitle = 'OS Settings Hub';
+        let activeExtModule = null;
+        if (this._activeView && this._activeView.startsWith('ext:')) {
+            const targetId = this._activeView.slice(4);
+            activeExtModule = allModules.find(m => m.id === targetId) || {
+                id: targetId,
+                title: targetId.charAt(0).toUpperCase() + targetId.slice(1),
+                schema: window.inSetu.serverSchemas?.[targetId] || window.inSetu.settingsSchemas?.[targetId] || []
+            };
+            drillHeaderTitle = activeExtModule.title;
+        } else if (this._activeView === 'sys:mounts') {
+            drillHeaderTitle = 'Virtual Mounts & Asset Sharing';
+        } else if (this._activeView === 'sys:extensions') {
+            drillHeaderTitle = 'Manage Workspace Extensions';
+        }
 
-        allExtKeys.forEach(ext => {
-            // system and config actions are manually hardcoded in the system tab
-            if (ext === 'core_system' || ext === 'system' || ext === 'config') return; 
-
-            const schema = allSchemas[ext] || [];
-            const manifest = window.ExtensionRegistry?._manifests?.get(ext);
-            const hasActions = manifest?.settingsActions && manifest.settingsActions.length > 0;
-
-            // If an extension has neither a backend schema nor frontend UI actions, skip it
-            if ((!schema || schema.length === 0) && !hasActions) return;
-
-            // Enforce ecosystem boundaries: hide settings for disabled domain extensions
-            if (!window.inSetu.isCore(ext) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(ext)) {
-                return;
-            }
-
-            const title = manifest?.name || ext.charAt(0).toUpperCase() + ext.slice(1);
-
-            if (window.inSetu.isCore(ext)) {
-                coreList.push({ id: ext, title });
-            } else {
-                extList.push({ id: ext, title });
-            }
-        });
-        const renderBtn = (icon, label, onClick) => html`
-            <sutram-btn 
-                intent="neutral" 
-                variant="tinted"
-                class="yv-interactive-row"  
-                style="width: 100%; justify-content: flex-start; --btn-padding: 12px 15px; --btn-font-size: 0.95rem; margin: 0;"
-                .icon=${icon ? (/^[a-zA-Z0-9-]+$/.test(icon) ? icon : html`<span style="font-size: 1.2rem;">${icon}</span>`) : ''}
-                label=${label}
-                @click=${onClick}>
-            </sutram-btn>
-        `;
         return html`
             <div style="position: relative; display: flex; align-items: stretch; height: 100%;">
                 <button class="system-action-btn" @click=${() => this.menuOpen = !this.menuOpen} title="System Menu">
@@ -390,264 +665,273 @@ export class InSetuSystemSettings extends InSetuElement {
                     </div>
                 ` : ''}
             </div>
+
             ${this.modalOpen ? html`
             <sutram-modal 
                 ?open=${true} 
-                ?fullscreen=${true} 
+                ?fullscreen=${true}
+                ?flush=${true}
                 titleText="OS Settings Hub" 
-                @sutram-modal-closed=${() => this.modalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: hidden;">
-                    <div style="display: flex; gap: 8px; margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 8px; flex-shrink: 0; overflow-x: auto; scrollbar-width: none;">
-                        <sutram-btn intent=${this.activeTab === 'system' ? 'primary' : 'neutral'} label="System" ?active=${this.activeTab === 'system'} style="--btn-padding: 8px 16px; white-space: nowrap;" @click=${() => this.activeTab = 'system'}></sutram-btn>
-                        <sutram-btn intent=${this.activeTab === 'core' ? 'primary' : 'neutral'} label="Core" ?active=${this.activeTab === 'core'} style="--btn-padding: 8px 16px; white-space: nowrap;" @click=${() => this.activeTab = 'core'}></sutram-btn>
-                        <sutram-btn intent=${this.activeTab === 'extensions' ? 'primary' : 'neutral'} label="Extensions" ?active=${this.activeTab === 'extensions'} style="--btn-padding: 8px 16px; white-space: nowrap;" @click=${() => this.activeTab = 'extensions'}></sutram-btn>
-                    </div>
-                    <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-bottom: 20px;">
-                        ${this.activeTab === 'system' ? html`
-                            ${renderBtn('settings', 'System Preferences', () => this._openGenericSettings('system'))}
-                            ${renderBtn('globe', 'Virtual Mounts & Sharing', () => this._openMountsModal())}${renderBtn('layers', 'Add / Remove Workspaces', () => AppStore.setState({ isWorkspaceEditorOpen: true }))}
-                            ${renderBtn('folder-cog', 'Configure Current Workspace', () => AppStore.setState({ isConfigOpen: true }))}
-                            ${renderBtn('blocks', 'Manage Workspace Extensions', () => this.manageExtOpen = true)}
-                        ` : ''}
-                        ${this.activeTab === 'core' ? html`
-                            ${coreList.map(ext => this._renderExtensionActions(ext, renderBtn))}
-                        ` : ''}
-
-                        ${this.activeTab === 'extensions' ? html`
-                            ${extList.map(ext => this._renderExtensionActions(ext, renderBtn))}
-                            ${extList.length === 0 ? html`<span style="color: var(--text-muted); font-style: italic; padding: 10px;">No third-party extensions active.</span>` : ''}
-                        ` : ''}
-                    </div>
-                </div>
-                <div slot="footer" style="width: 100%; display: flex; gap: 8px;">
-                    <sutram-entity-actions 
-                        .entityType=${'system_control'} 
-                        .entityData=${{}}
-                        style="width: 100%; display: flex; gap: 8px;">
-                    </sutram-entity-actions>
-                </div>
-            </sutram-modal>
-            ` : ''}
-            ${this.manageExtOpen ? html`
-            <sutram-modal 
-                ?open=${true} 
-                titleText="Manage Workspace Extensions"  
-                ?fullscreen=${true} 
-                @sutram-modal-closed=${() => this.manageExtOpen = false}>
-                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Enable or disable optional tools for this specific workspace ecosystem.</p>
-                ${(this._sysConfigMeta?.available_extensions || []).map(ext => {
-                    const isConfig = ext.id === 'config';
-                    const isChecked = (this._sysConfigForm.extensions || []).includes(ext.id) || isConfig;
-                    return html`
-                        <div style="display: flex; align-items: flex-start; gap: 12px; background: var(--input-bg); padding: 12px 15px; border: 1px solid var(--border); border-radius: 6px;">
-                            <sutram-toggle .checked=${isChecked} ?disabled=${isConfig} @sutram-input-changed=${(e) => {
-                                const current = this._sysConfigForm.extensions || [];
-                                const newExts = e.detail.value 
-                                    ? (current.includes(ext.id) ? current : [...current, ext.id])
-                                    : current.filter(x => x !== ext.id);
-                                this._sysConfigForm = { ...this._sysConfigForm, extensions: newExts };
-                                this.requestUpdate();
-                            }} ?flush=${true} style="margin-top: 2px;"></sutram-toggle>
-                            <div style="display: flex; flex-direction: column; gap: 2px; flex: 1;">
-                                <span style="font-size: 0.95rem; color: ${isConfig ? 'var(--text-muted)' : 'var(--text)'}; font-weight: bold; margin: 0;">
-                                    ${ext.title} <span style="font-weight: normal; color: var(--text-muted); font-size: 0.8rem;">(${ext.id})</span>
-                                </span>
-                                ${ext.description ? html`
-                                    <span style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.3;">
-                                        ${ext.description}
-                                    </span>
-                                ` : ''}
-                            </div>
+                @sutram-modal-closed=${(e) => { if (e.target !== e.currentTarget) return; this.modalOpen = false; this._activeView = null; }}>
+                <div slot="body" style="display: flex; flex-direction: column;">
+                    ${this._activeView ? html`
+                        <div class="hub-breadcrumb-bar">
+                            <sutram-btn
+                                intent="neutral"
+                                size="sm"
+                                icon="corner-left-up"
+                                label="All Settings"
+                                style="margin: 0;"
+                                @click=${() => { this._activeView = null; }}>
+                            </sutram-btn>
+                            <span style="font-weight: bold; font-size: 0.95rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                ${drillHeaderTitle}
+                            </span>
                         </div>
-                    `;
-                })}
-                <div slot="footer" style="width: 100%;">
-                    <sutram-async-btn style="width: 100%; display: block;" label="Save Active Extensions" intent="success" .onClick=${() => this._saveActiveExtensions()}></sutram-async-btn>
-                </div>
-            </sutram-modal>
-            ` : ''}
-            ${this.mountsModalOpen ? html`
-            <sutram-modal 
-                ?open=${true} 
-                titleText="Virtual Mounts & Asset Sharing"  
-                ?fullscreen=${true} 
-                @sutram-modal-closed=${() => this.mountsModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
-                    ${this._mountsLoading ? html`
-                        <div style="padding: 20px;"><sutram-spinner text="Loading mount configurations..."></sutram-spinner></div>
-                    ` : (() => {
-                        const activeWs = window.inSetu?.utils?.getActiveWorkspace() || 'default';
-                        const otherWorkspaces = Object.keys(this.workspaces || {}).filter(w => w !== activeWs);
-                        const domainOptions = [
-                            { value: 'prompts', label: 'prompts (.insetu/data/prompts)' },
-                            { value: 'notes', label: 'notes (.insetu/data/notes)' },
-                            { value: 'flow', label: 'flow (.insetu/data/flow)' },
-                            { value: '*', label: '* (All Domains)' }
-                        ];
+                        <div style="padding: 20px; display: flex; flex-direction: column; gap: 15px;">
+                            ${this._activeView === 'sys:mounts'
+                                ? this._renderMountsDrillDown()
+                                : (this._activeView === 'sys:extensions'
+                                    ? this._renderManageExtensionsDrillDown()
+                                    : html`
+                                        <sutram-settings-form
+                                            id="hub-active-settings-form"
+                                            .extName=${activeExtModule.id}
+                                            .schema=${activeExtModule.schema}
+                                            .formData=${this._extForms[activeExtModule.id] || {}}
+                                            .repos=${allRepos}
+                                            .selectedRepo=${this._selectedRepo}
+                                            ?hideSaveButton=${true}
+                                            @sutram-settings-form-changed=${(e) => {
+                                                this._extForms = { ...this._extForms, [activeExtModule.id]: e.detail.formData };
+                                            }}>
+                                        </sutram-settings-form>
+                                    `)}
+                        </div>
+                    ` : html`
+                        <div style="padding: 12px 20px; background: var(--input-bg); border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; position: sticky; top: 0; z-index: 20;">
+                            <sutram-search-bar
+                                placeholder="Search settings (e.g. port, api key, watchdog, color)..."
+                                .value=${this._searchQuery}
+                                @search-changed=${(e) => {
+                                    this._searchQuery = e.detail.value;
+                                    if (this._searchQuery) {
+                                        allModules.forEach(m => {
+                                            if (!this._extForms[m.id]) this._fetchExtSettings(m.id, this._selectedRepo);
+                                        });
+                                    }
+                                }}>
+                            </sutram-search-bar>
+                            ${!q ? html`
+                                <sutram-scrub-track style="--scrub-gap: 6px;">
+                                    <div style="display: flex; gap: 6px; align-items: center;">
+                                        <sutram-pill pillId="ALL" labelText="All" ?active=${this._categoryFilter === 'ALL'} @sutram-pill-toggled=${() => this._categoryFilter = 'ALL'}></sutram-pill>
+                                        <sutram-pill pillId="SYSTEM" labelText="System & Workspace" ?active=${this._categoryFilter === 'SYSTEM'} @sutram-pill-toggled=${() => this._categoryFilter = 'SYSTEM'}></sutram-pill>
+                                        <sutram-pill pillId="CORE" labelText="Core Engines" ?active=${this._categoryFilter === 'CORE'} @sutram-pill-toggled=${() => this._categoryFilter = 'CORE'}></sutram-pill>
+                                        <sutram-pill pillId="EXT" labelText="Extensions" ?active=${this._categoryFilter === 'EXT'} @sutram-pill-toggled=${() => this._categoryFilter = 'EXT'}></sutram-pill>
+                                    </div>
+                                </sutram-scrub-track>
+                            ` : ''}
+                        </div>
 
-                        return html`
-                            <!-- SUBSCRIBER SECTION -->
-                            <sutram-collapsible titleText="Virtual Mounts (Subscriber)" intent="primary" ?open=${true}>
-                                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0 0 12px 0;">
-                                    External workspace assets mounted read-only into this tenant via <code>ws://</code> URIs.
-                                </p>
-
-                                <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px;">
-                                    <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Mount Remote Domain</span>
-                                    ${otherWorkspaces.length === 0 ? html`
-                                        <span style="font-size: 0.8rem; color: var(--intent-warning); font-style: italic;">
-                                            At least two registered workspaces are required to configure peer-to-peer virtual mounts.
-                                        </span>
-                                    ` : html`
-                                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
-                                            <sutram-select 
-                                                label="Source Workspace"
-                                                .value=${this._newMountWs || otherWorkspaces[0]}
-                                                .options=${otherWorkspaces.map(w => {
-                                                    const wsTitle = (this.workspaces && this.workspaces[w] && this.workspaces[w].title) ? this.workspaces[w].title : w;
-                                                    return { value: w, label: `${wsTitle} (${w})` };
-                                                })}
-                                                @sutram-input-changed=${(e) => { this._newMountWs = e.detail.value; this.requestUpdate(); }}
-                                                ?flush=${true}>
-                                            </sutram-select>
-                                            <sutram-select 
-                                                label="Target Domain"
-                                                .value=${this._newMountDomain}
-                                                .options=${domainOptions}
-                                                @sutram-input-changed=${(e) => { this._newMountDomain = e.detail.value; this.requestUpdate(); }}
-                                                ?flush=${true}>
-                                            </sutram-select>
+                        <div style="padding: 16px 20px 24px 20px; display: flex; flex-direction: column; gap: 8px;">
+                            ${q ? html`
+                                ${allModules.filter(m => {
+                                    const matchesTitle = [m.title, m.id, m.description].filter(Boolean).join(' ').toLowerCase().includes(q);
+                                    const matchesField = (m.schema || []).some(f => f && f.type !== 'hidden' && [f.label, f.title, f.id, f.description].filter(Boolean).join(' ').toLowerCase().includes(q));
+                                    return matchesTitle || matchesField;
+                                }).map(m => {
+                                    const moduleMatchesDirectly = [m.title, m.id].filter(Boolean).join(' ').toLowerCase().includes(q);
+                                    return html`
+                                        <div style="margin-bottom: 16px;">
+                                            <div class="hub-section-title" style="display: flex; justify-content: space-between; align-items: center;">
+                                                <span>${m.title}</span>
+                                                <sutram-btn size="sm" intent="neutral" label="Open Module" icon="arrow-right" @click=${() => { this._searchQuery = ''; this._drillIntoExtension(m.id); }}></sutram-btn>
+                                            </div>
+                                            <sutram-settings-form
+                                                .extName=${m.id}
+                                                .schema=${m.schema}
+                                                .formData=${this._extForms[m.id] || {}}
+                                                .repos=${allRepos}
+                                                .selectedRepo=${this._selectedRepo}
+                                                .filterQuery=${moduleMatchesDirectly ? '' : this._searchQuery}
+                                                @sutram-settings-form-changed=${(e) => {
+                                                    this._extForms = { ...this._extForms, [m.id]: e.detail.formData };
+                                                }}>
+                                            </sutram-settings-form>
                                         </div>
-                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
-                                            <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--intent-highlight);">
-                                                URI: ws://${this._newMountWs || otherWorkspaces[0]}/${this._newMountDomain}/
-                                            </span>
-                                            <sutram-btn 
-                                                size="sm"
+                                    `;
+                                })}
+                            ` : html`
+                                ${(this._categoryFilter === 'ALL' || this._categoryFilter === 'SYSTEM') ? html`
+                                    <div class="hub-section-title">System & Workspace</div>
+                                    <sutram-card-group>
+                                        ${coreList.filter(m => m.id === 'system').map(sysMod => html`
+                                            <sutram-card
+                                                .titleText=${sysMod.title}
+                                                .descriptionText=${sysMod.description}
+                                                .detailSuffix=${sysMod.visibleCount + ' settings ›'}
+                                                icon="settings"
                                                 intent="primary"
-                                                icon="plus"
-                                                label="Add Mount"
-                                                @click=${() => this._addMount(this._newMountWs || otherWorkspaces[0], this._newMountDomain)}>
-                                            </sutram-btn>
-                                        </div>
-                                    `}
-                                </div>
-
-                                <div style="display: flex; flex-direction: column; gap: 8px;">
-                                    ${this._sharedMounts.length === 0 ? html`
-                                        <sutram-empty-state text="No external domains mounted in this workspace."></sutram-empty-state>
-                                    ` : this._sharedMounts.map((m, idx) => html`
-                                        <sutram-card 
-                                            .titleText=${`🌐 ws://${m.workspace_id}/${m.domain}/`}
-                                            .descriptionText=${`Read-only mount from tenant "${m.workspace_id}" • Domain: ${m.domain}`}
-                                            .detailText=${`Virtual Mount`}
+                                                ?disableSelection=${true}
+                                                @card-clicked=${() => this._drillIntoExtension('system')}>
+                                            </sutram-card>
+                                        `)}
+                                        <sutram-card
+                                            titleText="Configure Current Workspace (Repos & Buckets)"
+                                            descriptionText="Manage tracked repositories, Bucket 0 sieve rules, and Sub-Bucket extractors."
+                                            detailSuffix="Open Editor ›"
+                                            icon="folder-cog"
+                                            intent="highlight"
+                                            ?disableSelection=${true}
+                                            @card-clicked=${() => {
+                                                this.modalOpen = false;
+                                                this._activeView = null;
+                                                AppStore.setState({ isConfigOpen: true });
+                                            }}>
+                                        </sutram-card>
+                                        <sutram-card
+                                            titleText="Manage Workspace Extensions"
+                                            descriptionText="Enable or disable optional domain extensions for this workspace."
+                                            detailSuffix="${(this._sysConfigForm.extensions || []).length} enabled ›"
+                                            icon="blocks"
+                                            intent="primary"
+                                            ?disableSelection=${true}
+                                            @card-clicked=${() => { this._activeView = 'sys:extensions'; }}>
+                                        </sutram-card>
+                                        <sutram-card
+                                            titleText="Virtual Mounts & Asset Sharing"
+                                            descriptionText="Cross-workspace ws:// subscriber mounts and publisher domain exports."
+                                            detailSuffix="Configure ›"
                                             icon="globe"
                                             intent="highlight"
-                                            ?disableSelection=${true}>
-                                            <div slot="header-actions">
-                                                <sutram-btn size="sm" intent="danger" icon="trash-2" label="Unmount" @click=${(e) => { e.stopPropagation(); this._removeMount(idx); }}></sutram-btn>
-                                            </div>
+                                            ?disableSelection=${true}
+                                            @card-clicked=${() => { this._activeView = 'sys:mounts'; this._loadMountsData(); }}>
                                         </sutram-card>
-                                    `)}
-                                </div>
-                            </sutram-collapsible>
+                                        <sutram-card
+                                            titleText="Add / Remove Workspaces"
+                                            descriptionText="Provision isolated tenant workspaces or manage the system routing index."
+                                            detailSuffix="Open Editor ›"
+                                            icon="layers"
+                                            intent="neutral"
+                                            ?disableSelection=${true}
+                                            @card-clicked=${() => {
+                                                this.modalOpen = false;
+                                                this._activeView = null;
+                                                AppStore.setState({ isWorkspaceEditorOpen: true });
+                                            }}>
+                                        </sutram-card>
+                                    </sutram-card-group>
+                                ` : ''}
 
-                            <!-- PUBLISHER SECTION -->
-                            <sutram-collapsible titleText="Exported Domains (Publisher)" intent="neutral" ?open=${true}>
-                                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0 0 12px 0;">
-                                    Local directories declared accessible to other workspace tenants on this system.
-                                </p>
-
-                                <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px;">
-                                    <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Export Local Domain</span>
-                                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
-                                        <sutram-select 
-                                            label="Local Domain"
-                                            .value=${this._newExportDomain}
-                                            .options=${domainOptions.filter(d => d.value !== '*')}
-                                            @sutram-input-changed=${(e) => { this._newExportDomain = e.detail.value; this.requestUpdate(); }}
-                                            ?flush=${true}>
-                                        </sutram-select>
-                                        <div style="display: flex; align-items: center; padding-top: 18px;">
-                                            <sutram-toggle 
-                                                label="Authorize All Workspaces (*)"
-                                                .checked=${this._newExportWildcard}
-                                                @sutram-input-changed=${(e) => { this._newExportWildcard = e.detail.value; this.requestUpdate(); }}
-                                                ?flush=${true}>
-                                            </sutram-toggle>
-                                        </div>
-                                    </div>
-
-                                    ${!this._newExportWildcard ? html`
-                                        <div style="display: flex; flex-direction: column; gap: 6px;">
-                                            <span style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">Permitted Subscribers</span>
-                                            <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                                                ${otherWorkspaces.map(w => {
-                                                    const isAllowed = this._newExportAllowed.includes(w);
-                                                    const wsLabel = (this.workspaces && this.workspaces[w] && this.workspaces[w].title) ? this.workspaces[w].title : w;
-                                                    return html`
-                                                        <sutram-pill 
-                                                            pillId=${w}
-                                                            labelText=${`${wsLabel} (${w})`}
-                                                            ?active=${isAllowed}
-                                                            @sutram-pill-toggled=${() => {
-                                                                const s = new Set(this._newExportAllowed);
-                                                                s.has(w) ? s.delete(w) : s.add(w);
-                                                                this._newExportAllowed = Array.from(s);
-                                                                this.requestUpdate();
-                                                            }}>
-                                                        </sutram-pill>
-                                                    `;
-                                                })}
-                                            </div>
-                                        </div>
-                                    ` : ''}
-
-                                    <div style="display: flex; justify-content: flex-end; margin-top: 4px;">
-                                        <sutram-btn 
-                                            size="sm"
-                                            intent="primary"
-                                            icon="plus"
-                                            label="Export Domain"
-                                            @click=${() => this._addExport()}>
-                                        </sutram-btn>
-                                    </div>
-                                </div>
-
-                                <div style="display: flex; flex-direction: column; gap: 8px;">
-                                    ${Object.keys(this._exportSharedDomains).length === 0 ? html`
-                                        <sutram-empty-state text="No local domains currently exported to peer workspaces."></sutram-empty-state>
-                                    ` : Object.entries(this._exportSharedDomains).map(([domain, policy]) => {
-                                        const isWildcard = (policy.allowed || []).includes('*');
-                                        const allowedSummary = isWildcard ? 'All Workspaces (*)' : ((policy.allowed || []).join(', ') || 'None (Private)');
-                                        return html`
-                                            <sutram-card 
-                                                .titleText=${`📂 ${domain}`}
-                                                .descriptionText=${`Access Policy: ${allowedSummary}`}
-                                                .detailText=${`Publisher Export`}
-                                                icon="share-2"
-                                                intent="neutral"
-                                                ?disableSelection=${true}>
-                                                <div slot="header-actions">
-                                                    <sutram-btn size="sm" intent="danger" icon="trash-2" label="Revoke" @click=${(e) => { e.stopPropagation(); this._revokeExport(domain); }}></sutram-btn>
-                                                </div>
+                                ${(this._categoryFilter === 'ALL' || this._categoryFilter === 'CORE') ? html`
+                                    <div class="hub-section-title">Core Engines</div>
+                                    <sutram-card-group>
+                                        ${coreList.filter(m => m.id !== 'system').map(mod => html`
+                                            <sutram-card
+                                                .titleText=${mod.title}
+                                                .descriptionText=${mod.description}
+                                                .detailSuffix=${mod.visibleCount > 0 ? (mod.visibleCount + ' setting' + (mod.visibleCount === 1 ? '' : 's') + ' ›') : 'Open ›'}
+                                                .icon=${mod.icon}
+                                                intent="primary"
+                                                ?disableSelection=${true}
+                                                @card-clicked=${() => {
+                                                    if (mod.visibleCount === 0 && mod.customActions.length === 1) {
+                                                        this.modalOpen = false;
+                                                        this._activeView = null;
+                                                        mod.customActions[0].onClick();
+                                                    } else {
+                                                        this._drillIntoExtension(mod.id);
+                                                    }
+                                                }}>
                                             </sutram-card>
-                                        `;
-                                    })}
-                                </div>
-                            </sutram-collapsible>
-                        `;
-                    })()}
+                                        `)}
+                                    </sutram-card-group>
+                                ` : ''}
+
+                                ${(this._categoryFilter === 'ALL' || this._categoryFilter === 'EXT') ? html`
+                                    <div class="hub-section-title">Active Extensions</div>
+                                    ${extList.length === 0 ? html`
+                                        <span style="color: var(--text-muted); font-style: italic; font-size: 0.85rem; padding: 6px 0;">
+                                            No configurable domain extensions active in this workspace.
+                                        </span>
+                                    ` : html`
+                                        <sutram-card-group>
+                                            ${extList.map(mod => html`
+                                                <sutram-card
+                                                    .titleText=${mod.title}
+                                                    .descriptionText=${mod.description}
+                                                    .detailSuffix=${mod.visibleCount > 0 ? (mod.visibleCount + ' setting' + (mod.visibleCount === 1 ? '' : 's') + ' ›') : 'Open ›'}
+                                                    .icon=${mod.icon}
+                                                    intent="highlight"
+                                                    ?disableSelection=${true}
+                                                    @card-clicked=${() => {
+                                                        if (mod.visibleCount === 0 && mod.customActions.length === 1) {
+                                                            this.modalOpen = false;
+                                                            this._activeView = null;
+                                                            mod.customActions[0].onClick();
+                                                        } else {
+                                                            this._drillIntoExtension(mod.id);
+                                                        }
+                                                    }}>
+                                                </sutram-card>
+                                            `)}
+                                        </sutram-card-group>
+                                    `}
+                                ` : ''}
+                            `}
+                        </div>
+                    `}
                 </div>
-                <div slot="footer" style="display: flex; gap: 8px; width: 100%;">
-                    <sutram-btn intent="neutral" label="Cancel" style="flex: 1;" @click=${() => this.mountsModalOpen = false}></sutram-btn>
-                    <sutram-async-btn 
-                        intent="primary" 
-                        label="Save Mounts & Sharing" 
-                        style="flex: 2;" 
-                        .onClick=${() => this._saveMountsAndExports()}>
-                    </sutram-async-btn>
-                </div>
+
+                ${this._activeView ? html`
+                    <sutram-btn
+                        slot="footer"
+                        intent="neutral"
+                        icon="arrow-left"
+                        label="Back to Directory"
+                        @click=${() => { this._activeView = null; }}>
+                    </sutram-btn>
+                    ${this._activeView === 'sys:mounts' ? html`
+                        <sutram-async-btn
+                            slot="footer"
+                            intent="success"
+                            icon="save"
+                            label="Save Mounts & Sharing"
+                            .onClick=${() => this._saveMountsAndExports()}>
+                        </sutram-async-btn>
+                    ` : (this._activeView === 'sys:extensions' ? html`
+                        <sutram-async-btn
+                            slot="footer"
+                            intent="success"
+                            icon="save"
+                            label="Save Active Extensions"
+                            .onClick=${async () => {
+                                await this._saveActiveExtensions();
+                                this._activeView = null;
+                            }}>
+                        </sutram-async-btn>
+                    ` : html`
+                        <sutram-async-btn
+                            slot="footer"
+                            intent="success"
+                            icon="save"
+                            label=${'Save ' + drillHeaderTitle}
+                            .onClick=${async (e) => {
+                                const formEl = this.shadowRoot.querySelector('#hub-active-settings-form');
+                                if (formEl) await formEl.triggerSave(e);
+                            }}>
+                        </sutram-async-btn>
+                    `)}
+                ` : html`
+                    <div slot="footer" style="width: 100%; display: flex; gap: 8px;">
+                        <sutram-entity-actions 
+                            .entityType=${'system_control'} 
+                            .entityData=${{}}
+                            style="width: 100%; display: flex; gap: 8px;">
+                        </sutram-entity-actions>
+                    </div>
+                `}
             </sutram-modal>
             ` : ''}
             ${this.docsModalOpen ? html`
@@ -843,73 +1127,73 @@ export class InSetuWorkspaceEditor extends InSetuElement {
     render() {
         return html`
             ${this.open ? html`
-            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Add / Remove Workspaces" @sutram-modal-closed=${(e) => { if (e.target !== e.currentTarget) return; this.open = false; AppStore.setState({ isWorkspaceEditorOpen: false }); }}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0; overflow-y: auto;">
-                    <form @submit=${this._handleCreateWorkspace} style="display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; background: transparent; border: none; box-shadow: none;">
-                        <sutram-input label="Workspace Unique Name / ID" placeholder="e.g. guitar_academy" .value=${this._newWsId} @sutram-input-changed=${e => this._newWsId = e.detail.value} ?flush=${true}></sutram-input>
-                        <div>
-                            <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 6px; color: var(--text-muted);">Workspace Root Directory Path</label>
-                            <div style="display: flex; gap: 8px; align-items: flex-start;">
-                                <sutram-input placeholder="e.g. ~/Documents/GuitarRepertoire" .value=${this._newWsRoot} @sutram-input-changed=${e => this._newWsRoot = e.detail.value} ?flush=${true} style="flex: 1; margin: 0;"></sutram-input>
-                                <sutram-btn intent="highlight" label="..." style="margin: 0; --btn-padding: 8px 14px;" @click=${this._openHostBrowser}></sutram-btn>
-                            </div>
-                        </div>
-                        <sutram-async-btn btntype="submit" label="Provision & Mount Isolated Workspace" intent="success" style="width: 100%; display: block;" .onClick=${(e) => {
-                            if (!this._newWsId || !this._newWsRoot) {
-                                e.preventDefault();
-                                alert("Workspace ID and Root Path are required.");
-                                throw new Error("Validation failed");
-                            }
-                            return this._handleCreateWorkspace(e);
-                        }}></sutram-async-btn>
-                    </form>
+            <sutram-modal ?open=${true} ?fullscreen=${true} titleText=${this._showHostBrowser ? "Select Local System Directory" : "Add / Remove Workspaces"} @sutram-modal-closed=${(e) => { if (e.target !== e.currentTarget) return; this._showHostBrowser = false; this.open = false; AppStore.setState({ isWorkspaceEditorOpen: false }); }}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 20px;">
                     ${this._showHostBrowser ? html`
-                    <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Select Local System Directory" @sutram-modal-closed=${() => this._showHostBrowser = false}>
-                        <div slot="body" style="display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow-y: auto;">
-                            <div style="display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-shrink: 0;">
-                                <sutram-btn intent="neutral" label="Parent Dir" @click=${this._goUpHostDir}></sutram-btn>
-                                <sutram-scrub-track style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-primary); flex: 1;">${this._hostCurrentPath}</sutram-scrub-track>
-                            </div>
-                            <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;">
-                                ${this._hostDirs.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.9rem;">No subdirectories found.</div>` : this._hostDirs.map(d => html`
-                                    <div class="yv-interactive-row" style="padding: 8px 12px; cursor: pointer; display: flex; align-items: center; border-radius: 4px;"
-                                        @click=${() => this._selectHostDir(d)}>
-                                        <yv-icon name="folder" style="width: 16px; height: 16px; color: var(--intent-warning); margin-right: 8px;"></yv-icon>
-                                        <span style="font-weight: bold; font-size: 0.9rem;">${d}</span>
-                                    </div>
-                                `)}
-                            </div>
+                        <div style="display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+                            <sutram-btn intent="neutral" icon="corner-left-up" label="Parent Dir" @click=${this._goUpHostDir}></sutram-btn>
+                            <sutram-scrub-track style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-primary); flex: 1;">${this._hostCurrentPath}</sutram-scrub-track>
                         </div>
-                        <sutram-btn slot="footer" intent="success" label="Select This Path" icon="check-circle-2" @click=${this._confirmHostDir}></sutram-btn>
-                    </sutram-modal>
-                    ` : ''}
+                        <div style="display: flex; flex-direction: column; gap: 4px;">
+                            ${this._hostDirs.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.9rem;">No subdirectories found.</div>` : this._hostDirs.map(d => html`
+                                <div class="yv-interactive-row" style="padding: 8px 12px; cursor: pointer; display: flex; align-items: center; border-radius: 4px;"
+                                    @click=${() => this._selectHostDir(d)}>
+                                    <yv-icon name="folder" style="width: 16px; height: 16px; color: var(--intent-warning); margin-right: 8px;"></yv-icon>
+                                    <span style="font-weight: bold; font-size: 0.9rem;">${d}</span>
+                                </div>
+                            `)}
+                        </div>
+                    ` : html`
+                        <form @submit=${this._handleCreateWorkspace} style="display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; background: transparent; border: none; box-shadow: none;">
+                            <sutram-input label="Workspace Unique Name / ID" placeholder="e.g. guitar_academy" .value=${this._newWsId} @sutram-input-changed=${e => this._newWsId = e.detail.value} ?flush=${true}></sutram-input>
+                            <div>
+                                <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 6px; color: var(--text-muted);">Workspace Root Directory Path</label>
+                                <div style="display: flex; gap: 8px; align-items: flex-start;">
+                                    <sutram-input placeholder="e.g. ~/Documents/GuitarRepertoire" .value=${this._newWsRoot} @sutram-input-changed=${e => this._newWsRoot = e.detail.value} ?flush=${true} style="flex: 1; margin: 0;"></sutram-input>
+                                    <sutram-btn intent="highlight" label="Browse..." icon="folder" style="margin: 0; --btn-padding: 8px 14px;" @click=${this._openHostBrowser}></sutram-btn>
+                                </div>
+                            </div>
+                            <sutram-async-btn btntype="submit" label="Provision & Mount Isolated Workspace" intent="success" style="width: 100%; display: block;" .onClick=${(e) => {
+                                if (!this._newWsId || !this._newWsRoot) {
+                                    e.preventDefault();
+                                    alert("Workspace ID and Root Path are required.");
+                                    throw new Error("Validation failed");
+                                }
+                                return this._handleCreateWorkspace(e);
+                            }}></sutram-async-btn>
+                        </form>
 
-                    <div>
-                        <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 8px; color: var(--intent-primary);">Registered Workspaces Index</label>
-                        <div style="display: flex; flex-direction: column; gap: 8px;">
-                            ${Object.keys(this.workspaces).map(wsId => {
-                                const isActive = wsId === this.activeWorkspace;
-                                return html`
-                                    <div style="display: flex; justify-content: space-between; align-items: center; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px;">
-                                        <div style="display: flex; align-items: center; gap: 10px;">
-                                            <yv-icon name="${wsId === 'default' ? 'landmark' : 'folder'}" style="width: 16px; height: 16px; color: ${wsId === 'default' ? 'var(--intent-highlight)' : 'var(--intent-warning)'};"></yv-icon>
-                                            <span style="font-weight: bold; color: ${isActive ? 'var(--intent-success)' : 'var(--text)'};">
-                                                ${wsId} ${isActive ? '(Active)' : ''}
-                                            </span>
+                        <div>
+                            <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 8px; color: var(--intent-primary);">Registered Workspaces Index</label>
+                            <div style="display: flex; flex-direction: column; gap: 8px;">
+                                ${Object.keys(this.workspaces).map(wsId => {
+                                    const isActive = wsId === this.activeWorkspace;
+                                    return html`
+                                        <div style="display: flex; justify-content: space-between; align-items: center; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px;">
+                                            <div style="display: flex; align-items: center; gap: 10px;">
+                                                <yv-icon name="${wsId === 'default' ? 'landmark' : 'folder'}" style="width: 16px; height: 16px; color: ${wsId === 'default' ? 'var(--intent-highlight)' : 'var(--intent-warning)'};"></yv-icon>
+                                                <span style="font-weight: bold; color: ${isActive ? 'var(--intent-success)' : 'var(--text)'};">
+                                                    ${wsId}${isActive ? '(Active)' : ''}
+                                                </span>
+                                            </div>
+                                            ${wsId !== 'default' ? html`
+                                                <sutram-btn intent="danger" label="Remove" style="--btn-padding: 4px 10px; --btn-font-size: 0.8rem;" @click=${() => this._handleDeleteWorkspace(wsId)}></sutram-btn>
+                                            ` : html`<span style="font-size:0.8rem; color: var(--text-muted); font-style:italic;">System Protected</span>`}
                                         </div>
-                                        ${wsId !== 'default' ? html`
-                                            <sutram-btn intent="danger" label="Remove" style="--btn-padding: 4px 10px; --btn-font-size: 0.8rem;" @click=${() => this._handleDeleteWorkspace(wsId)}></sutram-btn>
-                                        ` : html`<span style="font-size:0.8rem; color: var(--text-muted); font-style:italic;">System Protected</span>`}
-                                    </div>
-                                `;
-                            })}
+                                    `;
+                                })}
+                            </div>
                         </div>
-                    </div>
+                    `}
                 </div>
+                ${this._showHostBrowser ? html`
+                    <sutram-btn slot="footer" intent="neutral" icon="arrow-left" label="Cancel" @click=${() => this._showHostBrowser = false}></sutram-btn>
+                    <sutram-btn slot="footer" intent="success" icon="check-circle-2" label="Select This Path" @click=${this._confirmHostDir}></sutram-btn>
+                ` : ''}
             </sutram-modal>
             ` : ''}
         `;
-}
+    }
 }
 customElements.define('insetu-workspace-editor', InSetuWorkspaceEditor);
 if (!document.getElementById('insetu-workspace-editor-root')) {
@@ -952,45 +1236,75 @@ window.addEventListener('sutram-settings-action', async (e) => {
     }
 });
 window.addEventListener('sutram-settings-save', async (e) => {
-    const { extName, formData, btn, origText } = e.detail;
-    const schema = window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas?.[extName] || window.ExtensionRegistry?._manifests?.get(extName)?.settingsSchema || [];
+    const { extName, formData, repo, btn, origText, resolve, reject } = e.detail || {};
+    const schema = e.detail?.schema || window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas?.[extName] || window.ExtensionRegistry?._manifests?.get(extName)?.settingsSchema || [];
     try {
         const payload = {};
 
         schema.forEach(f => {
-            if (f.type !== 'hidden') {
-                let val = formData[f.id] !== undefined ? formData[f.id] : f.default;
-                if ((f.type === 'object' || f.type === 'json') && typeof val === 'string') {
+            if (f && f.type !== 'hidden' && f.type !== 'action') {
+                let val = formData && formData[f.id] !== undefined ? formData[f.id] : f.default;
+                if (f.type === 'number') {
+                    const num = (val === '' || val === null || val === undefined) ? (f.default ?? 0) : Number(val);
+                    val = Number.isNaN(num) ? (f.default ?? 0) : num;
+                } else if ((f.type === 'object' || f.type === 'json') && typeof val === 'string') {
                     try {
                         val = JSON.parse(val);
                     } catch(err) {
-                        throw new Error(`Invalid JSON format in field: ${f.label || f.id}`);
+                        throw new Error('Invalid JSON format in field: ' + (f.label || f.id));
                     }
                 }
                 payload[f.id] = val;
             }
         });
 
-        // If the generic modal has nothing to save (everything was custom or hidden), just close
         if (Object.keys(payload).length === 0) {
-            document.getElementById('insetu-generic-settings-root').open = false;
-            btn.innerText = origText;
+            const genRoot = document.getElementById('insetu-generic-settings-root');
+            if (genRoot) genRoot.open = false;
+            if (btn && origText) btn.innerText = origText;
+            if (resolve) resolve({});
             return;
         }
 
-        const res = await window.inSetu.api.workspace.post(`${extName}/settings`, payload);
+        const qs = repo ? ('?repo=' + encodeURIComponent(repo)) : '';
+        const res = await window.inSetu.api.workspace.post(extName + '/settings' + qs, payload);
         if (res.ok) {
-            document.getElementById('insetu-generic-settings-root').open = false;
-            btn.innerText = origText;
-            window.dispatchEvent(new Event(`insetu-${extName}-settings-changed`));
+            const resData = await res.json().catch(() => ({}));
+            const genRoot = document.getElementById('insetu-generic-settings-root');
+            if (genRoot) genRoot.open = false;
+            if (btn && origText) btn.innerText = origText;
+
+            if (extName === 'gather' && window.inSetu?.stores?.Gather?.getState()?.fetchSettings) {
+                window.inSetu.stores.Gather.getState().fetchSettings();
+            }
+            window.dispatchEvent(new Event('insetu-' + extName + '-settings-changed'));
+
+            if (resData.job_id && window.inSetu?.utils?.pollJob) {
+                if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("Recompiling contexts with updated settings...", null);
+                window.inSetu.utils.pollJob(resData.job_id, {
+                    onProgress: (msg) => {
+                        if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus(msg, null);
+                    },
+                    onComplete: async () => {
+                        if (window.inSetu.sys?.refreshManifest) await window.inSetu.sys.refreshManifest();
+                        if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("Settings saved & contexts updated", 2500);
+                    }
+                });
+            } else if (window.inSetu.ui?.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus("Settings saved", 2000);
+            }
+            if (resolve) resolve(resData);
         } else {
             const errData = await res.json().catch(() => ({}));
-            alert("Failed to save settings: " + (errData.error || res.statusText || "Unknown Server Error"));
-            btn.innerText = origText;
+            const msg = errData.error || res.statusText || "Unknown Server Error";
+            alert("Failed to save settings: " + msg);
+            if (btn && origText) btn.innerText = origText;
+            if (reject) reject(new Error(msg));
         }
     } catch(err) {
-        alert("Network error: " + err.message);
-        btn.innerText = origText;
+        alert("Settings Error: " + err.message);
+        if (btn && origText) btn.innerText = origText;
+        if (reject) reject(err);
     }
 });
 

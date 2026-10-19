@@ -299,6 +299,7 @@ RestartSec=3
 LimitNOFILE=65536
 Environment="PATH={os.environ.get('PATH', '')}"
 Environment="PYTHONUNBUFFERED=1"
+Environment="MALLOC_ARENA_MAX=2"
 
 [Install]
 WantedBy=default.target

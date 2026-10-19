@@ -549,6 +549,29 @@ export class InSetuExtBridge extends InSetuElement {
             this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich, {
                 confirmed_candidates: this._confirmedCandidates
             })();
+        } else if (action === 'view-syntax-error') {
+            const errText = btn.dataset.err || 'Syntax error detected.';
+            const fileTarget = btn.dataset.file || 'file';
+            if (window.Sutram?.stores?.Layout) {
+                const layout = window.Sutram.stores.Layout.getState();
+                layout.openWindow({
+                    id: 'bridge:syntax-diff',
+                    component: 'sutram-report-projection',
+                    label: `Syntax Error: ${fileTarget.split('/').pop()}`,
+                    icon: 'alert-triangle',
+                    intent: 'danger',
+                    extName: 'bridge',
+                    windowOnly: true,
+                    props: {
+                        caption: `AST / compiler syntax validation failed for ${fileTarget}.`,
+                        content: errText,
+                        suggestedFilename: `syntax_error_${Date.now()}.txt`,
+                        actions: [
+                            { label: 'Close', icon: 'x', intent: 'neutral', onClick: () => layout.closeWindow('bridge:syntax-diff') }
+                        ]
+                    }
+                }, layout.focusedColumn || 'center', 1);
+            }
         } else if (action === 'view-diff') {
             const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
             if (window.Sutram?.stores?.Layout) {
@@ -676,11 +699,15 @@ export class InSetuExtBridge extends InSetuElement {
                                                     ` : ''}
                                                 </div>
                                                 ${p.error_message ? html`<div style="color: ${p.status === 'auto_skipped' ? 'var(--intent-warning)' : 'var(--intent-danger)'}; margin: 6px 0 0 0; font-family: var(--font-mono); font-size: 0.8rem; white-space: pre-wrap; word-break: break-word;">${p.error_message}</div>` : ''}
-                                                ${p.syntax_error ? html`
+                                                ${p.syntax_error && p.status !== 'syntax_error' ? html`
                                                     <div style="display: flex; gap: 10px; margin-top: 8px;">
-                                                        <sutram-btn data-action="view-diff" data-b64="${p.syntax_error}" intent="danger" icon="git-compare" label="${p.resolution_type === 'anchor_failed' ? 'Inspect Anchor Mismatch Diff' : (p.status === 'failed' ? 'Inspect Failed Anchor Diff' : 'View Syntax Error Diff')}" style="--btn-padding: 4px 10px;"></sutram-btn>
+                                                        <sutram-btn data-action="view-diff" data-b64="${p.syntax_error}" intent="danger" icon="git-compare" label="${p.resolution_type === 'anchor_failed' ? 'Inspect Anchor Mismatch Diff' : 'Inspect Failed Anchor Diff'}" style="--btn-padding: 4px 10px;"></sutram-btn>
                                                     </div>
-                                                ` : ''}
+                                                ` : (p.status === 'syntax_error' ? html`
+                                                    <div style="display: flex; gap: 10px; margin-top: 8px;">
+                                                        <sutram-btn data-action="view-syntax-error" data-err="${p.error_message || 'Syntax error'}" data-file="${file}" intent="danger" icon="file-text" label="View Syntax Error" style="--btn-padding: 4px 10px;"></sutram-btn>
+                                                    </div>
+                                                ` : '')}
                                                 ${p.candidates && p.candidates.length > 0 ? html`
                                                     <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 5px;">
                                                         ${p.candidates.map(c => {

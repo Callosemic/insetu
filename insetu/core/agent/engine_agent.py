@@ -93,10 +93,10 @@ def submit_prompt(ctx):
     )
 
     return jsonify({"status": "accepted", "job_id": job_id, "message_id": user_msg_id}), 202
-
 @agent_bp.worker("agent_turn_task")
 def _execute_agent_turn(ctx, job_id=None, session_id=None, user_prompt="", attached_files=None, retry_count=0, **kwargs):
     from insetu.core.llm.engine_llm import (
+        llm_bp as _llm_bp,
         _stream_anthropic as __stream_anthropic,
         _stream_gemini as __stream_gemini,
         _stream_claude_cli as __stream_claude_cli
@@ -136,10 +136,10 @@ def _execute_agent_turn(ctx, job_id=None, session_id=None, user_prompt="", attac
     )
     if context_text:
         system_prompt += f"\n\n--- WORKSPACE CONTEXT ---\n{context_text}"
-
-    provider = ctx.settings.get("provider", "anthropic")
-    model = ctx.settings.get("model", "claude-3-5-sonnet-latest")
-    api_key = ctx.settings.get("api_key", "")
+    llm_ctx = _llm_bp.get_context(ctx.workspace_id)
+    provider = llm_ctx.settings.get("provider", "anthropic")
+    model = llm_ctx.settings.get("model", "claude-3-5-sonnet-latest")
+    api_key = llm_ctx.settings.get("api_key", "")
 
     full_response = ""
     try:

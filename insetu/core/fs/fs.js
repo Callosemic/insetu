@@ -4,7 +4,6 @@ import { InSetuElement, createExtensionStore } from '/static/extensions/system/i
 import { resolveEditorMode } from '/static/extensions/system/components/ui_editor.js';
 import { AppStore, SelectionStore } from '/static/extensions/system/store.js';
 import { buildFileTree, resolveDirectoryState, downloadFile as sutramDownloadFile, downloadBlob, bindGhostDrag } from '../../vendor/sutram/js/utils.js';
-import { buildUriFileTree } from '/static/extensions/system/components/ui_file_tree.js';
 export function bindDownloadDrag(e, filename, fetchUrl) {
     const absoluteUrl = window.location.origin + fetchUrl;
     const safeName = filename.split('/').pop();
@@ -332,7 +331,6 @@ export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}
     downloadBlob(blob, dlName);
 }
 export async function viewInWindow(filename) {
-    await ensureFreshContext(filename);
     const chunks = getChunks(filename);
     const targetFile = (chunks && chunks.length > 0 && !chunks.includes(filename)) ? chunks[0] : filename;
 
@@ -366,7 +364,6 @@ export async function viewInWindow(filename) {
     }
 }
 export async function viewAndCopy(filename) {
-    await ensureFreshContext(filename);
     const chunks = getChunks(filename);
     // If the requested filename is explicitly a known chunk, respect it. Otherwise default to the first chunk of the payload.
     const targetFile = (chunks && chunks.length > 0 && !chunks.includes(filename)) ? chunks[0] : filename;
@@ -514,10 +511,50 @@ window.addEventListener('insetu:vfs-mutated', (e) => {
         updateManifestState(payload.mutations);
     }
 });
+export function resolveEntityExportTarget(data = {}) {
+    const rawPath = data.filepath || '';
+    const normPath = normalizeVfsURI(rawPath);
+    const parsed = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(normPath) : {};
+
+    const chunks = (data.chunks && data.chunks.length > 0)
+        ? data.chunks
+        : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, rawPath);
+
+    if (parsed.isCompiledArtifact || (chunks && chunks.length > 1)) {
+        return {
+            mode: 'chunks',
+            chunks: (chunks && chunks.length > 0) ? chunks : [rawPath],
+            isFS: false
+        };
+    }
+
+    if (data.transientContent !== undefined) {
+        const hasUnresolvedMacro = typeof data.transientContent === 'string' && /\{\{\s*include_prompt\s*:/.test(data.transientContent);
+        if (!hasUnresolvedMacro) {
+            return { mode: 'memory', text: data.transientContent, filename: rawPath.split('/').pop() || 'export.txt' };
+        }
+    }
+
+    const activeBuf = FsStore.getState().activeBuffers?.[normPath] || FsStore.getState().activeBuffers?.[rawPath];
+    if (activeBuf && (activeBuf.isFS || activeBuf.forceEdit)) {
+        const fullText = activeBuf.isTruncated ? activeBuf.fullText : activeBuf.content;
+        const hasUnresolvedMacro = typeof fullText === 'string' && /\{\{\s*include_prompt\s*:/.test(fullText);
+        if (!hasUnresolvedMacro && fullText !== undefined && fullText !== 'Loading...') {
+            return { mode: 'memory', text: fullText, filename: rawPath.split('/').pop() || 'export.txt' };
+        }
+    }
+
+    return {
+        mode: 'chunks',
+        chunks: [rawPath],
+        isFS: !!data.isFS
+    };
+}
+
 export async function saveBufferFile(filepath, autoSave = false) {
     if (autoSave !== true) autoSave = false;
     const state = FsStore.getState().activeBuffers[filepath];
-    if (!state) return;
+    if (!state || state.isTruncated) return;
 
     let content = state.content.replace(/\u00A0/g, ' ');
     if (state.filename.toLowerCase().endsWith('.json')) {
@@ -1285,16 +1322,17 @@ window.ExtensionRegistry.registerExtension('fs', {
             match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
             onClick: (data, e) => {
                 if (data.isDir) {
-                    const folderName = data.folderpath.split('/').filter(Boolean).pop();
+                    const srcDir = String(data.folderpath || data.filepath || '').replace(/\/+$/, '');
+                    const folderName = srcDir.split('/').filter(Boolean).pop();
                     openFolderBrowser(async (destParent) => {
                         if (destParent === undefined || destParent === null) return;
                         const cleanDest = destParent.replace(/\/+$/, '');
                         const destPath = cleanDest ? `${cleanDest}/${folderName}` : folderName;
-                        if (destPath === data.folderpath || destPath.startsWith(data.folderpath + '/')) {
+                        if (destPath === srcDir || destPath.startsWith(srcDir + '/')) {
                             alert("Cannot move a folder into itself or a subfolder.");
                             return;
                         }
-                        await _relocateVfsNode(data.folderpath, destPath, true, { loadingText: 'Moving folder...' });
+                        await _relocateVfsNode(srcDir, destPath, true, { loadingText: 'Moving folder...' });
                     });
                 } else {
                     const normFp = normalizeVfsURI(data.filepath || '');
@@ -1332,7 +1370,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             bulkable: false,
             match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
             asyncAction: async (data, e) => {
-                const rawPath = data.isDir ? data.folderpath : data.filepath;
+                const rawPath = String(data.isDir ? (data.folderpath || data.filepath) : data.filepath).replace(/\/+$/, '');
                 const parts = rawPath.split('/').filter(Boolean);
                 const currentName = parts.pop() || '';
                 const newName = prompt(`Enter new ${data.isDir ? 'folder' : 'file'} name:`, currentName);
@@ -1355,7 +1393,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             bulkable: true,
             match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
             asyncAction: async (data, e) => {
-                const rawPath = data.isDir ? data.folderpath : data.filepath;
+                const rawPath = String(data.isDir ? (data.folderpath || data.filepath) : data.filepath).replace(/\/+$/, '');
                 const label = data.isDir ? `folder "${rawPath.split('/').filter(Boolean).pop()}"` : `this file`;
                 if (!confirm(`Archive ${label} to an 'archived/' directory?`)) return;
                 await _archiveVfsNode(rawPath, !!data.isDir, { loadingText: 'Archiving...' });
@@ -1376,7 +1414,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             bulkable: true,
             match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
             asyncAction: async (data, e) => {
-                const rawPath = data.isDir ? data.folderpath : data.filepath;
+                const rawPath = String(data.isDir ? (data.folderpath || data.filepath) : data.filepath).replace(/\/+$/, '');
                 const label = data.isDir ? `folder "${rawPath.split('/').filter(Boolean).pop()}" and all its contents` : `this file`;
                 if (!confirm(`Permanently delete ${label}? This cannot be undone!`)) return;
                 await _deleteVfsNode(rawPath, !!data.isDir, { loadingText: 'Deleting...' });
@@ -1427,17 +1465,16 @@ window.ExtensionRegistry.registerExtension('fs', {
             order: 12,
             match: (data) => !data.isSkeleton,
             asyncAction: async (data, e) => {
-                const activeBuf = FsStore.getState().activeBuffers?.[data.filepath];
-                const transientText = data.transientContent !== undefined ? data.transientContent : activeBuf?.content;
-                const hasUnresolvedMacro = typeof transientText === 'string' && /\{\{\s*include_prompt\s*:/.test(transientText);
-                if (transientText !== undefined && !hasUnresolvedMacro) {
-                    await navigator.clipboard.writeText(transientText).then(() => {
+                const target = resolveEntityExportTarget(data);
+                if (target.mode === 'memory') {
+                    await navigator.clipboard.writeText(target.text).then(() => {
                         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("✅ Copied!", 2000);
                     }).catch(err => alert("Clipboard API failed. Please manually select the text and copy it directly."));
                     return;
                 }
-                const fetchUrl = resolveFileFetchUrl(data.filepath, data.isFS);
-                await fetchAndCopy(data.filepath, fetchUrl);
+                const primaryFile = target.chunks[0] || data.filepath;
+                const fetchUrl = resolveFileFetchUrl(primaryFile, target.isFS);
+                await fetchAndCopy(primaryFile, fetchUrl);
             }
         },
         {
@@ -1471,14 +1508,11 @@ window.ExtensionRegistry.registerExtension('fs', {
                 return !!navigator.share && !!navigator.canShare;
             },
             onReveal: (data) => {
-                const normPath = normalizeVfsURI(data.filepath);
-                if (data.transientContent !== undefined || FsStore.getState().activeBuffers?.[normPath]) return;
+                const target = resolveEntityExportTarget(data);
+                if (target.mode === 'memory') return;
                 window.inSetu.vfs.shareTextCache.clear();
-                const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, data.filepath);
-                const filesToFetch = (chunks && chunks.length > 1) ? chunks : [data.filepath];
-                filesToFetch.forEach(filepath => {
-                    const fileIsFS = (chunks && chunks.length > 1) ? false : data.isFS;
-                    const fetchUrl = resolveFileFetchUrl(filepath, fileIsFS);
+                target.chunks.forEach(filepath => {
+                    const fetchUrl = resolveFileFetchUrl(filepath, target.isFS);
                     const activeWs = window.inSetu.utils.getActiveWorkspace();
 
                     window.inSetu.api.fetchImmutableText(fetchUrl, { onlyIfMissing: true }, activeWs)
@@ -1488,16 +1522,12 @@ window.ExtensionRegistry.registerExtension('fs', {
             },
             onClick: (data, e) => {
                 if (e) e.stopPropagation();
-                const normPath = normalizeVfsURI(data.filepath);
-                const activeBuf = FsStore.getState().activeBuffers?.[normPath] || FsStore.getState().activeBuffers?.[data.filepath];
-                const transientText = data.transientContent !== undefined ? data.transientContent : activeBuf?.content;
-                if (transientText !== undefined) {
-                    const filename = data.filepath ? data.filepath.split('/').pop() : 'shared_file.txt';
-                    window.inSetu.utils.nativeShareFiles([{ content: transientText || '', filename }]).catch(()=>{});
+                const target = resolveEntityExportTarget(data);
+                if (target.mode === 'memory') {
+                    window.inSetu.utils.nativeShareFiles([{ content: target.text || '', filename: target.filename }]).catch(()=>{});
                     return;
                 }
-                const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, data.filepath);
-                shareFiles(data.filepath, chunks, data.isFS);
+                shareFiles(data.filepath, target.chunks, target.isFS);
             }
         },
         {
@@ -1530,21 +1560,18 @@ window.ExtensionRegistry.registerExtension('fs', {
             order: 18,
             match: (data) => !data.isSkeleton,
             asyncAction: async (data, e) => {
-                const normPath = normalizeVfsURI(data.filepath);
-                const activeBuf = FsStore.getState().activeBuffers?.[normPath] || FsStore.getState().activeBuffers?.[data.filepath];
-                const transientText = data.transientContent !== undefined ? data.transientContent : activeBuf?.content;
-                if (transientText !== undefined && (!data.chunks || data.chunks.length <= 1)) {
+                const target = resolveEntityExportTarget(data);
+                if (target.mode === 'memory') {
                     try {
-                        const blob = new Blob([transientText], { type: 'text/plain' });
-                        downloadBlob(blob, data.filepath.split('/').pop());
+                        const blob = new Blob([target.text], { type: 'text/plain' });
+                        downloadBlob(blob, target.filename);
                         return;
-                    } catch (e) {
-                        alert("Error downloading file: " + e.message);
+                    } catch (err) {
+                        alert("Error downloading file: " + err.message);
                         return;
                     }
                 }
-
-                const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, data.filepath);
+                const chunks = target.chunks;
                 if (chunks && chunks.length > 1) {
                     if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⬇️ Downloading multi-part context...", 2000);
                     for (const f of chunks) {
@@ -1852,7 +1879,8 @@ export function openWorkspaceBrowser(options = {}) {
     let targetManifest = files || getGlobalManifest();
     let cbPath = [];
     if (autoDrilldown) {
-        let cursor = buildUriFileTree(targetManifest, 'vfs://');
+        const treeBuilder = window.inSetu?.vfs?.buildUriFileTree || buildFileTree;
+        let cursor = treeBuilder(targetManifest, 'vfs://');
         while (cursor && cursor.type === 'directory' && cursor.children) {
             const children = Object.values(cursor.children);
             if (children.length === 1 && children[0].type === 'directory') {
@@ -2087,12 +2115,8 @@ export class InSetuEditorProjection extends InSetuElement {
         setTimeout(() => {
             if (!this._buffer && this.filepath && !this.filepath.startsWith('yomama://') && !this.filepath.startsWith('virtual://')) {
                 if (window.inSetu?.vfs?.viewSourceFile) {
-                    const isUserTemplate = this.filepath.includes('/.templates/user/');
-                    const isReadOnlyTemplate = !isUserTemplate && this.filepath.includes('/.templates/');
-                    const isSharedMount = this.filepath.startsWith('ws://');
-                    const isEditableCtx = !isReadOnlyTemplate && (this.filepath.startsWith('ctx://notes/') || this.filepath.startsWith('ctx://prompts/'));
-                    const isPhysical = !isReadOnlyTemplate && !isSharedMount && (!this.filepath.startsWith('ctx://') || isEditableCtx);
-                    window.inSetu.vfs.viewSourceFile(this.filepath, isPhysical, true);
+                    const parsed = this.utils.parseURI ? this.utils.parseURI(this.filepath) : { isEditable: true };
+                    window.inSetu.vfs.viewSourceFile(this.filepath, parsed.isEditable, true);
                 }
             }
         }, 0);
@@ -2234,11 +2258,10 @@ export class InSetuEditorProjection extends InSetuElement {
             }
         } catch (e) {}
     }
-
     render() {
         if (!this._buffer) return html`<div class="spinner" style="display:block; padding: 20px;">Initializing buffer...</div>`;
         const m = this._buffer;
-        const shouldBeReadOnly = !(m.isFS || m.forceEdit);
+        const shouldBeReadOnly = !(m.isFS || m.forceEdit) || !!m.isTruncated;
         const kbSize = Math.round((m.fullText?.length || 0) / 1024);
         return html`
             <div class="editor-header">
@@ -2368,6 +2391,7 @@ export function openPartsModal(filepath) {
         });
     }
 }
+window.inSetu.vfs.resolveEntityExportTarget = resolveEntityExportTarget;
 window.inSetu.vfs.resolveFileFetchUrl = resolveFileFetchUrl;
 window.inSetu.vfs.renameFileTracking = renameFileTracking;
 window.inSetu.vfs.getChunks = getChunks;

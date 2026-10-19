@@ -178,13 +178,25 @@ window.addEventListener('insetu:vfs-mutated', () => {
     _lastPackSelection = null;
     _lastPackItemsHash = '';
 });
-
+window.addEventListener('insetu:soft-refresh', () => {
+    _lastPackSelection = null;
+    _lastPackItemsHash = '';
+});
 const _computePackSelectionPayload = (items) => {
     const payloadItems = items.map(i => {
         const d = i.data || i;
-        if (d?.folderpath || d?.isDir) return { folderpath: d.folderpath || d.filepath, isDir: true };
-        if (d?.filepath) return { filepath: d.filepath, isDir: false };
-        return null;
+        if (typeof d === 'string' && d.trim()) {
+            const isDirStr = d.trim().endsWith('/');
+            return { filepath: d.trim(), isDir: isDirStr };
+        }
+        const rawTarget = String(d?.filepath || d?.folderpath || d?.id || '').trim();
+        if (!rawTarget) return null;
+        const isDir = Boolean(d?.isDir || d?.folderpath || rawTarget.endsWith('/'));
+        if (isDir) {
+            const cleanDir = rawTarget.replace(/\/+$/, '');
+            return { filepath: `${cleanDir}/`, folderpath: cleanDir, isDir: true };
+        }
+        return { filepath: rawTarget, isDir: false };
     }).filter(i => i !== null);
 
     const manifest = window.inSetu?.stores?.App?.getState()?.manifest || { vfs: {}, ctx: {} };
@@ -227,8 +239,14 @@ const packSelectionPayload = async (items) => {
                 } else if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
                     await window.inSetu.sys.refreshManifest();
                 }
-                _lastPackItemsHash = itemsHash;
-                _lastPackSelection = artifact;
+                const packedFiles = artifact.manifest_entry?.files || [];
+                if (packedFiles.length > 0 && packedFiles.every(f => typeof f === 'string')) {
+                    _lastPackItemsHash = itemsHash;
+                    _lastPackSelection = artifact;
+                } else {
+                    _lastPackItemsHash = '';
+                    _lastPackSelection = null;
+                }
                 resolve(artifact);
             },
             onError: (err) => reject(err)
@@ -398,6 +416,7 @@ export class InSetuExtGather extends InSetuElement {
         }
         const filteredFiles = this.filterItems(enrichedFiles, {
             repoField: 'repoDir',
+            alwaysInclude: f => f.finalCat === 'Quickpacks',
             searchFields: f => `${f.repoDir || ''} ${f.finalTitle} ${f.finalCat} ${f.finalDesc}`
         });
         return html`
@@ -455,6 +474,8 @@ export class InSetuExtGather extends InSetuElement {
                                     ${cat === 'Quickpacks' ? html`
                                         <sutram-async-btn slot="actions" label="Clear" intent="danger" size="sm" .onClick=${async () => {
                                             try {
+                                                _lastPackSelection = null;
+                                                _lastPackItemsHash = '';
                                                 const res = await window.inSetu.api.workspace.post('gather/clear_quickpacks', {});
                                                 if (res.ok) {
                                                     const data = await res.json();

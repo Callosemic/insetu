@@ -85,56 +85,12 @@ initShortcutRouter(window.ExtensionRegistry, () => {
 });
 // Default OS Shortcut Registrations
 const _isCoreExt = (extName) => window.inSetu?.isCore ? window.inSetu.isCore(extName) : false;
-
 export function autoWireSettingsSchemas() {
     if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
         window.inSetu.settingsSchemas = window.inSetu.settingsSchemas || {};
-
-        const allExts = new Set([
-            ...Array.from(window.ExtensionRegistry._manifests.keys()),
-            ...Object.keys(window.inSetu.settingsSchemas),
-            ...Object.keys(window.inSetu.serverSchemas || {})
-        ]);
-        allExts.forEach((extName) => {
-            const isCore = _isCoreExt(extName);
-            if (!isCore && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extName)) {
-                return;
-            }
-
-            const manifest = window.ExtensionRegistry._manifests.get(extName) || { name: extName.charAt(0).toUpperCase() + extName.slice(1), settingsActions: [] };
-            const schema = manifest.settingsSchema || window.inSetu.settingsSchemas[extName] || window.inSetu.serverSchemas?.[extName];
-
-            if (schema && schema.length > 0) {
-                manifest.settingsActions = manifest.settingsActions || [];
-                // Prevent duplicate injections during soft-refreshes
-                if (!manifest.settingsActions.some(a => a.id === `${extName}_generic_settings`)) {
-                    // Pass the full schema. The generic settings modal will natively 
-                    // intercept managedKeys and render custom inline buttons.
-                    const action = {
-                        id: `${extName}_generic_settings`,
-                        label: `${manifest.name || extName.charAt(0).toUpperCase() + extName.slice(1)} Base Settings`,
-                        icon: 'settings',
-                        onClick: async () => {
-                            const genericModal = document.getElementById('insetu-generic-settings-root');
-                            if (genericModal) {
-                                let formData = {};
-                                try {
-                                    const res = await window.inSetu.api.workspace.get(`${extName}/settings?t=${Date.now()}`);
-                                    if (res.ok) formData = await res.json();
-                                } catch(e) {}
-                                genericModal.openModal(extName, schema, formData);
-                            }
-                        }
-                    };
-                    manifest.settingsActions.push(action);
-                }
-
-                // Push directly to the registry to ensure it renders in the top-right DOM dropdown
-                if (typeof window.ExtensionRegistry.registerSettingsAction === 'function') {
-                    manifest.settingsActions.forEach(act => {
-                        window.ExtensionRegistry.registerSettingsAction(act.id, act.label, act.icon, act.onClick, isCore ? 'System' : 'Extensions');
-                    });
-                }
+        window.ExtensionRegistry._manifests.forEach((manifest, extName) => {
+            if (manifest.settingsSchema && !window.inSetu.settingsSchemas[extName]) {
+                window.inSetu.settingsSchemas[extName] = manifest.settingsSchema;
             }
         });
     }

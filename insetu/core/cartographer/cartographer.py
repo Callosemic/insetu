@@ -1,10 +1,10 @@
 import os
 import threading
 import subprocess
-import concurrent.futures
 from pathlib import Path
 from akasa.utils import get_workspace_physics, load_config, build_tree_dict
 from akasa.vfs import execute_vfs_save
+from akasa.workers import run_parallel
 from insetu.core.utils_core import execute_binary, InSetuURI
 from insetu.core.topology.engine_topology import get_valid_workspace_files, get_topology_files_for_repo
 from akasa.hooks import hooks
@@ -144,8 +144,9 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         ]
         if not filtered_files: return
 
+        managed_dirs = config.get("repo_managed_dirs") if config.get("repo_managed_dirs") is not None else cfg.get("managed_dirs", [])
         index_mtime = index_path.stat().st_mtime_ns if index_path.exists() else 0
-        repo_sig = (tuple(filtered_files), index_mtime, tuple(cfg.get("managed_dirs", [])), tuple(config.get("repo_managed_dirs", [])))
+        repo_sig = (tuple(filtered_files), index_mtime, tuple(managed_dirs))
         cache_key = (workspace_id or "default", repo_dir)
         with _CARTOGRAPHER_CACHE_LOCK:
             if _CARTOGRAPHER_SIG_CACHE.get(cache_key) == repo_sig and index_mtime > 0:
@@ -156,7 +157,6 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
             os.makedirs(Path(index_path).parent, exist_ok=True)
 
         header = f"# {config.get('title', repo_dir)} Code Index\n\nThis index serves as the architectural map. It outlines the core directories and their operational purpose to maintain a clear mental model of the ecosystem, preventing cognitive overload and logic drift.\n\n```text\n{repo_dir}/\n"
-        managed_dirs = cfg.get("managed_dirs", []) + config.get("repo_managed_dirs", [])
         tree_lines = render_ascii_tree(tree_dict, comments, managed_dirs)
         footer = "\n```\n"
         logical_index_path = f"vfs://{repo_dir}/docs/CODE_INDEX.md" if config.get("is_core_chassis") else f"vfs://{repo_dir}/CODE_INDEX.md"
@@ -170,9 +170,7 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
                 print(f"  └─ ✅ Index updated. ⚠️ {missing} placeholders require attention.")
             else:
                 print(f"  └─ ✅ Index updated. Perfect documentation parity.")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [executor.submit(process_repo, config) for config in all_configs]
-        concurrent.futures.wait(futures)
+    run_parallel(process_repo, all_configs)
 
     if not silent: print("\n🎉 Cartography complete!\n")
 

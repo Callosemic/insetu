@@ -219,7 +219,6 @@ def hook_request_vfs_manifest(workspace_id=None, **kwargs):
         return manifest
     except Exception:
         return {}
-
 def get_omniscient_workspace_files(workspace_id, allowed_repos):
     """Fast SQL replacement for the old os.walk bridge optimization."""
     resolve_topology_buffer(workspace_id)
@@ -227,7 +226,7 @@ def get_omniscient_workspace_files(workspace_id, allowed_repos):
     if not allowed_repos: return []
     placeholders = ','.join(['?'] * len(allowed_repos))
     rows = ctx.db.execute(f"SELECT filepath FROM topology_ledger WHERE repo IN ({placeholders})", tuple(allowed_repos)).fetchall()
-    return [(Path(r['filepath']).name, r['filepath']) for r in rows]
+    return [(InSetuURI(r['filepath']).basename, str(InSetuURI(r['filepath']))) for r in rows]
 def get_topology_files_for_repo(workspace_id, repo_dir):
     """SSOT accessor returning canonical vfs://<repo>/<path> URIs from topology_ledger."""
     resolve_topology_buffer(workspace_id)
@@ -360,19 +359,18 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
         _TOPOLOGY_SLEW_THREAD.start()
 
     if not mutations: return
-
     for m in mutations:
         if m.get("ignore_ledger"):
             continue
         filepath = m.get("filepath")
-        if not filepath or str(filepath).startswith("ws://"):
+        if not filepath or str(filepath).startswith(("ws://", "ctx://")):
             continue
 
-        is_dir = filepath.endswith('/') or filepath.endswith('\\')
-
-        repo, rel_path = parse_uri(filepath)
-        norm_path = f"vfs://{repo}/{rel_path}".strip('/') if rel_path else f"vfs://{repo}"
-
+        is_dir = str(filepath).endswith(('/', '\\'))
+        uri = InSetuURI(filepath)
+        if uri.scheme and uri.scheme != "vfs":
+            continue
+        norm_path = str(uri)
         if is_dir and not norm_path.endswith('/'):
             norm_path += '/'
 
@@ -475,34 +473,8 @@ def resolve_topology_buffer(workspace_id):
                 dirty_buckets.add(f"{repo_dir}::{row['bucket_id']}")
         else:
             repo_cfg = target_repos_map.get(repo_dir)
-
-            is_ignored = False
             rel_to_repo = rel_path
-            if repo_cfg:
-                live_cfg = ctx.config
-
-                ignore_exceptions = repo_cfg.get("ignore_exceptions") or []
-                if any(rel_to_repo.startswith(exc) or exc in rel_to_repo for exc in ignore_exceptions):
-                    is_ignored = False
-                else:
-                    ignore_dirs = set(repo_cfg.get("repo_ignore_dirs") if repo_cfg.get("repo_ignore_dirs") is not None else (live_cfg.get("ignore_dirs") or []))
-                    ignore_files = set(repo_cfg.get("repo_ignore_files") if repo_cfg.get("repo_ignore_files") is not None else (live_cfg.get("ignore_files") or []))
-                    ignore_patterns = repo_cfg.get("repo_ignore_patterns") if repo_cfg.get("repo_ignore_patterns") is not None else (live_cfg.get("ignore_patterns") or [])
-                    filename = Path(filepath).name.lower()
-                    if filename in ignore_files:
-                        is_ignored = True
-                    elif any(pattern in rel_to_repo for pattern in ignore_patterns):
-                        is_ignored = True
-                    elif set(p.lower() for p in rel_to_repo.split('/')).intersection(ignore_dirs):
-                        is_ignored = True
-                    else:
-                        if filename not in (".gitkeep", ".keep"):
-                            ext = Path(filepath).suffix.lower()
-                            allowed_exts = set(repo_cfg.get("exts") if repo_cfg.get("exts") is not None else (live_cfg.get("include_extensions") or []))
-                            if ext not in allowed_exts and filename not in allowed_exts:
-                                is_ignored = True
-
-            if is_ignored:
+            if repo_cfg and not is_file_tracked_by_sieve(rel_to_repo, repo_cfg, ctx.config, repo_dir=repo_dir):
                 continue
 
             sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []
@@ -628,12 +600,187 @@ def _background_resolve_topology(ctx, job_id=None, **kwargs):
         return {"message": "No topology events to resolve."}
 
     return {"message": f"Topology settled. Resolved {total_resolved} events."}
+_GITIGNORE_REGEX_CACHE = {}
+
+
+def _compile_gitignore_regex(pattern: str):
+    """Compiles a single .gitignore pattern into a (regex, is_dir_only) tuple."""
+    cached = _GITIGNORE_REGEX_CACHE.get(pattern)
+    if cached is not None:
+        return cached
+
+    p = pattern.strip()
+    is_dir_only = p.endswith("/")
+    if is_dir_only:
+        p = p.rstrip("/")
+
+    is_anchored = p.startswith("/")
+    if is_anchored:
+        p = p.lstrip("/")
+    elif "/" in p:
+        is_anchored = True
+
+    if not p:
+        return None
+
+    # Convert .gitignore glob syntax (*, **, ?) into regex
+    regex_parts = []
+    i = 0
+    n = len(p)
+    while i < n:
+        if p[i:i+3] == "**/":
+            regex_parts.append("(?:.+/)?")
+            i += 3
+        elif p[i:i+3] == "/**":
+            regex_parts.append("(?:/.*)?")
+            i += 3
+        elif p[i:i+2] == "**":
+            regex_parts.append(".*")
+            i += 2
+        elif p[i] == "*":
+            regex_parts.append("[^/]*")
+            i += 1
+        elif p[i] == "?":
+            regex_parts.append("[^/]")
+            i += 1
+        else:
+            regex_parts.append(re.escape(p[i]))
+            i += 1
+
+    body = "".join(regex_parts)
+    if is_anchored:
+        if is_dir_only:
+            full_pat = f"^{body}(?:/.*)?$"
+        else:
+            full_pat = f"^{body}(?:/.*)?$"
+    else:
+        if is_dir_only:
+            full_pat = f"^(?:.+/)?{body}/.*$"
+        else:
+            full_pat = f"^(?:.+/)?{body}(?:/.*)?$"
+
+    compiled = (re.compile(full_pat, re.IGNORECASE), is_dir_only)
+    if len(_GITIGNORE_REGEX_CACHE) < 2048:
+        _GITIGNORE_REGEX_CACHE[pattern] = compiled
+    return compiled
+
+
+def matches_gitignore_patterns(rel_path: str, patterns: list) -> bool:
+    """
+    Evaluates a relative POSIX path against a list of .gitignore-style patterns.
+    Supports trailing-slash directory matches ('archived/'), root-anchored paths ('/build/'),
+    floating globs ('*.pyc', 'temp_*'), double-star ('**'), and sequential '!negation' rules.
+    """
+    if not rel_path or not patterns:
+        return False
+
+    clean_path = rel_path.replace("\\", "/").lstrip("./").strip("/")
+    if not clean_path:
+        return False
+
+    matched = False
+    for raw_pat in patterns:
+        if not raw_pat or not isinstance(raw_pat, str):
+            continue
+        pat = raw_pat.strip()
+        if not pat or pat.startswith("#"):
+            continue
+
+        is_negated = pat.startswith("!")
+        if is_negated:
+            pat = pat[1:].strip()
+            if not pat:
+                continue
+
+        compiled = _compile_gitignore_regex(pat)
+        if not compiled:
+            continue
+        regex, _ = compiled
+        if regex.match(clean_path):
+            matched = not is_negated
+
+    return matched
+
+
+def is_file_tracked_by_sieve(rel_path: str, config: dict, live_cfg: dict, repo_dir: str = "") -> bool:
+    """
+    Single Source of Truth (SSOT) Hierarchical VFS Sieve.
+    Evaluates a repository-relative path against Nullable Override rules, .gitignore patterns,
+    prefixes, ignore exceptions, and force-include overrides.
+    """
+    norm_path = rel_path[2:] if rel_path.startswith("./") else rel_path
+    norm_path = norm_path.replace("\\", "/").strip("/")
+    if not norm_path:
+        return False
+
+    forced_files = set(config.get("force_include") or [])
+    if norm_path in forced_files:
+        return True
+
+    if config.get("prefix") and not norm_path.startswith(config.get("prefix")):
+        return False
+
+    if repo_dir == ".insetu" and (norm_path.startswith(("cache/", "ext/")) or "/cache/" in norm_path or "/ext/" in norm_path):
+        return False
+
+    p_obj = Path(norm_path)
+    fname = p_obj.name.lower()
+
+    if config.get("apply_ignore", True):
+        ignore_exceptions = config.get("ignore_exceptions") or []
+        is_excepted = any(
+            norm_path.startswith(exc.lstrip("/")) for exc in ignore_exceptions if exc
+        ) or matches_gitignore_patterns(norm_path, ignore_exceptions)
+
+        if not is_excepted:
+            raw_dirs = (
+                config.get("repo_ignore_dirs")
+                if config.get("repo_ignore_dirs") is not None
+                else (live_cfg.get("ignore_dirs") or [])
+            )
+            raw_files = (
+                config.get("repo_ignore_files")
+                if config.get("repo_ignore_files") is not None
+                else (live_cfg.get("ignore_files") or [])
+            )
+            raw_patterns = (
+                config.get("repo_ignore_patterns")
+                if config.get("repo_ignore_patterns") is not None
+                else (live_cfg.get("ignore_patterns") or [])
+            )
+
+            # Synthesize unified .gitignore pattern list from dirs, files, and patterns
+            combined_patterns = []
+            for d in (raw_dirs or []):
+                d_clean = str(d).strip()
+                if d_clean:
+                    combined_patterns.append(d_clean if d_clean.endswith("/") else f"{d_clean}/")
+            for f in (raw_files or []):
+                f_clean = str(f).strip()
+                if f_clean:
+                    combined_patterns.append(f_clean)
+            for p in (raw_patterns or []):
+                p_clean = str(p).strip()
+                if p_clean:
+                    combined_patterns.append(p_clean)
+
+            if matches_gitignore_patterns(norm_path, combined_patterns):
+                return False
+
+    if fname in (".gitkeep", ".keep"):
+        return True
+
+    ext = p_obj.suffix.lower()
+    allowed_exts = set(
+        (e.lower() for e in config.get("exts"))
+        if config.get("exts") is not None
+        else (e.lower() for e in (live_cfg.get("include_extensions") or []))
+    )
+    return ext in allowed_exts or fname in allowed_exts
+
+
 def get_valid_workspace_files(repo_path, config, workspace_id=None):
     live_cfg = load_config(workspace_id)
-
-    ignore_dirs = set(config.get("repo_ignore_dirs") if config.get("repo_ignore_dirs") is not None else (live_cfg.get("ignore_dirs") or []))
-    ignore_files = set(config.get("repo_ignore_files") if config.get("repo_ignore_files") is not None else (live_cfg.get("ignore_files") or []))
-    ignore_patterns = config.get("repo_ignore_patterns") if config.get("repo_ignore_patterns") is not None else (live_cfg.get("ignore_patterns") or [])
     archive_type = config.get("archive_type", "repo")
 
     def _fallback_rglob():
@@ -665,7 +812,8 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
 
     repo_p = Path(repo_path)
 
-    managed_scan_dirs = set(live_cfg.get("managed_dirs") or []) | {".insetu-data"}
+    resolved_managed = config.get("repo_managed_dirs") if config.get("repo_managed_dirs") is not None else (live_cfg.get("managed_dirs") or [])
+    managed_scan_dirs = set(resolved_managed) | {".insetu-data"}
     for m_dir in managed_scan_dirs:
         m_path = repo_p / m_dir
         if m_path.exists() and m_path.is_dir():
@@ -675,39 +823,30 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
                     except ValueError: pass
 
     valid_files = set()
+    repo_dir_name = config.get("repo_dir") or repo_p.name
 
     for file in git_files:
-        norm_path = file
-        if norm_path.startswith("./"): norm_path = norm_path[2:]
-        if config.get("prefix") and not norm_path.startswith(config.get("prefix")): continue
-
+        norm_path = file[2:] if file.startswith("./") else file
         target_f = repo_p / norm_path
-        if not target_f.is_file(): continue
-        if target_f.name.lower() in ignore_files: continue
-        if config.get("apply_ignore"):
-            if any(norm_path.startswith(exc) for exc in (config.get("ignore_exceptions") or [])):
-                pass
-            else:
-                if set(p.lower() for p in norm_path.split('/')).intersection(ignore_dirs): continue
-                if any(pattern in norm_path for pattern in ignore_patterns): continue
-
-        if repo_p.name == '.insetu' and (norm_path.startswith(('cache/', 'ext/')) or '/cache/' in norm_path or '/ext/' in norm_path):
+        if not target_f.is_file():
             continue
-        if target_f.name.lower() in (".gitkeep", ".keep"):
+        if is_file_tracked_by_sieve(norm_path, config, live_cfg, repo_dir=repo_dir_name):
             valid_files.add(norm_path)
-            continue
-        ext = target_f.suffix.lower()
-        fname = target_f.name.lower()
-
-        allowed_exts = set(config.get("exts") if config.get("exts") is not None else (live_cfg.get("include_extensions") or []))
-
-        if ext in allowed_exts or fname in allowed_exts: valid_files.add(norm_path)
 
     for forced_file in (config.get("force_include") or []):
         if (repo_p / forced_file).exists(): 
             valid_files.add(forced_file)
 
     return sorted(list(valid_files))
+_DROPPED_BUCKET_SENTINEL = {
+    "id": "_dropped",
+    "title": "Dropped Files",
+    "exclude_from_context": True,
+    "exclude_from_diffs": True,
+    "is_system": True
+}
+
+
 def resolve_file_bucket(filepath, sub_buckets, repo_dir=""):
     clean_filepath = re.sub(r'^(?:\[[A-Z?!\s]{1,2}\]\s+|[A-Z?!\s]{2}\s+)', '', filepath).strip()
 
@@ -717,27 +856,57 @@ def resolve_file_bucket(filepath, sub_buckets, repo_dir=""):
     clean_filepath_lower = clean_filepath.lower()
     safe_repo_prefix = (repo_dir.lower() + "/") if repo_dir else ""
 
-    for b in sub_buckets:
+    for b in (sub_buckets or []):
+        if not b or not isinstance(b, dict):
+            continue
+
+        matched_prefix = None
+        dynamic_module = None
         prefix = b.get("dynamic_split_prefix")
+
         if prefix:
             prefix_lower = prefix.lower()
             if prefix_lower == "." or clean_filepath_lower.startswith(prefix_lower):
                 parts = clean_filepath.split("/")
                 module_idx = len([p for p in prefix.split('/') if p and p != '.'])
                 if len(parts) > module_idx + 1:
-                    return b, parts[module_idx]
-                continue
+                    matched_prefix = "" if prefix_lower == "." else prefix
+                    dynamic_module = parts[module_idx]
+                else:
+                    continue
         elif b.get("match_prefixes"):
             for p in b["match_prefixes"]:
                 p_lower = p.lower()
                 if clean_filepath_lower.startswith(p_lower):
-                    return b, None
+                    matched_prefix = p
+                    break
                 if safe_repo_prefix and p_lower.startswith(safe_repo_prefix):
                     stripped_p = p_lower[len(safe_repo_prefix):]
                     if stripped_p and clean_filepath_lower.startswith(stripped_p):
-                        return b, None
-    catch_all = next((b for b in sub_buckets if b.get("is_catch_all")), None)
-    return catch_all, None
+                        matched_prefix = stripped_p
+                        break
+
+        if matched_prefix is not None:
+            # Evaluate sub-bucket .gitignore patterns against both repo-relative and bucket-relative paths
+            bucket_rel = clean_filepath[len(matched_prefix):].lstrip("/") if matched_prefix else clean_filepath
+
+            drop_pats = b.get("drop_patterns") or []
+            if drop_pats and (
+                matches_gitignore_patterns(clean_filepath, drop_pats)
+                or (bucket_rel and matches_gitignore_patterns(bucket_rel, drop_pats))
+            ):
+                return dict(_DROPPED_BUCKET_SENTINEL), None
+
+            ignore_pats = b.get("ignore_patterns") or []
+            if ignore_pats and (
+                matches_gitignore_patterns(clean_filepath, ignore_pats)
+                or (bucket_rel and matches_gitignore_patterns(bucket_rel, ignore_pats))
+            ):
+                continue
+
+            return b, dynamic_module
+
+    return None, None
 def resolve_owning_workspaces(event_name, **kwargs):
     """Domain-aware spatial router for OS lifecycle events."""
     if event_name != 'vfs_mutated': return set()

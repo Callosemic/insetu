@@ -1,10 +1,12 @@
 from pathlib import Path
 import os
+import gc
 import re
 import sys
 import json
 import shutil
 import socket
+import tracemalloc
 import importlib
 import importlib.util
 import threading
@@ -12,11 +14,11 @@ import time
 import traceback
 from typing import TypedDict, Optional, List, Dict, Any
 from flask import request, jsonify
-from akasa.utils import load_config, save_json_config, load_json_config, get_workspace_physics, sniff_tenant_id
+from akasa.utils import load_config, save_json_config, load_json_config, get_workspace_physics, sniff_tenant_id, reclaim_process_memory, _JSON_CACHE
 import akasa.utils as utils
 from akasa.hooks import hooks
 from akasa.sync import get_system_deltas
-from akasa.vfs import execute_vfs_delete, set_mount_authorizer
+from akasa.vfs import execute_vfs_delete, set_mount_authorizer, _VFS_READ_CACHE, _VFS_READ_CACHE_BYTES, _VFS_WRITE_QUEUE
 from akasa.extension import SettingsManager
 from insetu.core.sdk import InSetuExtension
 import insetu.core.system.legacy  # Mount one-off migration hooks
@@ -102,18 +104,18 @@ SYSTEM_SETTINGS_SCHEMA = [
     {
         "id": "export_shared_domains",
         "label": "Exported Domains (Publisher)",
-        "type": "object",
+        "type": "hidden",
         "scope": "workspace",
         "default": {},
-        "description": "Expose internal directories to other workspaces. Format: {'prompts': {'allowed': ['*']}}"
+        "description": "Expose internal directories to other workspaces."
     },
     {
         "id": "shared_mounts",
         "label": "Virtual Mounts (Subscriber)",
-        "type": "json",
+        "type": "hidden",
         "scope": "workspace",
         "default": [],
-        "description": "Mount external workspace domains. Format: [{'workspace_id': 'hub', 'domain': 'prompts'}]"
+        "description": "Mount external workspace domains."
     }
 ]
 system_bp = InSetuExtension(
@@ -671,6 +673,7 @@ def api_system_reboot(ctx):
         try: hooks.emit('system_shutdown')
         except Exception: pass
         time.sleep(0.5)
+        os.environ["MALLOC_ARENA_MAX"] = "2"
         python_exe = sys.executable
         os.execv(python_exe, [python_exe] + sys.argv)
 
@@ -958,3 +961,83 @@ def api_list_local_host_dirs(ctx):
         return jsonify({"current": target, "dirs": dirs})
     except Exception as e:
         return jsonify({"current": target, "dirs": [], "error": str(e)}), 500
+@system_bp.route('memory', methods=['GET', 'POST'], docstring="[sync] Inspects backend RAM usage, internal caches, top Python object types, and optionally triggers GC + glibc malloc_trim or tracemalloc.")
+def api_system_memory(ctx):
+    action = ctx.req.args.get('action') or ((ctx.req.get_json(silent=True) or {}).get('action') if ctx.req.method == 'POST' else None)
+    if action == 'trim':
+        reclaim_process_memory()
+    elif action == 'tracemalloc_start':
+        if not tracemalloc.is_tracing():
+            tracemalloc.start(10)
+    elif action == 'tracemalloc_stop':
+        if tracemalloc.is_tracing():
+            tracemalloc.stop()
+
+    # 1. OS Process Memory (/proc/self/status)
+    proc_mem = {}
+    if os.path.exists('/proc/self/status'):
+        try:
+            with open('/proc/self/status', 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.startswith(('VmRSS:', 'VmSize:', 'VmData:', 'VmPeak:', 'Threads:')):
+                        k, v = line.split(':', 1)
+                        proc_mem[k.strip()] = v.strip()
+        except Exception:
+            pass
+
+    # 2. Internal Kernel Cache Telemetry
+    json_cache_bytes = sum(len(v.encode('utf-8')) for v in _JSON_CACHE.values() if isinstance(v, str))
+    caches_info = {
+        "vfs_read_cache_files": len(_VFS_READ_CACHE),
+        "vfs_read_cache_mb": round(_VFS_READ_CACHE_BYTES / (1024 * 1024), 2),
+        "vfs_write_queue_depth": _VFS_WRITE_QUEUE.qsize(),
+        "json_config_cache_files": len(_JSON_CACHE),
+        "json_config_cache_kb": round(json_cache_bytes / 1024, 2)
+    }
+
+    # 3. Top Python Object Types in GC
+    type_counts = {}
+    type_bytes = {}
+    for obj in gc.get_objects():
+        t_name = type(obj).__name__
+        type_counts[t_name] = type_counts.get(t_name, 0) + 1
+        try:
+            type_bytes[t_name] = type_bytes.get(t_name, 0) + sys.getsizeof(obj)
+        except Exception:
+            pass
+
+    top_by_size = sorted(type_bytes.items(), key=lambda x: x[1], reverse=True)[:15]
+    top_objects = [
+        {"type": t, "count": type_counts.get(t, 0), "shallow_mb": round(b / (1024 * 1024), 2)}
+        for t, b in top_by_size
+    ]
+
+    # 4. Tracemalloc Snapshot (if enabled)
+    trace_top = []
+    if tracemalloc.is_tracing():
+        snap = tracemalloc.take_snapshot()
+        for stat in snap.statistics('lineno')[:15]:
+            trace_top.append({
+                "location": str(stat.traceback),
+                "size_mb": round(stat.size / (1024 * 1024), 2),
+                "count": stat.count
+            })
+
+    # 5. Live Thread Breakdown
+    thread_groups = {}
+    for t in threading.enumerate():
+        t_label = f"{type(t).__name__}:{t.name.split('-')[0].split('_')[0]}"
+        thread_groups[t_label] = thread_groups.get(t_label, 0) + 1
+    threads_summary = [
+        {"group": k, "count": v}
+        for k, v in sorted(thread_groups.items(), key=lambda x: x[1], reverse=True)
+    ]
+
+    return jsonify({
+        "process": proc_mem,
+        "caches": caches_info,
+        "threads": threads_summary,
+        "top_object_types": top_objects,
+        "tracemalloc_active": tracemalloc.is_tracing(),
+        "tracemalloc_top": trace_top
+    })

@@ -3,20 +3,23 @@ import { resolveDirectoryState } from '../../../vendor/sutram/js/utils.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { SutramCard } from '../../../vendor/sutram/js/primitives.js';
 import { InSetuElement } from '/static/extensions/system/insetu_sdk.js';
-
 export function buildUriFileTree(uris, rootScope = '') {
-    const root = { name: 'root', type: 'directory', children: {}, fullPath: rootScope || 'vfs://', canonicalUri: rootScope || 'vfs://', treePath: [] };
-    const cleanScope = (rootScope || '').replace(/\/+$/, '');
+    const normScope = (rootScope || 'vfs://').trim();
+    const isSchemeOnlyScope = /^[a-zA-Z0-9_-]+:\/\/$/.test(normScope);
+    const cleanScope = isSchemeOnlyScope ? normScope : normScope.replace(/\/+$/, '');
+    const rootUri = isSchemeOnlyScope ? normScope : `${cleanScope}/`;
+    const root = { name: 'root', type: 'directory', children: {}, fullPath: rootUri, canonicalUri: rootUri, treePath: [] };
 
-    (uris || []).forEach(rawUri => {
-        if (!rawUri || typeof rawUri !== 'string' || !rawUri.includes('://')) return;
+    (uris || []).forEach(rawItem => {
+        if (!rawItem || typeof rawItem !== 'string') return;
+        const rawUri = rawItem.includes('://') ? rawItem : `vfs://${rawItem.replace(/^\/+/, '')}`;
         let schemePrefix = '';
         let relSegmentsStr = '';
 
-        if (cleanScope && rawUri.startsWith(cleanScope + '/')) {
+        if (!isSchemeOnlyScope && cleanScope && rawUri.startsWith(cleanScope + '/')) {
             schemePrefix = cleanScope + '/';
             relSegmentsStr = rawUri.slice(schemePrefix.length);
-        } else if (cleanScope && rawUri === cleanScope) {
+        } else if (!isSchemeOnlyScope && cleanScope && rawUri === cleanScope) {
             return;
         } else {
             const match = rawUri.match(/^([a-zA-Z0-9_-]+:\/\/)(.*)$/);
@@ -144,7 +147,9 @@ constructor() {
     }
     _getMergedUris() {
         const rootScope = this.stripPrefix || this.basePath || 'vfs://';
-        const baseFiles = (this.files || []).filter(f => f && typeof f === 'string' && f.includes('://'));
+        const baseFiles = (this.files || [])
+            .filter(f => f && typeof f === 'string')
+            .map(f => f.includes('://') ? f : `vfs://${f.replace(/^\/+/, '')}`);
         const pendingFiles = Array.from(this._pendingMutations || [])
             .filter(f => f && typeof f === 'string' && f.startsWith(rootScope));
         let mergedFiles = Array.from(new Set([...baseFiles, ...pendingFiles]));
@@ -274,15 +279,18 @@ constructor() {
                             if (node.type === 'directory') {
                                 const nextPath = Array.isArray(node.treePath) ? node.treePath : node.fullPath.split('/').filter(Boolean);
                                 const isSharedDirRoot = parsed.isSharedMount && nextPath.length === 1;
+                                const cleanDirUri = String(fullTarget).replace(/\/+$/, '');
+                                const canonicalDirUri = `${cleanDirUri}/`;
                                 return html`
                                     <div style="width: 100%; box-sizing: border-box; padding: 0 var(--tree-item-px) 8px var(--tree-item-px);">
                                         <sutram-card
                                             style="margin-bottom: 0;"
+                                            .filename=${canonicalDirUri}
                                             .titleText=${node.name}
                                             icon=${isUserTemplateRoot ? 'user' : (isReadOnlyTemplateNode ? 'library' : (isSharedDirRoot ? 'globe' : 'folder'))}
                                             intent=${(isReadOnlyTemplateNode || isUserTemplateRoot || isSharedDirRoot) ? 'highlight' : 'warning'}
                                             .entityType=${'folder'}
-                                            .entityData=${{ id: fullTarget, folderpath: fullTarget, isDir: !isReadOnlyTemplateNode, isSkeleton: isReadOnlyTemplateNode, isTemplate: isReadOnlyTemplateNode || parsed.isUserTemplate }}
+                                            .entityData=${{ id: canonicalDirUri, filepath: canonicalDirUri, folderpath: cleanDirUri, titleText: node.name, isDir: !isReadOnlyTemplateNode, isSkeleton: isReadOnlyTemplateNode, isTemplate: isReadOnlyTemplateNode || parsed.isUserTemplate }}
                                             @card-clicked=${(e) => { e.stopPropagation(); this._setPath(nextPath); }}>
                                         </sutram-card>
                                     </div>
@@ -322,4 +330,10 @@ constructor() {
         `;
     }
 }
-customElements.define('insetu-file-tree', InSetuFileTree);
+window.inSetu = window.inSetu || {};
+window.inSetu.vfs = window.inSetu.vfs || {};
+window.inSetu.vfs.buildUriFileTree = buildUriFileTree;
+
+if (!customElements.get('insetu-file-tree')) {
+    customElements.define('insetu-file-tree', InSetuFileTree);
+}

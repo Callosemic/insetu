@@ -140,12 +140,23 @@ window.addEventListener('insetu:compile-step-complete', (e) => {
     const isFull = artifact.is_full_sweep || false;
     AppStore.setState(state => {
         const newBuckets = new Set(state.dirtyBuckets || []);
+        const newRepos = new Set(state.dirtyRepos || []);
         if (isFull) {
             newBuckets.clear();
+            newRepos.clear();
         } else if (Array.isArray(cleared)) {
-            cleared.forEach(bKey => newBuckets.delete(bKey));
+            cleared.forEach(bKey => {
+                newBuckets.delete(bKey);
+                if (typeof bKey === 'string' && bKey.includes('::')) {
+                    const repo = bKey.split('::')[0];
+                    const stillHasDirtyBucket = Array.from(newBuckets).some(k => k.startsWith(`${repo}::`));
+                    if (!stillHasDirtyBucket) {
+                        newRepos.delete(repo);
+                    }
+                }
+            });
         }
-        return { dirtyBuckets: newBuckets };
+        return { dirtyBuckets: newBuckets, dirtyRepos: newRepos };
     });
 });
 

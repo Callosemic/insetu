@@ -2,19 +2,65 @@ import re
 import difflib
 import base64
 from insetu.core.utils_core import _get_base_step_and_diffs
-def clean_chevron_meltdown(text):
-    """Phase B: Explicit Chevron Healing Loop. Trims conversational garbage trailing the final patch."""
-    # Find the last valid REPLACE block
+# ==============================================================================
+# CHATBOT & LLM TRANSPORT ARTIFACT HEALERS
+# ==============================================================================
+
+def heal_chevron_meltdown(text):
+    """Trims conversational garbage or broken markdown fences trailing the final REPLACE block."""
     match = list(re.finditer(r'>>>>>>> REPLACE', text))
     if match:
         last_idx = match[-1].end()
-        # Trim any trailing text that lacks alphanumeric characters (conversational/markdown decay)
         trailing = text[last_idx:]
         if not re.search(r'[a-zA-Z0-9]', trailing.replace('```', '')):
             return text[:last_idx]
     return text
+
+
+# Backward-compatible alias
+clean_chevron_meltdown = heal_chevron_meltdown
+
+
+def heal_latex_vert(text):
+    """Replaces Gemini LaTeX math-mode pipe escapes (\\vert{}) back into '|' strictly when bounded by $ ... $."""
+    if "\\vert" not in text or text.count("$") < 2:
+        return text
+    first_dollar = text.find("$")
+    last_dollar = text.rfind("$")
+    if first_dollar >= last_dollar:
+        return text
+    middle = text[first_dollar + 1:last_dollar].replace("\\vert{}", "|").replace("\\vert", "|")
+    return text[:first_dollar + 1] + middle + text[last_dollar:]
+
+
+def heal_citation_artifacts(text):
+    """Strips leaked LLM citation markers (,, [cite_start], [cite_end])."""
+    if "[" not in text:
+        return text
+    text = re.sub(r'\+\]', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\[cite:\s*[\d\s,]+\]', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\[cite_(?:start|end)\]', '', text, flags=re.IGNORECASE)
+    return text
+
+
+def heal_llm_block_artifacts(text, reference_content=""):
+    """
+    Unified chatbot artifact healing pipeline for SEARCH and REPLACE blocks.
+    Normalizes non-breaking spaces, heals $ ... \\vert{} ... $ escapes, and strips
+    leaked citation tags unless those tokens legitimately exist in reference_content.
+    """
+    if not text:
+        return text
+    healed = text.replace('\r\n', '\n').replace('\xa0', ' ')
+    if "\\vert" in healed and "\\vert" not in (reference_content or ""):
+        healed = heal_latex_vert(healed)
+    if ("[cite" in healed or "[source:" in healed) and "[cite" not in (reference_content or ""):
+        healed = heal_citation_artifacts(healed)
+    return healed
+
+
 def expand_macros(text):
-    # Semantic Multiplier Macro: e.g., ``` or =======
+    """Expands intentional Yomama semantic multiplier macros ({{ c * N }}, ccc)."""
     text = re.sub(r'\{\{\s*(.)\s*\*\s*(\d+)\s*\}\}', lambda m: m.group(1) * int(m.group(2)), text)
     text = re.sub(r'\{\{\s*triple(.)\s*\}\}', lambda m: m.group(1) * 3, text)
     return text
@@ -124,13 +170,19 @@ def find_block_anchor(file_lines, block_lines):
         # Explicit backtracking: If the block fails at X, always resume searching at X+1
         i += 1
     return None
-
-
 def apply_block_in_memory(content, block, silent=False):
     content = content.replace('\r\n', '\n').replace('\xa0', ' ')
     file_lines = content.split('\n')
-    search_str = expand_macros(block["search"]).replace('\xa0', ' ')
-    replace_str = expand_macros(block["replace"]).replace('\xa0', ' ')
+    raw_search = expand_macros(block["search"]).replace('\xa0', ' ')
+    raw_replace = expand_macros(block["replace"]).replace('\xa0', ' ')
+
+    search_str = raw_search
+    replace_str = heal_llm_block_artifacts(raw_replace, reference_content=content)
+    if replace_str != raw_replace:
+        block["replace"] = replace_str
+        if not silent:
+            print("  └─ 🛡️  Artifact Heal: Auto-repaired chatbot artifacts in REPLACE block.")
+
     if not search_str.strip(): return True, replace_str, "genesis"
 
     search_lines = search_str.split('\n')
@@ -147,6 +199,19 @@ def apply_block_in_memory(content, block, silent=False):
 
     # Abstracted Anchor Search on SEARCH Block
     search_match = find_block_anchor(file_lines, search_lines)
+    if not search_match:
+        healed_search_str = heal_llm_block_artifacts(search_str, reference_content=content)
+        if healed_search_str != search_str:
+            healed_search_lines = healed_search_str.split('\n')
+            healed_match = find_block_anchor(file_lines, healed_search_lines)
+            if healed_match:
+                search_match = healed_match
+                search_str = healed_search_str
+                search_lines = healed_search_lines
+                block["search"] = search_str
+                if not silent:
+                    print("  └─ 🛡️  Artifact Heal: Auto-repaired chatbot artifacts in SEARCH block.")
+
     if not search_match:
         # Check if REPLACE block matches 100% contiguously in file (Idempotency Check)
         if replace_lines and any(l.strip() for l in replace_lines if l.strip().upper() != '{{UNTIL}}'):

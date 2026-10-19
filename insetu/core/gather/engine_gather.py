@@ -8,7 +8,6 @@ import subprocess
 import threading
 import traceback
 import uuid
-import concurrent.futures
 from typing import TypedDict, List, Dict, Any, Literal, Optional
 from flask import jsonify
 from akasa.utils import get_workspace_physics, generate_ascii_tree, slugify, resolve_system_artifact_path, thread_safe_cache
@@ -57,7 +56,7 @@ GATHER_SETTINGS_SCHEMA = [
     {
         "id": "domain_colors",
         "label": "Domain Intent Colors",
-        "type": "object",
+        "type": "intent_map",
         "scope": "workspace",
         "default": {
             "primary": ["sutram"],
@@ -366,11 +365,12 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                     b_id = b.get("id") or slugify(b.get("title", "untitled_bucket"))
                     b["id"] = b_id
                     buckets[b_id] = {"files": [], "cfg": b}
-
             for file_uri in final_list:
                 rel_path = InSetuURI(file_uri).path
                 b, module = resolve_file_bucket(rel_path, sub_buckets, repo_dir=repo_dir)
-                if b and module:
+                if b and b.get("id") == "_dropped":
+                    continue
+                elif b and module:
                     if module not in dynamic_files: dynamic_files[module] = {"files": [], "cfg": b}
                     dynamic_files[module]["files"].append(file_uri)
                 elif b:
@@ -567,20 +567,17 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
                 return decl['filename'], entry
             else:
                 return decl['filename'], "DELETE"
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [executor.submit(process_differential, d) for d in declarations]
-            for future in concurrent.futures.as_completed(futures):
-                filename, entry = future.result()
-                if filename:
-                    dirty = True
-                    if entry == "DELETE":
-                        touched_manifest[filename] = None # Marker for deletion
-                        chunks = ctx.get_manifest_files(target_key=filename)
-                        if not chunks: chunks = [filename]
-                        for chunk in chunks:
-                            ctx.vfs.delete(chunk, data={"ignore_ledger": True})
-                    else:
-                        touched_manifest[filename] = entry
+        for filename, entry in ctx.jobs.map_parallel(process_differential, declarations):
+            if filename:
+                dirty = True
+                if entry == "DELETE":
+                    touched_manifest[filename] = None # Marker for deletion
+                    chunks = ctx.get_manifest_files(target_key=filename)
+                    if not chunks: chunks = [filename]
+                    for chunk in chunks:
+                        ctx.vfs.delete(chunk, data={"ignore_ledger": True})
+                else:
+                    touched_manifest[filename] = entry
 
         declared_filenames = {d['filename'] for d in declarations}
         old_ctx_manifest = ctx.manifest.get("ctx", {})
@@ -632,15 +629,12 @@ def generate_context_file(workspace_id=None, target_repos=None):
         except Exception as e:
             print(f"Error compiling {decl['filename']}: {e}")
         return decl['filename'], None
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [executor.submit(process_declaration, d) for d in declarations]
-        for future in concurrent.futures.as_completed(futures):
-            filename, entry = future.result()
-            if entry:
-                manifest[filename] = entry
-                # Track all constituent chunks for the global vacuum
-                chunks = entry.get("chunks", [filename])
-                expected_artifacts.update(InSetuURI(c).basename for c in chunks)
+    for filename, entry in ctx.jobs.map_parallel(process_declaration, declarations):
+        if entry:
+            manifest[filename] = entry
+            # Track all constituent chunks for the global vacuum
+            chunks = entry.get("chunks", [filename])
+            expected_artifacts.update(InSetuURI(c).basename for c in chunks)
     # Flush all newly generated/updated context chunks to disk first (Make-Before-Break)
     ctx.sync_vfs_barrier()
 
@@ -725,7 +719,6 @@ def vacuum_unaccounted_cache_on_complete(workspace_id=None, **kwargs):
                 uri = InSetuURI(c)
                 vol = uri.volume if uri.volume in expected_by_volume else "contexts"
                 expected_by_volume[vol].add(uri.basename)
-
         vacuum_manifest_artifacts(ctx, "ctx://contexts", expected_by_volume["contexts"], exempt_abs_paths=active_ephemerals)
         vacuum_manifest_artifacts(ctx, "ctx://diffs", expected_by_volume["diffs"], exempt_abs_paths=active_ephemerals)
         vacuum_manifest_artifacts(ctx, "ctx://workflows", expected_by_volume["workflows"], exempt_abs_paths=active_ephemerals)
@@ -743,6 +736,9 @@ def _pack_selection_worker(ctx, items=None, gather_only=True, job_id=None, **kwa
         return {"message": "No valid files selected for compilation."}
     ctx.jobs.update_progress("Compiling selected files into context payload...")
     files = ctx.expand_selection(items, gather_only=gather_only)
+    if not files and gather_only:
+        files = ctx.expand_selection(items, gather_only=False)
+    files = [str(InSetuURI(f)) for f in files if isinstance(f, str) and not str(f).endswith('/')]
     clean_tree_files = []
     for f in files:
         f_uri = InSetuURI(f)
@@ -790,7 +786,7 @@ def _pack_selection_worker(ctx, items=None, gather_only=True, job_id=None, **kwa
             "filename": base_uri,
             "filepath": base_uri,
             "out_file": base_uri,
-            "url": f"/download/{base_uri}",
+            "url": f"/api/{ctx.workspace_id}/fs/fetch?file={base_uri}&download=1",
             "chunks": chunks,
             "files": chunks,
             "manifest_entry": manifest_entry
@@ -936,12 +932,12 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
     finally:
         if acquired:
             ws_lock.release()
-class RepoTemplateResponse(TypedDict):
+class RepoTemplateResponse(TypedDict, total=False):
     repo_dir: str
     title: str
     domain: str
     description: str
-    exts: List[str]
+    exts: Optional[List[str]]
     apply_ignore: bool
     sub_buckets: List[Any]
 
@@ -963,18 +959,82 @@ def hook_request_paths(workspace_id=None, **kwargs):
     return {
         "contexts_dir": get_domain_artifact_path(workspace_id, "contexts", "gather")
     }
+
+
+def _canonicalize_uri_str(raw_str: str, default_scheme_prefix: str = "ctx://contexts/") -> str:
+    return InSetuURI.canonicalize(raw_str, default_prefix=default_scheme_prefix)
+
+
+def _canonicalize_manifest_entry(filepath: str, entry: Any) -> tuple:
+    canon_fp = _canonicalize_uri_str(filepath, "ctx://contexts/")
+    if not isinstance(entry, dict):
+        return canon_fp, entry
+    scheme_vol = "ctx://contexts/"
+    if "://" in canon_fp:
+        parsed_uri = InSetuURI(canon_fp)
+        scheme_vol = f"{parsed_uri.scheme}://{parsed_uri.volume}/" if parsed_uri.volume else f"{parsed_uri.scheme}://"
+
+    if isinstance(entry.get("chunks"), list):
+        entry["chunks"] = [_canonicalize_uri_str(c, scheme_vol) for c in entry["chunks"] if c]
+    if isinstance(entry.get("files"), list):
+        entry["files"] = [_canonicalize_uri_str(f, "vfs://") for f in entry["files"] if f]
+    if isinstance(entry.get("meta"), dict):
+        for mk in ("file", "filename", "filepath", "out_file"):
+            if entry["meta"].get(mk):
+                entry["meta"][mk] = canon_fp
+    return canon_fp, entry
+_MIGRATED_MANIFEST_WORKSPACES = set()
+
+
+@hooks.on('workspace_shutdown')
+def _evict_migrated_manifest_workspace(workspace_id=None, **kwargs):
+    if workspace_id:
+        _MIGRATED_MANIFEST_WORKSPACES.discard(workspace_id)
+
+
 @hooks.on('workspace_boot', priority=10)
 def mount_gather_volumes(workspace_id=None, **kwargs):
+    wid = workspace_id or "default"
     register_driver('ctx', DefaultVFSDriver())
-    ctx = gather_bp.get_context(workspace_id)
+    ctx = gather_bp.get_context(wid)
     control_dir = Path(ctx.paths.get("control_dir"))
     contexts_dir = Path(ctx.paths.get("contexts_dir"))
     move_tree_contents(control_dir.joinpath("ext", "gather", "data", "contexts"), contexts_dir)
-    mount_volume(workspace_id, 'ctx', 'contexts', contexts_dir.as_posix())
+    mount_volume(wid, 'ctx', 'contexts', contexts_dir.as_posix())
+    if wid in _MIGRATED_MANIFEST_WORKSPACES:
+        return
     try:
-        conn = get_connection("vfs_index", workspace_id=workspace_id)
-        conn.execute("UPDATE manifest_ledger SET filepath = 'ctx://contexts/' || filepath WHERE filepath NOT LIKE '%://%'")
-        conn.commit()
+        conn = get_connection("vfs_index", workspace_id=wid)
+        rows = conn.execute("SELECT filepath, entry_json, timestamp FROM manifest_ledger").fetchall()
+        updates = []
+        deletes = []
+        seen_canon = set()
+        for r in rows:
+            fp = r["filepath"]
+            raw_json = r["entry_json"]
+            ts = r["timestamp"]
+            if not raw_json:
+                if "://" not in str(fp):
+                    deletes.append((fp,))
+                continue
+            try:
+                parsed = json.loads(raw_json)
+            except Exception:
+                continue
+            canon_fp, canon_entry = _canonicalize_manifest_entry(fp, parsed)
+            new_json = json.dumps(canon_entry, sort_keys=True, separators=(',', ':'))
+            if canon_fp != fp:
+                deletes.append((fp,))
+            if canon_fp not in seen_canon and (canon_fp != fp or new_json != raw_json):
+                updates.append((canon_fp, new_json, ts))
+                seen_canon.add(canon_fp)
+        if deletes:
+            conn.executemany("DELETE FROM manifest_ledger WHERE filepath = ?", deletes)
+        if updates:
+            conn.executemany("INSERT OR REPLACE INTO manifest_ledger (filepath, entry_json, timestamp) VALUES (?, ?, ?)", updates)
+        if deletes or updates:
+            conn.commit()
+        _MIGRATED_MANIFEST_WORKSPACES.add(wid)
     except Exception:
         pass
 
@@ -1024,6 +1084,12 @@ def hook_resolve_payload_chunks(uri=None, workspace_id=None, manifest=None, **kw
 def hook_save_manifest(manifest_data=None, is_full_compile=False, workspace_id=None, **kwargs):
     hooks.emit('manifest_mutated', workspace_id=workspace_id)
     try:
+        if manifest_data:
+            normalized_data = {}
+            for k, v in manifest_data.items():
+                canon_k, canon_v = _canonicalize_manifest_entry(k, v)
+                normalized_data[canon_k] = canon_v
+            manifest_data = normalized_data
         conn = get_connection("vfs_index", workspace_id=workspace_id)
         now_ts = time.time()
         if is_full_compile:
@@ -1101,15 +1167,15 @@ class ManifestEntryResponse(TypedDict, total=False):
     path: str
     entry: Dict[str, Any]
     status: str
-
 @gather_bp.route('manifest/entry', methods=['GET'], request_schema=ManifestEntryQuery, response_schema=ManifestEntryResponse, docstring="Fetches a single context manifest entry by context URI.")
 def api_gather_manifest_entry(ctx):
     """Surgically fetches a single manifest entry by context path."""
     path = ctx.req.args.get('path', '').strip()
     if not path:
         return jsonify({"error": "Path parameter required"}), 400
+    target_uri = str(InSetuURI(path))
     conn = get_connection("vfs_index", workspace_id=ctx.workspace_id)
-    row = conn.execute("SELECT filepath, entry_json FROM manifest_ledger WHERE filepath=?", (path,)).fetchone()
+    row = conn.execute("SELECT filepath, entry_json FROM manifest_ledger WHERE filepath=?", (target_uri,)).fetchone()
     if not row or not row['entry_json']:
-        return jsonify({"path": path, "entry": None, "status": "deleted"}), 200
-    return jsonify({"path": path, "entry": json.loads(row['entry_json'])})
+        return jsonify({"path": target_uri, "entry": None, "status": "deleted"}), 200
+    return jsonify({"path": target_uri, "entry": json.loads(row['entry_json'])})

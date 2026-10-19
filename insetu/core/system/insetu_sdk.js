@@ -157,11 +157,11 @@ export class InSetuElement extends SutramElement {
 
     filterItems(items, options = {}) {
         if (!Array.isArray(items) || items.length === 0) return [];
-
         const {
             repoField = 'repo',
             pinnedRepos = (this.ecosystem?.pinnedRepos || new Set(['ALL'])),
             searchQuery = (this.searchQuery || ''),
+            alwaysInclude = null,
             searchFields = (item) => {
                 const title = item.titleText || item.title || item.name || '';
                 const path = item.filepath || item.filename || item.path || '';
@@ -176,6 +176,7 @@ export class InSetuElement extends SutramElement {
 
         const repoFiltered = items.filter(item => {
             if (!item) return false;
+            if (typeof alwaysInclude === 'function' && alwaysInclude(item)) return true;
             if (currentPins.has('ALL')) return true;
             const itemRepo = item[repoField] || (
                 item.filepath ? (this.utils.parseURI(item.filepath).repo || '') : ''

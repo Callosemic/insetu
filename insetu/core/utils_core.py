@@ -5,6 +5,7 @@ import sys
 import time
 import json
 import shutil
+import socket
 import threading
 import subprocess
 from pathlib import Path
@@ -16,6 +17,34 @@ from akasa.hooks import hooks
 from akasa.uri import AkasaURI
 from akasa.utils import load_config, get_workspace_physics, slugify, load_json_config, generate_ascii_tree, parse_uri
 from akasa.vfs import VFSTransaction, _resolve_physical_path as _vfs_resolve_physical_path
+def is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
+    """Checks if a TCP port is actively accepting connections on the given host."""
+    if not port or port <= 0:
+        return False
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.15)
+        return s.connect_ex((host, int(port))) == 0
+
+
+def can_bind_port(port: int, host: str = "0.0.0.0") -> bool:
+    """Checks if a TCP port is free to bind on the given host interface."""
+    if not port or port <= 0:
+        return False
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind((host, int(port)))
+            return True
+        except OSError:
+            return False
+
+
+def allocate_ephemeral_port(host: str = "0.0.0.0") -> int:
+    """Asks the OS kernel for an available ephemeral TCP port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, 0))
+        return int(s.getsockname()[1])
+
 
 @hooks.on('vfs_resolve_path')
 def hook_vfs_resolve_path(filename=None, workspace_id=None, **kwargs):
@@ -79,6 +108,31 @@ class InSetuURI(AkasaURI):
         if raw_str and "://" not in raw_str and not raw_str.startswith('/'):
             raise ValueError(f"Non-canonical URI rejected (missing scheme:// prefix): '{raw_str}'")
         super().__init__(raw_str)
+
+    @classmethod
+    def canonicalize(cls, raw: Any, default_prefix: str = "vfs://") -> str:
+        """SSOT migration normalizer for upgrading legacy storage strings into canonical scheme:// URIs."""
+        if not raw:
+            return ""
+        if isinstance(raw, (cls, AkasaURI)):
+            return str(raw)
+        clean = str(raw).replace('\\', '/').strip()
+        if not clean:
+            return ""
+        clean = re.sub(r'^(vfs|ctx|ws|virtual|yomama):/(?!/)', r'\1://', clean)
+        if "://" in clean:
+            return str(cls(clean))
+        clean_stripped = clean.lstrip('/')
+        if clean_stripped.endswith('_diffs.txt') or clean_stripped.startswith('diffs/'):
+            return f"ctx://diffs/{Path(clean_stripped).name}"
+        if (clean_stripped.startswith('workflow_') and clean_stripped.endswith('_context.txt')) or clean_stripped.startswith('workflows/'):
+            return f"ctx://workflows/{Path(clean_stripped).name}"
+        if clean_stripped.endswith(('_context.txt', '_vault.json')) or re.search(r'_context_part\d+\.txt$', clean_stripped) or clean_stripped.startswith('contexts/'):
+            return f"ctx://contexts/{Path(clean_stripped).name}"
+        if clean_stripped.startswith('prompts/'):
+            return f"ctx://prompts/{clean_stripped[len('prompts/'):].lstrip('/')}"
+        prefix = default_prefix if default_prefix.endswith('://') else f"{default_prefix.rstrip('/')}/"
+        return f"{prefix}{clean_stripped}"
 
     @classmethod
     def from_external_input(cls, raw: Any, default_scheme: str = "vfs") -> 'InSetuURI':
@@ -518,6 +572,8 @@ _WATCHDOG_OBSERVER = None
 def start_filesystem_observer(**kwargs):
     """Initializes a unified Watchdog observer for all active workspaces."""
     global _WATCHDOG_OBSERVER
+    if _WATCHDOG_OBSERVER is not None:
+        stop_filesystem_observer()
     from akasa.extension import SettingsManager as _SettingsManager
     from akasa.utils import get_all_workspace_ids as _get_all_workspace_ids
     workspace_ids = _get_all_workspace_ids()
@@ -541,12 +597,13 @@ def start_filesystem_observer(**kwargs):
         print(f"⚠️  Watcher initialization failed: {e}")
         return None
     class FileSystemObserver(_FileSystemEventHandler):
-        def __init__(self, workspace_id, repo_dir, target_path, ignore_dirs, ignore_patterns, ignore_exceptions=None):
+        def __init__(self, workspace_id, repo_dir, target_path, ignore_dirs, ignore_files, ignore_patterns, ignore_exceptions=None):
             super().__init__()
             self.workspace_id = workspace_id
             self.repo_dir = repo_dir
             self.target_path = target_path
             self.ignore_dirs = ignore_dirs
+            self.ignore_files = ignore_files
             self.ignore_patterns = ignore_patterns
             self.ignore_exceptions = ignore_exceptions or []
         def process_event(self, event, filepath_override=None, op_override=None, is_dir_override=None):
@@ -580,14 +637,17 @@ def start_filesystem_observer(**kwargs):
                 if parts.intersection({'.git', 'node_modules', '__pycache__', 'venv'}): return
                 if '.insetu' in parts and not (norm_rel_lower.startswith('.insetu/data/') or '/.insetu/data/' in norm_rel_lower):
                     return
-
-                is_excepted = any(rel_to_target.startswith(exc) or exc in rel_to_target for exc in self.ignore_exceptions)
+                from insetu.core.topology.engine_topology import matches_gitignore_patterns as _matches_gitignore_patterns
+                is_excepted = any(rel_to_target.startswith(exc.lstrip('/')) for exc in self.ignore_exceptions if exc) or _matches_gitignore_patterns(rel_to_target, self.ignore_exceptions)
                 if not is_excepted:
+                    if filename.lower() in self.ignore_files: return
                     if parts.intersection(self.ignore_dirs): return
-                    if any(pattern in logical_path for pattern in self.ignore_patterns): return
-                    now = time.time()
-
-                    logical_path_lower = logical_path.lower()
+                    if self.ignore_patterns and (
+                        any(pattern in logical_path for pattern in self.ignore_patterns)
+                        or _matches_gitignore_patterns(rel_to_target, self.ignore_patterns)
+                    ):
+                        return
+                now = time.time()
                 # Deduplication 1: Was this file recently modified natively by our own VFS?
                 abs_key = os.path.abspath(src_path).lower()
                 if now - _NATIVE_VFS_WRITES.get(abs_key, 0) < _WATCHDOG_DEBOUNCE_WINDOW:
@@ -617,20 +677,31 @@ def start_filesystem_observer(**kwargs):
     except Exception:
         observer = _PollingObserver()
     has_watches = False
+    scheduled_watches = set()
     for ws_id, cfg in active_configs:
         _, ws_root = get_workspace_physics(ws_id)
-        global_ignore = set(cfg.get("ignore_dirs", []))
+        global_ignore = set(d.lower() for d in cfg.get("ignore_dirs", []))
+        global_ignore_files = set(f.lower() for f in cfg.get("ignore_files", []))
         global_patterns = cfg.get("ignore_patterns", [])
         for repo_cfg in cfg.get("target_repos", []):
             r_dir = repo_cfg.get("repo_dir")
             if not r_dir: continue
             p_path = repo_cfg.get("physical_path")
             target_path = os.path.abspath(os.path.expanduser(p_path)) if p_path else Path(ws_root).joinpath(r_dir).resolve().as_posix()
+            watch_key = (ws_id, target_path)
+            if watch_key in scheduled_watches:
+                continue
             if os.path.exists(target_path):
+                scheduled_watches.add(watch_key)
                 if repo_cfg.get("repo_ignore_dirs") is not None:
-                    ignore_dirs = set(repo_cfg.get("repo_ignore_dirs"))
+                    ignore_dirs = set(d.lower() for d in repo_cfg.get("repo_ignore_dirs"))
                 else:
                     ignore_dirs = set(global_ignore)
+
+                if repo_cfg.get("repo_ignore_files") is not None:
+                    ignore_files = set(f.lower() for f in repo_cfg.get("repo_ignore_files"))
+                else:
+                    ignore_files = set(global_ignore_files)
 
                 if repo_cfg.get("repo_ignore_patterns") is not None:
                     ignore_patterns = repo_cfg.get("repo_ignore_patterns")
@@ -642,6 +713,7 @@ def start_filesystem_observer(**kwargs):
                     repo_dir=r_dir,
                     target_path=target_path,
                     ignore_dirs=ignore_dirs,
+                    ignore_files=ignore_files,
                     ignore_patterns=ignore_patterns,
                     ignore_exceptions=ignore_exceptions
                 )
@@ -706,15 +778,15 @@ def extract_manifest_files(manifest_data, target_key=None, domain='auto', exclud
 
     all_files = set()
     target_partition = ctx_manifest if domain == 'ctx' else (vfs_manifest if domain == 'vfs' else (vfs_manifest if (manifest_data.get('vfs') or manifest_data.get('ctx')) else manifest_data))
-
+    default_prefix = "ctx://contexts/" if domain == 'ctx' else "vfs://"
     for k, v in target_partition.items():
         extracted = _extract(v)
         if extracted:
             if isinstance(k, str) and k.endswith('.txt'):
-                all_files.add(k)
+                all_files.add(InSetuURI.canonicalize(k, default_prefix=default_prefix))
             for f in extracted:
-                if isinstance(f, str):
-                    all_files.add(f)
+                if isinstance(f, str) and f:
+                    all_files.add(InSetuURI.canonicalize(f, default_prefix=default_prefix))
     return sorted(list(all_files))
 def get_domain_cache_path(workspace_id, domain_name):
     """Resolves and ensures physical existence of .insetu/cache/<domain_name> for disposable compiled outputs."""
@@ -940,35 +1012,46 @@ def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kw
     all_ledger_files_cache = None
     with VFSTransaction(workspace_id) as vfs:
         for item in items:
-            if isinstance(item, dict) and item.get("isDir") is False and item.get("filepath"):
-                uri = InSetuURI(item["filepath"])
-                is_folder = False
-            elif isinstance(item, dict) and (item.get("isDir") is True or item.get("folderpath")):
-                uri = InSetuURI(item.get("folderpath") or item.get("filepath"))
-                is_folder = True
+            if isinstance(item, dict):
+                raw_target = str(item.get("filepath") or item.get("folderpath") or item.get("id") or "").strip()
+                if not raw_target:
+                    continue
+                uri = InSetuURI(raw_target)
+                if item.get("isDir") is not None:
+                    is_folder = bool(item.get("isDir"))
+                elif item.get("folderpath") or uri.is_dir:
+                    is_folder = True
+                elif uri.scheme == 'ctx' and uri.volume in ('contexts', 'diffs', 'workflows'):
+                    is_folder = False
+                elif '.' in uri.basename and not uri.basename.startswith('.'):
+                    is_folder = False
+                else:
+                    is_folder = uri.is_dir_physical(workspace_id)
             else:
-                uri = InSetuURI(str(item))
+                raw_item = str(item or "").strip()
+                if not raw_item:
+                    continue
+                uri = InSetuURI(raw_item)
                 if not uri.path and not uri.volume:
                     continue
-                if uri.scheme == 'ctx':
-                    is_folder = False
-                elif uri.is_dir:
+                if uri.is_dir:
                     is_folder = True
+                elif uri.scheme == 'ctx' and uri.volume in ('contexts', 'diffs', 'workflows'):
+                    is_folder = False
                 elif '.' in uri.basename and not uri.basename.startswith('.'):
                     # Fast-path: paths with standard file extensions avoid synchronous os.stat syscalls
                     is_folder = False
                 else:
                     is_folder = uri.is_dir_physical(workspace_id)
-
             if is_folder:
-                if gather_only:
+                matched_folder_files = []
+                if gather_only and (not uri.scheme or uri.scheme == 'vfs'):
                     repo_dir = uri.repo
                     folder_rel_path = uri.path.strip('/')
-
                     if repo_dir:
                         if repo_dir not in repo_files_cache:
                             from insetu.core.topology.engine_topology import get_topology_files_for_repo as _get_topology_files_for_repo
-                            g_list = _get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=False)
+                            g_list = _get_topology_files_for_repo(workspace_id, repo_dir)
                             if not g_list:
                                 repo_path = get_repo_path(repo_dir, workspace_id)
                                 if os.path.exists(repo_path):
@@ -991,14 +1074,20 @@ def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kw
 
                     for g_file in gather_files:
                         g_uri = InSetuURI(g_file)
+                        if g_uri.basename in ('.gitkeep', '.keep'):
+                            continue
                         g_rel_path = g_uri.path
                         if not folder_rel_path or g_rel_path == folder_rel_path or g_rel_path.startswith(folder_rel_path + '/'):
-                            files.append(str(g_uri))
+                            matched_folder_files.append(str(g_uri))
+
+                if matched_folder_files:
+                    files.extend(matched_folder_files)
                 else:
-                    target_walk = str(uri)
+                    target_walk = str(uri).rstrip('/')
                     for f in vfs.walk(target_walk):
                         f_uri = InSetuURI(f)
-                        files.append(str(f_uri))
+                        if f_uri.basename not in ('.gitkeep', '.keep'):
+                            files.append(str(f_uri))
             else:
                 if uri.scheme == 'ctx':
                     responses = hooks.emit('resolve_payload_chunks', uri=str(uri), workspace_id=workspace_id)
@@ -1046,17 +1135,17 @@ def find_path_candidates(query_path=None, workspace_id=None, allowed_repos=None,
     candidates.sort(key=lambda x: x["score"], reverse=True)
     return candidates
 def get_default_repo_template(repo_dir, title=None, domain=None, description=None, exts=None):
-    if not exts:
-        exts = [".py", ".json", ".md", ".sh", ".txt", ".html", ".css", ".js"]
-    return {
+    tpl = {
         "repo_dir": repo_dir,
         "title": title or repo_dir.replace("-", " ").replace("_", " ").title(),
         "domain": domain or "Workspaces",
         "description": description or f"Auto-initialized repository: {repo_dir}",
-        "exts": exts,
         "apply_ignore": True,
         "sub_buckets": []
     }
+    if exts is not None:
+        tpl["exts"] = exts
+    return tpl
 def sanitize_workspace_config(cfg):
     for non_topology_key in (
         "_settings_schemas",
