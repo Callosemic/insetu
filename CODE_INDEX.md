@@ -56,8 +56,10 @@ insetu/
 │       ├── 0063-atomic-vfs-bulk-mutations-popout-presence-and-sw-consolidation.md # Atomic VFS bulk mutations, popout presence heartbeat, and Service Worker consolidation.
 │       ├── 0064-core-prompt-engine-virtual-module-templates-and-job-api-unification.md # Core prompt engine graduation, virtual module template projection, and Akasa job API unification.
 │       ├── 0065-repository-data-containment-extension-state-hydration-and-security-hardening.md # Repository data containment (.insetu-data/), dual-scope notes migration, and cryptographic hook gating.
-│       ├── 0066-canonical-uris-inter-workspace-mounts-and-config-cascade-hardening.md # [comment required]
-│       ├── 0067-universal-extension-suite-modernization-and-domain-mounts.md # [comment required]
+│       ├── 0066-canonical-uris-inter-workspace-mounts-and-config-cascade-hardening.md # Canonical scheme:// URIs, inter-workspace ws:// mounts, and 3-tier configuration cascade hardening.
+│       ├── 0067-universal-extension-suite-modernization-and-domain-mounts.md # Universal extension suite modernization, declarative domain mounts, and SDK standardization.
+│       ├── 0068-hierarchical-vfs-sieve-sub-bucket-filtering-and-settings-hub.md # [comment required]
+│       ├── 0069-managed-app-server-preview-bulk-vcs-and-memory-telemetry.md # [comment required]
 │       └── archived/               # Superseded and historical ADR documents.
 │           ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │           ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -199,6 +201,11 @@ insetu/
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── engine_notes.py     # SQLite ledger tracking for markdown notes.
 │   │   │   └── ext_notes.js        # Note-taking editor and browser.
+│   │   ├── preview/                # Managed dev server supervisor and live web application previewer.
+│   │   │   ├── __init__.py         # Module initialization.
+│   │   │   ├── engine_preview.py   # Multi-profile dev server process supervisor, port allocator, and log ring buffer.
+│   │   │   ├── ext_preview.js      # Live iframe preview surface, server toolbar, and output log drawer.
+│   │   │   └── vendor.json         # Map of core third-party UI dependencies (Lit, CodeMirror).
 │   │   ├── publish/                # Standalone Pandoc/LaTeX document publishing extension.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── engine_publish.py   # Document publishing and compilation engine.
@@ -246,9 +253,10 @@ insetu/
 ├── scripts/                        # Build, vendorization, and utility shell scripts.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── vendor_codemirror.sh        # Bundles CodeMirror 6 core and language modules locally via esbuild.
-│   ├── vendor_jsyaml.sh            # [comment required]
+│   ├── vendor_jsyaml.sh            # Local esbuild vendorization script for js-yaml library.
 │   ├── vendor_lit.sh               # Local esbuild vendorization script for Lit library.
-│   ├── vendor_lucide.sh            # [comment required]
+│   ├── vendor_lucide.sh            # Generates the local Lucide SVG icon sprite dictionary.
+│   ├── vendor_sutram.sh            # Synchronizes and minifies Sutram and yenVUI into static/vendor.
 │   ├── vendor_zustand.sh           # Local esbuild vendorization script for Zustand modules.
 │   └── x-ray-dom-nodes-and-events.js # DOM node and event listener X-Ray diagnostic tool.
 └── tests/                          # Automated testing suite.
@@ -259,12 +267,12 @@ insetu/
     │   ├── rules_javascript.py     # JS linter enforcing UDF, declarative UI, and API contracts.
     │   └── rules_python.py         # Python AST linter enforcing async barriers and context accessors.
     ├── fitness_functions.py        # Master CLI runner for the architectural fitness linter suite.
-    ├── results.txt                 # Output log of the last architectural fitness validation sweep.
     ├── run_unit_tests.py           # Master CLI runner for behavioral unit and integration test suite.
     └── unit/                       # Dynamic behavioral unit and integration test suite.
         ├── __init__.py             # Module initialization.
         ├── test_canonical_uris.py  # Unit tests for canonical URI enforcement, InSetuURI normalization, and legacy ledger migrations.
         ├── test_config_cascade.py  # Unit tests for the 3-tier configuration cascade, secret encryption, and lazy migration.
+        ├── test_ext_preview_unit.py # Unittest suite for passive framework detection and preview server lifecycle.
         ├── test_sdk_improvements.py # Unit tests for ctx.create_entity_file and worker lifecycle isolation for disabled extensions.
         └── test_workspace_mounts.py # Unit tests for InterWorkspaceVFSDriver, ws:// read-only write barriers, and cross-workspace event broadcasting.
 ```

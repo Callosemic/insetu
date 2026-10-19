@@ -203,6 +203,57 @@ class TestCanonicalURIs(unittest.TestCase):
         # Second pass should be idempotent
         self.assertFalse(_migrate_batch_uris(legacy_batch))
 
+    def test_vfs_transaction_rejects_non_canonical_paths(self):
+        """VFSTransaction.read, .save, and .delete reject scheme-less paths unless is_absolute_artifact is True."""
+        from akasa.vfs import VFSTransaction
+        vfs = VFSTransaction("default")
+        with self.assertRaises(ValueError):
+            vfs.read("alpha/main.py")
+        with self.assertRaises(ValueError):
+            vfs.save("alpha/main.py", "print(1)")
+        with self.assertRaises(ValueError):
+            vfs.delete("alpha/main.py")
+
+    def test_manifest_entry_deep_canonicalization(self):
+        """_canonicalize_manifest_entry upgrades bare keys, chunks, files, and meta pointers to canonical URIs."""
+        from insetu.core.gather.engine_gather import _canonicalize_manifest_entry
+        raw_entry = {
+            "files": ["alpha/main.py", "notes_context.txt"],
+            "chunks": ["notes_context.txt", "notes_context_part2.txt"],
+            "meta": {"filepath": "notes_context.txt", "out_file": "notes_context.txt"}
+        }
+        canon_fp, canon_entry = _canonicalize_manifest_entry("notes_context.txt", raw_entry)
+        self.assertEqual(canon_fp, "ctx://contexts/notes_context.txt")
+        self.assertEqual(
+            canon_entry["files"],
+            ["vfs://alpha/main.py", "ctx://contexts/notes_context.txt"]
+        )
+        self.assertEqual(
+            canon_entry["chunks"],
+            ["ctx://contexts/notes_context.txt", "ctx://contexts/notes_context_part2.txt"]
+        )
+        self.assertEqual(canon_entry["meta"]["filepath"], "ctx://contexts/notes_context.txt")
+        self.assertEqual(canon_entry["meta"]["out_file"], "ctx://contexts/notes_context.txt")
+    def test_expand_selection_handles_folders_and_files_for_quickpack(self):
+        """expand_selection expands trailing-slash folder URIs, {filepath, folderpath, isDir} dicts, and unindexed subfolders into a flat List[str]."""
+        from akasa.extension import ExtensionContext
+        sub_dir = self.repo_dir / "nested" / "preview"
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        (sub_dir / "widget.py").write_text("x = 1\n", encoding="utf-8")
+
+        force_topology_scan(workspace_id="default")
+        ctx = ExtensionContext("gather", "default")
+
+        items = [
+            {"filepath": "vfs://alpha/nested/preview/", "folderpath": "vfs://alpha/nested/preview", "isDir": True},
+            "vfs://alpha/",
+            {"filepath": "vfs://alpha/main.py", "isDir": False}
+        ]
+        expanded = ctx.expand_selection(items=items, gather_only=True)
+        self.assertTrue(all(isinstance(f, str) for f in expanded))
+        self.assertIn("vfs://alpha/nested/preview/widget.py", expanded)
+        self.assertIn("vfs://alpha/main.py", expanded)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -31,6 +31,17 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             if k and isinstance(k, ast.Constant) and isinstance(k.value, str):
                 dict_keys[k.value] = v
 
+        for uri_key in ('out_file',):
+            if uri_key in dict_keys and isinstance(dict_keys[uri_key], ast.Constant) and isinstance(dict_keys[uri_key].value, str):
+                val = dict_keys[uri_key].value
+                if val and "://" not in val:
+                    report_violation(
+                        "CANONICAL_OUT_FILE_URI_MANDATE",
+                        self.filepath,
+                        node.lineno,
+                        f"Dictionary key '{uri_key}' contains non-canonical path '{val}'. Must include explicit scheme:// prefix (e.g. 'ctx://contexts/...')."
+                    )
+
         if 'id' in dict_keys and isinstance(dict_keys['id'], ast.Constant) and isinstance(dict_keys['id'].value, str):
             setting_id = dict_keys['id'].value.lower()
 
@@ -126,6 +137,14 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 or (isinstance(node.func.value, ast.Name) and node.func.value.id == "jobs")
             )
         )
+
+        if func_name == "ThreadPoolExecutor" and self.filename not in ("__init__.py", "hooks.py"):
+            report_violation(
+                "SHARED_IO_EXECUTOR_MANDATE",
+                self.filepath,
+                node.lineno,
+                "Ad-hoc ThreadPoolExecutor() instantiation detected outside Akasa kernel. Use ctx.jobs.map_parallel() or akasa.workers.run_parallel() to prevent thread sprawl and SQLite connection leaks."
+            )
 
         if func_name == "submit_immediate_job" or is_jobs_submit:
             has_category = any(kw.arg == "job_category" for kw in node.keywords if kw.arg)
@@ -250,7 +269,8 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'get':
             if len(node.args) > 0 and isinstance(node.args[0], ast.Constant):
                 arg_val = node.args[0].value
-                if arg_val == "targets" and self.filename != "rules_python.py":
+                caller_name = getattr(node.func.value, 'id', '') or getattr(node.func.value, 'attr', '')
+                if arg_val == "targets" and self.filename != "rules_python.py" and caller_name not in ("data", "req", "json", "payload", "kwargs"):
                     report_violation("TARGET_REPOS_KEY_MANDATE", self.filepath, node.lineno, "Deprecated config key 'targets' accessed. Normalize to 'target_repos' instead.")
                 if arg_val == "extension_config" and self.filename != "rules_python.py":
                     report_violation("LEGACY_EXTENSION_CONFIG_BAN", self.filepath, node.lineno, "Legacy 'extension_config' dictionary accessed. Use ctx.settings.get() with a declarative settings_schema instead.")
@@ -410,6 +430,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         self.generic_visit(node)
     def visit_ImportFrom(self, node):
         self._check_sqlite_import(node)
+        if node.module and node.module.endswith('utils') and any(alias.name == '_cwd' for alias in node.names):
+            report_violation(
+                "BANNED_CWD_VALUE_IMPORT",
+                self.filepath,
+                node.lineno,
+                "Importing '_cwd' by value freezes the working directory at import time. Import 'akasa.utils as utils' and access 'utils._cwd' dynamically."
+            )
         if node.module in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth'):
             report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{node.module}'. Import from 'akasa.{node.module.split('.')[-1]}' instead.")
         if node.module == 'os.path' and any(alias.name == 'join' for alias in node.names):

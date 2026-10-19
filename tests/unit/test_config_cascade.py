@@ -6,7 +6,9 @@ from pathlib import Path
 from unittest.mock import patch
 import akasa.db as akasa_db
 import akasa.utils as akasa_utils
-from akasa.extension import SettingsManager, _REGISTERED_SETTINGS_SCHEMAS
+import ast
+from akasa.auth import rotate_master_key, _on_security_settings_updated
+from akasa.extension import SettingsManager, _REGISTERED_SETTINGS_SCHEMAS, MASKED_SECRET_SENTINEL
 from akasa.utils import load_config, load_json_config, save_json_config
 from akasa.workers import _init_worker_schema
 from insetu.core.system.engine_system import (
@@ -113,7 +115,6 @@ class TestConfigurationCascade(unittest.TestCase):
             from cryptography.fernet import Fernet as _Fernet
             fixed_key = _Fernet.generate_key()
             mock_key.return_value = fixed_key
-
             mgr.set("api_token", "super-secret-token-123")
             secrets_path = self.control_dir / "secrets.json"
             secrets_disk = json.loads(secrets_path.read_text(encoding="utf-8"))
@@ -121,6 +122,98 @@ class TestConfigurationCascade(unittest.TestCase):
             self.assertTrue(raw_cipher.startswith("v1:"))
             self.assertNotIn("super-secret-token-123", raw_cipher)
             self.assertEqual(mgr.get("api_token"), "super-secret-token-123")
+
+            # 5. Secret Masking & Sentinel Preservation
+            self.assertEqual(mgr.get("api_token", mask_secrets=True), MASKED_SECRET_SENTINEL)
+            self.assertEqual(mgr.get_all(mask_secrets=True)["api_token"], MASKED_SECRET_SENTINEL)
+
+            # Updating with MASKED_SECRET_SENTINEL must preserve existing secret
+            mgr.update({"api_token": MASKED_SECRET_SENTINEL, "ws_label": "Updated Label"})
+            self.assertEqual(mgr.get("api_token"), "super-secret-token-123")
+            self.assertEqual(mgr.get("ws_label"), "Updated Label")
+
+            # Updating with empty string must clear the secret
+            mgr.update({"api_token": ""})
+            self.assertEqual(mgr.get("api_token"), "")
+            self.assertEqual(mgr.get("api_token", mask_secrets=True), "")
+
+    def test_master_fernet_key_rotation_reencrypts_secrets(self):
+        """rotate_master_key atomically decrypts and re-encrypts secrets.json with the new key."""
+        from cryptography.fernet import Fernet as _Fernet
+
+        key_1 = _Fernet.generate_key().decode("utf-8")
+        key_2 = _Fernet.generate_key().decode("utf-8")
+        local_key_file = self.control_dir / "master_key.txt"
+        local_key_file.write_text(key_1, encoding="utf-8")
+
+        test_schema = [
+            {"id": "api_key", "type": "password", "scope": "workspace", "secure": True, "default": ""}
+        ]
+        mgr = SettingsManager("llm", "default", schema=test_schema)
+        mgr.set("api_key", "sk-live-secret-999")
+        mgr._sync_vfs_barrier()
+
+        self.assertEqual(mgr.get("api_key"), "sk-live-secret-999")
+        # Rotate to key_2
+        rotated = rotate_master_key(key_2)
+        mgr._sync_vfs_barrier()
+        self.assertTrue(rotated)
+        self.assertEqual(local_key_file.read_text(encoding="utf-8").strip(), key_2)
+        self.assertEqual(mgr.get("api_key"), "sk-live-secret-999")
+
+        # Simulate invalid key saved to system.json via security_settings_updated hook
+        sys_data = load_json_config(self.system_json_path.as_posix(), {})
+        sys_data["security"] = {"master_fernet_key": "not-a-valid-fernet-key"}
+        save_json_config(self.system_json_path.as_posix(), sys_data, workspace_id="default")
+        mgr._sync_vfs_barrier()
+
+        _on_security_settings_updated(workspace_id="default")
+        mgr._sync_vfs_barrier()
+
+        # Verify invalid plaintext key was scrubbed from system.json and existing secrets remain intact
+        cleaned_sys = json.loads(self.system_json_path.read_text(encoding="utf-8"))
+        self.assertNotIn("security", cleaned_sys)
+        self.assertEqual(local_key_file.read_text(encoding="utf-8").strip(), key_2)
+        self.assertEqual(mgr.get("api_key"), "sk-live-secret-999")
+    def test_all_ctx_settings_calls_reference_declared_schema_keys(self):
+        """Every ctx.settings.get('key') and ctx.settings.set('key', ...) in Core and Extensions must exist in that module's settings_schema."""
+        import importlib as _importlib
+
+        insetu_pkg_dir = Path(__file__).resolve().parent.parent.parent / "insetu"
+        repo_root = insetu_pkg_dir.parent
+        for py_file in sorted(insetu_pkg_dir.rglob("engine_*.py")):
+            rel_mod = py_file.relative_to(repo_root).with_suffix("").as_posix().replace("/", ".")
+            try:
+                _importlib.import_module(rel_mod)
+            except Exception:
+                pass
+
+            tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+            ext_name = py_file.stem.replace("engine_", "")
+            schema_spec = _REGISTERED_SETTINGS_SCHEMAS.get(ext_name, [])
+            schema = schema_spec("default") if callable(schema_spec) else schema_spec
+            declared_keys = {f.get("id") for f in (schema or []) if isinstance(f, dict) and f.get("id")}
+
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ("get", "set")
+                    and isinstance(node.func.value, ast.Attribute)
+                    and node.func.value.attr == "settings"
+                    and isinstance(node.func.value.value, ast.Name)
+                    and node.func.value.value.id == "ctx"
+                    and len(node.args) >= 1
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)
+                ):
+                    key_str = node.args[0].value
+                    self.assertIn(
+                        key_str,
+                        declared_keys,
+                        f"{py_file.name}:{node.lineno} calls ctx.settings.{node.func.attr}('{key_str}'), "
+                        f"but '{key_str}' is not declared in {ext_name}'s settings_schema!"
+                    )
 
     def test_lazy_migration_from_legacy_config_json(self):
         """Legacy config.json values (extensions, instance_title, instance_emoji, port) auto-migrate into their tiers."""
@@ -280,6 +373,58 @@ class TestConfigurationCascade(unittest.TestCase):
                 )
             self.assertIn("target_repos", tpl_data)
             self.assertIn("ignore_dirs", tpl_data)
+
+    def test_vfs_sieve_blank_slate_nullable_override_and_bucket_zero(self):
+        """is_file_tracked_by_sieve honors Nullable Overrides (explicit [] vs None) and resolve_file_bucket routes to Bucket 0 or _dropped."""
+        from insetu.core.topology.engine_topology import is_file_tracked_by_sieve as _is_file_tracked, resolve_file_bucket as _resolve_bucket
+
+        global_cfg = {
+            "ignore_dirs": ["build", "dist"],
+            "ignore_files": ["secret.txt"],
+            "ignore_patterns": ["*.log"],
+            "include_extensions": [".py", ".md"],
+        }
+
+        # 1. Inherit State (repo overrides are None/omitted) -> uses global rules
+        inherit_repo_cfg = {"repo_dir": "alpha", "apply_ignore": True}
+        self.assertTrue(_is_file_tracked("src/app.py", inherit_repo_cfg, global_cfg, repo_dir="alpha"))
+        self.assertFalse(_is_file_tracked("build/output.py", inherit_repo_cfg, global_cfg, repo_dir="alpha"))
+        self.assertFalse(_is_file_tracked("debug.log", inherit_repo_cfg, global_cfg, repo_dir="alpha"))
+        self.assertFalse(_is_file_tracked("src/style.css", inherit_repo_cfg, global_cfg, repo_dir="alpha"))
+
+        # 2. Override State (repo explicitly sets empty list [] or custom list) -> completely replaces global rules
+        override_repo_cfg = {
+            "repo_dir": "alpha",
+            "apply_ignore": True,
+            "repo_ignore_dirs": [],
+            "repo_ignore_patterns": [],
+            "exts": [".py", ".css", ".log"],
+        }
+        self.assertTrue(_is_file_tracked("build/output.py", override_repo_cfg, global_cfg, repo_dir="alpha"))
+        self.assertTrue(_is_file_tracked("debug.log", override_repo_cfg, global_cfg, repo_dir="alpha"))
+        self.assertTrue(_is_file_tracked("src/style.css", override_repo_cfg, global_cfg, repo_dir="alpha"))
+
+        # 3. Sub-Bucket Extraction & Bucket 0 Fallthrough
+        sub_buckets = [
+            {
+                "id": "docs",
+                "title": "Docs",
+                "match_prefixes": ["docs/"],
+                "drop_patterns": ["archived/"],
+                "ignore_patterns": ["internal_notes.md"],
+            }
+        ]
+        # Matched sub-bucket
+        b_docs, _ = _resolve_bucket("docs/guide.md", sub_buckets, repo_dir="alpha")
+        self.assertEqual(b_docs["id"], "docs")
+
+        # Dropped pattern -> returns _dropped sentinel (omitted from both sub-bucket and Bucket 0)
+        b_drop, _ = _resolve_bucket("docs/archived/old.md", sub_buckets, repo_dir="alpha")
+        self.assertEqual(b_drop["id"], "_dropped")
+
+        # Ignored pattern in sub-bucket -> passes through to Bucket 0 (returns None, None)
+        b_pass, _ = _resolve_bucket("docs/internal_notes.md", sub_buckets, repo_dir="alpha")
+        self.assertIsNone(b_pass)
 
 
 if __name__ == "__main__":

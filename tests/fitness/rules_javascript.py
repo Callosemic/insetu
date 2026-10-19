@@ -112,6 +112,7 @@ def check_javascript_files():
     uri_scheme_strip_ban_pattern = re.compile(r'\.replace\(\s*(?:/\^?(?:vfs|ctx|ws):\\\/\\\/[^/]*/g?|[\'"](?:vfs|ctx|ws):\/\/[^\'"]*[\'"])\s*,\s*[\'"][\'"]\s*\)')
     download_uri_path_ban_pattern = re.compile(r'/download/\$\{encodeURIComponent\(')
     legacy_build_file_tree_call_pattern = re.compile(r'\bbuildFileTree\s*\(')
+    folder_entity_card_pattern = re.compile(r'\.entityType=\$\{[\'"]folder[\'"]\}[\s\S]{0,200}?\.entityData=\$\{\{([^\}]+)\}\}')
 
     # Initialize Tree-sitter for Hybrid Parsing
     ts_available = False
@@ -202,6 +203,17 @@ def check_javascript_files():
                             )
 
         # --- 2. GLOBAL & STRING PATTERNS ---
+        for folder_match in folder_entity_card_pattern.finditer(full_content):
+            entity_data_body = folder_match.group(1)
+            if "filepath:" not in entity_data_body or "titleText:" not in entity_data_body:
+                line_num = full_content[:folder_match.start()].count('\n') + 1
+                report_violation(
+                    "FOLDER_ENTITY_DATA_MANDATE",
+                    filepath,
+                    line_num,
+                    "Folder cards (.entityType=${'folder'}) must include both 'filepath' and 'titleText' in .entityData for SelectionStore and Quickpack parity."
+                )
+
         if n_plus_one_bulk_vfs_pattern.search(full_content):
             report_violation(
                 "BULK_VFS_LOOP_BAN",

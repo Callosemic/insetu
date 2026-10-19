@@ -60,6 +60,9 @@ format = [
 publish = [
     # System binary dependencies: pandoc, pdflatex
 ]
+preview = [
+    "uvicorn>=0.30.0",                # engine_preview: ASGI dev server supervisor
+]
 update = [
     "python-semantic-release>=9.0.0", # engine_update: Automated versioning
     "build>=1.0.0",                   # engine_update: PEP 517 package building
@@ -76,6 +79,7 @@ all = [
     "markdownify>=0.11.0",
     "playwright>=1.40.0",
     "jsbeautifier>=1.14.0",
+    "uvicorn>=0.30.0",
     "python-semantic-release>=9.0.0",
     "build>=1.0.0",
     "twine>=4.0.0"

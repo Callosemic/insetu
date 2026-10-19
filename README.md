@@ -102,15 +102,13 @@ git clone https://github.com/Callosemic/sutram.git
 # 2. Create and activate a shared virtual environment
 python3 -m venv venv
 source venv/bin/activate
-
 # 3. Link Python packages in editable mode
 pip install -e ./akasa
 pip install -e "./insetu[all]"
 
-# 4. Sync Sutram/yenVUI UI changes into insetu
-# (sutram/build_matrix.json automatically copies live CSS/JS primitives into ../insetu)
-cd sutram
-node build.js
+# 4. Vendorize & minify Sutram/yenVUI UI changes into insetu
+# (Can also be bound to a `repo_update` rule on `sutram` in the Automation Hooks extension)
+bash ./insetu/scripts/vendor_sutram.sh
 
 ```
 
