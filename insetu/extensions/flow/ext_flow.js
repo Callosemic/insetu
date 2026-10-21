@@ -5,19 +5,67 @@ import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
 const AppStore = window.inSetu.stores.App;
 export function canonicalizeFlowUri(uri) {
-    if (!uri) return '';
-    let s = String(uri).replace(/\\/g, '/').trim();
-    if (s.startsWith('vfs://') || s.startsWith('ctx://') || s.startsWith('ws://')) return s;
-    while (s.includes('://')) {
-        s = s.split('://').pop();
+    return window.inSetu.utils.InSetuURI.canonicalize(uri);
+}
+export function resolveFlowPromptUri(rawPrompt) {
+    if (!rawPrompt) return '';
+    const opts = FlowStore.getState().availableOptions || window.inSetu?.stores?.Gather?.getState()?.gatherOptions || {};
+    const prompts = opts.prompts || [];
+    if (prompts.includes(rawPrompt)) return rawPrompt;
+    const base = new window.inSetu.utils.InSetuURI(rawPrompt).basename;
+    return prompts.find(p => p.endsWith(rawPrompt) || p.endsWith('/' + base)) || canonicalizeFlowUri(rawPrompt.includes('://') ? rawPrompt : `ctx://prompts/${rawPrompt}`);
+}
+export function classifyFlowTargetUri(rawInc) {
+    if (!rawInc || typeof rawInc !== 'string') {
+        return { healedUri: '', isUndefined: true, isCleanDiff: false, isSystem: false, candidate: null };
     }
-    if (uri.includes('diffs/') || s.endsWith('_diffs.txt')) return `ctx://diffs/${s.replace(/^diffs\//, '')}`;
-    if (uri.includes('workflows/') || s.endsWith('_workflow_context.txt') || (s.startsWith('workflow_') && s.endsWith('_context.txt'))) {
-        return `ctx://workflows/${s.replace(/^workflows\//, '').replace(/^contexts\//, '')}`;
+    const appState = AppStore.getState ? AppStore.getState() : {};
+    const manifestCtx = appState.manifest?.ctx || {};
+    const vfsFiles = appState.derivedVfsFiles || [];
+    const allRepos = appState.allRepos || [];
+    const flowState = FlowStore.getState ? FlowStore.getState() : {};
+    const opts = flowState.availableOptions || window.inSetu?.stores?.Gather?.getState()?.gatherOptions || {};
+    const availContexts = opts.contexts || [];
+    const availDiffs = opts.diffs || [];
+    const availPrompts = opts.prompts || [];
+    const batches = flowState.batches || [];
+    const availWorkflows = batches.map(b => `ctx://workflows/workflow_${b.id}_context.txt`);
+    const allDefinedSystemUris = [...availDiffs, ...availContexts, ...availPrompts, ...availWorkflows];
+    const uriObj = new window.inSetu.utils.InSetuURI(rawInc);
+    const inc = uriObj.isDir ? `${uriObj.toString()}/` : uriObj.toString();
+    const isSystem = uriObj.scheme === 'ctx' || uriObj.scheme === 'ws';
+    const isDiff = inc.startsWith('ctx://diffs/') || inc.endsWith('_diffs.txt');
+    const isWorkflow = inc.startsWith('ctx://workflows/') || (uriObj.basename.startsWith('workflow_') && uriObj.basename.endsWith('_context.txt'));
+    const isPrompt = inc.startsWith('ctx://prompts/') || uriObj.volume === 'prompts';
+    const isGatherContext = isSystem && !isDiff && !isWorkflow && !isPrompt;
+
+    const hasTopologyLoaded = availContexts.length > 0 || availDiffs.length > 0 || allRepos.length > 0;
+    let isUndefined = false;
+
+    if (hasTopologyLoaded) {
+        if (isDiff) {
+            isUndefined = !availDiffs.includes(inc);
+        } else if (isGatherContext) {
+            isUndefined = !availContexts.includes(inc) && !manifestCtx[inc];
+        } else if (isWorkflow) {
+            isUndefined = batches.length > 0 && !availWorkflows.includes(inc);
+        } else if (isPrompt) {
+            isUndefined = availPrompts.length > 0 && !availPrompts.includes(inc);
+        } else if (uriObj.scheme === 'vfs') {
+            if (uriObj.repo && allRepos.length > 0 && !allRepos.includes(uriObj.repo)) {
+                isUndefined = true;
+            }
+        }
     }
-    if (uri.includes('prompts/')) return `ctx://prompts/${s.replace(/^prompts\//, '')}`;
-    if (s.endsWith('_context.txt')) return `ctx://contexts/${s.replace(/^contexts\//, '')}`;
-    return `vfs://${s.replace(/^\/+/, '')}`;
+
+    const isCleanDiff = isDiff && !isUndefined && !manifestCtx[inc];
+    let candidate = null;
+    if (isUndefined) {
+        const base = uriObj.basename;
+        candidate = allDefinedSystemUris.find(f => f === `ctx://contexts/${base}` || f === `ctx://diffs/${base}` || f.endsWith('/' + base) || f.endsWith('_' + base)) || null;
+    }
+
+    return { healedUri: inc, isUndefined, isCleanDiff, isSystem, isDiff, candidate };
 }
 
 export const FlowStore = createExtensionStore('Flow', {
@@ -66,6 +114,71 @@ export const FlowStore = createExtensionStore('Flow', {
         } finally {
             FlowStore.setState({ loading: false });
         }
+    },
+    duplicateBatch: async (sourceBatch) => {
+        if (!sourceBatch) return;
+        const rawTitle = String(sourceBatch.title || sourceBatch.id || 'Workflow').replace(/^\[🌐[^\]]+\]\s*/, '');
+        const newTitleInput = prompt("Enter a title for the copied workflow batch:", `${rawTitle} (Copy)`);
+        if (!newTitleInput || !newTitleInput.trim()) return;
+        const title = newTitleInput.trim();
+
+        const currentBatches = FlowStore.getState().batches || [];
+        const baseId = window.inSetu.utils.slugify(title) || `batch_${Date.now()}`;
+        const isTaken = (id) => currentBatches.some(b => b.id === id);
+        const newId = !isTaken(baseId)
+            ? baseId
+            : (Array.from({ length: 100 }).map((_, i) => `${baseId}_${i + 1}`).find(id => !isTaken(id)) || `${baseId}_${Date.now()}`);
+        const payload = {
+            id: newId,
+            title,
+            domain: (sourceBatch.domain || 'Workflows').trim() || 'Workflows',
+            includes: Array.isArray(sourceBatch.includes) ? [...sourceBatch.includes] : []
+        };
+        if (Array.isArray(sourceBatch.show_if_exists) && sourceBatch.show_if_exists.length > 0) {
+            payload.show_if_exists = [...sourceBatch.show_if_exists];
+        }
+        if (Array.isArray(sourceBatch.show_if_missing) && sourceBatch.show_if_missing.length > 0) {
+            payload.show_if_missing = [...sourceBatch.show_if_missing];
+        }
+        if (sourceBatch.include_prompt) payload.include_prompt = sourceBatch.include_prompt;
+        if (sourceBatch.response_path) payload.response_path = sourceBatch.response_path;
+        if (sourceBatch.archive_path) payload.archive_path = sourceBatch.archive_path;
+
+        if (window.Sutram?.stores?.Layout) {
+            const layout = window.Sutram.stores.Layout.getState();
+            layout.closeWindow('flow:view');
+            layout.closeWindow('flow:edit');
+        }
+
+        try {
+            const res = await window.inSetu.api.post('flow/batches/save', payload, { collapseKey: `flow:batch:save:${newId}` });
+            if (res.ok) {
+                const responseData = await res.json();
+                if (Array.isArray(responseData.batches)) {
+                    FlowStore.setState({ batches: responseData.batches });
+                } else {
+                    FlowStore.setState({ batches: [...currentBatches, payload] });
+                }
+                if (window.inSetu.ui?.setGlobalStatus) {
+                    window.inSetu.ui.setGlobalStatus(`✅ Created batch "${title}"`, 2500);
+                }
+                if (responseData.job_id && window.inSetu.utils?.pollJob) {
+                    window.inSetu.utils.pollJob(responseData.job_id, {
+                        onComplete: async () => {
+                            if (window.inSetu.sys?.refreshManifest) await window.inSetu.sys.refreshManifest();
+                            await FlowStore.getState().fetchBatches();
+                        }
+                    });
+                } else if (window.inSetu.sys?.refreshManifest) {
+                    await window.inSetu.sys.refreshManifest();
+                }
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert("Failed to copy batch: " + (err.error || res.statusText));
+            }
+        } catch (e) {
+            alert("Network error: " + e.message);
+        }
     }
 }, {
     onEvict: {
@@ -83,8 +196,6 @@ export class InSetuExtFlow extends InSetuElement {
         pendingModules: { type: Array },
         isPipelineActive: { type: Boolean },
         searchQuery: { type: String },
-        pinnedRepos: { type: Object },
-        allRepos: { type: Array },
         _showFilters: { type: Boolean },
         _applyVisibilityFilter: { type: Boolean }
     };
@@ -96,12 +207,7 @@ export class InSetuExtFlow extends InSetuElement {
         this.batches = [];
         this.loading = false;
         this.searchQuery = '';
-        this.pinnedRepos = new Set(['ALL']);
-        this.allRepos = [];
         this._applyVisibilityFilter = true;
-    }
-    onWorkspaceLoad(workspaceId) {
-        FlowStore.getState().fetchBatches();
     }
     onViewActivated() {
         FlowStore.getState().fetchBatches();
@@ -145,11 +251,11 @@ export class InSetuExtFlow extends InSetuElement {
             }),
             { autoFetch: 'fetchBatches' }
         );
-
         this.registerGlobalListener('insetu:flow:edit-batch', window, (e) => this.openEditBatchModal(e.detail));
+        this.registerGlobalListener('insetu:flow:copy-batch', window, (e) => FlowStore.getState().duplicateBatch(e.detail));
         this.registerGlobalListener('insetu:flow:refresh-prompt', window, () => {
             const vb = FlowStore.getState().viewingBatch;
-            if (vb) this.openBatchModal(vb);
+            if (vb) this._refreshBatchPromptText(vb);
         });
         this.registerGlobalListener('insetu:git:diffs-refreshed', window, () => {
             this._debouncedManifestRefresh();
@@ -157,8 +263,6 @@ export class InSetuExtFlow extends InSetuElement {
         this.subscribe(
             AppStore,
             state => ({
-                allRepos: state.allRepos || [],
-                pinnedRepos: state.pinnedRepos || new Set(['ALL']),
                 activeModules: state.activeModules || [],
                 pendingModules: state.pendingModules || [],
                 isPipelineActive: state.isPipelineActive || false,
@@ -166,8 +270,6 @@ export class InSetuExtFlow extends InSetuElement {
                 dirtyBuckets: state.dirtyBuckets
             }),
             (slice) => {
-                this.allRepos = slice.allRepos;
-                this.pinnedRepos = slice.pinnedRepos;
                 this.activeModules = slice.activeModules;
                 this.pendingModules = slice.pendingModules;
                 this.isPipelineActive = slice.isPipelineActive;
@@ -177,9 +279,11 @@ export class InSetuExtFlow extends InSetuElement {
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
-            const promptTouched = payload.mutations.some(m => m.filepath && (m.filepath.includes('prompts/') || m.filepath.endsWith('.md') || m.filepath.endsWith('.txt')));
+            const vb = FlowStore.getState().viewingBatch;
+            if (!vb || !vb.include_prompt) return;
+            const promptTouched = payload.mutations.some(m => m.filepath && (m.filepath.includes('prompts') || m.filepath.includes('.templates') || m.filepath.endsWith(vb.include_prompt.split('/').pop())));
             if (promptTouched) {
-                this.dispatch('insetu:flow:refresh-prompt');
+                this._refreshBatchPromptText(vb);
             }
         });
         this.registerGlobalListener('sutram-sync-complete', window, () => {
@@ -191,24 +295,13 @@ export class InSetuExtFlow extends InSetuElement {
                 this._debouncedFetchBatches();
             }
         });
-
-        const as = AppStore.getState ? AppStore.getState() : {};
-        this.pinnedRepos = as.pinnedRepos || new Set(['ALL']);
-        this.allRepos = as.allRepos || [];
     }
     disconnectedCallback() {
         super.disconnectedCallback();
     }
     openEditBatchModal(batch = null) {
         const savedPrompt = batch && batch.include_prompt ? batch.include_prompt : '';
-        const gatherOptions = FlowStore.getState().availableOptions || window.inSetu.stores.Gather?.getState()?.gatherOptions || {};
-        const availablePrompts = gatherOptions.prompts || [];
-        const matchedPrompt = (() => {
-            if (savedPrompt && !availablePrompts.includes(savedPrompt)) {
-                return availablePrompts.find(p => p.endsWith(savedPrompt.split('/').pop())) || savedPrompt;
-            }
-            return savedPrompt;
-        })();
+        const matchedPrompt = savedPrompt ? resolveFlowPromptUri(savedPrompt) : '';
 
         const editForm = {
             id: batch ? batch.id : '',
@@ -237,11 +330,21 @@ export class InSetuExtFlow extends InSetuElement {
             }, layout.focusedColumn || 'center', 1);
         }
     }
+    _refreshBatchPromptText(batch) {
+        if (!batch || !batch.include_prompt) return;
+        const promptPath = resolveFlowPromptUri(batch.include_prompt);
+        this.api.get(`prompts/resolve?file=${encodeURIComponent(promptPath)}`)
+            .then(res => res.ok ? res.text() : Promise.reject(new Error("Prompt resolution failed")))
+            .then(text => { FlowStore.setState({ viewingBatchPromptText: text }); })
+            .catch(err => { FlowStore.setState({ viewingBatchPromptText: `[Error: ${err.message}]` }); });
+    }
     openBatchModal(batch) {
+        const existingVb = FlowStore.getState().viewingBatch;
+        const preserveResponse = existingVb && existingVb.id === batch.id ? FlowStore.getState().responseContent : '';
         FlowStore.setState({
             viewingBatch: batch,
-            viewingBatchPromptText: 'Loading prompt...',
-            responseContent: ''
+            viewingBatchPromptText: batch.include_prompt ? 'Loading prompt...' : '',
+            responseContent: preserveResponse
         });
         if (window.Sutram?.stores?.Layout) {
             const layout = window.Sutram.stores.Layout.getState();
@@ -255,16 +358,26 @@ export class InSetuExtFlow extends InSetuElement {
                 windowOnly: true
             }, layout.focusedColumn || 'center', 1);
         }
-        const gatherOptions = FlowStore.getState().availableOptions || window.inSetu.stores.Gather?.getState()?.gatherOptions || {};
         if (batch.include_prompt) {
-            const prompts = gatherOptions.prompts || [];
-            const promptPath = prompts.includes(batch.include_prompt) 
-                ? batch.include_prompt 
-                : (prompts.find(p => p.endsWith(batch.include_prompt)) || batch.include_prompt);
-            this.api.workspace.get(`prompts/resolve?file=${encodeURIComponent(promptPath)}`)
-                .then(res => res.ok ? res.text() : Promise.reject(new Error("Prompt resolution failed")))
-                .then(text => { FlowStore.setState({ viewingBatchPromptText: text }); })
-                .catch(err => { FlowStore.setState({ viewingBatchPromptText: `[Error: ${err.message}]` }); });
+            this._refreshBatchPromptText(batch);
+        }
+        if (batch.id && window.inSetu?.vfs?.ensureFreshContext) {
+            const baseFile = `ctx://workflows/workflow_${batch.id}_context.txt`;
+            (async () => {
+                try {
+                    await window.inSetu.vfs.ensureFreshContext(baseFile);
+                    const chunks = window.inSetu.vfs.getChunks ? window.inSetu.vfs.getChunks(baseFile) : [baseFile];
+                    const targets = (chunks && chunks.length > 0) ? chunks : [baseFile];
+                    const activeWs = window.inSetu.utils.getActiveWorkspace();
+                    for (const fp of targets) {
+                        if (!window.inSetu.vfs.shareTextCache.has(fp)) {
+                            const fetchUrl = window.inSetu.vfs.resolveFileFetchUrl(fp, false);
+                            const text = await window.inSetu.api.fetchImmutableText(fetchUrl, { onlyIfMissing: true }, activeWs);
+                            window.inSetu.vfs.shareTextCache.set(fp, text);
+                        }
+                    }
+                } catch (_) {}
+            })();
         }
     }
     render() {
@@ -299,8 +412,7 @@ export class InSetuExtFlow extends InSetuElement {
                         if (!missingArr.every(f => !checkLiteralExists(f))) return false;
                     }
                 }
-
-                const activePins = Array.from(this.pinnedRepos || []);
+                const activePins = Array.from(this.ecosystem?.pinnedRepos || ['ALL']);
                 if (activePins.includes('ALL')) return true;
                 return activePins.some(pr => 
                     (b._repos && b._repos.includes(pr)) || 
@@ -313,6 +425,7 @@ export class InSetuExtFlow extends InSetuElement {
                 searchQuery: this.searchQuery,
                 searchFields: b => `${(b._repos || []).join(' ')} ${b.title} ${b.id} ${b.domain}`
             });
+            const activeRepoPinsArr = Array.from(this.ecosystem?.pinnedRepos || ['ALL']);
             try {
                 return html`
                     <sutram-toolbar
@@ -320,12 +433,12 @@ export class InSetuExtFlow extends InSetuElement {
                     .searchQuery=${this.searchQuery}
                     @search-changed=${(e) => FlowStore.setState({ searchQuery: e.detail.value })}
                     .enableFilterDropdown=${true}
-                    .activeFilters=${[...Array.from(this.pinnedRepos), ...(this._applyVisibilityFilter ? ['Visibility: ON'] : [])]}>
+                    .activeFilters=${[...activeRepoPinsArr, ...(this._applyVisibilityFilter ? ['Visibility: ON'] : [])]}>
                     <div slot="filters" style="display: flex; flex-direction: column;">
                         <insetu-repo-filter
                             label="📌 Repos:"
-                            .repos=${this.allRepos}
-                            .activeRepos=${Array.from(this.pinnedRepos)}
+                            .repos=${this.ecosystem?.allRepos || []}
+                            .activeRepos=${activeRepoPinsArr}
                             @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                         </insetu-repo-filter>
                         <div style="padding: 10px 15px; display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border);">
@@ -364,13 +477,15 @@ export class InSetuExtFlow extends InSetuElement {
                                     <div style="display: flex; flex-direction: column; gap: 8px;">
                                         ${groups[cat].map(b => {
                                             const filename = b._filename;
-                                            const manifestObj = AppStore.getState().manifest?.ctx?.[filename] || {};
-                                            const meta = manifestObj.meta || {};
+                                            const manifestCtx = AppStore.getState().manifest?.ctx || {};
+                                            const manifestObj = manifestCtx[filename];
+                                            const isCompiledInManifest = Boolean(manifestObj && manifestObj.meta);
+                                            const meta = manifestObj?.meta || {};
                                             const sizeStr = this.utils.formatArtifactSize(meta);
                                             const repoStr = b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : '';
                                             const isDirty = (() => {
-                                                const manifestCtx = AppStore.getState().manifest?.ctx || {};
-                                                const addr = window.inSetu.utils.BucketAddress.fromFilepath(filename, manifestCtx[filename]?.meta);
+                                                if (!isCompiledInManifest) return true;
+                                                const addr = window.inSetu.utils.BucketAddress.fromFilepath(filename, meta);
                                                 if ((AppStore.getState().dirtyBuckets || new Set()).has(addr.key)) return true;
                                                 return (b.includes || []).some(inc => {
                                                     const uri = window.inSetu.utils.parseURI(inc);
@@ -398,8 +513,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                             ...b, 
                                                             filepath: filename,
                                                             outdated: isDirty,
-                                                            suppress: ['file-edit'], 
-                                                            chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, filename, 'ctx') : [filename]  
+                                                            suppress: ['file-edit']
                                                         }}
                                                         @card-clicked=${() => this.openBatchModal(b)}>
                                                 </sutram-card>
@@ -424,7 +538,6 @@ export class InSetuExtFlow extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-flow', InSetuExtFlow);
-
 export class InSetuFlowViewProjection extends InSetuElement {
     static get extensionName() { return 'flow'; }
     static properties = {
@@ -433,7 +546,64 @@ export class InSetuFlowViewProjection extends InSetuElement {
         responseContent: { type: String }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+        :host {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            background: var(--bg);
+            box-sizing: border-box;
+        }
+        .flow-section {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 14px 16px;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .flow-section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .flow-section-title {
+            margin: 0;
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: var(--text);
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .flow-include-list {
+            display: flex;
+            flex-direction: column;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            max-height: 220px;
+            overflow-y: auto;
+            padding: 4px 12px;
+        }
+        .flow-include-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border);
+            font-family: var(--font-mono);
+            font-size: 0.82rem;
+            word-break: break-all;
+        }
+        .flow-include-item:last-child {
+            border-bottom: none;
+        }
     `];
     constructor() {
         super();
@@ -493,68 +663,125 @@ export class InSetuFlowViewProjection extends InSetuElement {
     }
     render() {
         if (!this.viewingBatch) return html``;
-        const gatherOptions = window.inSetu.stores.Gather?.getState()?.gatherOptions || {};
+        const includesList = this.viewingBatch.includes || [];
         return html`
-            <sutram-scroll-view padding="15px" style="gap: 18px;">
-                <div>
-                    <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">1. Compiled Context Payload</h4>
-                    <div style="background: var(--input-bg); padding: 10px 15px; border-radius: 4px; border: 1px solid var(--border); margin-bottom: 10px; max-height: 220px; overflow-y: auto;">
-                        <ul style="margin: 0; font-family: monospace; font-size: 0.85rem; color: var(--text); opacity: 0.8; padding-left: 20px;">
-                            ${(this.viewingBatch.includes || []).length > 0 ? this.viewingBatch.includes.map(inc => html`<li style="padding: 2px 0; word-break: break-all;">${inc}</li>`) : html`<li style="color: var(--intent-danger); list-style: none; margin-left: -20px;">No files mapped to this batch.</li>`}
-                        </ul>
-                    </div>
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; width: 100%;">
-                        ${(() => {
-                            const baseFile = `ctx://workflows/workflow_${this.viewingBatch.id}_context.txt`;
-                            const manifestCtx = AppStore.getState().manifest?.ctx || {};
-                            const manifestObj = manifestCtx[baseFile] || {};
-                            return html`
-                                <sutram-entity-actions 
-                                    ?scrollable=${true}
-                                    .entityType=${'file'} 
-                                    .entityData=${{ 
-                                        filepath: baseFile, 
-                                        chunks: manifestObj.chunks || [baseFile],
-                                        showOnly: ['file-copy', 'file-download', 'file-share', 'file-view-parts']
-                                    }}>
-                                </sutram-entity-actions>
-                            `;
-                        })()}
-                    </div>
+            <div style="padding: 10px 16px; background: var(--input-bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-shrink: 0; flex-wrap: wrap;">
+                <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                    <sutram-tag text=${this.viewingBatch.domain || 'Workflows'} intent="primary"></sutram-tag>
+                    <span style="font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        ctx://workflows/workflow_${this.viewingBatch.id}_context.txt
+                    </span>
                 </div>
-                ${this.viewingBatch.include_prompt ? html`
-                    <div>
-                        <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Instruction Prompt</h4>
-                        <sutram-textarea readonly style="width: 100%; min-height: 150px; margin-bottom: 10px;" .value=${this.viewingBatchPromptText}></sutram-textarea>
-                        <div style="display: flex; gap: 10px;">
+                <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0;">
+                    <sutram-btn size="sm" intent="neutral" icon="copy" label="Copy Batch" style="margin: 0;" @click=${() => FlowStore.getState().duplicateBatch(this.viewingBatch)}></sutram-btn>${!this.viewingBatch.is_shared ? html`
+                        <sutram-btn size="sm" intent="primary" icon="edit-3" label="Edit Batch" style="margin: 0;" @click=${() => {
+                            const b = this.viewingBatch;
+                            if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('flow:view');
+                            this.dispatch('insetu:flow:edit-batch', b);
+                        }}></sutram-btn>
+                    ` : ''}
+                </div>
+            </div>
+
+            <sutram-scroll-view padding="16px">
+                <div style="display: flex; flex-direction: column; gap: 16px;">
+                    <div class="flow-section">
+                        <div class="flow-section-header">
+                            <h4 class="flow-section-title">
+                                <yv-icon name="package" style="width: 15px; height: 15px; color: var(--intent-primary);"></yv-icon>
+                                <span>1. Compiled Context Payload</span>
+                            </h4>
+                            <sutram-tag text="${includesList.length}${includesList.length === 1 ? 'source' : 'sources'}" intent="neutral"></sutram-tag>
+                        </div>
+
+                        <div class="flow-include-list">
+                            ${includesList.length > 0 ? includesList.map(inc => {
+                                const { healedUri, isUndefined, isCleanDiff, isSystem } = classifyFlowTargetUri(inc);
+                                const iconName = healedUri.includes('diffs/') ? "git-pull-request" : (healedUri.includes('contexts/') || healedUri.includes('workflows/') ? "package" : (healedUri.endsWith('/') || (!isSystem && !healedUri.includes('.')) ? "folder" : "file-text"));
+                                return html`
+                                    <div class="flow-include-item">
+                                        <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                                            <yv-icon name="${iconName}" style="width: 13px; height: 13px; color: var(--text-muted); flex-shrink: 0;"></yv-icon>
+                                            <span style="color: ${isUndefined ? 'var(--intent-danger)' : (isCleanDiff ? 'var(--text-muted)' : (isSystem ? 'var(--intent-primary)' : 'var(--text)'))}; text-decoration: ${isUndefined ? 'line-through' : 'none'}; opacity: ${isUndefined ? '0.75' : '1'};">${healedUri}</span>
+                                        </div>
+                                        ${isUndefined ? html`<span style="font-size: 0.7rem; color: var(--intent-danger); border: 1px solid var(--intent-danger); padding: 1px 6px; border-radius: 999px; font-weight: bold; flex-shrink: 0;">Undefined</span>` : ''}
+                                        ${isCleanDiff ? html`<span style="font-size: 0.7rem; color: var(--text-muted); border: 1px solid var(--border); padding: 1px 6px; border-radius: 999px; font-style: italic; flex-shrink: 0;">Clean (no diffs)</span>` : ''}
+                                    </div>
+                                `;
+                            }) : html`<div style="padding: 12px 0; color: var(--intent-danger); font-size: 0.85rem; text-align: center;">No files mapped to this batch.</div>`}
+                        </div>
+
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; width: 100%; padding-top: 2px;">
                             ${(() => {
-                                const prompts = gatherOptions.prompts || [];
-                                const rawPrompt = this.viewingBatch.include_prompt;
-                                const promptPath = prompts.includes(rawPrompt) ? rawPrompt : (prompts.find(p => p.endsWith(rawPrompt)) || (rawPrompt.includes('://') ? rawPrompt : `ctx://prompts/${rawPrompt}`));
+                                const baseFile = `ctx://workflows/workflow_${this.viewingBatch.id}_context.txt`;
+                                const manifestCtx = AppStore.getState().manifest?.ctx || {};
+                                const manifestObj = manifestCtx[baseFile];
                                 return html`
                                     <sutram-entity-actions 
                                         ?scrollable=${true}
-                                        .entityType=${'file:prompt'} 
+                                        .entityType=${'file'} 
                                         .entityData=${{ 
-                                            filepath: promptPath, 
-                                            isFS: true,
-                                            transientContent: this.viewingBatchPromptText,
-                                            showOnly: ['file-copy', 'file-edit']
+                                            filepath: baseFile, 
+                                            isFS: false,
+                                            chunks: manifestObj?.chunks || [baseFile],
+                                            showOnly: ['file-copy', 'file-download', 'file-share', 'file-view-parts']
                                         }}>
                                     </sutram-entity-actions>
                                 `;
                             })()}
                         </div>
                     </div>
-                ` : ''}
-                ${this.viewingBatch.response_path ? html`
-                    <div>
-                        <h4 style="margin: 0 0 5px 0; color: var(--text); font-size: 1.05rem;">3. LLM Response Integration</h4>
-                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Paste response to save to: <code style="word-break: break-all; color: var(--intent-success);">${this.viewingBatch.response_path}</code></p>
-                        <sutram-textarea id="batch-response-text" placeholder="Paste LLM response here..." .value=${this.responseContent || ''} .monospace=${true} .rows=${10} @sutram-input-changed=${(e) => FlowStore.setState({ responseContent: e.detail.value })}></sutram-textarea>
-                        <sutram-async-btn intent="success" icon="save" label="Save Response" style="width: 100%; display: block; --btn-padding: 15px; --btn-font-size: 1.1rem;" .onClick=${this.saveBatchResponse.bind(this)}></sutram-async-btn>
-                    </div>
-                ` : ''}
+
+                    ${this.viewingBatch.include_prompt ? html`
+                        <div class="flow-section">
+                            <div class="flow-section-header">
+                                <h4 class="flow-section-title">
+                                    <yv-icon name="terminal" style="width: 15px; height: 15px; color: var(--intent-highlight);"></yv-icon>
+                                    <span>2. Instruction Prompt</span>
+                                </h4>
+                                <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted);">${resolveFlowPromptUri(this.viewingBatch.include_prompt)}</span>
+                            </div>
+                            <sutram-textarea readonly ?flush=${true} .monospace=${true} style="width: 100%; min-height: 140px; --bg-input: var(--bg);" .value=${this.viewingBatchPromptText}></sutram-textarea>
+                            <div style="display: flex; gap: 8px; padding-top: 2px;">
+                                ${(() => {
+                                    const promptPath = resolveFlowPromptUri(this.viewingBatch.include_prompt);
+                                    const resolvedText = (this.viewingBatchPromptText && this.viewingBatchPromptText !== 'Loading prompt...') ? this.viewingBatchPromptText : undefined;
+                                    return html`
+                                        <sutram-entity-actions 
+                                            ?scrollable=${true}
+                                            .entityType=${'file:prompt'} 
+                                            .entityData=${{ 
+                                                filepath: promptPath, 
+                                                isFS: !promptPath.includes('/.templates/') || promptPath.includes('/.templates/user/'),
+                                                transientContent: resolvedText,
+                                                showOnly: ['file-copy', 'file-edit']
+                                            }}>
+                                        </sutram-entity-actions>
+                                    `;
+                                })()}
+                            </div>
+                        </div>
+                    ` : ''}
+
+                    ${this.viewingBatch.response_path ? html`
+                        <div class="flow-section">
+                            <div class="flow-section-header">
+                                <h4 class="flow-section-title">
+                                    <yv-icon name="file-check-2" style="width: 15px; height: 15px; color: var(--intent-success);"></yv-icon>
+                                    <span>3. LLM Response Integration</span>
+                                </h4>
+                            </div>
+                            <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; flex-direction: column; gap: 4px; background: var(--bg); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border);">
+                                <div>Save Target: <code style="word-break: break-all; color: var(--intent-success); font-family: var(--font-mono);">${this.viewingBatch.response_path}</code></div>
+                                ${this.viewingBatch.archive_path ? html`
+                                    <div>Archive Prior To: <code style="word-break: break-all; color: var(--intent-highlight); font-family: var(--font-mono);">${this.viewingBatch.archive_path}</code></div>
+                                ` : ''}
+                            </div>
+                            <sutram-textarea id="batch-response-text" ?flush=${true} placeholder="Paste LLM response here..." .value=${this.responseContent || ''} .monospace=${true} .rows=${8} style="--bg-input: var(--bg);" @sutram-input-changed=${(e) => FlowStore.setState({ responseContent: e.detail.value })}></sutram-textarea>
+                            <sutram-async-btn intent="success" icon="save" label="Save Response" style="width: 100%; display: block; margin: 0;" .onClick=${this.saveBatchResponse.bind(this)}></sutram-async-btn>
+                        </div>
+                    ` : ''}
+                </div>
             </sutram-scroll-view>
         `;
     }
@@ -572,7 +799,48 @@ export class InSetuFlowEditProjection extends InSetuElement {
         contextSearchQuery: { type: String }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+        :host {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            background: var(--bg);
+            box-sizing: border-box;
+        }
+        .flow-section {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 14px 16px;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .flow-section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .flow-section-title {
+            margin: 0;
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: var(--text);
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .flow-list-box {
+            display: flex;
+            flex-direction: column;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 4px 12px;
+        }
     `];
     constructor() {
         super();
@@ -718,22 +986,16 @@ export class InSetuFlowEditProjection extends InSetuElement {
         const includes = this.editForm?.includes || [];
         const showIfExists = this.editForm?.showIfExists || [];
         const showIfMissing = this.editForm?.showIfMissing || [];
-        const renderIncludeRow = (inc, idx, listKey) => {
-            const isSystem = inc.startsWith('ctx://');
-            const isDiff = inc.startsWith('ctx://diffs/') || inc.includes('diffs/') || inc.endsWith('_diffs.txt');
-            const isContext = (isSystem && !isDiff) || inc.includes('contexts/') || inc.endsWith('_context.txt');
-            const isMissing = isContext && !allFiles.includes(inc);
-            const candidate = (listKey === 'includes' && isMissing) ? (() => {
-                const base = this.utils.parseURI(inc).filename;
-                return allFiles.find(f => f === `ctx://contexts/${base}` || f === `ctx://diffs/${base}` || f.endsWith(base));
-            })() : null;
-            const iconName = inc.includes('diffs/') ? "git-pull-request" : (inc.includes('contexts/') ? "package" : (inc.endsWith('/') || (!isSystem && !inc.includes('.')) ? "folder" : "file-text"));
+        const renderIncludeRow = (rawInc, idx, listKey, totalLen) => {
+            const { healedUri: inc, isUndefined: isMissing, isCleanDiff, isSystem, candidate } = classifyFlowTargetUri(rawInc);
+            const iconName = inc.includes('diffs/') ? "git-pull-request" : (inc.includes('contexts/') || inc.includes('workflows/') ? "package" : (inc.endsWith('/') || (!isSystem && !inc.includes('.')) ? "folder" : "file-text"));
+            const isLast = idx === totalLen - 1;
 
             return html`
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: ${isLast ? 'none' : '1px solid var(--border)'}; gap: 8px;">
                     <div style="display: flex; align-items: center; flex: 1; min-width: 0; gap: 8px; flex-wrap: wrap;">
                         <yv-icon name="${iconName}" style="width: 14px; height: 14px; color: var(--text-muted); flex-shrink: 0;"></yv-icon>
-                        <span style="font-family: monospace; font-size: 0.85rem; color: ${isMissing ? 'var(--intent-danger)' : (isSystem ? 'var(--intent-primary)' : 'var(--text)')}; word-break: break-all; text-decoration: ${isMissing ? 'line-through' : 'none'}; opacity: ${isMissing ? '0.8' : '1'}; font-weight: ${isSystem ? 'bold' : 'normal'};">${inc}</span>${isMissing ? html`<span style="font-size: 0.7rem; background: transparent; color: var(--intent-danger); border: 1px solid var(--intent-danger); padding: 1px 6px; border-radius: 10px; font-weight: bold; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;"><yv-icon name="alert-triangle" style="width: 10px; height: 10px;"></yv-icon> Missing</span>` : ''}
+                        <span style="font-family: var(--font-mono); font-size: 0.82rem; color: ${isMissing ? 'var(--intent-danger)' : (isSystem ? 'var(--intent-primary)' : 'var(--text)')}; word-break: break-all; text-decoration: ${isMissing ? 'line-through' : 'none'}; opacity: ${isMissing ? '0.8' : '1'}; font-weight: ${isSystem ? 'bold' : 'normal'};">${inc}</span>${isMissing ? html`<span style="font-size: 0.7rem; background: transparent; color: var(--intent-danger); border: 1px solid var(--intent-danger); padding: 1px 6px; border-radius: 999px; font-weight: bold; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;"><yv-icon name="alert-triangle" style="width: 10px; height: 10px;"></yv-icon> Undefined</span>` : ''}${isCleanDiff ? html`<span style="font-size: 0.7rem; color: var(--text-muted); border: 1px solid var(--border); padding: 1px 6px; border-radius: 999px; white-space: nowrap; font-style: italic;">Clean</span>` : ''}
                         ${candidate ? html`
                             <sutram-btn size="sm" intent="success" icon="sparkles" label="Fix → ${candidate}" style="margin: 0; padding: 2px 8px; font-size: 0.75rem;" @click=${() => {
                                 const nextList = [...(this.editForm[listKey] || [])];
@@ -742,7 +1004,7 @@ export class InSetuFlowEditProjection extends InSetuElement {
                             }}></sutram-btn>
                         ` : ''}
                     </div>
-                    <sutram-btn size="sm" variant="text" intent="danger" label="×" style="padding: 0 5px; flex-shrink: 0;" @click=${() => {
+                    <sutram-btn size="sm" variant="text" intent="danger" label="×" style="margin: 0; padding: 0 6px; flex-shrink: 0;" @click=${() => {
                         const nextList = [...(this.editForm[listKey] || [])];
                         nextList.splice(idx, 1);
                         this._updateForm({ [listKey]: nextList });
@@ -752,98 +1014,147 @@ export class InSetuFlowEditProjection extends InSetuElement {
         };
 
         return html`
-            <sutram-scroll-view padding="15px" style="gap: 15px;">
-                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <div style="flex: 1; min-width: 150px;">
-                        <sutram-input label="Batch Title" .value=${this.editForm?.title || ''} placeholder="e.g. API Wrap-Up" 
-                            @sutram-input-changed=${(e) => {
-                                this._updateForm({ title: e.detail.value });
-                            }}></sutram-input>
-                    </div>
-                    <div style="flex: 1; min-width: 150px;">
-                        <sutram-input label="Domain" .value=${this.editForm?.domain || 'Workflows'} placeholder="e.g. Workflows"
-                            @sutram-input-changed=${(e) => this._updateForm({ domain: e.detail.value })}></sutram-input>
-                    </div>
-                </div>
-                <div>
-                    <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">1. Includes (Contexts & Diffs)</h4>
-                    <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                        ${includes.length === 0 ? html`<sutram-empty-state text="No files selected."></sutram-empty-state>` : includes.map((inc, idx) => renderIncludeRow(inc, idx, 'includes'))}
-                    </div>
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
-                        <sutram-btn size="sm" intent="primary" icon="package" label="Select Contexts" @click=${() => FlowStore.setState({ selectingFor: 'includes', tempContexts: [...includes], showSelectContexts: true })}></sutram-btn>
-                        <sutram-btn size="sm" intent="neutral" icon="file-plus" label="File" @click=${() => {
-                            if (this.ui && this.ui.openWorkspaceBrowser) {
-                                this.ui.openWorkspaceBrowser({
-                                    mode: 'file',
-                                    title: 'Select File',
-                                    callback: (filepath) => {
-                                        if (filepath) {
-                                            const uri = (filepath.startsWith('vfs://') || filepath.startsWith('ctx://')) ? filepath : `vfs://${filepath.replace(/^\/+/, '')}`;
-                                            if (!includes.includes(uri)) {
-                                                this._updateForm({ includes: [...includes, uri] });
-                                            }
-                                        }
-                                    }
-                                });
-                            }
-                        }}></sutram-btn>
-                        <sutram-btn size="sm" intent="neutral" icon="folder-plus" label="Folder" @click=${() => {
-                            if (this.ui && this.ui.openWorkspaceBrowser) {
-                                this.ui.openWorkspaceBrowser({
-                                    mode: 'folder',
-                                    title: 'Select Folder',
-                                    callback: (folderpath) => {
-                                        if (folderpath) {
-                                            let uri = (folderpath.startsWith('vfs://') || folderpath.startsWith('ctx://')) ? folderpath : `vfs://${folderpath.replace(/^\/+/, '')}`;
-                                            if (!uri.endsWith('/')) uri += '/';
-                                            if (!includes.includes(uri)) {
-                                                this._updateForm({ includes: [...includes, uri] });
-                                            }
-                                        }
-                                    }
-                                });
-                            }
-                        }}></sutram-btn>
-                    </div>
-                </div>
-                <div>
-                    <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Visibility Prerequisites (Optional)</h4>
-                    <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if at least one of these exist:</label>
-                    <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                        ${showIfExists.length === 0 ? html`<sutram-empty-state text="No requirements."></sutram-empty-state>` : showIfExists.map((inc, idx) => renderIncludeRow(inc, idx, 'showIfExists'))}
-                    </div>
-                    <sutram-btn size="sm" intent="neutral" icon="plus" label="Add Required Contexts" style="margin: 0 0 15px 0;" @click=${() => FlowStore.setState({ selectingFor: 'exists', tempContexts: [...showIfExists], showSelectContexts: true })}></sutram-btn>
-                    <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if all of these are missing:</label>
-                    <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                        ${showIfMissing.length === 0 ? html`<sutram-empty-state text="No requirements."></sutram-empty-state>` : showIfMissing.map((inc, idx) => renderIncludeRow(inc, idx, 'showIfMissing'))}
-                    </div>
-                    <sutram-btn size="sm" intent="neutral" icon="plus" label="Add Missing Contexts" style="margin: 0 0 15px 0;" @click=${() => FlowStore.setState({ selectingFor: 'missing', tempContexts: [...showIfMissing], showSelectContexts: true })}></sutram-btn>
-                </div>
-                <div>
-                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-                        <sutram-toggle .checked=${this.editForm?.hasPrompt} @sutram-input-changed=${(e) => this._updateForm({ hasPrompt: e.detail.value })}></sutram-toggle>
-                        <h4 style="margin: 0; color: var(--text); font-size: 1.05rem;">3. Instruction Prompt</h4>
-                    </div>
-                    ${this.editForm?.hasPrompt ? html`
-                        <div style="display: flex; gap: 8px;">
-                            <sutram-select style="flex: 1;" .value=${this.editForm.prompt} .options=${[{value: '', label: '-- Select a Prompt --'}, ...(gatherOptions.prompts || []).map(p => { const canon = canonicalizeFlowUri(p.includes('://') ? p : `ctx://prompts/${p}`); return {value: canon, label: canon}; })]} @sutram-input-changed=${(e) => this._updateForm({ prompt: e.detail.value })}></sutram-select>
+            <sutram-scroll-view padding="16px">
+                <div style="display: flex; flex-direction: column; gap: 16px;">
+                    <div class="flow-section">
+                        <div class="flow-section-header">
+                            <h4 class="flow-section-title">
+                                <yv-icon name="sliders" style="width: 15px; height: 15px; color: var(--intent-primary);"></yv-icon>
+                                <span>Batch Identity</span>
+                            </h4>
                         </div>
-                    ` : ''}
-                </div>
-                <div>
-                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-                        <sutram-toggle .checked=${this.editForm?.hasResponse} @sutram-input-changed=${(e) => this._updateForm({ hasResponse: e.detail.value })}></sutram-toggle>
-                        <h4 style="margin: 0; color: var(--text); font-size: 1.05rem;">4. Response Text Box</h4>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
+                            <sutram-input ?flush=${true} label="Batch Title" .value=${this.editForm?.title || ''} placeholder="e.g. API Wrap-Up" style="--bg-input: var(--bg);"
+                                @sutram-input-changed=${(e) => {
+                                    this._updateForm({ title: e.detail.value });
+                                }}></sutram-input>
+                            <sutram-input ?flush=${true} label="Domain Category" .value=${this.editForm?.domain || 'Workflows'} placeholder="e.g. Workflows" style="--bg-input: var(--bg);"
+                                @sutram-input-changed=${(e) => this._updateForm({ domain: e.detail.value })}></sutram-input>
+                        </div>
                     </div>
-                    ${this.editForm?.hasResponse ? html`
-                        <sutram-input label="Response Path" .value=${this.editForm.responsePath} placeholder="e.g. sotu/sotu_{date}.current.md" style="font-family: monospace;" @sutram-input-changed=${(e) => this._updateForm({ responsePath: e.detail.value })}></sutram-input>
-                        <sutram-input label="Archive Path (Optional)" .value=${this.editForm.archivePath} placeholder="e.g. sotu/archive/" style="font-family: monospace;" @sutram-input-changed=${(e) => this._updateForm({ archivePath: e.detail.value })}></sutram-input>
-                    ` : ''}
+
+                    <div class="flow-section">
+                        <div class="flow-section-header">
+                            <h4 class="flow-section-title">
+                                <yv-icon name="package" style="width: 15px; height: 15px; color: var(--intent-primary);"></yv-icon>
+                                <span>1. Includes (Contexts, Diffs & VFS Paths)</span>
+                            </h4>
+                            <sutram-tag text="${includes.length} mapped" intent="neutral"></sutram-tag>
+                        </div>
+                        <div class="flow-list-box">
+                            ${includes.length === 0 ? html`<sutram-empty-state text="No files selected."></sutram-empty-state>` : includes.map((inc, idx) => renderIncludeRow(inc, idx, 'includes', includes.length))}
+                        </div>
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                            <sutram-btn size="sm" intent="primary" icon="package" label="Select Contexts" style="margin: 0;" @click=${() => FlowStore.setState({ selectingFor: 'includes', tempContexts: [...includes], showSelectContexts: true })}></sutram-btn>
+                            <sutram-btn size="sm" intent="neutral" icon="file-plus" label="Add File" style="margin: 0;" @click=${() => {
+                                if (this.ui && this.ui.openWorkspaceBrowser) {
+                                    this.ui.openWorkspaceBrowser({
+                                        mode: 'file',
+                                        title: 'Select File',
+                                        callback: (filepath) => {
+                                            if (filepath) {
+                                                const uri = canonicalizeFlowUri(filepath);
+                                                if (!includes.includes(uri)) {
+                                                    this._updateForm({ includes: [...includes, uri] });
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                            }}></sutram-btn>
+                            <sutram-btn size="sm" intent="neutral" icon="folder-plus" label="Add Folder" style="margin: 0;" @click=${() => {
+                                if (this.ui && this.ui.openWorkspaceBrowser) {
+                                    this.ui.openWorkspaceBrowser({
+                                        mode: 'folder',
+                                        title: 'Select Folder',
+                                        callback: (folderpath) => {
+                                            if (folderpath) {
+                                                let uri = canonicalizeFlowUri(folderpath);
+                                                if (!uri.endsWith('/')) uri += '/';
+                                                if (!includes.includes(uri)) {
+                                                    this._updateForm({ includes: [...includes, uri] });
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                            }}></sutram-btn>
+                        </div>
+                    </div>
+
+                    <div class="flow-section">
+                        <div class="flow-section-header">
+                            <h4 class="flow-section-title">
+                                <yv-icon name="eye" style="width: 15px; height: 15px; color: var(--intent-highlight);"></yv-icon>
+                                <span>2. Visibility Prerequisites (Optional)</span>
+                            </h4>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
+                                <span style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted);">Show ONLY if at least one of these exists:</span>
+                                <sutram-btn size="sm" intent="neutral" icon="plus" label="Add Required" style="margin: 0;" @click=${() => FlowStore.setState({ selectingFor: 'exists', tempContexts: [...showIfExists], showSelectContexts: true })}></sutram-btn>
+                            </div>
+                            <div class="flow-list-box">
+                                ${showIfExists.length === 0 ? html`<div style="padding: 8px 0; font-size: 0.8rem; color: var(--text-muted); font-style: italic; text-align: center;">No existence requirements.</div>` : showIfExists.map((inc, idx) => renderIncludeRow(inc, idx, 'showIfExists', showIfExists.length))}
+                            </div>
+                        </div>
+
+                        <div style="display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed var(--border); padding-top: 10px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
+                                <span style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted);">Show ONLY if all of these are missing:</span>
+                                <sutram-btn size="sm" intent="neutral" icon="plus" label="Add Missing" style="margin: 0;" @click=${() => FlowStore.setState({ selectingFor: 'missing', tempContexts: [...showIfMissing], showSelectContexts: true })}></sutram-btn>
+                            </div>
+                            <div class="flow-list-box">
+                                ${showIfMissing.length === 0 ? html`<div style="padding: 8px 0; font-size: 0.8rem; color: var(--text-muted); font-style: italic; text-align: center;">No missing requirements.</div>` : showIfMissing.map((inc, idx) => renderIncludeRow(inc, idx, 'showIfMissing', showIfMissing.length))}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flow-section">
+                        <div class="flow-section-header">
+                            <h4 class="flow-section-title">
+                                <yv-icon name="terminal" style="width: 15px; height: 15px; color: var(--intent-highlight);"></yv-icon>
+                                <span>3. Instruction Prompt</span>
+                            </h4>
+                            <sutram-toggle ?flush=${true} .checked=${this.editForm?.hasPrompt} @sutram-input-changed=${(e) => this._updateForm({ hasPrompt: e.detail.value })}></sutram-toggle>
+                        </div>
+                        ${this.editForm?.hasPrompt ? html`
+                            <sutram-select ?flush=${true} style="width: 100%; --bg-input: var(--bg);" .value=${this.editForm.prompt} .options=${[{value: '', label: '-- Select a Prompt --'}, ...(gatherOptions.prompts || []).map(p => { const canon = canonicalizeFlowUri(p.includes('://') ? p : `ctx://prompts/${p}`); return {value: canon, label: canon}; })]} @sutram-input-changed=${(e) => this._updateForm({ prompt: e.detail.value })}></sutram-select>
+                        ` : html`<span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">Toggle on to attach a reusable instruction prompt to this workflow.</span>`}
+                    </div>
+
+                    <div class="flow-section">
+                        <div class="flow-section-header">
+                            <h4 class="flow-section-title">
+                                <yv-icon name="file-check-2" style="width: 15px; height: 15px; color: var(--intent-success);"></yv-icon>
+                                <span>4. Response Text Box</span>
+                            </h4>
+                            <sutram-toggle ?flush=${true} .checked=${this.editForm?.hasResponse} @sutram-input-changed=${(e) => this._updateForm({ hasResponse: e.detail.value })}></sutram-toggle>
+                        </div>
+                        ${this.editForm?.hasResponse ? html`
+                            <div style="display: flex; flex-direction: column; gap: 10px;">
+                                <sutram-input ?flush=${true} label="Response Save Path" .value=${this.editForm.responsePath} placeholder="e.g. sotu/sotu_{date}.current.md" style="font-family: var(--font-mono); --bg-input: var(--bg);" @sutram-input-changed=${(e) => this._updateForm({ responsePath: e.detail.value })}></sutram-input>
+                                <sutram-input ?flush=${true} label="Archive Path (Optional)" .value=${this.editForm.archivePath} placeholder="e.g. sotu/archive/" style="font-family: var(--font-mono); --bg-input: var(--bg);" @sutram-input-changed=${(e) => this._updateForm({ archivePath: e.detail.value })}></sutram-input>
+                            </div>
+                        ` : html`<span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">Toggle on to save pasted LLM responses directly to a target file path.</span>`}
+                    </div>
                 </div>
             </sutram-scroll-view>
-            <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; gap: 10px; flex-shrink: 0;">
-                ${this.editingBatch?.id ? html`<sutram-async-btn intent="danger" icon="trash-2" label="Delete Batch" style="flex: 1; margin: 0;" .onClick=${this.deleteEditBatch.bind(this)}></sutram-async-btn>` : ''}
+            <div style="padding: 12px 16px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; gap: 10px; flex-shrink: 0; align-items: center;">
+                ${this.editingBatch?.id ? html`
+                    <sutram-async-btn intent="danger" icon="trash-2" label="Delete" style="flex: 1; margin: 0;" .onClick=${this.deleteEditBatch.bind(this)}></sutram-async-btn>
+                    <sutram-btn intent="neutral" icon="copy" label="Copy" style="flex: 1; margin: 0;" @click=${() => FlowStore.getState().duplicateBatch({
+                        ...this.editingBatch,
+                        title: this.editForm.title || this.editingBatch.title,
+                        domain: this.editForm.domain || this.editingBatch.domain,
+                        includes: this.editForm.includes || [],
+                        show_if_exists: this.editForm.showIfExists || [],
+                        show_if_missing: this.editForm.showIfMissing || [],
+                        include_prompt: this.editForm.hasPrompt ? this.editForm.prompt : undefined,
+                        response_path: this.editForm.hasResponse ? this.editForm.responsePath : undefined,
+                        archive_path: this.editForm.hasResponse ? this.editForm.archivePath : undefined
+                    })}></sutram-btn>
+                ` : ''}
                 <sutram-async-btn intent="primary" icon="save" label="Save Batch" style="flex: 2; margin: 0;" .onClick=${this.saveEditBatch.bind(this)}></sutram-async-btn>
             </div>
             ${this.showSelectContexts ? html`
@@ -901,28 +1212,49 @@ export class InSetuFlowEditProjection extends InSetuElement {
     }
 }
 customElements.define('insetu-flow-edit-projection', InSetuFlowEditProjection);
-
-export class InSetuExtFlowActions extends InSetuElement {
-    static get extensionName() { return 'flow'; }
-    static styles = [sharedStyles, css`:host { display: flex; align-items: stretch; height: 100%; }`];
-    get _menuItems() {
-        return [
-            { label: 'New Batch', icon: 'package', onClick: () => { 
-                this.dispatch('insetu:flow:edit-batch', null);
-            }}
-        ];
-    }
-    render() {
-        return html`
-            <sutram-dropdown align="right" .items=${this._menuItems}>
-                <button slot="trigger" class="system-action-btn" title="Workflow Actions">
-                    <yv-icon name="menu" style="width: 14px; height: 14px;"></yv-icon>
-                </button>
-            </sutram-dropdown>
-        `;
-    }
+function _buildFlowMenuActions() {
+    return [
+        {
+            label: 'New Batch',
+            icon: 'package',
+            onClick: () => window.inSetu?.events?.emit('insetu:flow:edit-batch', null)
+        }
+    ];
 }
-customElements.define('insetu-ext-flow-actions', InSetuExtFlowActions);
+
+window.addEventListener('insetu:ensure-fresh-artifact', (e) => {
+    const filePath = e.detail?.filepath || '';
+    if (!filePath.startsWith('ctx://workflows/')) return;
+    if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('flow')) return;
+
+    const baseUri = filePath.replace(/_part\d+\.txt$/, '.txt');
+    const appState = AppStore.getState();
+    const dirtyRepos = appState.dirtyRepos || new Set();
+    const dirtyBuckets = appState.dirtyBuckets || new Set();
+    const manifestObj = appState.manifest?.ctx?.[baseUri] || appState.manifest?.ctx?.[filePath];
+    const meta = manifestObj?.meta || {};
+    const itemRepos = Array.isArray(meta.repos) ? meta.repos : (meta.repo ? [meta.repo] : []);
+
+    const isMissing = !manifestObj;
+    const hasUpstreamDirty = itemRepos.some(r => dirtyRepos.has(r) || Array.from(dirtyBuckets).some(b => b.startsWith(`${r}::`)));
+    const isDirty = isMissing || hasUpstreamDirty || dirtyBuckets.has('global::workflows') || dirtyBuckets.has(baseUri);
+
+    if (isDirty && window.inSetu.stores?.Gather) {
+        const run = (async () => {
+            if (window.inSetu.ui?.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus("⏳ Compiling fresh workflow...", null);
+            }
+            const targetRepos = (!isMissing && itemRepos.length > 0) ? itemRepos : null;
+            await window.inSetu.stores.Gather.getState().executeCompile(null, isMissing, null, targetRepos);
+            dirtyBuckets.delete('global::workflows');
+            dirtyBuckets.delete(baseUri);
+            itemRepos.forEach(r => dirtyRepos.delete(r));
+            AppStore.setState({ dirtyBuckets: new Set(dirtyBuckets), dirtyRepos: new Set(dirtyRepos) });
+        })();
+        if (Array.isArray(e.inSetuResponses)) e.inSetuResponses.push(run);
+    }
+});
+
 window.ExtensionRegistry.registerExtension('flow', {
     name: "Workflows",
     version: "2.0.0",
@@ -939,6 +1271,17 @@ window.ExtensionRegistry.registerExtension('flow', {
             order: 10,
             match: (data) => !data?.is_shared,
             emitEvent: (data) => ({ name: 'insetu:flow:edit-batch', detail: data })
+        },
+        {
+            targetEntity: 'workflow_batch',
+            id: 'flow-duplicate',
+            label: 'Copy Batch',
+            icon: 'copy',
+            intent: 'neutral',
+            group: 'edit',
+            vfsBound: false,
+            order: 11,
+            emitEvent: (data) => ({ name: 'insetu:flow:copy-batch', detail: data })
         }
     ],
     layoutSlots: [
@@ -950,14 +1293,8 @@ window.ExtensionRegistry.registerExtension('flow', {
             icon: "workflow",
             intent: "primary",
             order: 2,
+            menuActions: _buildFlowMenuActions,
             component: "insetu-ext-flow"
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "context",
-            targetSub: "flow",
-            component: "insetu-ext-flow-actions",
-            order: 2
         }
     ],
 });

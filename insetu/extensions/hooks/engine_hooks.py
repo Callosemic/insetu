@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from akasa.hooks import hooks
-import akasa.utils as _akasa_utils
-from akasa.utils import load_json_config, save_json_config
+from insetu.core.utils_core import get_system_index_path, load_json_config, save_json_config
 from insetu.core.topology.engine_topology import resolve_file_bucket
 
 HOOKS_SCHEMA = {
@@ -77,7 +75,7 @@ def _background_execute_rule(ctx, rule_id, rule_name, command, workspace_id=None
     except Exception as e:
         print(f"❌ [HOOKS WORKER] Execution Error: {str(e)}")
         raise RuntimeError(f"Execution Error: {str(e)}")
-@hooks.on('topology_resolved', priority=100)
+@hooks_bp.on('topology_resolved', priority=100)
 def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None, events=None, **kwargs):
     """Event Bus Hook: Evaluates active automation rules based on resolved topology boundaries."""
     if not events:
@@ -137,13 +135,13 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
                 job_category="system_background"
             )
 def _get_approved_hook_ids(ctx) -> set:
-    sys_path = Path(_akasa_utils._cwd).joinpath(".insetu", "system.json").as_posix()
+    sys_path = get_system_index_path()
     sys_data = load_json_config(sys_path, {})
     return set(sys_data.get("approved_hooks", {}).get(ctx.workspace_id, []))
 
 def _mark_hook_approved(ctx, rule_id: str, command: str):
     sig = f"{rule_id}:{hashlib.sha256(command.encode('utf-8')).hexdigest()[:16]}"
-    sys_path = Path(_akasa_utils._cwd).joinpath(".insetu", "system.json").as_posix()
+    sys_path = get_system_index_path()
     sys_data = load_json_config(sys_path, {})
     approved = set(sys_data.setdefault("approved_hooks", {}).get(ctx.workspace_id, []))
     approved.add(sig)

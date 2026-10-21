@@ -8,10 +8,7 @@ import random
 from typing import TypedDict
 from datetime import datetime, timedelta
 from flask import request, jsonify
-from akasa.utils import sniff_tenant_id
-from akasa.hooks import hooks
 from insetu.core.sdk import InSetuExtension
-from insetu.core.system.legacy import move_tree_contents
 from insetu.core.topology.engine_topology import get_topology_files_for_repo
 from insetu.core.utils_core import (
     get_repo_path,
@@ -49,17 +46,14 @@ DEFAULT_KANBAN_PROFILES = []
 DEFAULT_PARENT_TABS = [
     {"id": "tasks", "label": "Tasks"}
 ]
-
 def _is_tracker_path(path_str: str) -> bool:
     if not path_str:
         return False
-    return (".insetu-data/tracker/" in path_str or ".tracker/" in path_str) and path_str.endswith(".md")
+    return ".insetu-data/tracker/" in path_str and path_str.endswith(".md")
 
 def _split_tracker_rel(path_str: str) -> str:
     if ".insetu-data/tracker/" in path_str:
         return path_str.split(".insetu-data/tracker/", 1)[1]
-    if ".tracker/" in path_str:
-        return path_str.split(".tracker/", 1)[1]
     return path_str
 
 def _normalize_status(raw_status, fallback="open"):
@@ -161,24 +155,10 @@ def _background_archive_stale_tickets(ctx, **kwargs):
     ctx.jobs.update_progress("Sweeping for stale entries...")
     count = archive_stale_tickets(workspace_id=ctx.workspace_id)
     return f"Archived {count} stale tickets."
-@hooks.on('workspace_boot', priority=10)
-def initialize_tracker_schemas(workspace_id=None, **kwargs):
-    # Phase 1: Migrate legacy .tracker directories before Topology scans the workspace
-    ctx = tracker_bp.get_context(workspace_id)
-    migrated_any = False
-    for repo_cfg in ctx.config.get("target_repos", []):
-        r_dir = repo_cfg.get("repo_dir")
-        if r_dir:
-            r_path = Path(get_repo_path(r_dir, workspace_id))
-            legacy_tr = r_path.joinpath(".tracker")
-            new_tr = r_path.joinpath(".insetu-data", "tracker")
-            if legacy_tr.exists() and legacy_tr.is_dir():
-                move_tree_contents(legacy_tr, new_tr)
-                migrated_any = True
+@tracker_bp.on('workspace_boot', priority=10)
+def initialize_tracker_schemas(ctx, workspace_id=None, **kwargs):
     try:
-        if migrated_any:
-            ctx.db.execute("DELETE FROM tracker_tickets WHERE filepath LIKE '%/.tracker/%'")
-        ctx.db.execute("UPDATE tracker_tickets SET filepath = 'vfs://' || filepath WHERE filepath NOT LIKE '%://%'")
+        ctx.db.heal_uri_column("tracker_tickets", "filepath", "vfs://")
         ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_repo ON tracker_tickets(repo)")
         ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_status ON tracker_tickets(status)")
         ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_tier ON tracker_tickets(tier)")
@@ -186,16 +166,13 @@ def initialize_tracker_schemas(workspace_id=None, **kwargs):
         ctx.db.commit()
     except Exception:
         pass
-@hooks.on('topology_boot_complete')
-def schedule_tracker_archiving(workspace_id=None, **kwargs):
+@tracker_bp.on('topology_boot_complete')
+def schedule_tracker_archiving(ctx, workspace_id=None, **kwargs):
     # Phase 2: Schedule background archiving to run silently every 1 hour
-    ctx = tracker_bp.get_context(workspace_id)
-    ctx.jobs.schedule("archive_stale_task", interval_ms=3600000, jitter_ms=300000, job_id=f"trk_arch_{workspace_id}")
-@hooks.on('vfs_mutated')
-def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
+    ctx.jobs.schedule("archive_stale_task", interval_ms=3600000, jitter_ms=300000, job_id=f"trk_arch_{ctx.workspace_id}")
+@tracker_bp.on('vfs_mutated')
+def handle_tracker_vfs_mutations(ctx, mutations=None, workspace_id=None, **kwargs):
     if not mutations: return
-
-    ctx = tracker_bp.get_context(workspace_id)
     for m in mutations:
         filepath = m.get("filepath", "")
         op = m.get("operation") or m.get("mutation_type")
@@ -287,27 +264,25 @@ def _sync_disk_to_db(workspace_id=None):
                 _parse_and_upsert_ticket(abs_path, ws_rel_path, workspace_id)
 
     ctx.db.commit()
-@hooks.on('mutate_workspace_config')
+@tracker_bp.on('mutate_workspace_config')
 def inject_tracker_config(cfg, workspace_id=None, **kwargs):
     """Dynamically injects the .tracker logic into the core OS pipelines."""
     if "tracker" not in cfg.get("extensions", []): return
 
     ctx = tracker_bp.get_context(workspace_id)
     tracker_cfg = ctx.settings.get_all()
-    # 1. Register .insetu-data and .tracker as Cartographer managed directories
+    # 1. Register .insetu-data as a Cartographer managed directory
     if "managed_dirs" not in cfg:
         cfg["managed_dirs"] = []
-    for m_dir in (".insetu-data", ".tracker"):
-        if m_dir not in cfg["managed_dirs"]:
-            cfg["managed_dirs"].append(m_dir)
+    if ".insetu-data" not in cfg["managed_dirs"]:
+        cfg["managed_dirs"].append(".insetu-data")
 
-    # 2. Force Topology Engine to map .insetu-data and .tracker even if the user ignored them
+    # 2. Force Topology Engine to map .insetu-data even if the user ignored it
     for repo_cfg in cfg.get("target_repos", []):
         if "ignore_exceptions" not in repo_cfg:
             repo_cfg["ignore_exceptions"] = []
-        for exc_dir in (".insetu-data/", ".tracker/"):
-            if exc_dir not in repo_cfg["ignore_exceptions"]:
-                repo_cfg["ignore_exceptions"].append(exc_dir)
+        if ".insetu-data/" not in repo_cfg["ignore_exceptions"]:
+            repo_cfg["ignore_exceptions"].append(".insetu-data/")
 
     # 3. Inject the tracker sub-bucket into all mapped repositories
     strat = tracker_cfg.get("domain_strategy", "default")
@@ -335,16 +310,11 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
             folder = vt if vt.endswith('s') or vt == 'queue' else f"{vt}s"
             main_prefixes.extend([
                 f".insetu-data/tracker/{folder}/open",
-                f".insetu-data/tracker/{folder}/active",
-                f".tracker/{folder}/open",
-                f".tracker/{folder}/active"
+                f".insetu-data/tracker/{folder}/active"
             ])
-            closed_prefixes.extend([
-                f".insetu-data/tracker/{folder}/closed",
-                f".tracker/{folder}/closed"
-            ])
+            closed_prefixes.append(f".insetu-data/tracker/{folder}/closed")
 
-        log_prefixes = [".insetu-data/tracker/log/", ".tracker/log/"]
+        log_prefixes = [".insetu-data/tracker/log/"]
 
         if include_closed == "grace_period":
             main_prefixes.extend(closed_prefixes)
@@ -373,14 +343,13 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
                     "exclude_from_diffs": exclude_from_diffs,
                     "is_system": True
                 })
-
         # Conditional Catch-all to prevent unmapped tracker files from bleeding into the default context
         if isolate_context:
             repo_cfg["sub_buckets"].append({
                 "id": "tracker_omitted",
                 "title": f"OMITTED TICKETS ({repo_cfg.get('repo_dir', '').upper()})",
                 "domain": "Hidden Context",
-                "match_prefixes": [".insetu-data/tracker/", ".tracker/"],
+                "match_prefixes": [".insetu-data/tracker/"],
                 "exclude_from_diffs": True,
                 "is_system": True
             })
@@ -499,7 +468,7 @@ def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", s
     """, (ticket_id, repo, ticket_type, status, title, description, json.dumps(tags_list), sub_bucket, now.isoformat(), None, delivery_date, canonical_uri, int(tier), parent_id, json.dumps(deps_list), priority.upper(), size.upper()))
     conn.commit()
 
-    ctx.emit('vfs_mutated', mutations=[{"filepath": canonical_uri, "operation": "save"}])
+    ctx.sync_vfs_barrier()
     return canonical_uri
 @tracker_bp.worker("harmonize_vocab_task")
 def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
@@ -533,15 +502,8 @@ def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
                 new_rel_path = f"{get_tracker_path(repo, new_type, status)}/{filename}"
                 # Reconstruct MaC payload (preserving structure, updating type)
                 new_content = ctx.update_frontmatter(content, yaml_data)
-                # Execute async VFS transactions
-                ctx.vfs.save(new_rel_path, new_content)
-                if new_rel_path != old_rel_path:
-                    ctx.vfs.delete(old_rel_path)
-
-                ctx.emit('vfs_mutated', mutations=[
-                    {"filepath": old_rel_path, "operation": "delete"},
-                    {"filepath": new_rel_path, "operation": "save"}
-                ])
+                # Execute atomic VFS save + source relocation
+                ctx.vfs.save(new_rel_path, new_content, data={"delete_source": old_rel_path if new_rel_path != old_rel_path else None})
     finally:
         # Release the UI Mutex lock reliably
         ctx.settings.set("tracker_is_migrating", False)
@@ -586,11 +548,6 @@ def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
     """, (new_status, new_rel_path, ticket_type, datetime.now().isoformat() if new_status == "closed" else None, tier, canonical_current_rel))
     conn.commit()
 
-    mutations = [{"filepath": new_rel_path, "operation": "save"}]
-    if canonical_current_rel != new_rel_path:
-        mutations.append({"filepath": canonical_current_rel, "operation": "delete"})
-    ctx.emit('vfs_mutated', mutations=mutations)
-
     return new_rel_path
 @tracker_bp.worker("enforce_tickets_task")
 def _background_enforce_tickets(ctx, specific_file=None, **kwargs):
@@ -603,11 +560,10 @@ def _background_sync_cache(ctx, **kwargs):
     _sync_disk_to_db(ctx.workspace_id)
     ctx.jobs.submit("enforce_tickets_task", job_category="system_background")
     return "Cache hydrated."
-@hooks.on('topology_boot_complete')
-@hooks.on('force_topology_scan')
-def manual_tracker_housekeeping(workspace_id=None, **kwargs):
+@tracker_bp.on('topology_boot_complete')
+@tracker_bp.on('force_topology_scan')
+def manual_tracker_housekeeping(ctx, workspace_id=None, **kwargs):
     """Hydrates Tracker safely after Topology maps the workspace, or on manual refresh."""
-    ctx = tracker_bp.get_context(workspace_id)
     ctx.jobs.submit("sync_cache_task", job_category="system_background")
 def enforce_declarative_tickets(workspace_id=None, specific_file=None):
     """
@@ -845,16 +801,10 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                     except Exception: pass
                     new_content = ctx.update_frontmatter(content, new_data)
                     ctx.vfs.save(intended_rel_path, new_content, data={"delete_source": current_rel_path if current_rel_path != intended_rel_path else None})
-
                     _parse_and_upsert_ticket(intended_path, intended_rel_path, workspace_id)
                     if current_rel_path != intended_rel_path:
                         ctx.db.execute("DELETE FROM tracker_tickets WHERE filepath = ?", (current_rel_path,))
                         ctx.db.commit()
-
-                        ctx.emit('vfs_mutated', mutations=[
-                            {"filepath": current_rel_path, "operation": "delete"},
-                            {"filepath": intended_rel_path, "operation": "save"}
-                        ])
                     enforced_count += 1
             except Exception as e:
                 print(f"Warning: Ticket Housekeeping failed on {ws_rel_path}: {e}")
@@ -991,11 +941,6 @@ def archive_stale_tickets(workspace_id=None):
                                 new_content = ctx.update_frontmatter(content, yaml_data)
                                 new_rel_path = f"vfs://{repo}/.insetu-data/tracker/log/{filename}"
                                 ctx.vfs.save(new_rel_path, new_content, data={"delete_source": ws_rel_path})
-
-                                ctx.emit('vfs_mutated', mutations=[
-                                    {"filepath": ws_rel_path, "operation": "delete"},
-                                    {"filepath": new_rel_path, "operation": "save"}
-                                ])
                                 archived_count += 1
                         except Exception:
                             pass
@@ -1021,11 +966,6 @@ def archive_stale_tickets(workspace_id=None):
                                 new_content = ctx.update_frontmatter(content, yaml_data)
                                 new_rel_path = f"vfs://{repo}/.insetu-data/tracker/log/archived/{filename}"
                                 ctx.vfs.save(new_rel_path, new_content, data={"delete_source": ws_rel_path})
-
-                                ctx.emit('vfs_mutated', mutations=[
-                                    {"filepath": ws_rel_path, "operation": "delete"},
-                                    {"filepath": new_rel_path, "operation": "save"}
-                                ])
                                 archived_count += 1
                         except Exception:
                             pass
@@ -1222,10 +1162,9 @@ def restore_ticket_metadata_from_git(workspace_id=None):
             try:
                 content = ctx.vfs.read(ws_rel_path)
                 if not content: continue
-
                 yaml_data, body, _ = parse_frontmatter(content)
                 rel_to_repo = _split_tracker_rel(ws_rel_path)
-                git_file_path = f".insetu-data/tracker/{rel_to_repo}" if ".insetu-data/tracker/" in ws_rel_path else f".tracker/{rel_to_repo}"
+                git_file_path = f".insetu-data/tracker/{rel_to_repo}"
 
                 modified = False
                 curr_repo_yaml = yaml_data.get('repo')
@@ -1372,7 +1311,7 @@ def api_tracker_transition(ctx):
         return jsonify({"status": "success", "new_filepath": new_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@hooks.on('request_changelog_suggestions')
+@tracker_bp.on('request_changelog_suggestions')
 def provide_changelog_suggestions(repo, workspace_id=None, **kwargs):
     """Provides recent closed tickets to other extensions (like Git) without exposing DB internals."""
     ctx = tracker_bp.get_context(workspace_id)
@@ -1397,10 +1336,9 @@ def provide_changelog_suggestions(repo, workspace_id=None, **kwargs):
     except Exception:
         pass
     return changelogs
-@hooks.on('tracker_settings_updated')
-def on_tracker_settings_updated(workspace_id=None, **kwargs):
+@tracker_bp.on('tracker_settings_updated')
+def on_tracker_settings_updated(ctx, workspace_id=None, **kwargs):
     """Event Bus hook: Rebuilds context payloads immediately when tracker settings are updated."""
-    ctx = tracker_bp.get_context(workspace_id)
     ordered_steps = ctx.resolve_dag_chain('register_compilation_steps')
     job_id = None
     if ordered_steps:

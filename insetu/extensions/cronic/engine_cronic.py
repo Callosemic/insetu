@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import InSetuURI
-from akasa.hooks import hooks
-from akasa.utils import is_extension_enabled
+from insetu.core.utils_core import InSetuURI, is_extension_enabled
 
 CRONIC_SCHEMA = {
     "cronic_jobs": {
@@ -89,8 +87,7 @@ def _ensure_cronic_hydrated(ctx):
                 norm_j["filepath"] = str(InSetuURI(fp if "://" in fp else f"vfs://{fp.lstrip('/')}"))
                 ctx.db.insert_or_replace("cronic_jobs", norm_j)
     elif count > 0:
-        ctx.db.execute("UPDATE cronic_jobs SET filepath = 'vfs://' || filepath WHERE filepath NOT LIKE '%://%'")
-        ctx.db.commit()
+        ctx.db.heal_uri_column("cronic_jobs", "filepath", "vfs://")
         if saved is None:
             _flush_cronic_to_json(ctx)
 
@@ -258,7 +255,7 @@ def _sweep_logs_worker(ctx, **kwargs):
                 except Exception:
                     pass
     return f"Swept {count} old log files."
-@hooks.on('topology_boot_complete')
+@cronic_bp.on('topology_boot_complete')
 def cronic_workspace_boot(workspace_id=None, **kwargs):
     if not workspace_id or not has_crontab():
         return

@@ -53,13 +53,9 @@ export const KanbanStore = createExtensionStore('Kanban', {
         const { repo: parsedRepo, relativePath } = window.inSetu.utils.parseURI(filepath);
         const cleanFp = parsedRepo ? `${parsedRepo}/${relativePath}` : relativePath;
         const repo = parsedRepo || 'global';
-
         const defaultTitle = cleanFp.split('/').pop();
         const pathParts = cleanFp.split('/');
-        let trackerIdx = pathParts.indexOf('tracker');
-        if (trackerIdx === -1 || pathParts[trackerIdx - 1] !== '.insetu-data') {
-            trackerIdx = pathParts.indexOf('.tracker');
-        }
+        const trackerIdx = pathParts.findIndex((p, i) => p === 'tracker' && pathParts[i - 1] === '.insetu-data');
         const inferredType = (() => {
             if (trackerIdx !== -1 && pathParts.length > trackerIdx + 1) {
                 const folder = pathParts[trackerIdx + 1];
@@ -113,7 +109,7 @@ export const KanbanStore = createExtensionStore('Kanban', {
     buildEditFrontmatter: (currentYaml) => {
         const form = KanbanStore.getState().editTaskForm;
         const tagsArr = (form.tagsRaw || '').split(',').map(t => t.trim()).filter(t => t);
-        const ticketId = form.filepath.split('/').pop().replace('.md', '');
+        const ticketId = new window.inSetu.utils.InSetuURI(form.filepath).basename.replace('.md', '');
         const dependsArr = form.dependsOn || [];
         const updatedYaml = {
             ...currentYaml,
@@ -136,7 +132,7 @@ export const KanbanStore = createExtensionStore('Kanban', {
         return updatedYaml;
     },
     setModal: (modalName, isOpen) => KanbanStore.setState((state) => ({ modals: { ...state.modals, [modalName]: isOpen } })),
-    resetState: () => KanbanStore.setState({ tasks: [] }),
+    clearPayload: () => KanbanStore.setState({ tasks: [], cachedTags: [], cachedSubBuckets: [], customViews: [], parentTabs: [], activeFocusId: null }),
     fetchIndex: async () => {
         if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('tracker')) return;
         try {
@@ -199,45 +195,32 @@ export const KanbanStore = createExtensionStore('Kanban', {
                 KanbanStore.setState({ customViews, parentTabs });
                 // Only recompile the DOM layout if the user actually modified their tabs in the settings
                 if (existingViewsStr !== newViewsStr || existingParentsStr !== newParentsStr) {
-                    // Dynamically update the ExtensionRegistry layoutSlots
+                    // Dynamically update the ExtensionRegistry layoutSlots via kernel API
                     const registry = window.ExtensionRegistry;
-                    if (registry) {
-                        const manifest = registry.getExtension('tracker');
-                        if (manifest) {
-                            // Clear old slots owned by tracker, retaining only globals
-                            manifest.layoutSlots = manifest.layoutSlots.filter(s => s.slot === 'slots:global');
-
-                            parentTabs.forEach((pt, idx) => {
-                                manifest.layoutSlots.push({
-                                    slot: "slots:primary-navigation",
-                                    id: pt.id,
-                                    label: pt.label,
-                                    order: 3 + idx
-                                });
+                    if (registry && typeof registry.setDynamicLayoutSlots === 'function') {
+                        const dynamicSlots = [];
+                        parentTabs.forEach((pt, idx) => {
+                            dynamicSlots.push({
+                                slot: "slots:primary-navigation",
+                                id: pt.id,
+                                label: pt.label,
+                                order: 3 + idx
                             });
-
-                            // Inject new slots with dynamic parent tab support
-                            customViews.forEach((view, idx) => {
-                                const parentTab = view.target_parent || view.parent_tab || "tasks";
-                                manifest.layoutSlots.push({
-                                    slot: "slots:sub-navigation",
-                                    targetParent: parentTab,
-                                    id: view.id,
-                                    label: view.label,
-                                    order: idx + 1,
-                                    allow_popout: true,
-                                    component: "insetu-ext-tracker"
-                                });
-                                manifest.layoutSlots.push({
-                                    slot: "slots:sub-navigation-actions",
-                                    targetParent: parentTab,
-                                    targetSub: view.id,
-                                    order: idx + 1,
-                                    component: "insetu-ext-tracker-actions"
-                                });
+                        });
+                        customViews.forEach((view, idx) => {
+                            const parentTab = view.target_parent || view.parent_tab || "tasks";
+                            dynamicSlots.push({
+                                slot: "slots:sub-navigation",
+                                targetParent: parentTab,
+                                id: view.id,
+                                label: view.label,
+                                order: idx + 1,
+                                allow_popout: true,
+                                menuActions: _buildTrackerMenuActions,
+                                component: "insetu-ext-tracker"
                             });
-                            registry.compileLayout();
-                        }
+                        });
+                        registry.setDynamicLayoutSlots('tracker', dynamicSlots);
                     }
                 }
             }
@@ -484,7 +467,7 @@ constructor() {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
 
-            const touchedTracker = payload.mutations.filter(m => m.filepath && (m.filepath.includes('.insetu-data/tracker/') || m.filepath.includes('.tracker/')) && m.filepath.endsWith('.md'));
+            const touchedTracker = payload.mutations.filter(m => m.filepath && m.filepath.includes('.insetu-data/tracker/') && m.filepath.endsWith('.md'));
             if (touchedTracker.length > 0) {
                 const isOffline = window.inSetu?.stores?.App?.getState()?.isOffline;
 
@@ -1041,32 +1024,32 @@ constructor() {
     }
 }
 customElements.define('insetu-ext-tracker', InSetuExtTracker);
-export class InSetuExtTrackerActions extends InSetuElement {
-    static get extensionName() { return 'tracker'; }
-    get extName() { return 'tracker'; }
-    static styles = [sharedStyles, css`:host { display: flex; align-items: stretch; height: 100%; }`];
-    get _menuItems() {
-        const layout = window.Sutram?.stores?.Layout?.getState?.();
-        const focusedCol = layout?.focusedColumn || 'center';
-        const activeInCol = layout?.columns?.[focusedCol]?.active || '';
-        const rawSubTab = this.dataset.subId || this.parentElement?.id?.replace('sub-', '') || activeInCol || 'todos';
-        const activeSubTab = rawSubTab.includes(':') ? rawSubTab.split(':').pop() : rawSubTab;
-        const items = [];
-        if (activeSubTab !== 'log') {
-            items.push({ label: 'New Task', icon: '🎫', onClick: () => { 
-                this.dispatch('insetu:tracker:open-new-task', { activeTab: activeSubTab });
-            } });
-            items.push({ label: 'Templates...', icon: '🧬', onClick: () => { 
-                this.dispatch('insetu:tracker:open-templates-browser');
-            } });
-            items.push({ label: 'Restore Metadata from Git', icon: '🩺', onClick: async () => {
+function _buildTrackerMenuActions(slotCfg = {}) {
+    const rawSubTab = slotCfg.rawId || slotCfg.id || 'todos';
+    const activeSubTab = rawSubTab.includes(':') ? rawSubTab.split(':').pop() : rawSubTab;
+    const items = [];
+    if (activeSubTab !== 'log') {
+        items.push({
+            label: 'New Task',
+            icon: '🎫',
+            onClick: () => window.inSetu?.events?.emit('insetu:tracker:open-new-task', { activeTab: activeSubTab })
+        });
+        items.push({
+            label: 'Templates...',
+            icon: '🧬',
+            onClick: () => window.inSetu?.events?.emit('insetu:tracker:open-templates-browser')
+        });
+        items.push({
+            label: 'Restore Metadata from Git',
+            icon: '🩺',
+            onClick: async () => {
                 if (!confirm("Scan Git history to restore wiped dates and canonical repo names for all tickets?")) return;
                 try {
-                    const res = await this.api.post('restore_metadata', {});
+                    const res = await window.inSetu.api.post('tracker/restore_metadata', {});
                     if (res.ok) {
                         const data = await res.json();
-                        this.api.pollJob(data.job_id, {
-                            onProgress: (msg) => this.setStatus(`⏳ ${msg}`),
+                        window.inSetu.utils.pollJob(data.job_id, {
+                            onProgress: (msg) => { if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`); },
                             onComplete: (statusData) => {
                                 KanbanStore.getState().fetchTasks();
                                 alert(`✅ ${statusData.message}`);
@@ -1074,29 +1057,25 @@ export class InSetuExtTrackerActions extends InSetuElement {
                             onError: (err) => alert(`❌ Restoration failed: ${err.message}`)
                         });
                     }
-                } catch(e) { alert(`Error: ${e.message}`); }
-            } });
-        } else if (activeSubTab === 'log') {
-            items.push({ label: 'Generate Changelog (all)', icon: '📜', onClick: () => { 
-                this.dispatch('insetu:tracker:generate-changelog', { allRepos: true });
-            } });
-            items.push({ label: 'Generate Changelog (current filter)', icon: '🔍', onClick: () => { 
-                this.dispatch('insetu:tracker:generate-changelog', { allRepos: false });
-            } });
-        }
-        return items;
+                } catch (e) {
+                    alert(`Error: ${e.message}`);
+                }
+            }
+        });
+    } else {
+        items.push({
+            label: 'Generate Changelog (all)',
+            icon: '📜',
+            onClick: () => window.inSetu?.events?.emit('insetu:tracker:generate-changelog', { allRepos: true })
+        });
+        items.push({
+            label: 'Generate Changelog (current filter)',
+            icon: '🔍',
+            onClick: () => window.inSetu?.events?.emit('insetu:tracker:generate-changelog', { allRepos: false })
+        });
     }
-    render() {
-        return html`
-            <sutram-dropdown align="right" .items=${this._menuItems}>
-                <button slot="trigger" class="system-action-btn" title="Tracker Actions">
-                    <yv-icon name="menu" style="width: 14px; height: 14px;"></yv-icon>
-                </button>
-            </sutram-dropdown>
-        `;
-    }
+    return items;
 }
-customElements.define('insetu-ext-tracker-actions', InSetuExtTrackerActions);
 export class InSetuExtTrackerModals extends InSetuElement {
     static get extensionName() { return 'tracker'; }
     get extName() { return 'tracker'; }
@@ -1200,14 +1179,16 @@ export class InSetuExtTrackerModals extends InSetuElement {
             const currentEdit = KanbanStore.getState().editTaskForm?.filepath;
             if (currentEdit && KanbanStore.getState().modals.edit) {
                 const deleted = payload.mutations.find(m => m.filepath === currentEdit && m.operation === 'delete');
-                if (deleted) KanbanStore.getState().setModal('edit', false);
+                if (deleted) {
+                    if (deleted.relocated_to) {
+                        KanbanStore.getState().setEditTaskField('filepath', deleted.relocated_to);
+                    } else {
+                        KanbanStore.getState().setModal('edit', false);
+                    }
+                }
             }
         });
         this.registerGlobalListener('insetu:tracker:save-new-task', window, () => this._saveNewTask());
-        this.registerGlobalListener('insetu:tracker:save-edit-task', window, () => {
-            const fm = this.shadowRoot.getElementById('fm-editor-tracker');
-            if (fm && typeof fm._handleSave === 'function') fm._handleSave();
-        });
         this.registerGlobalListener('insetu:tracker:open-convert', window, (e) => {
             this._convertTask = e.detail.task;
             this._convertOpen = true;
@@ -1441,7 +1422,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
         if (window.Sutram?.stores?.Layout) {
             const layout = window.Sutram.stores.Layout.getState();
             const existingTask = (KanbanStore.getState().tasks || []).find(t => t.filepath === filepath);
-            const label = existingTask?.title ? `${existingTask.id}:${existingTask.title.substring(0, 28)}` : filepath.split('/').pop();
+            const label = existingTask?.title ? `${existingTask.id}:${existingTask.title.substring(0, 28)}` : new window.inSetu.utils.InSetuURI(filepath).basename;
             layout.openWindow({
                 id: 'tracker:edit',
                 component: 'insetu-tracker-edit-projection',
@@ -2066,7 +2047,7 @@ export class InSetuTrackerEditProjection extends InSetuElement {
     connectedCallback() {
         super.connectedCallback();
         const subId = this.dataset?.subId;
-        if (subId && (subId.includes('.insetu-data/tracker/') || subId.includes('.tracker/')) && !KanbanStore.getState().editTaskForm?.filepath) {
+        if (subId && subId.includes('.insetu-data/tracker/') && !KanbanStore.getState().editTaskForm?.filepath) {
             const normSub = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(subId) : subId;
             KanbanStore.getState().setEditTaskField('filepath', normSub);
         }
@@ -2074,21 +2055,36 @@ export class InSetuTrackerEditProjection extends InSetuElement {
             KanbanStore,
             state => state.editTaskForm || {},
             (editTaskForm) => {
+                const prevFp = this.editTaskForm?.filepath;
                 this.editTaskForm = editTaskForm;
                 this.requestUpdate();
+                if (prevFp && editTaskForm.filepath === prevFp && this._hydratedOnce) {
+                    queueMicrotask(() => {
+                        const fm = this.shadowRoot?.getElementById('fm-editor-tracker');
+                        if (fm && typeof fm.syncFrontmatter === 'function') {
+                            const nextYaml = KanbanStore.getState().buildEditFrontmatter(fm._yamlData || {});
+                            fm.syncFrontmatter(nextYaml, true);
+                        }
+                    });
+                }
             }
         );
         this.registerGlobalListener('insetu:tracker:save-edit-task', window, () => {
             const fm = this.shadowRoot.getElementById('fm-editor-tracker');
-            if (fm && typeof fm._handleSave === 'function') fm._handleSave();
+            if (fm && typeof fm.save === 'function') fm.save();
         });
     }
     _onFrontmatterLoaded(e) {
+        this._hydratedOnce = false;
         KanbanStore.getState().loadEditFrontmatter(e.detail.yaml || {}, e.detail.content || '');
-    }
-    _onRequestFrontmatter(e) {
-        const { respond, currentYaml } = e.detail;
-        respond(KanbanStore.getState().buildEditFrontmatter(currentYaml || {}));
+        queueMicrotask(() => {
+            const fm = this.shadowRoot?.getElementById('fm-editor-tracker');
+            if (fm && typeof fm.syncFrontmatter === 'function') {
+                const initYaml = KanbanStore.getState().buildEditFrontmatter(e.detail.yaml || {});
+                fm.syncFrontmatter(initYaml, false);
+            }
+            this._hydratedOnce = true;
+        });
     }
     async _deleteTask() {
         const { filepath } = KanbanStore.getState().editTaskForm;
@@ -2123,8 +2119,7 @@ export class InSetuTrackerEditProjection extends InSetuElement {
                     .filepath=${editTaskForm.filepath}
                     .defaultExpanded=${false}
                     @editor-dirty=${e => { this._isDirtyTracker = e.detail.isDirty; this.requestUpdate(); }}
-                    @insetu:frontmatter-loaded=${this._onFrontmatterLoaded}
-                    @insetu:request-frontmatter=${this._onRequestFrontmatter}>
+                    @insetu:frontmatter-loaded=${this._onFrontmatterLoaded}>
 
                     <div slot="title-control" style="padding: 0;">
                         <sutram-textarea
@@ -2216,7 +2211,7 @@ export class InSetuTrackerEditProjection extends InSetuElement {
                         if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('tracker:edit');
                         if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(fp, true, true);
                     }}></sutram-btn>
-                    ${this._isDirtyTracker ? html`<sutram-async-btn style="margin: 0;" icon="save" label="Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor-tracker')._handleSave()}></sutram-async-btn>` : ''}
+                    ${this._isDirtyTracker ? html`<sutram-async-btn style="margin: 0;" icon="save" label="Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor-tracker').save()}></sutram-async-btn>` : ''}
                 </div>
             </div>
         `;
@@ -2230,8 +2225,8 @@ export class InSetuExtTrackerSettings extends InSetuElement {
     static styles = [sharedStyles, css`
         :host { display: contents; }
     `];
-
     static properties = {
+        embedded: { type: Boolean, reflect: true },
         settingsModalOpen: { type: Boolean },
         isMigrating: { type: Boolean },
         activeSettingsTab: { type: String },
@@ -2243,9 +2238,9 @@ export class InSetuExtTrackerSettings extends InSetuElement {
         globalViews: { type: Array },
         parentTabs: { type: Array }
     };
-
     constructor() {
         super();
+        this.embedded = false;
         this.settingsModalOpen = false;
         this.isMigrating = false;
         this.activeSettingsTab = 'schemas';
@@ -2285,6 +2280,18 @@ export class InSetuExtTrackerSettings extends InSetuElement {
             }
         );
         this.allRepos = AppStore.getState().allRepos || [];
+        if (this.embedded) {
+            this._initEmbedded();
+        }
+    }
+    async _initEmbedded() {
+        const state = KanbanStore.getState();
+        if (!state.systemSchemas || state.systemSchemas.length === 0) {
+            await state.fetchSettings();
+        }
+        this.allRepos = AppStore.getState().allRepos || [];
+        this._loadGlobalData();
+        this.requestUpdate();
     }
     _loadGlobalData() {
         const globalSettings = KanbanStore.getState().settings || {};
@@ -2501,7 +2508,7 @@ export class InSetuExtTrackerSettings extends InSetuElement {
         }
     }
     render() {
-        if (!this.settingsModalOpen) return html``;
+        if (!this.embedded && !this.settingsModalOpen) return html``;
         const allSchemas = this.customSchemas;
         const modalBody = this.isMigrating ? html`
             <div style="display: flex; flex-direction: column; gap: 15px; padding: 30px; margin: 20px; align-items: center; justify-content: center; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px;">
@@ -2754,13 +2761,24 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                 </sutram-tabs>
         </div>
         `;
+        if (this.embedded) {
+            return html`
+                <div style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
+                    ${modalBody}
+                </div>
+            `;
+        }
         if (!this.settingsModalOpen) return html``;
         return html`
-            <sutram-modal ?open=${true} ?fullscreen=${true} ?flush=${true} titleText="Kanban Configuration" @sutram-modal-closed=${() => KanbanStore.setState({ settingsModalOpen: false })}>
+            <sutram-modal ?open=${true} ?fullscreen=${true} ?flush=${true} titleText="Kanban Configuration" @sutram-modal-closed=${() => {
+                KanbanStore.setState({ settingsModalOpen: false });
+            }}>
                 <div slot="body" style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
                     ${modalBody}
                 </div>
-                <sutram-async-btn slot="footer" label="💾 Save Settings" intent="primary" .onClick=${() => this.saveSettings()} ?disabled=${this.isMigrating}></sutram-async-btn>
+                <sutram-async-btn slot="footer" label="💾 Save Settings" intent="primary" .onClick=${async () => {
+                    await this.saveSettings();
+                }} ?disabled=${this.isMigrating}></sutram-async-btn>
             </sutram-modal>
         `;
     }
@@ -2774,16 +2792,13 @@ window.ExtensionRegistry.registerExtension('tracker', {
     settingsActions: [
         {
             id: 'tracker_domain_vocab',
-            label: 'Kanban Structure Template',
-            icon: '🏷️',
+            label: 'Kanban Structure & Views Template',
+            icon: 'sliders',
+            component: 'insetu-ext-tracker-settings',
+            render: () => html`<insetu-ext-tracker-settings id="hub-custom-action-panel" ?embedded=${true}></insetu-ext-tracker-settings>`,
+            saveLabel: 'Save Kanban Configuration',
             onClick: async () => {
-                const state = KanbanStore.getState();
-                if (!state.systemSchemas || state.systemSchemas.length === 0) {
-                    if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⏳ Loading schemas...", null);
-                    await state.fetchSettings();
-                    if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("", 10);
-                }
-                KanbanStore.setState({ settingsModalOpen: true });
+                window.inSetu?.events?.emit('insetu:system:open-settings-view', { view: 'action:tracker_domain_vocab' });
             }
         }
     ],
@@ -2795,7 +2810,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             action: () => window.inSetu.events.emit('insetu:tracker:save-new-task')
         },
         {
-            context: 'modal:edit-task-modal',
+            context: 'subtab:tracker:edit',
             key: 'ctrl+s',
             label: 'Save Edited Task',
             action: () => window.inSetu.events.emit('insetu:tracker:save-edit-task')
@@ -2939,10 +2954,6 @@ window.ExtensionRegistry.registerExtension('tracker', {
             component: "insetu-ext-tracker-modals"
         },
         {
-            slot: "slots:global",
-            component: "insetu-ext-tracker-settings"
-        },
-        {
             slot: "slots:primary-navigation",
             id: "tasks",
             label: "Tasks",
@@ -2957,6 +2968,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             intent: "primary",
             order: 1,
             allow_popout: true,
+            menuActions: _buildTrackerMenuActions,
             component: "insetu-ext-tracker"
         },
         {
@@ -2968,6 +2980,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             intent: "danger",
             order: 2,
             allow_popout: true,
+            menuActions: _buildTrackerMenuActions,
             component: "insetu-ext-tracker"
         },
         {
@@ -2979,6 +2992,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             intent: "highlight",
             order: 3,
             allow_popout: true,
+            menuActions: _buildTrackerMenuActions,
             component: "insetu-ext-tracker"
         },
         {
@@ -2990,48 +3004,20 @@ window.ExtensionRegistry.registerExtension('tracker', {
             intent: "neutral",
             order: 4,
             allow_popout: true,
+            menuActions: _buildTrackerMenuActions,
             component: "insetu-ext-tracker"
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "tasks",
-            targetSub: "todos",
-            component: "insetu-ext-tracker-actions",
-            order: 1
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "tasks",
-            targetSub: "bugs",
-            component: "insetu-ext-tracker-actions",
-            order: 2
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "tasks",
-            targetSub: "queue",
-            component: "insetu-ext-tracker-actions",
-            order: 3
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "tasks",
-            targetSub: "log",
-            component: "insetu-ext-tracker-actions",
-            order: 4
         }
     ],
     customEditors: [
         {
             component: 'insetu-tracker-edit-projection',
-            match: (filepath) => filepath && (filepath.includes('.insetu-data/tracker/') || filepath.includes('.tracker/')),
+            match: (filepath) => filepath && filepath.includes('.insetu-data/tracker/'),
             onOpen: (filepath) => {
                 window.inSetu.events.emit('insetu:tracker:open-edit-task', { filepath });
             }
         }
     ]
 });
-
 // --- HEADLESS EXTENSION STATE SYNCHRONIZATION ---
 // Data fetching is managed defensively via lifecycle hooks (zone:tab-changed, zone:soft-refresh, connectedCallback)
 // to prevent boot-time evaluation race conditions.

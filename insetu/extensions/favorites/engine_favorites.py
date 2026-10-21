@@ -27,11 +27,13 @@ def _ensure_favorites_hydrated(ctx):
             if item.get("id") and item.get("path"):
                 norm_item = dict(item)
                 p = norm_item["path"]
-                norm_item["path"] = str(InSetuURI(p if "://" in p else f"vfs://{p.lstrip('/')}"))
+                canon = InSetuURI.canonicalize(p if "://" in p else f"vfs://{p.lstrip('/')}")
+                if norm_item.get("type") == "folder" and not canon.endswith("/"):
+                    canon += "/"
+                norm_item["path"] = canon
                 ctx.db.insert_or_replace("favorites", norm_item)
     elif count > 0:
-        ctx.db.execute("UPDATE favorites SET path = 'vfs://' || path WHERE path NOT LIKE '%://%'")
-        ctx.db.commit()
+        ctx.db.heal_uri_column("favorites", "path", "vfs://")
         if saved is None:
             _flush_favorites_to_json(ctx)
 
@@ -65,8 +67,8 @@ def add_favorite(ctx):
     if not raw_path:
         return jsonify({"error": "Filepath or folderpath is required"}), 400
     uri = InSetuURI(raw_path)
-    path = str(uri)
-    fav_type = 'folder' if folderpath else data.get('type', 'file').strip()
+    fav_type = 'folder' if (folderpath or uri.is_dir) else data.get('type', 'file').strip()
+    path = f"{str(uri).rstrip('/')}/" if fav_type == 'folder' else str(uri)
     name = data.get('name', '').strip() or uri.basename
     try:
         _ensure_favorites_hydrated(ctx)

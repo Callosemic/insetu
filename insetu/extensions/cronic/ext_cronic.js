@@ -100,17 +100,7 @@ export class InSetuExtCronic extends InSetuElement {
             }
         }, 10000);
     }
-    onWorkspaceLoad(workspaceId) {
-        CronicStore.getState().fetchStatus();
-        CronicStore.getState().fetchJobs();
-    }
-
     onViewActivated() {
-        CronicStore.getState().fetchStatus();
-        CronicStore.getState().fetchJobs();
-    }
-
-    onForceRefresh() {
         CronicStore.getState().fetchStatus();
         CronicStore.getState().fetchJobs();
     }
@@ -175,10 +165,12 @@ export class InSetuExtCronic extends InSetuElement {
 
                 <sutram-card-group>
                     ${this.jobs.length === 0 ? html`<p style="color: var(--text-muted); font-style: italic;">No active cronic jobs scheduled for this workspace.</p>` : ''}
-                    ${this.jobs.map(job => html`
+                    ${this.jobs.map(job => {
+                        const jobBasename = new this.utils.InSetuURI(job.filepath).basename;
+                        return html`
                         <sutram-card
-                            .filename=${job.filepath.split('/').pop()}
-                            .titleText=${job.filepath.split('/').pop()}
+                            .filename=${jobBasename}
+                            .titleText=${jobBasename}
                             .descriptionText=${`Schedule: ${job.schedule} • Status: ${job.last_status || 'pending'}`}
                             .detailText=${job.filepath}
                             icon="clock"
@@ -191,7 +183,7 @@ export class InSetuExtCronic extends InSetuElement {
                                 <sutram-async-btn size="sm" icon="trash-2" label="Remove" intent="danger" style="margin: 0;" .onClick=${async () => this._deleteJob(job.id)}></sutram-async-btn>
                             </div>
                         </sutram-card>
-                    `)}
+                    `;})}
                 </sutram-card-group>
                 ${this.selectedJobId ? html`
                     <sutram-collapsible titleText="Execution Output Log" .open=${true} style="margin-top: 10px;">
@@ -224,7 +216,7 @@ window.ExtensionRegistry.registerExtension('cronic', {
             },
             asyncAction: async (data, e) => {
                 const choice = prompt(
-                    `Schedule '${data.filepath.split('/').pop()}' via Cronic:\n\n` +
+                    `Schedule '${new window.inSetu.utils.InSetuURI(data.filepath).basename}' via Cronic:\n\n` +
                     `1: Every Hour (0 * * * *)\n` +
                     `2: Daily at 2 AM (0 2 * * *)\n` +
                     `3: Every Monday (0 0 * * 1)\n` +
