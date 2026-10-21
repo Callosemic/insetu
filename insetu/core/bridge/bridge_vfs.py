@@ -13,11 +13,27 @@ import uuid
 import difflib
 import traceback
 from pathlib import Path
-from akasa.utils import get_workspace_physics
-from insetu.core.utils_core import get_sister_repos, parse_blocks, InSetuURI
+from insetu.core.utils_core import get_workspace_physics, get_sister_repos, parse_blocks, InSetuURI
 from insetu.core.topology.engine_topology import get_omniscient_workspace_files
-from akasa.hooks import hooks
 from .bridge_fuzzy import apply_block_in_memory, clean_chevron_meltdown, expand_macros, heal_llm_block_artifacts, is_effectively_identical
+
+try:
+    from tree_sitter import Language as _TSLanguage, Parser as _TSParser
+except ImportError:
+    _TSLanguage = None
+    _TSParser = None
+
+try:
+    import tree_sitter_python as _ts_python
+except ImportError:
+    _ts_python = None
+
+try:
+    import tree_sitter_javascript as _ts_javascript
+except ImportError:
+    _ts_javascript = None
+
+
 def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
     from insetu.core.bridge.engine_bridge import bridge_bp as _bridge_bp
     ctx = _bridge_bp.get_context(workspace_id)
@@ -324,9 +340,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                         telemetry["can_commit"] = False
                         telemetry["summary"]["action_required"] += 1
                         pctx.handled = True
-
-            # Execute the Chain of Responsibility
-            for resolver in [resolve_confirmed, resolve_noop, resolve_genesis, resolve_direct_match, resolve_pinned_shortcut, resolve_fuzzy_path, resolve_anchor_failure, resolve_deep_search]:
+            # Execute the Chain of Responsibility (resolve_noop MUST run first so identical S/R blocks never fall through)
+            for resolver in [resolve_noop, resolve_confirmed, resolve_genesis, resolve_direct_match, resolve_pinned_shortcut, resolve_fuzzy_path, resolve_anchor_failure, resolve_deep_search]:
                 resolver()
                 if pctx.handled:
                     break
@@ -351,15 +366,21 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             patch_tel["disk_hash"] = disk_hashes.get(resolved_path)
             
             content = get_file_content(resolved_path) or ""
-            
             # Step h: Phase 2 - Patch Safety & Recursion
-            if search_str and search_str in replace_str:
-                if replace_str in content:
+            is_confirmed_override = bool(
+                data.get("force")
+                or (data.get("confirmed_candidates") or {}).get(target_file)
+                or (data.get("confirmed_candidates") or {}).get(resolved_path)
+            )
+            if search_str and search_str != replace_str and search_str in replace_str:
+                if replace_str in content and not is_confirmed_override:
                     patch_tel["status"] = "needs_confirmation"
+                    patch_tel["error_message"] = "Expansion Risk: The replacement block already exists in this file and contains the search block. Confirm to apply anyway."
                     patch_tel["flags"].append("expansion_risk")
+                    patch_tel["candidates"] = [{"filepath": resolved_path, "score": 1.0, "match_type": "expansion_override"}]
                     patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
                     telemetry["can_commit"] = False
-            elif replace_str and replace_str in search_str:
+            elif replace_str and replace_str != search_str and replace_str in search_str:
                 patch_tel["flags"].append("code_removal")
                 
             if patch_tel["status"] == "needs_confirmation":
@@ -386,37 +407,42 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 telemetry["can_commit"] = False
                 telemetry["summary"]["failed"] += 1
                 telemetry["patches"].append(patch_tel)
-                hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=resolved_path, error_type='patch_failed', details="Failed to anchor patch block in memory.", file_content=content, patch_payload=json.dumps(b))
+                ctx.emit_background('bridge_error', filepath=resolved_path, error_type='patch_failed', details="Failed to anchor patch block in memory.", file_content=content, patch_payload=json.dumps(b))
                 continue
             # Step i: Phase 3 - Full-File AST Syntax Gate (Scoped to last chunk)
             ext = os.path.splitext(resolved_path)[1].lower()
             syntax_error = False
             err_str = ""
             is_last_block = (b == blocks[-1])
-            if is_last_block and not data.get("ignore_syntax"):
+            if is_last_block and not (data.get("ignore_syntax") or data.get("ignore_syntax_errors")):
                 try:
                     if ext == '.json':
                         json.loads(new_content)
                     else:
                         try:
                             # Attempt high-performance, native Tree-sitter validation first
-                            from tree_sitter import Language as _Language, Parser as _Parser
+                            if not _TSLanguage or not _TSParser:
+                                raise ImportError("Tree-sitter core bindings unavailable.")
 
                             lang_mod = None
                             if ext == '.py':
-                                import tree_sitter_python as _ts_lang
-                                lang_mod = _ts_lang
+                                lang_mod = _ts_python
                             elif ext in ['.js', '.mjs', '.cjs', '.ts', '.tsx']:
-                                import tree_sitter_javascript as _ts_lang
-                                lang_mod = _ts_lang
+                                lang_mod = _ts_javascript
 
                             if lang_mod:
                                 # Tree-sitter >=0.22.0 bindings
-                                parser = _Parser(_Language(lang_mod.language()))
+                                parser = _TSParser(_TSLanguage(lang_mod.language()))
                                 tree = parser.parse(bytes(new_content, "utf8"))
                                 if tree.root_node.has_error:
-                                    # Fallback verification: Tree-sitter language injections frequently panic on valid Lit template literals.
-                                    if ext in ['.js', '.ts', '.mjs']:
+                                    # Fallback verification: Tree-sitter language injections can false-positive on valid Lit templates or raw regex strings.
+                                    if ext == '.py':
+                                        try:
+                                            ast.parse(new_content)
+                                        except SyntaxError as py_err:
+                                            syntax_error = True
+                                            err_str = f"Line {py_err.lineno}: {py_err.msg}"
+                                    elif ext in ['.js', '.ts', '.mjs']:
                                         try:
                                             res = ctx.exec.run(['node', '--input-type=module', '-c'], input=new_content, encoding='utf-8', timeout=5.0)
                                             if res.returncode != 0:
@@ -465,7 +491,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     telemetry["can_commit"] = False
                     telemetry["summary"]["action_required"] += 1
                     telemetry["patches"].append(patch_tel)
-                    hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=resolved_path, error_type='syntax_error', details=err_str, file_content=new_content, patch_payload=json.dumps(b))
+                    ctx.emit_background('bridge_error', filepath=resolved_path, error_type='syntax_error', details=err_str, file_content=new_content, patch_payload=json.dumps(b))
                     continue
 
             # Update memory buffer

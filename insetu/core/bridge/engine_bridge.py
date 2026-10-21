@@ -6,7 +6,6 @@ import zlib
 import traceback
 from typing import TypedDict, Literal, List, Dict
 from flask import jsonify
-from akasa.hooks import hooks
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import InSetuURI
 

@@ -286,7 +286,7 @@ export class InSetuExtBridge extends InSetuElement {
             if (this._fileVerificationCache[file] === false && !this._rejectedAutoSwaps.has(file)) {
                 const cleanFile = file.replace(/\s*\(\d+\)(?=\.[^.\/]+$|$)/, '').trim();
                 const cleanFileLower = cleanFile.toLowerCase();
-                const basename = cleanFile.split('/').pop().toLowerCase();
+                const basename = new window.inSetu.utils.InSetuURI(cleanFile).basename.toLowerCase();
 
                 let cands = mFiles.filter(f => f.toLowerCase().endsWith(cleanFileLower));
                 if (cands.length === 0) {
@@ -420,7 +420,7 @@ export class InSetuExtBridge extends InSetuElement {
             layout.openWindow({
                 id: 'bridge:edit-cell',
                 component: 'insetu-bridge-edit-projection',
-                label: `Edit Patch: ${cell.file.split('/').pop()}`,
+                label: `Edit Patch: ${new window.inSetu.utils.InSetuURI(cell.file).basename}`,
                 icon: 'git-commit',
                 intent: 'highlight',
                 extName: 'bridge',
@@ -711,7 +711,9 @@ export class InSetuExtBridge extends InSetuElement {
                                                 ${p.candidates && p.candidates.length > 0 ? html`
                                                     <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 5px;">
                                                         ${p.candidates.map(c => {
-                                                            const btnLabel = p.flags?.includes('confirm-to-overwrite') || c.match_type === 'overwrite' ? 'Confirm Overwrite' : 'Confirm Match';
+                                                            const btnLabel = (p.flags?.includes('confirm-to-overwrite') || c.match_type === 'overwrite')
+                                                                ? 'Confirm Overwrite'
+                                                                : (c.match_type === 'expansion_override' || p.flags?.includes('expansion_risk') ? 'Confirm Expansion' : 'Confirm Match');
                                                             return html`
                                                                 <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 8px; border: 1px solid var(--border); border-radius: 4px;">
                                                                     <span style="font-family: monospace;">${c.filepath}${c.score ? `(Score: ${c.score})` : ''}</span>
@@ -842,11 +844,10 @@ export class InSetuExtBridge extends InSetuElement {
                                             let cands = [];
                                             if (this.vfs && this.vfs.getGlobalManifest) {
                                                 const mFiles = this.vfs.getGlobalManifest().filter(f => !f.endsWith('.gitkeep'));
-
                                                 // Strip OS attachment duplicate suffixes like " (1)", " (2)"
                                                 const cleanFile = file.replace(/\s*\(\d+\)(?=\.[^.\/]+$|$)/, '').trim();
                                                 const cleanFileLower = cleanFile.toLowerCase();
-                                                const basename = cleanFile.split('/').pop().toLowerCase();
+                                                const basename = new window.inSetu.utils.InSetuURI(cleanFile).basename.toLowerCase();
 
                                                 // 1. Try matching the exact fragment (e.g. "c/file.py" matches "a/b/c/file.py")
                                                 cands = mFiles.filter(f => f.toLowerCase().endsWith(cleanFileLower));
@@ -929,7 +930,7 @@ export class InSetuExtBridge extends InSetuElement {
                         <sutram-async-btn icon="zap" label="Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; width: 100%;" .onClick=${this._getSyncAction(false)}></sutram-async-btn>
                     ` : html`
                         <sutram-btn intent="neutral" icon="arrow-left" label="Back to Edit" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-font-size: 0.95rem; width: 100%;" @click=${() => { BridgeStore.setState({ viewMode: 'input' }); this._allowDeepSearch = false; this._confirmedCandidates = {}; }}></sutram-btn>${this.telemetry && this.telemetry.can_commit && this.telemetry.mode !== 'live' ? html`
-                            <sutram-async-btn icon="check-circle-2" label="Apply Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; width: 100%;" .onClick=${this._getSyncAction(false, true, { force: true, ignore_syntax_errors: true, confirmed_candidates: Object.fromEntries(BridgeStore.getState().getActiveFiles().map(f => [f, f])) })}></sutram-async-btn>
+                            <sutram-async-btn icon="check-circle-2" label="Apply Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; width: 100%;" .onClick=${this._getSyncAction(false, true, { force: true, ignore_syntax: true, ignore_syntax_errors: true, confirmed_candidates: Object.fromEntries(BridgeStore.getState().getActiveFiles().map(f => [f, f])) })}></sutram-async-btn>
                         ` : ''}
                     `}
                 </div>
@@ -1065,7 +1066,7 @@ export class InSetuBridgeEditProjection extends InSetuElement {
         BridgeStore.setState({ editCellId: nextCell.id, editCellOriginalFile: nextCell.file });
         if (window.Sutram?.stores?.Layout) {
             const layoutStore = window.Sutram.stores.Layout;
-            const nextLabel = `Edit Patch: ${nextCell.file.split('/').pop()}`;
+            const nextLabel = `Edit Patch: ${new window.inSetu.utils.InSetuURI(nextCell.file).basename}`;
             layoutStore.setState(s => ({
                 windows: (s.windows || []).map(w => w.id === 'bridge:edit-cell' ? { ...w, label: nextLabel, titleText: nextLabel } : w)
             }));
@@ -1349,7 +1350,7 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                                 }
                                 return html`
                                 <sutram-card
-                                    .titleText=${record.filepath.split('/').pop()}
+                                    .titleText=${new window.inSetu.utils.InSetuURI(record.filepath).basename}
                                     .descriptionText=${descStr}
                                     .detailText=${record.filepath}
                                     icon=${record.is_snapshot ? 'save' : 'file-text'}
@@ -1369,7 +1370,7 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                     </div>
                     `;
                 }) : sortedFiles.slice(0, this._renderLimit).map(([filepath, fileData]) => {
-                    const filename = filepath.split('/').pop();
+                    const filename = new window.inSetu.utils.InSetuURI(filepath).basename;
                     const repo = fileData.records[0]?.repo || '';
                     return html`
                     <div style="padding-bottom: 15px; width: 100%; box-sizing: border-box;">
