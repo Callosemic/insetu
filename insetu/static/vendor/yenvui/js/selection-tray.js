@@ -19,12 +19,12 @@ import{html as t,css as e}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
             transform: translateX(-50%) translateY(0);
         }
         :host([data-theme="e-ink"]) {
-            border: 2px solid #000;
-            box-shadow: 4px 4px 0 #8b5cf6;
+            border: 2px solid var(--border, #000000);
+            box-shadow: 4px 4px 0 var(--intent-highlight, #8b5cf6);
         }
         .count-badge {
             background: var(--intent-highlight, #8b5cf6);
-            color: white;
+            color: var(--text-light, #ffffff);
             font-weight: bold;
             border-radius: 50%;
             width: 28px;

@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 export const {{cap_name}}Store = createExtensionStore('{{cap_name}}', {
@@ -38,13 +38,16 @@ export class InSetuExt{{cap_name}} extends InSetuElement {
         this.items = [];
         this.loading = false;
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe({{cap_name}}Store, state => {
-            this.items = state.items || [];
-            this.loading = state.loading;
-        });
+        this.subscribe(
+            {{cap_name}}Store,
+            state => ({ items: state.items || [], loading: !!state.loading }),
+            ({ items, loading }) => {
+                this.items = items;
+                this.loading = loading;
+            }
+        );
         {{cap_name}}Store.getState().fetchData();
     }
     onWorkspaceLoad(workspaceId) {

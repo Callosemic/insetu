@@ -11,8 +11,15 @@ try:
 except Exception:
     pass
 
-# Enforce host-specific control directory for the Akasa kernel
+# Enforce host-specific control directory for the Akasa kernel using pure stdlib
 os.environ["AKASA_CONTROL_DIR"] = ".insetu"
+
+# Ensure sibling akasa repo is discoverable in local dev setups
+_sibling_akasa = Path(__file__).resolve().parent.parent.parent.joinpath("akasa")
+if _sibling_akasa.exists() and (_sibling_akasa / "akasa").is_dir():
+    _akasa_posix = _sibling_akasa.as_posix()
+    if _akasa_posix not in sys.path:
+        sys.path.insert(0, _akasa_posix)
 
 
 def scaffold_profiles(cwd):
@@ -23,7 +30,8 @@ def scaffold_profiles(cwd):
     defaults_dir = Path(__file__).resolve().parent.joinpath("defaults").as_posix()
     for target_name, src_name in [
         ("config.json", "config_json.txt"),
-        ("system.json", "system_json.txt"),
+        ("host.json", "host_json.txt"),
+        ("workspaces.json", "workspaces_json.txt"),
         (".gitignore", "gitignore.txt")
     ]:
         target_p = Path(base_dir).joinpath(target_name).as_posix()

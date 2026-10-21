@@ -1,4 +1,4 @@
-import{html as e,css as r}from"lit";import{YenvuiBase as i}from"./yenvui-base.js";export class YenvuiTabs extends i{static properties={tabs:{type:Array},activeTab:{type:String},variant:{type:String,reflect:!0},cacheViews:{type:Boolean}};static styles=r`
+import{html as e,css as r}from"lit";import{YenvuiBase as n}from"./yenvui-base.js";export class YenvuiTabs extends n{static properties={tabs:{type:Array},activeTab:{type:String},variant:{type:String,reflect:!0},cacheViews:{type:Boolean}};static styles=r`
         :host {
             display: flex;
             flex-direction: column;
@@ -77,11 +77,11 @@ import{html as e,css as r}from"lit";import{YenvuiBase as i}from"./yenvui-base.js
             border-bottom: 1px solid var(--border);
         }
         :host([data-theme="e-ink"]:not([variant="sub"])) .tabs-header-wrap {
-            border-bottom: 2px solid #d946ef !important; /* Fuchsia header separator */
+            border-bottom: 2px solid var(--intent-highlight, #d946ef) !important; /* Fuchsia header separator */
         }
         /* E-Ink High Contrast Overrides */
         :host([data-theme="e-ink"]) .tab-btn {
-            color: #000000 !important;
+            color: var(--text, #000000) !important;
             font-weight: 600 !important;
             border: 2px solid transparent;
             transition: none !important;
@@ -90,14 +90,14 @@ import{html as e,css as r}from"lit";import{YenvuiBase as i}from"./yenvui-base.js
             background: transparent !important;
         }
         :host([data-theme="e-ink"]) .tab-btn.active {
-            background: #ffffff !important;
-            color: #000000 !important;
-            border: 2px solid #3b82f6 !important;
-            box-shadow: 3px -3px 0 #10b981 !important;
+            background: var(--bg, #ffffff) !important;
+            color: var(--text, #000000) !important;
+            border: 2px solid var(--intent-neutral, #3b82f6) !important;
+            box-shadow: 3px -3px 0 var(--intent-success, #10b981) !important;
         }
         :host([data-theme="e-ink"][variant="sub"]) .tab-btn.active {
             border: none !important;
-            border-bottom: 4px solid #f97316 !important;
+            border-bottom: 4px solid var(--intent-warning, #f97316) !important;
             box-shadow: none !important;
             background: transparent !important;
         }

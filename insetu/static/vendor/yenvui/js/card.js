@@ -5,13 +5,18 @@ import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
             position: relative;
             touch-action: pan-x pan-y;
             content-visibility: var(--card-content-visibility, auto);
-            contain-intrinsic-size: auto 76px;
+            contain-intrinsic-size: var(--card-contain-intrinsic-size, auto 76px);
+            -webkit-text-size-adjust: 100%;
+            text-size-adjust: 100%;
         }
         :host([compact]) {
-            contain-intrinsic-size: auto 42px;
+            contain-intrinsic-size: var(--card-contain-intrinsic-size, auto 42px);
         }
-        :host([_overlayactive]) {
+        :host([_overlayactive]),
+        :host-context(lit-virtualizer),
+        :host-context(sutram-virtual-list) {
             content-visibility: visible;
+            contain-intrinsic-size: none;
         }
         .card-wrapper {
             touch-action: pan-x pan-y;
@@ -269,8 +274,8 @@ import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
         }
         :host-context([data-theme="e-ink"]):host([selected]) .card-wrapper,
         :host-context([data-theme="e-ink"]):host([_overlayactive]) .card-wrapper {
-            border: 2px solid #ec4899 !important;
-            box-shadow: 3px 4px 0 #eab308 !important; /* Yellow Bottom Shadow on Selected */
+            border: 2px solid var(--intent-danger, #ec4899) !important;
+            box-shadow: 3px 4px 0 var(--intent-warning, #eab308) !important;
         }
 
         :host-context([data-theme="e-ink"]) .selection-strip {
@@ -279,18 +284,18 @@ import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
         :host-context([data-theme="e-ink"]):host([selected]) .selection-strip,
         :host-context([data-theme="e-ink"]):host([_overlayactive]) .selection-strip {
             border-left-width: 14px !important;
-            border-left-color: #ec4899 !important; /* Hot Pink thick slab */
+            border-left-color: var(--intent-danger, #ec4899) !important;
         }
 
         :host-context([data-theme="e-ink"]) .action-grip-rail {
-            background: #8b5cf6 !important;
-            border-left: 2px solid #000000 !important;
-            color: #ffffff !important;
+            background: var(--intent-primary, #8b5cf6) !important;
+            border-left: 2px solid var(--border, #000000) !important;
+            color: var(--bg, #ffffff) !important;
             font-weight: 900 !important;
         }
         :host-context([data-theme="e-ink"]):host([selected]) .action-grip-rail,
         :host-context([data-theme="e-ink"]):host([_overlayactive]) .action-grip-rail {
-            background: #ec4899 !important;
+            background: var(--intent-danger, #ec4899) !important;
         }
 
         :host-context([data-theme="e-ink"]) .actions-tray {
@@ -356,7 +361,7 @@ import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
                 border-left-width: 6px;
             }
         }
-    `;constructor(){super(),this._overlayActive=!1,this._hasActions=!1,this.selected=!1,this._isPanning=!1,this._overlayListener=t=>{t.detail.source!==this&&this._overlayActive&&(this._overlayActive=!1)},this._focusOutListener=t=>{!this.contains(t.relatedTarget)&&this._overlayActive&&(this._overlayActive=!1)}}_initGestureController(){this._gestureController||(this._gestureController=new h(this,{scrollableContainerSelector:"actions-wrapper",onPanStart:(t,s)=>{const e=this.getBoundingClientRect();this._cardWidth=e.width,this._localStartX=t-e.left;const r=this.shadowRoot.querySelector(".actions-wrapper");this._actionsScrollLeft=r?r.scrollLeft:null,this._initialScrollLeft=this._actionsScrollLeft},onPanMove:(t,s,e)=>{if(e==="horizontal"&&this._overlayActive){const r=this._gestureController.startX-t,i=this.shadowRoot.querySelector(".actions-wrapper");if(i&&this._initialScrollLeft!==null){let a=this._initialScrollLeft+r;this._drawerRafId&&cancelAnimationFrame(this._drawerRafId),this._drawerRafId=requestAnimationFrame(()=>{a<0?i.style.transform=`translateX(${Math.abs(a)*.4}px)`:(i.style.transform="translateX(0px)",i.scrollLeft=a)})}}},onPanEnd:(t,s,e)=>{if(e!=="horizontal")return;const r=this._gestureController.startX-t;if(Math.abs(r)>10&&(this._isPanning=!0,setTimeout(()=>this._isPanning=!1,150)),this._overlayActive){const i=this.shadowRoot.querySelector(".actions-wrapper");i&&(i.style.transition="transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)",i.style.transform="translateX(0px)",setTimeout(()=>{i.style.transition=""},200),this._initialScrollLeft+r<-(this._cardWidth*.2)&&(this._overlayActive=!1));return}if(Math.abs(r)>30){const i=r>30,a=r<-30,c=this._localStartX<this._cardWidth*.3,o=this._localStartX>this._cardWidth*.7;c&&a&&!this.disableSelection?this._toggleSelection():o&&i&&(this._hasActions||this.querySelector('[slot="actions"]'))&&(this._overlayActive=!0)}}}))}connectedCallback(){super.connectedCallback(),this.addEventListener("focusout",this._focusOutListener),document.addEventListener("yenvui-overlay-opened",this._overlayListener),this.registerOutsideClick(()=>{this._overlayActive&&(this._overlayActive=!1)})}disconnectedCallback(){super.disconnectedCallback(),this.removeEventListener("focusout",this._focusOutListener),document.removeEventListener("yenvui-overlay-opened",this._overlayListener),this._gestureController&&typeof this._gestureController.abort=="function"&&this._gestureController.abort()}updated(t){if(super.updated(t),t.has("_overlayActive")&&this._overlayActive&&this.dispatchEvent(new CustomEvent("yenvui-overlay-opened",{bubbles:!0,composed:!0,detail:{source:this}})),t.has("entityData")||t.has("filename")||t.has("titleText")){const s=t.get("filename"),e=t.get("titleText"),r=t.has("filename")&&s!==this.filename,i=t.has("titleText")&&e!==this.titleText;this._overlayActive&&(r||i)&&(this._overlayActive=!1)}}_toggleSelection(){this.selected=!this.selected,this.dispatchEvent(new CustomEvent("yenvui-card-select-toggled",{detail:{selected:this.selected},bubbles:!0,composed:!0}))}firstUpdated(){this._checkActions()}_checkActions(){const t=this.shadowRoot.querySelector('slot[name="actions"]');if(t){const s=t.assignedElements({flatten:!0});this._hasActions=s.length>0}else this._hasActions=!!this.querySelector('[slot="actions"]')}_handleSlotChange(t){this._checkActions()}render(){const t=!this.descriptionText&&!this.detailText,s=this.intent?`var(--intent-${this.intent})`:this.intentColor||"var(--intent-neutral)";return n`
+    `;constructor(){super(),this.titleText="",this.detailText="",this.detailPrefix="",this.detailSuffix="",this.descriptionText="",this.statusText="",this.icon="",this.intentColor="",this.intent="",this.disableSelection=!1,this.compact=!1,this.flush=!1,this.stale=!1,this._overlayActive=!1,this._hasActions=!1,this.selected=!1,this._isPanning=!1,this._overlayListener=t=>{t.detail.source!==this&&this._overlayActive&&(this._overlayActive=!1)},this._focusOutListener=t=>{!this.contains(t.relatedTarget)&&this._overlayActive&&(this._overlayActive=!1)}}_initGestureController(){this._gestureController||(this._gestureController=new h(this,{scrollableContainerSelector:"actions-wrapper",onPanStart:(t,s)=>{const e=this.getBoundingClientRect();this._cardWidth=e.width,this._localStartX=t-e.left;const r=this.shadowRoot.querySelector(".actions-wrapper");this._actionsScrollLeft=r?r.scrollLeft:null,this._initialScrollLeft=this._actionsScrollLeft},onPanMove:(t,s,e)=>{if(e==="horizontal"&&this._overlayActive){const r=this._gestureController.startX-t,i=this.shadowRoot.querySelector(".actions-wrapper");if(i&&this._initialScrollLeft!==null){let a=this._initialScrollLeft+r;this._drawerRafId&&cancelAnimationFrame(this._drawerRafId),this._drawerRafId=requestAnimationFrame(()=>{a<0?i.style.transform=`translateX(${Math.abs(a)*.4}px)`:(i.style.transform="translateX(0px)",i.scrollLeft=a)})}}},onPanEnd:(t,s,e)=>{if(e!=="horizontal")return;const r=this._gestureController.startX-t;if(Math.abs(r)>10&&(this._isPanning=!0,setTimeout(()=>this._isPanning=!1,150)),this._overlayActive){const i=this.shadowRoot.querySelector(".actions-wrapper");i&&(i.style.transition="transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)",i.style.transform="translateX(0px)",setTimeout(()=>{i.style.transition=""},200),this._initialScrollLeft+r<-(this._cardWidth*.2)&&(this._overlayActive=!1));return}if(Math.abs(r)>30){const i=r>30,a=r<-30,c=this._localStartX<this._cardWidth*.3,o=this._localStartX>this._cardWidth*.7;c&&a&&!this.disableSelection?this._toggleSelection():o&&i&&(this._hasActions||this.querySelector('[slot="actions"]'))&&(this._overlayActive=!0)}}}))}connectedCallback(){super.connectedCallback(),this.addEventListener("focusout",this._focusOutListener),document.addEventListener("yenvui-overlay-opened",this._overlayListener),this.registerOutsideClick(()=>{this._overlayActive&&(this._overlayActive=!1)})}disconnectedCallback(){super.disconnectedCallback(),this.removeEventListener("focusout",this._focusOutListener),document.removeEventListener("yenvui-overlay-opened",this._overlayListener),this._gestureController&&typeof this._gestureController.abort=="function"&&this._gestureController.abort()}updated(t){if(super.updated(t),t.has("_overlayActive")&&this._overlayActive&&this.dispatchEvent(new CustomEvent("yenvui-overlay-opened",{bubbles:!0,composed:!0,detail:{source:this}})),t.has("entityData")||t.has("filename")||t.has("titleText")){const s=t.get("filename"),e=t.get("titleText"),r=t.has("filename")&&s!==this.filename,i=t.has("titleText")&&e!==this.titleText;this._overlayActive&&(r||i)&&(this._overlayActive=!1)}}_toggleSelection(){this.selected=!this.selected,this.dispatchEvent(new CustomEvent("yenvui-card-select-toggled",{detail:{selected:this.selected},bubbles:!0,composed:!0}))}firstUpdated(){this._checkActions()}_checkActions(){const t=this.shadowRoot.querySelector('slot[name="actions"]');if(t){const s=t.assignedElements({flatten:!0});this._hasActions=s.length>0}else this._hasActions=!!this.querySelector('[slot="actions"]')}_handleSlotChange(t){this._checkActions()}render(){const t=!this.descriptionText&&!this.detailText,s=this.intent?`var(--intent-${this.intent})`:this.intentColor||"var(--intent-neutral)";return n`
             <div class="card-wrapper" style="--card-intent: ${s}"
                 @mouseleave=${()=>{window.matchMedia("(hover: hover)").matches&&(!this._gestureController||!this._gestureController.active)&&(this._overlayActive=!1)}}
                 @pointerdown=${e=>{this._initGestureController(),this._gestureController.start(e)}}>

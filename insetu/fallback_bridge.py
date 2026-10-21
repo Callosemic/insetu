@@ -186,12 +186,26 @@ HTML_TEMPLATE = """
             document.body.innerHTML = "<h2 style='color: #10b981; text-align: center; margin-top: 20%;'>Rebooting Engine...<br><span style='font-size: 0.8rem; color: #888;'>Waiting for OS to come back online...</span></h2>";
             try {
                 await fetch('/api/system/reboot', { method: 'POST' });
-                setInterval(async () => {
-                    try {
-                        const ping = await fetch('/auth/bootstrap', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}', cache: 'no-store' });
-                        if (ping.ok) window.location.href = '/';
-                    } catch(err) {}
-                }, 1000);
+                setTimeout(() => {
+                    setInterval(async () => {
+                        try {
+                            const ping = await fetch('/auth/bootstrap?t=' + Date.now(), {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: '{}',
+                                cache: 'no-store'
+                            });
+                            if (ping.ok || ping.status === 401) {
+                                const data = await ping.json().catch(() => ({}));
+                                if (data && data.status === 'recovery') {
+                                    window.location.href = '/recovery';
+                                } else {
+                                    window.location.href = '/';
+                                }
+                            }
+                        } catch(err) {}
+                    }, 1000);
+                }, 1500);
             } catch (e) {
                 alert("Reboot failed: " + e.message);
             }
@@ -272,6 +286,11 @@ HTML_TEMPLATE = """
 @app.route('/')
 def index_redirect():
     return redirect('/recovery')
+
+@app.route('/auth/bootstrap', methods=['GET', 'POST'])
+def recovery_auth_bootstrap():
+    """Allows reboot polling loops (from both main OS and recovery UI) to detect when the server is in recovery mode."""
+    return jsonify({"status": "recovery", "mode": "lifeboat"}), 200
 
 @app.route('/recovery')
 def index():
@@ -475,25 +494,50 @@ def api_emergency_dump():
                 else:
                     buckets["misc.txt"].append((rel_path, filepath))
             
+            max_chunk_bytes = 256 * 1024  # 256 KB per part without splitting individual files
             for bucket_name, entries in buckets.items():
-                if not entries: continue
-                bucket_content = []
+                if not entries:
+                    continue
+                file_blocks = []
                 for rel_path, filepath in entries:
                     try:
                         with open(filepath, 'r', encoding='utf-8') as inf:
                             content = inf.read()
-                        
+
                         # Strip massive inline base64 source maps from vendor JS files to preserve LLM token context
                         if filepath.endswith('.js'):
                             content = re.sub(r'//#\s*sourceMappingURL=data:application/json;base64,[A-Za-z0-9+/=]+', '', content)
-                            
-                        bucket_content.append(f"\n\n{'='*60}\n>>> FILE: {rel_path}\n{'='*60}\n\n{content}")
+
+                        block_str = f"\n\n{'='*60}\n>>> FILE: {rel_path}\n{'='*60}\n\n{content}"
+                        file_blocks.append(block_str)
                     except Exception:
                         pass
-                
-                if bucket_content:
-                    zf.writestr(bucket_name, "".join(bucket_content))
-                            
+
+                if not file_blocks:
+                    continue
+
+                chunks = []
+                current_chunk = []
+                current_bytes = 0
+                for block_str in file_blocks:
+                    block_bytes = len(block_str.encode('utf-8'))
+                    if current_chunk and (current_bytes + block_bytes > max_chunk_bytes):
+                        chunks.append("".join(current_chunk))
+                        current_chunk = [block_str]
+                        current_bytes = block_bytes
+                    else:
+                        current_chunk.append(block_str)
+                        current_bytes += block_bytes
+                if current_chunk:
+                    chunks.append("".join(current_chunk))
+
+                if len(chunks) == 1:
+                    zf.writestr(bucket_name, chunks[0])
+                else:
+                    stem, ext = os.path.splitext(bucket_name)
+                    for idx, chunk_text in enumerate(chunks, start=1):
+                        zf.writestr(f"{stem}_part{idx}{ext}", chunk_text)
+
         return jsonify({"status": "success", "file": out_file})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -513,7 +557,15 @@ def run_recovery_app():
     port = int(os.environ.get("INSETU_PORT", 5005))
     print(f"🚀 Booting Immutable Recovery OS on Port {port}...")
     print(f"👉 Navigate to http://127.0.0.1:{port} to evacuate files or issue emergency patches.")
-    app.run(port=port, debug=False)
+    for attempt in range(10):
+        try:
+            app.run(port=port, debug=False, use_reloader=False)
+            break
+        except OSError as e:
+            if attempt < 9 and ("Address already in use" in str(e) or getattr(e, "errno", None) in (98, 48)):
+                time.sleep(0.5)
+            else:
+                raise
 
 if __name__ == "__main__":
     run_recovery_app()

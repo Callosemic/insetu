@@ -1,9 +1,15 @@
 import{css as t}from"lit";import{sharedStyles as r}from"../../yenvui/js/shared_styles.js";export const sharedStyles=t`
     ${r}
 
-    /* Global Reset for Components */
+    /* Global Reset for Components & iOS WebKit Text-Inflation Guard */
+    :host {
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+    }
     * { 
-        box-sizing: border-box; 
+        box-sizing: border-box;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
     }
     yenvui-dropdown, sutram-dropdown { display: inline-flex; align-items: stretch; height: 100%; }
 

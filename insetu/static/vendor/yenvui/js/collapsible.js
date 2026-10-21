@@ -140,7 +140,7 @@ import{html as e,css as o}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
             }
         }
     `;constructor(){super(),this.open=!0,this.intent="neutral",this.flush=!1}render(){return e`
-            <div class="header" @click=${t=>{t.stopPropagation(),this.open=!this.open,this.dispatchEvent(new CustomEvent("yenvui-collapsible-toggled",{detail:{open:this.open},bubbles:!0,composed:!0}))}}>
+            <div class="header" @click=${t=>{t.stopPropagation(),this.open=!this.open,this.dispatchEvent(new CustomEvent("yenvui-collapsible-toggled",{detail:{open:this.open},bubbles:!1,composed:!1}))}}>
                 <span class="title intent-${this.intent}">${this.titleText}</span>
                 <div style="display: flex; align-items: center; gap: 15px;">
                     <slot name="actions" @click=${t=>t.stopPropagation()}></slot>

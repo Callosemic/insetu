@@ -14,55 +14,58 @@ import time
 import logging
 from contextlib import redirect_stdout
 
-try:
-    import resource as _resource
-    soft_lim, hard_lim = _resource.getrlimit(_resource.RLIMIT_NOFILE)
-    target_lim = min(hard_lim, 65536) if hard_lim > 0 else 65536
-    if soft_lim < target_lim:
-        _resource.setrlimit(_resource.RLIMIT_NOFILE, (target_lim, hard_lim))
-except Exception:
-    pass
-# Bound Linux glibc arenas and thread stack size (1MB instead of 8MB) to prevent multi-thread VmData bloat
-os.environ.setdefault("MALLOC_ARENA_MAX", "2")
-try:
-    threading.stack_size(1024 * 1024)
-except Exception:
-    pass
+_sibling_akasa = Path(__file__).resolve().parent.parent.parent.joinpath("akasa")
+if _sibling_akasa.exists() and (_sibling_akasa / "akasa").is_dir():
+    _akasa_posix = _sibling_akasa.as_posix()
+    if _akasa_posix not in sys.path:
+        sys.path.insert(0, _akasa_posix)
+import akasa
+from akasa.extension import SettingsManager
+from akasa.hooks import hooks
+import akasa.utils as _akasa_utils
+from akasa.utils import (
+    load_config,
+    get_workspace_physics,
+    is_core_module,
+)
+from insetu.core.utils_core import CORE_MODULES_TUPLE
 
-# Enforce host-specific control directory for the Akasa kernel
-os.environ["AKASA_CONTROL_DIR"] = ".insetu"
+# Phase A: Configure Akasa Kernel Physics & Host Namespaces
+akasa.configure(
+    control_dir=".insetu",
+    trusted_namespaces=["insetu.core."],
+    extension_namespaces=["insetu.extensions."],
+    core_modules=CORE_MODULES_TUPLE,
+    sse_passthrough=["topology_resolved"],
+    trusted_host_suffixes=(".ts.net",),
+    tune_os_resources=True,
+)
 
 # Fire Drill: Intercept the boot sequence to test the Lifeboat FS
 if os.environ.get("INSETU_SIMULATE_PANIC") == "1" or os.path.exists(".panic_lock"):
-    if "INSETU_SIMULATE_PANIC" in os.environ: del os.environ["INSETU_SIMULATE_PANIC"]
-    if os.path.exists(".panic_lock"): os.remove(".panic_lock")
+    if "INSETU_SIMULATE_PANIC" in os.environ:
+        del os.environ["INSETU_SIMULATE_PANIC"]
+    if os.path.exists(".panic_lock"):
+        os.remove(".panic_lock")
     raise SyntaxError("Simulated Kernel Panic (Triggered via UI Fire Drill)")
+
 from flask import Flask, render_template, request, jsonify, send_file, Response
-from werkzeug.middleware.proxy_fix import ProxyFix
-import akasa.workers # Initializes the metronome listeners
+
 app = Flask(__name__)
 
-class ForceHTTPSProxyFix(object):
-    """WSGI Middleware to force HTTPS scheme when accessed via Tailscale tunnels."""
-    def __init__(self, app):
-        self.app = app
-    def __call__(self, environ, start_response):
-        if environ.get('HTTP_X_FORWARDED_PROTO') == 'https' or environ.get('HTTP_HOST', '').endswith('.ts.net'):
-            environ['wsgi.url_scheme'] = 'https'
-        return self.app(environ, start_response)
-app.wsgi_app = ForceHTTPSProxyFix(app.wsgi_app)
-from akasa.auth import auth_bp, security_bp, BOOT_TOKEN
-app.register_blueprint(auth_bp)
-app.register_blueprint(security_bp.bp)
-
-from akasa.db import close_thread_connections
-from akasa.hooks import hooks
-from akasa.utils import register_core_module
-# Dependency Injection: Register host OS physics with the Kernel
-hooks.register_trusted_namespace('insetu.core.')
-hooks.register_extension_namespace('insetu.extensions.')
-for core_mod in ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline', 'llm', 'agent', 'prompts']:
-    register_core_module(core_mod)
+# Phase B: Wire Kernel Transport, Token Gate, DB Teardown, and SSE Stream
+akasa.init_app(
+    app,
+    token_header="X-InSetu-Token",
+    public_routes={
+        "/", "/manifest.json", "/sw.js", "/favicon.ico",
+        "/auth/bootstrap", "/api/system/panic",
+        "/api/system/openapi.json", "/recovery"
+    },
+    public_prefixes=("/static/", "/sm/"),
+    public_suffixes=(".map",),
+    sse_route="/api/system/stream",
+)
 
 # Explicitly register system core routes first to prevent dynamic loader misfires
 try:
@@ -75,64 +78,33 @@ try:
         app.register_blueprint(fs_bp.bp)
 except Exception as e:
     print(f"⚠️ Failed to mount core system routes explicitly: {e}")
-@app.teardown_appcontext
-def cleanup_request_db_connections(exception=None):
-    """Deterministically closes thread-local SQLite handles spawned by ephemeral WSGI request threads."""
-    close_thread_connections()
-
-@app.after_request
-def disable_http_caching(response):
-    """Disable browser HTTP caching. Rely exclusively on the Service Worker for offline performance."""
-    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    return response
-@app.before_request
-def enforce_token_gate():
-    """Universal interceptor enforcing token verification on all REST paths."""
-    # Always allow core landing, public assets, and the auth route to bypass checks
-    # Expose the panic endpoint so the recovery OS button works even if JS crashes before the token handshake
-    if (request.path in ['/', '/manifest.json', '/sw.js', '/favicon.ico', '/auth/bootstrap', '/api/system/panic', '/api/system/openapi.json', '/recovery'] 
-        or request.path.startswith('/static/') 
-        or request.path.startswith('/sm/') 
-        or request.path.endswith('.map')):
-        return None
-
-    # Check header first, fallback to query parameter for WebSockets
-    client_token = request.headers.get('X-InSetu-Token') or request.args.get('token')
-    if not client_token or client_token != BOOT_TOKEN:
-        return jsonify({"error": "401 Unauthorized: Invalid or missing execution credentials."}), 401
 # --- INSETU EXTENSION ARCHITECTURE ROUTINE ---
 def load_workspace_extensions():
-    import akasa.utils as _akasa_utils
-    from akasa.utils import load_config as _load_config
-    from akasa.extension import SettingsManager as _SettingsManager
-
     raw_extensions = set()
 
     # 0. Check global preload preference from Tier 1 Daemon Scope (system.json)
     preload_all = False
     try:
-        sys_settings = _SettingsManager('system', 'default')
-        cfg = _load_config()
+        sys_settings = SettingsManager('system', 'default')
+        cfg = load_config()
         preload_all = bool(sys_settings.get("preload_all_extensions", cfg.get("preload_all_extensions", False)))
     except Exception:
         pass
     # 1. Sweep system.json for a Union of all required extensions globally
-    index_path = Path(_akasa_utils._cwd).joinpath(".insetu", "system.json").as_posix()
+    index_path = Path(_akasa_utils.get_daemon_cwd()).joinpath(".insetu", "system.json").as_posix()
     if os.path.exists(index_path):
         try:
             with open(index_path, 'r', encoding='utf-8') as f:
                 w_data = json.load(f)
             for ws_id in w_data.get("workspaces", {}).keys():
-                cfg = _load_config(workspace_id=ws_id)
+                cfg = load_config(workspace_id=ws_id)
                 for ext in cfg.get("extensions", []):
                     raw_extensions.add(ext)
         except Exception as e:
             print(f"Warning: Failed to parse workspaces for extensions: {e}")
     # Fallback to default active config if switchboard is empty/missing
     if not raw_extensions:
-        cfg = _load_config()
+        cfg = load_config()
         for ext in cfg.get("extensions", []):
             raw_extensions.add(ext)
     # If preload is enabled, aggressively scan and add all available extensions
@@ -143,8 +115,7 @@ def load_workspace_extensions():
                 raw_extensions.add(item)
 
     # Scan local workspace .insetu/extensions/ for user-space extensions
-    from akasa.utils import get_workspace_physics as _get_workspace_physics
-    _, ws_root = _get_workspace_physics()
+    _, ws_root = get_workspace_physics()
     local_ext_dir = Path(ws_root).joinpath(".insetu", "extensions")
     if local_ext_dir.exists() and local_ext_dir.is_dir():
         if local_ext_dir.as_posix() not in sys.path:
@@ -376,12 +347,10 @@ def resolve_js_vendors(active_exts):
             except Exception: pass
 
     return {specifier: meta["resolvedPath"] for specifier, meta in packages.items()}
-
 @app.route('/static/extensions/<ext_name>/<path:filename>')
 def serve_extension_static(ext_name, filename):
     """Serves static assets and vendored dependencies directly from an extension directory."""
-    from akasa.utils import is_core_module as _is_core_module
-    if _is_core_module(ext_name):
+    if is_core_module(ext_name):
         ext_dir = Path(app.root_path).joinpath("core", ext_name).resolve()
     else:
         ext_dir = Path(app.root_path).joinpath("extensions", ext_name).resolve()
@@ -430,9 +399,6 @@ def root_readme():
     return "Not found", 404
 @app.route('/' + 'manifest.json')
 def manifest():
-    from akasa.utils import load_config as _load_config
-    from akasa.extension import SettingsManager as _SettingsManager
-
     # Load the base blueprint manifest map
     base_manifest_path = Path(app.static_folder).joinpath(*['manifest', 'json']).as_posix()
     try:
@@ -440,8 +406,8 @@ def manifest():
             manifest_data = json.load(f)
     except Exception:
         manifest_data = {}
-    cfg = _load_config()
-    settings = _SettingsManager('system', "default")
+    cfg = load_config()
+    settings = SettingsManager('system', "default")
     instance_title = settings.get("instance_title", "inSetu Developer OS")
     # Inject the instance title cleanly into the PWA footprint
     manifest_data["name"] = instance_title
@@ -450,8 +416,7 @@ def manifest():
     pwa_scope = cfg.get("instance_pwa_scope", "default")
     manifest_data["id"] = f"/pwa-{pwa_scope}"
     manifest_data["start_url"] = f"/?node={pwa_scope}"
-    from akasa.utils import get_workspace_physics as _get_workspace_physics
-    cfg_path, _ = _get_workspace_physics()
+    cfg_path, _ = get_workspace_physics()
     # Append a cache-busting timestamp query parameter so browsers re-evaluate the custom icons
     ts = int(os.path.getmtime(cfg_path)) if os.path.exists(cfg_path) else 1
     if "icons" in manifest_data:
@@ -468,24 +433,22 @@ def intercept_local_static_assets():
     Intercepts standard static asset routing routes before Flask's native 
     static file engine serves them, checking the local environment first.
     """
-    from akasa.utils import get_workspace_physics as _get_workspace_physics
     path = request.path
     if path in ['/static/icon-192.png', '/static/icon-512.png']:
         filename = Path(path).name
         # Anchor to the absolute instance directory to survive os.chdir() hijacking
-        cfg_path, _ = _get_workspace_physics()
+        cfg_path, _ = get_workspace_physics()
         instance_dir = Path(cfg_path).parent.as_posix()
         local_path = Path(instance_dir).joinpath("static", filename).as_posix()
         if os.path.exists(local_path):
             return send_file(local_path, mimetype='image/png')
 @app.route('/favicon.ico')
 def favicon():
-    from akasa.utils import load_config as _load_config, get_workspace_physics as _get_workspace_physics
-    cfg = _load_config()
+    cfg = load_config()
     custom_icon_name = cfg.get("instance_favicon", "favicon.ico")
 
     # Anchor to the absolute instance directory to survive os.chdir() hijacking
-    cfg_path, _ = _get_workspace_physics()
+    cfg_path, _ = get_workspace_physics()
     instance_dir = Path(cfg_path).parent.as_posix()
     local_icon_path = Path(instance_dir).joinpath("static", custom_icon_name).as_posix()
 
@@ -493,28 +456,6 @@ def favicon():
         mimetype = 'image/png' if local_icon_path.lower().endswith('.png') else 'image/vnd.microsoft.icon'
         return send_file(local_icon_path, mimetype=mimetype)
     return send_file(Path(app.static_folder).joinpath('favicon.ico').as_posix(), mimetype='image/vnd.microsoft.icon')
-@app.route('/api/system/stream', methods=['GET'])
-def api_system_stream():
-    """Push-driven Server-Sent Events (SSE) stream for zero-latency UI updates."""
-    from akasa.events import sse_bus as _sse_bus
-
-    def event_stream():
-        q = _sse_bus.subscribe()
-        try:
-            yield "event: connected\ndata: {\"status\": \"ok\"}\n\n"
-            while True:
-                try:
-                    # 5s timeout yields a heartbeat ping to keep the Tailscale tunnel warm
-                    msg = q.get(timeout=5.0)
-                    yield msg
-                except queue.Empty:
-                    yield ": heartbeat\n\n"
-        finally:
-            _sse_bus.unsubscribe(q)
-    return Response(event_stream(), content_type='text/event-stream', headers={
-        'Cache-Control': 'no-cache',
-        'X-Accel-Buffering': 'no'
-    })
 @app.route('/api/system/panic', methods=['POST'])
 def api_system_panic():
     """Hard reboot of the OS process, setting the simulated panic flag."""
@@ -547,10 +488,8 @@ def recovery_ui():
     return html
 @app.route('/')
 def index():
-    from akasa.utils import load_config as _load_config
-    from akasa.extension import SettingsManager as _SettingsManager
-    cfg = _load_config()
-    settings = _SettingsManager('system', "default")
+    cfg = load_config()
+    settings = SettingsManager('system', "default")
     instance_title = settings.get("instance_title", "inSetu Developer OS")
     instance_emoji = settings.get("instance_emoji", "⚙️")
     extensions = cfg.get("extensions", [])
@@ -558,30 +497,18 @@ def index():
 
     import_map = resolve_js_vendors(mounted_extensions)
 
-    return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=mounted_extensions, import_map=json.dumps({"imports": import_map}))
+    return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=mounted_extensions, import_map=json.dumps({"imports": import_map}), core_modules=list(CORE_MODULES_TUPLE))
 # Ignite active workspace feature components JIT at application startup
 load_workspace_extensions()
 
 @hooks.on('mutate_workspace_config')
 def inject_bypassed_extensions(cfg, workspace_id=None, **kwargs):
     cfg["bypassed_extensions"] = getattr(app, '_bypassed_extensions', [])
-
-# Fire the system boot hook to ignite the worker pools and VFS queues globally
-# Guardrail: Prevent the Werkzeug master reloader process from executing background threads
-# when INSETU_RELOADER=1 is active, while allowing standard single-process `insetu serve` and WSGI boots.
-is_werkzeug_worker = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+# Phase B Completion: Ignite the worker pools, declarative schemas, and VFS queues globally
 use_reloader = os.environ.get("INSETU_RELOADER", "0") == "1"
 is_cli_serve = "serve" in sys.argv
-
-if not (is_cli_serve and use_reloader and not is_werkzeug_worker):
-    try:
-        hooks.emit('system_boot')
-    except Exception as e:
-        print(f"Warning: system_boot failed: {e}")
+akasa.boot(skip_if_reloader_parent=(is_cli_serve and use_reloader))
 def run_app():
-    from akasa.utils import load_config as _load_config
-    from akasa.extension import SettingsManager as _SettingsManager
-
     class QuietPollingFilter(logging.Filter):
         def filter(self, record):
             if os.environ.get("INSETU_DEBUG") == "1":
@@ -591,16 +518,17 @@ def run_app():
             if any(p in msg for p in ['/system/deltas', '/system/jobs/', '/gather/manifest/entry', '/git/sweep/status']):
                 return False
             return True
-    logging.getLogger('werkzeug').addFilter(QuietPollingFilter())
+    wz_logger = logging.getLogger('werkzeug')
+    wz_logger.setLevel(logging.INFO)
+    wz_logger.addFilter(QuietPollingFilter())
 
-    cfg = _load_config()
-    sys_settings = _SettingsManager('system', 'default')
+    cfg = load_config()
+    sys_settings = SettingsManager('system', 'default')
     if "INSETU_PORT" not in os.environ:
         resolved_port = sys_settings.get("port", cfg.get("port", 5005))
         os.environ["INSETU_PORT"] = str(resolved_port)
 
     port = int(os.environ["INSETU_PORT"])
-
     print(f"🚀 Starting inSetu Developer OS (Port {port})...")
     print(f"👉 Open http://127.0.0.1:{port} in your browser")
     use_reloader = os.environ.get("INSETU_RELOADER", "0") == "1"

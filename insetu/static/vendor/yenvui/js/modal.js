@@ -65,16 +65,26 @@ import{LitElement as i,html as a,css as n}from"lit";export class YenvuiModal ext
             margin-right: 15px;
         }
         .close-btn {
-            background: var(--intent-neutral, #64748b);
-            color: #ffffff;
-            border: none;
-            padding: 6px 14px;
-            border-radius: 4px;
+            background: transparent;
+            color: var(--text-muted, #94a3b8);
+            border: 1px solid var(--border, #444);
+            width: 32px;
+            height: 32px;
+            padding: 0;
+            border-radius: 6px;
             cursor: pointer;
-            font-weight: bold;
-            font-size: 0.85rem;
-            transition: filter 0.2s, background 0.2s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
             flex-shrink: 0;
+        }
+
+        .close-btn:hover {
+            background: color-mix(in srgb, var(--intent-danger, #ef4444) 15%, transparent);
+            color: var(--intent-danger, #ef4444);
+            border-color: var(--intent-danger, #ef4444);
+            filter: none;
         }
 
         .close-btn:hover {
@@ -145,10 +155,11 @@ import{LitElement as i,html as a,css as n}from"lit";export class YenvuiModal ext
             <dialog 
                 @cancel=${this._handleNativeCancel}
                 @click=${this._handleBackdropClick}>
-                
                 <div class="header">
                     <h3>${this.titleText}</h3>
-                    <button class="close-btn" @click=${this._dispatchClose}>Back</button>
+                    <button class="close-btn" title="Close Modal (Esc)" aria-label="Close Modal" @click=${this._dispatchClose}>
+                        <yv-icon name="x" style="width: 16px; height: 16px;"></yv-icon>
+                    </button>
                 </div>
                 <div class="body">
                     <slot name="body"></slot>
