@@ -272,53 +272,61 @@ constructor() {
                         .items=${directoryEntries}
                         .renderItem=${node => {
                             if (!node || typeof node !== 'object') return html``;
-                            const fullTarget = node.canonicalUri || node.fullPath;
+                            const isDirNode = node.type === 'directory';
+                            const fullTarget = node.canonicalUri || node.fullPath || '';
                             const parsed = this.utils.parseURI(fullTarget);
+                            const displayName = node.name || parsed.basename || String(fullTarget).replace(/\/+$/, '').split('/').pop() || fullTarget;
                             const isUserTemplateRoot = fullTarget.endsWith('/.templates/user');
                             const isReadOnlyTemplateNode = !parsed.isUserTemplate && !isUserTemplateRoot && fullTarget.includes('/.templates');
-                            if (node.type === 'directory') {
-                                const nextPath = Array.isArray(node.treePath) ? node.treePath : node.fullPath.split('/').filter(Boolean);
-                                const isSharedDirRoot = parsed.isSharedMount && nextPath.length === 1;
-                                const cleanDirUri = String(fullTarget).replace(/\/+$/, '');
-                                const canonicalDirUri = `${cleanDirUri}/`;
-                                return html`
-                                    <div style="width: 100%; box-sizing: border-box; padding: 0 var(--tree-item-px) 8px var(--tree-item-px);">
-                                        <sutram-card
-                                            style="margin-bottom: 0;"
-                                            .filename=${canonicalDirUri}
-                                            .titleText=${node.name}
-                                            icon=${isUserTemplateRoot ? 'user' : (isReadOnlyTemplateNode ? 'library' : (isSharedDirRoot ? 'globe' : 'folder'))}
-                                            intent=${(isReadOnlyTemplateNode || isUserTemplateRoot || isSharedDirRoot) ? 'highlight' : 'warning'}
-                                            .entityType=${'folder'}
-                                            .entityData=${{ id: canonicalDirUri, filepath: canonicalDirUri, folderpath: cleanDirUri, titleText: node.name, isDir: !isReadOnlyTemplateNode, isSkeleton: isReadOnlyTemplateNode, isTemplate: isReadOnlyTemplateNode || parsed.isUserTemplate }}
-                                            @card-clicked=${(e) => { e.stopPropagation(); this._setPath(nextPath); }}>
-                                        </sutram-card>
-                                    </div>
-                                `;
-                            }
-                            const isGitMod = this._gitModifiedFiles.has(fullTarget);
-                            const isPending = this._pendingMutations.has(fullTarget);
-                            const cardSuffix = parsed.isSharedMount ? `🌐 ${parsed.volume}` : (parsed.isUserTemplate ? 'User Template' : (isReadOnlyTemplateNode ? 'Template' : (isGitMod ? 'M' : '')));
+
+                            const nextPath = isDirNode
+                                ? (Array.isArray(node.treePath) ? node.treePath : node.fullPath.split('/').filter(Boolean))
+                                : null;
+                            const isSharedDirRoot = isDirNode && parsed.isSharedMount && nextPath.length === 1;
+                            const cleanDirUri = isDirNode ? String(fullTarget).replace(/\/+$/, '') : '';
+                            const cardFilename = isDirNode ? `${cleanDirUri}/` : fullTarget;
+
+                            const isGitMod = !isDirNode && this._gitModifiedFiles.has(fullTarget);
+                            const isPending = !isDirNode && this._pendingMutations.has(fullTarget);
+                            const cardDetailText = isDirNode ? '' : fullTarget;
+                            const cardSuffix = isDirNode
+                                ? ''
+                                : (parsed.isSharedMount ? `🌐 ${parsed.volume}` : (parsed.isUserTemplate ? 'User Template' : (isReadOnlyTemplateNode ? 'Template' : (isGitMod ? 'M' : ''))));
+                            const cardIcon = isDirNode
+                                ? (isUserTemplateRoot ? 'user' : (isReadOnlyTemplateNode ? 'library' : (isSharedDirRoot ? 'globe' : 'folder')))
+                                : (parsed.isSharedMount ? 'globe' : (isReadOnlyTemplateNode ? 'book-open' : (isPending ? 'cloud-upload' : 'file-code-2')));
+                            const cardIntent = isDirNode
+                                ? ((isReadOnlyTemplateNode || isUserTemplateRoot || isSharedDirRoot) ? 'highlight' : 'warning')
+                                : ((parsed.isSharedMount || isReadOnlyTemplateNode || parsed.isUserTemplate || isGitMod) ? 'highlight' : 'primary');
+                            const cardEntityType = isDirNode ? 'folder' : (this.entityType || 'file');
+                            const cardEntityData = isDirNode
+                                ? { id: cardFilename, filepath: cardFilename, folderpath: cleanDirUri, titleText: displayName, isDir: !isReadOnlyTemplateNode, isSkeleton: isReadOnlyTemplateNode, isTemplate: isReadOnlyTemplateNode || parsed.isUserTemplate }
+                                : { filepath: fullTarget, titleText: displayName, isSource: parsed.isSource, isFS: parsed.isEditable, isTemplate: isReadOnlyTemplateNode || parsed.isUserTemplate, git_modified: isGitMod, is_dirty: isPending };
+
                             return html`
                                 <div style="width: 100%; box-sizing: border-box; padding: 0 var(--tree-item-px) 8px var(--tree-item-px);">
                                     <sutram-card
                                         style="margin-bottom: 0;"
-                                        .filename=${fullTarget}
-                                        .detailText=${fullTarget}
+                                        .filename=${cardFilename}
+                                        .titleText=${displayName}
+                                        .detailText=${cardDetailText}
                                         .detailSuffix=${cardSuffix}
-                                        .titleText=${node.name}
-                                        descriptionText=""
-                                        intent=${(parsed.isSharedMount || isReadOnlyTemplateNode || parsed.isUserTemplate || isGitMod) ? 'highlight' : 'primary'}
-                                        icon=${parsed.isSharedMount ? 'globe' : (isReadOnlyTemplateNode ? 'book-open' : (isPending ? 'cloud-upload' : 'file-code-2'))}
-                                        .entityType=${this.entityType || 'file'}
-                                        .entityData=${{ filepath: fullTarget, isSource: parsed.isSource, isFS: parsed.isEditable, isTemplate: isReadOnlyTemplateNode || parsed.isUserTemplate, git_modified: isGitMod, is_dirty: isPending }}
+                                        .descriptionText=${''}
+                                        .icon=${cardIcon}
+                                        .intent=${cardIntent}
+                                        .entityType=${cardEntityType}
+                                        .entityData=${cardEntityData}
                                         @card-clicked=${(e) => {
                                             e.stopPropagation();
-                                            this.dispatchEvent(new CustomEvent('card-clicked', {
-                                                detail: { filename: fullTarget, isSource: parsed.isSource, isFS: parsed.isEditable },
-                                                bubbles: true,
-                                                composed: true
-                                            }));
+                                            if (isDirNode) {
+                                                this._setPath(nextPath);
+                                            } else {
+                                                this.dispatchEvent(new CustomEvent('card-clicked', {
+                                                    detail: { filename: fullTarget, isSource: parsed.isSource, isFS: parsed.isEditable },
+                                                    bubbles: true,
+                                                    composed: true
+                                                }));
+                                            }
                                         }}>
                                     </sutram-card>
                                 </div>

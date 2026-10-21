@@ -4,69 +4,104 @@ import { AppStore } from '/static/extensions/system/store.js';
 import { InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
+function _pollUntilDaemonReady() {
+    const check = async () => {
+        try {
+            const ping = await window.inSetu.api.request('/?t=' + Date.now(), { cache: 'no-store' });
+            if (ping && ping.ok) {
+                window.location.reload();
+                return;
+            }
+        } catch (err) {}
+        setTimeout(check, 1000);
+    };
+    setTimeout(check, 1000);
+}
+const DEFAULT_GLOBAL_SIEVE = {
+    ignore_dirs: ['node_modules', '__pycache__', 'venv', '.venv', '.git', '.insetu', 'dist', 'build'],
+    ignore_files: ['.DS_Store'],
+    ignore_patterns: ['*.pyc', '*.log'],
+    include_extensions: ['.py', '.js', '.ts', '.json', '.md', '.txt', '.html', '.css', '.sh', '.yaml', '.yml', '.toml'],
+    managed_dirs: ['.insetu-data']
+};
+
 export class InSetuExtConfig extends InSetuElement {
     static properties = {
+        embedded: { type: Boolean, reflect: true },
         configForm: { type: Object },
         configMeta: { type: Object },
         _isOpen: { type: Boolean },
         _generalExpanded: { type: Boolean },
-        _extExpanded: { type: Boolean },
+        _orderingExpanded: { type: Boolean },
         _reposExpanded: { type: Boolean },
         _editingRepoIdx: { type: Number },
         _repoSettingsExpanded: { type: Boolean },
         _repoBucketsExpanded: { type: Boolean },
         _expandedBuckets: { type: Object },
-        _repoBackup: { type: Object }
+        _repoBackup: { type: Object },
+        _dryRunReport: { type: Object },
+        _showHostBrowser: { type: Boolean }
     };
 
-    static styles = [sharedStyles];
-    _renderOverrideToggle(repo, key, label, globalFallback) {
-        const isOverridden = repo[key] !== undefined && repo[key] !== null;
-        return html`
-            <div style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; background: var(--bg); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
-                <div style="display: flex; align-items: center; justify-content: space-between;">
-                    <sutram-toggle 
-                        label="Override ${label}" 
-                        .checked=${isOverridden}
-                        @sutram-input-changed=${(e) => {
-                            if (e.detail.value) {
-                                repo[key] = [];
-                            } else {
-                                delete repo[key];
-                            }
-                            this.requestUpdate();
-                        }}
-                        ?flush=${true}>
-                    </sutram-toggle>
-                </div>
-                ${isOverridden ? html`
-                    <sutram-input 
-                        label="${label} (comma separated)" 
-                        .value=${(repo[key] || []).join(', ')} 
-                        placeholder="Override values..." 
-                        @sutram-input-changed=${(e) => { 
-                            repo[key] = e.detail.value.split(',').map(s => s.trim()).filter(s => s); 
-                            this.requestUpdate(); 
-                        }} 
-                        ?flush=${true}>
-                    </sutram-input>
-                ` : html`
-                    <div style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">
-                        Inheriting: ${globalFallback.length > 0 ? globalFallback.join(', ') : 'None'}
-                    </div>
-                `}
-            </div>
-        `;
-    }
+    static styles = [sharedStyles, css`
+        :host { display: block; width: 100%; box-sizing: border-box; }
+        .field-card {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 14px 16px;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .field-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .field-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 12px;
+        }
+        .pill-preview-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 2px;
+        }
+        .pill-chip {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+        }
+        .dry-run-box {
+            background: var(--bg-deep);
+            border: 1px solid var(--intent-highlight);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+    `];
 
     constructor() {
         super();
+        this.embedded = false;
         this.configForm = null;
         this.configMeta = null;
         this._isOpen = false;
         this._editingRepoIdx = null;
         this._generalExpanded = true;
-        this._extExpanded = true;
+        this._orderingExpanded = false;
         this._reposExpanded = true;
         this._repoSettingsExpanded = true;
         this._repoBucketsExpanded = true;
@@ -74,6 +109,89 @@ export class InSetuExtConfig extends InSetuElement {
         this._repoBackup = null;
         this._isNewRepo = false;
         this._createDirIfNeeded = true;
+        this._dryRunReport = null;
+        this._showHostBrowser = false;
+    }
+
+    get isEditingRepo() {
+        const idx = this._editingRepoIdx;
+        return idx !== null && Boolean(this.configForm?.target_repos?.[idx]);
+    }
+
+    get activeRepoTitle() {
+        if (!this.isEditingRepo) return '';
+        const repo = this.configForm.target_repos[this._editingRepoIdx];
+        return `${this._isNewRepo ? 'Add Repository' : 'Edit Repository'}: ${repo.title || repo.repo_dir || 'New'}`;
+    }
+
+    _notifyModeChange() {
+        this.dispatchEvent(new CustomEvent('insetu-topology-mode-changed', {
+            detail: {
+                isEditingRepo: this.isEditingRepo,
+                isNewRepo: this._isNewRepo,
+                activeRepoTitle: this.activeRepoTitle
+            },
+            bubbles: true,
+            composed: true
+        }));
+    }
+    _renderFieldCard(label, description, inputTemplate, scope = 'workspace', extraAction = null) {
+        return html`
+            <sutram-field-card
+                .label=${label}
+                .description=${description || ''}
+                .scope=${scope}>
+                ${extraAction ? html`<div slot="header-actions">${extraAction}</div>` : ''}
+                ${inputTemplate}
+            </sutram-field-card>
+        `;
+    }
+
+    _renderOverrideToggle(repo, key, label, globalFallback, description = '') {
+        const isOverridden = repo[key] !== undefined && repo[key] !== null;
+        return html`
+            <div class="field-card">
+                <div class="field-header">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <sutram-toggle 
+                            label="Override ${label}" 
+                            .checked=${isOverridden}
+                            @sutram-input-changed=${(e) => {
+                                if (e.detail.value) {
+                                    repo[key] = [...globalFallback];
+                                } else {
+                                    delete repo[key];
+                                }
+                                this.requestUpdate();
+                            }}
+                            ?flush=${true}>
+                        </sutram-toggle>
+                    </div>
+                    <sutram-tag
+                        text=${isOverridden ? 'Repo Override' : 'Inheriting Global'}
+                        intent=${isOverridden ? 'highlight' : 'neutral'}>
+                    </sutram-tag>
+                </div>
+                ${isOverridden ? html`
+                    <sutram-input 
+                        .value=${(repo[key] || []).join(', ')} 
+                        placeholder="Comma-separated override values (leave empty for blank-slate)..." 
+                        @sutram-input-changed=${(e) => { 
+                            repo[key] = e.detail.value.split(',').map(s => s.trim()).filter(s => s); 
+                            this.requestUpdate(); 
+                        }} 
+                        ?flush=${true}>
+                    </sutram-input>
+                ` : html`
+                    <div class="pill-preview-list">
+                        ${globalFallback.length > 0
+                            ? globalFallback.map(item => html`<span class="pill-chip">${item}</span>`)
+                            : html`<span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">None configured globally</span>`}
+                    </div>
+                `}
+                ${description ? html`<div style="font-size: 0.75rem; color: var(--text-muted);">${description}</div>` : ''}
+            </div>
+        `;
     }
 
     _cancelRepoEditor() {
@@ -85,79 +203,110 @@ export class InSetuExtConfig extends InSetuElement {
         this._editingRepoIdx = null;
         this._repoBackup = null;
         this._isNewRepo = false;
+        this._dryRunReport = null;
+        this._showHostBrowser = false;
+        this._notifyModeChange();
         this.requestUpdate();
     }
-    async _handleConfirmRepo() {
-        if (this._isNewRepo) {
-            if (!confirm("Save current edits and add repo?")) {
-                throw new Error("Cancelled by user.");
-            }
-        }
+
+    async saveAndCommitRepo() {
         const idx = this._editingRepoIdx;
         const repo = (idx !== null && this.configForm?.target_repos) ? this.configForm.target_repos[idx] : null;
-
-        if (repo) {
-            if (repo.repo_dir) repo.repo_dir = repo.repo_dir.trim();
-            if (repo.physical_path) repo.physical_path = repo.physical_path.trim();
+        if (!repo || !repo.repo_dir || !repo.repo_dir.trim()) {
+            alert("Repository Directory Name is required.");
+            throw new Error("Repository Directory Name is required.");
         }
-        if (this._isNewRepo && repo && this._createDirIfNeeded && repo.repo_dir) {
+        repo.repo_dir = repo.repo_dir.trim();
+        if (!repo.title || !repo.title.trim()) {
+            repo.title = repo.repo_dir.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        }
+        if (repo.physical_path) repo.physical_path = repo.physical_path.trim();
+        // 1. Commit configuration to disk first so VFS volumes and physical paths are dynamically mounted
+        await this._saveConfig({ stayOpenInHub: true });
+
+        // 2. Initialize .gitkeep through canonical VFS volume mount if requested
+        if (this._isNewRepo && this._createDirIfNeeded && repo.repo_dir) {
             try {
-                const safeRepoDir = repo.repo_dir || '';
-                const targetPath = repo.physical_path 
-                    ? `${repo.physical_path.replace(/\/+$/, '')}/.gitkeep` 
-                    : `vfs://${safeRepoDir.replace(/^\/+|\/+$/g, '')}/.gitkeep`;
+                const targetPath = `vfs://${repo.repo_dir}/.gitkeep`;
                 await window.inSetu.sys.executeWorkspaceMutation('fs/save', {
                     filepath: targetPath,
-                    content: '',
-                    is_absolute_artifact: !!repo.physical_path
+                    content: ''
                 }, { silent: true });
             } catch (e) {
                 console.warn("Failed to create directory for new repository:", e);
             }
         }
-
         this._repoBackup = null;
         this._isNewRepo = false;
         this._editingRepoIdx = null;
+        this._dryRunReport = null;
+        this._showHostBrowser = false;
+        this._notifyModeChange();
         this.requestUpdate();
     }
+    async _preCacheRepo(repoDir) {
+        const files = [];
+        const vfsManifest = window.inSetu.stores.App.getState().manifest?.vfs || {};
+        Object.entries(vfsManifest).forEach(([key, bucket]) => {
+            if (key.startsWith(repoDir + '::')) {
+                files.push(...(bucket.files || []));
+            }
+        });
+        if (files.length === 0) {
+            alert(`No indexed files found for '${repoDir}'. Save & remap first if this is a newly added repository.`);
+            return;
+        }
+        window.inSetu?.offlineLog?.(`Starting pre-cache for repository '${repoDir}' (${files.length} files)...`, 'info');
+        let cachedCount = 0;
+        for (const f of files) {
+            const res = await this.api.workspace.get(`fs/fetch?file=${encodeURIComponent(f)}`).catch(() => null);
+            if (res && res.ok) {
+                await res.blob().catch(() => {});
+                cachedCount++;
+            }
+        }
+        window.inSetu?.offlineLog?.(`Pre-cache complete for '${repoDir}': ${cachedCount}/${files.length} cached.`, 'success');
+        if (this.ui?.setGlobalStatus) {
+            this.ui.setGlobalStatus(`Cached ${cachedCount}/${files.length} files for ${repoDir}`, 3000);
+        }
+    }
+
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(
-            AppStore,
-            state => state.isConfigOpen,
-            (isConfigOpen) => {
-                if (isConfigOpen && !this._isOpen) {
-                    this.openModal();
-                } else if (!isConfigOpen && this._isOpen) {
-                    this._isOpen = false;
-                }
-            }
-        );
+        if (this.embedded) {
+            this.openModal();
+        }
         this.registerGlobalListener('insetu:config:save', window, () => {
-            if (this._isOpen) this._saveConfig();
+            if (this._isOpen || this.embedded) {
+                if (this.isEditingRepo) this.saveAndCommitRepo();
+                else this._saveConfig();
+            }
         });
         this.registerGlobalListener('insetu:config:edit-repo', window, (e) => {
             const { repo, idx } = e.detail;
             this._repoBackup = JSON.parse(JSON.stringify(repo));
             this._editingRepoIdx = idx;
             this._isNewRepo = false;
+            this._dryRunReport = null;
+            this._notifyModeChange();
+            this.requestUpdate();
         });
-        this.registerGlobalListener('insetu:config:remove-repo', window, (e) => {
+        this.registerGlobalListener('insetu:config:remove-repo', window, async (e) => {
             const { idx } = e.detail;
-            if (confirm("Remove this repository from tracking?")) {
+            const target = this.configForm?.target_repos?.[idx];
+            if (!target) return;
+            if (confirm(`Remove repository '${target.title || target.repo_dir}' from workspace tracking? (Physical files on disk will not be deleted)`)) {
                 this.configForm.target_repos.splice(idx, 1);
+                await this._saveConfig({ stayOpenInHub: true });
                 this.requestUpdate();
             }
         });
     }
+
     onWorkspaceLoad(workspaceId) {
-        if (this._isOpen) this.openModal();
+        if (this._isOpen || this.embedded) this.openModal();
     }
 
-    disconnectedCallback() {
-        super.disconnectedCallback();
-    }
     async _testRepoBucketing(repoIdx, filterBucketId = null) {
         const repo = this.configForm.target_repos[repoIdx];
         try {
@@ -188,9 +337,12 @@ export class InSetuExtConfig extends InSetuElement {
                     }
                 }
 
-                if (window.inSetu.ui && window.inSetu.ui.viewTextBlob) {
-                    window.inSetu.ui.viewTextBlob(`Test Bucketing: ${filterBucketId || repo.repo_dir}`, text, `test_bucketing_${repo.repo_dir}.txt`);
-                }
+                this._dryRunReport = {
+                    title: `Dry-Run Bucketing Preview: ${filterBucketId || repo.repo_dir}`,
+                    filename: `test_bucketing_${repo.repo_dir}.txt`,
+                    content: text
+                };
+                this.requestUpdate();
             } else {
                 const err = await res.json();
                 alert("Error testing bucketing: " + err.error);
@@ -199,36 +351,54 @@ export class InSetuExtConfig extends InSetuElement {
             alert("Network error: " + e.message);
         }
     }
+
     async openModal() {
         this._isOpen = true;
         try {
-            const res = await window.inSetu.api.system.get('config?t=' + Date.now(), { cache: 'no-store' });
-            if (res.ok) {
-                const data = await res.json();
+            const [cfgRes, topRes] = await Promise.all([
+                window.inSetu.api.system.get('config?t=' + Date.now(), { cache: 'no-store' }),
+                window.inSetu.api.workspace.get('system/topology?t=' + Date.now(), { cache: 'no-store' })
+            ]);
+            if (cfgRes.ok) {
+                const data = await cfgRes.json();
                 this.configForm = data.config || {};
                 this.configMeta = data.meta || {};
             }
+            if (topRes.ok && this.configForm) {
+                const topData = await topRes.json();
+                if (!this.configForm.tab_order && topData.tab_order) {
+                    this.configForm.tab_order = topData.tab_order;
+                }
+                if (!this.configForm.category_order && topData.category_order) {
+                    this.configForm.category_order = topData.category_order;
+                }
+                if (!this.configForm.hidden_outputs && topData.hidden_outputs) {
+                    this.configForm.hidden_outputs = topData.hidden_outputs;
+                }
+            }
+            this.requestUpdate();
         } catch (e) {
-            console.error("Failed to fetch config", e);
+            console.error("Failed to fetch workspace topology config", e);
         }
     }
+
     renderSubBuckets(repo, rIdx) {
         const buckets = repo.sub_buckets || [];
         const visibleBuckets = buckets.filter(b => !b.is_system);
         if (visibleBuckets.length === 0) {
-            return html`<span style="color: var(--text-muted); font-size: 0.8rem; font-style: italic;">No sub-buckets defined.</span>`;
+            return html`<sutram-empty-state text="No sub-buckets defined. All tracked files route to Bucket 0 (main)."></sutram-empty-state>`;
         }
         return buckets.map((b, bIdx) => {
             if (b.is_system) return '';
             const isImplicit = !!b.dynamic_split_prefix;
             const headerTitle = b.title || b.dynamic_split_prefix || `Bucket ${bIdx + 1}`;
-            const isExpanded = !!this._expandedBuckets[bIdx]; // Default false
+            const isExpanded = !!this._expandedBuckets[bIdx];
             return html`
                 <sutram-collapsible 
                     titleText="${headerTitle}" 
                     intent="neutral" 
                     .open=${isExpanded} 
-                    style="--title-weight: normal; --title-size: 0.95rem;"
+                    style="--title-weight: bold; --title-size: 0.9rem;"
                     @sutram-collapsible-toggled=${(e) => {
                         e.stopPropagation();
                         this._expandedBuckets = { ...this._expandedBuckets, [bIdx]: e.detail.open };
@@ -236,324 +406,577 @@ export class InSetuExtConfig extends InSetuElement {
                     }}>
                     <div slot="actions" style="display: flex; gap: 8px;">
                         ${!isImplicit ? html`
-                            <sutram-btn intent="neutral" label="Test" icon="flask-conical" style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.75rem;"
+                            <sutram-btn intent="neutral" size="sm" label="Test" icon="flask-conical" style="margin: 0;"
                                 @click=${(e) => {
                                     e.stopPropagation();
                                     this._testRepoBucketing(rIdx, b.id);
                                 }}></sutram-btn>
                         ` : ''}
-                        <sutram-btn intent="danger" variant="text" label="Remove" icon="trash-2" style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.75rem;"
+                        <sutram-btn intent="danger" size="sm" variant="text" label="Remove" icon="trash-2" style="margin: 0;"
                             @click=${(e) => {
                                 e.stopPropagation();
                                 this.configForm.target_repos[rIdx].sub_buckets.splice(bIdx, 1);
                                 this.requestUpdate();
                             }}></sutram-btn>
                     </div>
-                    <div style="display: flex; flex-direction: column; gap: 10px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                            <sutram-select 
-                                .value=${isImplicit ? 'implicit' : 'explicit'} 
-                                .options=${[
-                                    { value: 'explicit', label: 'Explicit (Match Prefixes)' },
-                                    { value: 'implicit', label: 'Implicit (Dynamic Folders)' }
-                                ]}
-                                @sutram-input-changed=${(e) => {
-                                    if (e.detail.value === 'implicit') {
-                                        this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { id: b.id || `bucket_${Date.now()}`, dynamic_split_prefix: '.', meta_map: {} };
-                                    } else {
-                                        this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { id: b.id || `bucket_${Date.now()}`, title: '', match_prefixes: [] };
-                                    }
-                                    this.requestUpdate();
-                                }} ?flush=${true} style="width: 250px;">
-                            </sutram-select>
-                        </div>
+                    <div style="display: flex; flex-direction: column; gap: 12px; padding: 4px 0;">
+                        ${this._renderFieldCard(
+                            'Sub-Bucket Extraction Mode',
+                            'Explicit buckets match path prefixes into a single context file. Implicit buckets dynamically split each subfolder into its own context file.',
+                            html`
+                                <sutram-select 
+                                    .value=${isImplicit ? 'implicit' : 'explicit'} 
+                                    .options=${[
+                                        { value: 'explicit', label: 'Explicit (Match Folder/File Prefixes)' },
+                                        { value: 'implicit', label: 'Implicit (Dynamic Subfolder Splitting)' }
+                                    ]}
+                                    @sutram-input-changed=${(e) => {
+                                        if (e.detail.value === 'implicit') {
+                                            this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { id: b.id || `bucket_${Date.now()}`, dynamic_split_prefix: '.', meta_map: {} };
+                                        } else {
+                                            this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { id: b.id || `bucket_${Date.now()}`, title: '', match_prefixes: [] };
+                                        }
+                                        this.requestUpdate();
+                                    }} ?flush=${true}>
+                                </sutram-select>
+                            `,
+                            'repo'
+                        )}
                         ${!isImplicit ? html`
-                        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
-                            <sutram-input label="Title" .value=${b.title || ''} placeholder="Display Name" @sutram-input-changed=${(e) => { 
-                                b.title = e.detail.value; 
-                                b.id = this.utils.slugify(e.detail.value) || b.id;
-                                this.requestUpdate(); 
-                            }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
-                            <sutram-input label="Domain" .value=${b.domain || ''} placeholder="Category" @sutram-input-changed=${(e) => { b.domain = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
-                        </div>
-                        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
-                            <sutram-input label="Description" .value=${b.description || ''} placeholder="What goes here?" @sutram-input-changed=${(e) => { b.description = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
-                            <sutram-toggle label="Priority Cache Warming" .checked=${!!b.priority_bucket} @sutram-input-changed=${(e) => { b.priority_bucket = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="margin-top: 24px;"></sutram-toggle>
-                        </div>
-                        <sutram-input label="Match Prefixes (comma separated)" .value=${(b.match_prefixes || []).join(', ')} placeholder="path/to/folder, other/path" @sutram-input-changed=${(e) => { b.match_prefixes = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true}></sutram-input>
-                    ` : html`
-                        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                            <sutram-input label="Dynamic Split Prefix" .value=${b.dynamic_split_prefix || ''} placeholder="e.g. . or docs/" @sutram-input-changed=${(e) => { b.dynamic_split_prefix = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
-                            <sutram-input label="Shared Base Domain" .value=${b.domain || ''} placeholder="e.g. Dynamic Modules" @sutram-input-changed=${(e) => { b.domain = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
-                        </div>
-                        <div style="border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                                <label style="font-size: 0.85rem; font-weight: bold; color:var(--text-muted);">Meta Map (Folder Overrides)</label>
-                                <sutram-btn intent="primary" label="Folder Meta" @click=${() => {
-                                    if (!b.meta_map) b.meta_map = {};
-                                    const nextIdx = Object.keys(b.meta_map).filter(k => k.startsWith('new_folder_')).length + 1;
-                                    b.meta_map[`new_folder_${nextIdx}`] = { title: '', domain: '' };
-                                    this.requestUpdate();
-                                }}></sutram-btn>
+                            <div class="field-grid">
+                                ${this._renderFieldCard(
+                                    'Bucket Display Title',
+                                    `Generated Bucket ID: ${b.id || 'auto'}`,
+                                    html`<sutram-input .value=${b.title || ''} placeholder="e.g. Core Architecture" @sutram-input-changed=${(e) => { 
+                                        b.title = e.detail.value; 
+                                        b.id = this.utils.slugify(e.detail.value) || b.id;
+                                        this.requestUpdate(); 
+                                    }} ?flush=${true}></sutram-input>`,
+                                    'repo'
+                                )}
+                                ${this._renderFieldCard(
+                                    'Domain Category',
+                                    `Defaults to parent repository domain (${repo.domain || 'Workspaces'}) when left blank.`,
+                                    html`<sutram-input .value=${b.domain || ''} placeholder=${repo.domain || 'Workspaces'} @sutram-input-changed=${(e) => {
+                                        const val = e.detail.value.trim();
+                                        if (val) b.domain = val;
+                                        else delete b.domain;
+                                        this.requestUpdate();
+                                    }} ?flush=${true}></sutram-input>`,
+                                    'repo'
+                                )}
                             </div>
-                            <div style="display: flex; flex-direction: column; gap: 8px;">
-                                ${Object.keys(b.meta_map || {}).map(dirKey => {
-                                    const meta = b.meta_map[dirKey];
-                                    return html`
-                                        <div style="display: flex; gap: 8px; align-items: center; background: var(--bg); padding: 8px 10px; border-radius: 6px; flex-wrap: wrap; border: 1px solid var(--border);">
-                                            <sutram-input .value=${dirKey} placeholder="Folder Name" @sutram-input-changed=${(e) => { const newKey = e.detail.value; if (newKey && newKey !== dirKey && !b.meta_map[newKey]) { b.meta_map[newKey] = b.meta_map[dirKey]; delete b.meta_map[dirKey]; this.requestUpdate(); } }} ?flush=${true} style="flex: 1; min-width: 120px;"></sutram-input>
-                                            <sutram-input .value=${meta.title || ''} placeholder="Title" @sutram-input-changed=${(e) => { meta.title = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 120px;"></sutram-input>
-                                            <sutram-input .value=${meta.domain || ''} placeholder="Domain" @sutram-input-changed=${(e) => { meta.domain = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 120px;"></sutram-input>
-                                            <sutram-btn intent="danger" variant="text" label="✕" style="--btn-font-size: 1.2rem; --btn-padding: 0 8px; flex-shrink: 0;" @click=${() => {
-                                                delete b.meta_map[dirKey];
-                                                this.requestUpdate();
-                                            }}></sutram-btn>
-                                        </div>
-                                    `;
-                                })}
+                            ${this._renderFieldCard(
+                                'Match Prefixes (One per line)',
+                                'Relative directory or file prefixes captured by this sub-bucket (e.g. src/core/ or docs/).',
+                                html`<sutram-textarea .value=${(b.match_prefixes || []).join('\n')} .monospace=${true} .minRows=${2} placeholder="src/core/\ndocs/" @sutram-input-changed=${(e) => { b.match_prefixes = e.detail.value.split(/[\r\n,]+/).map(s => s.trim()).filter(Boolean); this.requestUpdate(); }} ?flush=${true}></sutram-textarea>`,
+                                'repo'
+                            )}
+                            <div class="field-grid">
+                                ${this._renderFieldCard(
+                                    'Description',
+                                    'Summary displayed on the compiled context card.',
+                                    html`<sutram-input .value=${b.description || ''} placeholder="What goes here?" @sutram-input-changed=${(e) => { b.description = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>`,
+                                    'repo'
+                                )}
+                                ${this._renderFieldCard(
+                                    'Priority Cache Warming',
+                                    'Pre-warm this sub-bucket first during background IndexedDB sync.',
+                                    html`<sutram-toggle label="Prioritize in Offline Cache" .checked=${!!b.priority_bucket} @sutram-input-changed=${(e) => { b.priority_bucket = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-toggle>`,
+                                    'repo'
+                                )}
                             </div>
-                        </div>
-                    `}
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px;">
-                        <div style="flex: 1; min-width: 220px;">
-                            <sutram-input label="Drop Patterns (.gitignore syntax)" .value=${(b.drop_patterns || []).join(', ')} placeholder="e.g. archived/, *.draft.md" @sutram-input-changed=${(e) => { b.drop_patterns = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true}></sutram-input>
-                            <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8; display: block; margin-top: 4px;">Matches are omitted from both this sub-bucket and Bucket 0.</span>
-                        </div>
-                        <div style="flex: 1; min-width: 220px;">
-                            <sutram-input label="Ignore Patterns (.gitignore syntax)" .value=${(b.ignore_patterns || []).join(', ')} placeholder="e.g. *.py, /legacy/" @sutram-input-changed=${(e) => { b.ignore_patterns = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true}></sutram-input>
-                            <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8; display: block; margin-top: 4px;">Matches pass through to the next sub-bucket or Bucket 0.</span>
-                        </div>
-                    </div>
-                    ${(() => {
-                        const opts = typeof window.ExtensionRegistry?.getBucketConfigOptions === 'function'
-                            ? window.ExtensionRegistry.getBucketConfigOptions()
-                            : Array.from(window.ExtensionRegistry?._manifests?.entries() || [])
-                                .filter(([extName]) => window.inSetu.isCore(extName) || !window.ACTIVE_EXTENSIONS || window.ACTIVE_EXTENSIONS.includes(extName))
-                                .flatMap(([, m]) => m.bucketConfigOptions || [])
-                                .sort((a, b) => (a.order || 50) - (b.order || 50));
-                        const templates = opts
-                            .filter(opt => typeof opt.component === 'function')
-                            .map(opt => opt.component({ bucket: b, repoDir: repo.repo_dir, updateCallback: () => this.requestUpdate() }));
-                        if (templates.length === 0) return '';
-                        return html`
-                            <div style="display: flex; gap: 15px; flex-wrap: wrap; padding: 12px 15px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); align-items: center; margin-top: 10px;">
-                                ${templates}
+                        ` : html`
+                            <div class="field-grid">
+                                ${this._renderFieldCard(
+                                    'Dynamic Split Prefix',
+                                    'Parent directory whose immediate child folders each become a separate context bucket (use "." for repo root).',
+                                    html`<sutram-input .value=${b.dynamic_split_prefix || ''} placeholder="e.g. . or extensions/" @sutram-input-changed=${(e) => { b.dynamic_split_prefix = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>`,
+                                    'repo'
+                                )}
+                                ${this._renderFieldCard(
+                                    'Shared Base Domain',
+                                    `Defaults to parent repository domain (${repo.domain || 'Workspaces'}) when left blank.`,
+                                    html`<sutram-input .value=${b.domain || ''} placeholder=${repo.domain || 'Workspaces'} @sutram-input-changed=${(e) => {
+                                        const val = e.detail.value.trim();
+                                        if (val) b.domain = val;
+                                        else delete b.domain;
+                                        this.requestUpdate();
+                                    }} ?flush=${true}></sutram-input>`,
+                                    'repo'
+                                )}
                             </div>
-                        `;
-                    })()}
+                            ${this._renderFieldCard(
+                                'Meta Map (Subfolder Title & Domain Overrides)',
+                                'Optional display title and domain overrides for specific child directories.',
+                                html`
+                                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                                        ${Object.keys(b.meta_map || {}).map(dirKey => {
+                                            const meta = b.meta_map[dirKey];
+                                            return html`
+                                                <div style="display: flex; gap: 8px; align-items: center; background: var(--bg); padding: 8px 10px; border-radius: 6px; flex-wrap: wrap; border: 1px solid var(--border);">
+                                                    <sutram-input .value=${dirKey} placeholder="Folder Name" @sutram-input-changed=${(e) => { const newKey = e.detail.value; if (newKey && newKey !== dirKey && !b.meta_map[newKey]) { b.meta_map[newKey] = b.meta_map[dirKey]; delete b.meta_map[dirKey]; this.requestUpdate(); } }} ?flush=${true} style="flex: 1; min-width: 120px;"></sutram-input>
+                                                    <sutram-input .value=${meta.title || ''} placeholder="Display Title" @sutram-input-changed=${(e) => { meta.title = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 120px;"></sutram-input>
+                                                    <sutram-input .value=${meta.domain || ''} placeholder=${b.domain || repo.domain || 'Workspaces'} @sutram-input-changed=${(e) => { const val = e.detail.value.trim(); if (val) meta.domain = val; else delete meta.domain; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 120px;"></sutram-input>
+                                                    <sutram-btn intent="danger" size="sm" variant="text" icon="trash-2" label="Remove" @click=${() => {
+                                                        delete b.meta_map[dirKey];
+                                                        this.requestUpdate();
+                                                    }}></sutram-btn>
+                                                </div>
+                                            `;
+                                        })}
+                                    </div>
+                                `,
+                                'repo',
+                                html`
+                                    <sutram-btn size="sm" intent="primary" icon="plus" label="Add Folder Override" style="margin: 0;" @click=${() => {
+                                        if (!b.meta_map) b.meta_map = {};
+                                        const nextIdx = Object.keys(b.meta_map).filter(k => k.startsWith('new_folder_')).length + 1;
+                                        b.meta_map[`new_folder_${nextIdx}`] = { title: '', domain: '' };
+                                        this.requestUpdate();
+                                    }}></sutram-btn>
+                                `
+                            )}
+                        `}
+                        <div class="field-grid">
+                            ${this._renderFieldCard(
+                                'Drop Patterns (.gitignore syntax, one per line)',
+                                'Matches are completely omitted from both this sub-bucket AND Bucket 0.',
+                                html`<sutram-textarea .value=${(b.drop_patterns || []).join('\n')} .monospace=${true} .minRows=${2} placeholder="archived/\n*.draft.md" @sutram-input-changed=${(e) => { b.drop_patterns = e.detail.value.split(/[\r\n,]+/).map(s => s.trim()).filter(Boolean); this.requestUpdate(); }} ?flush=${true}></sutram-textarea>`,
+                                'repo'
+                            )}
+                            ${this._renderFieldCard(
+                                'Pass-Through Ignore Patterns (.gitignore syntax, one per line)',
+                                'Matches are skipped by this sub-bucket and fall through to the next sub-bucket or Bucket 0.',
+                                html`<sutram-textarea .value=${(b.ignore_patterns || []).join('\n')} .monospace=${true} .minRows=${2} placeholder="*.py\n/legacy/" @sutram-input-changed=${(e) => { b.ignore_patterns = e.detail.value.split(/[\r\n,]+/).map(s => s.trim()).filter(Boolean); this.requestUpdate(); }} ?flush=${true}></sutram-textarea>`,
+                                'repo'
+                            )}
+                        </div>
+                        ${(() => {
+                            const opts = typeof window.ExtensionRegistry?.getBucketConfigOptions === 'function'
+                                ? window.ExtensionRegistry.getBucketConfigOptions()
+                                : Array.from(window.ExtensionRegistry?._manifests?.entries() || [])
+                                    .filter(([extName]) => window.inSetu.isCore(extName) || !window.ACTIVE_EXTENSIONS || window.ACTIVE_EXTENSIONS.includes(extName))
+                                    .flatMap(([, m]) => m.bucketConfigOptions || [])
+                                    .sort((a, b) => (a.order || 50) - (b.order || 50));
+                            const templates = opts
+                                .filter(opt => typeof opt.component === 'function')
+                                .map(opt => opt.component({ bucket: b, repoDir: repo.repo_dir, updateCallback: () => this.requestUpdate() }));
+                            if (templates.length === 0) return '';
+                            return this._renderFieldCard(
+                                'Extension Pipeline Rules',
+                                'Domain-specific compilation and diff rules registered by active extensions.',
+                                html`<div style="display: flex; gap: 16px; flex-wrap: wrap; align-items: center;">${templates}</div>`,
+                                'repo'
+                            );
+                        })()}
                     </div>
                 </sutram-collapsible>
             `;
         });
     }
+
     renderRepos() {
         if (!this.configForm) return '';
         const repos = this.configForm.target_repos || [];
+        if (repos.length === 0) {
+            return html`<sutram-empty-state text="No repositories tracked yet. Click 'Add Repository' to map a codebase into this workspace."></sutram-empty-state>`;
+        }
         return html`
-            <div style="padding: 15px;">
+            <div style="padding: 8px 0;">
                 <sutram-card-group>
-                    ${repos.map((repo, idx) => html`
-                        <sutram-card
-                            titleText=${repo.title || repo.repo_dir || 'New Repository'}
-                            descriptionText=${repo.repo_dir ? `Directory: ${repo.repo_dir}` : 'No Directory Specified'}
-                            detailText=${repo.domain || 'Workspaces'}
-                            icon="package"
-                            intent="highlight"
-                            ?disableSelection=${true}
-                            entityType="config-repo"
-                            .entityData=${{ repo, idx }}
-                            @card-clicked=${() => { 
-                                this._repoBackup = JSON.parse(JSON.stringify(repo)); 
-                                this._editingRepoIdx = idx; 
-                                this._isNewRepo = false;
-                            }}>
-                        </sutram-card>
-                    `)}
+                    ${repos.map((repo, idx) => {
+                        const bucketCount = (repo.sub_buckets || []).filter(b => !b.is_system).length;
+                        const pathInfo = repo.physical_path ? `Host Path: ${repo.physical_path}` : `Directory: ${repo.repo_dir || 'Unset'}`;
+                        const suffix = `${bucketCount} sub-bucket${bucketCount === 1 ? '' : 's'}${repo.offline_capable ? ' • ⚡ Offline' : ''}`;
+                        return html`
+                            <sutram-card
+                                titleText=${repo.title || repo.repo_dir || 'New Repository'}
+                                descriptionText=${pathInfo}
+                                detailText=${repo.domain || 'Workspaces'}
+                                detailSuffix=${suffix}
+                                icon="package"
+                                intent="highlight"
+                                ?disableSelection=${true}
+                                entityType="config-repo"
+                                .entityData=${{ repo, idx }}
+                                @card-clicked=${() => { 
+                                    this._repoBackup = JSON.parse(JSON.stringify(repo)); 
+                                    this._editingRepoIdx = idx; 
+                                    this._isNewRepo = false;
+                                    this._dryRunReport = null;
+                                    this._notifyModeChange();
+                                }}>
+                            </sutram-card>
+                        `;
+                    })}
                 </sutram-card-group>
             </div>
         `;
     }
     renderRepoDrillDown(repo, idx) {
         if (!repo) return html``;
+        if (this._showHostBrowser) {
+            return html`
+                <insetu-host-dir-picker
+                    .titleText=${`Select Host Directory for '${repo.title || repo.repo_dir || 'Repository'}'`}
+                    confirmLabel="Select Current Path"
+                    .initialPath=${repo.physical_path || ''}
+                    @host-dir-cancelled=${() => { this._showHostBrowser = false; }}
+                    @host-dir-selected=${(e) => {
+                        const selectedDir = e.detail?.path || '';
+                        repo.physical_path = selectedDir;
+                        if (!repo.repo_dir) {
+                            repo.repo_dir = this.utils.HostPath.basename(selectedDir);
+                        }
+                        this._showHostBrowser = false;
+                        this.requestUpdate();
+                    }}>
+                </insetu-host-dir-picker>
+            `;
+        }
+
         return html`
-            <div style="display: flex; flex-direction: column;">
-                <div style="padding: 10px 20px; background: var(--input-bg); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 10px; position: sticky; top: 0; z-index: 20;">
-                    <sutram-btn
-                        intent="neutral"
-                        size="sm"
-                        icon="corner-left-up"
-                        label="All Repositories"
-                        style="margin: 0;"
-                        @click=${() => this._cancelRepoEditor()}>
-                    </sutram-btn>
-                    <span style="font-weight: bold; font-size: 0.9rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                        ${this._isNewRepo ? 'Add Repository' : 'Edit Repository'}: ${repo.title || repo.repo_dir || 'New'}
-                    </span>
-                </div>
-                <div style="padding: 15px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; background: var(--bg);">
-                    <yv-icon name="package" style="width: 22px; height: 22px; color: var(--intent-primary); flex-shrink: 0;"></yv-icon>
-                    <sutram-input .value=${repo.title || ''} placeholder="Display Title (e.g. My Repository)" style="flex: 1; margin: 0; --bg-input: var(--input-bg);" @sutram-input-changed=${(e) => { repo.title = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>
-                </div>
-                    <sutram-collapsible   
-                        titleText="Bucket 0 (Base Pipeline)" 
-                        intent="primary"
-                        .open=${this._repoSettingsExpanded}
-                        @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoSettingsExpanded = e.detail.open; }}>
-                        <div slot="actions" style="display: flex; gap: 8px;">
-                            <sutram-btn intent="neutral" label="Test All Buckets" style="margin: 0; --btn-padding: 4px 10px; --btn-font-size: 0.75rem;" @click=${(e) => {
-                                e.stopPropagation();
-                                this._testRepoBucketing(idx);
-                            }}></sutram-btn>
+            <div style="display: flex; flex-direction: column; gap: 14px;">
+                ${!this.embedded ? html`
+                    <div style="padding: 10px 20px; background: var(--input-bg); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 10px; position: sticky; top: 0; z-index: 20;">
+                        <sutram-btn
+                            intent="neutral"
+                            size="sm"
+                            icon="corner-left-up"
+                            label="All Repositories"
+                            style="margin: 0;"
+                            @click=${() => this._cancelRepoEditor()}>
+                        </sutram-btn>
+                        <span style="font-weight: bold; font-size: 0.9rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                            ${this.activeRepoTitle}
+                        </span>
+                    </div>
+                ` : ''}
+
+                ${this._dryRunReport ? html`
+                    <div class="dry-run-box">
+                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+                            <div style="display: flex; align-items: center; gap: 8px; font-weight: bold; color: var(--intent-highlight); font-size: 0.9rem;">
+                                <yv-icon name="flask-conical" style="width: 16px; height: 16px;"></yv-icon>
+                                <span>${this._dryRunReport.title}</span>
+                            </div>
+                            <div style="display: flex; gap: 8px;">
+                                <sutram-btn size="sm" intent="primary" icon="external-link" label="Open in Editor" @click=${() => {
+                                    const rpt = this._dryRunReport;
+                                    window.inSetu?.events?.emit('insetu:system:close-settings');
+                                    this._isOpen = false;
+                                    AppStore.setState({ isConfigOpen: false });
+                                    if (window.inSetu.ui?.viewTextBlob) {
+                                        window.inSetu.ui.viewTextBlob(rpt.title, rpt.content, rpt.filename);
+                                    }
+                                }}></sutram-btn>
+                                <sutram-btn size="sm" intent="neutral" icon="x" label="Dismiss" @click=${() => { this._dryRunReport = null; }}></sutram-btn>
+                            </div>
                         </div>
-                        <div style="display: flex; flex-direction: column; gap: 15px;">
-                            <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 0;">Files not captured by explicit sub-buckets automatically fall into this baseline group.</p>
-                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                <sutram-input label="Directory Name" .value=${repo.repo_dir || ''} placeholder="e.g. my-repo" @sutram-input-changed=${(e) => { repo.repo_dir = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
-                                <sutram-input label="Domain" .value=${repo.domain || ''} placeholder="Category" @sutram-input-changed=${(e) => { repo.domain = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
-                                <sutram-select label="Archive Type" .value=${repo.archive_type || 'repo'} .options=${[
+                        <pre style="margin: 0; max-height: 240px; overflow-y: auto; font-size: 0.78rem; background: var(--input-bg); border: 1px solid var(--border);">${this._dryRunReport.content}</pre>
+                    </div>
+                ` : ''}
+
+                <sutram-collapsible   
+                    titleText="Bucket 0 (Base Repository & Sieve Pipeline)" 
+                    intent="primary"
+                    .open=${this._repoSettingsExpanded}
+                    @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoSettingsExpanded = e.detail.open; }}>
+                    <div slot="actions" style="display: flex; gap: 8px;">
+                        <sutram-btn intent="neutral" size="sm" icon="flask-conical" label="Test All Buckets" style="margin: 0;" @click=${(e) => {
+                            e.stopPropagation();
+                            this._testRepoBucketing(idx);
+                        }}></sutram-btn>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 12px; padding-top: 4px;">
+                        <div class="field-grid">
+                            ${this._renderFieldCard(
+                                'Display Title',
+                                'Human-readable title shown on context cards and headers.',
+                                html`<sutram-input .value=${repo.title || ''} placeholder="e.g. My Repository" @sutram-input-changed=${(e) => { repo.title = e.detail.value; this._notifyModeChange(); this.requestUpdate(); }} ?flush=${true}></sutram-input>`,
+                                'repo'
+                            )}
+                            ${this._renderFieldCard(
+                                'Directory Name (Volume ID)',
+                                `Canonical VFS volume: vfs://${repo.repo_dir || 'my-repo'}/`,
+                                html`<sutram-input .value=${repo.repo_dir || ''} placeholder="e.g. my-repo" @sutram-input-changed=${(e) => { repo.repo_dir = e.detail.value; this._notifyModeChange(); this.requestUpdate(); }} ?flush=${true}></sutram-input>`,
+                                'repo'
+                            )}
+                            ${this._renderFieldCard(
+                                'Domain Category',
+                                'Primary grouping heading in Gather & Diffs views.',
+                                html`<sutram-input .value=${repo.domain || ''} placeholder="Workspaces" @sutram-input-changed=${(e) => { repo.domain = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>`,
+                                'repo'
+                            )}
+                            ${this._renderFieldCard(
+                                'Archive Type',
+                                'Standard code repository or media vault.',
+                                html`<sutram-select .value=${repo.archive_type || 'repo'} .options=${[
                                     { value: 'repo', label: 'Standard Repo' },
                                     { value: 'media-vault', label: 'Media Vault' },
                                     ...(repo.archive_type && repo.archive_type !== 'repo' && repo.archive_type !== 'media-vault' ? [{ value: repo.archive_type, label: repo.archive_type }] : [])
-                                ]} @sutram-input-changed=${(e) => { repo.archive_type = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-select>
-                            </div>
-                            <div style="font-size: 0.8rem; color: var(--text-muted); font-family: var(--font-mono); margin-top: -5px; display: flex; align-items: center; gap: 6px;">
-                                <yv-icon name="folder" style="width: 14px; height: 14px; color: var(--intent-warning);"></yv-icon> Path Preview: <span style="color: var(--intent-primary); font-weight: bold;">${repo.physical_path ? repo.physical_path : `[project root]/${repo.repo_dir || 'my-new-repo'}/`}</span>
-                            </div>
-
-                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                <sutram-input label="Physical Path (Optional Override)" .value=${repo.physical_path || ''} placeholder="/absolute/path/to/repo" @sutram-input-changed=${(e) => { repo.physical_path = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
-                            </div>
-
-                            <sutram-toggle 
-                                label="Create directory if doesn't exist" 
-                                .checked=${this._createDirIfNeeded !== false} 
-                                @sutram-input-changed=${(e) => { this._createDirIfNeeded = e.detail.value; this.requestUpdate(); }} 
-                                ?flush=${true}>
-                            </sutram-toggle>
-                            ${this._renderOverrideToggle(repo, 'exts', 'Tracked Extensions', (this.configForm.include_extensions || []))}
-                            ${this._renderOverrideToggle(repo, 'repo_ignore_dirs', 'Ignore Directories', (this.configForm.ignore_dirs || []))}${this._renderOverrideToggle(repo, 'repo_ignore_files', 'Ignore Files', (this.configForm.ignore_files || []))}
-                            ${this._renderOverrideToggle(repo, 'repo_ignore_patterns', 'Ignore Patterns', (this.configForm.ignore_patterns || []))}${this._renderOverrideToggle(repo, 'repo_managed_dirs', 'Managed Dirs (Cartographer Labels)', (this.configForm.managed_dirs || []))}
-
-                            <sutram-input label="Ignore Exceptions (comma separated prefixes)" .value=${(repo.ignore_exceptions || []).join(', ')} placeholder="docs/archived/, .tracker/" @sutram-input-changed=${(e) => { repo.ignore_exceptions = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true}></sutram-input>
-
-                            <sutram-input label="Force Include Files (comma separated)" .value=${(repo.force_include || []).join(', ')} placeholder="docs/todos.md" @sutram-input-changed=${(e) => { repo.force_include = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true}></sutram-input>
-
-                            <sutram-input label="Path Prefix (Virtual Root Restriction)" .value=${repo.prefix || ''} placeholder="src/frontend/" @sutram-input-changed=${(e) => { repo.prefix = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>
-                            <div style="display: flex; gap: 15px; flex-wrap: wrap; padding: 12px 15px; background: var(--input-bg); border-radius: 6px; border: 1px solid var(--border); align-items: center;">
-                                <sutram-toggle label="Apply Ignore Rules" .checked=${repo.apply_ignore !== false} @sutram-input-changed=${(e) => { repo.apply_ignore = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-toggle>${(() => {
-                                    const opts = typeof window.ExtensionRegistry?.getRepoConfigOptions === 'function'
-                                        ? window.ExtensionRegistry.getRepoConfigOptions()
-                                        : Array.from(window.ExtensionRegistry?._manifests?.entries() || [])
-                                            .filter(([extName]) => window.inSetu.isCore(extName) || !window.ACTIVE_EXTENSIONS || window.ACTIVE_EXTENSIONS.includes(extName))
-                                            .flatMap(([, m]) => m.repoConfigOptions || [])
-                                            .sort((a, b) => (a.order || 50) - (b.order || 50));
-                                    return opts
-                                        .filter(opt => typeof opt.component === 'function')
-                                        .map(opt => opt.component({ repo, updateCallback: () => this.requestUpdate() }));
-                                })()}
-                            </div>
+                                ]} @sutram-input-changed=${(e) => { repo.archive_type = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-select>`,
+                                'repo'
+                            )}
                         </div>
-                    </sutram-collapsible>
-                    <sutram-collapsible 
-                        titleText="Sub-Buckets" 
-                        intent="highlight" 
-                        ?flush=${true}
-                        .open=${this._repoBucketsExpanded}
-                        @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoBucketsExpanded = e.detail.open; }}>
-                        <div slot="actions" style="display: flex; gap: 8px;">
-                            <sutram-btn intent="highlight" label="Add Bucket" style="margin: 0; --btn-padding: 4px 10px; --btn-font-size: 0.75rem;" @click=${(e) => {
-                                e.stopPropagation();
-                                if (!repo.sub_buckets) repo.sub_buckets = [];
-                                repo.sub_buckets.push({ id: `bucket_${Date.now()}`, title: '', match_prefixes: [] });
-                                this.requestUpdate();
-                            }}></sutram-btn>
+
+                        ${this._renderFieldCard(
+                            'Physical Host Path (Optional External Mount Override)',
+                            `Resolved Path: ${repo.physical_path ? repo.physical_path : `[workspace root]/${repo.repo_dir || 'my-new-repo'}/`}`,
+                            html`
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <sutram-input .value=${repo.physical_path || ''} placeholder="Leave blank for [workspace root]/${repo.repo_dir || 'repo'}, or browse host..." @sutram-input-changed=${(e) => { repo.physical_path = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; margin: 0;"></sutram-input>
+                                    <sutram-btn intent="highlight" icon="folder" label="Browse..." style="margin: 0;" @click=${() => { this._showHostBrowser = true; }}></sutram-btn>
+                                </div>
+                                ${this._isNewRepo ? html`
+                                    <div style="margin-top: 6px;">
+                                        <sutram-toggle 
+                                            label="Create directory on disk if it does not exist yet" 
+                                            .checked=${this._createDirIfNeeded !== false} 
+                                            @sutram-input-changed=${(e) => { this._createDirIfNeeded = e.detail.value; this.requestUpdate(); }} 
+                                            ?flush=${true}>
+                                        </sutram-toggle>
+                                    </div>
+                                ` : ''}
+                            `,
+                            'repo'
+                        )}
+
+                        ${this._renderOverrideToggle(repo, 'exts', 'Tracked Extensions', (this.configForm.include_extensions || []), 'File extensions indexed by the VFS and Cartographer for this repository.')}
+                        ${this._renderOverrideToggle(repo, 'repo_ignore_dirs', 'Ignore Directories', (this.configForm.ignore_dirs || []), 'Directory names skipped during VFS traversal.')}
+                        ${this._renderOverrideToggle(repo, 'repo_ignore_files', 'Ignore Files', (this.configForm.ignore_files || []), 'Exact filenames skipped during VFS traversal.')}
+                        ${this._renderOverrideToggle(repo, 'repo_ignore_patterns', 'Ignore Patterns', (this.configForm.ignore_patterns || []), 'Wildcard or .gitignore patterns skipped during VFS traversal.')}
+                        ${this._renderOverrideToggle(repo, 'repo_managed_dirs', 'Managed Dirs (Cartographer Labels)', (this.configForm.managed_dirs || []), 'Directories treated as managed data containers in CODE_INDEX.md.')}
+
+                        <div class="field-grid">
+                            ${this._renderFieldCard(
+                                'Ignore Exceptions (Comma-Separated)',
+                                'Paths or patterns exempted from global/repo ignore rules (e.g. .insetu-data/, docs/archived/).',
+                                html`<sutram-input .value=${(repo.ignore_exceptions || []).join(', ')} placeholder="docs/archived/, .insetu-data/" @sutram-input-changed=${(e) => { repo.ignore_exceptions = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true}></sutram-input>`,
+                                'repo'
+                            )}
+                            ${this._renderFieldCard(
+                                'Force Include Files (Comma-Separated)',
+                                'Specific relative filepaths always included regardless of extension filters.',
+                                html`<sutram-input .value=${(repo.force_include || []).join(', ')} placeholder="docs/todos.md, Makefile" @sutram-input-changed=${(e) => { repo.force_include = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true}></sutram-input>`,
+                                'repo'
+                            )}
+                            ${this._renderFieldCard(
+                                'Path Prefix (Virtual Root Restriction)',
+                                'Optional subdirectory prefix to restrict VFS scanning within a monorepo.',
+                                html`<sutram-input .value=${repo.prefix || ''} placeholder="e.g. packages/web/" @sutram-input-changed=${(e) => { repo.prefix = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>`,
+                                'repo'
+                            )}
                         </div>
-                        <div style="display: flex; flex-direction: column;">
-                            ${this.renderSubBuckets(repo, idx)}
-                        </div>
-                    </sutram-collapsible>
+
+                        ${this._renderFieldCard(
+                            'Pipeline, Sieve & Offline Capabilities',
+                            'Control ignore rule evaluation, extension-specific exclusions, and IndexedDB offline caching for this repository.',
+                            html`
+                                <div style="display: flex; gap: 16px; flex-wrap: wrap; align-items: center; justify-content: space-between;">
+                                    <div style="display: flex; gap: 16px; flex-wrap: wrap; align-items: center;">
+                                        <sutram-toggle label="Apply Ignore Rules" .checked=${repo.apply_ignore !== false} @sutram-input-changed=${(e) => { repo.apply_ignore = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-toggle>
+                                        <sutram-toggle label="Offline Capable (IndexedDB Sync)" .checked=${!!repo.offline_capable} @sutram-input-changed=${(e) => { repo.offline_capable = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-toggle>
+                                        ${(() => {
+                                            const opts = typeof window.ExtensionRegistry?.getRepoConfigOptions === 'function'
+                                                ? window.ExtensionRegistry.getRepoConfigOptions()
+                                                : Array.from(window.ExtensionRegistry?._manifests?.entries() || [])
+                                                    .filter(([extName]) => window.inSetu.isCore(extName) || !window.ACTIVE_EXTENSIONS || window.ACTIVE_EXTENSIONS.includes(extName))
+                                                    .flatMap(([, m]) => m.repoConfigOptions || [])
+                                                    .sort((a, b) => (a.order || 50) - (b.order || 50));
+                                            return opts
+                                                .filter(opt => typeof opt.component === 'function')
+                                                .map(opt => opt.component({ repo, updateCallback: () => this.requestUpdate() }));
+                                        })()}
+                                    </div>
+                                    ${repo.repo_dir ? html`
+                                        <sutram-async-btn
+                                            size="sm"
+                                            intent="highlight"
+                                            icon="hard-drive"
+                                            label="Pre-Cache Repo Now"
+                                            ?disabled=${!repo.offline_capable}
+                                            .onClick=${() => this._preCacheRepo(repo.repo_dir)}>
+                                        </sutram-async-btn>
+                                    ` : ''}
+                                </div>
+                            `,
+                            'repo'
+                        )}
+                    </div>
+                </sutram-collapsible>
+
+                <sutram-collapsible 
+                    titleText="Sub-Buckets (Specialized Context Splitters)" 
+                    intent="highlight" 
+                    .open=${this._repoBucketsExpanded}
+                    @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoBucketsExpanded = e.detail.open; }}>
+                    <div slot="actions" style="display: flex; gap: 8px;">
+                        <sutram-btn intent="highlight" size="sm" icon="plus" label="Add Sub-Bucket" style="margin: 0;" @click=${(e) => {
+                            e.stopPropagation();
+                            if (!repo.sub_buckets) repo.sub_buckets = [];
+                            const newIdx = repo.sub_buckets.length;
+                            repo.sub_buckets.push({ id: `bucket_${Date.now()}`, title: '', match_prefixes: [] });
+                            this._expandedBuckets = { ...this._expandedBuckets, [newIdx]: true };
+                            this._repoBucketsExpanded = true;
+                            this.requestUpdate();
+                        }}></sutram-btn>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 8px; padding-top: 4px;">
+                        ${this.renderSubBuckets(repo, idx)}
+                    </div>
+                </sutram-collapsible>
             </div>
         `;
     }
+    _renderTopologyOverview() {
+        return html`
+            <div style="display: flex; flex-direction: column; gap: 14px;">
+                <sutram-collapsible 
+                    titleText="Global VFS Sieve & Ignore Defaults" 
+                    intent="neutral"
+                    .open=${this._generalExpanded}
+                    @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._generalExpanded = e.detail.open; }}>
+                    <div slot="actions">
+                        <sutram-btn intent="neutral" size="sm" icon="rotate-ccw" label="Reset Defaults" style="margin: 0;"
+                            @click=${(e) => {
+                                e.stopPropagation();
+                                this.configForm = {
+                                    ...this.configForm,
+                                    ignore_dirs: [...DEFAULT_GLOBAL_SIEVE.ignore_dirs],
+                                    ignore_files: [...DEFAULT_GLOBAL_SIEVE.ignore_files],
+                                    ignore_patterns: [...DEFAULT_GLOBAL_SIEVE.ignore_patterns],
+                                    include_extensions: [...DEFAULT_GLOBAL_SIEVE.include_extensions],
+                                    managed_dirs: [...DEFAULT_GLOBAL_SIEVE.managed_dirs]
+                                };
+                                this.requestUpdate();
+                            }}>
+                        </sutram-btn>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 12px; padding-top: 4px;">
+                        <div class="field-grid">
+                            ${this._renderFieldCard(
+                                'Global Ignore Directories',
+                                'Directories completely skipped by the VFS and Watchdog unless overridden by a repository.',
+                                html`<sutram-input .value=${(this.configForm.ignore_dirs || []).join(', ')} placeholder="node_modules, __pycache__, venv" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(Boolean); this.configForm = { ...this.configForm, ignore_dirs: arr }; }} ?flush=${true}></sutram-input>`,
+                                'workspace'
+                            )}
+                            ${this._renderFieldCard(
+                                'Global Ignore Files',
+                                'Exact filenames ignored across all repositories.',
+                                html`<sutram-input .value=${(this.configForm.ignore_files || []).join(', ')} placeholder=".DS_Store" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(Boolean); this.configForm = { ...this.configForm, ignore_files: arr }; }} ?flush=${true}></sutram-input>`,
+                                'workspace'
+                            )}
+                        </div>
+                        ${this._renderFieldCard(
+                            'Global Ignore Patterns (.gitignore syntax, one per line)',
+                            'Wildcard and .gitignore patterns ignored globally (e.g. *.pyc, *.log).',
+                            html`<sutram-textarea .value=${(this.configForm.ignore_patterns || []).join('\n')} .monospace=${true} .minRows=${2} placeholder="*.pyc\n*.log" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(/[\r\n,]+/).map(s => s.trim()).filter(Boolean); this.configForm = { ...this.configForm, ignore_patterns: arr }; }} ?flush=${true}></sutram-textarea>`,
+                            'workspace'
+                        )}
+                        <div class="field-grid">
+                            ${this._renderFieldCard(
+                                'Global Allowed Extensions',
+                                'Default tracked file extensions for repositories that do not define an explicit override.',
+                                html`<sutram-input .value=${(this.configForm.include_extensions || []).join(', ')} placeholder=".py, .js, .md" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(s => s !== null && s !== undefined); this.configForm = { ...this.configForm, include_extensions: arr }; }} ?flush=${true}></sutram-input>`,
+                                'workspace'
+                            )}
+                            ${this._renderFieldCard(
+                                'Exempted Managed Directories',
+                                'Data folders indexed with structural labels in CODE_INDEX.md without requiring inline comments.',
+                                html`<sutram-input .value=${(this.configForm.managed_dirs || []).join(', ')} placeholder=".insetu-data" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(Boolean); this.configForm = { ...this.configForm, managed_dirs: arr }; }} ?flush=${true}></sutram-input>`,
+                                'workspace'
+                            )}
+                        </div>
+                    </div>
+                </sutram-collapsible>
+
+                <sutram-collapsible 
+                    titleText="Target Repositories (${(this.configForm.target_repos || []).length})"  
+                    intent="primary"
+                    .open=${this._reposExpanded}
+                    @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._reposExpanded = e.detail.open; }}>
+                    <div slot="actions">
+                        <sutram-btn intent="primary" size="sm" icon="plus" label="Add Repository" style="margin: 0;"
+                            @click=${async (e) => {
+                                e.stopPropagation();
+                                if (!this.configForm.target_repos) this.configForm.target_repos = [];
+                                let newRepo = {    
+                                    repo_dir: '', title: '', domain: 'Workspaces', 
+                                    apply_ignore: true, sub_buckets: [] 
+                                };
+                                try {
+                                    const res = await window.inSetu.api.workspace.get('gather/repos/template');
+                                    if (res.ok) newRepo = await res.json();
+                                } catch(err) {}
+                                this.configForm.target_repos.push(newRepo);
+                                const newIdx = this.configForm.target_repos.length - 1;
+                                this._repoBackup = null;
+                                this._editingRepoIdx = newIdx;
+                                this._isNewRepo = true;
+                                this._createDirIfNeeded = true;
+                                this._dryRunReport = null;
+                                this._notifyModeChange();
+                                this.requestUpdate();
+                            }}></sutram-btn>
+                    </div>
+                    <p style="font-size: 0.82rem; color: var(--text-muted); margin: 4px 0 8px 0;">
+                        Click any repository card to configure its Bucket 0 sieve overrides, sub-buckets, host path, or offline cache warming.
+                    </p>
+                    ${this.renderRepos()}
+                </sutram-collapsible>
+
+                <sutram-collapsible
+                    titleText="Workspace UI & Output Ordering"
+                    intent="highlight"
+                    .open=${this._orderingExpanded}
+                    @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._orderingExpanded = e.detail.open; }}>
+                    <div style="display: flex; flex-direction: column; gap: 12px; padding-top: 4px;">
+                        <div class="field-grid">
+                            ${this._renderFieldCard(
+                                'Primary Navigation Tab Order',
+                                'Comma-separated top-level folder IDs controlling the left-to-right order in the top bar.',
+                                html`<sutram-input .value=${(this.configForm.tab_order || ['context', 'edit', 'tasks', 'ctrl', 'library']).join(', ')} placeholder="context, edit, tasks, ctrl, library" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(Boolean); this.configForm = { ...this.configForm, tab_order: arr }; }} ?flush=${true}></sutram-input>`,
+                                'workspace'
+                            )}
+                            ${this._renderFieldCard(
+                                'Context Domain Category Order',
+                                'Comma-separated domain names controlling vertical section order in Gather and Diffs views.',
+                                html`<sutram-input .value=${(this.configForm.category_order || []).join(', ')} placeholder="Core OS, Workspaces, Documentation" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(Boolean); this.configForm = { ...this.configForm, category_order: arr }; }} ?flush=${true}></sutram-input>`,
+                                'workspace'
+                            )}
+                        </div>
+                        ${this._renderFieldCard(
+                            'Hidden Context Outputs',
+                            'Compiled ctx:// URIs to hide from the primary Gather and Diffs card lists.',
+                            html`<sutram-input .value=${(this.configForm.hidden_outputs || []).join(', ')} placeholder="ctx://contexts/context_prompt.md" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(Boolean); this.configForm = { ...this.configForm, hidden_outputs: arr }; }} ?flush=${true}></sutram-input>`,
+                            'workspace'
+                        )}
+                    </div>
+                </sutram-collapsible>
+            </div>
+        `;
+    }
+
     render() {
         const idx = this._editingRepoIdx;
         const activeRepo = (idx !== null && this.configForm && this.configForm.target_repos) ? this.configForm.target_repos[idx] : null;
         const isEditingRepo = idx !== null && activeRepo !== null;
 
         const bodyContent = !this.configForm 
-            ? html`<div style="padding: 20px;"><sutram-spinner text="Loading configuration..."></sutram-spinner></div>`
-            : (isEditingRepo ? this.renderRepoDrillDown(activeRepo, idx) : html`
-                <div style="display: flex; flex-direction: column;">
-                    <sutram-collapsible 
-                        titleText="Global Ignore Rules" 
-                        intent="neutral"
-                        .open=${this._generalExpanded}
-                        @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._generalExpanded = e.detail.open; }}>
-                        <div style="display: flex; flex-direction: column; gap: 12px;">
-                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                <div style="flex: 1; min-width: 200px;">
-                                    <sutram-input label="Global Ignore Directories" .value=${(this.configForm.ignore_dirs || []).join(', ')} placeholder="node_modules, build" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, ignore_dirs: arr }; }}></sutram-input>
-                                    <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8; display: block; margin-top: -12px; margin-bottom: 8px;">Completely ignored by the VFS (e.g. node_modules).</span>
-                                </div>
-                                <div style="flex: 1; min-width: 200px;">
-                                    <sutram-input label="Global Ignore Files" .value=${(this.configForm.ignore_files || []).join(', ')} placeholder=".DS_Store" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, ignore_files: arr }; }}></sutram-input>
-                                    <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8; display: block; margin-top: -12px; margin-bottom: 8px;">Exact filenames to completely ignore.</span>
-                                </div>
-                            </div>
+            ? html`<div style="padding: 20px;"><sutram-spinner text="Loading workspace topology..."></sutram-spinner></div>`
+            : (isEditingRepo ? this.renderRepoDrillDown(activeRepo, idx) : this._renderTopologyOverview());
 
-                            <div>
-                                <sutram-input label="Global Ignore Patterns" .value=${(this.configForm.ignore_patterns || []).join(', ')} placeholder="*.log, cache_*" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, ignore_patterns: arr }; }}></sutram-input>
-                                <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8; display: block; margin-top: -12px; margin-bottom: 8px;">Wildcard substring matches to completely ignore (e.g. *.log).</span>
-                            </div>
+        if (this.embedded) {
+            return bodyContent;
+        }
 
-                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                <div style="flex: 1; min-width: 200px;">
-                                    <sutram-input label="Global Allowed Extensions" .value=${(this.configForm.include_extensions || []).join(', ')} placeholder=".py, .js, .md" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(s => s !== null && s !== undefined); this.configForm = { ...this.configForm, include_extensions: arr }; }}></sutram-input>
-                                    <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8; display: block; margin-top: -12px; margin-bottom: 8px;">Default tracked extensions unless overridden by a repository.</span>
-                                </div>
-                                <div style="flex: 1; min-width: 200px;">
-                                    <sutram-input label="Exempted Managed Directories" .value=${(this.configForm.managed_dirs || []).join(', ')} placeholder=".insetu-data" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, managed_dirs: arr }; }}></sutram-input>
-                                    <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8; display: block; margin-top: -12px; margin-bottom: 8px;">Default managed folders unless overridden by a repository.</span>
-                                </div>
-                            </div>
-                        </div>
-                    </sutram-collapsible>
-                    <sutram-collapsible 
-                        titleText="Target Repositories"  
-                        intent="primary"
-                        .open=${this._reposExpanded}
-                        @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._reposExpanded = e.detail.open; }}>
-                        <div slot="actions">
-                            <sutram-btn intent="primary" label="Add Repository" style="margin: 0; --btn-padding: 4px 10px; --btn-font-size: 0.75rem;"
-                                @click=${async () => {
-                                    if (!this.configForm.target_repos) this.configForm.target_repos = [];
-                                    let newRepo = {    
-                                        repo_dir: '', title: '', domain: 'Workspaces', 
-                                        apply_ignore: true, sub_buckets: [] 
-                                    };
-                                    try {
-                                        const res = await window.inSetu.api.workspace.get('gather/repos/template');
-                                        if (res.ok) newRepo = await res.json();
-                                    } catch(e) {}
-                                    this.configForm.target_repos.push(newRepo);
-                                    const newIdx = this.configForm.target_repos.length - 1;
-                                    this._repoBackup = null;
-                                    this._editingRepoIdx = newIdx;
-                                    this._isNewRepo = true;
-                                    this._createDirIfNeeded = true;
-                                    this.requestUpdate();
-                                }}></sutram-btn>
-                        </div>
-                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>
-                        ${this.renderRepos()}
-                    </sutram-collapsible>
-                </div>
-            `);
         return html`
             ${this._isOpen ? html`
                 <sutram-modal 
                     ?open=${true} 
-                    titleText=${isEditingRepo ? `${this._isNewRepo ? 'Add Repository' : 'Edit Repository'}: ${activeRepo.title || activeRepo.repo_dir || 'New'}` : 'Workspace Manager'} 
+                    titleText=${isEditingRepo ? this.activeRepoTitle : 'Workspace Topology Manager'} 
                     ?fullscreen=${true} 
                     ?flush=${true}
                     @sutram-modal-closed=${(e) => {
@@ -564,56 +987,52 @@ export class InSetuExtConfig extends InSetuElement {
                         this._isOpen = false;
                         AppStore.setState({ isConfigOpen: false });
                     }}>
-                    <div slot="body">${bodyContent}</div>${isEditingRepo ? html`
+                    <div slot="body" style="padding: 16px 20px;">${bodyContent}</div>
+                    ${isEditingRepo ? html`
                         <sutram-btn slot="footer" intent="neutral" icon="x" label="Cancel" @click=${() => this._cancelRepoEditor()}></sutram-btn>
                         <sutram-async-btn 
                             slot="footer" 
-                            icon="check"
-                            label="${this._isNewRepo ? 'Create Repository' : 'Keep Edits'}" 
+                            icon="save"
+                            label="${this._isNewRepo ? 'Create & Remap Disk' : 'Save Repository & Remap'}" 
                             intent="success" 
-                            .onClick=${async () => await this._handleConfirmRepo()}>
+                            .onClick=${async () => await this.saveAndCommitRepo()}>
                         </sutram-async-btn>
                     ` : html`
-                        <sutram-async-btn slot="footer" icon="save" label="Save & Remap Disk" intent="primary" .onClick=${this._saveConfig.bind(this)}></sutram-async-btn>
+                        <sutram-async-btn slot="footer" icon="save" label="Save & Remap Disk" intent="primary" .onClick=${() => this._saveConfig()}></sutram-async-btn>
                     `}
                 </sutram-modal>
             ` : ''}
         `;
     }
-    async _saveConfig() {
+    async _saveConfig(options = {}) {
+        const { stayOpenInHub = false } = options;
         try {
-            // Config saves utilize explicit multi-tenant URL path boundaries
             const res = await window.inSetu.api.system.post('config', this.configForm);
             if (res.ok) {
                 const data = await res.json();
                 if (window.inSetu.stores.Gather) {
-                    if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⏳ Re-indexing...", null);
+                    if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⏳ Re-indexing workspace topology...", null);
                     await window.inSetu.stores.Gather.getState().executeCompile(null, true);
                 }
                 if (data.requires_reboot) {
-                    // Declarative UI State Transition
                     AppStore.setState({ isRebooting: true, rebootType: 'reboot' });
-
                     try {
                         await window.inSetu.api.system.post('reboot', {});
                     } catch(err) {}
-                    setInterval(async () => {
-                        try {
-                            const ping = await fetch('/?t=' + Date.now(), { cache: 'no-store' });
-                            if (ping.ok) window.location.reload();
-                        } catch(err) {}
-                    }, 1000);
-
-                    // Stall the promise so the async button remains in the loading state through reboot
+                    _pollUntilDaemonReady();
                     await new Promise(() => {});
                 } else {
-                    this._isOpen = false;
-                    AppStore.setState({ isConfigOpen: false });
-
+                    if (!stayOpenInHub && !this.embedded) {
+                        this._isOpen = false;
+                        AppStore.setState({ isConfigOpen: false });
+                    }
                     if (window.inSetu.sys.performSoftRefresh) {
                         await window.inSetu.sys.performSoftRefresh();
                     } else {
                         window.location.reload();
+                    }
+                    if (window.inSetu.ui?.setGlobalStatus) {
+                        window.inSetu.ui.setGlobalStatus("✅ Workspace topology saved and remapped", 2500);
                     }
                 }
             } else {
@@ -627,17 +1046,11 @@ export class InSetuExtConfig extends InSetuElement {
 }
 customElements.define('insetu-ext-config', InSetuExtConfig);
 
-// Instantiated once as a persistent background event substrate on extension script load
-if (!document.getElementById('insetu-config-root')) {
-    const root = document.createElement('insetu-ext-config');
-    root.id = 'insetu-config-root';
-    document.body.appendChild(root);
-}
-
 // --- DECLARATIVE SCHEMA PAYLOAD ---
 window.ExtensionRegistry.registerExtension('config', {
     name: "Workspace Configuration",
     version: "2.0.0",
+    settingsCategory: "Workspace",
     offline_mode: "read_only",
     shortcuts: [
         {
@@ -700,12 +1113,7 @@ window.ExtensionRegistry.registerExtension('config', {
                 AppStore.setState({ isRebooting: true, rebootType: 'reboot' });
                 try {
                     await window.inSetu.api.system.post('reboot', {});
-                    setInterval(async () => {
-                        try {
-                            const ping = await fetch('/?t=' + Date.now(), { cache: 'no-store' });
-                            if (ping.ok) window.location.reload();
-                        } catch(err) {}
-                    }, 1000);
+                    _pollUntilDaemonReady();
                 } catch (err) {
                     alert("Reboot failed: " + err.message);
                     AppStore.setState({ isRebooting: false });

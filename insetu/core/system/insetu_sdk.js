@@ -1,51 +1,15 @@
 // insetu/insetu/static/js/core/sdk.js
 // Tier 1A: inSetu Local OS SDK Wrapper
-import { SutramElement, createSutramStore, ExtensionRegistry as SutramRegistry, bindStoreInput } from '/static/vendor/sutram/js/sutram_sdk.js';
-import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, coalescedAsync, formatDate, timeAgo, nativeShareFiles, cleanCodeArtifacts, shallowEqual } from '/static/vendor/sutram/js/utils.js';
+import { SutramElement, createSutramStore, StoreRegistry, ExtensionRegistry as SutramRegistry, bindStoreInput } from '/static/vendor/sutram/js/sutram_sdk.js';
+import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, coalescedAsync, formatDate, timeAgo, nativeShareFiles, cleanCodeArtifacts, shallowEqual, copyRichHtml, threeWayMergeText, HostPath, truncateFilename, clone } from '/static/vendor/sutram/js/utils.js';
 import { getEventPath, getEventTarget } from '/static/vendor/yenvui/js/physics.js';
 import * as jsYaml from '/static/vendor/js-yaml/js-yaml.min.js';
 
-export { bindStoreInput };
-
-/**
-* Standardized filename truncation for compact UI chrome (tabs, action drawers, window headers).
-* Preserves the front of the basename and the file extension (e.g., "this-is-part…md").
-*
-* @param {string} filename - Full path or basename to shorten.
-* @param {number} [maxLen=24] - Maximum allowed character length.
-* @param {string} [ellipsis='…'] - Ellipsis character or string.
-* @returns {string} Truncated string.
-*/
-export function truncateFilename(filename, maxLen = 24, ellipsis = '…') {
-    if (!filename || typeof filename !== 'string') return '';
-    const base = filename.replace(/\\/g, '/').split('/').pop() || '';
-    if (base.length <= maxLen) return base;
-
-    const lastDot = base.lastIndexOf('.');
-    if (lastDot <= 0) {
-        const sliceLen = Math.max(1, maxLen - ellipsis.length);
-        return base.slice(0, sliceLen) + ellipsis;
-    }
-
-    const ext = base.slice(lastDot);
-    if (ext.length + ellipsis.length >= maxLen) {
-        const sliceLen = Math.max(1, maxLen - ellipsis.length);
-        return base.slice(0, sliceLen) + ellipsis;
-    }
-
-    const frontLen = maxLen - ext.length - ellipsis.length;
-    return `${base.slice(0, frontLen)}${ellipsis}${ext}`;
-}
+export { bindStoreInput, truncateFilename };
 
 export function createExtensionStore(name, initialState, persistenceSchema = {}) {
     const getWs = () => window.inSetu.utils.getActiveWorkspace();
-    const processedState = { ...initialState };
-    Object.keys(processedState).forEach(key => {
-        if (key.startsWith('fetch') && typeof processedState[key] === 'function') {
-            processedState[key] = coalescedAsync(processedState[key]);
-        }
-    });
-    const store = createSutramStore(name, processedState, persistenceSchema, getWs, 'insetu');
+    const store = createSutramStore(name, initialState, persistenceSchema, getWs, 'insetu');
     window.inSetu = window.inSetu || {};
     window.inSetu.stores = window.inSetu.stores || {};
     window.inSetu.stores[name] = store;
@@ -88,13 +52,14 @@ export class BucketAddress {
         return new BucketAddress(key, 'main');
     }
     static fromFilepath(filepath, manifestMeta = null) {
-        // Strict SSOT Key-Value Lookup
-        if (manifestMeta && manifestMeta.repo && manifestMeta.bucket_id) {
-            return new BucketAddress(manifestMeta.repo, manifestMeta.bucket_id);
+        if (manifestMeta) {
+            const primaryRepo = manifestMeta.repo || (Array.isArray(manifestMeta.repos) && manifestMeta.repos.length === 1 ? manifestMeta.repos[0] : (Array.isArray(manifestMeta.repos) ? 'global' : null));
+            const bucketId = manifestMeta.bucket_id || manifestMeta.type || null;
+            if (primaryRepo && bucketId) {
+                return new BucketAddress(primaryRepo, bucketId);
+            }
         }
-
-        // If the metadata is missing, it is an orphan. No string splitting.
-        const filename = filepath.split('/').pop();
+        const filename = new InSetuURI(filepath).basename;
         return new BucketAddress('orphan', filename);
     }
     static fromVfsPath(filepath) {
@@ -110,10 +75,148 @@ export class BucketAddress {
         return new BucketAddress(parsed.repo || 'global', 'main');
     }
 }
+export class InSetuURI {
+    constructor(raw = '', defaultScheme = 'vfs') {
+        if (raw instanceof InSetuURI) {
+            Object.assign(this, raw);
+            return;
+        }
+        const rawStr = typeof raw === 'object' && raw !== null
+            ? String(raw.folderpath || raw.filepath || raw.id || '')
+            : String(raw || '');
+        const normRaw = rawStr.replace(/\\/g, '/').trim();
+        const hadTrailingSlash = normRaw.endsWith('/') && !normRaw.endsWith('://');
+        const clean = normRaw.replace(/\/+$/, '');
+        let withScheme = clean
+            ? (clean.includes('://') ? clean : `${defaultScheme}://${clean.replace(/^\/+/, '')}`)
+            : '';
+        if (withScheme.startsWith('ctx://contexts/workflow_') && (withScheme.endsWith('_context.txt') || /_context_part\d+\.txt$/.test(withScheme))) {
+            withScheme = withScheme.replace(/^ctx:\/\/contexts\//, 'ctx://workflows/');
+        }
+
+        let str = withScheme;
+        let scheme = defaultScheme;
+        const schemeMatch = str.match(/^([a-zA-Z0-9_-]+):\/\/(.*)$/);
+        if (schemeMatch) {
+            scheme = schemeMatch[1];
+            str = schemeMatch[2];
+        }
+        str = str.replace(/^\/+/, '');
+        const parts = str.split('/').filter(Boolean);
+        const volume = parts.length > 0 ? parts[0] : '';
+        const repo = parts.length > 1 ? parts[0] : (scheme === 'vfs' ? volume : '');
+        const relativePath = parts.length > 1 ? parts.slice(1).join('/') : (scheme === 'vfs' ? '' : str);
+        const filename = parts[parts.length - 1] || '';
+
+        this.scheme = scheme;
+        this.volume = volume;
+        this.repo = repo;
+        this.relativePath = relativePath;
+        this.filename = filename;
+        this.raw = rawStr;
+        this.canonical = withScheme;
+        this.isDir = hadTrailingSlash;
+
+        this.isCompiledArtifact = scheme === 'ctx' && ['contexts', 'diffs', 'workflows'].includes(volume);
+        this.isUserTemplate = withScheme.includes('/.templates/user/');
+        this.isReadOnlyTemplate = !this.isUserTemplate && withScheme.includes('/.templates/');
+        this.isTemplate = this.isUserTemplate || this.isReadOnlyTemplate;
+        this.isSharedMount = scheme === 'ws';
+        this.isReadOnly = this.isSharedMount || this.isCompiledArtifact || this.isReadOnlyTemplate;
+        this.isEditable = !this.isReadOnly && (scheme === 'vfs' || (scheme === 'ctx' && ['prompts', 'notes', 'skills'].includes(volume)) || scheme === 'virtual' || scheme === 'yomama');
+        this.isSource = !this.isCompiledArtifact;
+    }
+
+    get basename() {
+        return this.filename || this.volume || '';
+    }
+
+    get pathSegments() {
+        const rel = this.repo
+            ? (this.relativePath ? `${this.repo}/${this.relativePath}` : this.repo)
+            : (this.volume ? (this.relativePath ? `${this.volume}/${this.relativePath}` : this.volume) : this.relativePath);
+        return String(rel || '').split('/').filter(Boolean);
+    }
+
+    get isRootVolume() {
+        return Boolean(this.volume && !this.relativePath);
+    }
+
+    get parentUri() {
+        if (!this.scheme) return '';
+        const segs = this.pathSegments;
+        if (segs.length <= 1) {
+            return `${this.scheme}://`;
+        }
+        segs.pop();
+        return `${this.scheme}://${segs.join('/')}`;
+    }
+
+    withName(newName) {
+        const cleanName = String(newName || '').trim().replace(/^\/+|\/+$/g, '');
+        if (!cleanName) return this.toString();
+        const parent = this.parentUri;
+        if (!parent || parent.endsWith('://')) {
+            return `${this.scheme || 'vfs'}://${cleanName}`;
+        }
+        return `${parent}/${cleanName}`;
+    }
+
+    join(...segments) {
+        const cleanSegs = segments
+            .map(s => String(s || '').trim().replace(/^\/+|\/+$/g, ''))
+            .filter(Boolean);
+        const base = this.toString().replace(/\/+$/, '');
+        if (cleanSegs.length === 0) return base;
+        if (!base || base.endsWith('://')) {
+            return `${this.scheme || 'vfs'}://${cleanSegs.join('/')}`;
+        }
+        return `${base}/${cleanSegs.join('/')}`;
+    }
+    static canonicalize(raw, defaultScheme = 'vfs') {
+        if (!raw) return '';
+        const rawStr = typeof raw === 'object' && raw !== null
+            ? String(raw.folderpath || raw.filepath || raw.id || '')
+            : String(raw || '');
+        let s = rawStr.replace(/\\/g, '/').trim();
+        if (!s) return '';
+        const hasTrailingSlash = (s.endsWith('/') && !s.endsWith('://')) || Boolean(typeof raw === 'object' && raw?.isDir);
+        s = s.replace(/^(vfs|ctx|ws|virtual|yomama):\/(?!\/)/, '$1://');
+        if (s.startsWith('vfs://') || s.startsWith('ctx://') || s.startsWith('ws://') || s.startsWith('virtual://') || s.startsWith('yomama://')) {
+            const parsed = new InSetuURI(s);
+            return hasTrailingSlash ? `${parsed.toString()}/` : parsed.toString();
+        }
+        while (s.includes('://')) {
+            s = s.split('://').pop();
+        }
+        const clean = s.replace(/^\/+|\/+$/g, '');
+        if (!clean) return `${defaultScheme}://`;
+        if (clean.includes('diffs/') || clean.endsWith('_diffs.txt')) {
+            return `ctx://diffs/${clean.replace(/^diffs\//, '')}`;
+        }
+        if (clean.includes('workflows/') || clean.endsWith('_workflow_context.txt') || (clean.startsWith('workflow_') && clean.endsWith('_context.txt'))) {
+            return `ctx://workflows/${clean.replace(/^workflows\//, '').replace(/^contexts\//, '')}`;
+        }
+        if (clean.includes('prompts/')) {
+            return `ctx://prompts/${clean.replace(/^prompts\//, '')}`;
+        }
+        if (clean.endsWith('_context.txt') || clean.startsWith('contexts/')) {
+            return `ctx://contexts/${clean.replace(/^contexts\//, '')}`;
+        }
+        return `${defaultScheme}://${clean}${hasTrailingSlash ? '/' : ''}`;
+    }
+
+    toString() {
+        if (!this.canonical) return '';
+        return this.canonical;
+    }
+}
 
 window.inSetu = window.inSetu || {};
 window.inSetu.utils = window.inSetu.utils || {};
 window.inSetu.utils.BucketAddress = BucketAddress;
+window.inSetu.utils.InSetuURI = InSetuURI;
+window.inSetu.utils.canonicalizeURI = (raw, defaultScheme = 'vfs') => InSetuURI.canonicalize(raw, defaultScheme);
 
 export class InSetuElement extends SutramElement {
     static properties = {
@@ -126,34 +229,7 @@ export class InSetuElement extends SutramElement {
         /** @type {import('./types.js').WorkspaceConfig} */
         this.ecosystem = { activeWorkspace: this.workspaceId, allRepos: [], pinnedRepos: new Set(['ALL']), targetConfigs: [] };
     }
-    bindStore(store, stateMapper, options = {}) {
-        const { autoFetch = 'fetchData', equalityFn } = options;
 
-        this.subscribe(store, stateMapper, (mappedSlice) => {
-            Object.assign(this, mappedSlice);
-            this.requestUpdate();
-        }, equalityFn);
-
-        if (autoFetch) {
-            const triggerFetch = (workspaceId) => {
-                if (!this.isExtensionActive()) return;
-
-                if (typeof autoFetch === 'function') {
-                    autoFetch(workspaceId);
-                } else if (typeof autoFetch === 'string') {
-                    const state = typeof store?.getState === 'function' ? store.getState() : store;
-                    if (state && typeof state[autoFetch] === 'function') {
-                        state[autoFetch](workspaceId);
-                    }
-                }
-            };
-
-            this._autoFetchFns = this._autoFetchFns || [];
-            this._autoFetchFns.push(triggerFetch);
-
-            triggerFetch(this.workspaceId);
-        }
-    }
 
     filterItems(items, options = {}) {
         if (!Array.isArray(items) || items.length === 0) return [];
@@ -248,6 +324,7 @@ export class InSetuElement extends SutramElement {
             pollJob: window.inSetu.utils.pollJob,
             slugify: window.inSetu.utils.slugify,
             copyToClipboard: window.inSetu.utils.copyToClipboard,
+            copyRichHtml: window.inSetu.utils.copyRichHtml,
             copyRawText: window.inSetu.utils.copyRawText,
             formatDate: window.inSetu.utils.formatDate,
             timeAgo: window.inSetu.utils.timeAgo,
@@ -255,6 +332,8 @@ export class InSetuElement extends SutramElement {
             debounce: window.ExtensionRegistry.utils.debounce,
             coalescedAsync: window.inSetu.utils.coalescedAsync,
             nativeShareFiles: window.inSetu.utils.nativeShareFiles,
+            HostPath: window.inSetu.utils.HostPath,
+            InSetuURI: window.inSetu.utils.InSetuURI,
             parseURI: window.inSetu.utils.parseURI,
             formatArtifactSize: window.inSetu.utils.formatArtifactSize,
             extractManifestFiles: window.inSetu.utils.extractManifestFiles,
@@ -262,6 +341,7 @@ export class InSetuElement extends SutramElement {
             serializeFrontmatter: window.inSetu.utils.serializeFrontmatter,
             cleanCodeArtifacts: window.inSetu.utils.cleanCodeArtifacts,
             shallowEqual: window.inSetu.utils.shallowEqual,
+            threeWayMergeText: window.inSetu.utils.threeWayMergeText,
             getActiveWorkspace: window.inSetu.utils.getActiveWorkspace
         };
     }
@@ -362,36 +442,55 @@ export class InSetuElement extends SutramElement {
         }
         return null;
     }
+    _runWorkspaceHydration(ws) {
+        if (typeof this.clearManagedTimeouts === 'function') {
+            this.clearManagedTimeouts();
+        }
+        this._autoFetchTriggeredInCycle = false;
+        if (typeof this.onWorkspaceLoad === 'function') {
+            this.onWorkspaceLoad(ws);
+        }
+        if (!this._autoFetchTriggeredInCycle && Array.isArray(this._autoFetchFns)) {
+            this._autoFetchFns.forEach(fn => fn(ws));
+        }
+    }
+
+    _runForceRefresh() {
+        this._autoFetchTriggeredInCycle = false;
+        if (typeof this.onForceRefresh === 'function') {
+            this.onForceRefresh();
+        }
+        if (!this._autoFetchTriggeredInCycle && Array.isArray(this._autoFetchFns)) {
+            this._autoFetchFns.forEach(fn => fn(this.workspaceId));
+        }
+    }
+
     connectedCallback() {
         super.connectedCallback();
-        // Wire up the new unified onForceRefresh lifecycle method
+        // Wire up the unified onForceRefresh lifecycle method
         this.registerGlobalListener('insetu:force-refresh', window, (e) => {
-            if (typeof this.onForceRefresh === 'function') {
-                const { parentId, subId } = e.detail || {};
-                const mySubId = this.dataset.subId || this.extName;
+            const { parentId, subId } = e.detail || {};
+            const mySubId = this.dataset.subId || this.extName;
 
-                let myParentId = this.dataset.parentId;
-                if (!myParentId && window.ExtensionRegistry) {
-                    const slots = window.ExtensionRegistry.getLayoutSlots();
-                    const mySlot = slots.find(s => s.component === this.tagName.toLowerCase());
-                    if (mySlot) myParentId = mySlot.targetParent;
-                }
+            let myParentId = this.dataset.parentId;
+            if (!myParentId && window.ExtensionRegistry) {
+                const slots = window.ExtensionRegistry.getLayoutSlots();
+                const mySlot = slots.find(s => s.component === this.tagName.toLowerCase());
+                if (mySlot) myParentId = mySlot.targetParent;
+            }
 
-                const matchesSub = subId && subId === mySubId;
-                const matchesParent = parentId && (parentId === this.extName || parentId === myParentId);
+            const matchesSub = subId && subId === mySubId;
+            const matchesParent = parentId && (parentId === this.extName || parentId === myParentId);
 
-                if (matchesSub || (!subId && matchesParent) || (parentId && !subId && matchesParent)) {
-                    this.onForceRefresh();
-                }
+            if (matchesSub || (!subId && matchesParent) || (parentId && !subId && matchesParent)) {
+                this._runForceRefresh();
             }
         });
         // Wire up workspace soft-refresh lifecycle method
         this.registerGlobalListener('insetu:soft-refresh', window, (e) => {
             const ws = e.detail || window.inSetu?.utils?.getActiveWorkspace() || 'default';
             this.workspaceId = ws;
-            if (typeof this.onWorkspaceLoad === 'function') {
-                this.onWorkspaceLoad(ws);
-            }
+            this._runWorkspaceHydration(ws);
             this.requestUpdate();
         });
         const appStore = window.inSetu?.stores?.App;
@@ -399,17 +498,23 @@ export class InSetuElement extends SutramElement {
             this.subscribe(appStore, state => state.activeWorkspace, (ws) => {
                 if (this.workspaceId !== ws) {
                     this.workspaceId = ws;
-                    this.onWorkspaceLoad(ws);
+                    if (!appStore.getState().isSwappingWorkspace) {
+                        this._runWorkspaceHydration(ws);
+                    }
                 }
             });
-
             // Guarantee components natively hydrate their workspace context on initial mount 
             // even if they were instantiated after the global swap event fired.
             const currentWs = appStore.getState().activeWorkspace;
             if (!this._hasHydratedWorkspaceSwap) {
                 this._hasHydratedWorkspaceSwap = true;
                 this.workspaceId = currentWs;
-                setTimeout(() => this.onWorkspaceLoad(currentWs), 0);
+                const mountEpoch = this._scopeEpoch;
+                this.registerTimeout(() => {
+                    if (this._scopeEpoch === mountEpoch && !appStore.getState().isSwappingWorkspace) {
+                        this._runWorkspaceHydration(currentWs);
+                    }
+                }, 0);
             }
         }
         // Auto-hydrate the ecosystem topology for all extensions natively using structural slice equality
@@ -435,22 +540,24 @@ export class InSetuElement extends SutramElement {
         }
     }
     onWorkspaceLoad(workspaceId) {
+        this._autoFetchTriggeredInCycle = true;
         if (Array.isArray(this._autoFetchFns)) {
             this._autoFetchFns.forEach(fn => fn(workspaceId));
         }
     }
     onForceRefresh() {
+        this._autoFetchTriggeredInCycle = true;
         if (Array.isArray(this._autoFetchFns)) {
-            this._autoFetchFns.forEach(fn => fn());
+            this._autoFetchFns.forEach(fn => fn(this.workspaceId));
         }
     }
 }
 window.inSetu = window.inSetu || {};
 // Pre-seed foundational OS chassis modules to protect against offline cache misses or backend latency
-const _baseCore = ['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'cartographer', 'offline', 'topology', 'llm', 'agent', 'prompts'];
+const _baseCore = ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline', 'llm', 'agent', 'prompts'];
 window.inSetu.CORE_MODULES = window.inSetu.CORE_MODULES && window.inSetu.CORE_MODULES.size > 0 
     ? window.inSetu.CORE_MODULES 
-    : new Set(_baseCore);
+    : new Set(window.CORE_MODULES || _baseCore);
 window.inSetu.isCore = (extName) => window.inSetu.CORE_MODULES.has(extName);
 
 // Safely export the dynamic namespace
@@ -466,7 +573,6 @@ export const CORE_UI_SCRIPTS = [
     '/static/extensions/agent/agent.js',
     '/static/extensions/prompts/prompts.js'
 ];
-
 window.inSetu.stores = window.inSetu.stores || {};
 window.inSetu.extensions = window.inSetu.extensions || {};
 window.inSetu.ui = window.inSetu.ui || {};
@@ -474,12 +580,33 @@ window.inSetu.vfs = window.inSetu.vfs || {};
 window.inSetu.sys = window.inSetu.sys || {};
 window.inSetu.editor = window.inSetu.editor || {};
 window.inSetu.utils = window.inSetu.utils || {};
+const TENANT_SCOPED_HOOKS = new Set([
+    'insetu:vfs-mutated',
+    'insetu:compile-step-complete',
+    'insetu:compile-progress'
+]);
+
 // Abstracted Event Bus & Fail-Safe Hook Emitter
 window.inSetu.events = window.inSetu.events || {
+    shouldDropTenantEvent: function(targetWorkspaceId = null) {
+        const appState = window.inSetu?.stores?.App?.getState?.();
+        if (appState?.isSwappingWorkspace) return true;
+        if (targetWorkspaceId) {
+            const activeWs = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';
+            if (targetWorkspaceId !== activeWs) return true;
+        }
+        return false;
+    },
     emit: function(eventName, detail = null) {
+        if (TENANT_SCOPED_HOOKS.has(eventName) && this.shouldDropTenantEvent(detail?.workspace_id)) {
+            return;
+        }
         window.dispatchEvent(new CustomEvent(eventName, { detail, bubbles: true, composed: true }));
     },
     emitHook: function(zoneName, payload = null) {
+        if (TENANT_SCOPED_HOOKS.has(zoneName) && this.shouldDropTenantEvent(payload?.workspace_id)) {
+            return null;
+        }
         if (zoneName === 'insetu:force-refresh') {
             window.dispatchEvent(new CustomEvent('insetu:force-refresh', { detail: payload, bubbles: true, composed: true }));
         }
@@ -490,11 +617,23 @@ window.inSetu.events = window.inSetu.events || {
         if (event.inSetuResponses.length > 0) return event.inSetuResponses[0];
 
         return null;
+    },
+    emitHookAll: function(zoneName, payload = null) {
+        if (TENANT_SCOPED_HOOKS.has(zoneName) && this.shouldDropTenantEvent(payload?.workspace_id)) {
+            return [];
+        }
+        const event = new CustomEvent(zoneName, { detail: payload, bubbles: true, composed: true });
+        event.inSetuResponses = [];
+        window.dispatchEvent(event);
+        return event.inSetuResponses || [];
     }
 };
-// Forward the central registry
+// Forward the central registry and bind the host tenant scope provider
 window.inSetu.extensions.Registry = SutramRegistry;
 window.ExtensionRegistry = SutramRegistry;
+if (window.Sutram?.storeRegistry?.setScopeProvider) {
+    window.Sutram.storeRegistry.setScopeProvider(() => window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default');
+}
 window.ExtensionRegistry.executeJobAction = (route, payloadGenerator, pollOptions = {}) => {
     return async (e) => {
         const payload = typeof payloadGenerator === 'function' ? await payloadGenerator(e) : (payloadGenerator || {});
@@ -607,37 +746,6 @@ window.ExtensionRegistry.utils = {
     }
 };
 
-const _originalRegister = window.ExtensionRegistry.registerExtension.bind(window.ExtensionRegistry);
-window.ExtensionRegistry.registerExtension = function(extName, config) {
-    if (config.entityActions) {
-        config.entityActions.forEach(act => {
-            if (act.emitEvent && !act.onClick && !act.asyncAction) {
-                act.onClick = (data, e) => {
-                    if (e) e.stopPropagation();
-                    const payload = act.emitEvent(data);
-                    if (window.inSetu?.events?.emit) {
-                        window.inSetu.events.emit(payload.name, payload.detail);
-                    }
-                };
-            }
-        });
-    }
-    _originalRegister(extName, config);
-
-    if (config.shortcuts) {
-        config.shortcuts.forEach(s => {
-            s.id = s.id || `${extName}:${slugify(s.label || 'shortcut')}`;
-            window.ExtensionRegistry.registerShortcut(s.context, s.key, s.action, { id: s.id, extName, label: s.label });
-        });
-    }
-    if (config.settingsActions) {
-        config.settingsActions.forEach(act => {
-            let sectionName = config.settingsCategory || 'Extensions';
-            if (config.name === 'Workspace Configuration' || act.id === 'config_editor' || act.id === 'workspaces_editor') sectionName = 'Workspace';
-            this.registerSettingsAction(act.id, act.label, act.icon, act.onClick, sectionName);
-        });
-    }
-};
 // Attach util wrappers mapping to the Sutram imports
 window.inSetu.utils.getEventPath = getEventPath;
 window.inSetu.utils.getEventTarget = getEventTarget;
@@ -650,6 +758,8 @@ window.inSetu.utils.coalescedAsync = coalescedAsync;
 window.inSetu.utils.nativeShareFiles = nativeShareFiles;
 window.inSetu.utils.cleanCodeArtifacts = cleanCodeArtifacts;
 window.inSetu.utils.shallowEqual = shallowEqual;
+window.inSetu.utils.threeWayMergeText = threeWayMergeText;
+window.inSetu.utils.HostPath = HostPath;
 window.inSetu.utils.truncateFilename = truncateFilename;
 window.inSetu.utils.formatArtifactSize = function(meta) {
     if (!meta) return "";
@@ -663,47 +773,12 @@ window.inSetu.utils.formatArtifactSize = function(meta) {
     }
     return "";
 };
-
-/**
-* Creates a deep, detached clone of an object or array to safely break memory references.
-* Relies natively on the browser's high-performance structuredClone API, falling back to JSON.
-*/
-window.inSetu.utils.clone = (obj) => {
-    if (obj === undefined || obj === null) return obj;
-    try {
-        return typeof structuredClone === 'function' ? structuredClone(obj) : JSON.parse(JSON.stringify(obj));
-    } catch (e) {
-        console.warn("[SDK] structuredClone failed (likely due to functions or DOM nodes in object). Falling back to JSON parse.", e);
-        return JSON.parse(JSON.stringify(obj));
-    }
-};
-
-/**
-* Tenant-Scoped Storage Abstraction (SSOT)
-* Guarantees storage keys are automatically isolated by active workspace.
-*/
-window.inSetu.utils.getScopedStorage = (key, defaultVal = null, workspaceId = null) => {
-    const ws = workspaceId || window.inSetu.utils.getActiveWorkspace() || 'default';
-    const val = localStorage.getItem(`insetu_${ws}_${key}`);
-    if (val === null) {
-        // Failsafe fallback for legacy un-scoped keys
-        const legacyVal = localStorage.getItem(`insetu_${key}`);
-        return legacyVal !== null ? legacyVal : defaultVal;
-    }
-    return val;
-};
-
-window.inSetu.utils.setScopedStorage = (key, value, workspaceId = null) => {
-    const ws = workspaceId || window.inSetu.utils.getActiveWorkspace() || 'default';
-    localStorage.setItem(`insetu_${ws}_${key}`, typeof value === 'string' ? value : JSON.stringify(value));
-};
-
-window.inSetu.utils.removeScopedStorage = (key, workspaceId = null) => {
-    const ws = workspaceId || window.inSetu.utils.getActiveWorkspace() || 'default';
-    localStorage.removeItem(`insetu_${ws}_${key}`);
-};
-
+window.inSetu.utils.clone = clone;
+window.inSetu.utils.getScopedStorage = (key, defaultVal = null, workspaceId = null) => StoreRegistry.getScopedStorage(key, defaultVal, workspaceId, 'insetu');
+window.inSetu.utils.setScopedStorage = (key, value, workspaceId = null) => StoreRegistry.setScopedStorage(key, value, workspaceId, 'insetu');
+window.inSetu.utils.removeScopedStorage = (key, workspaceId = null) => StoreRegistry.removeScopedStorage(key, workspaceId, 'insetu');
 // Preserve clipboard API bindings
+window.inSetu.utils.copyRichHtml = copyRichHtml;
 window.inSetu.utils.copyToClipboard = async function(text) {
     try {
         await navigator.clipboard.writeText(text);
@@ -724,43 +799,7 @@ window.inSetu.utils.copyRawText = async function(text, successMsg = "✅ Copied!
     }
 };
 window.inSetu.utils.parseURI = function(pathStr) {
-    if (!pathStr) {
-        return {
-            scheme: '', volume: '', repo: '', relativePath: '', filename: '',
-            isCompiledArtifact: false, isTemplate: false, isUserTemplate: false,
-            isReadOnly: true, isEditable: false, isSource: false, raw: ''
-        };
-    }
-
-    let str = String(pathStr).replace(/\\/g, '/').trim();
-    let scheme = '';
-
-    const schemeMatch = str.match(/^([a-zA-Z0-9_-]+):\/\/(.*)$/);
-    if (schemeMatch) {
-        scheme = schemeMatch[1];
-        str = schemeMatch[2];
-    }
-    str = str.replace(/^\/+/, '');
-    const parts = str.split('/').filter(Boolean);
-    const volume = parts.length > 0 ? parts[0] : '';
-    const repo = parts.length > 1 ? parts[0] : (scheme === 'vfs' ? volume : '');
-    const relativePath = parts.length > 1 ? parts.slice(1).join('/') : (scheme === 'vfs' ? '' : str);
-    const filename = parts[parts.length - 1] || '';
-
-    const isCompiledArtifact = scheme === 'ctx' && ['contexts', 'diffs', 'workflows'].includes(volume);
-    const isUserTemplate = pathStr.includes('/.templates/user/');
-    const isReadOnlyTemplate = !isUserTemplate && pathStr.includes('/.templates/');
-    const isTemplate = isUserTemplate || isReadOnlyTemplate;
-    const isSharedMount = scheme === 'ws';
-    const isReadOnly = isSharedMount || isCompiledArtifact || isReadOnlyTemplate;
-    const isEditable = !isReadOnly && (scheme === 'vfs' || (scheme === 'ctx' && ['prompts', 'notes', 'skills'].includes(volume)) || scheme === 'virtual' || scheme === 'yomama');
-    const isSource = !isCompiledArtifact;
-
-    return {
-        scheme, volume, repo, relativePath, filename,
-        isCompiledArtifact, isTemplate, isUserTemplate, isReadOnlyTemplate,
-        isSharedMount, isReadOnly, isEditable, isSource, raw: pathStr
-    };
+    return new InSetuURI(pathStr);
 };
 
 window.inSetu.utils.parseFrontmatter = function(text) {
@@ -854,6 +893,35 @@ window.ExtensionRegistry.registerExtension('system', {
     name: "System Core Actions",
     version: "1.0.0",
     uiHooks: {
+        'sutram:is-swapping-scope': () => {
+            return Boolean(
+                window.Sutram?.storeRegistry?.isTransitioning?.() ||
+                window.inSetu?.stores?.App?.getState()?.isSwappingWorkspace
+            );
+        },
+        'sutram:resolve-preferred-column': (targetParent) => {
+            if (!targetParent) return 'center';
+            const t = String(targetParent).toLowerCase();
+            if (t === 'context' || t === 'library') return 'left';
+            if (t === 'edit' || t === 'ctrl') return 'center';
+            return 'right';
+        },
+        'sutram:resolve-primary-tab-meta': ({ id }) => {
+            const tabMap = {
+                'context': { color: 'var(--intent-primary)', icon: 'folder-code' },
+                'edit': { color: 'var(--intent-highlight)', icon: 'edit-3' },
+                'diagnostics': { color: 'var(--intent-warning)', icon: 'activity' },
+                'tasks': { color: 'var(--intent-warning)', icon: 'check-square' },
+                'ctrl': { color: 'var(--intent-danger)', icon: 'terminal' },
+                'dev': { color: 'var(--intent-success)', icon: 'code' },
+                'offline': { color: 'var(--text-muted)', icon: 'wifi-off' },
+                'library': { color: 'var(--intent-highlight)', icon: 'book-open' },
+                'cronic': { color: 'var(--intent-warning)', icon: 'clock' },
+                'skills': { color: 'var(--intent-success)', icon: 'award' },
+                'practice': { color: 'var(--intent-success)', icon: 'target' }
+            };
+            return tabMap[id] || null;
+        },
         'sutram:resolve-route-hash': ({ colId, subId }) => {
             const activeWs = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';
             const deepPath = window.inSetu?.stores?.App?.getState()?.tabBrowsePaths?.[subId];

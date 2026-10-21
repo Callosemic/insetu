@@ -2,19 +2,24 @@ import os
 import json
 import uuid
 import time
-import hashlib
 import datetime
 import traceback
 from pathlib import Path
-from typing import TypedDict, Optional, List, Dict, Any
+from typing import TypedDict, Optional, List, Dict, Any, Tuple
 import werkzeug.utils
 from flask import request, jsonify, send_file
-from insetu.core.sdk import InSetuExtension
-from akasa.db import get_connection
-from akasa.hooks import hooks
-from akasa.utils import sniff_tenant_id
-from akasa.vfs import execute_vfs_move, execute_vfs_delete, execute_vfs_save, execute_vfs_bulk, _cache_evict
-from insetu.core.utils_core import InSetuURI, get_repo_path, execute_binary
+from insetu.core.sdk import InSetuExtension, hooks
+from insetu.core.utils_core import (
+    InSetuURI,
+    get_repo_path,
+    execute_binary,
+    sniff_tenant_id,
+    compute_vfs_sha256 as _compute_sha256,
+    record_vfs_ancestor as _record_ancestor,
+    lookup_vfs_ancestor as _lookup_ancestor,
+    three_way_merge_text as _three_way_merge_text,
+    has_pending_vfs_write,
+)
 fs_bp = InSetuExtension(
     'fs', 
     __name__, 
@@ -23,6 +28,8 @@ fs_bp = InSetuExtension(
     core=True
 )
 __depends__ = []
+
+
 def _is_readonly_template_path(filepath: str) -> bool:
     if not filepath:
         return False
@@ -63,11 +70,18 @@ def api_fs_fetch(ctx):
         res = send_file(resolved_path, as_attachment=True, download_name=dl_name, mimetype='application/octet-stream')
         res.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
         return res
-
     content = uri.read(workspace_id)
     if content is not None:
+        ctx.vfs.record_ancestor(str(uri), content)
         return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
-    return "File not found.", 404
+    resolved = uri.resolve(workspace_id)
+    return jsonify({
+        "error": "File not found.",
+        "uri": str(uri),
+        "resolved_path": resolved,
+        "exists_on_disk": bool(resolved and os.path.exists(resolved)),
+        "pending_write": has_pending_vfs_write(resolved) if resolved else False
+    }), 404
 
 class FileGitDiffResponse(TypedDict):
     filepath: str
@@ -120,8 +134,19 @@ def api_fs_git_diff(ctx):
 def download_file(filename):
     """Universal download gateway for contexts, artifacts, and vault files."""
     workspace_id = sniff_tenant_id()
-    uri = InSetuURI.from_external_input(filename)
-    resolved_path = uri.resolve_if_exists(workspace_id)
+    resolved_path = None
+    if "://" not in filename and "/" not in filename.replace("\\", "/"):
+        hook_res = hooks.emit_first(
+            'vfs_resolve_file',
+            filename=filename,
+            workspace_id=workspace_id,
+            predicate=lambda r: bool(r and os.path.exists(r[0] if isinstance(r, tuple) else r))
+        )
+        if hook_res:
+            resolved_path = hook_res[0] if isinstance(hook_res, tuple) else hook_res
+    if not resolved_path:
+        uri = InSetuURI.from_external_input(filename)
+        resolved_path = uri.resolve_if_exists(workspace_id)
     if not resolved_path:
         return jsonify({"error": "File object not found"}), 404
 
@@ -136,10 +161,7 @@ def download_file(filename):
 @fs_bp.worker("search_task")
 def _background_fs_search(ctx, query="", **kwargs):
     ctx.jobs.update_progress("Searching workspace files...")
-    results = []
-    search_responses = ctx.emit('vfs_search', query=query)
-    for res in search_responses:
-        if res: results.extend(res)
+    results = ctx.emit_merge_list('vfs_search', query=query)
     results.sort(key=lambda x: x["score"], reverse=True)
     results = results[:50]
     return {"message": "Search complete.", "artifact": {"results": results}}
@@ -174,7 +196,12 @@ def api_fs_move(ctx):
                 return jsonify({"error": "403 Forbidden: Built-in module templates are read-only. Fork the template to your workspace prompts to edit it."}), 403
         src_uri = str(InSetuURI(filepath))
         dst_uri = str(InSetuURI(dest_path))
-        res, code = execute_vfs_move(workspace_id, src_uri, dst_uri)
+        res, code = ctx.vfs.move(src_uri, dst_uri)
+        if isinstance(res, dict) and code < 400:
+            res.setdefault("mutations", [
+                {"filepath": src_uri, "operation": "delete", "relocated_to": dst_uri},
+                {"filepath": dst_uri, "operation": "save", "relocated_from": src_uri},
+            ])
         return jsonify(res), code
     except Exception as e:
         try:
@@ -204,11 +231,16 @@ def api_fs_archive(ctx):
             new_path = f"{parent_path}/archived/{uri.basename}"
         scheme = uri.scheme or "vfs"
         rel_dest = f"{scheme}://{uri.repo}/{new_path}" if uri.repo else f"{scheme}://{new_path}"
-
-        res, code = execute_vfs_move(workspace_id, str(uri), rel_dest)
+        src_uri = str(uri)
+        res, code = ctx.vfs.move(src_uri, rel_dest)
         # Retain payload signature compatibility for the frontend
         res["new_path"] = rel_dest
         res["message"] = "File archive queued."
+        if code < 400:
+            res.setdefault("mutations", [
+                {"filepath": src_uri, "operation": "delete", "relocated_to": rel_dest},
+                {"filepath": rel_dest, "operation": "save", "relocated_from": src_uri},
+            ])
         return jsonify(res), code
     except Exception as e:
         try:
@@ -226,7 +258,9 @@ def api_fs_delete(ctx):
         if _is_readonly_template_path(filepath):
                 return jsonify({"error": "403 Forbidden: Built-in module templates are read-only."}), 403
         target_uri = str(InSetuURI(filepath))
-        res, code = execute_vfs_delete(workspace_id, target_uri)
+        res, code = ctx.vfs.delete(target_uri)
+        if isinstance(res, dict) and code < 400:
+            res.setdefault("mutations", [{"filepath": target_uri, "operation": "delete"}])
         return jsonify(res), code
     except Exception as e:
         try:
@@ -296,8 +330,25 @@ def api_fs_bulk(ctx):
 
         if not normalized_ops:
             return jsonify({"error": "No valid bulk operations provided"}), 400
-
-        res, code = execute_vfs_bulk(workspace_id, normalized_ops)
+        res, code = ctx.vfs.bulk(normalized_ops)
+        if isinstance(res, dict) and code < 400:
+            receipt_mutations = []
+            for op in normalized_ops:
+                suffix = "/" if op.get("is_dir") else ""
+                if op["action"] == "delete":
+                    receipt_mutations.append({"filepath": op["filepath"] + suffix, "operation": "delete"})
+                elif op["action"] == "move" and op.get("dest_path"):
+                    receipt_mutations.append({
+                        "filepath": op["filepath"] + suffix,
+                        "operation": "delete",
+                        "relocated_to": op["dest_path"]
+                    })
+                    receipt_mutations.append({
+                        "filepath": op["dest_path"] + suffix,
+                        "operation": "save",
+                        "relocated_from": op["filepath"]
+                    })
+            res.setdefault("mutations", receipt_mutations)
         return jsonify(res), code
     except Exception as e:
         try:
@@ -323,7 +374,7 @@ def api_fs_upload(ctx):
     files = ctx.req.files.getlist('file')
     dest_dir = ctx.req.form.get('dest_dir', '').strip()
 
-    db_conn = get_connection("workers", workspace_id=workspace_id)
+    db_conn = ctx.get_db("workers")
     uploaded_paths = []
     mutations = []
     for file in files:
@@ -341,7 +392,7 @@ def api_fs_upload(ctx):
             is_new = not os.path.exists(resolved_path)
             os.makedirs(Path(resolved_path).parent, exist_ok=True)
 
-            _cache_evict(resolved_path)
+            ctx.vfs.evict_cache(resolved_path)
             file.save(resolved_path)
             uploaded_paths.append(filepath)
             mutations.append({"filepath": filepath, "operation": "save", "ignore_ledger": False})
@@ -353,18 +404,22 @@ def api_fs_upload(ctx):
 
     hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=mutations)
     db_conn.commit()
-
     if not uploaded_paths:
             return jsonify({"error": "No valid files uploaded"}), 400
-    return jsonify({"status": "success", "message": f"{len(uploaded_paths)} file(s) uploaded successfully.", "filepaths": uploaded_paths})
-
-class FileSavePayload(TypedDict):
+    return jsonify({
+        "status": "success",
+        "message": f"{len(uploaded_paths)} file(s) uploaded successfully.",
+        "filepaths": uploaded_paths,
+        "mutations": mutations
+    })
+class FileSavePayload(TypedDict, total=False):
     filepath: str
     content: str
     base_hash: Optional[str]
-@fs_bp.route('save', methods=['POST'], request_schema=FileSavePayload, docstring="[sync] Saves text content securely to the VFS. Creates directories if they don't exist.")
+    base_content: Optional[str]
+@fs_bp.route('save', methods=['POST'], request_schema=FileSavePayload, docstring="[sync] Saves text content securely to the VFS. Performs a deterministic 3-way merge when base_hash diverges before falling back to conflict file creation.")
 def api_fs_save(ctx):
-    """Universal save-back endpoint with explicit path routing guardrails."""
+    """Universal save-back endpoint with 3-way OCC merge and explicit path routing guardrails."""
     workspace_id = ctx.workspace_id
     try:
         data = ctx.req.get_json(silent=True)
@@ -383,22 +438,45 @@ def api_fs_save(ctx):
                 return jsonify({"error": "403 Forbidden: Built-in module templates are read-only. Fork the template to your workspace prompts to edit it."}), 403
         filepath = str(InSetuURI(filepath))
         base_hash = data.get("base_hash")
-        if base_hash:
-            current_disk_content = ctx.vfs.read(filepath)
-            if current_disk_content is not None:
-                current_hash = hashlib.sha256(current_disk_content.encode('utf-8')).hexdigest()
-                if current_hash != base_hash and current_disk_content != content:
-                    # Preserve logical URI boundaries using pure string math to avoid Pathlib stripping '://'
-                    parts = filepath.split('/')
-                    filename = parts[-1]
+        base_content_fallback = data.get("base_content")
+        data.pop("base_content", None)
+
+        was_merged = False
+        current_disk_content = ctx.vfs.read(filepath)
+        if current_disk_content is not None:
+            current_hash = ctx.vfs.compute_sha256(current_disk_content)
+            ctx.vfs.record_ancestor(filepath, current_disk_content, current_hash)
+            if base_hash and current_hash != base_hash and current_disk_content != content:
+                ancestor_text = ctx.vfs.lookup_ancestor(filepath, base_hash, base_content_fallback)
+                merged_ok = False
+                if ancestor_text is not None:
+                    merged_ok, merged_text = ctx.vfs.three_way_merge(ancestor_text, current_disk_content, content)
+                    if merged_ok:
+                        content = merged_text
+                        was_merged = (merged_text != data.get("content", ""))
+
+                if not merged_ok:
+                    uri_obj = InSetuURI(filepath)
+                    filename = uri_obj.basename
                     conflict_name = f"{Path(filename).stem}.conflict_{int(time.time())}{Path(filename).suffix}"
-
-                    parts[-1] = conflict_name
-                    conflict_path = "/".join(parts)
-
-                    execute_vfs_save(workspace_id, conflict_path, content, data={})
-                    return jsonify({"error": f"OCC Conflict: File was modified externally. Offline changes saved to {conflict_name}"}), 409
-        result = execute_vfs_save(workspace_id, filepath, content, data)
+                    parent_prefix = filepath.rpartition('/')[0]
+                    conflict_path = f"{parent_prefix}/{conflict_name}" if parent_prefix else f"vfs://{conflict_name}"
+                    ctx.vfs.save(conflict_path, content, data={})
+                    reason = (
+                        f"OCC Conflict: Overlapping edits on the same line could not be auto-merged. Changes saved to {conflict_name}"
+                        if ancestor_text is not None
+                        else f"OCC Conflict: File was modified externally. Offline changes saved to {conflict_name}"
+                    )
+                    return jsonify({"error": reason}), 409
+        result = ctx.vfs.save(filepath, content, data)
+        saved_hash = ctx.vfs.record_ancestor(filepath, content)
+        if isinstance(result, dict):
+            result["base_hash"] = saved_hash
+            result.setdefault("mutations", [{"filepath": filepath, "operation": "save", "base_hash": saved_hash}])
+            if was_merged:
+                result["status"] = "merged"
+                result["merged_content"] = content
+                result["message"] = "Merged concurrent edits cleanly."
         return jsonify(result)
     except Exception as e:
         try:

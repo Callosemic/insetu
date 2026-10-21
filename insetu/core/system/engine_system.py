@@ -14,13 +14,31 @@ import time
 import traceback
 from typing import TypedDict, Optional, List, Dict, Any
 from flask import request, jsonify
-from akasa.utils import load_config, save_json_config, load_json_config, get_workspace_physics, sniff_tenant_id, reclaim_process_memory, _JSON_CACHE
-import akasa.utils as utils
-from akasa.hooks import hooks
-from akasa.sync import get_system_deltas
-from akasa.vfs import execute_vfs_delete, set_mount_authorizer, _VFS_READ_CACHE, _VFS_READ_CACHE_BYTES, _VFS_WRITE_QUEUE
-from akasa.extension import SettingsManager
-from insetu.core.sdk import InSetuExtension
+from insetu.core.sdk import (
+    InSetuExtension,
+    SettingsManager,
+    get_registered_settings_schemas,
+    hooks,
+    set_mount_authorizer,
+    get_system_deltas,
+    provision_workspace_schemas,
+)
+from insetu.core.utils_core import (
+    load_config,
+    save_json_config,
+    load_json_config,
+    get_workspace_physics,
+    get_daemon_cwd,
+    get_system_index_path,
+    get_core_modules,
+    sniff_tenant_id,
+    reclaim_process_memory,
+    get_kernel_memory_telemetry,
+    typeddict_to_openapi,
+    execute_vfs_delete,
+    normalize_repo_domains,
+    heal_manifest_entry_domain,
+)
 import insetu.core.system.legacy  # Mount one-off migration hooks
 
 
@@ -125,11 +143,11 @@ system_bp = InSetuExtension(
     core=True,
     settings_schema=SYSTEM_SETTINGS_SCHEMA
 )
-@hooks.on('system_settings_updated')
+@system_bp.on('system_settings_updated')
 def core_system_settings_updated(workspace_id=None, **kwargs):
     # Core OS settings (ports, titles, watchdogs) mandate an environment refresh
     return {"requires_refresh": True}
-@hooks.on('mutate_workspace_config', priority=1)
+@system_bp.on('mutate_workspace_config', priority=1)
 def hydrate_and_migrate_cascade_settings(cfg, workspace_id=None, **kwargs):
     """
     Transparent 3-Tier Cascade Bridge:
@@ -174,12 +192,21 @@ def hydrate_and_migrate_cascade_settings(cfg, workspace_id=None, **kwargs):
     resolved_exts = list(raw_exts)
     if "config" not in resolved_exts:
         resolved_exts.insert(0, "config")
-
     cfg["extensions"] = resolved_exts
     cfg["instance_title"] = sys_ws_block.get("instance_title") or settings.get("instance_title", "inSetu Workbench")
     cfg["instance_emoji"] = sys_ws_block.get("instance_emoji") or settings.get("instance_emoji", "⚙️")
     cfg["port"] = daemon_data.get("port") or sys_daemon_block.get("port") or settings.get("port", 5005)
-@hooks.on('execute_identity_handshake')
+    # Auto-heal blank domain strings ("") on target_repos and sub_buckets so they inherit parent repo domain
+    normalize_repo_domains(cfg.get("target_repos"))
+
+
+@system_bp.on('is_trusted_origin')
+def allow_tailscale_origin(hostname=None, **kwargs):
+    """Permits Tailscale Funnel/Serve origins (.ts.net) during localhost bootstrap handshakes."""
+    return bool(hostname and str(hostname).endswith('.ts.net'))
+
+
+@system_bp.on('execute_identity_handshake')
 def host_identity_handshake(request=None, client_ip=None, config=None, **kwargs):
     """Tier 2 Core OS: Evaluates daemon-level host identity protocols (e.g., Tailscale WHOIS)."""
     if not request or not client_ip or not config: return None
@@ -223,7 +250,7 @@ def host_identity_handshake(request=None, client_ip=None, config=None, **kwargs)
             return {"status": "authenticated", "method": "tailscale", "user": user_email}
 
     return None
-@hooks.on('request_vfs_ignore_dirs')
+@system_bp.on('request_vfs_ignore_dirs')
 def provide_vfs_ignores(workspace_id=None, **kwargs):
     """Host application declaration of directories the VFS should never traverse natively."""
     return ['.git', 'node_modules', '__pycache__', 'venv']
@@ -231,7 +258,6 @@ def provide_vfs_ignores(workspace_id=None, **kwargs):
 def api_system_openapi():
     """Phase 3 Tool Calling: Generates a real-time OpenAPI 3.0 specification from mounted SDK routes."""
     from flask import current_app as _current_app
-    from akasa.utils import typeddict_to_openapi as _typeddict_to_openapi
 
     paths = {}
     # 1. Manually inject the bootstrap route since it lives outside the standard extension SDK
@@ -348,7 +374,7 @@ def api_system_openapi():
                         "description": "Successful operation.",
                         "content": {
                             "application/json": {
-                                "schema": _typeddict_to_openapi(meta["response_schema"])
+                                "schema": typeddict_to_openapi(meta["response_schema"])
                             }
                         }
                     }
@@ -407,7 +433,7 @@ def api_system_openapi():
                     })
                 # Hydrate Request Schema if bound
                 if meta.get("request_schema"):
-                    schema_dict = _typeddict_to_openapi(meta["request_schema"])
+                    schema_dict = typeddict_to_openapi(meta["request_schema"])
                     if method_lower == "get":
                         for prop_name, prop_details in schema_dict.get("properties", {}).items():
                             parameters.append({
@@ -529,7 +555,7 @@ def api_system_pipeline_submit(ctx):
     except Exception as e:
         traceback.print_exc()
         return jsonify({"status": "error", "error": f"Pipeline Dispatch Error ({type(e).__name__}): {str(e)}"}), 500
-@hooks.on('pre_file_save')
+@system_bp.on('pre_file_save')
 def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=None, **kwargs):
     if data and data.get("is_new_repo") and data.get("repo_dir"):
         repo_dir = data.get("repo_dir")
@@ -556,7 +582,7 @@ def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=
 def get_system_config(workspace_id):
     data = load_config(workspace_id)
     script_dir = Path(__file__).resolve().parent.as_posix()
-    from akasa.utils import _CORE_MODULES as _CORE_MODULES
+    core_modules_set = get_core_modules()
     available_ids = set()
     available = []
     extensions_dir = Path(script_dir).parent.parent.joinpath("extensions").as_posix()
@@ -572,7 +598,7 @@ def get_system_config(workspace_id):
                     elif item.startswith("engine_") and item.endswith(".py"):
                             # Legacy flat topology
                             ext_name = item.replace("engine_", "").replace(".py", "")
-                    if ext_name and ext_name not in _CORE_MODULES and ext_name not in available_ids:
+                    if ext_name and ext_name not in core_modules_set and ext_name not in available_ids:
                             available_ids.add(ext_name)
                             title = ext_name.replace('_', ' ').title()
                             desc = ""
@@ -617,16 +643,8 @@ def get_system_config(workspace_id):
                                             if not shutil.which(binary):
                                                     missing_bins.append(binary)
                             available.append({"id": ext_name, "title": title, "description": desc, "missing_externals": missing_exts, "missing_binaries": missing_bins})
-            from akasa.extension import _REGISTERED_SETTINGS_SCHEMAS as _REGISTERED_SETTINGS_SCHEMAS
-
-            evaluated_schemas = {}
-            for ext_id, schema_spec in _REGISTERED_SETTINGS_SCHEMAS.items():
-                if callable(schema_spec):
-                    try: evaluated_schemas[ext_id] = schema_spec(workspace_id)
-                    except Exception: evaluated_schemas[ext_id] = []
-                else:
-                    evaluated_schemas[ext_id] = schema_spec
             from flask import current_app as _current_app
+            evaluated_schemas = get_registered_settings_schemas(workspace_id)
             mounted_extensions = [ext for ext in data.get("extensions", []) if ext == "config" or ext in _current_app.blueprints]
 
             return {
@@ -635,7 +653,7 @@ def get_system_config(workspace_id):
                     "mounted_extensions": mounted_extensions,
                     "available_extensions": sorted(available, key=lambda x: x.get('title') or ""),
                     "settings_schemas": evaluated_schemas,
-                    "core_modules": list(_CORE_MODULES)
+                    "core_modules": list(core_modules_set)
                 }
             }
 def save_system_config(workspace_id, payload):
@@ -674,6 +692,8 @@ def api_system_reboot(ctx):
         except Exception: pass
         time.sleep(0.5)
         os.environ["MALLOC_ARENA_MAX"] = "2"
+        os.environ.pop("WERKZEUG_RUN_MAIN", None)
+        os.environ.pop("WERKZEUG_SERVER_FD", None)
         python_exe = sys.executable
         os.execv(python_exe, [python_exe] + sys.argv)
 
@@ -755,15 +775,18 @@ def api_system_topology(ctx):
 class ManifestResponse(TypedDict):
     vfs: Dict[str, Any]
     ctx: Dict[str, Any]
-
 @system_bp.route('manifest', methods=['GET'], response_schema=ManifestResponse, docstring="Returns the twin single-source-of-truth manifests: 'vfs' (physical file bucket mapping) and 'ctx' (compiled context tree mapping).")
 def api_system_manifest(ctx):
     headers = {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
     }
-    ctx_manifest = next((m for m in hooks.emit('request_manifest', workspace_id=ctx.workspace_id) if m), {})
-    vfs_manifest = next((m for m in hooks.emit('request_vfs_manifest', workspace_id=ctx.workspace_id) if m), {})
+    ctx_manifest = ctx.emit_first('request_manifest', default={})
+    vfs_manifest = ctx.emit_first('request_vfs_manifest', default={})
+    # Heal any cached manifest entries whose meta.domain was stored as an empty string ("")
+    target_repos = load_config(ctx.workspace_id).get("target_repos") or []
+    for entry in (ctx_manifest or {}).values():
+        heal_manifest_entry_domain(entry, target_repos=target_repos)
 
     return jsonify({"vfs": vfs_manifest, "ctx": ctx_manifest}), 200, headers
 class WorkspaceCreatePayload(TypedDict):
@@ -776,7 +799,7 @@ def api_create_workspace(ctx):
         ws_id = data.get('id', '').strip().lower()
         if not ws_id or ws_id in ['default', 'none']:
             return jsonify({"error": "A unique, valid alphanumeric workspace ID is required"}), 400
-        index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
+        index_path = get_system_index_path()
 
         w_data = load_json_config(index_path, {"workspaces": {"default": {"config_path": "config.json"}}})
         if "workspaces" not in w_data:
@@ -816,9 +839,7 @@ def api_create_workspace(ctx):
             "extensions": ["config"]
         })
         # 4. Provision databases and trigger the boot sequence for the new workspace
-        from akasa.db import apply_declarative_schema as _apply_declarative_schema, _REGISTERED_SCHEMAS as _REGISTERED_SCHEMAS
-        for ext_name, schema in _REGISTERED_SCHEMAS.items():
-            _apply_declarative_schema(ext_name, schema, ws_id)
+        provision_workspace_schemas(ws_id)
         hooks.emit('workspace_boot', workspace_id=ws_id)
 
         return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
@@ -834,7 +855,7 @@ def api_delete_workspace(ctx):
         ws_id = data.get('id', '').strip().lower()
         if ws_id == 'default':
             return jsonify({"error": "The root system default workspace framework cannot be deleted."}), 400
-        index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
+        index_path = get_system_index_path()
 
         w_data = load_json_config(index_path, {"workspaces": {"default": {"config_path": "config.json"}}})
         if "workspaces" not in w_data:
@@ -844,7 +865,7 @@ def api_delete_workspace(ctx):
             return jsonify({"error": "Target workspace not found."}), 404
         del w_data["workspaces"][ws_id]
         hooks.emit('workspace_shutdown', workspace_id=ws_id)
-        local_insetu_dir = Path(utils._cwd).joinpath(".insetu").as_posix()
+        local_insetu_dir = Path(get_daemon_cwd()).joinpath(".insetu").as_posix()
         ws_dir = Path(local_insetu_dir).joinpath("workspaces", ws_id)
         if os.path.exists(ws_dir.as_posix()):
             execute_vfs_delete("default", ws_dir.as_posix())
@@ -875,13 +896,12 @@ class WorkspacesResponse(TypedDict):
 
 class WorkspacesSwitchPayload(TypedDict):
     active_workspace: str
-
 @system_bp.route('workspaces', methods=['GET', 'POST'], request_schema={"POST": WorkspacesSwitchPayload}, response_schema=WorkspacesResponse, docstring="[sync] GET lists all mounted tenant workspaces. POST validates and switches session context to a target 'active_workspace'.")
 def api_workspaces(ctx):
-    index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
+    index_path = get_system_index_path()
 
     if ctx.req.method == 'GET':
-        data = utils.load_json_config(index_path, {})
+        data = load_json_config(index_path, {})
         if "workspaces" not in data:
             data["workspaces"] = {"default": {"config_path": "config.json"}}
         return jsonify(data)
@@ -891,7 +911,7 @@ def api_workspaces(ctx):
         old_active = sniff_tenant_id()
         if not os.path.exists(index_path):
             return jsonify({"error": "system.json not found."}), 404
-        w_data = utils.load_json_config(index_path, {})
+        w_data = load_json_config(index_path, {})
         if new_active not in w_data.get("workspaces", {}) and new_active != "default":
             return jsonify({"error": "Workspace ID not found."}), 400
 
@@ -984,16 +1004,8 @@ def api_system_memory(ctx):
                         proc_mem[k.strip()] = v.strip()
         except Exception:
             pass
-
     # 2. Internal Kernel Cache Telemetry
-    json_cache_bytes = sum(len(v.encode('utf-8')) for v in _JSON_CACHE.values() if isinstance(v, str))
-    caches_info = {
-        "vfs_read_cache_files": len(_VFS_READ_CACHE),
-        "vfs_read_cache_mb": round(_VFS_READ_CACHE_BYTES / (1024 * 1024), 2),
-        "vfs_write_queue_depth": _VFS_WRITE_QUEUE.qsize(),
-        "json_config_cache_files": len(_JSON_CACHE),
-        "json_config_cache_kb": round(json_cache_bytes / 1024, 2)
-    }
+    caches_info = get_kernel_memory_telemetry()
 
     # 3. Top Python Object Types in GC
     type_counts = {}

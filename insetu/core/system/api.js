@@ -210,9 +210,8 @@ window.inSetu.api = {
     workspace: async function(path, options = {}) {
         const activeWs = window.inSetu.utils.getActiveWorkspace();
         const cleanPath = path.startsWith('/') ? path.substring(1) : path;
-
         const extName = cleanPath.split('/')[0];
-        const isCore = window.inSetu?.isCore ? window.inSetu.isCore(extName) : ['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'offline'].includes(extName);
+        const isCore = window.inSetu?.CORE_MODULES ? window.inSetu.CORE_MODULES.has(extName) : ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline', 'llm', 'agent', 'prompts'].includes(extName);
         if (extName && !isCore && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extName)) {
             return new Response(JSON.stringify({ error: `Extension '${extName}' is disabled in workspace '${activeWs}'.` }), { status: 403, statusText: "Forbidden" });
         }
@@ -271,6 +270,13 @@ class SSEPipeline {
         this.reconnectTimer = null;
         this.isConnected = false;
     }
+    _shouldDrop(workspaceId = null) {
+        if (window.inSetu?.events?.shouldDropTenantEvent) {
+            return window.inSetu.events.shouldDropTenantEvent(workspaceId);
+        }
+        if (AppStore.getState().isSwappingWorkspace) return true;
+        return Boolean(workspaceId && workspaceId !== window.inSetu.utils.getActiveWorkspace());
+    }
     connect() {
         if (this.source) return;
         const token = window.inSetu.stores?.App?.getState()?.authToken || sessionStorage.getItem('insetu_boot_token');
@@ -285,8 +291,7 @@ class SSEPipeline {
             if (type === 'presence_ping') {
                 bc.postMessage({ type: 'presence_pong' });
             } else if (type === 'outbox_mutated') {
-                const activeWs = window.inSetu.utils.getActiveWorkspace();
-                if (data?.scopeId && data.scopeId !== activeWs) return;
+                if (this._shouldDrop(data?.scopeId)) return;
                 const appState = window.inSetu.stores.App.getState();
                 const pendingSet = new Set(appState.pendingMutations);
                 const deletedSet = new Set(appState.deletedMutations);
@@ -313,13 +318,13 @@ class SSEPipeline {
         this.source.addEventListener('vfs_mutated', (e) => {
             const data = JSON.parse(e.data);
             bc.postMessage({ type: 'vfs_mutated', data });
-            if (data.workspace_id && data.workspace_id !== window.inSetu.utils.getActiveWorkspace()) return;
+            if (this._shouldDrop(data.workspace_id)) return;
             window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: data.mutations });
         });
         this.source.addEventListener('topology_resolved', (e) => {
             const data = JSON.parse(e.data);
             bc.postMessage({ type: 'topology_resolved', data });
-            if (data.workspace_id && data.workspace_id !== window.inSetu.utils.getActiveWorkspace()) return;
+            if (this._shouldDrop(data.workspace_id)) return;
             const state = AppStore.getState();
             if (data.clear_all) {
                 AppStore.setState({ dirtyRepos: new Set(), dirtyBuckets: new Set() });
@@ -332,7 +337,7 @@ class SSEPipeline {
         this.source.addEventListener('job_progress', (e) => {
             const data = JSON.parse(e.data);
             bc.postMessage({ type: 'job_progress', data });
-            if (data.workspace_id && data.workspace_id !== window.inSetu.utils.getActiveWorkspace()) return;
+            if (this._shouldDrop(data.workspace_id)) return;
             const isPipelineJob = ['topology', 'cartographer', 'gather', 'git', 'flow'].includes(data.ext_name);
 
             // 1. ALWAYS emit step completion hooks regardless of job_category to keep manifest & dirty states fresh

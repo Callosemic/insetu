@@ -32,6 +32,8 @@ export const AppStore = createExtensionStore('App', {
     configMissing: false,
     isRebooting: false,
     rebootType: 'reboot',
+    isSwappingWorkspace: false,
+    swapPhase: 'READY',
     isOffline: false,
     isReconciling: false,
     outboxCount: 0,
@@ -39,24 +41,69 @@ export const AppStore = createExtensionStore('App', {
     deletedMutations: new Set(),
     activeModules: [],
     pendingModules: [],
-    globalBrowsePath: [],
+    syncWatermarks: {
+        lastManifestSyncTs: 0,
+        lastPolledTs: 0,
+        localVfsSignatures: {},
+        localCtxSignatures: {},
+        warmedVfsSignatures: {}
+    },
+    getSyncWatermarks: () => {
+        let wm = AppStore.getState().syncWatermarks;
+        if (!wm || typeof wm !== 'object') {
+            wm = {
+                lastManifestSyncTs: 0,
+                lastPolledTs: 0,
+                localVfsSignatures: {},
+                localCtxSignatures: {},
+                warmedVfsSignatures: {}
+            };
+            AppStore.setState({ syncWatermarks: wm });
+        }
+        return wm;
+    },
+    resetSyncWatermarks: () => AppStore.setState({
+        syncWatermarks: {
+            lastManifestSyncTs: 0,
+            lastPolledTs: 0,
+            localVfsSignatures: {},
+            localCtxSignatures: {},
+            warmedVfsSignatures: {}
+        }
+    }),
     tabBrowsePaths: {},
-    currentBrowsePath: [],
-    setBrowsePath: (pathArray = [], subId = 'files') => {
+    getBrowsePath: (subId = 'fs:files') => {
+        const paths = AppStore.getState().tabBrowsePaths || {};
+        if (paths[subId]) return paths[subId];
+        const rawKey = subId.includes(':') ? subId.split(':').pop() : subId;
+        const scopedKey = subId === 'files' ? 'fs:files' : subId;
+        return paths[scopedKey] || paths[rawKey] || [];
+    },
+    setBrowsePath: (pathArray = [], subId = 'fs:files') => {
         const cleanPath = Array.isArray(pathArray) ? pathArray : [];
+        const rawKey = subId.includes(':') ? subId.split(':').pop() : subId;
+        const scopedKey = subId === 'files' ? 'fs:files' : subId;
         AppStore.setState(s => ({
-            globalBrowsePath: cleanPath,
-            tabBrowsePaths: { ...(s.tabBrowsePaths || {}), [subId]: cleanPath }
+            tabBrowsePaths: {
+                ...(s.tabBrowsePaths || {}),
+                [subId]: cleanPath,
+                [rawKey]: cleanPath,
+                [scopedKey]: cleanPath
+            }
         }));
         const activeWs = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';
         const focusedCol = window.Sutram?.stores?.Layout?.getState()?.focusedColumn || 'center';
         const activeSubInCol = window.Sutram?.stores?.Layout?.getState()?.columns?.[focusedCol]?.active;
-        if (!activeSubInCol || activeSubInCol === subId) {
+        if (!activeSubInCol || activeSubInCol === subId || activeSubInCol === scopedKey || activeSubInCol === rawKey) {
+            const routeSub = activeSubInCol || scopedKey;
             const deepStr = cleanPath.length > 0 ? '/' + cleanPath.map(encodeURIComponent).join('/') : '';
-            const hash = `#/${encodeURIComponent(activeWs)}/${focusedCol}/${encodeURIComponent(subId)}${deepStr}`;
+            const hash = `#/${encodeURIComponent(activeWs)}/${focusedCol}/${encodeURIComponent(routeSub)}${deepStr}`;
             if (window.location.hash !== hash) {
                 window.history.replaceState(null, '', hash);
             }
+        }
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('sutram-subtab-menu-refresh', { detail: { subId: scopedKey, path: cleanPath } }));
         }
     },
     browserConfig: { mode: 'view', callback: null },

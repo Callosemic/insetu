@@ -92,12 +92,12 @@ export class InSetuRebootOverlay extends InSetuElement {
         if (!this.isRebooting) return html``;
         const isPanic = this.rebootType === 'panic';
         return html`
-            <div style="position:fixed; top:0; left:0; width:100vw; height:100dvh; background:rgba(15,23,42,0.95); z-index:999999; display:flex; flex-direction:column; align-items:center; justify-content:center; color:${isPanic ? '#ef4444' : '#38bdf8'}; font-family:monospace; backdrop-filter:blur(5px);">
+            <div style="position:fixed; top:0; left:0; width:100vw; height:100dvh; background:var(--modal-backdrop, rgba(15,23,42,0.95)); z-index:999999; display:flex; flex-direction:column; align-items:center; justify-content:center; color:${isPanic ? 'var(--intent-danger)' : 'var(--intent-primary)'}; font-family:monospace; backdrop-filter:blur(5px);">
                 <h2 style="display: flex; align-items: center; gap: 10px;">
                     <yv-icon name="${isPanic ? 'alert-triangle' : 'refresh-cw'}" style="width: 24px; height: 24px;"></yv-icon>
                     <span>${isPanic ? 'Initiating Kernel Panic...' : 'Rebooting inSetu OS...'}</span>
                 </h2>
-                <p style="color:#94a3b8;">${isPanic ? 'Awaiting Lifeboat FS binding...' : 'Awaiting kernel binding...'}</p>
+                <p style="color:var(--text-muted);">${isPanic ? 'Awaiting Lifeboat FS binding...' : 'Awaiting kernel binding...'}</p>
             </div>
         `;
     }
@@ -125,7 +125,7 @@ export class InSetConfigBanner extends InSetuElement {
     render() {
         if (!this.configMissing) return html``;
         return html`
-            <div style="background: var(--intent-warning); color: #000; padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem; display: flex; align-items: center; justify-content: center; gap: 8px;">
+            <div style="background: var(--intent-warning); color: var(--bg-deep); padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem; display: flex; align-items: center; justify-content: center; gap: 8px;">
                 <yv-icon name="alert-triangle" style="width: 16px; height: 16px;"></yv-icon>
                 <span>Configuration file missing. Operating in empty fallback state.</span>
                 <span style="cursor:pointer; text-decoration:underline; margin-left:15px; opacity:0.8;" @click=${() => window.inSetu.stores.App.setState({ configMissing: false })}>Dismiss</span>
@@ -182,6 +182,119 @@ export class InSetuEmptyState extends LitElement {
     render() { return html`<div class="empty-container">${this.icon ? html`<div class="icon">${this.icon}</div>` : ''}<div class="text">${this.text || ''}<slot></slot></div></div>`; }
 }
 if (!customElements.get('insetu-empty-state')) customElements.define('insetu-empty-state', InSetuEmptyState);
+export class InSetuHostDirPicker extends InSetuElement {
+    static properties = {
+        titleText: { type: String },
+        confirmLabel: { type: String },
+        initialPath: { type: String },
+        _currentPath: { type: String },
+        _dirs: { type: Array },
+        _loading: { type: Boolean }
+    };
+    static styles = [sharedStyles, css`
+        :host { display: block; width: 100%; box-sizing: border-box; }
+        .picker-card {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 14px 16px;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .picker-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+    `];
+
+    constructor() {
+        super();
+        this.titleText = 'Select Host Directory';
+        this.confirmLabel = 'Select Current Path';
+        this.initialPath = '';
+        this._currentPath = '';
+        this._dirs = [];
+        this._loading = false;
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this._loadHostDirs((this.initialPath || '').trim());
+    }
+
+    async _loadHostDirs(path = '') {
+        this._loading = true;
+        try {
+            const res = await window.inSetu.api.workspace.get(`system/fs/list_local?path=${encodeURIComponent(path)}`);
+            if (res.ok) {
+                const data = await res.json();
+                this._currentPath = data.current || '';
+                this._dirs = data.dirs || [];
+            }
+        } catch (e) {
+            console.error("Failed to browse host directories:", e);
+        } finally {
+            this._loading = false;
+            this.requestUpdate();
+        }
+    }
+    _selectDir(dirName) {
+        this._loadHostDirs(this.utils.HostPath.join(this._currentPath, dirName));
+    }
+
+    _goUpDir() {
+        this._loadHostDirs(this.utils.HostPath.parent(this._currentPath));
+    }
+
+    _emitCancel() {
+        this.dispatchEvent(new CustomEvent('host-dir-cancelled', { bubbles: true, composed: true }));
+    }
+
+    _emitConfirm() {
+        this.dispatchEvent(new CustomEvent('host-dir-selected', {
+            detail: { path: this._currentPath },
+            bubbles: true,
+            composed: true
+        }));
+    }
+
+    render() {
+        return html`
+            <div class="picker-card">
+                <div class="picker-header">
+                    <span style="font-weight: bold; font-size: 0.95rem; color: var(--text);">${this.titleText}</span>
+                    <div style="display: flex; gap: 8px;">
+                        <sutram-btn size="sm" intent="neutral" icon="x" label="Cancel" @click=${() => this._emitCancel()}></sutram-btn>
+                        <sutram-btn size="sm" intent="success" icon="check-circle-2" label=${this.confirmLabel} @click=${() => this._emitConfirm()}></sutram-btn>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+                    <sutram-btn size="sm" intent="neutral" icon="corner-left-up" label="Parent Dir" @click=${() => this._goUpDir()}></sutram-btn>
+                    <sutram-scrub-track style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-primary); flex: 1;">${this._currentPath}</sutram-scrub-track>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow-y: auto;">
+                    ${this._loading
+                        ? html`<sutram-spinner text="Loading directories..."></sutram-spinner>`
+                        : (this._dirs.length === 0
+                            ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No subdirectories found.</div>`
+                            : this._dirs.map(d => html`
+                                <div class="yv-interactive-row" style="padding: 8px 12px; cursor: pointer; display: flex; align-items: center; border-radius: 4px;"
+                                    @click=${() => this._selectDir(d)}>
+                                    <yv-icon name="folder" style="width: 16px; height: 16px; color: var(--intent-warning); margin-right: 8px;"></yv-icon>
+                                    <span style="font-weight: bold; font-size: 0.9rem;">${d}</span>
+                                </div>
+                            `))}
+                </div>
+            </div>
+        `;
+    }
+}
+if (!customElements.get('insetu-host-dir-picker')) customElements.define('insetu-host-dir-picker', InSetuHostDirPicker);
+
 if (!document.getElementById('insetu-toast-root')) {
     const toastRoot = document.createElement('sutram-toast-container');
     toastRoot.id = 'insetu-toast-root';

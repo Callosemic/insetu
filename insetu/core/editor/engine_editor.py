@@ -34,6 +34,16 @@ editor_bp = InSetuExtension(
     core=True
 )
 __depends__ = []
+
+
+@editor_bp.on('pre_compile_document')
+def _provide_editor_ephemeral_macros(workspace_id=None, **kwargs):
+    """Declares editor-specific ephemeral macros (such as wordcount markers) to strip prior to document compilation."""
+    return {
+        "strip_macros": [r'\{\{wordcount_(?:start|stop|all|sum)\}\}']
+    }
+
+
 def _ensure_editor_prefs_hydrated(ctx):
     count = ctx.db.execute("SELECT count(*) FROM file_preferences").fetchone()[0]
     saved = ctx.store.get("preferences.json", "items", None)

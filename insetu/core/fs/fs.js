@@ -1,7 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { InSetuElement, createExtensionStore } from '/static/extensions/system/insetu_sdk.js';
-import { resolveEditorMode } from '/static/extensions/system/components/ui_editor.js';
+import { resolveEditorMode, insertLinkToEditor } from '/static/extensions/system/components/ui_editor.js';
 import { AppStore, SelectionStore } from '/static/extensions/system/store.js';
 import { buildFileTree, resolveDirectoryState, downloadFile as sutramDownloadFile, downloadBlob, bindGhostDrag } from '../../vendor/sutram/js/utils.js';
 export function bindDownloadDrag(e, filename, fetchUrl) {
@@ -37,10 +37,13 @@ document.addEventListener('dragstart', (e) => {
         }
     }
 });
-export function normalizeVfsURI(path) {
+export function normalizeVfsURI(path, defaultScheme = 'vfs') {
+    if (window.inSetu?.utils?.InSetuURI?.canonicalize) {
+        return window.inSetu.utils.InSetuURI.canonicalize(path, defaultScheme);
+    }
     if (!path || typeof path !== 'string') return '';
     if (path.includes('://')) return path;
-    return `vfs://${path.replace(/^\/+/, '')}`;
+    return `${defaultScheme}://${path.replace(/^\/+/, '')}`;
 }
 export function isFileGitModified(filepath) {
     if (!filepath || typeof filepath !== 'string') return false;
@@ -60,10 +63,43 @@ export function isFileGitModified(filepath) {
     }
     return false;
 }
+export function resolveConflictOriginalPath(filepath) {
+    if (!filepath || typeof filepath !== 'string') return null;
+    const match = filepath.match(/^(.*)\.conflict(?:ed)?_\d+(\.[^./]+)?$/);
+    if (!match) return null;
+    return `${match[1]}${match[2] || ''}`;
+}
+
+export async function viewTwoFileDiff(leftFilepath, rightFilepath) {
+    if (!leftFilepath || !rightFilepath) return;
+    const normLeft = normalizeVfsURI(leftFilepath);
+    const normRight = normalizeVfsURI(rightFilepath);
+    const rightBase = normRight.split('/').pop();
+    const cleanName = window.inSetu?.utils?.truncateFilename
+        ? window.inSetu.utils.truncateFilename(rightBase, 22)
+        : rightBase;
+
+    if (window.Sutram?.stores?.Layout) {
+        const layout = window.Sutram.stores.Layout.getState();
+        layout.openWindow({
+            id: `vfs:pairdiff:${normLeft}::${normRight}`,
+            component: 'insetu-file-diff-projection',
+            label: `Compare: ${cleanName}`,
+            icon: 'git-compare',
+            intent: 'highlight',
+            extName: 'fs',
+            windowOnly: true,
+            props: {
+                filepath: normLeft,
+                compareFilepath: normRight
+            }
+        }, layout.focusedColumn || 'center', 1);
+    }
+}
 export async function viewFileGitDiff(filepath) {
     if (!filepath) return;
-    const baseName = filepath.split('/').pop();
-    const cleanName = window.inSetu?.utils?.truncateFilename 
+    const baseName = new window.inSetu.utils.InSetuURI(filepath).basename;
+    const cleanName = window.inSetu?.utils?.truncateFilename  
         ? window.inSetu.utils.truncateFilename(baseName, 22) 
         : baseName;
 
@@ -83,24 +119,156 @@ export async function viewFileGitDiff(filepath) {
         }, layout.focusedColumn || 'center', 1);
     }
 }
-
+function _deriveFrontmatterProjection(text, isMarkdown, forceFrontmatterMode = false) {
+    if (typeof text !== 'string' || text === 'Loading...') {
+        return { yamlMeta: {}, bodyContent: '', hasFrontmatter: Boolean(forceFrontmatterMode) };
+    }
+    const hasFence = Boolean(isMarkdown && /^\s*---\s*\n/.test(text));
+    if ((forceFrontmatterMode || hasFence) && window.inSetu?.utils?.parseFrontmatter) {
+        const { meta, content, rawFrontmatter } = window.inSetu.utils.parseFrontmatter(text);
+        if (forceFrontmatterMode || rawFrontmatter) {
+            return {
+                yamlMeta: meta || {},
+                bodyContent: (content || '').replace(/^\s+/, ''),
+                hasFrontmatter: Boolean(forceFrontmatterMode || (meta && Object.keys(meta).length > 0) || rawFrontmatter)
+            };
+        }
+    }
+    return { yamlMeta: {}, bodyContent: text, hasFrontmatter: false };
+}
 export const FsStore = createExtensionStore('Fs', {
     searchQuery: '',
-    activeBuffers: {}, // Maps filepath -> buffer state for multi-projection editing
-    openBuffer: (filepath, data) => {
-        FsStore.setState(s => ({  
-            activeBuffers: { ...s.activeBuffers, [filepath]: { ...(s.activeBuffers[filepath] || {}), ...data, filename: filepath } } 
-        }));
+    activeBuffers: {}, // Maps canonical filepath -> buffer state for multi-projection editing
+    shareTextCache: new Map(),
+    reconcilingPaths: new Set(),
+    savingPaths: new Set(),
+    hydratingPromises: {},
+    autoSaveTimers: new Map(),
+    clearPayload: () => {
+        const st = FsStore.getState();
+        st.shareTextCache?.clear();
+        st.savingPaths?.clear();
+        if (st.autoSaveTimers) {
+            st.autoSaveTimers.forEach(autoSaveTimer => clearTimeout(autoSaveTimer));
+            st.autoSaveTimers.clear();
+        }
     },
-    updateBuffer: (filepath, data) => {
-        FsStore.setState(s => ({ 
-            activeBuffers: { ...s.activeBuffers, [filepath]: { ...(s.activeBuffers[filepath] || {}), ...data } } 
-        }));
+    scheduleAutoSave: (filepath, delayMs = 2000) => {
+        const key = normalizeVfsURI(filepath) || filepath;
+        if (!key) return;
+        const timers = FsStore.getState().autoSaveTimers;
+        if (timers.has(key)) {
+            const prevTimer = timers.get(key);
+            clearTimeout(prevTimer);
+        }
+        const autoSaveTimer = setTimeout(() => {
+            timers.delete(key);
+            const buf = FsStore.getState().activeBuffers?.[key];
+            const isDirty = Boolean(buf && buf.isFS && !buf.isTruncated && buf.content !== buf.originalContent && buf.content !== 'Loading...');
+            if (isDirty && window.inSetu?.ui?.saveBufferFile) {
+                window.inSetu.ui.saveBufferFile(key, true);
+            }
+        }, delayMs);
+        timers.set(key, autoSaveTimer);
+    },
+    cancelAutoSave: (filepath) => {
+        const key = normalizeVfsURI(filepath) || filepath;
+        const timers = FsStore.getState().autoSaveTimers;
+        if (timers && timers.has(key)) {
+            const activeTimer = timers.get(key);
+            clearTimeout(activeTimer);
+            timers.delete(key);
+        }
+    },
+    openBuffer: (filepath, data) => {
+        const key = normalizeVfsURI(filepath) || filepath;
+        FsStore.setState(s => {
+            const existing = s.activeBuffers[key] || {};
+            const merged = {
+                docRevision: 0,
+                savedRevision: 0,
+                frontmatterMode: false,
+                yamlMeta: {},
+                bodyContent: '',
+                hasFrontmatter: false,
+                ...existing,
+                ...data,
+                filename: key
+            };
+            if (data.content !== undefined && data.content !== 'Loading...') {
+                Object.assign(merged, _deriveFrontmatterProjection(merged.content, merged.isMarkdown, merged.frontmatterMode));
+            }
+            return {
+                activeBuffers: {
+                    ...s.activeBuffers,
+                    [key]: merged
+                }
+            };
+        });
+    },
+    updateBuffer: (filepath, data, options = {}) => {
+        const key = normalizeVfsURI(filepath) || filepath;
+        FsStore.setState(s => {
+            const existing = s.activeBuffers[key] || { filename: key, docRevision: 0, savedRevision: 0 };
+            const nextDocRev = options.userEdit ? (existing.docRevision || 0) + 1 : (data.docRevision ?? existing.docRevision ?? 0);
+            const nextSavedRev = options.markSaved ? nextDocRev : (data.savedRevision ?? existing.savedRevision ?? 0);
+            const nextBuf = {
+                ...existing,
+                ...data,
+                docRevision: nextDocRev,
+                savedRevision: nextSavedRev
+            };
+            if (data.content !== undefined && data.content !== 'Loading...' && !options.skipFrontmatterParse) {
+                Object.assign(nextBuf, _deriveFrontmatterProjection(nextBuf.content, nextBuf.isMarkdown, nextBuf.frontmatterMode));
+            }
+            return {
+                activeBuffers: {
+                    ...s.activeBuffers,
+                    [key]: nextBuf
+                }
+            };
+        });
+    },
+    enableFrontmatterMode: (filepath, enabled = true) => {
+        const key = normalizeVfsURI(filepath) || filepath;
+        const buf = FsStore.getState().activeBuffers[key];
+        if (!buf) return;
+        const derived = _deriveFrontmatterProjection(buf.content, true, enabled);
+        FsStore.getState().updateBuffer(key, {
+            frontmatterMode: enabled,
+            ...derived
+        }, { skipFrontmatterParse: true });
+    },
+    updateBufferFrontmatter: (filepath, { yamlMeta = null, bodyContent = null } = {}, { userEdit = true } = {}) => {
+        const key = normalizeVfsURI(filepath) || filepath;
+        const buf = FsStore.getState().activeBuffers[key];
+        if (!buf || buf.content === 'Loading...') return null;
+        const nextYaml = yamlMeta !== null ? { ...yamlMeta } : { ...(buf.yamlMeta || {}) };
+        const nextBody = bodyContent !== null ? bodyContent : (buf.bodyContent ?? '');
+        const serialized = window.inSetu?.utils?.serializeFrontmatter
+            ? window.inSetu.utils.serializeFrontmatter(nextYaml, nextBody)
+            : nextBody;
+        const patch = {
+            frontmatterMode: true,
+            hasFrontmatter: true,
+            yamlMeta: nextYaml,
+            bodyContent: nextBody,
+            content: serialized,
+            fullText: serialized
+        };
+        if (!userEdit) {
+            patch.originalContent = serialized;
+        }
+        FsStore.getState().updateBuffer(key, patch, { userEdit, skipFrontmatterParse: true });
+        return serialized;
     },
     closeBuffer: (filepath) => {
+        const key = normalizeVfsURI(filepath) || filepath;
+        FsStore.getState().cancelAutoSave?.(key);
         FsStore.setState(s => { 
             const newBufs = {...s.activeBuffers}; 
-            delete newBufs[filepath]; 
+            delete newBufs[key]; 
+            delete newBufs[filepath];
             return { activeBuffers: newBufs }; 
         });
     },
@@ -109,7 +277,7 @@ export const FsStore = createExtensionStore('Fs', {
         newFile: { open: false, basePath: '', fileName: '', content: '' },
         newFolder: { open: false, basePath: '', folderName: '', repoTitle: '', repoDomain: 'Workspaces', repoDesc: '', repoExts: '.py, .json, .md, .sh, .txt, .html, .css, .js' },
         linkInsert: { open: false, activeTab: 'filename', searchQuery: '', searchResults: [], deepSearchLoading: false },
-        browser: { open: false, title: '', manifest: [], searchQuery: '' }
+        browser: { open: false, title: '', manifest: [], searchQuery: '', currentPath: [] }
     },
     fileVerificationCache: {},
     verifyFiles: (files, force = false) => {
@@ -138,7 +306,10 @@ window.inSetu.stores = window.inSetu.stores || {};
 window.inSetu.vfs = window.inSetu.vfs || {};
 window.inSetu.ui = window.inSetu.ui || {};
 window.inSetu.stores.Fs = FsStore;
-window.inSetu.vfs.shareTextCache = new Map();
+Object.defineProperty(window.inSetu.vfs, 'shareTextCache', {
+    get: () => FsStore.getState().shareTextCache,
+    configurable: true
+});
 
 function injectTextToBuffer(filepath, text, isSupportedEditor, isMarkdown, isFS, forceAllowEdit = false) {
     const TRUNCATE_LIMIT = 200000;
@@ -149,12 +320,15 @@ function injectTextToBuffer(filepath, text, isSupportedEditor, isMarkdown, isFS,
         isTruncated = true;
         content = text.substring(0, TRUNCATE_LIMIT) + '\n\n... [CONTENT TRUNCATED FOR PERFORMANCE] ...';
     }
+    const curRev = (FsStore.getState().activeBuffers?.[filepath]?.docRevision || 0) + 1;
     FsStore.getState().updateBuffer(filepath, {
         content,
         originalContent: content,
         fullText: text,
         isTruncated,
-        forceEdit: forceAllowEdit
+        forceEdit: forceAllowEdit,
+        docRevision: curRev,
+        savedRevision: curRev
     });
 }
 export function routeToSpatialGrid(filepath, label = null, preferredCol = null) {
@@ -163,7 +337,7 @@ export function routeToSpatialGrid(filepath, label = null, preferredCol = null) 
         return;
     }
     const layout = window.Sutram.stores.Layout.getState();
-    const baseName = filepath.split('/').pop();
+    const baseName = new window.inSetu.utils.InSetuURI(filepath).basename;
     const safeLabel = label || (window.inSetu?.utils?.truncateFilename ? window.inSetu.utils.truncateFilename(baseName, 24) : baseName);
 
     let existingCol = null;
@@ -206,54 +380,40 @@ export function routeToSpatialGrid(filepath, label = null, preferredCol = null) 
         }
     }
 }
-
 export async function ensureFreshContext(filePath) {
     if (!filePath) return;
-    const appState = AppStore.getState();
-    const dirtyRepos = appState.dirtyRepos || new Set();
-    const dirtyBuckets = appState.dirtyBuckets || new Set();
-
-    const manifestObj = appState.manifest?.ctx?.[filePath];
-    const addr = window.inSetu.utils.BucketAddress ? window.inSetu.utils.BucketAddress.fromFilepath(filePath, manifestObj?.meta) : null;
-
-    const isDirty = (addr && addr.key && dirtyBuckets.has(addr.key)) || 
-                    (addr && addr.repo && dirtyRepos.has(addr.repo)) ||
-                    dirtyBuckets.has(filePath);
-
-    if (isDirty) {
-        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-            window.inSetu.ui.setGlobalStatus("⏳ Compiling fresh context...", null);
-        }
-        const targetRepos = (addr && addr.repo && addr.repo !== 'orphan') ? [addr.repo] : null;
-        await window.inSetu.stores.Gather.getState().executeCompile(null, false, null, targetRepos);
-        if (addr && addr.key) dirtyBuckets.delete(addr.key);
-        if (addr && addr.repo) dirtyRepos.delete(addr.repo);
-        dirtyBuckets.delete(filePath);
-        AppStore.setState({ dirtyBuckets: new Set(dirtyBuckets), dirtyRepos: new Set(dirtyRepos) });
-    }
+    const parsedUri = new window.inSetu.utils.InSetuURI(filePath);
+    if (!parsedUri.isCompiledArtifact) return;
+    const responses = window.inSetu?.events?.emitHookAll
+        ? window.inSetu.events.emitHookAll('insetu:ensure-fresh-artifact', { filepath: filePath, uri: parsedUri })
+        : [window.inSetu?.events?.emitHook?.('insetu:ensure-fresh-artifact', { filepath: filePath, uri: parsedUri })];
+    await Promise.all((responses || []).filter(Boolean));
 }
-
 export async function fetchAndCopy(filePath, explicitUrl = null) {
     try {
         await ensureFreshContext(filePath);
-        let res;
         const activeWs = window.inSetu.utils.getActiveWorkspace();
-        const fetchUrl = explicitUrl || resolveFileFetchUrl(filePath, true);
-        res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
+        const resolvedChunks = getChunks(filePath);
+        const targetFile = (resolvedChunks && resolvedChunks.length > 0) ? resolvedChunks[0] : filePath;
+        const fetchUrl = (targetFile === filePath && explicitUrl) ? explicitUrl : resolveFileFetchUrl(targetFile, true);
+        const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
 
         if (!res.ok) throw new Error("File not found on disk.");
         const text = await res.text();
         await navigator.clipboard.writeText(text);
         window.inSetu.ui.setGlobalStatus("✅ Copied!", 2000);
-} catch (e) {
+    } catch (e) {
         window.inSetu.ui.setGlobalStatus("❌ Error: " + e.message, 3000, true);
         throw e;
     }
 }
 export async function fetchAndDownloadState(filePath, explicitUrl = null) {
     try {
-        const fetchUrl = explicitUrl || resolveFileFetchUrl(filePath);
-        await downloadFile(fetchUrl, filePath.split('/').pop());
+        await ensureFreshContext(filePath);
+        const resolvedChunks = getChunks(filePath);
+        const targetFile = (resolvedChunks && resolvedChunks.length > 0 && !resolvedChunks.includes(filePath)) ? resolvedChunks[0] : filePath;
+        const fetchUrl = (targetFile === filePath && explicitUrl) ? explicitUrl : `${resolveFileFetchUrl(targetFile)}&download=1`;
+        await downloadFile(fetchUrl, new window.inSetu.utils.InSetuURI(targetFile).basename);
         window.inSetu.ui.setGlobalStatus("✅ Downloaded!", 2000);
     } catch (e) {
         window.inSetu.ui.setGlobalStatus("❌ Error: " + e.message, 3000, true);
@@ -261,14 +421,17 @@ export async function fetchAndDownloadState(filePath, explicitUrl = null) {
 }
 export function shareFiles(baseFile, chunks = null, isFS = false) {
     const activeWs = window.inSetu.utils.getActiveWorkspace();
-    const filesToFetch = (chunks && chunks.length > 1) ? chunks : [baseFile];
+    const manifestChunks = getChunks(baseFile);
+    const filesToFetch = (manifestChunks && manifestChunks.length > 0)
+        ? manifestChunks
+        : ((chunks && chunks.length > 0) ? chunks : [baseFile]);
 
     // Synchronous Fast-Path
-    if (filesToFetch.every(fp => window.inSetu.vfs.shareTextCache.has(fp))) {
+    if (filesToFetch.length > 0 && filesToFetch.every(fp => window.inSetu.vfs.shareTextCache.has(fp))) {
         try {
             const fileObjects = filesToFetch.map(filepath => ({
                 content: window.inSetu.vfs.shareTextCache.get(filepath),
-                filename: filepath.split('/').pop()
+                filename: new window.inSetu.utils.InSetuURI(filepath).basename
             }));
 
             window.inSetu.utils.nativeShareFiles(fileObjects).catch(err => {
@@ -282,21 +445,26 @@ export function shareFiles(baseFile, chunks = null, isFS = false) {
             return;
         }
     }
-    // Asynchronous Pre-Warm Fallback
+    // Asynchronous On-Demand Fetch & Share Fallback (leaves drawer open if WebKit requires a second tap)
     (async () => {
         try {
+            if (window.inSetu?.ui?.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus("⏳ Preparing files for Share...", null);
+            }
+            await ensureFreshContext(baseFile);
+            const refreshedChunks = getChunks(baseFile);
+            const effectiveFiles = (refreshedChunks && refreshedChunks.length > 0) ? refreshedChunks : filesToFetch;
             const fileObjects = [];
 
-            for (const filepath of filesToFetch) {
-                const fileIsFS = (chunks && chunks.length > 1) ? false : isFS;
+            for (const filepath of effectiveFiles) {
+                const fileIsFS = (effectiveFiles.length > 1) ? false : isFS;
                 const fetchUrl = resolveFileFetchUrl(filepath, fileIsFS);
 
                 const textContent = await window.inSetu.api.fetchImmutableText(fetchUrl, { onlyIfMissing: true }, activeWs);
                 window.inSetu.vfs.shareTextCache.set(filepath, textContent);
-
                 fileObjects.push({
                     content: textContent,
-                    filename: filepath.split('/').pop()
+                    filename: new window.inSetu.utils.InSetuURI(filepath).basename
                 });
             }
 
@@ -331,76 +499,26 @@ export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}
     downloadBlob(blob, dlName);
 }
 export async function viewInWindow(filename) {
+    await ensureFreshContext(filename);
     const chunks = getChunks(filename);
     const targetFile = (chunks && chunks.length > 0 && !chunks.includes(filename)) ? chunks[0] : filename;
-
-    const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(targetFile);
-    FsStore.getState().openBuffer(targetFile, {
-        filename: targetFile,
-        content: 'Loading...',
-        originalContent: 'Loading...',
-        fullText: 'Loading...',
-        isTruncated: false,
-        isFS: false,
-        forceEdit: false,
-        isMemoryOnly: false,
-        isMarkdown,
-        isSupportedEditor,
-        ext,
-        codeMode
-    });
-
+    const hydrationPromise = hydrateVfsBuffer(targetFile, { isFS: false, forceReload: true });
     routeToSpatialGrid(targetFile);
     closeBrowseModal();
-    try {
-        const activeWs = window.inSetu.utils.getActiveWorkspace();
-        const fetchUrl = resolveFileFetchUrl(targetFile, false);
-        const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
-        if (!res.ok) throw new Error("Failed to fetch");
-        const text = await res.text();
-        injectTextToBuffer(targetFile, text, isSupportedEditor, isMarkdown, false);
-    } catch (e) {
-        injectTextToBuffer(targetFile, "Error loading file content.", isSupportedEditor, isMarkdown, false);
-    }
+    await hydrationPromise;
 }
 export async function viewAndCopy(filename) {
+    await ensureFreshContext(filename);
     const chunks = getChunks(filename);
-    // If the requested filename is explicitly a known chunk, respect it. Otherwise default to the first chunk of the payload.
     const targetFile = (chunks && chunks.length > 0 && !chunks.includes(filename)) ? chunks[0] : filename;
-
-    const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(targetFile);
     const browserState = AppStore.getState().browserConfig;
     const isParts = browserState && browserState.isParts;
-    FsStore.getState().openBuffer(targetFile, {
-        filename: targetFile,
-        content: 'Loading...',
-        originalContent: 'Loading...',
-        fullText: 'Loading...',
-        isTruncated: false,
-        isFS: false,
-        forceEdit: false,
-        isMemoryOnly: false,
-        isMarkdown,
-        isSupportedEditor,
-        ext,
-        codeMode
-    });
-
+    const hydrationPromise = hydrateVfsBuffer(targetFile, { isFS: false, forceReload: true });
     routeToSpatialGrid(targetFile);
-
     if (!isParts) {
         closeBrowseModal();
     }
-    try {
-        const activeWs = window.inSetu.utils.getActiveWorkspace();
-        const fetchUrl = resolveFileFetchUrl(targetFile, false);
-        const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
-        if (!res.ok) throw new Error("Failed to fetch");
-        const text = await res.text();
-        injectTextToBuffer(targetFile, text, isSupportedEditor, isMarkdown, false);
-    } catch (e) {
-        injectTextToBuffer(targetFile, "Error loading file content.", isSupportedEditor, isMarkdown, false);
-    }
+    await hydrationPromise;
 }
 function refreshActiveFileViews(oldPath, newPath = null) {
     const mutations = [{ filepath: oldPath, operation: 'delete' }];
@@ -416,21 +534,22 @@ export function updateManifestState(mutations) {
     let changed = false;
     const newManifest = { vfs: { ...(manifest?.vfs || {}) }, ctx: { ...(manifest?.ctx || {}) } };
     const trimTrailingSlash = (p) => (p && typeof p === 'string') ? p.replace(/\\/g, '/').replace(/\/+$/, '') : '';
-
-    // Detect move/rename logic directly from the payload
-    let moveSource = null;
-    let moveDest = null;
+    // Support both explicit relocated_to/relocated_from metadata and legacy 2-item move pairs
+    let fallbackMoveSource = null;
+    let fallbackMoveDest = null;
     if (mutations.length === 2) {
-        const delMut = mutations.find(m => m.operation === 'delete');
-        const savMut = mutations.find(m => m.operation === 'save');
-        if (delMut && savMut) {
-            moveSource = trimTrailingSlash(delMut.filepath);
-            moveDest = trimTrailingSlash(savMut.filepath);
+        const delMut = mutations.find(m => m.operation === 'delete' && m.filepath);
+        const savMut = mutations.find(m => m.operation === 'save' && m.filepath);
+        if (delMut && savMut && (delMut.relocated_to || savMut.relocated_from)) {
+            fallbackMoveSource = trimTrailingSlash(delMut.filepath);
+            fallbackMoveDest = trimTrailingSlash(savMut.filepath);
         }
     }
     (mutations || []).forEach(m => {
         const normPath = trimTrailingSlash(m.filepath);
         if (!normPath) return;
+        const moveDest = m.relocated_to ? trimTrailingSlash(m.relocated_to) : fallbackMoveDest;
+        const isRelocatedSave = Boolean(m.relocated_from || fallbackMoveSource);
 
         // Centralized Cache Invalidation
         if (window.inSetu?.vfs?.shareTextCache?.has(normPath)) {
@@ -470,11 +589,11 @@ export function updateManifestState(mutations) {
                 changed = true;
             }
         } else if (m.operation === 'save') {
-            if (moveSource) return;
+            if (isRelocatedSave) return;
 
             const alreadyInManifest = Object.values(newManifest.vfs).some(obj => obj.files && obj.files.includes(normPath));
             if (!alreadyInManifest && normPath.startsWith('vfs://')) {
-                const parsed = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(normPath) : { repo: 'global' };
+                const parsed = new window.inSetu.utils.InSetuURI(normPath);
                 const repoDir = parsed.repo || 'global';
                 let added = false;
                 for (const key of Object.keys(newManifest.vfs)) {
@@ -514,24 +633,25 @@ window.addEventListener('insetu:vfs-mutated', (e) => {
 export function resolveEntityExportTarget(data = {}) {
     const rawPath = data.filepath || '';
     const normPath = normalizeVfsURI(rawPath);
-    const parsed = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(normPath) : {};
+    const parsed = new window.inSetu.utils.InSetuURI(normPath);
 
-    const chunks = (data.chunks && data.chunks.length > 0)
-        ? data.chunks
-        : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, rawPath);
+    const manifestChunks = getChunks(normPath);
+    const chunks = (manifestChunks && manifestChunks.length > 0)
+        ? manifestChunks
+        : ((data.chunks && data.chunks.length > 0) ? data.chunks : []);
 
     if (parsed.isCompiledArtifact || (chunks && chunks.length > 1)) {
         return {
             mode: 'chunks',
-            chunks: (chunks && chunks.length > 0) ? chunks : [rawPath],
+            chunks: (chunks && chunks.length > 0) ? chunks : [normPath],
             isFS: false
         };
     }
-
+    const resolvedBaseName = rawPath ? new window.inSetu.utils.InSetuURI(rawPath).basename : '';
     if (data.transientContent !== undefined) {
         const hasUnresolvedMacro = typeof data.transientContent === 'string' && /\{\{\s*include_prompt\s*:/.test(data.transientContent);
         if (!hasUnresolvedMacro) {
-            return { mode: 'memory', text: data.transientContent, filename: rawPath.split('/').pop() || 'export.txt' };
+            return { mode: 'memory', text: data.transientContent, filename: resolvedBaseName || 'export.txt' };
         }
     }
 
@@ -540,7 +660,7 @@ export function resolveEntityExportTarget(data = {}) {
         const fullText = activeBuf.isTruncated ? activeBuf.fullText : activeBuf.content;
         const hasUnresolvedMacro = typeof fullText === 'string' && /\{\{\s*include_prompt\s*:/.test(fullText);
         if (!hasUnresolvedMacro && fullText !== undefined && fullText !== 'Loading...') {
-            return { mode: 'memory', text: fullText, filename: rawPath.split('/').pop() || 'export.txt' };
+            return { mode: 'memory', text: fullText, filename: resolvedBaseName || 'export.txt' };
         }
     }
 
@@ -550,41 +670,337 @@ export function resolveEntityExportTarget(data = {}) {
         isFS: !!data.isFS
     };
 }
+export function prepareBufferSavePayload(buf, filepath) {
+    if (!buf || buf.content === 'Loading...' || buf.content === undefined) return null;
+    let content = buf.content.replace(/\u00A0/g, ' ');
+    const filename = buf.filename || filepath || '';
+    if (filename.toLowerCase().endsWith('.json')) {
+        try { JSON.parse(content); } catch (e) { throw new Error("Invalid JSON syntax: " + e.message); }
+    }
+    return {
+        filepath: normalizeVfsURI(filepath || buf.filename),
+        content,
+        base_hash: buf.baseHash || null,
+        base_content: buf.originalContent ?? null
+    };
+}
 
+export function rebaseConcurrentText(baseText, localText, remoteText) {
+    if (window.inSetu?.utils?.threeWayMergeText) {
+        return window.inSetu.utils.threeWayMergeText(baseText, localText, remoteText);
+    }
+    if (localText === baseText) return { merged: remoteText, clean: true };
+    if (remoteText === baseText || remoteText === localText) return { merged: localText, clean: true };
+    return { merged: localText, clean: false };
+}
 export async function saveBufferFile(filepath, autoSave = false) {
     if (autoSave !== true) autoSave = false;
-    const state = FsStore.getState().activeBuffers[filepath];
-    if (!state || state.isTruncated) return;
-
-    let content = state.content.replace(/\u00A0/g, ' ');
-    if (state.filename.toLowerCase().endsWith('.json')) {
-        try { JSON.parse(content); } catch (e) { return alert("Invalid JSON syntax: " + e.message); }
+    const normPath = normalizeVfsURI(filepath) || filepath;
+    const state = FsStore.getState().activeBuffers[normPath] || FsStore.getState().activeBuffers[filepath];
+    if (!state || !state.isFS || state.isTruncated) return;
+    FsStore.getState().cancelAutoSave?.(normPath);
+    const saveRev = state.docRevision || 0;
+    let payload;
+    try {
+        payload = prepareBufferSavePayload(state, normPath);
+    } catch (e) {
+        return alert(e.message);
     }
-    const baseHash = state.baseHash || null;
-    await window.inSetu.sys.executeWorkspaceMutation('fs/save', { filepath, content, base_hash: baseHash }, {
-        collapseKey: `vfs:save:${filepath}`,
-        pendingMutations: [filepath],
-        cacheBlobUrl: `/api/${window.inSetu.utils.getActiveWorkspace()}/fs/fetch?file=${encodeURIComponent(filepath)}`,
-        cacheBlobContent: content,
-        loadingText: 'Saving...',
-        silent: autoSave,
-        onSuccess: async () => {
-            let nextHash = null;
-            try {
-                const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
-                nextHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-            } catch(e) {}
-            FsStore.getState().updateBuffer(filepath, { originalContent: content, content, baseHash: nextHash, saveStatus: 'idle' });
-            refreshActiveFileViews(null, filepath);
+    if (!payload) return;
+    const { content, base_hash: baseHash, base_content: baseContent } = payload;
+
+    const savingSet = FsStore.getState().savingPaths;
+    savingSet.add(normPath);
+    FsStore.getState().updateBuffer(normPath, {
+        saveStatus: 'saving',
+        lastSaveStartedAt: Date.now()
+    });
+
+    try {
+        await window.inSetu.sys.executeWorkspaceMutation('fs/save', {
+            filepath: payload.filepath,
+            content: payload.content,
+            base_hash: baseHash,
+            base_content: baseContent
+        }, {
+            collapseKey: `vfs:save:${normPath}`,
+            pendingMutations: [normPath],
+            cacheBlobUrl: `/api/${window.inSetu.utils.getActiveWorkspace()}/fs/fetch?file=${encodeURIComponent(normPath)}`,
+            cacheBlobContent: content,
+            loadingText: 'Saving...',
+            silent: autoSave,
+            onSuccess: async (resData) => {
+                const latestBuf = FsStore.getState().activeBuffers[normPath] || FsStore.getState().activeBuffers[filepath];
+                if (!latestBuf) return;
+
+                // PILLAR 2: If queued in offline outbox, do NOT overwrite originalContent or baseHash!
+                // Keep them pinned to the last server-confirmed ancestor so outbox compaction preserves V0.
+                if (resData && resData.job_id === 'offline_queue') {
+                    FsStore.getState().updateBuffer(normPath, {
+                        saveStatus: 'queued_offline',
+                        lastSavedAt: Date.now()
+                    });
+                    return;
+                }
+
+                const serverMergedText = (resData && resData.status === 'merged' && typeof resData.merged_content === 'string')
+                    ? resData.merged_content
+                    : null;
+                const confirmedText = serverMergedText !== null ? serverMergedText : content;
+
+                let nextHash = resData?.base_hash || null;
+                if (!nextHash) {
+                    try {
+                        const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(confirmedText));
+                        nextHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+                    } catch(e) {}
+                }
+                const advancedDuringSave = (latestBuf.docRevision || 0) > saveRev;
+                let canAdvanceBase = true;
+                let mergedContent = null;
+
+                if (serverMergedText !== null) {
+                    if (!advancedDuringSave) {
+                        mergedContent = serverMergedText;
+                    } else {
+                        const rebased = rebaseConcurrentText(content, latestBuf.content, serverMergedText);
+                        if (rebased.clean) {
+                            mergedContent = rebased.merged;
+                        } else {
+                            canAdvanceBase = false;
+                        }
+                    }
+                }
+                const ancestorSet = new Set(latestBuf.ancestorHashes || []);
+                if (baseHash) ancestorSet.add(baseHash);
+                if (latestBuf.baseHash) ancestorSet.add(latestBuf.baseHash);
+                if (nextHash) ancestorSet.add(nextHash);
+                const ancestorHashes = Array.from(ancestorSet).slice(-50);
+
+                const patch = {
+                    saveStatus: 'idle',
+                    lastSavedAt: Date.now(),
+                    savedRevision: Math.max(latestBuf.savedRevision || 0, saveRev),
+                    ancestorHashes
+                };
+
+                if (canAdvanceBase) {
+                    patch.originalContent = confirmedText;
+                    patch.baseHash = nextHash;
+                }
+
+                if (mergedContent !== null) {
+                    patch.content = mergedContent;
+                    patch.fullText = mergedContent;
+                }
+
+                FsStore.getState().updateBuffer(normPath, patch);
+            }
+        });
+    } finally {
+        savingSet.delete(normPath);
+    }
+}
+export async function reconcileBufferWithDisk(filepath) {
+    const normPath = normalizeVfsURI(filepath);
+    const fsState = FsStore.getState();
+    const recSet = fsState.reconcilingPaths;
+    const savingSet = fsState.savingPaths;
+    const autoSaveTimers = fsState.autoSaveTimers;
+    if (!normPath || recSet.has(normPath) || savingSet?.has(normPath) || autoSaveTimers?.has(normPath)) return;
+    const curBuf = fsState.activeBuffers?.[normPath] || fsState.activeBuffers?.[filepath];
+    if (!curBuf || !curBuf.isFS || curBuf.isTruncated || curBuf.content === 'Loading...') return;
+
+    const startDocRev = curBuf.docRevision || 0;
+    const startBaseHash = curBuf.baseHash || null;
+    recSet.add(normPath);
+    try {
+        const r = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(normPath)}`, {
+            headers: { 'Cache-Control': 'no-cache' }
+        });
+        if (!r.ok) return;
+        const newText = await r.text();
+        const latestState = FsStore.getState();
+        const latestBuf = latestState.activeBuffers?.[normPath] || latestState.activeBuffers?.[filepath];
+        if (!latestBuf || newText === null) return;
+
+        // Deterministic Lockout: Abort if user typed, scheduled autosave, or saved while fetch was in flight
+        if (
+            latestState.savingPaths?.has(normPath) ||
+            latestState.autoSaveTimers?.has(normPath) ||
+            (latestBuf.docRevision || 0) !== startDocRev ||
+            (latestBuf.baseHash || null) !== startBaseHash
+        ) {
+            return;
+        }
+
+        let newHash = null;
+        try {
+            const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(newText));
+            newHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+        } catch (_) {}
+
+        if (newHash && newHash === latestBuf.baseHash && newText === latestBuf.originalContent) {
+            return;
+        }
+
+        // Causal Monotonicity: Never roll back to a known historical ancestor of this buffer
+        if (newHash && Array.isArray(latestBuf.ancestorHashes) && latestBuf.ancestorHashes.includes(newHash)) {
+            return;
+        }
+
+        const isCurrentlyDirty = latestBuf.content !== latestBuf.originalContent;
+        const nextAncestors = newHash
+            ? Array.from(new Set([...(latestBuf.ancestorHashes || []), newHash])).slice(-50)
+            : (latestBuf.ancestorHashes || []);
+        if (!isCurrentlyDirty) {
+            const nextRev = (latestBuf.docRevision || 0) + 1;
+            FsStore.getState().updateBuffer(normPath, {
+                content: newText,
+                originalContent: newText,
+                fullText: newText,
+                baseHash: newHash,
+                ancestorHashes: nextAncestors,
+                docRevision: nextRev,
+                savedRevision: nextRev
+            });
+        } else {
+            const rebased = rebaseConcurrentText(latestBuf.originalContent, latestBuf.content, newText);
+            if (rebased.clean) {
+                const nextRev = (latestBuf.docRevision || 0) + 1;
+                FsStore.getState().updateBuffer(normPath, {
+                    content: rebased.merged,
+                    originalContent: newText,
+                    fullText: rebased.merged,
+                    baseHash: newHash,
+                    ancestorHashes: nextAncestors,
+                    docRevision: nextRev
+                });
+            }
+        }
+    } catch (_) {
+    } finally {
+        FsStore.getState().reconcilingPaths.delete(normPath);
+    }
+}
+export async function flushAllDirtyBuffers(useKeepalive = false) {
+    const buffers = FsStore.getState().activeBuffers || {};
+    const promises = [];
+    for (const [fp, buf] of Object.entries(buffers)) {
+        if (buf && buf.isFS && !buf.isTruncated && buf.content !== buf.originalContent && buf.content !== 'Loading...') {
+            const normPath = normalizeVfsURI(fp);
+            if (useKeepalive && window.inSetu?.api?.keepalivePost) {
+                let payload;
+                try {
+                    payload = prepareBufferSavePayload(buf, normPath);
+                } catch (_) {
+                    continue; // Skip invalid JSON buffers on emergency unload to prevent corrupting disk
+                }
+                if (payload) {
+                    window.inSetu.api.keepalivePost('fs/save', payload);
+                }
+            } else {
+                promises.push(saveBufferFile(normPath, true).catch(() => {}));
+            }
+        }
+    }
+    if (promises.length > 0) {
+        await Promise.all(promises);
+    }
+}
+
+window.addEventListener('blur', () => {
+    flushAllDirtyBuffers(false);
+});
+window.addEventListener('focus', () => {
+    const buffers = FsStore.getState().activeBuffers || {};
+    Object.keys(buffers).forEach(fp => {
+        const b = buffers[fp];
+        if (b && b.isFS && b.content === b.originalContent) {
+            reconcileBufferWithDisk(fp);
         }
     });
-}
+});
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        flushAllDirtyBuffers(false);
+    } else {
+        const buffers = FsStore.getState().activeBuffers || {};
+        Object.keys(buffers).forEach(fp => {
+            const b = buffers[fp];
+            if (b && b.isFS && b.content === b.originalContent) {
+                reconcileBufferWithDisk(fp);
+            }
+        });
+    }
+});
+
+window.addEventListener('sutram-outbox-item-synced', async (e) => {
+    const { path, bodyString, responseData } = e.detail || {};
+    if (!path || !path.endsWith('/fs/save') || !bodyString) return;
+    try {
+        const sentPayload = JSON.parse(bodyString);
+        const fp = normalizeVfsURI(sentPayload.filepath || '');
+        const buf = FsStore.getState().activeBuffers?.[fp];
+        if (!buf) return;
+
+        const serverMergedText = (responseData && responseData.status === 'merged' && typeof responseData.merged_content === 'string')
+            ? responseData.merged_content
+            : null;
+        const confirmedText = serverMergedText !== null ? serverMergedText : sentPayload.content;
+        let nextHash = responseData?.base_hash || null;
+        if (!nextHash && confirmedText !== undefined) {
+            const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(confirmedText));
+            nextHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+        let canAdvanceBase = true;
+        let mergedContent = null;
+
+        if (serverMergedText !== null) {
+            const rebased = rebaseConcurrentText(sentPayload.content, buf.content, serverMergedText);
+            if (rebased.clean) {
+                mergedContent = rebased.merged;
+            } else {
+                canAdvanceBase = false;
+            }
+        }
+        const ancestorSet = new Set(buf.ancestorHashes || []);
+        if (buf.baseHash) ancestorSet.add(buf.baseHash);
+        if (nextHash) ancestorSet.add(nextHash);
+
+        const patch = {
+            saveStatus: 'idle',
+            lastSavedAt: Date.now(),
+            ancestorHashes: Array.from(ancestorSet).slice(-50)
+        };
+
+        if (canAdvanceBase) {
+            patch.originalContent = confirmedText;
+            patch.baseHash = nextHash;
+        }
+
+        if (mergedContent !== null) {
+            patch.content = mergedContent;
+            patch.fullText = mergedContent;
+        }
+
+        if (buf.content === confirmedText || (patch.content && patch.content === confirmedText)) {
+            patch.savedRevision = buf.docRevision || 0;
+        }
+        FsStore.getState().updateBuffer(fp, patch);
+    } catch (_) {}
+});
 export function renameFileTracking(oldPath, newPath) {
+    if (!oldPath || !newPath || oldPath === newPath) return;
     const fsState = window.inSetu.stores.Fs.getState();
+    const hadPendingAutoSave = fsState.autoSaveTimers?.has(oldPath);
     const oldBuf = fsState.activeBuffers[oldPath];
     if (oldBuf) {
         fsState.openBuffer(newPath, { ...oldBuf, filename: newPath });
         fsState.closeBuffer(oldPath);
+        if (hadPendingAutoSave) {
+            fsState.scheduleAutoSave?.(newPath);
+        }
     }
 
     // Migrate open buffer tracking when parent directories are renamed or moved
@@ -597,63 +1013,34 @@ export function renameFileTracking(oldPath, newPath) {
         }
     });
 
+    const tPaths = AppStore.getState().tabBrowsePaths || {};
+    if (tPaths[oldPath]) {
+        const nextPaths = { ...tPaths, [newPath]: tPaths[oldPath] };
+        delete nextPaths[oldPath];
+        AppStore.setState({ tabBrowsePaths: nextPaths });
+    }
     const layoutStore = window.Sutram?.stores?.Layout;
-    if (layoutStore) {
-        const layout = layoutStore.getState();
-        const newCols = JSON.parse(JSON.stringify(layout.columns));
-        let changed = false;
-
-        ['left', 'center', 'right'].forEach(col => {
-            const colState = newCols[col];
-            if (colState && colState.pinned) {
-                colState.pinned = colState.pinned.map(p => {
-                    if (p.id === oldPath) {
-                        changed = true;
-                        return { ...p, id: newPath, label: newPath.split('/').pop() };
-                    }
-                    return p;
-                });
-                if (colState.active === oldPath) {
-                    colState.active = newPath;
-                    changed = true;
-                }
-                if (Array.isArray(colState.history)) {
-                    colState.history = colState.history.map(hId => hId === oldPath ? newPath : hId);
-                }
-            }
-        });
-
-        const newFocusHistory = (layout.focusHistory || []).map(h => {
-            if (h.id === oldPath) {
-                changed = true;
-                return { ...h, id: newPath };
-            }
-            return h;
-        });
-
-        const newWindows = (layout.windows || []).map(w => {
-            if (w.id === oldPath) {
-                changed = true;
-                return { ...w, id: newPath, label: newPath.split('/').pop(), titleText: newPath.split('/').pop() };
-            }
-            return w;
-        });
-        if (changed) {
-            layoutStore.setState({ columns: newCols, windows: newWindows, focusHistory: newFocusHistory });
-
-            const activeWs = window.inSetu.utils.getActiveWorkspace();
-            const focused = layout.focusedColumn || 'center';
-            if (newCols[focused] && newCols[focused].active === newPath) {
-                const deepPath = window.inSetu.stores.App?.getState()?.tabBrowsePaths?.[oldPath];
-                const deepStr = deepPath && deepPath.length > 0 ? '/' + deepPath.map(encodeURIComponent).join('/') : '';
-                const hash = `#/${activeWs}/${focused}/${encodeURIComponent(newPath)}${deepStr}`;
-                if (window.location.hash !== hash) {
-                    window.history.replaceState(null, '', hash);
-                }
-            }
-        }
+    if (layoutStore?.getState()?.rekeyProjection) {
+        layoutStore.getState().rekeyProjection(oldPath, newPath, new window.inSetu.utils.InSetuURI(newPath).basename);
     }
 }
+
+window.addEventListener('sutram-projections-migrated', (e) => {
+    const migrationMap = e.detail?.migrationMap || {};
+    const tPaths = AppStore.getState().tabBrowsePaths || {};
+    let changed = false;
+    const updatedPaths = { ...tPaths };
+    for (const [oldKey, newKey] of Object.entries(migrationMap)) {
+        if (updatedPaths[oldKey]) {
+            updatedPaths[newKey] = updatedPaths[oldKey];
+            delete updatedPaths[oldKey];
+            changed = true;
+        }
+    }
+    if (changed) {
+        AppStore.setState({ tabBrowsePaths: updatedPaths });
+    }
+});
 
 async function executeMove() {
     const { currentFile, destPath } = FsStore.getState().modals.move;
@@ -661,11 +1048,11 @@ async function executeMove() {
 
     const normCurrent = normalizeVfsURI(currentFile);
     const normDest = normalizeVfsURI(destPath);
-
     const activeBuffers = FsStore.getState().activeBuffers || {};
     const buffer = activeBuffers[normCurrent] || activeBuffers[currentFile];
     if (buffer && buffer.isFS && buffer.content !== buffer.originalContent) {
-        if (confirm(`"${normCurrent.split('/').pop()}" has unsaved changes. Save changes before moving?`)) {
+        const baseName = new window.inSetu.utils.InSetuURI(normCurrent).basename;
+        if (confirm(`"${baseName}" has unsaved changes. Save changes and continue moving? (Click Cancel to abort move)`)) {
             await window.inSetu.ui.saveBufferFile(buffer.filename);
         } else {
             return;
@@ -681,8 +1068,6 @@ async function executeMove() {
             if (window.Sutram?.stores?.Layout) {
                 window.Sutram.stores.Layout.getState().closeWindow('vfs:move-file');
             }
-            renameFileTracking(normCurrent, normDest);
-            refreshActiveFileViews(normCurrent, normDest);
         }
     });
 }
@@ -734,12 +1119,10 @@ export class InSetuMoveFileProjection extends InSetuElement {
                     placeholder="path/to/destination/file.ext"
                     style="font-family: var(--font-mono); --bg-input: var(--bg);"
                     @sutram-input-changed=${e => {
-                        const newDest = normalizeVfsURI(e.detail.value);
-                        const parsed = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(newDest) : { repo: '', relativePath: '' };
-                        const relJoined = parsed.repo ? `${parsed.repo}/${parsed.relativePath}` : parsed.relativePath;
-                        const parts = relJoined.split('/').filter(Boolean);
+                        const uri = new window.inSetu.utils.InSetuURI(e.detail.value);
+                        const parts = uri.pathSegments;
                         parts.pop();
-                        FsStore.getState().setModal('move', { destPath: newDest, initialParts: parts });
+                        FsStore.getState().setModal('move', { destPath: uri.toString(), initialParts: parts });
                     }}>
                 </sutram-input>
             </div>
@@ -755,7 +1138,7 @@ export class InSetuMoveFileProjection extends InSetuElement {
                     @path-changed=${e => {
                         const pathArr = e.detail.path || [];
                         const folderPrefix = pathArr.join('/');
-                        const filename = m.currentFile ? m.currentFile.split('/').pop() : '';
+                        const filename = m.currentFile ? new window.inSetu.utils.InSetuURI(m.currentFile).basename : '';
                         const nextDest = folderPrefix ? `vfs://${folderPrefix}/${filename}` : `vfs://${filename}`;
                         FsStore.getState().setModal('move', {
                             destPath: nextDest,
@@ -858,7 +1241,7 @@ export class InSetuVFSExplorer extends InSetuElement {
         static properties = {
                 searchQuery: { type: String },
                 manifestFiles: { type: Array },
-                globalBrowsePath: { type: Array },
+                browsePath: { type: Array },
                 loading: { type: Boolean }
         };
         static styles = [sharedStyles, css`
@@ -869,20 +1252,27 @@ export class InSetuVFSExplorer extends InSetuElement {
                 super();
                 this.searchQuery = '';
                 this.manifestFiles = [];
-                this.globalBrowsePath = [];
+                this.browsePath = [];
                 this.loading = false;
+        }
+        _getSubKey() {
+                return this.dataset?.subId || 'fs:files';
         }
         connectedCallback() {
                 super.connectedCallback();
                 this.subscribe(
                         AppStore,
-                        state => ({
-                                manifestFiles: state.derivedVfsFiles || [],
-                                globalBrowsePath: state.globalBrowsePath || []
-                        }),
-                        ({ manifestFiles, globalBrowsePath }) => {
+                        state => {
+                                const subKey = this._getSubKey();
+                                const tPaths = state.tabBrowsePaths || {};
+                                return {
+                                        manifestFiles: state.derivedVfsFiles || [],
+                                        browsePath: tPaths[subKey] || tPaths['fs:files'] || tPaths['files'] || []
+                                };
+                        },
+                        ({ manifestFiles, browsePath }) => {
                                 this.manifestFiles = manifestFiles;
-                                this.globalBrowsePath = globalBrowsePath;
+                                this.browsePath = browsePath;
                         }
                 );
                 this.subscribe(
@@ -900,7 +1290,7 @@ export class InSetuVFSExplorer extends InSetuElement {
 
                 const initState = AppStore.getState();
                 this.manifestFiles = initState.derivedVfsFiles || [];
-                this.globalBrowsePath = initState.globalBrowsePath || [];
+                this.browsePath = initState.getBrowsePath ? initState.getBrowsePath(this._getSubKey()) : [];
                 this.searchQuery = FsStore.getState().searchQuery || '';
         }
         disconnectedCallback() {
@@ -921,7 +1311,7 @@ export class InSetuVFSExplorer extends InSetuElement {
                 }
         }
         _handlePathChange(e) {
-                AppStore.getState().setBrowsePath(e.detail.path || [], 'files');
+                AppStore.getState().setBrowsePath(e.detail.path || [], this._getSubKey());
         }
         render() {
             if (this.manifestFiles.length === 0 && !this.loading) {
@@ -935,7 +1325,7 @@ export class InSetuVFSExplorer extends InSetuElement {
                         @card-clicked=${(e) => { if(e.detail.isSource && window.inSetu.vfs.viewSourceFile) window.inSetu.vfs.viewSourceFile(e.detail.filename, true); }}
                         basePath=""
                         .files=${this.manifestFiles}
-                        .currentPath=${this.globalBrowsePath}
+                        .currentPath=${this.browsePath}
                         .hidePath=${false}
                         .enableSearch=${true}
                         searchPlaceholder="Fuzzy search files..."
@@ -998,7 +1388,6 @@ function _evictDeletedNodeFromState(normPath, rawPath, isDir) {
         mutations: [{ filepath: normPath + (isDir ? '/' : ''), operation: 'delete' }]
     });
 }
-
 async function _relocateVfsNode(rawPath, destPath, isDir, options = {}) {
     const normPath = normalizeVfsURI(rawPath);
     const normDest = normalizeVfsURI(destPath);
@@ -1009,13 +1398,6 @@ async function _relocateVfsNode(rawPath, destPath, isDir, options = {}) {
         loadingText: options.loadingText || 'Moving...',
         silent: !!options.silent,
         onSuccess: () => {
-            renameFileTracking(normPath, normDest);
-            window.inSetu.events.emitHook('insetu:vfs-mutated', {
-                mutations: [
-                    { filepath: normPath + (isDir ? '/' : ''), operation: 'delete' },
-                    { filepath: normDest + (isDir ? '/' : ''), operation: 'save' }
-                ]
-            });
             if (options.onSuccess) options.onSuccess();
         }
     });
@@ -1029,13 +1411,6 @@ async function _archiveVfsNode(rawPath, isDir, options = {}) {
         loadingText: options.loadingText || 'Archiving...',
         silent: !!options.silent,
         onSuccess: (resData) => {
-            renameFileTracking(normPath, resData.new_path);
-            window.inSetu.events.emitHook('insetu:vfs-mutated', {
-                mutations: [
-                    { filepath: normPath + (isDir ? '/' : ''), operation: 'delete' },
-                    { filepath: resData.new_path + (isDir ? '/' : ''), operation: 'save' }
-                ]
-            });
             if (options.onSuccess) options.onSuccess(resData);
         }
     });
@@ -1063,25 +1438,24 @@ export async function executeBulkMove(items) {
         const cleanDest = destFolder.replace(/\/+$/, '');
 
         if (!confirm(`Move ${targets.length} item(s) to /${cleanDest || '[root]'}?`)) return;
-
+        const destBaseUri = new window.inSetu.utils.InSetuURI(cleanDest || 'vfs://');
         const operations = [];
         for (const target of targets) {
-            const itemName = target.path.split('/').filter(Boolean).pop();
-            const destPath = cleanDest ? `${cleanDest}/${itemName}` : itemName;
-            if (destPath === target.path) continue;
-            if (target.isDir && (destPath === target.path || destPath.startsWith(target.path + '/'))) {
+            const srcUri = new window.inSetu.utils.InSetuURI(target.path);
+            const destUriStr = destBaseUri.join(srcUri.basename);
+            if (destUriStr === srcUri.toString()) continue;
+            if (target.isDir && (destUriStr === srcUri.toString() || destUriStr.startsWith(srcUri.toString() + '/'))) {
                 console.warn(`Cannot move directory '${target.path}' into itself or its own subfolder.`);
                 continue;
             }
             operations.push({
                 action: 'move',
-                filepath: normalizeVfsURI(target.path),
-                dest_path: normalizeVfsURI(destPath),
+                filepath: srcUri.toString(),
+                dest_path: destUriStr,
                 is_dir: !!target.isDir
             });
         }
         if (operations.length === 0) return;
-
         await window.inSetu.sys.executeWorkspaceMutation('fs/bulk', { operations }, {
             collapseKey: `vfs:bulk:move:${Date.now()}`,
             pendingMutations: operations.map(op => op.dest_path),
@@ -1089,13 +1463,6 @@ export async function executeBulkMove(items) {
             loadingText: `Moving ${operations.length} item(s)...`,
             successMessage: `Moved ${operations.length} item(s) to /${cleanDest || '[root]'}`,
             onSuccess: () => {
-                const mutations = [];
-                operations.forEach(op => {
-                    renameFileTracking(op.filepath, op.dest_path);
-                    mutations.push({ filepath: op.filepath + (op.is_dir ? '/' : ''), operation: 'delete' });
-                    mutations.push({ filepath: op.dest_path + (op.is_dir ? '/' : ''), operation: 'save' });
-                });
-                window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations });
                 SelectionStore.getState().clearSelection();
                 if (window.inSetu.ui?.setGlobalStatus) {
                     window.inSetu.ui.setGlobalStatus(`Moved ${operations.length} item(s) to /${cleanDest || '[root]'}`, 3000);
@@ -1116,26 +1483,12 @@ export async function executeBulkArchive(items) {
         filepath: normalizeVfsURI(target.path),
         is_dir: !!target.isDir
     }));
-
     await window.inSetu.sys.executeWorkspaceMutation('fs/bulk', { operations }, {
         collapseKey: `vfs:bulk:archive:${Date.now()}`,
         deletedMutations: operations.map(op => op.filepath),
         loadingText: `Archiving ${operations.length} item(s)...`,
         successMessage: `Archived ${operations.length} item(s)`,
-        onSuccess: (resData) => {
-            const returnedOps = resData?.operations || [];
-            const mutations = [];
-            operations.forEach((op, idx) => {
-                const dest = returnedOps[idx]?.dest_path;
-                if (dest) {
-                    renameFileTracking(op.filepath, dest);
-                    mutations.push({ filepath: op.filepath + (op.is_dir ? '/' : ''), operation: 'delete' });
-                    mutations.push({ filepath: dest + (op.is_dir ? '/' : ''), operation: 'save' });
-                }
-            });
-            if (mutations.length > 0) {
-                window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations });
-            }
+        onSuccess: () => {
             SelectionStore.getState().clearSelection();
             if (window.inSetu.ui?.setGlobalStatus) {
                 window.inSetu.ui.setGlobalStatus(`Archived ${operations.length} item(s)`, 3000);
@@ -1175,110 +1528,29 @@ export async function executeBulkDelete(items) {
         }
     });
 }
+function _buildVfsExplorerMenuActions(slotCfg = {}) {
+    const subKey = slotCfg?.id || 'fs:files';
+    const browsePath = AppStore.getState().getBrowsePath ? AppStore.getState().getBrowsePath(subKey) : [];
+    const currentPath = browsePath.join('/');
+    const items = [];
+    if (!currentPath) {
+        items.push({ label: 'New Repository', icon: 'package', onClick: () => openNewFolderModal() });
+    } else {
+        const prefix = `vfs://${currentPath}/`;
+        items.push({ label: 'New Folder', icon: 'folder-plus', onClick: () => openNewFolderModal(prefix) });
+        items.push({ label: 'New File', icon: 'file-plus', onClick: () => openNewFileModal(prefix) });
+        items.push({ label: 'Upload File', icon: 'upload', onClick: () => uploadFileToWorkspace(`vfs://${currentPath}`) });
 
-export class InSetuVFSExplorerActions extends InSetuElement {
-    static properties = {
-        globalBrowsePath: { type: Array },
-        _menuItems: { type: Array },
-        _selectedCount: { type: Number }
-    };
-    static styles = [sharedStyles, css`
-        :host { display: flex; align-items: stretch; height: 100%; }
-    `];
-
-    constructor() {
-        super();
-        this.globalBrowsePath = [];
-        this._menuItems = [];
-        this._selectedCount = 0;
-        this._selectedItems = new Map();
-    }
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(
-            AppStore,
-            state => state.globalBrowsePath || [],
-            (globalBrowsePath) => {
-                this.globalBrowsePath = globalBrowsePath;
-                this._rebuildMenu();
-            }
-        );
-        this.subscribe(
-            SelectionStore,
-            state => state.selectedItems || new Map(),
-            (selectedItems) => {
-                this._selectedItems = selectedItems;
-                this._selectedCount = this._selectedItems.size;
-                this._rebuildMenu();
-                this.requestUpdate();
-            }
-        );
-        this.globalBrowsePath = AppStore.getState().globalBrowsePath || [];
-        this._selectedItems = SelectionStore.getState()?.selectedItems || new Map();
-        this._selectedCount = this._selectedItems.size;
-        this._rebuildMenu();
-    }
-
-    _rebuildMenu() {
-        const selectedMap = this._selectedItems || new Map();
-        const selectedList = Array.from(selectedMap.values());
-        const selectedCount = selectedList.length;
-
-        const currentPath = this.globalBrowsePath.join('/');
-        const items = [];
-        if (selectedCount > 0) {
-            const bulkFileActions = window.ExtensionRegistry?.getAggregatableActions 
-                ? window.ExtensionRegistry.getAggregatableActions(selectedList, { group: 'file' }) 
-                : [];
-
-            if (bulkFileActions.length > 0) {
-                bulkFileActions.forEach(act => items.push(act));
-                items.push({ divider: true });
-            }
-
-            items.push({
-                label: `Clear Selection (${selectedCount})`,
-                icon: 'x',
-                onClick: () => SelectionStore.getState().clearSelection()
-            });
+        const manifestFiles = getGlobalManifest();
+        const hasFiles = manifestFiles.some(f => f.startsWith(prefix) && !f.endsWith('.gitkeep'));
+        if (!hasFiles) {
             items.push({ divider: true });
+            items.push({ label: 'Delete Folder', icon: 'trash-2', onClick: () => deleteEmptyFolder(`vfs://${currentPath}`) });
         }
-        if (!currentPath) {
-            items.push({ label: 'New Repository', icon: 'package', onClick: () => openNewFolderModal() });
-        } else {
-            const prefix = `vfs://${currentPath}/`;
-            items.push({ label: 'New Folder', icon: 'folder-plus', onClick: () => openNewFolderModal(prefix) });
-            items.push({ label: 'New File', icon: 'file-plus', onClick: () => openNewFileModal(prefix) });
-            items.push({ label: 'Upload File', icon: 'upload', onClick: () => uploadFileToWorkspace(`vfs://${currentPath}`) });
-
-            const manifestFiles = getGlobalManifest();
-            const hasFiles = manifestFiles.some(f => f.startsWith(prefix) && !f.endsWith('.gitkeep'));
-            if (!hasFiles) {
-                items.push({ divider: true });
-                items.push({ label: 'Delete Folder', icon: 'trash-2', onClick: () => deleteEmptyFolder(`vfs://${currentPath}`) });
-            }
-        }
-        window.inSetu.events.emitHook('insetu:fs-dropdown-menu', { currentPath, menuItems: items });
-        this._menuItems = items;
     }
-
-    render() {
-        const count = this._selectedCount || 0;
-        return html`
-            <sutram-dropdown align="right" .items=${this._menuItems} style="height: 100%; display: flex; align-items: stretch;">
-                <button slot="trigger" class="system-action-btn" title="${count > 0 ? `Bulk Actions (${count} selected)` : 'Actions'}" style="border: none; border-left: 1px solid var(--border); border-radius: 0; height: 100%; width: 44px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; position: relative;">
-                    ${count > 0 ? html`
-                        <yv-icon name="layers" style="width: 15px; height: 15px; color: var(--intent-warning);"></yv-icon>
-                        <span style="position: absolute; top: 4px; right: 4px; background: var(--intent-warning); color: var(--bg-deep); border-radius: 50%; width: 14px; height: 14px; font-size: 9px; font-weight: bold; display: flex; align-items: center; justify-content: center; line-height: 1;">${count > 9 ? '9+' : count}</span>
-                    ` : html`
-                        <yv-icon name="menu" style="width: 14px; height: 14px;"></yv-icon>
-                    `}
-                </button>
-            </sutram-dropdown>
-        `;
-    }
+    window.inSetu.events.emitHook('insetu:fs-dropdown-menu', { currentPath, menuItems: items });
+    return items;
 }
-customElements.define('insetu-vfs-explorer-actions', InSetuVFSExplorerActions);
 window.ExtensionRegistry.registerExtension('fs', {
     name: "Virtual File System",
     version: "2.0.0",
@@ -1290,6 +1562,24 @@ window.ExtensionRegistry.registerExtension('fs', {
             const activeBuffers = FsStore.getState().activeBuffers || {};
             const buf = activeBuffers[subId] || activeBuffers[normId];
             return Boolean(buf && buf.content !== buf.originalContent);
+        },
+        'sutram:rekey-projection-id': ({ id, mapSegment }) => {
+            if (!id || typeof id !== 'string' || typeof mapSegment !== 'function') return null;
+            if (id.startsWith('vfs:diff:')) {
+                const target = id.slice('vfs:diff:'.length);
+                const mapped = mapSegment(target);
+                return mapped !== target ? `vfs:diff:${mapped}` : id;
+            }
+            if (id.startsWith('vfs:pairdiff:')) {
+                const pairStr = id.slice('vfs:pairdiff:'.length);
+                const [leftFp, rightFp] = pairStr.split('::');
+                const nextLeft = mapSegment(leftFp || '');
+                const nextRight = mapSegment(rightFp || '');
+                if (nextLeft !== (leftFp || '') || nextRight !== (rightFp || '')) {
+                    return `vfs:pairdiff:${nextLeft}::${nextRight}`;
+                }
+            }
+            return null;
         }
     },
     shortcuts: [
@@ -1322,31 +1612,28 @@ window.ExtensionRegistry.registerExtension('fs', {
             match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
             onClick: (data, e) => {
                 if (data.isDir) {
-                    const srcDir = String(data.folderpath || data.filepath || '').replace(/\/+$/, '');
-                    const folderName = srcDir.split('/').filter(Boolean).pop();
+                    const srcUri = new window.inSetu.utils.InSetuURI(data.folderpath || data.filepath);
                     openFolderBrowser(async (destParent) => {
                         if (destParent === undefined || destParent === null) return;
-                        const cleanDest = destParent.replace(/\/+$/, '');
-                        const destPath = cleanDest ? `${cleanDest}/${folderName}` : folderName;
-                        if (destPath === srcDir || destPath.startsWith(srcDir + '/')) {
+                        const destBaseUri = new window.inSetu.utils.InSetuURI(destParent);
+                        const normDest = destBaseUri.join(srcUri.basename);
+                        if (normDest === srcUri.toString() || normDest.startsWith(srcUri.toString() + '/')) {
                             alert("Cannot move a folder into itself or a subfolder.");
                             return;
                         }
-                        await _relocateVfsNode(srcDir, destPath, true, { loadingText: 'Moving folder...' });
+                        await _relocateVfsNode(srcUri.toString(), normDest, true, { loadingText: 'Moving folder...' });
                     });
                 } else {
-                    const normFp = normalizeVfsURI(data.filepath || '');
-                    const parsed = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(normFp) : { repo: '', relativePath: '' };
-                    const relJoined = parsed.repo ? `${parsed.repo}/${parsed.relativePath}` : parsed.relativePath;
-                    const parts = relJoined ? relJoined.split('/').filter(Boolean) : [];
+                    const srcUri = new window.inSetu.utils.InSetuURI(data.filepath);
+                    const parts = srcUri.pathSegments;
                     parts.pop();
-                    window.inSetu.stores.Fs.getState().setModal('move', { open: false, currentFile: normFp, destPath: normFp, initialParts: parts });
+                    window.inSetu.stores.Fs.getState().setModal('move', { open: false, currentFile: srcUri.toString(), destPath: srcUri.toString(), initialParts: parts });
                     if (window.Sutram?.stores?.Layout) {
                         const layout = window.Sutram.stores.Layout.getState();
                         layout.openWindow({
                             id: 'vfs:move-file',
                             component: 'insetu-move-file-projection',
-                            label: `Move: ${normFp.split('/').pop()}`,
+                            label: `Move: ${srcUri.basename}`,
                             icon: 'truck',
                             intent: 'warning',
                             extName: 'fs',
@@ -1368,15 +1655,21 @@ window.ExtensionRegistry.registerExtension('fs', {
             intent: 'neutral',
             order: 65,
             bulkable: false,
-            match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
+            match: (data) => {
+                if (data.isSkeleton || !(data.isFS || data.isDir)) return false;
+                const uri = new window.inSetu.utils.InSetuURI(data.isDir ? (data.folderpath || data.filepath) : data.filepath);
+                if (data.isDir && uri.isRootVolume) return false;
+                return Boolean(uri.basename);
+            },
             asyncAction: async (data, e) => {
-                const rawPath = String(data.isDir ? (data.folderpath || data.filepath) : data.filepath).replace(/\/+$/, '');
-                const parts = rawPath.split('/').filter(Boolean);
-                const currentName = parts.pop() || '';
-                const newName = prompt(`Enter new ${data.isDir ? 'folder' : 'file'} name:`, currentName);
+                const srcUri = new window.inSetu.utils.InSetuURI(data.isDir ? (data.folderpath || data.filepath) : data.filepath);
+                const currentName = srcUri.basename;
+                const rawNewName = prompt(`Enter new ${data.isDir ? 'folder' : 'file'} name:`, currentName);
+                if (!rawNewName) return;
+                const newName = rawNewName.trim().replace(/^\/+|\/+$/g, '');
                 if (!newName || newName === currentName) return;
-                const destPath = parts.length > 0 ? parts.join('/') + '/' + newName : newName;
-                await _relocateVfsNode(rawPath, destPath, !!data.isDir, { loadingText: 'Renaming...' });
+                const destPath = srcUri.withName(newName);
+                await _relocateVfsNode(srcUri.toString(), destPath, !!data.isDir, { loadingText: 'Renaming...' });
             }
         },
         {
@@ -1393,10 +1686,10 @@ window.ExtensionRegistry.registerExtension('fs', {
             bulkable: true,
             match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
             asyncAction: async (data, e) => {
-                const rawPath = String(data.isDir ? (data.folderpath || data.filepath) : data.filepath).replace(/\/+$/, '');
-                const label = data.isDir ? `folder "${rawPath.split('/').filter(Boolean).pop()}"` : `this file`;
+                const targetUri = new window.inSetu.utils.InSetuURI(data.isDir ? (data.folderpath || data.filepath) : data.filepath);
+                const label = data.isDir ? `folder "${targetUri.basename}"` : `this file`;
                 if (!confirm(`Archive ${label} to an 'archived/' directory?`)) return;
-                await _archiveVfsNode(rawPath, !!data.isDir, { loadingText: 'Archiving...' });
+                await _archiveVfsNode(targetUri.toString(), !!data.isDir, { loadingText: 'Archiving...' });
             },
             bulkAction: (items, e) => executeBulkArchive(items)
         },
@@ -1414,10 +1707,10 @@ window.ExtensionRegistry.registerExtension('fs', {
             bulkable: true,
             match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
             asyncAction: async (data, e) => {
-                const rawPath = String(data.isDir ? (data.folderpath || data.filepath) : data.filepath).replace(/\/+$/, '');
-                const label = data.isDir ? `folder "${rawPath.split('/').filter(Boolean).pop()}" and all its contents` : `this file`;
+                const targetUri = new window.inSetu.utils.InSetuURI(data.isDir ? (data.folderpath || data.filepath) : data.filepath);
+                const label = data.isDir ? `folder "${targetUri.basename}" and all its contents` : `this file`;
                 if (!confirm(`Permanently delete ${label}? This cannot be undone!`)) return;
-                await _deleteVfsNode(rawPath, !!data.isDir, { loadingText: 'Deleting...' });
+                await _deleteVfsNode(targetUri.toString(), !!data.isDir, { loadingText: 'Deleting...' });
             },
             bulkAction: (items, e) => executeBulkDelete(items)
         },
@@ -1456,6 +1749,76 @@ window.ExtensionRegistry.registerExtension('fs', {
         },
         {
             targetEntity: 'file',
+            id: 'file-conflict-diff',
+            label: 'Diff Original',
+            icon: 'git-compare',
+            group: 'edit',
+            vfsBound: false,
+            intent: 'highlight',
+            order: 11.5,
+            match: (data) => {
+                if (data.isSkeleton || data.isDir) return false;
+                return Boolean(resolveConflictOriginalPath(data.filepath));
+            },
+            onClick: (data, e) => {
+                const origPath = resolveConflictOriginalPath(data.filepath);
+                if (origPath) {
+                    viewTwoFileDiff(origPath, data.filepath);
+                }
+            }
+        },
+        {
+            targetEntity: 'file',
+            targetEntities: ['file'],
+            id: 'vfs-compare-selected',
+            bulkGroupKey: 'compare',
+            label: 'Compare Selected (2)',
+            icon: 'git-compare',
+            group: 'file',
+            vfsBound: false,
+            intent: 'highlight',
+            order: 63,
+            bulkable: true,
+            match: (data) => {
+                if (data.isSkeleton || data.isDir) return false;
+                const selMap = SelectionStore.getState()?.selectedItems;
+                if (!selMap || selMap.size !== 2) return false;
+                const items = Array.from(selMap.values());
+                return items.every(i => !(i.data?.isDir || i.isDir));
+            },
+            onClick: () => {
+                const selMap = SelectionStore.getState()?.selectedItems;
+                if (!selMap || selMap.size !== 2) return;
+                const paths = Array.from(selMap.values()).map(i => i.data?.filepath || i.filepath).filter(Boolean);
+                if (paths.length === 2) {
+                    const [a, b] = paths;
+                    // Always place the base file on the Left and the .conflict_ file on the Right
+                    if (resolveConflictOriginalPath(a)) {
+                        viewTwoFileDiff(b, a);
+                    } else {
+                        viewTwoFileDiff(a, b);
+                    }
+                    SelectionStore.getState().clearSelection();
+                }
+            },
+            bulkAction: (items) => {
+                const fileItems = (items || []).filter(i => !(i.data?.isDir || i.isDir));
+                if (fileItems.length !== 2) {
+                    alert("Please select exactly 2 files to compare side-by-side.");
+                    return;
+                }
+                const a = fileItems[0].data?.filepath || fileItems[0].filepath;
+                const b = fileItems[1].data?.filepath || fileItems[1].filepath;
+                if (resolveConflictOriginalPath(a)) {
+                    viewTwoFileDiff(b, a);
+                } else {
+                    viewTwoFileDiff(a, b);
+                }
+                SelectionStore.getState().clearSelection();
+            }
+        },
+        {
+            targetEntity: 'file',
             id: 'file-copy',
             label: 'Copy',
             icon: 'clipboard',
@@ -1465,13 +1828,15 @@ window.ExtensionRegistry.registerExtension('fs', {
             order: 12,
             match: (data) => !data.isSkeleton,
             asyncAction: async (data, e) => {
-                const target = resolveEntityExportTarget(data);
-                if (target.mode === 'memory') {
-                    await navigator.clipboard.writeText(target.text).then(() => {
+                const preTarget = resolveEntityExportTarget(data);
+                if (preTarget.mode === 'memory') {
+                    await navigator.clipboard.writeText(preTarget.text).then(() => {
                         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("✅ Copied!", 2000);
                     }).catch(err => alert("Clipboard API failed. Please manually select the text and copy it directly."));
                     return;
                 }
+                await ensureFreshContext(data.filepath);
+                const target = resolveEntityExportTarget(data);
                 const primaryFile = target.chunks[0] || data.filepath;
                 const fetchUrl = resolveFileFetchUrl(primaryFile, target.isFS);
                 await fetchAndCopy(primaryFile, fetchUrl);
@@ -1501,24 +1866,12 @@ window.ExtensionRegistry.registerExtension('fs', {
             icon: 'share',
             group: 'share',
             vfsBound: false,
+            keepDrawerOpen: true,
             intent: 'primary',
             order: 15,
             match: (data) => {
                 if (data.isSkeleton) return false;
                 return !!navigator.share && !!navigator.canShare;
-            },
-            onReveal: (data) => {
-                const target = resolveEntityExportTarget(data);
-                if (target.mode === 'memory') return;
-                window.inSetu.vfs.shareTextCache.clear();
-                target.chunks.forEach(filepath => {
-                    const fetchUrl = resolveFileFetchUrl(filepath, target.isFS);
-                    const activeWs = window.inSetu.utils.getActiveWorkspace();
-
-                    window.inSetu.api.fetchImmutableText(fetchUrl, { onlyIfMissing: true }, activeWs)
-                        .then(textContent => window.inSetu.vfs.shareTextCache.set(filepath, textContent))
-                        .catch(() => {});
-                });
             },
             onClick: (data, e) => {
                 if (e) e.stopPropagation();
@@ -1540,10 +1893,9 @@ window.ExtensionRegistry.registerExtension('fs', {
             intent: 'neutral',
             order: 105,
             match: (data) => {
-                if (data.isSkeleton) return false;
-                // Fast-path: Utilize the pre-computed chunks array passed by the UI cards
-                const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, data.filepath);
-                return chunks && chunks.length > 1;
+                if (data.isSkeleton || !data.filepath) return false;
+                const chunks = getChunks(data.filepath);
+                return Boolean(chunks && chunks.length > 1);
             },
             onClick: (data, e) => {
                 window.dispatchEvent(new CustomEvent('insetu:vfs:view-parts', { detail: { filepath: data.filepath } }));
@@ -1560,17 +1912,19 @@ window.ExtensionRegistry.registerExtension('fs', {
             order: 18,
             match: (data) => !data.isSkeleton,
             asyncAction: async (data, e) => {
-                const target = resolveEntityExportTarget(data);
-                if (target.mode === 'memory') {
+                const preTarget = resolveEntityExportTarget(data);
+                if (preTarget.mode === 'memory') {
                     try {
-                        const blob = new Blob([target.text], { type: 'text/plain' });
-                        downloadBlob(blob, target.filename);
+                        const blob = new Blob([preTarget.text], { type: 'text/plain' });
+                        downloadBlob(blob, preTarget.filename);
                         return;
                     } catch (err) {
                         alert("Error downloading file: " + err.message);
                         return;
                     }
                 }
+                await ensureFreshContext(data.filepath);
+                const target = resolveEntityExportTarget(data);
                 const chunks = target.chunks;
                 if (chunks && chunks.length > 1) {
                     if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⬇️ Downloading multi-part context...", 2000);
@@ -1597,14 +1951,11 @@ window.ExtensionRegistry.registerExtension('fs', {
             intent: "neutral",
             order: 2,
             allow_popout: true,
+            bulkActionGroup: "file",
+            bulkEntityTypes: ["file", "folder"],
+            menuStores: ["App"],
+            menuActions: _buildVfsExplorerMenuActions,
             component: "insetu-vfs-explorer"
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "edit",
-            targetSub: "files",
-            component: "insetu-vfs-explorer-actions",
-            order: 2
         }
     ]
 });
@@ -1612,7 +1963,7 @@ export function getFileExtensionWarning(filename, basePath = '') {
     if (!filename) return '';
     const cleanBase = (basePath || '').replace(/^[a-zA-Z0-9_-]+:\/\//, '');
     const pathParts = cleanBase.split('/').filter(Boolean);
-    const gbPath = pathParts.length > 0 ? pathParts : (AppStore.getState().globalBrowsePath || []);
+    const gbPath = pathParts.length > 0 ? pathParts : (AppStore.getState().getBrowsePath ? AppStore.getState().getBrowsePath('fs:files') : []);
     if (gbPath.length > 0) {
         const repoDir = gbPath[0];
         const targetConfigs = AppStore.getState().targetConfigs || [];
@@ -1638,7 +1989,7 @@ export function checkFileExtension(filename) {
     return getFileExtensionWarning(filename);
 }
 function openNewFileModal(overridePath = null) {
-    const gbPath = AppStore.getState().globalBrowsePath || [];
+    const gbPath = AppStore.getState().getBrowsePath ? AppStore.getState().getBrowsePath('fs:files') : [];
     const rawPrefix = typeof overridePath === 'string' ? overridePath : (gbPath.length > 0 ? `vfs://${gbPath.join('/')}/` : '');
     const prefix = rawPrefix ? normalizeVfsURI(rawPrefix) : '';
     FsStore.getState().setModal('newFile', { open: true, basePath: prefix, fileName: '', content: '' });
@@ -1691,7 +2042,7 @@ async function saveNewFile() {
     });
 }
 async function openNewFolderModal(overridePath = null) {
-    const gbPath = AppStore.getState().globalBrowsePath || [];
+    const gbPath = AppStore.getState().getBrowsePath ? AppStore.getState().getBrowsePath('fs:files') : [];
     const isRoot = overridePath === null && gbPath.length === 0;
     const rawPrefix = typeof overridePath === 'string' ? overridePath : (isRoot ? '' : `vfs://${gbPath.join('/')}/`);
     const prefix = rawPrefix ? normalizeVfsURI(rawPrefix) : '';
@@ -1759,7 +2110,7 @@ async function saveNewFolder() {
         loadingText: "Creating...",
         onSuccess: async () => {
             if (isNewRepo) {
-                const rRes = await window.inSetu.api.system.get('topology?t=' + Date.now());
+                const rRes = await window.inSetu.api.workspace.get('system/topology?t=' + Date.now());
                 if (rRes.ok) {
                     const d = await rRes.json();
                     AppStore.setState({ allRepos: d.repos, targetConfigs: d.target_repos || [] });
@@ -1773,91 +2124,116 @@ async function saveNewFolder() {
         }
     });
 }
+export async function hydrateVfsBuffer(filepath, { isFS = null, forceReload = false } = {}) {
+    if (!filepath || typeof filepath !== 'string') return null;
+    const normPath = normalizeVfsURI(filepath);
+    const fsState = FsStore.getState();
+    const existing = fsState.activeBuffers?.[normPath] || fsState.activeBuffers?.[filepath];
+    if (!forceReload && existing && existing.content !== 'Loading...') {
+        return existing;
+    }
+    if (!forceReload && fsState.hydratingPromises[normPath]) {
+        return fsState.hydratingPromises[normPath];
+    }
+    const parsedUri = new window.inSetu.utils.InSetuURI(normPath);
+    const effectiveIsFS = parsedUri.isReadOnly ? false : Boolean(isFS !== null ? isFS : parsedUri.isEditable);
+    const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(normPath);
+
+    if (forceReload || !existing) {
+        fsState.openBuffer(normPath, {
+            filename: normPath,
+            content: 'Loading...',
+            originalContent: 'Loading...',
+            fullText: 'Loading...',
+            isTruncated: false,
+            isFS: effectiveIsFS,
+            forceEdit: false,
+            isMemoryOnly: false,
+            isMarkdown,
+            isSupportedEditor,
+            ext,
+            codeMode
+        });
+    }
+
+    const promise = (async () => {
+        try {
+            let text = null;
+            try {
+                const activeWs = window.inSetu.utils.getActiveWorkspace();
+                const fetchUrl = resolveFileFetchUrl(normPath, effectiveIsFS);
+                const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
+                if (res.ok) text = await res.text();
+            } catch (e) {
+                // Network or cache miss, proceed to outbox rescue
+            }
+
+            // Always check the outbox for pending writes to prevent stale cache reads offline
+            const outbox = window.inSetu?.stores?.Offline?.getState()?.outboxItems || [];
+            let pendingContent = undefined;
+            [...outbox].reverse().find(i => {
+                if (i.method === 'POST' && i.path.endsWith('fs/save')) {
+                    try {
+                        const payload = i.bodyString ? JSON.parse(i.bodyString) : (i.payload || {});
+                        const normPayloadFp = normalizeVfsURI(payload.filepath || '');
+                        if (normPayloadFp === normPath && payload.content !== undefined) {
+                            pendingContent = payload.content;
+                            return true;
+                        }
+                    } catch(e) {}
+                }
+                return false;
+            });
+
+            if (pendingContent !== undefined) {
+                text = pendingContent;
+            } else if (text === null) {
+                throw new Error("Failed to fetch");
+            }
+            let initialHash = null;
+            try {
+                const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+                initialHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+            } catch(e) {}
+            FsStore.getState().updateBuffer(normPath, {
+                baseHash: initialHash,
+                ancestorHashes: initialHash ? [initialHash] : [],
+                saveStatus: 'idle',
+                docHandle: null
+            });
+            injectTextToBuffer(normPath, text, isSupportedEditor, isMarkdown, effectiveIsFS);
+        } catch (e) {
+            injectTextToBuffer(normPath, "Error loading file content.", isSupportedEditor, isMarkdown, effectiveIsFS);
+        } finally {
+            delete FsStore.getState().hydratingPromises[normPath];
+        }
+        return FsStore.getState().activeBuffers?.[normPath] || null;
+    })();
+
+    fsState.hydratingPromises[normPath] = promise;
+    return promise;
+}
+
 export async function viewSourceFile(filepath, isFS = false, bypassHook = false) {
     if (!filepath || typeof filepath !== 'string') return;
-    const normPath = filepath;
+    const normPath = normalizeVfsURI(filepath);
 
     if (!bypassHook) {
         // ADR 0041: Declarative Custom Editors Engine
         const registry = window.ExtensionRegistry;
-        if (registry && registry._manifests) {
-            let intercepted = false;
-            for (const manifest of registry._manifests.values()) {
-                if (manifest.customEditors) {
-                    for (const editor of manifest.customEditors) {
-                        if (editor.match && editor.match(normPath)) {
-                            if (editor.onOpen) editor.onOpen(normPath);
-                            intercepted = true;
-                            break;
-                        }
-                    }
-                }
-                if (intercepted) break;
+        if (registry && typeof registry.resolveCustomEditor === 'function') {
+            const customEd = registry.resolveCustomEditor(normPath);
+            if (customEd && typeof customEd.onOpen === 'function') {
+                customEd.onOpen(normPath);
+                return;
             }
-            if (intercepted) return;
         }
     }
-    const parsedUri = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(normPath) : { isEditable: isFS };
-    const effectiveIsFS = parsedUri.isReadOnly ? false : (isFS || parsedUri.isEditable);
-    const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(normPath);
-    FsStore.getState().openBuffer(normPath, {
-        filename: normPath,
-        content: 'Loading...',
-        originalContent: 'Loading...',
-        fullText: 'Loading...',
-        isTruncated: false,
-        isFS: effectiveIsFS,
-        forceEdit: false,
-        isMemoryOnly: false,
-        isMarkdown,
-        isSupportedEditor,
-        ext,
-        codeMode
-    });
 
+    const hydrationPromise = hydrateVfsBuffer(normPath, { isFS, forceReload: true });
     routeToSpatialGrid(normPath);
     closeBrowseModal();
-    try {
-        let text = null;
-        try {
-            const res = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(normPath)}`);
-            if (res.ok) text = await res.text();
-        } catch (e) {
-            // Network or cache miss, proceed to outbox rescue
-        }
-
-        // Always check the outbox for pending writes to prevent stale cache reads offline
-        const outbox = window.inSetu?.stores?.Offline?.getState()?.outboxItems || [];
-        let pendingContent = undefined;
-        [...outbox].reverse().find(i => {
-            if (i.method === 'POST' && i.path.endsWith('fs/save')) {
-                try {
-                    const payload = i.bodyString ? JSON.parse(i.bodyString) : (i.payload || {});
-                    const normPayloadFp = normalizeVfsURI(payload.filepath || '');
-                    if (normPayloadFp === normPath && payload.content !== undefined) {
-                        pendingContent = payload.content;
-                        return true;
-                    }
-                } catch(e) {}
-            }
-            return false;
-        });
-
-        if (pendingContent !== undefined) {
-            text = pendingContent;
-        } else if (text === null) {
-            throw new Error("Failed to fetch");
-        }
-        let initialHash = null;
-        try {
-            const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-            initialHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-        } catch(e) {}
-        FsStore.getState().updateBuffer(normPath, { baseHash: initialHash, saveStatus: 'idle', docHandle: null });
-        injectTextToBuffer(normPath, text, isSupportedEditor, isMarkdown, isFS);
-    } catch (e) {
-        injectTextToBuffer(normPath, "Error loading file content.", isSupportedEditor, isMarkdown, isFS);
-    }
+    await hydrationPromise;
 }
 function closeBrowseModal() {
     FsStore.getState().setModal('browser', { open: false });
@@ -1891,8 +2267,7 @@ export function openWorkspaceBrowser(options = {}) {
             break;
         }
     }
-    AppStore.setState({ currentBrowsePath: cbPath });
-    FsStore.getState().setModal('browser', { open: true, title, manifest: targetManifest, searchQuery: '', isParts });
+    FsStore.getState().setModal('browser', { open: true, title, manifest: targetManifest, searchQuery: '', isParts, currentPath: cbPath });
     if (window.Sutram?.stores?.Layout) {
         const layout = window.Sutram.stores.Layout.getState();
         layout.openWindow({
@@ -1924,8 +2299,9 @@ export function openFolderBrowser(callback = null) {
     openWorkspaceBrowser({ mode: 'folder', title: 'Select Destination Folder', callback: callback });
 }
 function confirmFolderSelection() {
-    const { currentBrowsePath, browserConfig } = AppStore.getState();
-    const selectedPath = (currentBrowsePath || []).join('/');
+    const { browserConfig } = AppStore.getState();
+    const browserPath = FsStore.getState().modals?.browser?.currentPath || [];
+    const selectedPath = (browserPath || []).join('/');
     if (browserConfig && browserConfig.callback) {
         const finalPath = selectedPath ? `vfs://${selectedPath.replace(/\/+$/, '')}/` : 'vfs://';
         browserConfig.callback(finalPath);
@@ -1968,9 +2344,15 @@ export function openVirtualFile(filename, content) {
 export class InSetuEditorProjection extends InSetuElement {
     static properties = {
         filepath: { type: String },
+        frontmatterMode: { type: Boolean },
+        defaultExpanded: { type: Boolean },
         _buffer: { type: Object },
         _writingMode: { type: Boolean },
         _editorFocused: { type: Boolean },
+        _metadataExpanded: { type: Boolean },
+        _yamlData: { type: Object },
+        _bodyContent: { type: String },
+        _hasTitleSlot: { type: Boolean },
         zenMode: { type: Boolean, reflect: true, attribute: 'zen-mode' }
     };
 
@@ -1994,45 +2376,149 @@ export class InSetuEditorProjection extends InSetuElement {
         }
         :host([zen-mode]) .zen-exit-btn { display: flex; }
         :host([zen-mode]) .zen-exit-btn:hover { opacity: 1; color: var(--intent-danger); border-color: var(--intent-danger); }
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); overflow: hidden; }
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); overflow: hidden; container-type: inline-size; }
         .editor-header {
             display: flex; justify-content: space-between; align-items: center; 
-            padding: 8px 15px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0;
-            gap: 12px;
+            padding: 6px 15px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0;
+            gap: 10px;
+        }
+        .action-bar-scroll {
+            display: flex; gap: 8px; align-items: center; flex: 1; min-width: 0;
+            overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap; white-space: nowrap;
+        }
+        .action-bar-scroll::-webkit-scrollbar { display: none; }
+        .meta-btn {
+            background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 4px;
+            padding: 4px 8px; cursor: pointer; font-weight: bold; display: inline-flex; align-items: center;
+            gap: 4px; font-size: 0.82rem; transition: background 0.2s; margin: 0; flex-shrink: 0;
+        }
+        .meta-btn:hover { background: var(--bg); }
+        .meta-btn.active { background: var(--bg); border-color: var(--intent-primary); color: var(--intent-primary); }
+        @container (max-width: 480px) {
+            .meta-btn-text { display: none; }
+            .meta-btn { padding: 4px 6px; }
         }
         .editor-footer {
             padding: 10px 15px; gap: 10px; border-top: 1px solid var(--border); 
             background: var(--input-bg); display: flex; flex-shrink: 0; width: 100%; box-sizing: border-box;
         }
-        .zen-reveal-btn {
-            position: absolute; bottom: 12px; right: 20px; z-index: 101;
-            background: var(--intent-primary); color: white; border: none; border-radius: 50%;
-            width: 44px; height: 44px; font-size: 1.2rem; display: flex; align-items: center; justify-content: center;
-            cursor: pointer; opacity: 0; visibility: hidden; pointer-events: none;
-            transition: opacity 0.3s ease, visibility 0.3s ease; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-        }
-        :host([is-focused]) .zen-reveal-btn { opacity: 0.5; visibility: visible; pointer-events: auto; }
-        :host([is-focused]) .zen-reveal-btn:hover { opacity: 1; }
     `];
+
     constructor() {
         super();
         this.filepath = '';
+        this.frontmatterMode = false;
+        this.defaultExpanded = false;
         this._buffer = null;
         this._writingMode = false;
         this._editorFocused = false;
+        this._metadataExpanded = false;
+        this._yamlData = {};
+        this._bodyContent = '';
+        this._hasTitleSlot = false;
         this.zenMode = false;
         this._transientCursorPos = 0;
         this._transientScrollTop = 0;
         this._autoSaveTimer = null;
+        this._lastEmittedYamlJson = null;
+        this._wasDirty = false;
     }
 
-    _triggerDebouncedAutoSave() {
-        if (this._autoSaveTimer) clearTimeout(this._autoSaveTimer);
-        this._autoSaveTimer = setTimeout(() => {
-            if (this.isDirty && this.filepath && window.inSetu?.ui?.saveBufferFile) {
-                window.inSetu.ui.saveBufferFile(this.filepath, true);
+    _normPath() {
+        const raw = this.filepath || this.dataset.subId || '';
+        return raw ? normalizeVfsURI(raw) : '';
+    }
+
+    _syncFromBuffer(buffer, isInitialHydration = false) {
+        this._buffer = buffer;
+        if (!buffer || buffer.content === 'Loading...') return;
+
+        if (this.frontmatterMode && !buffer.frontmatterMode) {
+            FsStore.getState().enableFrontmatterMode(this._normPath(), true);
+            this._buffer = FsStore.getState().activeBuffers[this._normPath()] || buffer;
+        }
+
+        const activeBuf = this._buffer;
+        this._yamlData = activeBuf.yamlMeta || {};
+        this._bodyContent = activeBuf.bodyContent ?? activeBuf.content;
+
+        const nowDirty = this.isDirty;
+        if (this._wasDirty !== nowDirty) {
+            this._wasDirty = nowDirty;
+            this.dispatchEvent(new CustomEvent('editor-dirty', {
+                detail: { isDirty: nowDirty },
+                bubbles: true,
+                composed: true
+            }));
+        }
+
+        if (this.frontmatterMode || activeBuf.hasFrontmatter) {
+            const yamlJson = JSON.stringify(this._yamlData);
+            const yamlChanged = yamlJson !== this._lastEmittedYamlJson;
+            this._lastEmittedYamlJson = yamlJson;
+
+            if (isInitialHydration) {
+                const docType = (this._yamlData?.doctype || this._yamlData?.doc_type || '').toLowerCase();
+                const proseDocTypes = ['prose', 'essay', 'article', 'draft', 'spec', 'story', 'novel'];
+                if (proseDocTypes.includes(docType) || this._yamlData?.writing_mode === 'true' || this._yamlData?.writing_mode === true) {
+                    this._writingMode = true;
+                }
+                this._metadataExpanded = !!this.defaultExpanded;
             }
-        }, 2000);
+
+            if (isInitialHydration || yamlChanged) {
+                this.dispatchEvent(new CustomEvent('insetu:frontmatter-loaded', {
+                    detail: { yaml: this._yamlData, content: this._bodyContent },
+                    bubbles: true,
+                    composed: true
+                }));
+            }
+            if (isInitialHydration && this.frontmatterMode) {
+                queueMicrotask(() => this._syncFrontmatterToBuffer(false));
+            }
+        }
+    }
+    syncFrontmatter(yamlPatch = null, userEdit = true) {
+        if (yamlPatch && typeof yamlPatch === 'object') {
+            this._yamlData = { ...(this._yamlData || {}), ...yamlPatch };
+        }
+        this._syncFrontmatterToBuffer(userEdit);
+    }
+    _syncFrontmatterToBuffer(userEdit = true) {
+        const normPath = this._normPath();
+        if (!normPath || !this._buffer || this._buffer.content === 'Loading...') return;
+
+        this._yamlData = { ...(this._yamlData || {}) };
+        this._lastEmittedYamlJson = JSON.stringify(this._yamlData);
+        const prevContent = this._buffer.content;
+        const serialized = FsStore.getState().updateBufferFrontmatter(
+            normPath,
+            { yamlMeta: this._yamlData, bodyContent: this._bodyContent },
+            { userEdit }
+        );
+        if (userEdit && serialized !== null && serialized !== prevContent) {
+            this._triggerDebouncedAutoSave();
+        }
+    }
+
+    async save() {
+        return this._handleSave();
+    }
+
+    async _handleSave() {
+        const normPath = this._normPath();
+        if (!normPath) return;
+        if (this.frontmatterMode) {
+            this._syncFrontmatterToBuffer(true);
+        }
+        if (window.inSetu?.ui?.saveBufferFile) {
+            await window.inSetu.ui.saveBufferFile(normPath, true);
+        }
+    }
+    _triggerDebouncedAutoSave() {
+        const targetPath = this._normPath();
+        if (!targetPath) return;
+        FsStore.getState().scheduleAutoSave?.(targetPath, 2000);
     }
     _cleanArtifacts() {
         const cleanFn = window.inSetu?.utils?.cleanCodeArtifacts;
@@ -2041,10 +2527,18 @@ export class InSetuEditorProjection extends InSetuElement {
         let modified = false;
         if (cmEditor && cmEditor.transformContent) {
             modified = cmEditor.transformContent(cleanFn);
+        } else if (this.frontmatterMode) {
+            const cleaned = cleanFn(this._bodyContent);
+            if (cleaned !== this._bodyContent) {
+                this._bodyContent = cleaned;
+                this._syncFrontmatterToBuffer(true);
+                modified = true;
+            }
         } else if (this._buffer) {
             const cleaned = cleanFn(this._buffer.content);
             if (cleaned !== this._buffer.content) {
-                window.inSetu.stores.Fs?.getState()?.updateBuffer(this.filepath, { content: cleaned });
+                FsStore.getState().updateBuffer(this._normPath(), { content: cleaned }, { userEdit: true });
+                this._triggerDebouncedAutoSave();
                 modified = true;
             }
         }
@@ -2057,15 +2551,21 @@ export class InSetuEditorProjection extends InSetuElement {
 
     async _toggleWritingMode() {
         this._writingMode = !this._writingMode;
+        if (this.frontmatterMode) {
+            this._yamlData = { ...this._yamlData, writing_mode: this._writingMode };
+            this._syncFrontmatterToBuffer(true);
+            return;
+        }
         if (this._buffer && this._buffer.isFS) {
             try {
                 await window.inSetu.api.workspace.post('editor/preference', {
-                    filepath: this.filepath,
+                    filepath: this._normPath(),
                     writing_mode: this._writingMode
                 });
             } catch(e) {}
         }
     }
+
     async _toggleZenMode() {
         this.zenMode = !this.zenMode;
         if (this.zenMode) {
@@ -2101,125 +2601,146 @@ export class InSetuEditorProjection extends InSetuElement {
             }
         }
     }
+    onWorkspaceLoad(workspaceId) {
+        super.onWorkspaceLoad(workspaceId);
+        if (this.filepath) {
+            this._lastEmittedYamlJson = null;
+            this._ensureBufferLoaded(this.filepath);
+            this._loadPreference(this.filepath);
+        }
+    }
+
+    onProjectionRekeyed(oldId, newId) {
+        const normCur = this._normPath();
+        if (this.filepath === oldId || normCur === oldId) {
+            this.filepath = newId;
+            this.dataset.subId = newId;
+            this._syncFromBuffer(FsStore.getState().activeBuffers[newId] || null, false);
+            this.requestUpdate();
+        } else if (this.filepath && this.filepath.startsWith(oldId + '/')) {
+            const childNew = newId + this.filepath.slice(oldId.length);
+            this.filepath = childNew;
+            this.dataset.subId = childNew;
+            this._syncFromBuffer(FsStore.getState().activeBuffers[childNew] || null, false);
+            this.requestUpdate();
+        }
+    }
+    async _ensureBufferLoaded(filepath) {
+        if (!filepath || filepath.startsWith('yomama://') || filepath.startsWith('virtual://')) return;
+        const buf = await hydrateVfsBuffer(filepath, { forceReload: false });
+        if (buf) {
+            this._syncFromBuffer(buf, true);
+        }
+    }
+
     connectedCallback() {
         super.connectedCallback();
-        if (!this.filepath) this.filepath = this.dataset.subId; // Inherit identity from spatial viewport router
+        if (!this.filepath && this.dataset.subId) this.filepath = this.dataset.subId;
         this.subscribe(
             'Fs',
-            state => state.activeBuffers[this.filepath] || null,
+            state => {
+                const np = this._normPath();
+                return np ? (state.activeBuffers[np] || state.activeBuffers[this.filepath] || null) : null;
+            },
             (buffer) => {
-                this._buffer = buffer;
+                const isFirstHydration = Boolean(buffer && buffer.content !== 'Loading...' && this._lastEmittedYamlJson === null);
+                this._syncFromBuffer(buffer, isFirstHydration);
+                this.requestUpdate();
             }
         );
-        // Pointer Relaunch: Fetch the file from the VFS if the layout mounted this component but memory is empty
-        setTimeout(() => {
-            if (!this._buffer && this.filepath && !this.filepath.startsWith('yomama://') && !this.filepath.startsWith('virtual://')) {
-                if (window.inSetu?.vfs?.viewSourceFile) {
-                    const parsed = this.utils.parseURI ? this.utils.parseURI(this.filepath) : { isEditable: true };
-                    window.inSetu.vfs.viewSourceFile(this.filepath, parsed.isEditable, true);
-                }
-            }
-        }, 0);
+        if (this.filepath) {
+            this._lastLoadedFilepath = this.filepath;
+            this._ensureBufferLoaded(this.filepath);
+        }
         this.registerGlobalListener('insetu:editor:clean-artifacts', window, (e) => {
-            if (!e.detail?.filepath || e.detail.filepath === this.filepath || e.detail.filepath === this.dataset.subId) {
+            const normTarget = e.detail?.filepath ? normalizeVfsURI(e.detail.filepath) : '';
+            if (!normTarget || normTarget === this._normPath() || e.detail?.filepath === this.dataset.subId) {
                 this._cleanArtifacts();
             }
         });
         this.registerGlobalListener('insetu:editor:toggle-prose', window, (e) => {
-            if (e.detail?.filepath === this.filepath || e.detail?.filepath === this.dataset.subId) {
+            const normTarget = e.detail?.filepath ? normalizeVfsURI(e.detail.filepath) : '';
+            if (normTarget === this._normPath() || e.detail?.filepath === this.filepath || e.detail?.filepath === this.dataset.subId) {
                 this._toggleWritingMode();
             }
         });
         this.registerGlobalListener('insetu:editor:toggle-zen', window, (e) => {
-            if (e.detail?.filepath === this.filepath || e.detail?.filepath === this.dataset.subId) {
+            const normTarget = e.detail?.filepath ? normalizeVfsURI(e.detail.filepath) : '';
+            if (normTarget === this._normPath() || e.detail?.filepath === this.filepath || e.detail?.filepath === this.dataset.subId) {
                 this._toggleZenMode();
             }
         });
-        // Emergency Flush on Window Close (Protects in-flight keystrokes during debounce)
-        this._beforeUnloadFlush = () => {
-            if (this.isDirty && this.filepath) {
-                const normPath = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(this.filepath) : this.filepath;
-                const state = window.inSetu?.stores?.Fs?.getState()?.activeBuffers?.[normPath] || window.inSetu?.stores?.Fs?.getState()?.activeBuffers?.[this.filepath];
-                if (state && state.content !== state.originalContent && window.inSetu?.api?.keepalivePost) {
-                    window.inSetu.api.keepalivePost('fs/save', {
-                        filepath: normPath,
-                        content: state.content,
-                        base_hash: state.baseHash || null
-                    });
-                }
-            }
-        };
-        window.addEventListener('beforeunload', this._beforeUnloadFlush);
-
-        // Focus-Aware Idle Hot-Swap Listener (Driven by BroadcastChannel or SSE)
+        // Live 3-Way Rebase & Hot-Swap Listener (Driven by BroadcastChannel or SSE)
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
+            if (!this.filepath || !this._buffer) return;
             const mutations = e.detail?.mutations || [];
-            const normPath = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(this.filepath) : this.filepath;
-            const isMatch = mutations.some(m => {
+            const normPath = this._normPath();
+            const relocMut = mutations.find(m => {
+                const mNorm = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(m.filepath) : m.filepath;
+                return m.operation === 'delete' && m.relocated_to && (mNorm === normPath || m.filepath === this.filepath);
+            });
+            if (relocMut) {
+                this.onProjectionRekeyed(normPath, normalizeVfsURI(relocMut.relocated_to));
+                return;
+            }
+            const matchingSave = mutations.find(m => {
+                if (m.operation === 'delete') return false;
                 const mNorm = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(m.filepath) : m.filepath;
                 return mNorm === normPath || m.filepath === this.filepath;
             });
-
-            if (isMatch) {
-                const cmEditor = this.shadowRoot.querySelector('insetu-markdown-editor');
-                const hasFocus = cmEditor?.shadowRoot?.activeElement || this.shadowRoot.activeElement;
-                if (!this.isDirty && !hasFocus) {
-                    window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(normPath)}`)
-                        .then(r => r.ok ? r.text() : null)
-                        .then(async (newText) => {
-                            if (newText !== null && newText !== this._buffer?.content) {
-                                let newHash = null;
-                                try {
-                                    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(newText));
-                                    newHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-                                } catch(err) {}
-                                const fsStore = window.inSetu?.stores?.Fs;
-                                if (fsStore) {
-                                    fsStore.getState().updateBuffer(normPath, {
-                                        content: newText,
-                                        originalContent: newText,
-                                        fullText: newText,
-                                        baseHash: newHash
-                                    });
-                                }
-                            }
-                        })
-                        .catch(() => {});
+            if (matchingSave) {
+                const fsState = FsStore.getState();
+                const isLockedByLocalEdit = Boolean(
+                    this.isDirty ||
+                    fsState.savingPaths?.has(normPath) ||
+                    fsState.autoSaveTimers?.has(normPath)
+                );
+                const isKnownHash = Boolean(
+                    matchingSave.base_hash && (
+                        matchingSave.base_hash === this._buffer?.baseHash ||
+                        (Array.isArray(this._buffer?.ancestorHashes) && this._buffer.ancestorHashes.includes(matchingSave.base_hash))
+                    )
+                );
+                if (isLockedByLocalEdit || isKnownHash) {
+                    return;
                 }
+                reconcileBufferWithDisk(normPath);
             }
         });
 
         this.registerGlobalListener('insetu:editor-insert-text', window, (e) => {
-            if (e.detail.filepath === this.filepath || e.detail.filepath === this.dataset.subId) {
+            const normTarget = e.detail?.filepath ? normalizeVfsURI(e.detail.filepath) : '';
+            if (normTarget === this._normPath() || e.detail.filepath === this.filepath || e.detail.filepath === this.dataset.subId) {
                 const m = this._buffer;
                 if (!m) return;
-
                 const cmEditor = this.shadowRoot.querySelector('insetu-markdown-editor');
-                const textarea = this.shadowRoot.querySelector('textarea');
-
                 if (m.isSupportedEditor && cmEditor) {
                     cmEditor.insertAtCursor(e.detail.text);
-                } else if (textarea) {
-                    const insertPos = textarea.selectionStart;
-                    const newContent = m.content.substring(0, insertPos) + e.detail.text + m.content.substring(insertPos);
-                    const st = textarea.scrollTop;
-                    textarea.value = newContent;
-                    textarea.selectionStart = textarea.selectionEnd = insertPos + e.detail.text.length;
-                    textarea.scrollTop = st;
-
-                    window.inSetu.stores.Fs?.getState()?.updateBuffer(this.filepath, { content: newContent });
+                } else if (this.frontmatterMode) {
+                    this._bodyContent = this._bodyContent + "\n" + e.detail.text;
+                    this._syncFrontmatterToBuffer(true);
                 } else {
-                    window.inSetu.stores.Fs?.getState()?.updateBuffer(this.filepath, { content: m.content + "\n" + e.detail.text });
+                    window.inSetu.stores.Fs?.getState()?.updateBuffer(this._normPath(), { content: m.content + "\n" + e.detail.text }, { userEdit: true });
+                    this._triggerDebouncedAutoSave();
                 }
             }
         });
 
         this._loadPreference(this.filepath);
     }
+
     updated(changedProperties) {
         super.updated(changedProperties);
-        if (changedProperties.has('filepath') && this.filepath) {
-            this._buffer = window.inSetu.stores.Fs?.getState()?.activeBuffers[this.filepath] || null;
+        if (changedProperties.has('filepath') && this.filepath && this.filepath !== this._lastLoadedFilepath) {
+            this._lastLoadedFilepath = this.filepath;
+            this._lastEmittedYamlJson = null;
+            const normPath = this._normPath();
+            const existing = window.inSetu.stores.Fs?.getState()?.activeBuffers[normPath] || window.inSetu.stores.Fs?.getState()?.activeBuffers[this.filepath] || null;
+            if (existing && existing.content !== 'Loading...') {
+                this._syncFromBuffer(existing, true);
+            } else {
+                this._ensureBufferLoaded(this.filepath);
+            }
             this._loadPreference(this.filepath);
 
             if (this._buffer) {
@@ -2242,7 +2763,7 @@ export class InSetuEditorProjection extends InSetuElement {
     }
 
     get isDirty() {
-        return this._buffer && this._buffer.isFS && this._buffer.content !== this._buffer.originalContent;
+        return Boolean(this._buffer && this._buffer.isFS && this._buffer.content !== this._buffer.originalContent && this._buffer.content !== 'Loading...');
     }
 
     async _loadPreference(filename) {
@@ -2258,93 +2779,156 @@ export class InSetuEditorProjection extends InSetuElement {
             }
         } catch (e) {}
     }
+
     render() {
-        if (!this._buffer) return html`<div class="spinner" style="display:block; padding: 20px;">Initializing buffer...</div>`;
+        if (!this._buffer || this._buffer.content === 'Loading...') {
+            return html`<div style="padding: 20px;"><sutram-spinner text="Loading file..."></sutram-spinner></div>`;
+        }
         const m = this._buffer;
         const shouldBeReadOnly = !(m.isFS || m.forceEdit) || !!m.isTruncated;
         const kbSize = Math.round((m.fullText?.length || 0) / 1024);
+        const hasDetectedFrontmatter = Boolean(m.isMarkdown && (this.frontmatterMode || (this._yamlData && Object.keys(this._yamlData).length > 0)));
+        const editorTextValue = this.frontmatterMode ? this._bodyContent : m.content;
         return html`
-            <div class="editor-header">
-                <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;">
-                    <sutram-entity-actions   
-                        variant="menu-bar"
-                        .entityType=${'file:editor'} 
-                        .entityData=${{ 
-                            filepath: m.filename, 
-                            isFS: m.isFS,
-                            isMarkdown: m.isMarkdown,
-                            writingMode: this._writingMode,
-                            isSkeleton: false,
-                            isDirty: this.isDirty,
-                            suppress: ['file-edit'],
-                            chunks: window.inSetu?.vfs?.getChunks ? window.inSetu.vfs.getChunks(m.filename) : [m.filename]
-                        }}>
-                    </sutram-entity-actions>
+            <div style="display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); position: relative;">
+                <div style="padding: 8px 15px 6px 15px; background: var(--bg); flex-shrink: 0; display: ${this._hasTitleSlot ? 'block' : 'none'};">
+                    <slot name="title-control" @slotchange=${(e) => { this._hasTitleSlot = e.target.assignedNodes({ flatten: true }).length > 0; }}></slot>
                 </div>
-                <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
-                    <insetu-projection-window-controls 
-                        .filepath=${m.filename}
-                        .beforeAction=${async () => { if (this.isDirty) await window.inSetu.ui.saveBufferFile(this.filepath, true); }}>
-                    </insetu-projection-window-controls>
-                </div>
-            </div>
-            ${m.isTruncated ? html`
-                <div style="display: flex; background: #f59e0b; color: #000; padding: 8px 20px; font-weight: bold; justify-content: space-between; align-items: center; flex-shrink: 0; border-bottom: 1px solid var(--border);">
-                    <span>⚠️ Only showing the first 200kb of <b>${kbSize}kb</b>.</span>
-                    <sutram-btn label="Show All" @click=${() => window.inSetu.stores.Fs?.getState()?.updateBuffer(this.filepath, { content: m.fullText, originalContent: m.fullText, isTruncated: false })} style="background: #000; color: #f59e0b; margin: 0; border: 1px solid #000; --btn-padding: 4px 8px;"></sutram-btn>
-                </div>
-            ` : ''}
 
-            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; position: relative;"
-                @focusin=${() => this._editorFocused = true}
-                @focusout=${(e) => { if (!this.shadowRoot.activeElement) this._editorFocused = false; }}>${m.isSupportedEditor ? html`
-                    <insetu-markdown-editor 
-                        .value=${m.content} 
-                        .language=${m.codeMode} 
-                        .readOnly=${shouldBeReadOnly}
-                        ?writingMode=${this._writingMode}
-                        @content-changed=${(e) => {
-                            window.inSetu.stores.Fs?.getState()?.updateBuffer(this.filepath, { content: e.detail.value });
-                            this._triggerDebouncedAutoSave();
-                        }}>
-                    </insetu-markdown-editor>
-                ` : html`
-                    <textarea 
-                        style="flex: 1; margin: 0; border: none; border-radius: 0; resize: none; background: var(--bg); color: var(--text); padding: 15px; font-family: monospace;"
-                        .value=${m.content}
-                        ?readOnly=${shouldBeReadOnly}
-                        @input=${(e) => window.inSetu.stores.Fs?.getState()?.updateBuffer(this.filepath, { content: e.target.value })}>
-                    </textarea>
-                `}
-            </div>
-            ${this.isDirty ? html`
-                <div class="editor-footer">
-                    <sutram-async-btn label="Save Changes" intent="warning" style="width: 100%; display: block;" .onClick=${() => window.inSetu.ui.saveBufferFile(this.filepath)}></sutram-async-btn>
+                <div class="editor-header">
+                    <div class="action-bar-scroll">
+                        <slot name="action-bar-extra"></slot>
+                        <sutram-entity-actions   
+                            variant="menu-bar"
+                            .entityType=${'file:editor'} 
+                            .entityData=${{ 
+                                filepath: m.filename, 
+                                isFS: m.isFS,
+                                isMarkdown: m.isMarkdown,
+                                writingMode: this._writingMode,
+                                isSkeleton: false,
+                                isDirty: this.isDirty,
+                                transientContent: editorTextValue,
+                                suppress: ['file-edit'],
+                                chunks: window.inSetu?.vfs?.getChunks ? window.inSetu.vfs.getChunks(m.filename) : [m.filename]
+                            }}>
+                        </sutram-entity-actions>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                        <insetu-projection-window-controls 
+                            .filepath=${m.filename}
+                            .beforeAction=${async () => { if (this.isDirty) await this._handleSave(); }}>
+                        </insetu-projection-window-controls>
+                        ${hasDetectedFrontmatter ? html`
+                            <button class="meta-btn ${this._metadataExpanded ? 'active' : ''}"
+                                @click=${() => {
+                                    const nextExpanded = !this._metadataExpanded;
+                                    if (!this._alwaysFrontmatter) {
+                                        if (nextExpanded && !this.frontmatterMode) {
+                                            this._lastEmittedYamlJson = null;
+                                            this.frontmatterMode = true;
+                                            FsStore.getState().enableFrontmatterMode(this._normPath(), true);
+                                            this._syncFromBuffer(FsStore.getState().activeBuffers[this._normPath()], false);
+                                        } else if (!nextExpanded && this.frontmatterMode) {
+                                            this._syncFrontmatterToBuffer(false);
+                                            this.frontmatterMode = false;
+                                            FsStore.getState().enableFrontmatterMode(this._normPath(), false);
+                                        }
+                                    }
+                                    this._metadataExpanded = nextExpanded;
+                                }}
+                                title="Toggle Frontmatter Metadata">
+                                <yv-icon name="settings" style="width: 14px; height: 14px;"></yv-icon>
+                                <span class="meta-btn-text"> Metadata</span>
+                                <span style="font-size: 0.7rem; margin-left: 2px;">${this._metadataExpanded ? '▲' : '▼'}</span>
+                            </button>
+                        ` : ''}
+                    </div>
                 </div>
-            ` : ''}
-            <button class="zen-exit-btn" title="Exit Focus Mode (Esc)" 
-                @pointerdown=${(e) => { e.preventDefault(); e.stopPropagation(); this._toggleZenMode(); }}
-                @click=${(e) => { e.preventDefault(); e.stopPropagation(); this._toggleZenMode(); }}>
-                <yv-icon name="minimize-2" style="width: 20px; height: 20px; pointer-events: none;"></yv-icon>
-            </button>
+
+                ${this._metadataExpanded && hasDetectedFrontmatter ? html`
+                    <div style="padding: 8px 15px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0;">
+                        <slot name="metadata-controls">
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                ${Object.keys(this._yamlData || {}).map(k => html`
+                                    <div style="flex: 1; min-width: 150px;">
+                                        <sutram-input ?flush=${true} label=${k} .value=${String(this._yamlData[k] ?? '')} @sutram-input-changed=${e => {
+                                            this._yamlData = { ...this._yamlData, [k]: e.detail.value };
+                                            this._syncFrontmatterToBuffer(true);
+                                        }}></sutram-input>
+                                    </div>
+                                `)}
+                            </div>
+                        </slot>
+                    </div>
+                ` : ''}
+                ${m.isTruncated ? html`
+                    <div style="display: flex; background: var(--intent-warning); color: var(--bg-deep); padding: 8px 20px; font-weight: bold; justify-content: space-between; align-items: center; flex-shrink: 0; border-bottom: 1px solid var(--border);">
+                        <span>⚠️ Only showing the first 200kb of <b>${kbSize}kb</b>.</span>
+                        <sutram-btn label="Show All" intent="neutral" @click=${() => window.inSetu.stores.Fs?.getState()?.updateBuffer(this._normPath(), { content: m.fullText, originalContent: m.fullText, isTruncated: false })} style="margin: 0; --btn-padding: 4px 8px;"></sutram-btn>
+                    </div>
+                ` : ''}
+
+                <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; position: relative;"
+                    @focusin=${() => this._editorFocused = true}
+                    @focusout=${() => { if (!this.shadowRoot.activeElement) this._editorFocused = false; }}>${m.isSupportedEditor ? html`
+                        <insetu-markdown-editor 
+                            .value=${editorTextValue} 
+                            .language=${m.codeMode} 
+                            .readOnly=${shouldBeReadOnly}
+                            ?writingMode=${this._writingMode}
+                            @editor-selection=${(e) => { this._transientCursorPos = e.detail?.cursor ?? 0; }}
+                            @editor-scroll=${(e) => { this._transientScrollTop = e.detail?.top ?? 0; }}
+                            @content-changed=${(e) => {
+                                if (this.frontmatterMode) {
+                                    this._bodyContent = e.detail.value;
+                                    this._syncFrontmatterToBuffer(true);
+                                } else {
+                                    window.inSetu.stores.Fs?.getState()?.updateBuffer(this._normPath(), { content: e.detail.value }, { userEdit: true });
+                                    this._triggerDebouncedAutoSave();
+                                }
+                            }}>
+                        </insetu-markdown-editor>
+                    ` : html`
+                        <sutram-textarea
+                            style="flex: 1; margin: 0;"
+                            .value=${editorTextValue}
+                            .monospace=${true}
+                            ?disabled=${shouldBeReadOnly}
+                            ?flush=${true}
+                            @sutram-input-changed=${(e) => {
+                                window.inSetu.stores.Fs?.getState()?.updateBuffer(this._normPath(), { content: e.detail.value }, { userEdit: true });
+                                this._triggerDebouncedAutoSave();
+                            }}>
+                        </sutram-textarea>
+                    `}
+                </div>
+                ${this.isDirty && !this._hasTitleSlot ? html`
+                    <div class="editor-footer">
+                        <sutram-async-btn label="Save Changes" intent="warning" style="width: 100%; display: block;" .onClick=${() => this._handleSave()}></sutram-async-btn>
+                    </div>
+                ` : ''}
+                <button class="zen-exit-btn" title="Exit Focus Mode (Esc)" 
+                    @pointerdown=${(e) => { e.preventDefault(); e.stopPropagation(); this._toggleZenMode(); }}
+                    @click=${(e) => { e.preventDefault(); e.stopPropagation(); this._toggleZenMode(); }}>
+                    <yv-icon name="minimize-2" style="width: 20px; height: 20px; pointer-events: none;"></yv-icon>
+                </button>
+            </div>
         `;
     }
+
     disconnectedCallback() {
         super.disconnectedCallback();
         if (this._escListener) {
             window.removeEventListener('keydown', this._escListener);
         }
-        if (this._beforeUnloadFlush) {
-            window.removeEventListener('beforeunload', this._beforeUnloadFlush);
-        }
         if (this._autoSaveTimer) {
             clearTimeout(this._autoSaveTimer);
         }
-        // Stateless UX Teardown (only update if buffer has not been explicitly closed)
-        const normPath = normalizeVfsURI(this.filepath);
+        const normPath = this._normPath();
         const activeBuffers = window.inSetu.stores.Fs?.getState()?.activeBuffers || {};
-        if (this.filepath && this._buffer && (activeBuffers[normPath] || activeBuffers[this.filepath])) {
-            window.inSetu.stores.Fs.getState().updateBuffer(this.filepath, { 
+        if (normPath && this._buffer && (activeBuffers[normPath] || activeBuffers[this.filepath])) {
+            window.inSetu.stores.Fs.getState().updateBuffer(normPath, { 
                 cursorPos: this._transientCursorPos, 
                 scrollTop: this._transientScrollTop 
             });
@@ -2352,6 +2936,16 @@ export class InSetuEditorProjection extends InSetuElement {
     }
 }
 customElements.define('insetu-editor-projection', InSetuEditorProjection);
+export class InSetuFrontmatterEditor extends InSetuEditorProjection {
+    constructor() {
+        super();
+        this.frontmatterMode = true;
+        this._alwaysFrontmatter = true;
+    }
+}
+if (!customElements.get('insetu-frontmatter-editor')) {
+    customElements.define('insetu-frontmatter-editor', InSetuFrontmatterEditor);
+}
 export const extractManifestFiles = (...args) => window.inSetu.utils.extractManifestFiles(...args);
 
 window.inSetu.vfs.normalizeVfsURI = normalizeVfsURI;
@@ -2384,7 +2978,7 @@ export function openPartsModal(filepath) {
     if (chunks && chunks.length > 0) {
         openWorkspaceBrowser({
             mode: 'parts',
-            title: `Parts: ${filepath.split('/').pop()}`,
+            title: `Parts: ${new window.inSetu.utils.InSetuURI(filepath).basename}`,
             files: chunks,
             autoDrilldown: false,
             isParts: true
@@ -2395,6 +2989,7 @@ window.inSetu.vfs.resolveEntityExportTarget = resolveEntityExportTarget;
 window.inSetu.vfs.resolveFileFetchUrl = resolveFileFetchUrl;
 window.inSetu.vfs.renameFileTracking = renameFileTracking;
 window.inSetu.vfs.getChunks = getChunks;
+window.inSetu.vfs.ensureFreshContext = ensureFreshContext;
 window.inSetu.vfs.openPartsModal = openPartsModal;
 window.inSetu.vfs.openVirtualFile = openVirtualFile;
 window.inSetu.vfs.fetchAndCopy = fetchAndCopy;
@@ -2404,6 +2999,9 @@ window.inSetu.vfs.shareFiles = shareFiles;
 window.inSetu.vfs.uploadFileToWorkspace = uploadFileToWorkspace;
 window.inSetu.vfs.viewSourceFile = viewSourceFile;
 window.inSetu.vfs.viewFileGitDiff = viewFileGitDiff;
+window.inSetu.vfs.viewTwoFileDiff = viewTwoFileDiff;
+window.inSetu.vfs.reconcileBufferWithDisk = reconcileBufferWithDisk;
+window.inSetu.vfs.flushAllDirtyBuffers = flushAllDirtyBuffers;
 window.inSetu.vfs.isFileGitModified = isFileGitModified;
 window.inSetu.vfs.viewAndCopy = viewAndCopy;
 window.inSetu.vfs.viewInWindow = viewInWindow;
@@ -2460,8 +3058,8 @@ export async function uploadFileToWorkspace(targetDir) {
         await window.inSetu.sys.executeWorkspaceMutation('fs/upload', formData, {
             loadingText: loadingMsg,
             onSuccess: (data) => {
-                if (data && data.filepaths) {
-                    data.filepaths.forEach(fp => updateManifestState(null, fp));
+                if (data && Array.isArray(data.filepaths)) {
+                    updateManifestState(data.filepaths.map(fp => ({ filepath: fp, operation: 'save' })));
                 }
             }
         });
@@ -2501,7 +3099,7 @@ export function switchLinkTab(tab) {
     const { searchQuery } = FsStore.getState().modals.linkInsert;
     if (tab === 'filename' && searchQuery) executeLinkSearch(searchQuery);
 }
-const _debouncedLinkSearch = window.ExtensionRegistry.utils.debounce((val) => {
+const _debouncedLinkSearch = (window.inSetu?.utils?.debounce || window.ExtensionRegistry.utils.debounce)((val) => {
     executeLinkSearch(val);
 }, 300);
 
@@ -2732,7 +3330,7 @@ export class InSetuLinkInsertProjection extends InSetuElement {
                     </span>
                 ` : ''}
                 ${(li.searchResults || []).map(item => {
-                    const name = item.path.split('/').pop();
+                    const name = new window.inSetu.utils.InSetuURI(item.path).basename;
                     return html`
                         <sutram-card
                             .filename=${item.path}
@@ -2759,21 +3357,21 @@ export class InSetuLinkInsertProjection extends InSetuElement {
     }
 }
 customElements.define('insetu-link-insert-projection', InSetuLinkInsertProjection);
-
 export class InSetuBrowserProjection extends InSetuElement {
     static properties = {
         browserModal: { type: Object },
         browserConfig: { type: Object },
-        currentBrowsePath: { type: Array }
+        browserPath: { type: Array }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
     `];
     constructor() {
         super();
-        this.browserModal = FsStore.getState().modals?.browser || {};
+        const bModal = FsStore.getState().modals?.browser || {};
+        this.browserModal = bModal;
         this.browserConfig = AppStore.getState().browserConfig || {};
-        this.currentBrowsePath = AppStore.getState().currentBrowsePath || [];
+        this.browserPath = bModal.currentPath || [];
     }
     connectedCallback() {
         super.connectedCallback();
@@ -2782,18 +3380,15 @@ export class InSetuBrowserProjection extends InSetuElement {
             state => state.modals?.browser || {},
             (browserModal) => {
                 this.browserModal = browserModal;
+                this.browserPath = browserModal.currentPath || [];
                 this.requestUpdate();
             }
         );
         this.subscribe(
             AppStore,
-            state => ({
-                browserConfig: state.browserConfig || {},
-                currentBrowsePath: state.currentBrowsePath || []
-            }),
-            ({ browserConfig, currentBrowsePath }) => {
+            state => state.browserConfig || {},
+            (browserConfig) => {
                 this.browserConfig = browserConfig;
-                this.currentBrowsePath = currentBrowsePath;
                 this.requestUpdate();
             }
         );
@@ -2835,12 +3430,12 @@ export class InSetuBrowserProjection extends InSetuElement {
                     <insetu-file-tree 
                         basePath=""
                         .files=${manifest}
-                        .currentPath=${this.currentBrowsePath || []}
+                        .currentPath=${this.browserPath || []}
                         .hidePath=${false}
                         .enableSearch=${this.browserConfig?.mode !== 'folder'}
                         searchPlaceholder="Fuzzy find files..."
                         .hideFiles=${this.browserConfig?.mode === 'folder'}
-                        @path-changed=${e => AppStore.setState({ currentBrowsePath: e.detail.path })}
+                        @path-changed=${e => FsStore.getState().setModal('browser', { currentPath: e.detail.path || [] })}
                         @card-clicked=${e => _handleBrowserCardClick(e.detail)}>
                     </insetu-file-tree>
                 `}
@@ -2857,7 +3452,7 @@ export class InSetuBrowserProjection extends InSetuElement {
                         <sutram-async-btn label="Share All" icon="share" intent="neutral" style="flex: 1; margin: 0;" .onClick=${async () => {
                             if (manifest.length > 0) {
                                 const firstFile = manifest[0];
-                                const cleanFirst = firstFile.includes('/') ? firstFile.split('/').pop() : firstFile;
+                                const cleanFirst = new window.inSetu.utils.InSetuURI(firstFile).basename || firstFile;
                                 await shareFiles(cleanFirst, manifest, false);
                             }
                         }}></sutram-async-btn>
@@ -2876,6 +3471,7 @@ customElements.define('insetu-browser-projection', InSetuBrowserProjection);
 export class InSetuFileDiffProjection extends InSetuElement {
     static properties = {
         filepath: { type: String },
+        compareFilepath: { type: String },
         _loading: { type: Boolean },
         _error: { type: String },
         _headContent: { type: String },
@@ -2898,6 +3494,7 @@ export class InSetuFileDiffProjection extends InSetuElement {
     constructor() {
         super();
         this.filepath = '';
+        this.compareFilepath = '';
         this._loading = false;
         this._error = '';
         this._headContent = '';
@@ -2905,28 +3502,79 @@ export class InSetuFileDiffProjection extends InSetuElement {
         this._isUntracked = false;
         this._hasUnsavedBuffer = false;
     }
+    onWorkspaceLoad(workspaceId) {
+        super.onWorkspaceLoad(workspaceId);
+        if (this.filepath) {
+            this._fetchDiff();
+        }
+    }
+
+    onProjectionRekeyed(oldId, newId) {
+        let updated = false;
+        if (this.filepath === oldId) {
+            this.filepath = newId;
+            updated = true;
+        } else if (this.filepath && this.filepath.startsWith(oldId + '/')) {
+            this.filepath = newId + this.filepath.slice(oldId.length);
+            updated = true;
+        }
+        if (this.compareFilepath === oldId) {
+            this.compareFilepath = newId;
+            updated = true;
+        } else if (this.compareFilepath && this.compareFilepath.startsWith(oldId + '/')) {
+            this.compareFilepath = newId + this.compareFilepath.slice(oldId.length);
+            updated = true;
+        }
+        if (updated) this.requestUpdate();
+    }
 
     connectedCallback() {
         super.connectedCallback();
-        if (!this.filepath && this.dataset.subId?.startsWith('vfs:diff:')) {
+        if (!this.filepath && this.dataset.subId?.startsWith('vfs:pairdiff:')) {
+            const pairStr = this.dataset.subId.replace('vfs:pairdiff:', '');
+            const [leftFp, rightFp] = pairStr.split('::');
+            this.filepath = leftFp || '';
+            this.compareFilepath = rightFp || '';
+        } else if (!this.filepath && this.dataset.subId?.startsWith('vfs:diff:')) {
             this.filepath = this.dataset.subId.replace('vfs:diff:', '');
         }
         this.subscribe(
             FsStore,
             state => {
                 if (!this.filepath) return null;
-                const normFp = normalizeVfsURI(this.filepath);
-                const buf = state.activeBuffers?.[normFp] || state.activeBuffers?.[this.filepath];
-                return (buf && buf.isFS && buf.content !== undefined && buf.content !== 'Loading...')
-                    ? { content: buf.content, originalContent: buf.originalContent }
+                const normLeft = normalizeVfsURI(this.filepath);
+                const leftBuf = state.activeBuffers?.[normLeft] || state.activeBuffers?.[this.filepath];
+                const leftSnap = (leftBuf && leftBuf.isFS && leftBuf.content !== undefined && leftBuf.content !== 'Loading...')
+                    ? leftBuf.content
                     : null;
+
+                const targetFp = this.compareFilepath || this.filepath;
+                const normRight = normalizeVfsURI(targetFp);
+                const rightBuf = state.activeBuffers?.[normRight] || state.activeBuffers?.[targetFp];
+                const rightSnap = (rightBuf && rightBuf.isFS && rightBuf.content !== undefined && rightBuf.content !== 'Loading...')
+                    ? rightBuf.content
+                    : null;
+                const rightDirty = Boolean(rightBuf && rightBuf.isFS && rightBuf.content !== rightBuf.originalContent);
+
+                return {
+                    leftContent: this.compareFilepath ? leftSnap : null,
+                    rightContent: rightSnap,
+                    rightDirty
+                };
             },
-            (buf) => {
-                if (buf) {
-                    this._workingContent = buf.content;
-                    this._hasUnsavedBuffer = buf.content !== buf.originalContent;
-                    this.requestUpdate();
+            (snap) => {
+                if (!snap) return;
+                let changed = false;
+                if (this.compareFilepath && snap.leftContent !== null && snap.leftContent !== this._headContent) {
+                    this._headContent = snap.leftContent;
+                    changed = true;
                 }
+                if (snap.rightContent !== null && (snap.rightContent !== this._workingContent || snap.rightDirty !== this._hasUnsavedBuffer)) {
+                    this._workingContent = snap.rightContent;
+                    this._hasUnsavedBuffer = snap.rightDirty;
+                    changed = true;
+                }
+                if (changed) this.requestUpdate();
             }
         );
         if (this.filepath) {
@@ -2936,9 +3584,22 @@ export class InSetuFileDiffProjection extends InSetuElement {
 
     updated(changedProperties) {
         super.updated(changedProperties);
-        if (changedProperties.has('filepath') && this.filepath) {
+        if ((changedProperties.has('filepath') || changedProperties.has('compareFilepath')) && this.filepath) {
             this._fetchDiff();
         }
+    }
+
+    async _readBufferOrFetch(targetFp) {
+        const normFp = normalizeVfsURI(targetFp);
+        const buf = FsStore.getState().activeBuffers?.[normFp] || FsStore.getState().activeBuffers?.[targetFp];
+        if (buf && buf.isFS && buf.content !== undefined && buf.content !== 'Loading...') {
+            return { text: buf.content, isDirty: buf.content !== buf.originalContent };
+        }
+        const res = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(normFp)}`);
+        if (!res.ok) {
+            throw new Error(`Failed to fetch '${normFp}' (HTTP ${res.status})`);
+        }
+        return { text: await res.text(), isDirty: false };
     }
 
     async _fetchDiff() {
@@ -2946,26 +3607,36 @@ export class InSetuFileDiffProjection extends InSetuElement {
         this._loading = true;
         this._error = '';
         try {
-            const normFp = normalizeVfsURI(this.filepath);
-            const res = await window.inSetu.api.workspace.get(`fs/git_diff?file=${encodeURIComponent(normFp)}`);
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.error || `HTTP ${res.status}`);
-            }
-            const data = await res.json();
-            this._headContent = data.head_content || '';
-            this._isUntracked = !!data.is_untracked;
-
-            const buf = FsStore.getState().activeBuffers?.[normFp] || FsStore.getState().activeBuffers?.[this.filepath];
-            if (buf && buf.isFS && buf.content !== undefined && buf.content !== 'Loading...') {
-                this._workingContent = buf.content;
-                this._hasUnsavedBuffer = buf.content !== buf.originalContent;
+            if (this.compareFilepath) {
+                const [leftRes, rightRes] = await Promise.all([
+                    this._readBufferOrFetch(this.filepath),
+                    this._readBufferOrFetch(this.compareFilepath)
+                ]);
+                this._headContent = leftRes.text;
+                this._workingContent = rightRes.text;
+                this._hasUnsavedBuffer = rightRes.isDirty;
             } else {
-                this._workingContent = data.working_content || '';
-                this._hasUnsavedBuffer = false;
+                const normFp = normalizeVfsURI(this.filepath);
+                const res = await window.inSetu.api.workspace.get(`fs/git_diff?file=${encodeURIComponent(normFp)}`);
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.error || `HTTP ${res.status}`);
+                }
+                const data = await res.json();
+                this._headContent = data.head_content || '';
+                this._isUntracked = !!data.is_untracked;
+
+                const buf = FsStore.getState().activeBuffers?.[normFp] || FsStore.getState().activeBuffers?.[this.filepath];
+                if (buf && buf.isFS && buf.content !== undefined && buf.content !== 'Loading...') {
+                    this._workingContent = buf.content;
+                    this._hasUnsavedBuffer = buf.content !== buf.originalContent;
+                } else {
+                    this._workingContent = data.working_content || '';
+                    this._hasUnsavedBuffer = false;
+                }
             }
         } catch (e) {
-            this._error = e.message || 'Failed to load Git diff.';
+            this._error = e.message || 'Failed to load diff.';
         } finally {
             this._loading = false;
         }
@@ -2973,26 +3644,32 @@ export class InSetuFileDiffProjection extends InSetuElement {
 
     render() {
         if (this._loading) {
-            return html`<div style="padding: 20px;"><sutram-spinner text="Comparing against Git HEAD..."></sutram-spinner></div>`;
+            return html`<div style="padding: 20px;"><sutram-spinner text="${this.compareFilepath ? 'Comparing selected files...' : 'Comparing against Git HEAD...'}"></sutram-spinner></div>`;
         }
         if (this._error) {
             return html`<div style="padding: 20px; color: var(--intent-danger); font-family: var(--font-mono);">Error: ${this._error}</div>`;
         }
+        const isPairMode = Boolean(this.compareFilepath);
+        const leftLabel = isPairMode
+            ? `Base: ${new window.inSetu.utils.InSetuURI(this.filepath).basename}`
+            : (this._isUntracked ? 'Git HEAD (Untracked / New File)' : 'Git HEAD (Committed)');
+        const rightLabel = isPairMode
+            ? `Compare: ${new window.inSetu.utils.InSetuURI(this.compareFilepath).basename}`
+            : (this._hasUnsavedBuffer ? 'Working Buffer (Unsaved Edits)' : 'Working Tree (Disk)');
 
-        const rightLabel = this._hasUnsavedBuffer
-            ? 'Working Buffer (Unsaved Edits)'
-            : 'Working Tree (Disk)';
-        const leftLabel = this._isUntracked
-            ? 'Git HEAD (Untracked / New File)'
-            : 'Git HEAD (Committed)';
         return html`
-            <div style="padding: 8px 15px; background: var(--input-bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-shrink: 0;">
+            <div style="padding: 8px 15px; background: var(--input-bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-shrink: 0; flex-wrap: wrap;">
                 <span style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                    ${normalizeVfsURI(this.filepath)}
+                    ${isPairMode
+                        ? `${normalizeVfsURI(this.filepath)}  ↔${normalizeVfsURI(this.compareFilepath)}`
+                        : normalizeVfsURI(this.filepath)}
                 </span>
                 <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0;">
                     <sutram-btn size="sm" intent="neutral" icon="refresh-cw" label="Refresh" @click=${() => this._fetchDiff()}></sutram-btn>
-                    <sutram-btn size="sm" intent="primary" icon="edit-3" label="Open Editor" @click=${() => viewSourceFile(this.filepath, true)}></sutram-btn>
+                    <sutram-btn size="sm" intent="primary" icon="edit-3" label="${isPairMode ? 'Edit Left' : 'Open Editor'}" @click=${() => viewSourceFile(this.filepath, true)}></sutram-btn>
+                    ${isPairMode ? html`
+                        <sutram-btn size="sm" intent="highlight" icon="edit-3" label="Edit Right" @click=${() => viewSourceFile(this.compareFilepath, true)}></sutram-btn>
+                    ` : ''}
                 </div>
             </div>
             <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0;">
@@ -3007,12 +3684,12 @@ export class InSetuFileDiffProjection extends InSetuElement {
     }
 }
 customElements.define('insetu-file-diff-projection', InSetuFileDiffProjection);
-
-// Isolate VFS-specific dirty state checks
+// Isolate VFS-specific dirty state checks and keepalive flush on window close
 window.addEventListener('beforeunload', (e) => {
     const buffers = Object.values(FsStore.getState().activeBuffers || {});
-    const hasUnsaved = buffers.some(b => b.isFS && b.content !== b.originalContent);
+    const hasUnsaved = buffers.some(b => b.isFS && b.content !== b.originalContent && b.content !== 'Loading...');
     if (hasUnsaved) {
+        flushAllDirtyBuffers(true);
         e.preventDefault();
         e.returnValue = '';
     }

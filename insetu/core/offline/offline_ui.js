@@ -10,7 +10,6 @@ export const OfflineStore = createExtensionStore('Offline', {
     deadLetters: [],
     logs: [],
     loading: false,
-    storageModalOpen: false,
     storageUsage: 0,
     storageQuota: 0,
     storagePersisted: false,
@@ -273,7 +272,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                                     </div>
                                     <pre style="margin: 0; font-size: 0.75rem; padding: 6px; max-height: 100px; overflow-y: auto;">${item.bodyString ? (item.bodyString.startsWith('{') || item.bodyString.startsWith('[') ? JSON.stringify(JSON.parse(item.bodyString), null, 2) : item.bodyString) : 'Empty Payload'}</pre>
                                     <div style="display: flex; gap: 8px; margin-top: 8px;">
-                                        <sutram-btn intent="warning" label="Retry" style="--btn-padding: 6px 12px; margin: 0; color: #000;" @click=${() => this._retryDeadLetter(item)}></sutram-btn>
+                                        <sutram-btn intent="warning" label="Retry" style="--btn-padding: 6px 12px; margin: 0; color: var(--bg-deep);" @click=${() => this._retryDeadLetter(item)}></sutram-btn>
                                         <sutram-btn intent="danger" label="Discard" style="--btn-padding: 6px 12px; margin: 0;" @click=${() => this._discardDeadLetter(item)}></sutram-btn>
                                     </div>
                                 </div>
@@ -320,138 +319,6 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
 }
 customElements.define('insetu-core-offline-ledger', InSetuCoreOfflineLedger);
 
-export class InSetuCoreOfflineSettings extends InSetuElement {
-    static get extensionName() { return 'offline'; }
-    static properties = {
-        storageModalOpen: { type: Boolean },
-        targetConfigs: { type: Array }
-    };
-    static styles = [sharedStyles, css`
-        :host { display: contents; }
-    `];
-
-    constructor() {
-        super();
-        this.storageModalOpen = false;
-        this.targetConfigs = [];
-    }
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(
-            OfflineStore,
-            state => !!state.storageModalOpen,
-            (storageModalOpen) => {
-                this.storageModalOpen = storageModalOpen;
-            }
-        );
-        this.subscribe(
-            window.inSetu.stores.App,
-            state => state.targetConfigs || [],
-            (targetConfigs) => {
-                this.targetConfigs = this.utils.clone(targetConfigs);
-            }
-        );
-        this.targetConfigs = this.utils.clone(window.inSetu.stores.App.getState().targetConfigs || []);
-    }
-    async _toggleOffline(repoDir, isEnabled) {
-        const configs = [...this.targetConfigs];
-        const repo = configs.find(c => c.repo_dir === repoDir);
-        if (repo) {
-            repo.offline_capable = isEnabled;
-            try {
-                // Fetch full configuration to prevent wiping extensions and other settings
-                const cfgRes = await this.api.workspace.get('system/config?t=' + Date.now(), { cache: 'no-store' });
-                if (!cfgRes.ok) throw new Error("Failed to fetch current config.");
-                const data = await cfgRes.json();
-                const fullConfig = data.config || {};
-
-                fullConfig.target_repos = configs;
-                const res = await this.api.workspace.post('system/config', fullConfig);
-                if (res.ok) {
-                    window.inSetu.stores.App.setState({ targetConfigs: configs });
-                    if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`Saved offline capability for ${repoDir}`, 2000);
-                }
-            } catch (e) {
-                alert(`Failed to save setting: ${e.message}`);
-            }
-        }
-    }
-    async _preCacheRepo(repoDir) {
-        const files = [];
-        const vfsManifest = window.inSetu.stores.App.getState().manifest?.vfs || {};
-
-        Object.entries(vfsManifest).forEach(([key, bucket]) => {
-            if (key.startsWith(repoDir + '::')) {
-                files.push(...(bucket.files || []));
-            }
-        });
-
-        if (files.length === 0) {
-            alert(`No indexed files found for ${repoDir}. Check your cartographer mappings.`);
-            return;
-        }
-        window.inSetu?.offlineLog?.(`Starting pre-cache for repository '${repoDir}' (${files.length} files)...`, 'info');
-        try {
-            let cachedCount = 0;
-            for (const f of files) {
-                const res = await this.api.workspace.get(`fs/fetch?file=${encodeURIComponent(f)}`).catch(()=>{});
-
-                if (res && res.ok) {
-                    await res.blob().catch(()=>{});
-                    cachedCount++;
-                }
-            }
-            window.inSetu?.offlineLog?.(`Pre-cache complete for '${repoDir}': ${cachedCount}/${files.length} cached.`, 'success');
-            if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`Successfully cached ${files.length} files for ${repoDir}`, 3000);
-
-            setTimeout(() => {
-                this.dispatch('insetu:force-refresh', { parentId: 'offline', subId: 'ledger' });
-            }, 500);
-        } catch (e) {
-            window.inSetu?.offlineLog?.(`Pre-cache failed for '${repoDir}': ${e.message}`, 'error');
-            alert(`Failed to cache repository: ${e.message}`);
-        }
-    }
-    render() {
-        if (!this.storageModalOpen) return html``;
-        return html`
-            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Offline Storage Management" @sutram-modal-closed=${() => OfflineStore.setState({ storageModalOpen: false })}>
-                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Manage offline cache capabilities per-repository.</p>
-
-                ${this.targetConfigs.map(repo => html`
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap; padding: 15px; background: var(--input-bg); border-radius: 6px; border: 1px solid var(--border); align-items: center; justify-content: space-between;">
-                        <div style="display: flex; flex-direction: column; flex: 1; min-width: 250px;">
-                            <span style="font-weight: bold; color: var(--intent-primary); font-size: 1.1rem; display: flex; align-items: center; gap: 6px;"><yv-icon name="folder" style="width: 16px; height: 16px;"></yv-icon> ${repo.repo_dir}</span>
-                            <span style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">${repo.title || 'No Display Title'}</span>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
-                            <sutram-toggle 
-                                label="Offline Capable" 
-                                .checked=${!!repo.offline_capable} 
-                                @sutram-input-changed=${(e) => this._toggleOffline(repo.repo_dir, e.detail.value)} 
-                                ?flush=${true}>
-                            </sutram-toggle>
-                            <sutram-async-btn 
-                                label="Pre-Cache Repository" 
-                                intent="neutral" 
-                                ?disabled=${!repo.offline_capable}
-                                style="margin: 0;" 
-                                .onClick=${() => this._preCacheRepo(repo.repo_dir)}>
-                            </sutram-async-btn>
-                        </div>
-                    </div>
-                `)}
-
-                ${this.targetConfigs.length === 0 ? html`
-                    <div style="color: var(--text-muted); font-style: italic; padding: 20px; text-align: center; background: var(--input-bg); border-radius: 6px; border: 1px dashed var(--border);">
-                        No repositories mapped to this workspace yet.
-                    </div>
-                ` : ''}
-            </sutram-modal>
-        `;
-    }
-}
-customElements.define('insetu-core-offline-settings', InSetuCoreOfflineSettings);
 export class InSetuCoreOfflineLog extends InSetuElement {
     static get extensionName() { return 'offline'; }
     static properties = {
@@ -544,30 +411,28 @@ export class InSetuCoreOfflineLog extends InSetuElement {
     }
 }
 customElements.define('insetu-core-offline-log', InSetuCoreOfflineLog);
-
 window.ExtensionRegistry.registerExtension('offline', {
     name: "Offline Engine",
     version: "2.0.0",
+    icon: "hard-drive",
     offline_mode: "read_only",
     settingsActions: [
         {
             id: 'offline_storage_management',
-            label: 'Offline Storage Management',
+            label: 'Repository Offline Cache & Storage',
             icon: 'hard-drive',
             onClick: () => {
-                OfflineStore.setState({ storageModalOpen: true });
+                window.inSetu?.events?.emit('insetu:system:open-settings-view', { view: 'sys:topology' });
             }
         }
     ],
     layoutSlots: [
         {
-            slot: "slots:global",
-            component: "insetu-core-offline-settings"
-        },
-        {
             slot: "slots:primary-navigation",
             id: "offline",
             label: "Offline",
+            icon: "wifi-off",
+            intent: "neutral",
             order: 91
         },
         {

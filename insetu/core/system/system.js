@@ -119,7 +119,6 @@ async function bootExtensions() {
             const dataMatch = targetPath.match(/\.(?:insetu-data|insetu\/data)\/([a-z0-9_]+)\//);
             if (dataMatch) matchingExt = dataMatch[1];
             else if (targetPath.startsWith('ctx://notes/') || targetPath.includes('/notes/')) matchingExt = 'notes';
-            else if (targetPath.includes('.tracker/')) matchingExt = 'tracker';
             else if (targetPath.startsWith('ctx://prompts/')) matchingExt = 'prompts';
             else if (targetPath.includes('term')) matchingExt = 'term';
         }
@@ -156,15 +155,14 @@ async function bootExtensions() {
     autoWireSettingsSchemas();
 }
 // --- DECENTRALIZED MANIFEST SYNC & KERNEL HEARTBEAT ---
-let lastManifestSyncTs = 0;
-let lastPolledTs = 0;
-let localVfsSignatures = {};
-let localCtxSignatures = {};
-let warmedVfsSignatures = {};
 async function checkManifestVersion() {
     if (!window.BOOT_COMPLETE) return;
-    if (window.inSetu?.stores?.App?.getState()?.isReconciling) return; // Wait for outbox drain
-    if (window.inSetu?.stores?.App?.getState()?.isPipelineActive) return; // Yield to active compilation DAG
+    const appState = window.inSetu?.stores?.App?.getState();
+    if (appState?.isSwappingWorkspace) return; // Suspend heartbeat while workspace swap FSM is locked
+    if (appState?.isReconciling) return; // Wait for outbox drain
+    if (appState?.isPipelineActive) return; // Yield to active compilation DAG
+    const wm = appState.getSyncWatermarks();
+    const { localVfsSignatures, localCtxSignatures, warmedVfsSignatures } = wm;
 
     const activeWs = window.inSetu.utils.getActiveWorkspace();
     const nowMs = Date.now();
@@ -172,13 +170,13 @@ async function checkManifestVersion() {
 
     // Adaptive Backoff: If SSE is healthy, poll at 30s intervals. If disconnected, poll at 3s intervals.
     const requiredIntervalMs = isSseConnected ? 30000 : 3000;
-    if (nowMs - lastPolledTs < requiredIntervalMs) {
+    if (nowMs - wm.lastPolledTs < requiredIntervalMs) {
         return;
     }
-    lastPolledTs = nowMs;
+    wm.lastPolledTs = nowMs;
     try {
-        const deltaRes = await window.inSetu.api.workspace.get(`system/deltas?since=${lastManifestSyncTs}`, { 
-            signal: AbortSignal.timeout(4000) 
+        const deltaRes = await window.inSetu.api.workspace.get(`system/deltas?since=${wm.lastManifestSyncTs}`, { 
+            signal: AbortSignal.timeout(8000) 
         });
 
         if (!deltaRes.ok) return;
@@ -223,7 +221,7 @@ async function checkManifestVersion() {
                     manifestUpdated = true;
                 } else if (localVfsSignatures[repo] !== sig) {
                     // Short-circuit N+1 fetches on workspace swap/boot if we already have the data
-                    if (lastManifestSyncTs === 0 && currentManifest.vfs && Object.keys(currentManifest.vfs).some(k => k.startsWith(`${repo}::`))) {
+                    if (wm.lastManifestSyncTs === 0 && currentManifest.vfs && Object.keys(currentManifest.vfs).some(k => k.startsWith(`${repo}::`))) {
                         localVfsSignatures[repo] = sig;
                         continue;
                     }
@@ -301,17 +299,30 @@ async function checkManifestVersion() {
             const targetConfigs = AppStore.getState().targetConfigs || [];
             const offlineRepos = targetConfigs.filter(c => c.offline_capable).map(c => c.repo_dir);
             if (offlineRepos.length > 0 && currentManifest.vfs && sigs.vfs) {
+                const mutatedPaths = new Set(
+                    (deltaData.mutations || [])
+                        .filter(m => m.operation !== 'delete' && m.filepath)
+                        .map(m => window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(m.filepath) : m.filepath)
+                );
+
                 Object.entries(currentManifest.vfs).forEach(([key, bucket]) => {
                     const repo = key.split('::')[0];
                     const currentSig = sigs.vfs[repo];
                     if (offlineRepos.includes(repo) && currentSig && warmedVfsSignatures[repo] !== currentSig) {
+                        const isInitialWarm = !warmedVfsSignatures[repo];
                         (bucket.files || []).forEach(f => {
+                            if (!f || f.endsWith('/.gitkeep') || f.endsWith('/.keep')) return;
+                            if (!isInitialWarm && mutatedPaths.size > 0 && !mutatedPaths.has(f)) return;
                             const cacheKeyUrl = window.inSetu.vfs?.resolveFileFetchUrl ? window.inSetu.vfs.resolveFileFetchUrl(f, true) : `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(f)}`;
                             SutramDB.deleteVFSBlob(activeWs, cacheKeyUrl).catch(()=>{});
                             const sep = cacheKeyUrl.includes('?') ? '&' : '?';
                             pathsToWarm.push(`${cacheKeyUrl}${sep}t=${Date.now()}`);
                         });
-                        warmedVfsSignatures[repo] = currentSig;
+                    }
+                });
+                Object.keys(sigs.vfs).forEach(repo => {
+                    if (offlineRepos.includes(repo) && sigs.vfs[repo]) {
+                        warmedVfsSignatures[repo] = sigs.vfs[repo];
                     }
                 });
             }
@@ -325,21 +336,20 @@ async function checkManifestVersion() {
         const backendUptimeSeconds = deltaData.timestamp - (deltaData.backend_boot_ts || deltaData.timestamp);
         const isBootSettled = backendUptimeSeconds > 150;
         const isSystemSettled = !deltaData.is_pipeline_active && isBootSettled;
-
         if (!AppStore.getState().isOffline && navigator.connection?.saveData !== true && isSystemSettled) {
             const q = Array.from(AppStore.getState().warmingQueue);
             if (q.length > 0) {
-                // Dynamic Throttle: Adjust fetch rate based on live network conditions
-                let chunkSize = 50; 
+                // Dynamic Throttle: Keep background warming gentle so local WSGI/Werkzeug threads are never starved
+                let chunkSize = 10; 
 
                 if (navigator.connection) {
                     if (navigator.connection.effectiveType === '2g' || navigator.connection.effectiveType === '3g') {
-                        chunkSize = 10; // Severe throttle for slow mobile networks
+                        chunkSize = 4;
                     } else if (navigator.connection.downlink) {
                         const mbps = navigator.connection.downlink;
-                        if (mbps < 2) chunkSize = 15;       // Weak connection
-                        else if (mbps < 10) chunkSize = 30; // Moderate connection
-                        else chunkSize = 50;                // Fast connection (LAN/Strong Wi-Fi)
+                        if (mbps < 2) chunkSize = 5;
+                        else if (mbps < 10) chunkSize = 8;
+                        else chunkSize = 10;
                     }
                 }
 
@@ -375,9 +385,8 @@ async function checkManifestVersion() {
         if (deltaData.is_pipeline_active !== undefined) {
             AppStore.setState({ isPipelineActive: deltaData.is_pipeline_active });
         }
-
         if (deltaData.timestamp) {
-            lastManifestSyncTs = deltaData.timestamp;
+            wm.lastManifestSyncTs = deltaData.timestamp;
         }
         // 3. Dispatch Physical Mutations to Event Bus
         if (deltaData.mutations && deltaData.mutations.length > 0) {
@@ -433,10 +442,11 @@ window.inSetu.utils.pollJob = (jobId, options = {}) => {
     const initWs = window.inSetu.utils.getActiveWorkspace();
     const safeOptions = { ...options };
     let settled = false;
-
+    let trackedJobId = jobId;
     const cleanupSseFastPath = () => {
         settled = true;
         window.removeEventListener('sutram-compile-progress', sseHandler);
+        window.removeEventListener('insetu:compile-progress', sseHandler);
     };
 
     ['onProgress', 'onComplete', 'onError'].forEach(cbName => {
@@ -458,22 +468,26 @@ window.inSetu.utils.pollJob = (jobId, options = {}) => {
             };
         }
     });
-
     const sseHandler = (e) => {
         if (settled) return;
         const d = e.detail;
-        if (!d || (d.job_id !== jobId && d.id !== jobId)) return;
+        if (!d || (d.job_id !== trackedJobId && d.id !== trackedJobId && d.artifact?.root_job_id !== jobId)) return;
         if (window.inSetu.utils.getActiveWorkspace() !== initWs) return;
 
-        if (d.status === 'completed' && ! d.artifact?.next_job_id) {
-            cleanupSseFastPath();
-            if (options.onComplete) options.onComplete(d);
+        if (d.status === 'completed') {
+            if (d.artifact?.next_job_id) {
+                trackedJobId = d.artifact.next_job_id;
+            } else {
+                cleanupSseFastPath();
+                if (options.onComplete) options.onComplete(d);
+            }
         } else if (d.status === 'failed') {
             cleanupSseFastPath();
             if (options.onError) options.onError(new Error(d.message || 'Job failed'));
         }
     };
     window.addEventListener('sutram-compile-progress', sseHandler);
+    window.addEventListener('insetu:compile-progress', sseHandler);
 
     // Instantiate a dynamically bound poller to strictly lock network requests to the originating tenant
     const scopedPoller = createJobPoller({
@@ -544,11 +558,11 @@ async function executeSecurityHandshake() {
         if (res.status === 401) {
             return new Promise((resolve) => {
                 document.body.innerHTML = `
-                    <div style="font-family:monospace; background:#0f172a; color:#f8fafc; padding:20px; text-align:center; height:100dvh; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; align-items:center;">
-                        <h2 style="color:#10b981; margin-top:0; display:flex; align-items:center; gap:8px;"><yv-icon name="key" style="width:22px; height:22px;"></yv-icon><span>inSetu Security Gate</span></h2>
-                        <p style="color:#94a3b8; margin-bottom:20px;">Enter the persistent 'auth_token' defined in your config.json:</p>
-                        <input type="password" id="auth-token-input" style="padding:12px; font-size:1.1rem; border-radius:4px; border:1px solid #334155; background:#1e293b; color:#fff; margin-bottom:15px; width:100%; max-width:300px; text-align:center;" />
-                        <button id="auth-submit-btn" style="background:#3b82f6; color:white; border:none; padding:12px 20px; border-radius:4px; font-size:1.1rem; font-weight:bold; cursor:pointer; width:100%; max-width:300px;">Authenticate</button>
+                    <div style="font-family:var(--font-mono, monospace); background:var(--bg-deep, #0f172a); color:var(--text, #f8fafc); padding:20px; text-align:center; height:100dvh; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; align-items:center;">
+                        <h2 style="color:var(--intent-success, #10b981); margin-top:0; display:flex; align-items:center; gap:8px;"><yv-icon name="key" style="width:22px; height:22px;"></yv-icon><span>inSetu Security Gate</span></h2>
+                        <p style="color:var(--text-muted, #94a3b8); margin-bottom:20px;">Enter the persistent 'auth_token' defined in your config.json:</p>
+                        <input type="password" id="auth-token-input" style="padding:12px; font-size:1.1rem; border-radius:4px; border:1px solid var(--border, #334155); background:var(--input-bg, #1e293b); color:var(--text, #ffffff); margin-bottom:15px; width:100%; max-width:300px; text-align:center;" />
+                        <button id="auth-submit-btn" style="background:var(--intent-primary, #3b82f6); color:var(--text-light, #ffffff); border:none; padding:12px 20px; border-radius:4px; font-size:1.1rem; font-weight:bold; cursor:pointer; width:100%; max-width:300px;">Authenticate</button>
                     </div>
                 `;
                 const btn = document.getElementById('auth-submit-btn');
@@ -698,12 +712,19 @@ export async function executeBootSequence(options = {}) {
                 return;
             }
             primaryAcknowledged = true;
-            const activeWs = window.inSetu.utils.getActiveWorkspace();
+            if (type === 'network_state') {
+                const isOff = Boolean(data?.isOffline);
+                AppStore.setState({ isOffline: isOff });
+                if (window.Sutram?.stores?.Environment) window.Sutram.stores.Environment.setState({ isOffline: isOff });
+                return;
+            }
+            const shouldDrop = window.inSetu?.events?.shouldDropTenantEvent
+                ? window.inSetu.events.shouldDropTenantEvent(data?.workspace_id || data?.scopeId)
+                : Boolean(AppStore.getState().isSwappingWorkspace);
+            if (shouldDrop) return;
             if (type === 'vfs_mutated') {
-                if (data.workspace_id && data.workspace_id !== activeWs) return;
                 window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: data.mutations });
             } else if (type === 'job_progress') {
-                if (data.workspace_id && data.workspace_id !== activeWs) return;
                 if (data.status === 'completed' && data.artifact) {
                     window.inSetu.events.emitHook('insetu:compile-step-complete', {
                         job_id: data.job_id,
@@ -712,7 +733,6 @@ export async function executeBootSequence(options = {}) {
                     });
                 }
             } else if (type === 'topology_resolved') {
-                if (data.workspace_id && data.workspace_id !== activeWs) return;
                 const state = AppStore.getState();
                 if (data.clear_all) {
                     AppStore.setState({ dirtyRepos: new Set(), dirtyBuckets: new Set() });
@@ -721,12 +741,7 @@ export async function executeBootSequence(options = {}) {
                     const newBuckets = new Set([...state.dirtyBuckets, ...(data.dirty_buckets || [])]);
                     AppStore.setState({ dirtyRepos: newRepos, dirtyBuckets: newBuckets });
                 }
-            } else if (type === 'network_state') {
-                const isOff = Boolean(data?.isOffline);
-                AppStore.setState({ isOffline: isOff });
-                if (window.Sutram?.stores?.Environment) window.Sutram.stores.Environment.setState({ isOffline: isOff });
             } else if (type === 'outbox_reconciled') {
-                if (data?.scopeId && data.scopeId !== activeWs) return;
                 AppStore.setState({ isOffline: false, isReconciling: false, outboxCount: 0, pendingMutations: new Set(), deletedMutations: new Set() });
                 if (window.Sutram?.stores?.Environment) window.Sutram.stores.Environment.setState({ isOffline: false });
                 if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus('✅ System Synced', 3000);
@@ -830,6 +845,10 @@ export async function executeBootSequence(options = {}) {
     console.log("[BOOT] Loading Workspaces...");
     updateBootProgress("Loading Workspaces...");
     await loadWorkspaces();
+    const resolvedBootWs = window.inSetu.utils.getActiveWorkspace();
+    if (window.Sutram?.stores?.Layout && window.Sutram.stores.Layout._boundScope !== resolvedBootWs) {
+        window.Sutram.stores.Layout.hydrateStore(resolvedBootWs);
+    }
         // 2. Fetch tenant configuration for the true active workspace
         try {
             console.log("[BOOT] Fetching system configuration...");
@@ -968,6 +987,8 @@ export async function executeBootSequence(options = {}) {
     }
     // Initialize Zero-Bundler SPA Router (Native Hash Routing)
     const handleHashChange = () => {
+        if (AppStore.getState().isSwappingWorkspace) return;
+
         const hash = window.location.hash.replace(/^#\/?/, '');
         const parts = hash.split('/').map(decodeURIComponent);
 
@@ -985,7 +1006,7 @@ export async function executeBootSequence(options = {}) {
         if (!validColumns.includes(colId)) {
             subId = parts[2] || colId; 
             colId = 'center';
-            
+
             // Silently rewrite the URL to the new format
             const deepStr = deepPath.length > 0 ? '/' + deepPath.map(encodeURIComponent).join('/') : '';
             const newHash = `#/${encodeURIComponent(ws)}/${colId}/${encodeURIComponent(subId)}${deepStr}`;
@@ -994,8 +1015,9 @@ export async function executeBootSequence(options = {}) {
 
         if (ws && ws !== activeWs) {
             if (window.inSetu.sys.executeWorkspaceSwap) {
-                window.inSetu.sys.executeWorkspaceSwap(ws);
+                window.inSetu.sys.executeWorkspaceSwap(ws, null, window.location.hash);
             }
+            return;
         }
         if (deepPath.length > 0) {
             AppStore.getState().setBrowsePath(deepPath, subId);
@@ -1010,12 +1032,22 @@ export async function executeBootSequence(options = {}) {
                 AppStore.getState().setBrowsePath([], subId);
             }
         }
-
         if (window.Sutram?.stores?.Layout) {
             const layout = window.Sutram.stores.Layout.getState();
 
-            if (colId && layout.columns[colId]) {
+            if (colId && layout.columns[colId] && (subId || layout.columns[colId].pinned?.length > 0)) {
                 layout.setFocusedColumn(colId);
+            }
+            if (!subId) {
+                const activeCol = layout.focusedColumn || colId || 'center';
+                const restoredActive = layout.columns[activeCol]?.active || layout.columns[activeCol]?.pinned?.[0]?.id || '';
+                if (restoredActive) {
+                    colId = activeCol;
+                    subId = restoredActive;
+                    const savedDeep = AppStore.getState().tabBrowsePaths?.[subId] || [];
+                    const deepStr = savedDeep.length > 0 ? '/' + savedDeep.map(encodeURIComponent).join('/') : '';
+                    history.replaceState(null, '', `#/${encodeURIComponent(ws)}/${colId}/${encodeURIComponent(subId)}${deepStr}`);
+                }
             }
             if (subId) {
                 const colState = layout.columns[colId];
@@ -1062,18 +1094,36 @@ export async function executeBootSequence(options = {}) {
                     const pinnedItem = colState.pinned.find(p => p.id === subId || p.rawId === subId);
                     if (pinnedItem) resolvedTargetId = pinnedItem.id;
                 }
-
                 if (typeof layout.setActiveProjection === 'function') {
                     layout.setActiveProjection(colId, resolvedTargetId);
                 }
+
+                if (isPopout) {
+                    const baseTitle = document.querySelector('sutram-status-bar')?.baseTitle || 'inSetu Workbench';
+                    const pinnedItem = layout.columns[colId]?.pinned?.find(p => p.id === resolvedTargetId || p.rawId === subId);
+                    const rawTarget = (subId === 'editor' && deepPath.length > 0) ? deepPath.join('/') : (resolvedTargetId || subId);
+                    const parsed = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(rawTarget) : {};
+                    const itemLabel = (rawTarget.includes('://') || rawTarget.includes('/'))
+                        ? rawTarget.replace(/\/+$/, '').split('/').pop()
+                        : (pinnedItem?.label || rawTarget);
+                    const repoSuffix = parsed.repo ? ` — ${parsed.repo}` : '';
+                    document.title = itemLabel ? `${itemLabel}${repoSuffix} · ${baseTitle}` : baseTitle;
+                }
             }
+        }
+        if (!isPopout) {
+            const baseTitle = document.querySelector('sutram-status-bar')?.baseTitle || 'inSetu Workbench';
+            document.title = (ws && ws !== 'default') ? `${baseTitle} [${ws}]` : baseTitle;
         }
     };
     window.addEventListener('hashchange', handleHashChange);
-    // Bootstrap initial route from URL or set default
+    // Bootstrap initial route from URL or set default from restored LayoutStore state
     const currentWs = window.inSetu.utils.getActiveWorkspace();
     if (!window.location.hash || window.location.hash === '#/' || window.location.hash === '#') {
-        window.location.hash = `#/${encodeURIComponent(currentWs)}/center/`;
+        const restoredLayout = window.Sutram?.stores?.Layout?.getState();
+        const restoredCol = restoredLayout?.focusedColumn || 'center';
+        const restoredActive = restoredLayout?.columns?.[restoredCol]?.active || '';
+        window.location.hash = `#/${encodeURIComponent(currentWs)}/${restoredCol}/${encodeURIComponent(restoredActive)}`;
     }
     // Always trigger handleHashChange on startup to populate layout state
     handleHashChange();
@@ -1159,42 +1209,276 @@ try {
     currentTheme = localStorage.getItem('insetu_theme') || 'dark';
 } catch(e) {}
 document.body.setAttribute('data-theme', currentTheme);
-async function executeWorkspaceSwap(key, title) {
-    localVfsSignatures = {};
-    localCtxSignatures = {};
-    lastManifestSyncTs = 0;
-
-    // Automated Context Cancellation: Abort in-flight network requests for the outgoing workspace
-    const oldWs = window.inSetu.utils.getActiveWorkspace();
-    if (oldWs && window.inSetu.api?.abortWorkspace) {
-        window.inSetu.api.abortWorkspace(oldWs);
+function _setAppShellLock(locked) {
+    const appShell = document.querySelector('sutram-app-shell');
+    if (!appShell) return;
+    if (locked) {
+        appShell.setAttribute('inert', '');
+        appShell.style.pointerEvents = 'none';
+    } else {
+        appShell.removeAttribute('inert');
+        appShell.style.pointerEvents = '';
     }
-    window.inSetu.ui.setGlobalStatus(`Switched to ${title || key}. Hydrating UI...`, null);
-    await purgeServiceWorkerCaches();
+}
+function _reconcileExtensionsAndSettings(previousExts = [], nextExts = []) {
+    if (!window.ExtensionRegistry) return;
 
-    // 1. Temporarily clear active extensions during context transition to prevent 403 race conditions
-    window.ACTIVE_EXTENSIONS = [];
-
-    // 2. Explicitly zero out tenant-scoped infrastructure state. 
-    // DO NOT set activeWorkspace or location.hash yet to prevent layout data bleeds.
-    const newPinned = new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${key}`)) || ["ALL"]);
-    AppStore.setState({ 
-        pinnedRepos: newPinned,
-        dirtyRepos: new Set(),
-        dirtyBuckets: new Set(),
-        pendingMutations: new Set(),
-        deletedMutations: new Set(),
-        outboxCount: 0,
-        resolvingLocks: {},
-        warmingQueue: new Set()
+    const candidateExts = new Set([
+        ...(previousExts || []),
+        ...Array.from(window.ExtensionRegistry._manifests?.keys() || [])
+    ]);
+    candidateExts.forEach(extName => {
+        if (!extName || _isCoreExt(extName)) return;
+        if (!nextExts.includes(extName) && typeof window.ExtensionRegistry.executeUnload === 'function') {
+            window.ExtensionRegistry.executeUnload(extName);
+        }
     });
 
-    // 3. Notify backend of the swap
-    await window.inSetu.api.workspace.post('system/workspaces', { active_workspace: key });
+    autoWireSettingsSchemas();
+    if (typeof window.ExtensionRegistry.compileLayout === 'function') {
+        window.ExtensionRegistry.compileLayout();
+    }
+}
 
-    // 4. Perform top-down AppStore outward cascade and hand off Identity Management
-    await performSoftRefresh(key);
-    loadWorkspaces();
+async function _hydrateWorkspaceEnvironment(targetWs, previousExts = []) {
+    // 1. Hydrate Topology
+    const rRes = await window.inSetu.api.workspace.get('system/topology?t=' + Date.now());
+    if (rRes.ok) {
+        const d = await rRes.json();
+        window.inSetu.utils.setScopedStorage('offline_topology', JSON.stringify(d), targetWs);
+        const tabOrder = d.tab_order || [];
+        AppStore.setState({
+            activeWorkspace: targetWs,
+            allRepos: d.repos,
+            targetConfigs: d.target_repos || [],
+            virtualContexts: d.virtual_contexts || [],
+            categoryOrder: d.category_order || [],
+            hiddenOutputs: d.hidden_outputs || [],
+            configMissing: !!d.config_missing,
+            tabOrder: tabOrder
+        });
+        if (window.ExtensionRegistry?.setTabOrder && tabOrder.length > 0) {
+            window.ExtensionRegistry.setTabOrder(tabOrder);
+        }
+    }
+
+    // 2. Hydrate Config, Boot Newly Enabled Extensions & Unload Disabled Extensions
+    const cRes = await window.inSetu.api.workspace.get('system/config?t=' + Date.now(), { cache: 'no-store' });
+    if (cRes.ok) {
+        const data = await cRes.json();
+        window.inSetu.utils.setScopedStorage('offline_config', JSON.stringify(data), targetWs);
+        const config = data.config || {};
+        window.ACTIVE_EXTENSIONS = data.meta?.mounted_extensions || config.extensions || [];
+        window.inSetu.serverSchemas = data.meta?.settings_schemas || {};
+        if (data.meta?.core_modules) {
+            window.inSetu.CORE_MODULES = new Set(data.meta.core_modules);
+        }
+        await bootExtensions();
+        AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
+        const statusBar = document.querySelector('sutram-status-bar');
+        if (statusBar) {
+            statusBar.baseTitle = config.instance_title || "inSetu Workbench";
+        }
+        _reconcileExtensionsAndSettings(previousExts, window.ACTIVE_EXTENSIONS);
+    }
+
+    // 3. Hydrate Offline Outbox Markers from IndexedDB
+    try {
+        const outbox = await SutramDB.getOutboxItems(targetWs);
+        const pendingSet = new Set();
+        const deletedSet = new Set();
+        outbox.forEach(item => {
+            try {
+                const payload = item.bodyString ? JSON.parse(item.bodyString) : {};
+                const fp = payload.filepath || payload.dest_path;
+                if (fp) {
+                    const isDelete = item.method === 'DELETE' || (item.path && item.path.includes('fs/delete')) || (item.path && item.path.includes('fs/move'));
+                    if (isDelete) deletedSet.add(fp);
+                    else pendingSet.add(fp);
+                }
+            } catch (_) {}
+        });
+        AppStore.setState({ outboxCount: outbox.length, pendingMutations: pendingSet, deletedMutations: deletedSet });
+    } catch (_) {}
+
+    // 4. Hydrate Manifest
+    AppStore.setState({ manifest: { vfs: {}, ctx: {} } });
+    const mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
+    const rawManifest = mRes.ok ? await mRes.json() : null;
+    const manifestData = { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} };
+    const appState = AppStore.getState();
+    const hasActiveRepos = appState.targetConfigs && appState.targetConfigs.length > 0;
+    const isEmptyCtxManifest = Object.keys(manifestData.ctx || {}).length === 0;
+    AppStore.setState({ manifest: { vfs: manifestData.vfs || {}, ctx: manifestData.ctx || {} } });
+    if (manifestData.ctx) {
+        const { localCtxSignatures } = AppStore.getState().getSyncWatermarks();
+        Object.entries(manifestData.ctx).forEach(([p, entry]) => {
+            if (entry && entry.meta && entry.meta.timestamp) {
+                localCtxSignatures[p] = entry.meta.timestamp;
+            }
+        });
+    }
+    if (isEmptyCtxManifest && hasActiveRepos && window.inSetu.stores.Gather) {
+        await window.inSetu.stores.Gather.getState().executeCompile();
+    }
+}
+
+export const SessionOrchestrator = {
+    get phase() {
+        return AppStore.getState().swapPhase || 'READY';
+    },
+
+    transitionToWorkspace: async function(targetWs, title = null, targetHash = null) {
+        if (!targetWs || AppStore.getState().isSwappingWorkspace) return;
+        const oldWs = window.inSetu.utils.getActiveWorkspace();
+        if (targetWs === oldWs) {
+            return await this.refreshCurrentWorkspace(targetHash);
+        }
+
+        const isPopout = new URLSearchParams(window.location.search).get('popout') === 'true';
+        const previousExts = [...(window.ACTIVE_EXTENSIONS || [])];
+
+        // --- PHASE 1: LOCKED ---
+        AppStore.setState({ isSwappingWorkspace: true, swapPhase: 'LOCKED' });
+        _setAppShellLock(true);
+        window.inSetu.ui.setGlobalStatus(`Switched to ${title || targetWs}. Hydrating UI...`, null);
+
+        try {
+            // --- PHASE 2: TEARDOWN (Executes strictly under oldWs identity) ---
+            AppStore.setState({ swapPhase: 'TEARDOWN' });
+            try {
+                if (window.inSetu?.vfs?.flushAllDirtyBuffers) {
+                    await window.inSetu.vfs.flushAllDirtyBuffers(false);
+                }
+            } catch (_) {}
+
+            try {
+                await window.inSetu.api.workspace.post('system/workspaces', { active_workspace: targetWs });
+            } catch (_) {}
+
+            if (oldWs && window.inSetu.api?.abortWorkspace) {
+                window.inSetu.api.abortWorkspace(oldWs);
+            }
+            await purgeServiceWorkerCaches();
+            // Synchronously evict all open projections on LayoutStore while suspending persistence so oldWs's saved layout is not mutated
+            const layoutStore = window.Sutram?.stores?.Layout;
+            if (layoutStore && typeof layoutStore.getState === 'function') {
+                layoutStore._suspendPersistence = true;
+                try {
+                    const lState = layoutStore.getState();
+                    (lState.windows || []).forEach(w => lState.evictProjection(w.id, true));
+                    ['left', 'center', 'right'].forEach(col => {
+                        const pinned = lState.columns?.[col]?.pinned || [];
+                        pinned.forEach(p => lState.evictProjection(p.id, true));
+                    });
+                } finally {
+                    layoutStore._suspendPersistence = false;
+                }
+            }
+
+            // Hold ExtensionRegistry.isBooting during identity swap so setTabOrder does not compile an empty extension list
+            if (window.ExtensionRegistry) window.ExtensionRegistry.isBooting = true;
+
+            // Temporarily clear active extensions during identity transition to prevent 403 calls
+            window.ACTIVE_EXTENSIONS = [];
+            // --- PHASE 3: IDENTITY_SWAP (Atomic Pointer Update) ---
+            AppStore.setState({ swapPhase: 'IDENTITY_SWAP' });
+            try {
+                sessionStorage.setItem('insetu_workspace', targetWs);
+                if (!isPopout) {
+                    localStorage.setItem('insetu_workspace', targetWs);
+                }
+            } catch (_) {}
+
+            // --- PHASE 4: HYDRATE (Deterministic New-Tenant Hydration via StoreRegistry) ---
+            if (window.Sutram?.storeRegistry?.beginScopeTransition) {
+                window.Sutram.storeRegistry.beginScopeTransition(targetWs);
+            } else if (window.Sutram?.storeRegistry) {
+                window.Sutram.storeRegistry.switchTenantScope(targetWs);
+            }
+            AppStore.setState({ activeWorkspace: targetWs, isSwappingWorkspace: true, swapPhase: 'HYDRATE' });
+
+            await _hydrateWorkspaceEnvironment(targetWs, previousExts);
+            // --- PHASE 5: ROUTING ---
+            if (window.ExtensionRegistry) {
+                window.ExtensionRegistry.isBooting = false;
+            }
+            AppStore.setState({ isSwappingWorkspace: false, swapPhase: 'ROUTING' });
+            if (window.Sutram?.storeRegistry?.endScopeTransition) {
+                window.Sutram.storeRegistry.endScopeTransition();
+            } else if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
+                window.ExtensionRegistry.compileLayout();
+            }
+            const restoredLayout = window.Sutram?.stores?.Layout?.getState();
+            const restoredCol = restoredLayout?.focusedColumn || 'center';
+            const restoredActive = restoredLayout?.columns?.[restoredCol]?.active || '';
+            const desiredHash = (targetHash && targetHash.startsWith(`#/${encodeURIComponent(targetWs)}/`))
+                ? targetHash
+                : `#/${encodeURIComponent(targetWs)}/${restoredCol}/${encodeURIComponent(restoredActive)}`;
+            if (window.location.hash !== desiredHash) {
+                window.location.hash = desiredHash;
+            } else {
+                window.dispatchEvent(new HashChangeEvent('hashchange'));
+            }
+
+            window.inSetu.events.emitHook('insetu:soft-refresh', targetWs);
+            loadWorkspaces();
+            window.inSetu.ui.setGlobalStatus("Workspace Hydrated", 2000);
+        } catch (e) {
+            console.error("[SessionOrchestrator] Swap failed:", e);
+            alert("Workspace transition failed. Falling back to hard reload.");
+            window.location.reload();
+        } finally {
+            // --- PHASE 6: READY ---
+            if (window.ExtensionRegistry) window.ExtensionRegistry.isBooting = false;
+            if (window.Sutram?.storeRegistry?.isTransitioning?.()) {
+                window.Sutram.storeRegistry.endScopeTransition();
+            }
+            _setAppShellLock(false);
+            AppStore.setState({ isSwappingWorkspace: false, swapPhase: 'READY' });
+        }
+    },
+
+    refreshCurrentWorkspace: async function(targetHash = null) {
+        if (AppStore.getState().isSwappingWorkspace) return;
+        const currentWs = AppStore.getState().activeWorkspace || window.inSetu.utils.getActiveWorkspace();
+        const previousExts = [...(window.ACTIVE_EXTENSIONS || [])];
+
+        AppStore.getState().resetSyncWatermarks();
+        AppStore.setState({ isSwappingWorkspace: true, swapPhase: 'HYDRATE' });
+        if (window.Sutram?.storeRegistry?.beginScopeTransition) {
+            window.Sutram.storeRegistry.beginScopeTransition();
+        }
+        _setAppShellLock(true);
+
+        try {
+            await _hydrateWorkspaceEnvironment(currentWs, previousExts);
+            AppStore.setState({ isSwappingWorkspace: false, swapPhase: 'ROUTING' });
+            if (window.Sutram?.storeRegistry?.endScopeTransition) {
+                window.Sutram.storeRegistry.endScopeTransition();
+            }
+
+            if (targetHash && window.location.hash !== targetHash) {
+                window.location.hash = targetHash;
+            }
+            window.inSetu.events.emitHook('insetu:soft-refresh', currentWs);
+            window.inSetu.ui.setGlobalStatus("Workspace Hydrated", 2000);
+        } catch (e) {
+            console.error("[SessionOrchestrator] In-place soft refresh failed:", e);
+            alert("Soft refresh failed. Falling back to hard reload.");
+            window.location.reload();
+        } finally {
+            if (window.Sutram?.storeRegistry?.isTransitioning?.()) {
+                window.Sutram.storeRegistry.endScopeTransition();
+            }
+            _setAppShellLock(false);
+            AppStore.setState({ isSwappingWorkspace: false, swapPhase: 'READY' });
+        }
+    }
+};
+
+async function executeWorkspaceSwap(key, title = null, targetHash = null) {
+    return await SessionOrchestrator.transitionToWorkspace(key, title, targetHash);
 }
 async function loadWorkspaces() {
     try {
@@ -1296,12 +1580,33 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
         }
         const data = await res.json();
         if (onSuccess) await onSuccess(data);
-
+        if (data && Array.isArray(data.mutations) && data.mutations.length > 0 && !options.skipCentralMutationBroadcast) {
+            const normFn = window.inSetu?.vfs?.normalizeVfsURI || ((p) => p);
+            const appState = AppStore.getState();
+            data.mutations.forEach(m => {
+                const rawFp = String(m.filepath || '').replace(/\/+$/, '');
+                const normFp = normFn(rawFp);
+                if (m.operation === 'delete' && m.relocated_to) {
+                    const normDest = normFn(String(m.relocated_to).replace(/\/+$/, ''));
+                    appState.setResolvingLock(normFp, 'move_source');
+                    appState.setResolvingLock(normDest, 'move_dest');
+                    if (window.inSetu?.vfs?.renameFileTracking) {
+                        window.inSetu.vfs.renameFileTracking(normFp, normDest);
+                    }
+                } else if (m.operation === 'delete') {
+                    appState.setResolvingLock(normFp, 'delete');
+                } else if (m.operation === 'save' && !m.relocated_from) {
+                    appState.setResolvingLock(normFp, 'create');
+                }
+            });
+            window.inSetu?.events?.emitHook('insetu:vfs-mutated', { mutations: data.mutations });
+        }
         if (!silent) {
             const toastStore = window.inSetu?.stores?.Toast || window.Sutram?.stores?.Toast;
             if (toastStore && typeof toastStore.getState === 'function') {
                 const isQueuedOffline = data && data.job_id === 'offline_queue';
-                const targetName = payload?.filepath ? payload.filepath.split('/').filter(Boolean).pop() : '';
+                const UriCls = window.inSetu?.utils?.InSetuURI;
+                const targetName = (payload?.filepath && UriCls) ? new UriCls(payload.filepath).basename : '';
                 let toastMsg = options.successMessage || '';
 
                 if (!toastMsg) {
@@ -1310,7 +1615,7 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
                     } else if (cleanPath === 'fs/save') {
                         toastMsg = `Saved ${targetName || 'file'}`;
                     } else if (cleanPath === 'fs/move') {
-                        const destName = payload?.dest_path ? payload.dest_path.split('/').filter(Boolean).pop() : '';
+                        const destName = (payload?.dest_path && UriCls) ? new UriCls(payload.dest_path).basename : '';
                         toastMsg = `Moved ${targetName || 'item'}${destName ? ` to ${destName}` : ''}`;
                     } else if (cleanPath === 'fs/archive') {
                         toastMsg = `Archived ${targetName || 'item'}`;
@@ -1346,23 +1651,16 @@ export const refreshManifest = window.inSetu.utils.coalescedAsync(async () => {
         const res = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
         if (res.ok) {
             const rawManifest = await res.json();
-            const curState = AppStore.getState();
-            const prevVfs = curState.manifest?.vfs || {};
-            const prevCtx = curState.manifest?.ctx || {};
             const nextVfs = rawManifest?.vfs || {};
             const nextCtx = rawManifest?.ctx || {};
-
-            const finalCtx = (Object.keys(nextCtx).length === 0 && Object.keys(prevCtx).length > 0) ? prevCtx : nextCtx;
-            Object.entries(finalCtx).forEach(([p, entry]) => {
+            const { localCtxSignatures } = AppStore.getState().getSyncWatermarks();
+            Object.entries(nextCtx).forEach(([p, entry]) => {
                 if (entry && entry.meta && entry.meta.timestamp) {
                     localCtxSignatures[p] = entry.meta.timestamp;
                 }
             });
 
-            const safeManifest = {
-                vfs: (Object.keys(nextVfs).length === 0 && Object.keys(prevVfs).length > 0) ? prevVfs : nextVfs,
-                ctx: finalCtx
-            };
+            const safeManifest = { vfs: nextVfs, ctx: nextCtx };
             AppStore.setState({ manifest: safeManifest });
             return safeManifest;
         }
@@ -1410,176 +1708,12 @@ async function simulatePanic() {
         alert("Error triggering panic.");
     }
 }
-async function performSoftRefresh(targetWs = null) {
-    localVfsSignatures = {};
-    localCtxSignatures = {};
-    lastManifestSyncTs = 0;
-    const currentWs = targetWs || AppStore.getState().activeWorkspace || window.inSetu.utils.getActiveWorkspace();
-
-    // 1. Flush feature domain stores and evict layouts BEFORE changing tenant identity.
-    // This guarantees that any synchronous saves triggered by teardown hit the OLD storage keys.
-    Object.entries(window.inSetu.stores).forEach(([storeName, store]) => {
-        if (['App', 'Status', 'Toast', 'Selection'].includes(storeName)) return;
-        if (store && typeof store.getState === 'function') {
-            const state = store.getState();
-            if (state) {
-                if (typeof state.clearPayload === 'function') state.clearPayload();
-                if (storeName === 'Layout') {
-                    const currentWindows = state.windows || [];
-                    currentWindows.forEach(w => window.dispatchEvent(new CustomEvent('sutram-evict-projection', { detail: { id: w.id }, bubbles: true, composed: true })));
-                    ['left', 'center', 'right'].forEach(col => {
-                        const pinned = state.columns?.[col]?.pinned || [];
-                        pinned.forEach(p => window.dispatchEvent(new CustomEvent('sutram-evict-projection', { detail: { id: p.id }, bubbles: true, composed: true })));
-                    });
-                }
-                if (typeof state.resetState === 'function') state.resetState();
-            }
-        }
-    });
-
-    // 2. NOW switch the active workspace identity globally
-    if (targetWs) {
-        sessionStorage.setItem('insetu_workspace', targetWs);
-        localStorage.setItem('insetu_workspace', targetWs);
-        AppStore.setState({ activeWorkspace: targetWs });
+async function performSoftRefresh(targetWs = null, targetHash = null) {
+    const activeWs = window.inSetu.utils.getActiveWorkspace();
+    if (targetWs && targetWs !== activeWs) {
+        return await SessionOrchestrator.transitionToWorkspace(targetWs, null, targetHash);
     }
-
-    // 3. Hydrate layout for the new workspace
-    const layoutStore = window.Sutram?.stores?.Layout;
-    if (layoutStore && typeof layoutStore.hydrateStore === 'function') {
-        layoutStore.hydrateStore(currentWs);
-    }
-    try {
-        // 1. Update routing topology for the new tenant
-        const rRes = await window.inSetu.api.workspace.get('system/topology?t=' + Date.now());
-        if (rRes.ok) {
-            const d = await rRes.json();
-            window.inSetu.utils.setScopedStorage('offline_topology', JSON.stringify(d));
-            const tabOrder = d.tab_order || [];
-            AppStore.setState({  
-                allRepos: d.repos,
-                targetConfigs: d.target_repos || [],
-                virtualContexts: d.virtual_contexts || [],
-                categoryOrder: d.category_order || [],
-                hiddenOutputs: d.hidden_outputs || [],
-                configMissing: !!d.config_missing,
-                tabOrder: tabOrder
-            });
-            if (window.ExtensionRegistry?.setTabOrder && tabOrder.length > 0) {
-                window.ExtensionRegistry.setTabOrder(tabOrder);
-            }
-        }
-        // 2. JIT Mount any missing JS extension payloads using explicit tenant routing
-        const cRes = await window.inSetu.api.workspace.get('system/config?t=' + Date.now(), { cache: 'no-store' });
-        if (cRes.ok) {
-            const data = await cRes.json();
-            window.inSetu.utils.setScopedStorage('offline_config', JSON.stringify(data));
-            const config = data.config || {};
-            window.ACTIVE_EXTENSIONS = data.meta?.mounted_extensions || config.extensions || [];
-            window.inSetu.serverSchemas = data.meta?.settings_schemas || {};
-            if (data.meta?.core_modules) {
-                window.inSetu.CORE_MODULES = new Set(data.meta.core_modules);
-            }
-            await bootExtensions(); // ES6 naturally caches imports, preventing duplicate execution
-            // Dynamically synchronize workspace branding tokens to prevent ghost state layouts
-            AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
-            const statusBar = document.querySelector('sutram-status-bar');
-            if (statusBar) {
-                statusBar.baseTitle = config.instance_title || "inSetu Workbench";
-            }
-            // Flush old memory states only for deactivated extensions to protect core layout definitions
-            if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
-                window.ExtensionRegistry._manifests.forEach((ext, extName) => {
-                    const isCoreModule = _isCoreExt(extName);
-                    if (!window.ACTIVE_EXTENSIONS.includes(extName) && !isCoreModule) {
-                        if (window.ExtensionRegistry.executeUnload) {
-                            window.ExtensionRegistry.executeUnload(extName);
-                        }
-                    }
-                });
-            }
-            // Rebuild Settings Actions based strictly on active extensions
-            if (window.ExtensionRegistry) {
-                window.ExtensionRegistry._settingsActions = [];
-                window.ExtensionRegistry._manifests.forEach((manifest, extName) => {
-                    const isCore = _isCoreExt(extName);
-                    if (isCore || window.ACTIVE_EXTENSIONS.includes(extName)) {
-                        if (manifest.settingsActions) {
-                            manifest.settingsActions.forEach(act => {
-                                // Skip generic settings, autoWireSettingsSchemas handles them below
-                                if (act.id === `${extName}_generic_settings`) return;
-                                let sectionName = manifest.settingsCategory || 'Extensions';
-                                if (isCore || manifest.name === 'Workspace Configuration' || act.id === 'config_editor' || act.id === 'workspaces_editor') sectionName = 'System';
-                                window.ExtensionRegistry.registerSettingsAction(act.id, act.label, act.icon, act.onClick, sectionName);
-                            });
-                        }
-                    }
-                });
-            }
-
-            autoWireSettingsSchemas();
-            // Recompile the primary and sub-tab layouts cleanly from the registry blueprints
-            if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
-                window.ExtensionRegistry.compileLayout();
-            }
-        }
-        // 3. Hydrate the workspace instantly from cache, falling back to compile only if unbuilt
-        const currentWsSafe = window.inSetu.utils.getActiveWorkspace();
-        AppStore.setState({ manifest: { vfs: {}, ctx: {} } });
-
-        // Hydrate pending offline UI trackers from IndexedDB to restore "🌩️" icons
-        try {
-            const outbox = await SutramDB.getOutboxItems(currentWsSafe);
-            const pendingSet = new Set();
-            const deletedSet = new Set();
-            outbox.forEach(item => {
-                try {
-                    const payload = item.bodyString ? JSON.parse(item.bodyString) : {};
-                    const fp = payload.filepath || payload.dest_path;
-                    if (fp) {
-                        const isDelete = item.method === 'DELETE' || (item.path && item.path.includes('fs/delete')) || (item.path && item.path.includes('fs/move'));
-                        if (isDelete) deletedSet.add(fp);
-                        else pendingSet.add(fp);
-                    }
-                } catch(e) {}
-            });
-            AppStore.setState({ outboxCount: outbox.length, pendingMutations: pendingSet, deletedMutations: deletedSet });
-        } catch(e) {}
-
-        let mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
-        let rawManifest = mRes.ok ? await mRes.json() : null;
-        let manifestData = { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} };
-        const appState = AppStore.getState();
-        const hasActiveRepos = appState.targetConfigs && appState.targetConfigs.length > 0;
-        const isEmptyCtxManifest = Object.keys(manifestData.ctx || {}).length === 0;
-        AppStore.setState({ manifest: { vfs: manifestData.vfs || {}, ctx: manifestData.ctx || {} } });
-        if (manifestData.ctx) {
-            Object.entries(manifestData.ctx).forEach(([p, entry]) => {
-                if (entry && entry.meta && entry.meta.timestamp) {
-                    localCtxSignatures[p] = entry.meta.timestamp;
-                }
-            });
-        }
-        if (isEmptyCtxManifest && hasActiveRepos) {
-            // Force a compile if context manifest is unbuilt for this workspace
-            if (window.inSetu.stores.Gather) {
-                await window.inSetu.stores.Gather.getState().executeCompile();
-            }
-        }
-
-        // FINALLY, update the URL hash so the router sees the fully constructed Layout and Extensions
-        if (targetWs) {
-            window.location.hash = `#/${encodeURIComponent(targetWs)}/center/`;
-        }
-        // 4. Hydrate active DOM views using native routing
-        window.inSetu.events.emitHook('insetu:soft-refresh', currentWs);
-
-        window.inSetu.ui.setGlobalStatus("Workspace Hydrated", 2000);
-    } catch (e) {
-        console.error(e);
-        alert("Soft refresh failed. Falling back to hard reload.");
-        window.location.reload();
-    }
+    return await SessionOrchestrator.refreshCurrentWorkspace(targetHash);
 }
 async function fullRefresh() {
     if (window.inSetu?.sse?.disconnect) {
@@ -1589,10 +1723,10 @@ async function fullRefresh() {
         window.inSetu.ui.setGlobalStatus("Rebooting Frontend & Purging Caches...", 2000);
     }
     try {
-        // 1. Purge stale UI state keys
+        // 1. Purge stale legacy UI state keys without wiping active tenant layout or pinned repo filters
         const keys = Object.keys(localStorage);
         keys.forEach(k => {
-            if (k.startsWith('insetu_pinned_') || k.startsWith('insetu_task_') || k.startsWith('insetu_lib_')) {
+            if (k.startsWith('insetu_task_') || k.startsWith('insetu_lib_')) {
                 localStorage.removeItem(k);
             }
         });
@@ -1644,6 +1778,7 @@ async function initializeWorkspaceTopology() {
         }
         if (mRes.ok || manifestData) {
             const ctxMap = manifestData?.ctx || {};
+            const { localCtxSignatures } = AppStore.getState().getSyncWatermarks();
             Object.entries(ctxMap).forEach(([p, entry]) => {
                 if (entry && entry.meta && entry.meta.timestamp) {
                     localCtxSignatures[p] = entry.meta.timestamp;
@@ -1671,6 +1806,7 @@ window.inSetu.sys.simulatePanic = simulatePanic;
 window.inSetu.sys.executeWorkspaceMutation = executeWorkspaceMutation;
 window.inSetu.sys.loadWorkspaces = loadWorkspaces;
 window.inSetu.sys.executeWorkspaceSwap = executeWorkspaceSwap;
+window.inSetu.sys.SessionOrchestrator = SessionOrchestrator;
 window.inSetu.ui.setGlobalStatus = setGlobalStatus;
 window.inSetu.ui.setSyncStatus = setSyncStatus;
 

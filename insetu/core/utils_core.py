@@ -1,5 +1,7 @@
 import os
 import io
+
+os.environ.setdefault("AKASA_CONTROL_DIR", ".insetu")
 import re
 import sys
 import time
@@ -8,42 +10,75 @@ import shutil
 import socket
 import threading
 import subprocess
+from collections import OrderedDict
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple, Union
 from ruamel.yaml import YAML
-
+from akasa.auth import (
+    ensure_master_key_on_disk,
+    encrypt_secret,
+    decrypt_secret,
+    rotate_master_key,
+)
 from akasa.hooks import hooks
+CORE_MODULES_TUPLE = (
+    "bridge", "gather", "cartographer", "config", "editor", "fs",
+    "system", "workers", "auth", "security", "topology", "offline",
+    "llm", "agent", "prompts"
+)
+
+from akasa.process import execute_binary
 from akasa.uri import AkasaURI
-from akasa.utils import load_config, get_workspace_physics, slugify, load_json_config, generate_ascii_tree, parse_uri
-from akasa.vfs import VFSTransaction, _resolve_physical_path as _vfs_resolve_physical_path
-def is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
-    """Checks if a TCP port is actively accepting connections on the given host."""
-    if not port or port <= 0:
-        return False
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.15)
-        return s.connect_ex((host, int(port))) == 0
-
-
-def can_bind_port(port: int, host: str = "0.0.0.0") -> bool:
-    """Checks if a TCP port is free to bind on the given host interface."""
-    if not port or port <= 0:
-        return False
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            s.bind((host, int(port)))
-            return True
-        except OSError:
-            return False
-
-
-def allocate_ephemeral_port(host: str = "0.0.0.0") -> int:
-    """Asks the OS kernel for an available ephemeral TCP port."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((host, 0))
-        return int(s.getsockname()[1])
+from akasa.utils import (
+    load_config,
+    save_json_config,
+    load_json_config,
+    get_workspace_physics,
+    get_all_workspace_ids,
+    get_tenant_control_dir,
+    get_daemon_cwd,
+    set_daemon_cwd,
+    get_system_index_path,
+    get_core_modules,
+    is_core_module,
+    is_extension_enabled,
+    get_active_modules,
+    sniff_tenant_id,
+    slugify,
+    is_subpath,
+    resolve_system_artifact_path,
+    build_tree_dict,
+    generate_ascii_tree,
+    fold_vfs_events,
+    reclaim_process_memory,
+    get_kernel_memory_telemetry,
+    typeddict_to_openapi,
+    parse_uri,
+    is_port_listening,
+    can_bind_port,
+    allocate_ephemeral_port,
+)
+from akasa.vfs import (
+    VFSTransaction,
+    DefaultVFSDriver,
+    register_driver,
+    mount_volume,
+    set_mount_authorizer,
+    resolve_physical_path as _vfs_resolve_physical_path,
+    resolve_physical_path,
+    sync_vfs_barrier,
+    execute_vfs_save,
+    execute_vfs_delete,
+    execute_vfs_move,
+    execute_vfs_bulk,
+    evict_vfs_cache,
+    compute_vfs_sha256,
+    record_vfs_ancestor,
+    lookup_vfs_ancestor,
+    three_way_merge_text,
+    has_pending_vfs_write,
+)
 
 
 @hooks.on('vfs_resolve_path')
@@ -51,48 +86,8 @@ def hook_vfs_resolve_path(filename=None, workspace_id=None, **kwargs):
     if not filename:
         return None
     return resolve_logical_path(filename, workspace_id=workspace_id)
-def execute_binary(cmd, cwd=None, env=None, check=False, capture_output=True, text=True, popen=False, **kwargs):
-    """
-    Universal binary execution wrapper resolving system PATH, venv directories,
-    and module CLI fallbacks across systemd, desktop, and isolated environments.
-    """
-    cmd_args = [cmd] if isinstance(cmd, str) else list(cmd)
-    if not cmd_args:
-        raise ValueError("Command list cannot be empty.")
 
-    bin_name = cmd_args[0]
-    resolved_bin = shutil.which(bin_name)
 
-    if not resolved_bin:
-        py_dir = Path(sys.executable).parent
-        ext = '.exe' if os.name == 'nt' else ''
-        candidate = py_dir / f"{bin_name}{ext}"
-        if candidate.exists():
-            resolved_bin = candidate.as_posix()
-    if resolved_bin:
-        full_cmd = [resolved_bin] + cmd_args[1:]
-    else:
-        module_name = bin_name.replace('-', '_')
-        full_cmd = [sys.executable, '-m', module_name] + cmd_args[1:]
-
-    if popen:
-        return subprocess.Popen(
-            full_cmd,
-            cwd=cwd,
-            env=env,
-            text=text,
-            **kwargs
-        )
-
-    return subprocess.run(
-        full_cmd,
-        cwd=cwd,
-        env=env,
-        check=check,
-        capture_output=capture_output,
-        text=text,
-        **kwargs
-    )
 class InSetuURI(AkasaURI):
     """
     Host application URI class enforcing strict canonical scheme:// prefixes
@@ -119,9 +114,17 @@ class InSetuURI(AkasaURI):
         clean = str(raw).replace('\\', '/').strip()
         if not clean:
             return ""
+        has_trailing_slash = clean.endswith('/') and not clean.endswith('://')
         clean = re.sub(r'^(vfs|ctx|ws|virtual|yomama):/(?!/)', r'\1://', clean)
         if "://" in clean:
-            return str(cls(clean))
+            uri_obj = cls(clean)
+            if uri_obj.scheme == 'ctx' and uri_obj.volume == 'contexts' and (
+                (uri_obj.basename.startswith('workflow_') and ('_context' in uri_obj.basename))
+                or uri_obj.basename.endswith('_workflow_context.txt')
+            ):
+                return f"ctx://workflows/{uri_obj.basename}"
+            base_canon = str(uri_obj).rstrip('/')
+            return f"{base_canon}/" if has_trailing_slash else base_canon
         clean_stripped = clean.lstrip('/')
         if clean_stripped.endswith('_diffs.txt') or clean_stripped.startswith('diffs/'):
             return f"ctx://diffs/{Path(clean_stripped).name}"
@@ -148,13 +151,54 @@ class InSetuURI(AkasaURI):
         if "://" not in raw_str and not raw_str.startswith('/'):
             raw_str = f"{default_scheme}://{raw_str.lstrip('/')}"
         return cls(raw_str)
-
     @property
     def repo(self) -> str:
         return self.volume
+
     @property
     def is_diff(self) -> bool:
         return self.scheme == 'ctx' and self.volume == 'diffs'
+
+    @property
+    def parent_uri(self) -> 'InSetuURI':
+        scheme = self.scheme or 'vfs'
+        clean_path = (self.path or '').strip('/')
+        if not clean_path:
+            return InSetuURI(f"{scheme}://{self.volume}" if self.volume else f"{scheme}://")
+        parent_rel = clean_path.rpartition('/')[0]
+        if self.volume:
+            return InSetuURI(f"{scheme}://{self.volume}/{parent_rel}" if parent_rel else f"{scheme}://{self.volume}")
+        return InSetuURI(f"{scheme}://{parent_rel}" if parent_rel else f"{scheme}://")
+
+    def join(self, *segments: str) -> 'InSetuURI':
+        clean_segs = [str(s or '').replace('\\', '/').strip('/') for s in segments if str(s or '').strip('/')]
+        base = str(self).rstrip('/')
+        if not clean_segs:
+            return InSetuURI(base)
+        if not base or base.endswith('://'):
+            return InSetuURI(f"{self.scheme or 'vfs'}://{'/'.join(clean_segs)}")
+        return InSetuURI(f"{base}/{'/'.join(clean_segs)}")
+
+    def with_name(self, new_name: str) -> 'InSetuURI':
+        clean_name = str(new_name or '').replace('\\', '/').strip('/')
+        if not clean_name:
+            return self
+        return self.parent_uri.join(clean_name)
+
+    def resolve_sibling_uri(self, raw_target: str) -> 'InSetuURI':
+        """Resolves a relative or scheme-prefixed path within the same repository volume as this URI."""
+        clean = str(raw_target or '').replace('\\', '/').strip().rstrip('/')
+        scheme = self.scheme or 'vfs'
+        if "://" in clean:
+            cand = InSetuURI(clean)
+            if self.repo and cand.scheme == scheme and cand.repo != self.repo:
+                joined_rel = f"{cand.repo}/{cand.path}".strip('/')
+                return InSetuURI(f"{scheme}://{self.repo}/{joined_rel}".rstrip('/'))
+            return cand
+        clean_rel = clean.lstrip('/')
+        if self.repo and not clean_rel.startswith(f"{self.repo}/"):
+            return InSetuURI(f"{scheme}://{self.repo}/{clean_rel}".rstrip('/'))
+        return InSetuURI(f"{scheme}://{clean_rel}".rstrip('/'))
 
     def resolve(self, workspace_id: Optional[str] = None, is_absolute_artifact: bool = False) -> Optional[str]:
         return _vfs_resolve_physical_path(str(self), workspace_id, is_absolute_artifact=is_absolute_artifact)
@@ -165,17 +209,23 @@ class InSetuURI(AkasaURI):
     def exists(self, workspace_id: Optional[str] = None) -> bool:
         phys = self.resolve(workspace_id)
         return bool(phys and os.path.exists(phys))
-
-    def resolve_if_exists(self, workspace_id: Optional[str] = None) -> Optional[str]:
+    def resolve_if_exists(self, workspace_id: Optional[str] = None, allow_heal: bool = True) -> Optional[str]:
         phys = self.resolve(workspace_id)
-        return phys if (phys and os.path.exists(phys)) else None
+        if phys and os.path.exists(phys):
+            return phys
+        if allow_heal and self.scheme == 'ctx' and self.volume in ('contexts', 'diffs', 'workflows'):
+            healed = hooks.emit_first('vfs_resolve_file', filename=str(self), workspace_id=workspace_id or 'default')
+            if isinstance(healed, tuple) and healed[0] and os.path.exists(healed[0]):
+                return healed[0]
+            if isinstance(healed, str) and os.path.exists(healed):
+                return healed
+        return None
 
     def is_dir_physical(self, workspace_id: Optional[str] = None) -> bool:
         if self.is_dir or self.path.endswith('/'):
             return True
         phys = self.resolve(workspace_id)
         return bool(phys and os.path.exists(phys) and os.path.isdir(phys))
-
     def is_file_physical(self, workspace_id: Optional[str] = None) -> bool:
         if self.is_dir or self.path.endswith('/'):
             return False
@@ -192,7 +242,14 @@ class InSetuURI(AkasaURI):
         return None
     def read(self, workspace_id: Optional[str] = None, is_absolute_artifact: bool = False) -> Optional[str]:
         with VFSTransaction(workspace_id) as vfs:
-            return vfs.read(str(self), is_absolute_artifact=is_absolute_artifact)
+            content = vfs.read(str(self), is_absolute_artifact=is_absolute_artifact)
+            if content is not None:
+                return content
+            if not is_absolute_artifact and self.scheme == 'ctx' and self.volume in ('contexts', 'diffs', 'workflows'):
+                resolved = self.resolve_if_exists(workspace_id, allow_heal=True)
+                if resolved and os.path.exists(resolved):
+                    return vfs.read(resolved, is_absolute_artifact=True)
+            return None
     def bucket(self, workspace_id=None):
         from insetu.core.topology.engine_topology import resolve_file_bucket as _resolve_file_bucket
 
@@ -217,10 +274,10 @@ def _lazy_mount_missing_volume(workspace_id=None, scheme=None, volume=None, **kw
         from akasa.vfs import mount_volume as _mount_volume, register_driver as _register_driver, DefaultVFSDriver as _DefaultVFSDriver
         _register_driver('ctx', _DefaultVFSDriver())
         path_key = f"{volume}_dir"
-        for p_dict in hooks.emit('request_paths', workspace_id=wid):
-            if isinstance(p_dict, dict) and path_key in p_dict:
-                _mount_volume(wid, 'ctx', volume, p_dict[path_key])
-                return
+        paths_dict = hooks.emit_merge_dict('request_paths', workspace_id=wid)
+        if path_key in paths_dict:
+            _mount_volume(wid, 'ctx', volume, paths_dict[path_key])
+            return
     elif scheme == 'vfs':
         from insetu.core.topology.engine_topology import mount_topology_volumes_dynamically as _mount_topology
         _mount_topology(load_config(wid), workspace_id=wid)
@@ -512,10 +569,47 @@ def parse_string_enum(raw_val):
     """Safely parses and normalizes string enumerations (e.g., priority, sizes)."""
     return str(raw_val).upper() if raw_val and str(raw_val).lower() not in ('null', 'none', '') else ''
 _NATIVE_VFS_WRITES = {}
+_NATIVE_VFS_HASHES = OrderedDict()
 _WATCHDOG_PENDING = {}
 _WATCHDOG_LOCK = threading.Lock()
 _WATCHDOG_DEBOUNCE_WINDOW = 2.0
 _WATCHDOG_THREAD = None
+
+
+def _is_watchdog_vfs_echo(abs_key: str, src_path: str, op: str) -> Tuple[bool, Optional[str]]:
+    """
+    Deterministic Content-Addressed Echo Filter:
+    Verifies whether an OS filesystem event matches an in-flight or already-committed internal VFS mutation.
+    Returns (is_echo, disk_sha256).
+    """
+    if has_pending_vfs_write(src_path):
+        return True, None
+
+    with _WATCHDOG_LOCK:
+        expected_hash = _NATIVE_VFS_HASHES.get(abs_key)
+
+    if op == 'delete':
+        if expected_hash == "__DELETED__" and not os.path.exists(src_path):
+            return True, None
+        return False, None
+
+    if not os.path.exists(src_path) or os.path.isdir(src_path):
+        return False, None
+
+    try:
+        st = os.stat(src_path)
+        if st.st_size > 2 * 1024 * 1024:
+            return False, None
+        with open(src_path, 'r', encoding='utf-8') as f:
+            disk_text = f.read()
+        disk_hash = compute_vfs_sha256(disk_text)
+        if expected_hash and disk_hash == expected_hash:
+            return True, disk_hash
+        return False, disk_hash
+    except Exception:
+        return False, None
+
+
 def _watchdog_debouncer_loop():
     from akasa.db import get_connection as _get_connection
     while True:
@@ -524,23 +618,25 @@ def _watchdog_debouncer_loop():
         to_emit = {}
         with _WATCHDOG_LOCK:
             for cache_key, data in list(_WATCHDOG_PENDING.items()):
-                abs_key = data['abs_key']
-                # Final Guardrail: Ensure the VFS didn't touch it while the timer was ticking
-                if time.time() - _NATIVE_VFS_WRITES.get(abs_key, 0) < _WATCHDOG_DEBOUNCE_WINDOW:
-                    del _WATCHDOG_PENDING[cache_key]
-                    continue
-
                 if now - data['ts'] >= _WATCHDOG_DEBOUNCE_WINDOW:
                     to_emit[cache_key] = data
                     del _WATCHDOG_PENDING[cache_key]
         if to_emit:
             ws_groups = {}
-            for abs_key, data in to_emit.items():
+            for cache_key, data in to_emit.items():
+                abs_key = data['abs_key']
+                src_path = data.get('src_path', abs_key)
+                is_echo, disk_hash = _is_watchdog_vfs_echo(abs_key, src_path, data['op'])
+                if is_echo:
+                    continue
                 logical_path = data.get('logical_path', abs_key)
                 print(f"👀 [Watchdog] Caught '{data['op']}' on: {logical_path} (after {_WATCHDOG_DEBOUNCE_WINDOW}s quiet)")
                 ws_id = data['workspace_id']
                 if ws_id not in ws_groups: ws_groups[ws_id] = []
-                ws_groups[ws_id].append({"filepath": logical_path, "operation": data['op'], "ignore_ledger": False, "is_watchdog": True})
+                mut_entry = {"filepath": logical_path, "operation": data['op'], "ignore_ledger": False, "is_watchdog": True}
+                if disk_hash:
+                    mut_entry["base_hash"] = disk_hash
+                ws_groups[ws_id].append(mut_entry)
                 try:
                     w_conn = _get_connection("workers", workspace_id=ws_id)
                     w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (logical_path, data['op'], now))
@@ -549,24 +645,26 @@ def _watchdog_debouncer_loop():
 
             for ws_id, mutations in ws_groups.items():
                 hooks.emit_background('vfs_mutated', workspace_id=ws_id, mutations=mutations)
-@hooks.on('pre_file_save')
-def _track_intent_vfs_writes(workspace_id=None, filepath=None, resolved_path=None, **kwargs):
-    """Records VFS intent BEFORE disk I/O to completely seal Watchdog race conditions."""
-    if not filepath: return
-    now = time.time()
 
-    # Memory Leak Prevention: Prune timestamps older than the debounce window
-    if len(_NATIVE_VFS_WRITES) > 1000:
-        expired = [k for k, v in _NATIVE_VFS_WRITES.items() if now - v > _WATCHDOG_DEBOUNCE_WINDOW * 2]
-        for k in expired:
-            del _NATIVE_VFS_WRITES[k]
-    if resolved_path:
-        abs_key = os.path.abspath(resolved_path).lower()
-        _NATIVE_VFS_WRITES[abs_key] = now
-        with _WATCHDOG_LOCK:
-            keys_to_remove = [k for k in _WATCHDOG_PENDING.keys() if k[1] == abs_key]
-            for k in keys_to_remove:
-                del _WATCHDOG_PENDING[k]
+
+@hooks.on('pre_file_save')
+def _track_intent_vfs_writes(workspace_id=None, filepath=None, resolved_path=None, content=None, data=None, **kwargs):
+    """Records deterministic VFS content hashes BEFORE disk I/O to eliminate Watchdog self-echoes."""
+    if not filepath or not resolved_path:
+        return
+    abs_key = os.path.abspath(resolved_path).lower()
+    action = (data or {}).get("action", "save") if isinstance(data, dict) else "save"
+    target_hash = "__DELETED__" if action in ("delete", "move") else compute_vfs_sha256(content or "")
+
+    with _WATCHDOG_LOCK:
+        _NATIVE_VFS_WRITES[abs_key] = time.time()
+        _NATIVE_VFS_HASHES[abs_key] = target_hash
+        _NATIVE_VFS_HASHES.move_to_end(abs_key)
+        while len(_NATIVE_VFS_HASHES) > 2048:
+            _NATIVE_VFS_HASHES.popitem(last=False)
+        keys_to_remove = [k for k in _WATCHDOG_PENDING.keys() if k[1] == abs_key]
+        for k in keys_to_remove:
+            del _WATCHDOG_PENDING[k]
 _WATCHDOG_OBSERVER = None
 @hooks.on('system_boot')
 def start_filesystem_observer(**kwargs):
@@ -647,16 +745,24 @@ def start_filesystem_observer(**kwargs):
                         or _matches_gitignore_patterns(rel_to_target, self.ignore_patterns)
                     ):
                         return
-                now = time.time()
-                # Deduplication 1: Was this file recently modified natively by our own VFS?
                 abs_key = os.path.abspath(src_path).lower()
-                if now - _NATIVE_VFS_WRITES.get(abs_key, 0) < _WATCHDOG_DEBOUNCE_WINDOW:
-                    return
-                # Deduplication 2: Unified Trailing Debounce
+                # Deduplication 1: Deterministic Content-Addressed VFS Echo Check
+                if not is_dir:
+                    is_echo, _ = _is_watchdog_vfs_echo(abs_key, src_path, op)
+                    if is_echo:
+                        return
+                # Deduplication 2: Unified Trailing Slew Limiter (Batcher)
                 global _WATCHDOG_THREAD
                 with _WATCHDOG_LOCK:
                     cache_key = (self.workspace_id, abs_key)
-                    _WATCHDOG_PENDING[cache_key] = {'op': op, 'workspace_id': self.workspace_id, 'ts': time.time(), 'logical_path': logical_path, 'abs_key': abs_key}
+                    _WATCHDOG_PENDING[cache_key] = {
+                        'op': op,
+                        'workspace_id': self.workspace_id,
+                        'ts': time.time(),
+                        'logical_path': logical_path,
+                        'abs_key': abs_key,
+                        'src_path': src_path
+                    }
                     if _WATCHDOG_THREAD is None or not _WATCHDOG_THREAD.is_alive():
                         _WATCHDOG_THREAD = threading.Thread(target=_watchdog_debouncer_loop, daemon=True)
                         _WATCHDOG_THREAD.start()
@@ -895,16 +1001,17 @@ def get_flattened_buckets(workspace_id=None, target_configs=None):
 
     if not isinstance(target_configs, list):
         return []
-
     flattened = []
     for repo in target_configs:
         if not repo or not isinstance(repo, dict):
             continue
+        repo_domain = (repo.get("domain") or "").strip() or "Workspaces"
         sub_buckets = repo.get("sub_buckets") or []
         if isinstance(sub_buckets, list):
             for b in sub_buckets:
                 if b and isinstance(b, dict) and not b.get("is_system"):
                     b_copy = dict(b)
+                    b_copy["domain"] = (b.get("domain") or "").strip() or repo_domain
                     b_copy["repo_dir"] = repo.get("repo_dir", "")
                     b_copy["repo_title"] = repo.get("title") or repo.get("repo_dir", "")
                     flattened.append(b_copy)
@@ -919,9 +1026,7 @@ def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_type
             if any(c.get(flag) for flag in flags):
                 excluded_repos.add(c.get("repo_dir"))
 
-    declarations = []
-    for res in hooks.emit('gather_declare_topology', workspace_id=workspace_id):
-        if res: declarations.extend(res)
+    declarations = hooks.emit_merge_list('gather_declare_topology', workspace_id=workspace_id)
 
     expected_contexts = set()
     for decl in declarations:
@@ -1090,8 +1195,7 @@ def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kw
                             files.append(str(f_uri))
             else:
                 if uri.scheme == 'ctx':
-                    responses = hooks.emit('resolve_payload_chunks', uri=str(uri), workspace_id=workspace_id)
-                    chunks = next((r for r in responses if r), [str(uri)])
+                    chunks = hooks.emit_first('resolve_payload_chunks', uri=str(uri), workspace_id=workspace_id, default=[str(uri)])
                     files.extend(chunks)
                 else:
                     files.append(str(uri))
@@ -1146,6 +1250,81 @@ def get_default_repo_template(repo_dir, title=None, domain=None, description=Non
     if exts is not None:
         tpl["exts"] = exts
     return tpl
+def normalize_repo_domains(target_repos, strip_empty_overrides=False):
+    """
+    SSOT normalizer for repository, sub-bucket, and meta_map domain strings.
+    When strip_empty_overrides=True (for disk persistence), blank child domains are removed so they inherit cleanly.
+    When strip_empty_overrides=False (for runtime hydration), blank child domains are populated from their parent.
+    """
+    for repo in (target_repos or []):
+        if not isinstance(repo, dict):
+            continue
+        parent_dom = (repo.get("domain") or "").strip() or "Workspaces"
+        repo["domain"] = parent_dom
+        for b in (repo.get("sub_buckets") or []):
+            if not isinstance(b, dict):
+                continue
+            b_dom = (b.get("domain") or "").strip()
+            if b_dom:
+                b["domain"] = b_dom
+            elif strip_empty_overrides:
+                b.pop("domain", None)
+            else:
+                b["domain"] = parent_dom
+            effective_b_dom = b.get("domain") or parent_dom
+            if isinstance(b.get("meta_map"), dict):
+                for m_val in b["meta_map"].values():
+                    if isinstance(m_val, dict):
+                        m_dom = (m_val.get("domain") or "").strip()
+                        if m_dom:
+                            m_val["domain"] = m_dom
+                        elif strip_empty_overrides:
+                            m_val.pop("domain", None)
+                        else:
+                            m_val["domain"] = effective_b_dom
+    return target_repos
+
+
+def heal_manifest_entry_domain(entry, target_repos=None, workspace_id=None) -> bool:
+    """Ensures entry['meta']['domain'] is never blank, inheriting from the parent repository domain when empty."""
+    if not isinstance(entry, dict) or not isinstance(entry.get("meta"), dict):
+        return False
+    meta = entry["meta"]
+    if (meta.get("domain") or "").strip():
+        return False
+    repo_dir = meta.get("repo")
+    parent_dom = "Workspaces"
+    if repo_dir:
+        if target_repos is None:
+            target_repos = load_config(workspace_id).get("target_repos") or []
+        for r_cfg in (target_repos or []):
+            if isinstance(r_cfg, dict) and r_cfg.get("repo_dir") == repo_dir:
+                parent_dom = (r_cfg.get("domain") or "").strip() or "Workspaces"
+                break
+    meta["domain"] = parent_dom
+    return True
+def heal_sqlite_uri_column(conn, table: str, column: str = "filepath", default_prefix: str = "vfs://") -> None:
+    """Collision-safe SQLite URI column healer: removes duplicate unprefixed shadow rows before prepending default_prefix."""
+    if not conn or not table or not column:
+        return
+    if not re.match(r'^[a-zA-Z0-9_]+$', table) or not re.match(r'^[a-zA-Z0-9_]+$', column):
+        raise ValueError(f"Invalid SQLite identifier: {table}.{column}")
+    prefix = default_prefix if default_prefix.endswith("://") or default_prefix.endswith("/") else f"{default_prefix}://"
+    try:
+        conn.execute(
+            f"DELETE FROM {table} WHERE {column} NOT LIKE '%://%' "
+            f"AND (? || LTRIM({column}, '/')) IN (SELECT {column} FROM {table})",
+            (prefix,),
+        )
+        conn.execute(
+            f"UPDATE {table} SET {column} = ? || LTRIM({column}, '/') WHERE {column} NOT LIKE '%://%'",
+            (prefix,),
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+
 def sanitize_workspace_config(cfg):
     for non_topology_key in (
         "_settings_schemas",
@@ -1175,7 +1354,6 @@ def sanitize_workspace_config(cfg):
         if r_dir in seen_dirs:
             continue
         seen_dirs.add(r_dir)
-
         valid_buckets = []
         for b in (repo.get("sub_buckets") or []):
             if not b or b.get("is_system"):
@@ -1188,5 +1366,6 @@ def sanitize_workspace_config(cfg):
             valid_buckets.append(b)
         repo["sub_buckets"] = valid_buckets
         valid_repos.append(repo)
+    normalize_repo_domains(valid_repos, strip_empty_overrides=True)
     cfg["target_repos"] = valid_repos
     return cfg
