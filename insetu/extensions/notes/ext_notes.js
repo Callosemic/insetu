@@ -33,7 +33,7 @@ export const NotesStore = createExtensionStore('Notes', {
             layout.openWindow({
                 id: filepath,
                 component: 'insetu-ext-notes-editor',
-                label: title || filepath.split('/').pop(),
+                label: title || new window.inSetu.utils.InSetuURI(filepath).basename,
                 icon: 'file-text',
                 intent: 'highlight',
                 extName: 'notes',
@@ -228,10 +228,12 @@ export class InSetuExtNotesEditor extends InSetuElement {
             const mutations = e.detail?.mutations || [];
             if (this.filepath && mutations.some(m => m.filepath === this.filepath && m.operation === 'delete')) {
                 const deletedFp = this.filepath;
-                const baseName = deletedFp.split('/').pop();
+                const delMut = mutations.find(m => m.filepath === this.filepath && m.operation === 'delete');
+                const baseName = new this.utils.InSetuURI(deletedFp).basename;
                 const movedSave = mutations.find(m => m.operation === 'save' && m.filepath !== deletedFp && m.filepath.endsWith('/' + baseName));
-                if (movedSave) {
-                    const newFp = movedSave.filepath;
+                const relocatedTarget = delMut?.relocated_to || movedSave?.filepath;
+                if (relocatedTarget) {
+                    const newFp = relocatedTarget;
                     this.filepath = newFp;
                     this.dataset.subId = newFp;
                     if (NotesStore.getState().editNoteFilepath === deletedFp) {
@@ -265,7 +267,6 @@ export class InSetuExtNotesEditor extends InSetuElement {
                 return yaml.tags || '';
             } catch(err) { return yaml.tags || ''; }
         })();
-
         this.editForm = {
             id: yaml.id || '',
             title: yaml.title || '',
@@ -277,12 +278,9 @@ export class InSetuExtNotesEditor extends InSetuElement {
         };
         this.requestUpdate();
     }
-    _onRequestFrontmatter(e) {
-        const { respond, currentYaml } = e.detail;
-
+    _pushFrontmatter() {
         const tagsArr = this.editForm.tags ? this.editForm.tags.split(',').map(t => t.trim()).filter(t => t) : [];
-        const updatedYaml = {
-            ...currentYaml,
+        const yamlPatch = {
             id: this.editForm.id,
             title: this.editForm.title,
             repo: this.editForm.repo,
@@ -291,7 +289,7 @@ export class InSetuExtNotesEditor extends InSetuElement {
             created_at: this.editForm.created_at,
             updated_at: new Date().toISOString().split('.')[0]
         };
-        respond(updatedYaml);
+        this.shadowRoot?.getElementById('fm-editor')?.syncFrontmatter(yamlPatch, true);
     }
     async _deleteNote() {
         if (!this.filepath) return;
@@ -327,36 +325,34 @@ export class InSetuExtNotesEditor extends InSetuElement {
                     .filepath=${this.filepath}
                     .defaultExpanded=${false}
                     @editor-dirty=${e => { this._isDirty = e.detail.isDirty; this.requestUpdate(); }}
-                    @insetu:frontmatter-loaded=${this._onFrontmatterLoaded}
-                    @insetu:request-frontmatter=${this._onRequestFrontmatter}>
+                    @insetu:frontmatter-loaded=${this._onFrontmatterLoaded}>
                     <div slot="title-control" style="padding: 0;">
                         <sutram-textarea 
                             .value=${this.editForm.title} 
                             placeholder="Note Title..." 
                             ?autoSize=${true}
-                            .minRows=${1}
-                            .maxHeight=${150}
+                            .minRows=${1} .maxHeight=${150}
                             ?borderless=${true}
                             style="font-weight: bold; font-size: 1.3rem; width: 100%; color: var(--text);"
                             @sutram-input-changed=${e => { 
                                 const val = e.detail.value.replace(/[\r\n]+/g, ' '); 
-                                this.editForm.title = val; 
-                                this.requestUpdate(); 
+                                this.editForm = { ...this.editForm, title: val }; 
+                                this.requestUpdate();
+                                this._pushFrontmatter();
                             }}>
                         </sutram-textarea>
                     </div>
                     <div slot="metadata-controls" style="display: flex; flex-direction: column; gap: 5px; margin-top: 5px;">
                         <div style="display: flex; gap: 15px; flex-wrap: wrap;">
-                            <sutram-select style="flex: 1; min-width: 150px; margin-bottom: 0;" label="Repository" .value=${this.editForm.repo} .options=${[{value: 'global', label: 'Global OS Level'}, ...(this.ecosystem.allRepos || []).map(r => ({value: r, label: r}))]} @sutram-input-changed=${e => { this.editForm.repo = e.detail.value; this.requestUpdate(); }}></sutram-select>
-                            ${this.editForm.repo !== 'global' ? (() => {
+                            <sutram-select style="flex: 1; min-width: 150px; margin-bottom: 0;" label="Repository" .value=${this.editForm.repo} .options=${[{value: 'global', label: 'Global OS Level'}, ...(this.ecosystem.allRepos || []).map(r => ({value: r, label: r}))]} @sutram-input-changed=${e => { this.editForm = { ...this.editForm, repo: e.detail.value, bucket: 'None' }; this.requestUpdate(); this._pushFrontmatter(); }}></sutram-select>${this.editForm.repo !== 'global' ? (() => {
                                 const buckets = this.sys.getFlattenedBuckets ? this.sys.getFlattenedBuckets(this.editForm.repo) : [];
                                 if (buckets.length > 0) {
-                                    return html`<sutram-select style="flex: 1; min-width: 150px; margin-bottom: 0;" label="Sub-Bucket" .value=${this.editForm.bucket} .options=${[{value: 'None', label: 'None'}, ...buckets.map(b => ({value: b.id, label: b.title}))]} @sutram-input-changed=${e => { this.editForm.bucket = e.detail.value; this.requestUpdate(); }}></sutram-select>`;
+                                    return html`<sutram-select style="flex: 1; min-width: 150px; margin-bottom: 0;" label="Sub-Bucket" .value=${this.editForm.bucket} .options=${[{value: 'None', label: 'None'}, ...buckets.map(b => ({value: b.id, label: b.title}))]} @sutram-input-changed=${e => { this.editForm = { ...this.editForm, bucket: e.detail.value }; this.requestUpdate(); this._pushFrontmatter(); }}></sutram-select>`;
                                 }
                                 return '';
                             })() : ''}
                         </div>
-                        <sutram-input style="width: 100%; margin-bottom: 0;" label="Tags" .value=${this.editForm.tags} placeholder="e.g., architecture, bug" @sutram-input-changed=${e => { this.editForm.tags = e.detail.value; this.requestUpdate(); }}></sutram-input>
+                        <sutram-input style="width: 100%; margin-bottom: 0;" label="Tags" .value=${this.editForm.tags} placeholder="e.g., architecture, bug" @sutram-input-changed=${e => { this.editForm = { ...this.editForm, tags: e.detail.value }; this.requestUpdate(); this._pushFrontmatter(); }}></sutram-input>
                     </div>
                 </insetu-frontmatter-editor>
             </div>
@@ -376,7 +372,7 @@ export class InSetuExtNotesEditor extends InSetuElement {
                         }
                         if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(fp, true, true);
                     }}></sutram-btn>
-                    ${this._isDirty ? html`<sutram-async-btn style="margin: 0;" icon="save" label="Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor')._handleSave()}></sutram-async-btn>` : ''}
+                    ${this._isDirty ? html`<sutram-async-btn style="margin: 0;" icon="save" label="Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor').save()}></sutram-async-btn>` : ''}
                 </div>
             </div>
         `;
@@ -451,13 +447,7 @@ export class InSetuExtNotes extends InSetuElement {
             e.inSetuResponses.push(['ctx://notes/']);
         });
     }
-    onWorkspaceLoad(workspaceId) {
-        NotesStore.getState().fetchNotes();
-    }
     onViewActivated() {
-        NotesStore.getState().fetchNotes();
-    }
-    onForceRefresh() {
         NotesStore.getState().fetchNotes();
     }
 
@@ -515,61 +505,38 @@ export class InSetuExtNotes extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-notes', InSetuExtNotes);
-// 5. The Toolbar Actions
-export class InSetuExtNotesActions extends InSetuElement {
-    static get extensionName() { return 'notes'; }
-    static styles = [sharedStyles, css`:host { display: flex; align-items: stretch; height: 100%; }`];
-
-    async _preCacheNotes() {
-        const notes = NotesStore.getState().notes || [];
-        if (notes.length === 0) {
-            alert("No notes available to cache.");
-            return;
-        }
-        const activeWs = window.inSetu.utils.getActiveWorkspace();
-        window.inSetu?.offlineLog?.(`Starting pre-cache for Notes Library (${notes.length} files)...`, 'info');
-        if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`Caching ${notes.length} notes...`, null);
-
-        let cachedCount = 0;
-        try {
-            for (const n of notes) {
-                if (!n.filepath) continue;
-                const res = await this.api.request(`/api/${activeWs}/fs/fetch?file=${encodeURIComponent(n.filepath)}`, {}, activeWs).catch(()=>{});
-                if (res && res.ok) {
-                    await res.blob().catch(()=>{});
-                    cachedCount++;
-                }
-            }
-
-            window.inSetu?.offlineLog?.(`Pre-cache complete for Notes: ${cachedCount}/${notes.length} cached.`, 'success');
-            if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`Successfully cached ${cachedCount} notes.`, 3000);
-
-            setTimeout(() => {
-                this.dispatch('insetu:force-refresh', { parentId: 'offline', subId: 'ledger' });
-            }, 500);
-        } catch (e) {
-            window.inSetu?.offlineLog?.(`Pre-cache failed for Notes: ${e.message}`, 'error');
-            alert(`Failed to cache notes: ${e.message}`);
-        }
+// 5. Toolbar Menu Helper & Declarative Registration
+async function _preCacheAllNotes() {
+    const notes = NotesStore.getState().notes || [];
+    if (notes.length === 0) {
+        alert("No notes available to cache.");
+        return;
     }
-    render() {
-        const items = [
-            { label: 'New Note', icon: 'file-plus', onClick: () => this.dispatch('insetu:notes:new') },
-            { label: 'Pre-Cache Notes', icon: 'download', onClick: () => this._preCacheNotes() }
-        ];
+    const activeWs = window.inSetu.utils.getActiveWorkspace();
+    window.inSetu?.offlineLog?.(`Starting pre-cache for Notes Library (${notes.length} files)...`, 'info');
+    if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`Caching ${notes.length} notes...`, null);
 
-        return html`
-            <sutram-dropdown align="right" .items=${items}>
-                <button slot="trigger" class="system-action-btn" title="Notes Actions">
-                    <yv-icon name="menu" style="width: 14px; height: 14px;"></yv-icon>
-                </button>
-            </sutram-dropdown>
-        `;
+    let cachedCount = 0;
+    try {
+        for (const n of notes) {
+            if (!n.filepath) continue;
+            const res = await window.inSetu.api.request(`/api/${activeWs}/fs/fetch?file=${encodeURIComponent(n.filepath)}`, {}, activeWs).catch(() => {});
+            if (res && res.ok) {
+                await res.blob().catch(() => {});
+                cachedCount++;
+            }
+        }
+        window.inSetu?.offlineLog?.(`Pre-cache complete for Notes: ${cachedCount}/${notes.length} cached.`, 'success');
+        if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`Successfully cached ${cachedCount} notes.`, 3000);
+        setTimeout(() => {
+            window.inSetu?.events?.emit('insetu:force-refresh', { parentId: 'offline', subId: 'ledger' });
+        }, 500);
+    } catch (e) {
+        window.inSetu?.offlineLog?.(`Pre-cache failed for Notes: ${e.message}`, 'error');
+        alert(`Failed to cache notes: ${e.message}`);
     }
 }
-customElements.define('insetu-ext-notes-actions', InSetuExtNotesActions);
 
-// 6. Declarative Registration
 window.ExtensionRegistry.registerExtension('notes', {
     name: "Notes Library",
     version: "1.0.0",
@@ -589,14 +556,11 @@ window.ExtensionRegistry.registerExtension('notes', {
             intent: "highlight",
             order: 4,
             allow_popout: true,
+            menuActions: [
+                { label: 'New Note', icon: 'file-plus', emitEvent: 'insetu:notes:new' },
+                { label: 'Pre-Cache Notes', icon: 'download', onClick: () => _preCacheAllNotes() }
+            ],
             component: "insetu-ext-notes"
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "edit",
-            targetSub: "notes",
-            component: "insetu-ext-notes-actions",
-            order: 4
         }
     ],
     customEditors: [

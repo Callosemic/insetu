@@ -10,8 +10,7 @@ import json
 from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
-from akasa.hooks import hooks
-from akasa.utils import is_extension_enabled, get_workspace_physics
+from insetu.core.utils_core import is_extension_enabled, get_workspace_physics
 RESEARCH_SCHEMA = {
     "research_jobs": {
         "id": "TEXT PRIMARY KEY",
@@ -220,7 +219,7 @@ class GooglePlaywrightProvider(SearchProvider):
                     os.makedirs(log_dir.as_posix(), exist_ok=True)
                     dump_path = log_dir / f"google_serp_fail_{int(time.time())}.html"
                     dump_ctx = research_bp.get_context('default')
-                    dump_ctx.vfs.save(dump_path.as_posix(), page.content(), data={"is_absolute_artifact": True})
+                    dump_ctx.vfs.save(dump_path.as_posix(), page.content(), data={"is_absolute_artifact": True, "ignore_ledger": True})
                     print(f"  [!] SERP parsing failed. Raw HTML dumped to: {dump_path}")
                 except Exception:
                     pass

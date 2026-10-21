@@ -99,12 +99,15 @@ export class InSetuExtResearch extends InSetuElement {
         this._isUnmounted = true;
     }
     async fetchState() {
+        this.clearManagedTimeouts();
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('research')) return;
+        const fetchWs = this.workspaceId;
         try {
             const [jRes, iRes] = await Promise.all([
                 this.api.get('jobs'),
                 this.api.get('inbox?status=pending,duplicate,in_library')
             ]);
+            if (window.inSetu.utils.getActiveWorkspace() !== fetchWs) return;
 
             if (jRes.ok && iRes.ok) {
                 const jData = await jRes.json();
@@ -120,7 +123,9 @@ export class InSetuExtResearch extends InSetuElement {
                 // Native component polling to replace the banned global tick
                 const activeJobs = (jData.jobs || []).filter(j => j.status === 'running' || j.status === 'gathering');
                 if (activeJobs.length > 0 && !this._isUnmounted) {
-                    setTimeout(() => { if (!this._isUnmounted) this.fetchState(); }, 3000);
+                    this.registerTimeout(() => {
+                        if (!this._isUnmounted) this.fetchState();
+                    }, 3000);
                 }
             }
         } catch (e) {

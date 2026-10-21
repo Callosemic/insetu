@@ -13,7 +13,7 @@ export const CitationStore = createExtensionStore('Citations', {
             attachForm: { repo: '', bucket: 'None' },
             editForm: { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' },
             importingIds: new Set()
-}, { localSync: ['pinnedRepos'] });
+});
 
 window.inSetu.stores.Citations = CitationStore;
 import { html, css } from 'lit';

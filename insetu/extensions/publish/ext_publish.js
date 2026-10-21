@@ -6,9 +6,12 @@ window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {}
 export const PublishStore = createExtensionStore('Publish', {
     publishModalOpen: false,
     currentPublishTarget: '',
-    publishMode: 'pdf',
+    publishMode: 'html_snippet',
     activePublishJobId: null,
-    publishError: ''
+    publishError: '',
+    snippetHtml: ''
+}, {
+    localSync: ['publishMode']
 });
 
 window.inSetu.stores.Publish = PublishStore;
@@ -20,16 +23,46 @@ export class InSetuExtPublishModals extends InSetuElement {
         currentPublishTarget: { type: String },
         publishMode: { type: String },
         activePublishJobId: { type: String },
-        publishError: { type: String }
+        publishError: { type: String },
+        snippetHtml: { type: String }
     };
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`
+        .snippet-box {
+            margin-top: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 14px;
+        }
+        .snippet-pre {
+            margin: 0;
+            padding: 12px;
+            background: var(--bg-deep);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            line-height: 1.45;
+            color: var(--text);
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 320px;
+            overflow-y: auto;
+        }
+    `];
 
     constructor() {
         super();
+        const st = PublishStore.getState();
         this.publishModalOpen = false;
         this.currentPublishTarget = '';
-        this.publishMode = 'pdf';
+        this.publishMode = st.publishMode || 'html_snippet';
         this.activePublishJobId = null;
+        this.publishError = '';
+        this.snippetHtml = '';
     }
     connectedCallback() {
         super.connectedCallback();
@@ -40,7 +73,8 @@ export class InSetuExtPublishModals extends InSetuElement {
                 currentPublishTarget: state.currentPublishTarget,
                 publishMode: state.publishMode,
                 activePublishJobId: state.activePublishJobId,
-                publishError: state.publishError
+                publishError: state.publishError,
+                snippetHtml: state.snippetHtml
             }),
             (slice) => {
                 Object.assign(this, slice);
@@ -49,47 +83,104 @@ export class InSetuExtPublishModals extends InSetuElement {
     }
     disconnectedCallback() {
         super.disconnectedCallback();
-        if (window.inSetu?.extensions?.Registry?.executeUnload) {
-            window.inSetu.extensions.Registry.executeUnload('publish');
-        }
     }
+    async _copyRichForSubstack(htmlStr) {
+        if (!htmlStr) return;
+        await this.utils.copyRichHtml(htmlStr);
+        this.setStatus("✅ Copied Rich HTML! Paste directly into Substack editor (Ctrl+V / Cmd+V).", 3500);
+    }
+
+    async _copyRawHtml(htmlStr) {
+        if (!htmlStr) return;
+        await this.utils.copyToClipboard(htmlStr);
+        this.setStatus("✅ Copied raw HTML source tags to clipboard!", 2500);
+    }
+
     render() {
         if (!this.publishModalOpen) return html``;
+        const isSnippetMode = this.publishMode === 'html_snippet';
         return html`
-            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Publish Document" @sutram-modal-closed=${() => PublishStore.setState({ publishModalOpen: false })}>
-                <div slot="body" style="display: contents;">
+            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Publish Document" @sutram-modal-closed=${() => PublishStore.setState({ publishModalOpen: false, snippetHtml: '', publishError: '' })}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 12px;">
                     <sutram-select 
                         label="Target Format"
                         .value=${this.publishMode}
                         .options=${[
-                            { value: 'pdf', label: 'PDF (Requires LaTeX/pdflatex)' },
+                            { value: 'html_snippet', label: 'Substack / Rich-Text Snippet (HTML Fragment)' },
+                            { value: 'pdf', label: 'PDF Document (Requires LaTeX/pdflatex)' },
                             { value: 'docx', label: 'Word Document (.docx)' },
-                            { value: 'html', label: 'HTML Webpage' }
+                            { value: 'html', label: 'Standalone HTML Webpage (.html)' }
                         ]}
-                        @sutram-input-changed=${e => PublishStore.setState({ publishMode: e.detail.value })}>
+                        @sutram-input-changed=${e => PublishStore.setState({ publishMode: e.detail.value, snippetHtml: '', publishError: '' })}>
                     </sutram-select>
 
                     ${this.publishError ? html`
-                        <div style="margin-top: 15px; padding: 12px; background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 4px; color: var(--intent-danger); font-size: 0.85rem; font-family: var(--font-mono); white-space: pre-wrap;">
+                        <div style="padding: 12px; background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 4px; color: var(--intent-danger); font-size: 0.85rem; font-family: var(--font-mono); white-space: pre-wrap;">
                             <strong>Error:</strong> ${this.publishError}
                         </div>
                     ` : ''}
+
+                    ${this.snippetHtml ? html`
+                        <div class="snippet-box">
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+                                <span style="font-size: 0.85rem; font-weight: bold; color: var(--intent-success); display: flex; align-items: center; gap: 6px;">
+                                    <yv-icon name="check-circle-2" style="width: 16px; height: 16px;"></yv-icon>
+                                    <span>HTML Snippet Ready (${this.snippetHtml.length} chars)</span>
+                                </span>
+                                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                    <sutram-btn
+                                        size="sm"
+                                        intent="success"
+                                        icon="clipboard"
+                                        label="Copy for Substack (Rich Paste)"
+                                        @click=${() => this._copyRichForSubstack(this.snippetHtml)}>
+                                    </sutram-btn>
+                                    <sutram-btn
+                                        size="sm"
+                                        intent="highlight"
+                                        icon="code"
+                                        label="Copy Raw HTML Tags"
+                                        @click=${() => this._copyRawHtml(this.snippetHtml)}>
+                                    </sutram-btn>
+                                </div>
+                            </div>
+                            <pre class="snippet-pre">${this.snippetHtml}</pre>
+                        </div>
+                    ` : ''}
                 </div>
-                <div slot="footer">
+                <div slot="footer" style="display: flex; gap: 10px; width: 100%;">
                     <sutram-async-btn 
-                        icon="download"
-                        label="Compile & Download" 
+                        icon="${isSnippetMode ? 'code' : 'download'}"
+                        label="${isSnippetMode ? 'Generate & Copy Substack Snippet' : 'Compile & Download'}" 
                         intent="primary" 
-                        style="flex: 1; margin: 0; --btn-padding: 15px;"
+                        style="flex: 1; margin: 0;"
                         .onClick=${this.api.bindJobAction('compile-document', 
                             () => {
-                                PublishStore.setState({ publishError: '' });
+                                PublishStore.setState({ publishError: '', snippetHtml: '' });
                                 return { filepath: this.currentPublishTarget, format: this.publishMode };
                             }, 
                             {
                                 onProgress: (msg) => this.setStatus(`⏳ ${msg}`, null),
                                 onComplete: async (statusData) => {
-                                    const artifact = statusData.artifact;
+                                    const artifact = statusData.artifact || {};
+                                    if (this.publishMode === 'html_snippet') {
+                                        let snippet = artifact.snippet_html || '';
+                                        if (!snippet && artifact.download_url) {
+                                            try {
+                                                const res = await this.api.request(artifact.download_url);
+                                                if (res.ok) snippet = (await res.text()).trim();
+                                            } catch (_) {}
+                                        }
+                                        if (snippet) {
+                                            PublishStore.setState({ snippetHtml: snippet });
+                                            await this._copyRichForSubstack(snippet);
+                                        } else {
+                                            PublishStore.setState({
+                                                publishError: "Snippet payload was empty. Please reboot the inSetu daemon (Settings Hub -> Reboot) so the updated Publish engine loads."
+                                            });
+                                        }
+                                        return;
+                                    }
                                     if (this.vfs && this.vfs.downloadFile) {
                                         try {
                                             await this.vfs.downloadFile(artifact.download_url, artifact.filename);
@@ -122,7 +213,7 @@ window.ExtensionRegistry.registerExtension('publish', {
             targetEntity: 'file',
             id: 'publish-doc',
             label: 'Publish',
-            icon: '📄',
+            icon: 'book-open',
             intent: 'primary',
             group: 'share',
             vfsBound: true,
@@ -133,7 +224,7 @@ window.ExtensionRegistry.registerExtension('publish', {
                 return fp.endsWith('.md');
             },
             onClick: (data, e) => {
-                PublishStore.setState({ publishModalOpen: true, currentPublishTarget: data.filepath, activePublishJobId: null, publishError: '' });
+                PublishStore.setState({ publishModalOpen: true, currentPublishTarget: data.filepath, activePublishJobId: null, publishError: '', snippetHtml: '' });
             }
         }
     ],

@@ -6,12 +6,8 @@ import shutil
 from typing import TypedDict, Optional
 from datetime import datetime
 from flask import jsonify
-from insetu.core.sdk import InSetuExtension, ExtensionContext
-from insetu.core.system.legacy import move_tree_contents
-from insetu.core.utils_core import get_domain_data_path, parse_frontmatter, update_frontmatter, InSetuURI
-from akasa.hooks import hooks
-from akasa.utils import slugify
-from akasa.vfs import mount_volume, register_driver, DefaultVFSDriver
+from insetu.core.sdk import InSetuExtension, ExtensionContext, DefaultVFSDriver
+from insetu.core.utils_core import parse_frontmatter, InSetuURI
 
 _SYNCED_NOTES_WORKSPACES = set()
 
@@ -49,13 +45,21 @@ NOTES_SCHEMA = {
         "updated_at": "TEXT"
     }
 }
-
 notes_bp = InSetuExtension(
     'notes', 
     __name__, 
     title="Notes Library", 
     description="Workspace-level markdown notes managed via YAML frontmatter.", 
-    schema=NOTES_SCHEMA
+    schema=NOTES_SCHEMA,
+    volumes={
+        "notes": {
+            "scheme": "ctx",
+            "tier": "data",
+            "path_key": "notes_dir",
+            "driver": NotesVFSDriver,
+            "legacy_dirs": ["notes", "ext/notes/data/notes", "ext/notes/data"],
+        }
+    },
 )
 __depends__ = []
 def _is_note_path(filepath: str) -> bool:
@@ -86,14 +90,7 @@ def _sync_all_notes_to_db(ctx):
                 if nid:
                     seen_ids.add(nid)
     _SYNCED_NOTES_WORKSPACES.add(ctx.workspace_id)
-
-@hooks.on('request_paths')
-def hook_notes_request_paths(workspace_id=None, **kwargs):
-    return {
-        "notes_dir": get_domain_data_path(workspace_id, "notes")
-    }
-
-@hooks.on('mutate_workspace_config')
+@notes_bp.on('mutate_workspace_config')
 def inject_notes_config(cfg, workspace_id=None, **kwargs):
     if "notes" not in cfg.get("extensions", []): return
     for repo_cfg in cfg.get("target_repos", []):
@@ -108,25 +105,9 @@ def inject_notes_config(cfg, workspace_id=None, **kwargs):
                 "exclude_from_diffs": True,
                 "is_system": True
             })
-
-@hooks.on('workspace_boot', priority=10)
-def mount_notes_volumes(workspace_id=None, **kwargs):
-    register_driver('ctx', NotesVFSDriver(), volume='notes')
-    ctx = notes_bp.get_context(workspace_id)
-    notes_dir = Path(ctx.paths.get("notes_dir"))
-    control_dir = Path(ctx.paths.get("control_dir"))
-
-    # Self-migrate legacy .insetu/notes and .insetu/ext/notes/data
-    move_tree_contents(control_dir.joinpath("notes"), notes_dir)
-    move_tree_contents(control_dir.joinpath("ext", "notes", "data", "notes"), notes_dir)
-    move_tree_contents(control_dir.joinpath("ext", "notes", "data"), notes_dir)
-
-    mount_volume(workspace_id, 'ctx', 'notes', notes_dir.as_posix())
-
-@hooks.on('topology_boot_complete')
-def hydrate_notes_on_boot(workspace_id=None, **kwargs):
+@notes_bp.on('topology_boot_complete')
+def hydrate_notes_on_boot(ctx, workspace_id=None, **kwargs):
     try:
-        ctx = notes_bp.get_context(workspace_id)
         ctx.db.execute("DELETE FROM notes_ledger")
         ctx.db.commit()
         _sync_all_notes_to_db(ctx)
@@ -151,12 +132,12 @@ def _parse_and_upsert_note(abs_path, rel_path, workspace_id, valid_repos=None):
     repo = yaml_data.get('repo', inferred_repo)
     if repo != 'global' and repo not in valid_repos:
         repo = inferred_repo
-
     filename = Path(rel_path).name
     intended_uri = _resolve_intended_note_uri(repo, filename, valid_repos)
     if str(uri) != intended_uri:
-        ctx.vfs.save(intended_uri, content, data={"delete_source": str(uri)})
-        ctx.db.delete("notes_ledger", "filepath", str(uri))
+        old_uri_str = str(uri)
+        ctx.vfs.save(intended_uri, content, data={"delete_source": old_uri_str})
+        ctx.db.delete("notes_ledger", "filepath", old_uri_str)
         rel_path = intended_uri
 
     title = yaml_data.get('title', filename)
@@ -182,12 +163,10 @@ def _parse_and_upsert_note(abs_path, rel_path, workspace_id, valid_repos=None):
         "created_at": created_at, "updated_at": updated_at
     })
     return note_id
-
-@hooks.on('vfs_mutated')
-def handle_notes_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
+@notes_bp.on('vfs_mutated')
+def handle_notes_vfs_mutations(ctx, mutations=None, workspace_id=None, **kwargs):
     """Event Bus hook: Keeps the Notes DB synced with both global and repo-scoped disk changes."""
     if not mutations: return
-    ctx = notes_bp.get_context(workspace_id)
     valid_repos = {r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")}
     for m in mutations:
         filepath = m.get("filepath", "")
@@ -272,10 +251,9 @@ def api_notes_new(ctx):
 
     filepath, _ = ctx.create_entity_file(folder, title, yaml_data, prefix="note")
     return jsonify({"status": "success", "filepath": filepath})
-@hooks.on('gather_declare_topology')
-def declare_notes_topology(target_repos=None, ledger_events=None, workspace_id=None, **kwargs):
+@notes_bp.on('gather_declare_topology')
+def declare_notes_topology(ctx, target_repos=None, ledger_events=None, workspace_id=None, **kwargs):
     """Declares the notes library to the Gather engine for centralized chunking and context compilation."""
-    ctx = notes_bp.get_context(workspace_id)
     notes = ctx.db.get_all("notes_ledger")
     if not notes: 
         return []

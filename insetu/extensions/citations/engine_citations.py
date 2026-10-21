@@ -8,7 +8,6 @@ from typing import TypedDict, Optional, List
 from flask import request, jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import InSetuURI
-from akasa.hooks import hooks
 CITATIONS_SCHEMA = {
     "citations": {
         "id": "TEXT PRIMARY KEY",
@@ -20,7 +19,7 @@ CITATIONS_SCHEMA = {
 }
 citations_bp = InSetuExtension('citations', __name__, title="Reference Library", description="Academic citation and bibliography records manager.", schema=CITATIONS_SCHEMA)
 __depends__ = []
-@hooks.on('mutate_workspace_config')
+@citations_bp.on('mutate_workspace_config')
 def inject_citation_metadata(cfg, workspace_id=None, **kwargs):
     """Dynamically injects virtual UI metadata for citation payloads statelessly."""
     if "citations" not in cfg.get("extensions", []): return
@@ -46,77 +45,120 @@ def inject_citation_metadata(cfg, workspace_id=None, **kwargs):
                 cfg["virtual_contexts"].append(scope)
     except Exception:
         pass
-@hooks.on('compile_contexts')
-def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
+@citations_bp.on('gather_declare_topology')
+def declare_citations_topology(ctx, target_repos=None, ledger_events=None, workspace_id=None, **kwargs):
+    """Declares global and repo-scoped citation libraries to the Gather engine for centralized compilation."""
     try:
-        is_full_sweep = kwargs.get('is_full_sweep', True)
-        if not is_full_sweep:
-            return
-        ctx = citations_bp.get_context(workspace_id)
         _ensure_citations_hydrated(ctx)
-        paths = ctx.paths
+        rows = ctx.db.execute("SELECT raw_json, attachments FROM citations ORDER BY id ASC").fetchall()
+        if not rows:
+            ctx.store.set("citations_ui.json", "virtual_contexts", [])
+            return []
 
-        conn = ctx.db
-        cursor = conn.execute("SELECT raw_json, attachments FROM citations ORDER BY id ASC")
-        rows = cursor.fetchall()
-        if rows:
-            def write_citation_bucket(uri, items, list_title):
-                content_lines = []
-                content_lines.append("============================================================")
-                content_lines.append(f"INSETU TOPOLOGY ({list_title})")
-                content_lines.append("============================================================\n")
+        global_items = []
+        bucketed_items = {}
+        bucket_meta_map = {}
 
-                for item in items:
-                    csl_id = item.get("id", "unknown")
-                    title = item.get("title", "Untitled")
-                    authors = ", ".join([a.get('family', '') for a in item.get('author', [])])
-                    content_lines.append(f"--- [@{csl_id}] ---")
-                    content_lines.append(f"Title: {title}")
-                    content_lines.append(f"Author(s): {authors}")
-                    content_lines.append(f"Type: {item.get('type', 'unknown')}")
-                    content_lines.append(f"Raw CSL-JSON: {json.dumps(item)}\n")
-                ctx.vfs.save(uri, "\n".join(content_lines), data={"is_absolute_artifact": True})
-                manifest[uri] = {
-                    "files": [uri],
-                    "meta": {"type": "citation", "title": list_title, "domain": "Reference Library", "desc": f"Academic citations scoped to {list_title}."}
-                }
+        for row in rows:
+            item = json.loads(row['raw_json'])
+            atts = json.loads(row['attachments']) if row['attachments'] else []
+            global_items.append(item)
 
-            global_items = []
-            bucketed_items = {}
+            for att in atts:
+                repo = att.get("repo")
+                bucket = att.get("bucket", "None")
+                if repo:
+                    if repo not in bucketed_items:
+                        bucketed_items[repo] = []
+                        bucket_meta_map[repo] = {"repo": repo, "bucket_id": "citations"}
+                    if item not in bucketed_items[repo]:
+                        bucketed_items[repo].append(item)
+                    if bucket and bucket != "None":
+                        rb_key = f"{repo}_{bucket}"
+                        if rb_key not in bucketed_items:
+                            bucketed_items[rb_key] = []
+                            bucket_meta_map[rb_key] = {"repo": repo, "bucket_id": f"{bucket}_citations"}
+                        if item not in bucketed_items[rb_key]:
+                            bucketed_items[rb_key].append(item)
 
-            for row in rows:
-                item = json.loads(row['raw_json'])
-                atts = json.loads(row['attachments']) if row['attachments'] else []
-                global_items.append(item)
+        def _make_callbacks(items, list_title):
+            def _gen():
+                header = (
+                    "============================================================\n"
+                    f"INSETU TOPOLOGY ({list_title})\n"
+                    "============================================================\n\n"
+                )
+                blocks = []
+                for it in items:
+                    csl_id = it.get("id", "unknown")
+                    title = it.get("title", "Untitled")
+                    authors = ", ".join([a.get('family', '') for a in it.get('author', [])])
+                    block = (
+                        f"--- [@{csl_id}] ---\n"
+                        f"Title: {title}\n"
+                        f"Author(s): {authors}\n"
+                        f"Type: {it.get('type', 'unknown')}\n"
+                        f"Raw CSL-JSON: {json.dumps(it)}\n\n"
+                    )
+                    blocks.append(block)
+                return {"header": header, "blocks": blocks, "files": ["ctx://data/citations/library.json"]}
 
-                for att in atts:
-                    repo = att.get("repo")
-                    bucket = att.get("bucket", "None")
-                    if repo:
-                        if repo not in bucketed_items: bucketed_items[repo] = []
-                        if item not in bucketed_items[repo]: bucketed_items[repo].append(item)
-                        if bucket and bucket != "None":
-                            rb_key = f"{repo}_{bucket}"
-                            if rb_key not in bucketed_items: bucketed_items[rb_key] = []
-                            if item not in bucketed_items[rb_key]: bucketed_items[rb_key].append(item)
-            write_citation_bucket("ctx://contexts/citations_context.txt", global_items, "GLOBAL REFERENCE LIBRARY")
-            v_ctxs = []
-            for k, items in bucketed_items.items():
-                out_file = f"ctx://contexts/{k}_citations_context.txt"
-                ui_title = k.replace('_', '/')
-                write_citation_bucket(out_file, items, f"REFERENCE LIBRARY ({k.upper()})")
-                v_ctxs.append({
-                    "title": ui_title,
-                    "description": f"Academic citations scoped to {ui_title}.",
+            def _rec(events):
+                for ev in (events or []):
+                    fp = ev.get("filepath", "") if isinstance(ev, dict) else str(ev)
+                    if "library.json" in fp or "citations" in fp:
+                        return _gen()
+                return None
+
+            return _gen, _rec
+
+        declarations = []
+        g_gen, g_rec = _make_callbacks(global_items, "GLOBAL REFERENCE LIBRARY")
+        declarations.append({
+            "filename": "ctx://contexts/citations_context.txt",
+            "meta": {
+                "type": "citation",
+                "title": "Global Reference Library",
+                "domain": "Reference Library",
+                "desc": "Academic citations and bibliography records.",
+                "repo": "global",
+                "bucket_id": "citations"
+            },
+            "generator_callback": g_gen,
+            "recall_callback": g_rec
+        })
+
+        v_ctxs = []
+        for k, items in bucketed_items.items():
+            out_file = f"ctx://contexts/{k}_citations_context.txt"
+            ui_title = k.replace('_', '/')
+            b_info = bucket_meta_map.get(k, {"repo": "global", "bucket_id": "citations"})
+            b_gen, b_rec = _make_callbacks(items, f"REFERENCE LIBRARY ({k.upper()})")
+            declarations.append({
+                "filename": out_file,
+                "meta": {
+                    "type": "citation",
+                    "title": f"Reference Library ({ui_title})",
                     "domain": "Reference Library",
-                    "out_file": out_file
-                })
+                    "desc": f"Academic citations scoped to {ui_title}.",
+                    "repo": b_info["repo"],
+                    "bucket_id": b_info["bucket_id"]
+                },
+                "generator_callback": b_gen,
+                "recall_callback": b_rec
+            })
+            v_ctxs.append({
+                "title": ui_title,
+                "description": f"Academic citations scoped to {ui_title}.",
+                "domain": "Reference Library",
+                "out_file": out_file
+            })
 
-            # Save the generated scopes to the fast JSON cache for the UI to consume statelessly
-            ctx.store.set("citations_ui.json", "virtual_contexts", v_ctxs)
-
+        ctx.store.set("citations_ui.json", "virtual_contexts", v_ctxs)
+        return declarations
     except Exception as e:
-        print(f"Extension Hook Error (citations compile): {e}")
+        print(f"Extension Hook Error (citations declare_topology): {e}")
+        return []
 @citations_bp.route('index', methods=['GET'], docstring="Retrieves a unique index of all authors and publications present in the global library.")
 def get_metadata_index(ctx):
     """Leverages SQLite JSON1 C-extensions to calculate aggregates instantly, eliminating Python RAM caching."""
@@ -370,7 +412,7 @@ def delete_citation(ctx, csl_id):
         return jsonify({"status": "success", "message": f"Deleted citation {csl_id}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@hooks.on('pre_compile_document')
+@citations_bp.on('pre_compile_document')
 def inject_citation_middleware(text, workspace_id=None, **kwargs):
     """Parses text for citation macros and injects bibliography temp files and citeproc flags into the compiler."""
     true_ids = list(set(re.findall(r'\[@([^\]]+)\]', text)))

@@ -7,11 +7,7 @@ from pathlib import Path
 from typing import TypedDict, Optional, Any
 from flask import request, jsonify
 from insetu.core.sdk import InSetuExtension
-from insetu.core.system.legacy import move_tree_contents
-from insetu.core.utils_core import parse_frontmatter, InSetuURI
-from akasa.hooks import hooks
-from akasa.utils import slugify
-from akasa.vfs import mount_volume, register_driver, DefaultVFSDriver
+from insetu.core.utils_core import parse_frontmatter, InSetuURI, slugify
 SKILLS_SCHEMA = {
     "skills_ledger": {
         "id": "TEXT PRIMARY KEY",
@@ -52,28 +48,26 @@ SKILLS_SETTINGS_SCHEMA = [
         }
     }
 ]
-skills_bp = InSetuExtension('skills', __name__, title="Skills Tracker", description="Spaced-repetition tracking for musical and technical skills.", schema=SKILLS_SCHEMA, settings_schema=SKILLS_SETTINGS_SCHEMA)
+skills_bp = InSetuExtension(
+    'skills',
+    __name__,
+    title="Skills Tracker",
+    description="Spaced-repetition tracking for musical and technical skills.",
+    schema=SKILLS_SCHEMA,
+    settings_schema=SKILLS_SETTINGS_SCHEMA,
+    volumes={
+        "skills": {
+            "scheme": "ctx",
+            "tier": "data",
+            "path_key": "skills_dir",
+            "legacy_dirs": ["ext/skills/data/skills", "ext/skills/data"],
+        }
+    },
+)
 __depends__ = []
-def _get_user_skills_dir(workspace_id=None):
-    """Resolves and commands the localized workspace skills directory structure in .insetu/data/skills."""
-    ctx = skills_bp.get_context(workspace_id)
-    base_dir = ctx.paths["data_dir"]
-    os.makedirs(base_dir, exist_ok=True)
-    return base_dir
-@hooks.on('workspace_boot', priority=10)
-def init_skills_storage(workspace_id=None, **kwargs):
-    register_driver('ctx', DefaultVFSDriver())
-    ctx = skills_bp.get_context(workspace_id)
-    control_dir = Path(ctx.paths.get("control_dir"))
-    skills_dir = Path(_get_user_skills_dir(workspace_id))
-    move_tree_contents(control_dir.joinpath("ext", "skills", "data", "skills"), skills_dir)
-    move_tree_contents(control_dir.joinpath("ext", "skills", "data"), skills_dir)
-    mount_volume(workspace_id, 'ctx', 'skills', skills_dir.as_posix())
-
-@hooks.on('topology_boot_complete')
-def hydrate_skills_on_boot(workspace_id=None, **kwargs):
+@skills_bp.on('topology_boot_complete')
+def hydrate_skills_on_boot(ctx, workspace_id=None, **kwargs):
     try:
-        ctx = skills_bp.get_context(workspace_id)
         _ensure_skills_hydrated(ctx)
     except Exception:
         pass
@@ -85,11 +79,8 @@ def _canonical_skill_uri(filepath_or_name: str) -> str:
         return filepath_or_name
     base = InSetuURI(filepath_or_name).basename if "://" in filepath_or_name else Path(filepath_or_name).name
     return f"ctx://skills/{base}"
-
 def _ensure_skills_hydrated(ctx):
-    init_skills_storage(workspace_id=ctx.workspace_id)
-    ctx.db.execute("UPDATE skills_ledger SET filepath = 'ctx://skills/' || filepath WHERE filepath NOT LIKE '%://%'")
-    ctx.db.commit()
+    ctx.db.heal_uri_column("skills_ledger", "filepath", "ctx://skills/")
     count = ctx.db.execute("SELECT count(*) FROM skills_ledger").fetchone()[0]
     if count == 0:
         for skill_uri in ctx.vfs.walk("ctx://skills", exts=['.md']):
@@ -169,11 +160,9 @@ def log_skill_practice(ctx):
     filename = data.get('filepath')  # Maps strictly to user space base filename
     score = int(data.get('score', 3))
     updates = data.get('metrics', {})
-
     if not filename:
         return jsonify({"error": "Filename tracking reference required"}), 400
     try:
-        init_skills_storage(workspace_id=ctx.workspace_id)
         canon_uri = _canonical_skill_uri(filename)
         conn = ctx.db
         row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (canon_uri,)).fetchone()
@@ -240,7 +229,6 @@ def update_skill_structure(ctx):
     if not filename:
         return jsonify({"error": "Filename tracking reference required"}), 400
     try:
-        init_skills_storage(workspace_id=ctx.workspace_id)
         canon_uri = _canonical_skill_uri(filename)
         conn = ctx.db
         row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (canon_uri,)).fetchone()
@@ -294,7 +282,6 @@ def delete_skill_item(ctx):
     if not filename:
         return jsonify({"error": "Filename tracking reference required"}), 400
     try:
-        init_skills_storage(workspace_id=ctx.workspace_id)
         canon_uri = _canonical_skill_uri(filename)
         conn = ctx.db
         ctx.vfs.delete(canon_uri)
@@ -362,7 +349,6 @@ def create_new_skill(ctx):
         if parts:
             yaml_data["parts"] = parts
             yaml_data["completed_parts"] = ""
-        init_skills_storage(workspace_id=ctx.workspace_id)
         canon_uri, _ = ctx.create_entity_file(
             folder="ctx://skills",
             title=name,
