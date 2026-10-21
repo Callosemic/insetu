@@ -4,16 +4,22 @@ import re
 from typing import TypedDict, List
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from insetu.core.system.legacy import move_tree_contents
-from insetu.core.utils_core import resolve_macro_includes, InSetuURI, get_workspace_physics
-from akasa.hooks import hooks
-from akasa.utils import get_tenant_control_dir, is_extension_enabled, is_core_module, _CORE_MODULES, load_config, is_subpath
-from akasa.vfs import mount_volume, register_driver, DefaultVFSDriver, _resolve_physical_path
+from insetu.core.utils_core import (
+    resolve_macro_includes,
+    InSetuURI,
+    get_workspace_physics,
+    get_tenant_control_dir,
+    is_extension_enabled,
+    is_core_module,
+    is_subpath,
+    DefaultVFSDriver,
+    resolve_physical_path,
+)
 
 
 def _ensure_global_user_templates_dir(workspace_id: str = "default") -> Path:
     """Resolves the global user templates directory via the ws://default/prompts/.templates/user VFS driver."""
-    resolved = _resolve_physical_path("ws://default/prompts/.templates/user", workspace_id)
+    resolved = resolve_physical_path("ws://default/prompts/.templates/user", workspace_id)
     user_dir = Path(resolved) if resolved else Path(get_tenant_control_dir("default")).joinpath("data", "prompts", ".templates", "user").resolve()
     os.makedirs(user_dir.as_posix(), exist_ok=True)
     return user_dir
@@ -55,7 +61,7 @@ class PromptsVFSDriver(DefaultVFSDriver):
             if mod_name == "user":
                 _ensure_global_user_templates_dir(workspace_id)
                 ws_uri = f"ws://default/prompts/.templates/user/{mod_rel}".rstrip('/')
-                return _resolve_physical_path(ws_uri, workspace_id)
+                return resolve_physical_path(ws_uri, workspace_id)
             mod_prompts_dir = _resolve_module_prompts_dir(mod_name, workspace_id)
             if not mod_prompts_dir:
                 return None
@@ -66,17 +72,26 @@ class PromptsVFSDriver(DefaultVFSDriver):
                 return None
             return resolved.as_posix()
         return super().resolve(uri_obj, workspace_id, physical_target)
-
-
 prompts_bp = InSetuExtension(
     'prompts',
     __name__,
     title="Prompt Library",
     description="Core prompt template management, module .templates projection, and macro embedding.",
-    core=True
+    core=True,
+    volumes={
+        'prompts': {
+            'tier': 'data',
+            'scheme': 'ctx',
+            'path_key': 'prompts_dir',
+            'driver': PromptsVFSDriver(),
+            'legacy_dirs': ['prompts', 'ext/prompts/data'],
+        }
+    },
 )
 __depends__ = []
-@hooks.on('mutate_workspace_config')
+
+
+@prompts_bp.on('mutate_workspace_config')
 def inject_prompts_config(cfg, workspace_id=None, **kwargs):
     for repo_cfg in cfg.get("target_repos", []):
         if "sub_buckets" not in repo_cfg:
@@ -92,28 +107,7 @@ def inject_prompts_config(cfg, workspace_id=None, **kwargs):
             })
 
 
-@hooks.on('request_paths')
-def hook_prompts_request_paths(workspace_id=None, **kwargs):
-    """Dynamically injects the prompts directory into the ecosystem path dictionary."""
-    try:
-        control_dir = get_tenant_control_dir(workspace_id)
-        prompts_dir = Path(control_dir).joinpath("data", "prompts").as_posix()
-        os.makedirs(prompts_dir, exist_ok=True)
-        return {"prompts_dir": prompts_dir}
-    except Exception:
-        return {}
-@hooks.on('workspace_boot', priority=10)
-def mount_prompts_volumes(workspace_id=None, **kwargs):
-    register_driver('ctx', PromptsVFSDriver(), volume='prompts')
-    ctx = prompts_bp.get_context(workspace_id)
-    control_dir = Path(ctx.paths.get("control_dir"))
-    prompts_dir = Path(ctx.paths.get("prompts_dir"))
-    move_tree_contents(control_dir.joinpath("prompts"), prompts_dir)
-    move_tree_contents(control_dir.joinpath("ext", "prompts", "data"), prompts_dir)
-    mount_volume(workspace_id, 'ctx', 'prompts', prompts_dir.as_posix())
-
-
-@hooks.on('topology_boot_complete')
+@prompts_bp.on('topology_boot_complete')
 def migrate_legacy_prompt_macros_on_boot(workspace_id=None, **kwargs):
     """One-time boot migration upgrading legacy scheme-less {{include_prompt: ...}} tags in prompt files to canonical ctx://prompts/ URIs."""
     try:
@@ -158,18 +152,13 @@ def _discover_module_template_prompts(workspace_id=None):
                 user_templates_found = True
     if not user_templates_found:
         template_uris.append("ctx://prompts/.templates/user/.gitkeep")
-    cfg = load_config(workspace_id)
-    active_modules = sorted(set(_CORE_MODULES) | set(cfg.get("extensions", [])))
-    for mod_name in active_modules:
+    for mod_name in ctx.get_active_modules():
         for mod_tpl_path in sorted(ctx.vfs.walk(f"ctx://prompts/.templates/{mod_name}", exts=['.md', '.txt'])):
             template_uris.append(mod_tpl_path)
     return template_uris
-
-
-@hooks.on('request_available_prompts')
+@prompts_bp.on('request_available_prompts')
 def provide_available_prompts(workspace_id=None, **kwargs):
     """Supplies global (ctx://prompts), virtual module templates (ctx://prompts/.templates), repo-scoped (<repo>/.insetu-data/prompts), and peer-mounted (ws://) prompts."""
-    mount_prompts_volumes(workspace_id=workspace_id)
     ctx = prompts_bp.get_context(workspace_id)
     prompts = []
     for ws_rel_path in ctx.vfs.walk("ctx://prompts", exts=['.md', '.txt', '.gitkeep', '.keep']):
@@ -211,7 +200,6 @@ def api_prompts_list(ctx):
 @prompts_bp.route('resolve', methods=['GET'], request_schema=PromptResolveQuery, docstring="[sync] Fetches a canonical prompt URI and recursively resolves {{include_prompt: ...}} macros.")
 def api_prompts_resolve(ctx):
     """Fetches a canonical prompt URI and recursively resolves {{include_prompt: ...}} macros."""
-    mount_prompts_volumes(workspace_id=ctx.workspace_id)
     filename = ctx.req.args.get('file', '').strip()
     if not filename:
         return jsonify({"error": "File required"}), 400

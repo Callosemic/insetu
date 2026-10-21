@@ -2,27 +2,31 @@
 import { html, css } from 'lit';
 import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
-
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
-const syncPromptsState = window.inSetu.utils.coalescedAsync(async () => {
+const syncPromptsState = window.inSetu.utils.coalescedAsync(async (forceRewarm = false) => {
     try {
+        const st = PromptsStore.getState();
+        const warmedSet = forceRewarm ? new Set() : new Set(st.warmedPromptUrls || []);
         const res = await window.inSetu.api.get('prompts/list?t=' + Date.now(), { cache: 'no-store' });
         if (res.ok) {
             const data = await res.json();
             const cleanPrompts = data.prompts || [];
-            const currentPrompts = PromptsStore.getState().prompts;
+            const currentPrompts = st.prompts;
             if (JSON.stringify(currentPrompts) !== JSON.stringify(cleanPrompts)) {
                 PromptsStore.setState({ prompts: cleanPrompts });
             }
             const activeWs = window.inSetu.utils.getActiveWorkspace();
-            const urlsToWarm = cleanPrompts.map(p => `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(p)}`);
+            const urlsToWarm = cleanPrompts
+                .filter(p => p && !p.endsWith('/.gitkeep') && !p.endsWith('/.keep'))
+                .map(p => `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(p)}`)
+                .filter(u => !warmedSet.has(u));
             if (urlsToWarm.length > 0 && window.inSetu?.stores?.App) {
-                const currentQueue = window.inSetu.stores.App.getState().warmingQueue || new Set();
-                const hasNew = urlsToWarm.some(u => !currentQueue.has(u));
-                if (hasNew) {
-                    window.inSetu.stores.App.getState().enqueueWarming(urlsToWarm);
-                }
+                urlsToWarm.forEach(u => warmedSet.add(u));
+                PromptsStore.setState({ warmedPromptUrls: warmedSet });
+                window.inSetu.stores.App.getState().enqueueWarming(urlsToWarm);
+            } else if (forceRewarm) {
+                PromptsStore.setState({ warmedPromptUrls: warmedSet });
             }
             const gatherStore = window.inSetu?.stores?.Gather;
             if (gatherStore && typeof gatherStore.setState === 'function') {
@@ -42,9 +46,9 @@ const syncPromptsState = window.inSetu.utils.coalescedAsync(async () => {
         console.warn("Headless prompt sync failed:", e);
     }
 });
-
 export const PromptsStore = createExtensionStore('Prompts', {
     prompts: [],
+    warmedPromptUrls: new Set(),
     loading: false,
     searchQuery: '',
     fetchPrompts: async () => {
@@ -68,7 +72,7 @@ export class InSetuExtPrompts extends InSetuElement {
         loading: { type: Boolean },
         prompts: { type: Array },
         searchQuery: { type: String },
-        globalBrowsePath: { type: Array }
+        browsePath: { type: Array }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
@@ -78,7 +82,10 @@ export class InSetuExtPrompts extends InSetuElement {
         this.loading = false;
         this.prompts = [];
         this.searchQuery = '';
-        this.globalBrowsePath = [];
+        this.browsePath = [];
+    }
+    _getSubKey() {
+        return this.dataset?.subId || 'prompts:prompts';
     }
     connectedCallback() {
         super.connectedCallback();
@@ -98,13 +105,17 @@ export class InSetuExtPrompts extends InSetuElement {
         );
         this.subscribe(
             AppStore,
-            state => state.globalBrowsePath || [],
-            (globalBrowsePath) => {
-                this.globalBrowsePath = globalBrowsePath;
+            state => {
+                const subKey = this._getSubKey();
+                const tPaths = state.tabBrowsePaths || {};
+                return tPaths[subKey] || tPaths['prompts:prompts'] || tPaths['prompts'] || [];
+            },
+            (browsePath) => {
+                this.browsePath = browsePath;
                 this.requestUpdate();
             }
         );
-        this.globalBrowsePath = AppStore.getState().globalBrowsePath || [];
+        this.browsePath = AppStore.getState().getBrowsePath ? AppStore.getState().getBrowsePath(this._getSubKey()) : [];
         this.subscribe(AppStore, state => state.promptsForceRefreshTick, (tick) => {
             if (tick) PromptsStore.getState().fetchPrompts();
         });
@@ -135,7 +146,7 @@ export class InSetuExtPrompts extends InSetuElement {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
             const touchedPrompt = payload.mutations.some(m => isPromptPath(m.filepath));
-            if (touchedPrompt) setTimeout(() => syncPromptsState(), 300);
+            if (touchedPrompt) setTimeout(() => syncPromptsState(true), 300);
         });
         this.registerGlobalListener('insetu:soft-refresh', window, () => {
             syncPromptsState();
@@ -187,7 +198,7 @@ export class InSetuExtPrompts extends InSetuElement {
                     basePath="ctx://prompts/"
                     .enableSearch=${true}
                     searchPlaceholder="Fuzzy search prompts & .templates..."
-                    .currentPath=${this.globalBrowsePath}
+                    .currentPath=${this.browsePath}
                     entityType="file:prompt"
                     @card-clicked=${(e) => {
                         if (e.detail.isSource && window.inSetu.vfs.viewSourceFile) {
@@ -196,80 +207,47 @@ export class InSetuExtPrompts extends InSetuElement {
                             window.inSetu.vfs.viewSourceFile(fn, isEditable);
                         }
                     }}
-                    @path-changed=${(e) => AppStore.getState().setBrowsePath(e.detail.path || [], 'prompts')}>
+                    @path-changed=${(e) => AppStore.getState().setBrowsePath(e.detail.path || [], this._getSubKey())}>
                 </insetu-file-tree>
             </div>
         `;
     }
 }
 customElements.define('insetu-ext-prompts', InSetuExtPrompts);
-
-export class InSetuExtPromptsActions extends InSetuElement {
-    get extName() { return 'prompts'; }
-    static properties = {
-        globalBrowsePath: { type: Array }
-    };
-    static styles = [sharedStyles, css`:host { display: flex; align-items: stretch; height: 100%; }`];
-
-    constructor() {
-        super();
-        this.globalBrowsePath = [];
+function _buildPromptsMenuActions(slotCfg = {}) {
+    const isOffline = window.inSetu?.stores?.App?.getState()?.isOffline;
+    if (isOffline) {
+        return [{ label: 'Read-Only (Offline)', icon: 'lock', onClick: () => {} }];
     }
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(
-            AppStore,
-            state => state.globalBrowsePath || [],
-            (globalBrowsePath) => {
-                this.globalBrowsePath = globalBrowsePath;
+    const subKey = slotCfg?.id || 'prompts:prompts';
+    const browseParts = AppStore.getState().getBrowsePath ? AppStore.getState().getBrowsePath(subKey) : [];
+    const isInsideUserTemplates = browseParts[0] === '.templates' && browseParts[1] === 'user';
+    const cpPath = isInsideUserTemplates ? browseParts : browseParts.filter(p => p !== '.templates');
+    const prefix = cpPath.length > 0 ? "ctx://prompts/" + cpPath.join('/') + "/" : "ctx://prompts/";
+    return [
+        {
+            label: 'New Folder',
+            icon: 'folder-plus',
+            onClick: () => {
+                if (window.inSetu?.ui?.openNewFolderModal) window.inSetu.ui.openNewFolderModal(prefix);
             }
-        );
-        this.globalBrowsePath = AppStore.getState().globalBrowsePath || [];
-    }
-    get _menuItems() {
-        const isOffline = window.inSetu?.stores?.App?.getState()?.isOffline;
-        if (isOffline) {
-            return [{ label: 'Read-Only (Offline)', icon: 'lock', onClick: () => {} }];
-        }
-        const browseParts = this.globalBrowsePath || [];
-        const isInsideUserTemplates = browseParts[0] === '.templates' && browseParts[1] === 'user';
-        const cpPath = isInsideUserTemplates ? browseParts : browseParts.filter(p => p !== '.templates');
-        const prefix = cpPath.length > 0 ? "ctx://prompts/" + cpPath.join('/') + "/" : "ctx://prompts/";
-        return [
-            { 
-                label: 'New Folder',  
-                icon: 'folder-plus', 
-                onClick: () => { 
-                    if (this.ui && this.ui.openNewFolderModal) this.ui.openNewFolderModal(prefix); 
-                } 
-            },
-            { 
-                label: isInsideUserTemplates ? 'New User Template' : 'New Prompt', 
-                icon: 'file-plus', 
-                onClick: () => { 
-                    if (this.ui && this.ui.openNewFileModal) this.ui.openNewFileModal(prefix); 
-                } 
-            },
-            ...(!isInsideUserTemplates ? [{
-                label: 'New Global User Template',
-                icon: 'user-plus',
-                onClick: () => {
-                    if (this.ui && this.ui.openNewFileModal) this.ui.openNewFileModal('ctx://prompts/.templates/user/');
-                }
-            }] : [])
-        ];
-    }
-    render() {
-        return html`
-            <sutram-dropdown align="right" .items=${this._menuItems}>
-                <button slot="trigger" class="system-action-btn" title="Prompt Actions">
-                    <yv-icon name="menu" style="width: 14px; height: 14px;"></yv-icon>
-                </button>
-            </sutram-dropdown>
-        `;
-    }
+        },
+        {
+            label: isInsideUserTemplates ? 'New User Template' : 'New Prompt',
+            icon: 'file-plus',
+            onClick: () => {
+                if (window.inSetu?.ui?.openNewFileModal) window.inSetu.ui.openNewFileModal(prefix);
+            }
+        },
+        ...(!isInsideUserTemplates ? [{
+            label: 'New Global User Template',
+            icon: 'user-plus',
+            onClick: () => {
+                if (window.inSetu?.ui?.openNewFileModal) window.inSetu.ui.openNewFileModal('ctx://prompts/.templates/user/');
+            }
+        }] : [])
+    ];
 }
-customElements.define('insetu-ext-prompts-actions', InSetuExtPromptsActions);
 
 function isPromptPath(filepath) {
     if (!filepath) return false;
@@ -297,7 +275,7 @@ window.ExtensionRegistry.registerExtension('prompts', {
                 const srcUri = data.filepath;
                 const isWs = srcUri.startsWith('ws://');
                 const destUri = isWs
-                    ? `ctx://prompts/${srcUri.split('/').pop()}`
+                    ? `ctx://prompts/${new window.inSetu.utils.InSetuURI(srcUri).basename}`
                     : srcUri.replace('/.templates/', '/');
                 const activeWs = window.inSetu.utils.getActiveWorkspace();
                 const res = await window.inSetu.api.request(`/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(srcUri)}`, {}, activeWs);
@@ -327,7 +305,8 @@ window.ExtensionRegistry.registerExtension('prompts', {
                     const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
                     const text = res.ok ? await res.text() : "Offline cache miss. This prompt was not pre-cached.";
                     if (window.inSetu.ui && window.inSetu.ui.viewTextBlob) {
-                        window.inSetu.ui.viewTextBlob(`[Read-Only] ${filepath.split('/').pop()}`, text, filepath.split('/').pop());
+                        const baseName = new window.inSetu.utils.InSetuURI(filepath).basename;
+                        window.inSetu.ui.viewTextBlob(`[Read-Only] ${baseName}`, text, baseName);
                     }
                 } catch (e) {
                     alert("Failed to load prompt offline.");
@@ -344,14 +323,9 @@ window.ExtensionRegistry.registerExtension('prompts', {
             icon: "terminal",
             intent: "neutral",
             order: 3,
+            menuStores: ["App"],
+            menuActions: _buildPromptsMenuActions,
             component: "insetu-ext-prompts"
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "context",
-            targetSub: "prompts",
-            component: "insetu-ext-prompts-actions",
-            order: 3
         }
     ]
 });

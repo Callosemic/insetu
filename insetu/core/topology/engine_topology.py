@@ -8,21 +8,28 @@ import traceback
 import queue
 from pathlib import Path
 from flask import jsonify
-from akasa.extension import ExtensionContext
-from insetu.core.sdk import InSetuExtension
-from akasa.db import get_connection
-from akasa.events import sse_bus
-from akasa.hooks import hooks
-from akasa.utils import (
+from insetu.core.sdk import (
+    InSetuExtension,
+    ExtensionContext,
+    get_connection,
+    sse_bus,
+    hooks,
+    set_workspace_router,
     thread_safe_cache,
+)
+from insetu.core.utils_core import (
+    get_repo_path,
+    execute_binary,
+    InSetuURI,
     fold_vfs_events,
     parse_uri,
     get_all_workspace_ids,
     get_workspace_physics,
-    load_config
+    load_config,
+    mount_volume,
+    execute_vfs_save,
+    resolve_physical_path,
 )
-from akasa.vfs import mount_volume, execute_vfs_save, _resolve_physical_path
-from insetu.core.utils_core import get_repo_path, execute_binary, InSetuURI
 TOPOLOGY_SCHEMA = {
     "topology_ledger": {
         "filepath": "TEXT PRIMARY KEY",
@@ -48,7 +55,7 @@ topology_bp = InSetuExtension(
     core=True
 )
 __depends__ = []
-@hooks.on('register_compilation_steps')
+@topology_bp.on('register_compilation_steps')
 def _register_topology_compilation_step(workspace_id=None, **kwargs):
     return [{
         "id": "topology_scan",
@@ -120,7 +127,7 @@ def _get_repo_git_status_map(repo_path):
         pass
     return status_map
 
-@hooks.on('register_manifest_signatures')
+@topology_bp.on('register_manifest_signatures')
 def hook_topology_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs):
     """Yields lightweight repository signatures for the vfs domain, incorporating git_status counts."""
     ctx = topology_bp.get_context(workspace_id)
@@ -154,7 +161,7 @@ def api_topology_vfs_repo(ctx):
         if r['git_status']:
             files_by_bucket[key]["git_modified"].append(r['filepath'])
     return jsonify({"repo": repo, "buckets": files_by_bucket})
-@hooks.on('force_topology_scan', priority=10)
+@topology_bp.on('force_topology_scan', priority=10)
 def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
     """Synchronously forces a full physical disk walk to rebuild the Topology Ledger."""
     hooks.emit('vfs_manifest_mutated', workspace_id=workspace_id)
@@ -196,10 +203,11 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
                 )
     return True
 
-@hooks.on('vfs_manifest_mutated')
+@topology_bp.on('vfs_manifest_mutated')
 def _invalidate_topology_manifest(workspace_id=None, **kwargs):
     hook_request_vfs_manifest.invalidate(workspace_id=workspace_id)
-@hooks.on('request_vfs_manifest')
+
+@topology_bp.on('request_vfs_manifest')
 @thread_safe_cache(ttl=2.0, key_maker=lambda workspace_id=None, **kwargs: str(workspace_id))
 def hook_request_vfs_manifest(workspace_id=None, **kwargs):
     """Returns the vfs manifest derived directly from the topology ledger via raw tuple queries."""
@@ -285,7 +293,7 @@ def _topology_slew_limiter_loop():
             try:
                 hooks.emit_background('system_error', source="Topology:Slew_Loop", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload="", workspace_id="default")
             except Exception: pass
-@hooks.on('vfs_mutated', priority=90)
+@topology_bp.on('vfs_mutated', priority=90)
 def broadcast_cross_workspace_mutations(mutations=None, workspace_id=None, **kwargs):
     """
     Phase 4 Event Bus Synchronization: Propagates mutations on shared domains
@@ -296,7 +304,7 @@ def broadcast_cross_workspace_mutations(mutations=None, workspace_id=None, **kwa
     # Guardrail: Never re-broadcast synthetic ws:// mutations to prevent infinite loops
     if any(m.get("filepath", "").startswith("ws://") for m in mutations):
         return
-    from akasa.extension import SettingsManager as _SettingsManager
+    from insetu.core.sdk import SettingsManager as _SettingsManager
 
     pub_settings = _SettingsManager('system', workspace_id)
     exports = pub_settings.get("export_shared_domains", {})
@@ -347,7 +355,7 @@ def broadcast_cross_workspace_mutations(mutations=None, workspace_id=None, **kwa
                 sse_bus.emit_sse('vfs_mutated', {"mutations": translated, "workspace_id": target_ws})
 
 
-@hooks.on('vfs_mutated', priority=10)
+@topology_bp.on('vfs_mutated', priority=10)
 def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
     """
     Stage 1 Slew Limiter: Catches high-velocity disk/watchdog mutations 
@@ -538,7 +546,7 @@ def resolve_topology_buffer(workspace_id):
     )
 
     return final_events
-@hooks.on('mutate_workspace_config')
+@topology_bp.on('mutate_workspace_config')
 def mount_topology_volumes_dynamically(cfg, workspace_id=None, **kwargs):
     """Dynamically remounts VFS volumes whenever the configuration changes."""
     _, ws_root = get_workspace_physics(workspace_id)
@@ -552,7 +560,7 @@ def mount_topology_volumes_dynamically(cfg, workspace_id=None, **kwargs):
             else:
                 repo_path = Path(ws_root).joinpath(repo_dir).resolve().as_posix()
             mount_volume(workspace_id, 'vfs', repo_dir, repo_path)
-@hooks.on('workspace_boot', priority=1)
+@topology_bp.on('workspace_boot', priority=1)
 def init_topology_on_boot(workspace_id=None, **kwargs):
     """Topology owns the boot sequence. Maps the drive immediately."""
     ctx = topology_bp.get_context(workspace_id)
@@ -925,7 +933,7 @@ def resolve_owning_workspaces(event_name, **kwargs):
         if Path(filepath).is_absolute():
             abs_target = Path(filepath).resolve().as_posix()
         elif origin_workspace_id:
-            resolved = _resolve_physical_path(filepath, origin_workspace_id)
+            resolved = resolve_physical_path(filepath, origin_workspace_id)
             if resolved:
                 abs_target = Path(resolved).resolve().as_posix()
 
@@ -959,4 +967,4 @@ def resolve_owning_workspaces(event_name, **kwargs):
     return owning_workspaces
 
 # Dependency Injection: Register the Tier 2 router with the Tier 1 kernel
-hooks.set_workspace_router(resolve_owning_workspaces)
+set_workspace_router(resolve_owning_workspaces)

@@ -120,49 +120,108 @@ export const GatherStore = createExtensionStore('Gather', {
         }
     }
 });
-
 window.inSetu.stores = window.inSetu.stores || {};
 window.inSetu.stores.Gather = GatherStore;
+window.addEventListener('insetu-gather-settings-changed', () => {
+    GatherStore.getState().fetchSettings();
+});
+window.addEventListener('insetu:ensure-fresh-artifact', (e) => {
+    const filePath = e.detail?.filepath || '';
+    if (!filePath || !filePath.startsWith('ctx://contexts/')) return;
+    const baseUri = filePath.replace(/_part\d+\.txt$/, '.txt');
+    const appState = AppStore.getState();
+    const dirtyRepos = appState.dirtyRepos || new Set();
+    const dirtyBuckets = appState.dirtyBuckets || new Set();
+    const manifestObj = appState.manifest?.ctx?.[baseUri] || appState.manifest?.ctx?.[filePath];
+    const meta = manifestObj?.meta || {};
+    const addr = window.inSetu.utils.BucketAddress ? window.inSetu.utils.BucketAddress.fromFilepath(baseUri, meta) : null;
+    const itemRepos = Array.isArray(meta.repos) ? meta.repos : (meta.repo ? [meta.repo] : []);
 
-export function getFlattenedBuckets(repoDirOrConfigs = [], includeSystem = false) {
+    const isDirty = !manifestObj ||
+                    (addr && addr.key && dirtyBuckets.has(addr.key)) ||
+                    (addr && addr.repo && dirtyRepos.has(addr.repo)) ||
+                    itemRepos.some(r => dirtyRepos.has(r) || Array.from(dirtyBuckets).some(b => b.startsWith(`${r}::`))) ||
+                    dirtyBuckets.has(baseUri) ||
+                    dirtyBuckets.has(filePath);
+
+    if (isDirty) {
+        const run = (async () => {
+            if (window.inSetu.ui?.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus("⏳ Compiling fresh context...", null);
+            }
+            const targetRepos = itemRepos.length > 0
+                ? itemRepos
+                : ((addr && addr.repo && addr.repo !== 'orphan' && addr.repo !== 'global') ? [addr.repo] : null);
+            await GatherStore.getState().executeCompile(null, !manifestObj, null, targetRepos);
+            if (addr && addr.key) dirtyBuckets.delete(addr.key);
+            if (addr && addr.repo) dirtyRepos.delete(addr.repo);
+            itemRepos.forEach(r => dirtyRepos.delete(r));
+            dirtyBuckets.delete(baseUri);
+            dirtyBuckets.delete(filePath);
+            AppStore.setState({ dirtyBuckets: new Set(dirtyBuckets), dirtyRepos: new Set(dirtyRepos) });
+        })();
+        if (Array.isArray(e.inSetuResponses)) e.inSetuResponses.push(run);
+    }
+});
+export function getFlattenedBuckets(repoDirOrConfigs = null, includeSystem = false) {
+    const { targetConfigs } = AppStore.getState();
+    let configsToProcess = [];
+
     if (Array.isArray(repoDirOrConfigs)) {
-        const flattened = [];
-        repoDirOrConfigs.forEach(repo => {
-            if (!repo || typeof repo !== 'object') return;
-            const subBuckets = repo.sub_buckets || [];
-            if (Array.isArray(subBuckets)) {
-                subBuckets.forEach(b => {
-                    if (b && typeof b === 'object' && (!b.is_system || includeSystem)) {
-                        flattened.push({
-                            ...b,
-                            repo_dir: repo.repo_dir || '',
-                            repo_title: repo.title || repo.repo_dir || ''
-                        });
-                    }
+        configsToProcess = repoDirOrConfigs;
+    } else if (typeof repoDirOrConfigs === 'string' && repoDirOrConfigs.trim()) {
+        const repo = (targetConfigs || []).find(c => c.repo_dir === repoDirOrConfigs.trim());
+        if (repo) configsToProcess = [repo];
+    } else {
+        configsToProcess = targetConfigs || [];
+    }
+
+    const flattened = [];
+    configsToProcess.forEach(repo => {
+        if (!repo || typeof repo !== 'object') return;
+        const subBuckets = repo.sub_buckets || [];
+        if (!Array.isArray(subBuckets)) return;
+
+        const parentDomain = (repo.domain || '').trim() || 'Workspaces';
+        const repoDir = repo.repo_dir || '';
+        const repoTitle = repo.title || repoDir;
+
+        subBuckets.forEach(b => {
+            if (!b || typeof b !== 'object') return;
+            if (b.is_system && !includeSystem) return;
+
+            if (b.dynamic_split_prefix && b.meta_map) {
+                Object.entries(b.meta_map).forEach(([module, meta]) => {
+                    const modTitle = meta?.title || module.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                    const modDomain = (meta?.domain || '').trim() || (b.domain || '').trim() || parentDomain;
+                    flattened.push({
+                        id: module,
+                        title: modTitle,
+                        domain: modDomain,
+                        repo_dir: repoDir,
+                        repo_title: repoTitle,
+                        is_dynamic: true,
+                        dynamic_parent: b.id || b.dynamic_split_prefix,
+                        original: b
+                    });
+                });
+            } else if (!b.dynamic_split_prefix) {
+                const bTitle = b.title || b.id || 'Untitled Bucket';
+                const bDomain = (b.domain || '').trim() || parentDomain;
+                flattened.push({
+                    ...b,
+                    id: b.id || bTitle,
+                    title: bTitle,
+                    domain: bDomain,
+                    repo_dir: repoDir,
+                    repo_title: repoTitle,
+                    original: b
                 });
             }
         });
-        return flattened;
-    }
-
-    const repoDir = repoDirOrConfigs;
-    const { targetConfigs } = AppStore.getState();
-    const repoCfg = (targetConfigs || []).find(c => c.repo_dir === repoDir);
-    if (!repoCfg || !repoCfg.sub_buckets) return [];
-
-    const buckets = [];
-    repoCfg.sub_buckets.forEach(b => {
-        if (!includeSystem && b.is_system) return;
-
-        if (b.dynamic_split_prefix && b.meta_map) {
-            Object.keys(b.meta_map).forEach(module => {
-                buckets.push({ id: module, title: b.meta_map[module].title || module, original: b });
-            });
-        } else if (!b.dynamic_split_prefix) {
-            buckets.push({ id: b.id, title: b.title || b.id, original: b });
-        }
     });
-    return buckets;
+
+    return flattened;
 }
 
 if (typeof window !== 'undefined') {
@@ -375,18 +434,22 @@ export class InSetuExtGather extends InSetuElement {
         const categoryOrder = this.categoryOrder || [];
         const hiddenOutputs = this.hiddenOutputs || [];
         // 1. Enrich data with metadata for searching
+        const targetConfigs = this.ecosystem?.targetConfigs || AppStore.getState().targetConfigs || [];
         const enrichedFiles = this.manifestFiles.map(file => {
                 const manifestObj = ctxManifest[file] || {};
                 const meta = manifestObj.meta || { title: file, domain: "Workspaces", desc: "Context payload." };
                 if (meta.type && meta.type !== 'gather') return null;
-                let finalCat = (file.startsWith && file.startsWith('quickpack_')) || file.includes('quickpack_') || file.includes('selection_') ? 'Quickpacks' : meta.domain;
+                const repoDir = meta.repo || null;
+                const repoCfg = repoDir ? targetConfigs.find(r => r && r.repo_dir === repoDir) : null;
+                const parentDomain = (repoCfg?.domain || '').trim() || 'Workspaces';
+                const isQuickpackFile = (file.startsWith && file.startsWith('quickpack_')) || file.includes('quickpack_') || file.includes('selection_');
+                let finalCat = isQuickpackFile ? 'Quickpacks' : ((meta.domain || '').trim() || parentDomain);
                 let finalDesc = meta.desc;
                 let finalTitle = meta.title;
                 let sizeStr = window.inSetu.utils.formatArtifactSize(meta);
-                let repoDir = meta.repo || null;
                 const extMeta = window.inSetu.events.emitHook('insetu:context-metadata', file);
                 if (extMeta) {
-                        finalCat = extMeta.cat;
+                        finalCat = (extMeta.cat || '').trim() || parentDomain;
                         finalDesc = extMeta.desc;
                         finalTitle = extMeta.displayName;
                 }
@@ -562,6 +625,7 @@ customElements.define('insetu-ext-gather', InSetuExtGather);
 window.ExtensionRegistry.registerExtension('gather', {
     name: "Context Gatherer",
     version: "2.0.0",
+    icon: "hexagon",
     offline_mode: "read_only",
     repoConfigOptions: [
         {

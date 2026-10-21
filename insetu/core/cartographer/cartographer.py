@@ -1,21 +1,22 @@
 import os
 import threading
-import subprocess
 from pathlib import Path
-from akasa.utils import get_workspace_physics, load_config, build_tree_dict
-from akasa.vfs import execute_vfs_save
-from akasa.workers import run_parallel
-from insetu.core.utils_core import execute_binary, InSetuURI
-from insetu.core.topology.engine_topology import get_valid_workspace_files, get_topology_files_for_repo
-from akasa.hooks import hooks
 from insetu.core.sdk import InSetuExtension
+from insetu.core.utils_core import (
+    get_workspace_physics,
+    load_config,
+    build_tree_dict,
+    execute_binary,
+    InSetuURI,
+)
+from insetu.core.topology.engine_topology import get_valid_workspace_files, get_topology_files_for_repo
 
 cartographer_bp = InSetuExtension('cartographer', __name__, title="Cartographer", description="Code index mapping.", core=True)
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
 _CARTOGRAPHER_SIG_CACHE = {}
 _CARTOGRAPHER_CACHE_LOCK = threading.Lock()
 
-@hooks.on('register_compilation_steps')
+@cartographer_bp.on('register_compilation_steps')
 def _register_cartographer_compilation_step(workspace_id=None, **kwargs):
     return [{
         "id": "cartographer_map",
@@ -113,7 +114,8 @@ def render_ascii_tree(node, comment_map, managed_dirs, prefix="", current_path="
     return lines
 def map_repositories(workspace_id=None, silent=True, target_repos=None):
     if not silent: print(f"\n{'-'*50}\n🚀 inSetu: Mapping Repository Topologies\n{'-'*50}")
-    cfg = load_config(workspace_id)
+    ctx = cartographer_bp.get_context(workspace_id)
+    cfg = ctx.config
     cfg_path, ws_root = get_workspace_physics(workspace_id)
     all_configs = cfg.get("target_repos", [])
     def process_repo(config):
@@ -160,7 +162,7 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         tree_lines = render_ascii_tree(tree_dict, comments, managed_dirs)
         footer = "\n```\n"
         logical_index_path = f"vfs://{repo_dir}/docs/CODE_INDEX.md" if config.get("is_core_chassis") else f"vfs://{repo_dir}/CODE_INDEX.md"
-        execute_vfs_save(workspace_id, logical_index_path, header + "\n".join(tree_lines) + footer, data={"ignore_ledger": True})
+        ctx.vfs.save(logical_index_path, header + "\n".join(tree_lines) + footer, data={"ignore_ledger": True})
         with _CARTOGRAPHER_CACHE_LOCK:
             _CARTOGRAPHER_SIG_CACHE[cache_key] = repo_sig
 
@@ -170,7 +172,7 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
                 print(f"  └─ ✅ Index updated. ⚠️ {missing} placeholders require attention.")
             else:
                 print(f"  └─ ✅ Index updated. Perfect documentation parity.")
-    run_parallel(process_repo, all_configs)
+    ctx.jobs.map_parallel(process_repo, all_configs)
 
     if not silent: print("\n🎉 Cartography complete!\n")
 
