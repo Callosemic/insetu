@@ -157,7 +157,7 @@ class TestWorkspaceMounts(unittest.TestCase):
         self.assertEqual(res_bulk["operations"][0]["filepath"], "vfs://app/notes.md")
     @patch("akasa.hooks.hooks.emit_background")
     @patch("insetu.core.topology.engine_topology.get_all_workspace_ids")
-    @patch("akasa.extension.SettingsManager")
+    @patch("insetu.core.topology.engine_topology.SettingsManager")
     def test_cross_workspace_event_broadcasting(self, mock_settings_mgr, mock_all_ws, mock_emit_bg):
         """Mutations on exported ctx:// domains broadcast virtual ws:// events to subscribed workspaces."""
         mock_all_ws.return_value = ["hub", "app"]

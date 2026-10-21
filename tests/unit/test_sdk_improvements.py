@@ -6,14 +6,24 @@ import unittest
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+import akasa
 import akasa.db as akasa_db
 import akasa.utils as akasa_utils
 from akasa.db import get_connection
-from akasa.extension import ExtensionContext
 from akasa.utils import load_config
 from akasa.workers import _execute_job, _execute_immediate_job, _init_worker_schema, register_callback
-from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import parse_frontmatter
+import ast
+import contextlib
+import io
+from insetu.core.sdk import InSetuExtension, ExtensionContext
+from insetu.core.system.legacy import move_tree_contents
+from insetu.core.utils_core import parse_frontmatter, get_domain_cache_path, get_domain_data_path
+from insetu.core.gather.engine_gather import gather_bp, VFS_INDEX_SCHEMA
+from insetu.extensions.flow.engine_flow import flow_bp, _background_compile_workflows
+from akasa.db import apply_declarative_schema
+from akasa.vfs import sync_vfs_barrier
+from tests.fitness.core import FitnessState
+from tests.fitness.rules_python import BackendFitnessVisitor, check_python_files
 
 
 def _reset_db_connections():
@@ -39,14 +49,9 @@ class TestSdkImprovements(unittest.TestCase):
         self.control_dir = self.root_path / ".insetu"
         (self.control_dir / "cache" / "db").mkdir(parents=True, exist_ok=True)
 
-        self.orig_cwd = akasa_utils._cwd
+        self.orig_cwd = akasa_utils.get_daemon_cwd()
         self.orig_env_ctrl = os.environ.get("AKASA_CONTROL_DIR")
-        os.environ["AKASA_CONTROL_DIR"] = ".insetu"
-        akasa_utils._cwd = self.root_path.as_posix()
-
-        akasa_utils._JSON_CACHE.clear()
-        akasa_utils._JSON_MTIME.clear()
-        load_config.clear_all()
+        akasa.reset_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
         self.workspace_id = f"ws_{uuid.uuid4().hex[:8]}"
         (self.control_dir / "system.json").write_text(
             json.dumps({
@@ -66,13 +71,7 @@ class TestSdkImprovements(unittest.TestCase):
         _init_worker_schema(self.workspace_id)
 
     def tearDown(self):
-        _reset_db_connections()
-        akasa_utils._cwd = self.orig_cwd
-        if self.orig_env_ctrl is not None:
-            os.environ["AKASA_CONTROL_DIR"] = self.orig_env_ctrl
-        akasa_utils._JSON_CACHE.clear()
-        akasa_utils._JSON_MTIME.clear()
-        load_config.clear_all()
+        akasa.reset_state(cwd=self.orig_cwd, control_dir=self.orig_env_ctrl or ".insetu")
         try:
             self.temp_dir.cleanup()
         except OSError:
@@ -178,6 +177,136 @@ class TestSdkImprovements(unittest.TestCase):
         row = fresh_conn.execute("SELECT status, status_message FROM immediate_jobs WHERE id=?", ("imm_456",)).fetchone()
         self.assertEqual(row["status"], "failed")
         self.assertIn("disabled", row["status_message"].lower())
+
+    def test_move_tree_contents_self_move_immunity_and_volume_disjointness(self):
+        """move_tree_contents never deletes files when src_dir == dst_dir, and mount_volumes is idempotent."""
+        target_dir = self.control_dir / "cache" / "workflows"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        sentinel = target_dir / "workflow_morning_briefing_context.txt"
+        sentinel.write_text("Morning briefing payload", encoding="utf-8")
+
+        # 1. Direct self-move call must be a safe no-op
+        move_tree_contents(target_dir, target_dir)
+        self.assertTrue(sentinel.exists(), "move_tree_contents must never delete files when src_dir == dst_dir")
+
+        # 2. Repeated mount_volumes and get_context calls must preserve files in .insetu/cache/workflows
+        flow_bp.mount_volumes(self.workspace_id, force=True)
+        flow_bp.mount_volumes(self.workspace_id)
+        _ = flow_bp.get_context(self.workspace_id)
+        self.assertTrue(sentinel.exists(), "flow_bp.mount_volumes must preserve compiled workflow cache files")
+
+        # 3. Verify no extension declares a legacy_dir that resolves to its own target cache/data directory
+        for ext_bp in (gather_bp, flow_bp):
+            for vol_name, vol_spec in (ext_bp.volumes or {}).items():
+                tier = vol_spec.get("tier", "data")
+                t_dir = Path(
+                    get_domain_cache_path(self.workspace_id, vol_name)
+                    if tier == "cache"
+                    else get_domain_data_path(self.workspace_id, vol_name)
+                ).resolve()
+                for rel_legacy in (vol_spec.get("legacy_dirs") or []):
+                    l_dir = self.control_dir.joinpath(*Path(rel_legacy).parts).resolve()
+                    self.assertNotEqual(
+                        l_dir,
+                        t_dir,
+                        f"Extension '{ext_bp.name}' volume '{vol_name}' declares legacy_dir '{rel_legacy}' equal to target_dir!",
+                    )
+
+    def test_flow_two_phase_incremental_skip_zero_vfs_reads(self):
+        """_background_compile_workflows short-circuits untouched batches on disk before calling ctx.vfs.read."""
+        apply_declarative_schema("vfs_index", VFS_INDEX_SCHEMA, self.workspace_id)
+        repo_dir = self.root_path / "alpha"
+        repo_dir.mkdir(parents=True, exist_ok=True)
+        (repo_dir / "note.md").write_text("# Briefing Note", encoding="utf-8")
+
+        (self.control_dir / "config.json").write_text(
+            json.dumps({
+                "workspace_root": self.root_path.as_posix(),
+                "extensions": ["config", "flow"],
+                "target_repos": [{"repo_dir": "alpha", "title": "Alpha", "exts": [".md"]}],
+            }),
+            encoding="utf-8",
+        )
+        akasa_utils.load_config.clear_all()
+        from insetu.core.topology.engine_topology import mount_topology_volumes_dynamically as _mount_top
+        _mount_top(load_config(self.workspace_id), workspace_id=self.workspace_id)
+
+        ctx = flow_bp.get_context(self.workspace_id)
+        ctx.store.set("workflows.json", "context_batches", [{
+            "id": "morning_briefing",
+            "title": "Morning Briefing",
+            "domain": "Workflows",
+            "includes": ["vfs://alpha/note.md"],
+        }])
+        sync_vfs_barrier(self.workspace_id)
+
+        # 1. Initial compile writes workflow_morning_briefing_context.txt to disk and manifest
+        res1 = _background_compile_workflows(ctx, force_full=True)
+        sync_vfs_barrier(self.workspace_id)
+        base_uri = "ctx://workflows/workflow_morning_briefing_context.txt"
+        self.assertIn(base_uri, res1["artifact"]["files"])
+        self.assertTrue(ctx.is_context_on_disk(base_uri))
+
+        # 2. Second incremental run with empty touched_buckets / touched_diffs must perform ZERO vfs.read calls on chunks
+        fresh_ctx = flow_bp.get_context(self.workspace_id)
+        with patch.object(fresh_ctx.vfs, "read", wraps=fresh_ctx.vfs.read) as spy_read:
+            _background_compile_workflows(
+                fresh_ctx,
+                force_full=False,
+                chain_state={"touched_buckets": [], "touched_diffs": []},
+                ledger_events=[],
+            )
+            chunk_reads = [c for c in spy_read.call_args_list if c.args and c.args[0] == "vfs://alpha/note.md"]
+            self.assertEqual(len(chunk_reads), 0, "Untouched workflow batch on disk must skip VFS file reads")
+
+        # 3. If physical workflow file is wiped from cache, has_missing_domain_artifacts self-heals it
+        phys_wf = Path(fresh_ctx.resolve_path(base_uri))
+        phys_wf.unlink()
+        self.assertFalse(fresh_ctx.is_context_on_disk(base_uri))
+        _background_compile_workflows(
+            flow_bp.get_context(self.workspace_id),
+            force_full=False,
+            chain_state={"touched_buckets": [], "touched_diffs": []},
+            ledger_events=[],
+        )
+        sync_vfs_barrier(self.workspace_id)
+        self.assertTrue(phys_wf.exists(), "Missing workflow artifact on disk must auto-heal on next compile")
+
+    def test_python_fitness_linter_catches_redundant_mounts_and_dead_hooks(self):
+        """BackendFitnessVisitor flags manual .mount_volumes() calls, manual move_tree_contents(), and dead @on('compile_contexts') hooks."""
+        prev = FitnessState.violations_found
+        FitnessState.violations_found = 0
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                check_python_files()
+            self.assertEqual(
+                FitnessState.violations_found,
+                0,
+                f"Existing Python codebase had fitness violations:\n{buf.getvalue()}",
+            )
+
+            bad_code = (
+                "from insetu.core.sdk import InSetuExtension\n"
+                "demo_bp = InSetuExtension('demo', __name__)\n"
+                "__depends__ = []\n"
+                "def bad_init():\n"
+                "    demo_bp.mount_volumes(workspace_id='default')\n"
+                "@demo_bp.on('compile_contexts')\n"
+                "def dead_hook(manifest, **kwargs):\n"
+                "    pass\n"
+            )
+            fake_path = Path(__file__).resolve().parent.parent.parent / "insetu" / "extensions" / "demo" / "engine_demo.py"
+            tree = ast.parse(bad_code, filename=str(fake_path))
+            buf_bad = io.StringIO()
+            with contextlib.redirect_stdout(buf_bad):
+                visitor = BackendFitnessVisitor(fake_path, "engine_demo.py", is_test=False)
+                visitor.visit(tree)
+            out_bad = buf_bad.getvalue()
+            self.assertIn("REDUNDANT_VOLUME_MOUNT_BAN", out_bad)
+            self.assertIn("DEAD_COMPILE_CONTEXTS_HOOK_BAN", out_bad)
+        finally:
+            FitnessState.violations_found = prev
 
 
 if __name__ == "__main__":

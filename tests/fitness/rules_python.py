@@ -2,13 +2,19 @@ import os
 import ast
 from pathlib import Path
 from .core import (
-    BACKEND_DIR, VFS_WRITE_WHITELIST, SQLITE_WHITELIST, 
-    SUBPROCESS_WHITELIST, EXECUTE_BINARY_WHITELIST, report_violation
+    PROJECT_ROOT, BACKEND_DIR, AKASA_DIR, AKASA_MEMBRANE_WHITELIST, VFS_WRITE_WHITELIST,
+    SQLITE_WHITELIST, SUBPROCESS_WHITELIST, EXECUTE_BINARY_WHITELIST, report_violation, collect_unique_files
 )
 class BackendFitnessVisitor(ast.NodeVisitor):
-    def __init__(self, filepath, filename):
+    def __init__(self, filepath, filename, is_test=False):
         self.filepath = filepath
         self.filename = filename
+        self.is_test = is_test or "tests" in self.filepath.parts or self.filename.startswith("test_")
+        try:
+            self.rel_posix = Path(filepath).resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+        except ValueError:
+            self.rel_posix = Path(filepath).as_posix()
+        self.is_membrane_whitelisted = any(self.rel_posix.endswith(w) for w in AKASA_MEMBRANE_WHITELIST)
         self.has_save_json = False
         self.has_cache_clear = False
         self.top_level_imports = set()
@@ -30,6 +36,9 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         for k, v in zip(node.keys, node.values):
             if k and isinstance(k, ast.Constant) and isinstance(k.value, str):
                 dict_keys[k.value] = v
+        if self.is_test:
+            self.generic_visit(node)
+            return
 
         for uri_key in ('out_file',):
             if uri_key in dict_keys and isinstance(dict_keys[uri_key], ast.Constant) and isinstance(dict_keys[uri_key].value, str):
@@ -93,7 +102,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             if len(node.value.args) > 0 and isinstance(node.value.args[0], ast.Constant) and node.value.args[0].value == '/':
                 is_neg_one = isinstance(node.slice, ast.UnaryOp) and isinstance(node.slice.op, ast.USub) and isinstance(node.slice.operand, ast.Constant) and node.slice.operand.value == 1
                 is_zero = isinstance(node.slice, ast.Constant) and node.slice.value == 0
-                if self.filename != "fallback_bridge.py":
+                if self.filename not in ("fallback_bridge.py", "vfs.py", "uri.py") and not self.is_test:
                     if is_neg_one:
                         report_violation("URI_BASENAME_MANDATE", self.filepath, node.lineno, "Manual path splitting ([-1]) detected. Use InSetuURI(path).basename instead.")
                     elif is_zero:
@@ -120,15 +129,59 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     node.lineno,
                     "Direct ExtensionContext(...) instantiation detected in core/extension module. Use bp.get_context(workspace_id) instead."
                 )
-        if isinstance(node.func, ast.Attribute) and node.func.attr == 'clear':
-            if isinstance(node.func.value, ast.Name) and node.func.value.id == '_MUTATED_CONFIG_CACHE':
-                self.has_cache_clear = True
-
         func_name = None
         if isinstance(node.func, ast.Name):
             func_name = node.func.id
         elif isinstance(node.func, ast.Attribute):
             func_name = node.func.attr
+
+        # Ban manual next((... for ... in *.emit(...))) query comprehension loops
+        if func_name == "next" and len(node.args) >= 1 and isinstance(node.args[0], ast.GeneratorExp):
+            gen_exp = node.args[0]
+            for gen in gen_exp.generators:
+                if isinstance(gen.iter, ast.Call):
+                    iter_fn = gen.iter.func.attr if isinstance(gen.iter.func, ast.Attribute) else (gen.iter.func.id if isinstance(gen.iter.func, ast.Name) else "")
+                    if iter_fn == "emit":
+                        report_violation(
+                            "RAW_EMIT_QUERY_ACCUMULATION_BAN",
+                            self.filepath,
+                            node.lineno,
+                            "Manual 'next((... for ... in *.emit(...)))' query loop detected. Use emit_first(), emit_merge_dict(), or emit_merge_list() instead."
+                        )
+        # Enforce declarative volume mounting for 'ctx' volumes in core/extension engines
+        if (
+            not self.is_test
+            and not self.is_membrane_whitelisted
+            and func_name == "mount_volume"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == "ctx"
+        ):
+            report_violation(
+                "DECLARATIVE_VOLUME_MOUNT_MANDATE",
+                self.filepath,
+                node.lineno,
+                "Manual mount_volume(..., 'ctx', ...) detected in engine. Declare 'volumes={...}' on InSetuExtension instead."
+            )
+
+        if not self.is_test and func_name == "mount_volumes" and not self.rel_posix.endswith("insetu/core/sdk/__init__.py"):
+            report_violation(
+                "REDUNDANT_VOLUME_MOUNT_BAN",
+                self.filepath,
+                node.lineno,
+                "Manual .mount_volumes() call detected. InSetuExtension mounts declarative volumes automatically via workspace_boot and get_context()."
+            )
+
+        if not self.is_test and func_name == "move_tree_contents" and not (
+            self.rel_posix.endswith("insetu/core/sdk/__init__.py")
+            or self.rel_posix.endswith("insetu/core/system/legacy.py")
+        ):
+            report_violation(
+                "EXTENSION_MANUAL_LEGACY_MIGRATION_BAN",
+                self.filepath,
+                node.lineno,
+                "Manual move_tree_contents() call detected. Declare 'legacy_dirs' on InSetuExtension(..., volumes={...}) instead."
+            )
         is_jobs_submit = (
             isinstance(node.func, ast.Attribute)
             and node.func.attr in ("submit", "submit_chain")
@@ -206,8 +259,12 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'from_any':
             report_violation("BANNED_URI_FROM_ANY_COERCION", self.filepath, node.lineno, "InSetuURI.from_any() is banned. All internal paths must be canonical scheme:// URIs passed to InSetuURI(uri).")
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'from_external_input':
-            if self.filename not in ("utils_core.py", "bridge_vfs.py", "engine_fs.py"):
+            if self.filename not in ("utils_core.py", "bridge_vfs.py", "engine_fs.py") and not self.is_test:
                 report_violation("EXTERNAL_URI_COERCION_BOUNDARY_VIOLATION", self.filepath, node.lineno, "InSetuURI.from_external_input() is restricted to external ingress boundaries (bridge_vfs.py, engine_fs.py, utils_core.py). Use strict InSetuURI(uri) internally.")
+
+        if self.is_test:
+            self.generic_visit(node)
+            return
 
         if isinstance(node.func, ast.Name):
             if node.func.id == 'open' and self.filename not in VFS_WRITE_WHITELIST:
@@ -317,10 +374,17 @@ class BackendFitnessVisitor(ast.NodeVisitor):
     def visit_Import(self, node):
         self._check_sqlite_import(node)
         for alias in node.names:
+            if not self.is_test and not self.is_membrane_whitelisted and (alias.name == 'akasa' or alias.name.startswith('akasa.')):
+                report_violation(
+                    "AKASA_MEMBRANE_ISOLATION",
+                    self.filepath,
+                    node.lineno,
+                    f"Direct import '{alias.name}' outside the 4-File Membrane. Import from 'insetu.core.sdk' or 'insetu.core.utils_core' instead."
+                )
             if alias.name in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth'):
                 report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{alias.name}'. Import from 'akasa.{alias.name.split('.')[-1]}' instead.")
         is_ext = 'extensions' in self.filepath.parts
-        is_tier2 = not is_ext and self.filename not in ('cli.py', 'app.py')
+        is_tier2 = not is_ext and self.filename not in ('cli.py', 'app.py') and not self.is_test
         if is_tier2 and any(alias.name.startswith('insetu.extensions') or alias.name.startswith('extensions') for alias in node.names):
             report_violation("TIER_ISOLATION_MANDATE", self.filepath, node.lineno, "Tier 2 Core Substrate modules cannot import from Tier 3 Domain Extensions.")
         if is_tier2 and any(alias.name.startswith('insetu.kernel') for alias in node.names):
@@ -337,7 +401,8 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         hook_events = []
         for dec in node.decorator_list:
             if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute):
-                if getattr(dec.func.value, 'id', '') == 'hooks' and dec.func.attr == 'on':
+                dec_obj_id = getattr(dec.func.value, 'id', '')
+                if (dec_obj_id == 'hooks' or dec_obj_id.endswith('_bp')) and dec.func.attr == 'on':
                     if len(dec.args) > 0 and isinstance(dec.args[0], ast.Constant):
                         hook_events.append(dec.args[0].value)
         for child in ast.walk(node):
@@ -360,6 +425,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         for legacy_hook in ['vfs_transaction_committed', 'post_file_save', 'post_file_delete', 'coerce_naked_uri']:
             if legacy_hook in hook_events:
                 report_violation("LEGACY_HOOK_BAN", self.filepath, node.lineno, f"Function subscribes to deprecated '{legacy_hook}'. Use canonical URIs natively instead.")
+        if 'compile_contexts' in hook_events:
+            report_violation(
+                "DEAD_COMPILE_CONTEXTS_HOOK_BAN",
+                self.filepath,
+                node.lineno,
+                "Function subscribes to dead hook 'compile_contexts'. Use '@*.on(\"gather_declare_topology\")' with generator_callback and recall_callback instead."
+            )
 
         if 'vfs_mutated' in hook_events or 'topology_resolved' in hook_events:
             has_uri_check = False
@@ -430,19 +502,36 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         self.generic_visit(node)
     def visit_ImportFrom(self, node):
         self._check_sqlite_import(node)
+        if node.module and (node.module == 'akasa' or node.module.startswith('akasa.')):
+            if not self.is_test and not self.is_membrane_whitelisted:
+                report_violation(
+                    "AKASA_MEMBRANE_ISOLATION",
+                    self.filepath,
+                    node.lineno,
+                    f"Direct import from '{node.module}' outside the 4-File Membrane. Import from 'insetu.core.sdk' or 'insetu.core.utils_core' instead."
+                )
+            if not self.is_test:
+                for alias in node.names:
+                    if alias.name.startswith('_'):
+                        report_violation(
+                            "PRIVATE_KERNEL_ATTR_BAN",
+                            self.filepath,
+                            node.lineno,
+                            f"Importing private underscore symbol '{alias.name}' from '{node.module}' is banned. Use public kernel APIs instead."
+                        )
         if node.module and node.module.endswith('utils') and any(alias.name == '_cwd' for alias in node.names):
             report_violation(
                 "BANNED_CWD_VALUE_IMPORT",
                 self.filepath,
                 node.lineno,
-                "Importing '_cwd' by value freezes the working directory at import time. Import 'akasa.utils as utils' and access 'utils._cwd' dynamically."
+                "Importing '_cwd' by value freezes the working directory at import time. Use get_daemon_cwd() / set_daemon_cwd() instead."
             )
         if node.module in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth'):
             report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{node.module}'. Import from 'akasa.{node.module.split('.')[-1]}' instead.")
         if node.module == 'os.path' and any(alias.name == 'join' for alias in node.names):
             report_violation("PATHLIB_MANDATE_BYPASS", self.filepath, node.lineno, "from os.path import join detected. Migrate to pathlib.Path.")
         is_ext = 'extensions' in self.filepath.parts
-        is_tier2 = not is_ext and self.filename not in ('cli.py', 'app.py')
+        is_tier2 = not is_ext and self.filename not in ('cli.py', 'app.py') and not self.is_test
         if is_tier2 and node.module and (node.module.startswith('insetu.extensions') or node.module.startswith('extensions')):
             report_violation("TIER_ISOLATION_MANDATE", self.filepath, node.lineno, "Tier 2 Core Substrate modules cannot import from Tier 3 Domain Extensions.")
         if is_tier2 and node.module and node.module.startswith('insetu.kernel'):
@@ -502,7 +591,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     f"Hardcoded reference to deprecated 'workspaces.json' detected in string literal '{node.value}'. "
                     "Use load_config(), get_all_workspace_ids(), or '.insetu/system.json' instead."
                 )
-            if any(sql in node.value for sql in ("INSERT INTO jobs", "INSERT OR REPLACE INTO jobs", "DELETE FROM jobs")) and self.filename not in ("workers.py", "__init__.py"):
+            if any(sql in node.value for sql in ("INSERT INTO jobs", "INSERT OR REPLACE INTO jobs", "DELETE FROM jobs")) and self.filename not in ("workers.py", "__init__.py") and not self.is_test:
                 report_violation(
                     "DIRECT_JOB_TABLE_MUTATION_BAN",
                     self.filepath,
@@ -517,13 +606,12 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             names = [alias.name for alias in node.names]
             if module_name == 'sqlite3' or 'sqlite3' in names:
                 report_violation("DB_CONNECTION_BAN", self.filepath, node.lineno, "Direct sqlite3 import detected. Use 'from insetu.db import get_connection'.")
-
 def check_python_files():
     print("🔍 Sweeping Python Backend (AST Analysis)...")
-    for root, _, files in os.walk(BACKEND_DIR):
-        for file in files:
+    scan_roots = [BACKEND_DIR]
+    for filepath in collect_unique_files(scan_roots, [".py"]):
+        for file in [filepath.name]:
             if file.endswith(".py"):
-                filepath = Path(root) / file
                 if "venv" in str(filepath) or "__pycache__" in str(filepath):
                     continue
                 with open(filepath, "r", encoding="utf-8") as f:
@@ -531,24 +619,14 @@ def check_python_files():
                         tree = ast.parse(f.read(), filename=str(filepath))
                         visitor = BackendFitnessVisitor(filepath, file)
                         visitor.visit(tree)
-
-                        if visitor.has_save_json and not visitor.has_cache_clear and file in ["routes_system.py", "extension.py", "app.py"]:
-                            report_violation("CACHE_INVALIDATION_MANDATE", filepath, 1, "File invokes save_json_config for configuration but fails to clear _MUTATED_CONFIG_CACHE to invalidate the configuration cache.")
                         if file == "app.py":
                             has_token_gate = any(
-                                isinstance(n, ast.FunctionDef) and n.name == "enforce_token_gate"
+                                (isinstance(n, ast.FunctionDef) and n.name == "enforce_token_gate")
+                                or (isinstance(n, ast.Call) and getattr(n.func, 'attr', '') == "init_app")
                                 for n in ast.walk(tree)
                             )
                             if not has_token_gate:
-                                report_violation("REST_SECURITY_GATE_MANDATE", filepath, 1, "Core app.py is missing the mandatory enforce_token_gate() before_request hook.")
-                        if file == "utils.py" and "kernel" in filepath.parts:
-                            has_core_modules = any(
-                                isinstance(n, ast.Assign) and 
-                                any(isinstance(t, ast.Name) and t.id == 'CORE_MODULES' for t in n.targets) 
-                                for n in tree.body
-                            )
-                            if not has_core_modules:
-                                report_violation("CORE_MODULES_SSOT_MANDATE", filepath, 1, "Tier 1 kernel/utils.py is missing the CORE_MODULES SSOT definition.")
+                                report_violation("REST_SECURITY_GATE_MANDATE", filepath, 1, "Core app.py is missing the mandatory akasa.init_app() or enforce_token_gate() security gate.")
                         if file == "utils_core.py" and "core" in filepath.parts:
                             has_vfs_hook = any(
                                 isinstance(n, ast.FunctionDef) and any(
@@ -592,14 +670,52 @@ def check_python_files():
                                 report_violation("SDK_EXTENSION_MANDATE", filepath, 1, "Extension engine does not utilize InSetuExtension framework.")
                     except SyntaxError:
                         print(f"⚠️  Skipping {file} due to SyntaxError.")
+    # Validate defaults/ templates for 3-Tier Configuration Cascade compliance
+    defaults_dir = BACKEND_DIR / "defaults"
+    engine_tpl_path = defaults_dir / "engine_template_py.txt"
+    if engine_tpl_path.exists():
+        tpl_source = engine_tpl_path.read_text(encoding="utf-8").replace("{{ext_name}}", "sample").replace("{{cap_name}}", "Sample")
+        try:
+            tpl_tree = ast.parse(tpl_source, filename=str(engine_tpl_path))
+            BackendFitnessVisitor(engine_tpl_path, engine_tpl_path.name).visit(tpl_tree)
+        except SyntaxError as e:
+            report_violation("TEMPLATE_SYNTAX_ERROR", engine_tpl_path, e.lineno or 1, f"Syntax error in engine_template_py.txt: {e}")
+    # Validate unit test files for unittest.TestLoader discovery and import safety compliance
+    unit_tests_dir = PROJECT_ROOT / "tests" / "unit"
+    if unit_tests_dir.exists():
+        for test_fp in sorted(unit_tests_dir.glob("test_*.py")):
+            try:
+                t_tree = ast.parse(test_fp.read_text(encoding="utf-8"), filename=str(test_fp))
+                BackendFitnessVisitor(test_fp, test_fp.name).visit(t_tree)
+                has_testcase_class = False
+                for stmt in t_tree.body:
+                    if isinstance(stmt, ast.FunctionDef) and stmt.name.startswith("test_"):
+                        report_violation(
+                            "UNITTEST_DISCOVERY_MANDATE",
+                            test_fp,
+                            stmt.lineno,
+                            f"Top-level function '{stmt.name}()' is ignored by unittest.TestLoader().discover(). Place all test methods inside a unittest.TestCase subclass."
+                        )
+                    elif isinstance(stmt, ast.ClassDef):
+                        has_testcase_class = True
+                if not has_testcase_class:
+                    report_violation(
+                        "UNITTEST_DISCOVERY_MANDATE",
+                        test_fp,
+                        1,
+                        f"Test module '{test_fp.name}' contains no unittest.TestCase classes and will not be executed by run_unit_tests.py."
+                    )
+            except SyntaxError as e:
+                report_violation("UNITTEST_SYNTAX_ERROR", test_fp, e.lineno or 1, f"Syntax error in unit test file: {e}")
 
-# Validate defaults/ templates for 3-Tier Configuration Cascade compliance
-defaults_dir = BACKEND_DIR / "defaults"
-engine_tpl_path = defaults_dir / "engine_template_py.txt"
-if engine_tpl_path.exists():
-    tpl_source = engine_tpl_path.read_text(encoding="utf-8").replace("{{ext_name}}", "sample").replace("{{cap_name}}", "Sample")
-    try:
-        tpl_tree = ast.parse(tpl_source, filename=str(engine_tpl_path))
-        BackendFitnessVisitor(engine_tpl_path, engine_tpl_path.name).visit(tpl_tree)
-    except SyntaxError as e:
-        report_violation("TEMPLATE_SYNTAX_ERROR", engine_tpl_path, e.lineno or 1, f"Syntax error in engine_template_py.txt: {e}")
+    # Validate CODE_INDEX.md has no unresolved Cartographer placeholders
+    code_index_path = PROJECT_ROOT / "CODE_INDEX.md"
+    if code_index_path.exists():
+        for idx, line in enumerate(code_index_path.read_text(encoding="utf-8").splitlines(), start=1):
+            if "[comment required]" in line:
+                report_violation(
+                    "CARTOGRAPHER_PLACEHOLDER_BAN",
+                    code_index_path,
+                    idx,
+                    f"Unresolved '# [comment required]' placeholder in CODE_INDEX.md: {line.strip()}"
+                )

@@ -2,7 +2,7 @@ import os
 import re
 import json
 from pathlib import Path
-from .core import FRONTEND_DIR, BACKEND_DIR, report_violation, collect_unique_files
+from .core import FRONTEND_DIR, BACKEND_DIR, SUTRAM_DIR, report_violation, collect_unique_files
 
 def check_vendor_manifest_paths():
     print("🔍 Sweeping Vendor Manifest Paths (Existence Analysis)...")
@@ -39,9 +39,37 @@ def check_vendor_manifest_paths():
             report_violation("VENDOR_MANIFEST_SYNTAX_ERROR", vendor_file, 1, "Malformed JSON syntax in vendor.json")
         except Exception as e:
             report_violation("VENDOR_MANIFEST_READ_ERROR", vendor_file, 1, f"Failed to parse vendor.json: {e}")
+def check_tier0_domain_purity():
+    print("🔍 Sweeping Tier 0 Sutram/yenVUI Substrate for Domain & Scheme Leaks...")
+    leak_pattern = re.compile(r'\b(?:inSetu|insetu)\b|yomama://|vfs:(?:diff|pairdiff):')
+    vendor_dirs = [
+        BACKEND_DIR / "static" / "vendor" / "sutram",
+        BACKEND_DIR / "static" / "vendor" / "yenvui",
+    ]
+    if SUTRAM_DIR.exists():
+        vendor_dirs.extend([
+            SUTRAM_DIR / "sutram",
+            SUTRAM_DIR / "yenvui",
+        ])
+    for v_dir in vendor_dirs:
+        if not v_dir.exists():
+            continue
+        for js_fp in sorted(v_dir.rglob("*.js")):
+            try:
+                content = js_fp.read_text(encoding="utf-8")
+                if leak_pattern.search(content):
+                    report_violation(
+                        "TIER0_DOMAIN_LEAK_BAN",
+                        js_fp,
+                        1,
+                        "Tier 0 Sutram/yenVUI source or bundle contains upward reference to Tier 2 ('inSetu', 'yomama://', or 'vfs:diff:'). Keep Tier 0 strictly domain-agnostic and run vendor_sutram.sh."
+                    )
+            except Exception:
+                pass
 
 def check_javascript_files():
     check_vendor_manifest_paths()
+    check_tier0_domain_purity()
     print("🔍 Sweeping JavaScript Frontend (Hybrid AST + Regex Analysis)...")
     shared_styles_pattern = re.compile(r'from\s+[\'"][^\'"]*shared_styles\.js[\'"]')
     dom_read_pattern = re.compile(r'document\.(?:getElementById|querySelector)\([^\)]+\)(?:\.(value|checked|classList)|\[[\'"](value|checked|classList)[\'"]\]|\.getAttribute\([\'"](value|checked|class)[\'"]\))')
@@ -55,6 +83,7 @@ def check_javascript_files():
     dom_annihilation_pattern = re.compile(r'(?:\.innerHTML|\[[\'"]innerHTML[\'"]\])\s*=\s*([\'"`][\'"`])')
     bracket_bypass_pattern = re.compile(r'\[[\'"](value|checked|classList)[\'"]\]')
     floating_global_pattern = re.compile(r'^\s*let\s+[a-zA-Z0-9_,\s]+')
+    floating_collection_pattern = re.compile(r'^\s*const\s+_[a-zA-Z0-9_]+\s*=\s*new\s+(?:Set|Map)\s*\(')
     naive_xss_pattern = re.compile(r'\.replace\(/<script')
     create_modal_pattern = re.compile(r'\.createModal\s*\(')
     slug_dry_pattern = re.compile(r'\.normalize\([\'"]NFD[\'"]\)')
@@ -95,8 +124,10 @@ def check_javascript_files():
     unmanaged_document_input_listener_pattern = re.compile(r"document\.addEventListener\(\s*['\"](input|change)['\"]")
     open_virtual_file_pattern = re.compile(r'\b(?:this\.vfs|window\.inSetu\.vfs|vfs)\.openVirtualFile\s*\(')
     registry_debounce_pattern = re.compile(r'(?:window\.)?ExtensionRegistry\.utils\.debounce')
+    parse_uri_deprecation_pattern = re.compile(r'\bparseURI\s*\(')
     banned_ui_zones_pattern = re.compile(r'\buiHooks\s*:|[\'"]zone:[a-zA-Z0-9_-]+[\'"]')
     banned_has_actions_pattern = re.compile(r'\bhas-actions\b')
+    banned_sub_nav_actions_slot_pattern = re.compile(r'slot\s*:\s*[\'"]slots:sub-navigation-actions[\'"]')
     composed_path_pattern = re.compile(r'\be\.composedPath\s*\(\s*\)')
     unscoped_offline_storage_pattern = re.compile(r"localStorage\.(?:set|get)Item\(['\"]insetu_offline_(?:config|topology|workspaces)['\"]")
     domain_store_config_mirror_pattern = re.compile(r'(?:targetConfigs|allRepos)\s*:\s*AppStore\.getState\(\)\.(?:targetConfigs|allRepos)')
@@ -105,7 +136,9 @@ def check_javascript_files():
     udf_editor_intent_mandate_pattern = re.compile(r'document\.querySelectorAll\([\'"]insetu-editor-projection[\'"]\)')
     legacy_sdk_import_ban_pattern = re.compile(r'from\s+[\'"][^\'"]*/static/extensions/system/sdk\.js[\'"]')
     coarse_store_sub_pattern = re.compile(r'this\.subscribe\(\s*([^,\n]+|\n\s*[^,\n]+)\s*,\s*(?:(?:(?:\(?\s*(?:state|s)\s*\)?)|(?:\(?\s*\{[^}]+\}\s*\)?))\s*=>\s*\{|function\s*\([^)]*\)\s*\{)', re.MULTILINE)
-    direct_browse_path_setstate_pattern = re.compile(r'\.setState\(\s*\{[^\}]*\bglobalBrowsePath\s*:')
+    direct_browse_path_setstate_pattern = re.compile(r'\b(?:globalBrowsePath|currentBrowsePath)\b')
+    legacy_frontmatter_pubsub_pattern = re.compile(r'insetu:(?:request-frontmatter|editor:save-frontmatter)\b')
+    detached_sync_watermark_pattern = re.compile(r'\.syncWatermarks\b')
     dirty_alert_triangle_pattern = re.compile(r'isDirty\s*\?\s*[\'"]alert-triangle[\'"]')
     n_plus_one_bulk_vfs_pattern = re.compile(r'export\s+async\s+function\s+executeBulk(?:Move|Archive|Delete)(?:(?!export\s+)[\s\S])*?for\s*\([^)]*\)\s*\{(?:(?!export\s+)[\s\S])*?await\s+_(?:relocate|archive|delete)VfsNode\b')
     duplicated_filter_pattern = re.compile(r'pinnedRepos\.has\([^\)]+\)[\s\S]*?fuzzyFilterObjects')
@@ -113,6 +146,54 @@ def check_javascript_files():
     download_uri_path_ban_pattern = re.compile(r'/download/\$\{encodeURIComponent\(')
     legacy_build_file_tree_call_pattern = re.compile(r'\bbuildFileTree\s*\(')
     folder_entity_card_pattern = re.compile(r'\.entityType=\$\{[\'"]folder[\'"]\}[\s\S]{0,200}?\.entityData=\$\{\{([^\}]+)\}\}')
+    component_execute_unload_ban_pattern = re.compile(r'\.executeUnload\s*\(')
+    direct_manifest_slots_mutation_pattern = re.compile(r'\bmanifest\.layoutSlots\s*(?:=|\.push\b|\.splice\b)')
+    store_persistence_schema_pattern = re.compile(
+        r'create(?:Extension|Sutram)Store\s*\(\s*[\'"][^\'"]+[\'"]\s*,\s*\{([\s\S]*?)\}\s*,\s*\{([\s\S]*?)\}\s*\)',
+        re.MULTILINE
+    )
+    legacy_array_persist_pattern = re.compile(
+        r'create(?:Extension|Sutram)Store\s*\(\s*[\'"][^\'"]+[\'"]\s*,\s*\{[\s\S]*?\}\s*,\s*\[\s*[\'"]',
+        re.MULTILINE
+    )
+    valid_sutram_ui_hooks = {
+        "sutram:is-projection-dirty",
+        "sutram:rekey-projection-id",
+        "sutram:vendorize-language",
+        "sutram:resolve-editor-component",
+        "sutram:normalize-projection-id",
+        "sutram:popout-fallback",
+        "sutram:before-popout",
+        "sutram:before-dock-in",
+        "sutram:build-popout-url",
+        "sutram:restore-docked-projection",
+        "sutram:popout-projection",
+        "sutram:is-swapping-scope",
+        "sutram:is-swapping-workspace",
+        "sutram:resolve-route-hash",
+        "sutram:resolve-item-size",
+    }
+    ui_hooks_block_pattern = re.compile(r'\buiHooks\s*:\s*\{([\s\S]*?)\n\s*\}', re.MULTILINE)
+    uri_raw_split_pattern = re.compile(
+        r'\b[a-zA-Z0-9_$.]*(?:[pP]ath|[uU]ri|[fF]ile|Dir|target)\b[^;\n]*?\.split\(\s*[\'"]/[\'"]\s*\)\.(?:filter\(\s*Boolean\s*\)|pop\(\s*\)|slice\()'
+    )
+    generic_scheme_strip_pattern = re.compile(
+        r'\.replace\(\s*/\^\(\?:\[a-zA-Z0-9_-\]\+\|(?:vfs|ctx|ws)[^/]*\):\\\/\\\/[^/]*/g?\s*,\s*[\'"][\'"]\s*\)'
+    )
+    bespoke_subtab_selection_menu_pattern = re.compile(
+        r'getAggregatableActions\s*\([\s\S]{0,400}?<sutram-dropdown\b'
+    )
+    entity_action_obj_pattern = re.compile(r'\{\s*targetEntit(?:y|ies)\s*:[\s\S]*?\n\s*\}', re.MULTILINE)
+    quickpack_share_allowed_files = {"gather.js", "fs.js", "agent.js", "ext_flow.js", "prompts.js"}
+    fs_domain_coupling_pattern = re.compile(
+        r'\b(?:GatherStore|FlowStore|GitStore|executeCompile|flow_workflows|git_diffs|gather_base)\b|stores\.(?:Gather|Flow|Git)\b'
+    )
+    speculative_on_reveal_pattern = re.compile(
+        r'\bonReveal\s*:|addEventListener\(\s*[\'"]yenvui-overlay-opened[\'"]'
+    )
+    insetu_uri_class_pattern = re.compile(r'export\s+class\s+InSetuURI\b([\s\S]*?)^}', re.MULTILINE)
+    insetu_uri_store_coupling_pattern = re.compile(r'\b(?:AppStore|derivedVfsFiles|stores\.App)\b')
+    manual_entity_chunks_prop_pattern = re.compile(r'\.entityData=\$\{\{[\s\S]{0,400}?\bchunks\s*:')
 
     # Initialize Tree-sitter for Hybrid Parsing
     ts_available = False
@@ -126,8 +207,10 @@ def check_javascript_files():
         ts_available = True
     except ImportError:
         print("⚠️ [WARNING] Tree-sitter not installed. Falling back to legacy regex. (Run `pip install -e .[syntax]`)")
-    for filepath in collect_unique_files([FRONTEND_DIR, BACKEND_DIR / "core", BACKEND_DIR / "extensions"], [".js"]):
+    js_scan_roots = [FRONTEND_DIR, BACKEND_DIR / "core", BACKEND_DIR / "extensions"]
+    for filepath in collect_unique_files(js_scan_roots, [".js"]):
         file = filepath.name
+        is_tier0 = "sutram" in filepath.parts and "vendor" not in filepath.parts
         is_extension = file.startswith("ext_") or "extensions" in filepath.parts
         with open(filepath, "r", encoding="utf-8") as f:
             lines = f.readlines()
@@ -141,8 +224,11 @@ def check_javascript_files():
             udf_query = Query(JS_LANG, '(program (lexical_declaration) @udf)')
             for match in QueryCursor(udf_query).matches(tree.root_node):
                 for node in match[1].get("udf", []):
-                    if is_extension and full_content.encode('utf8')[node.start_byte:node.end_byte].decode('utf8').startswith("let"):
+                    decl_text = full_content.encode('utf8')[node.start_byte:node.end_byte].decode('utf8').strip()
+                    if is_extension and decl_text.startswith("let"):
                         report_violation("UDF_STATE_BLEED", filepath, node.start_point[0] + 1, "Floating module-level global state detected. Migrate variable into the centralized Zustand AppStore.")
+                    elif (is_extension or "core" in filepath.parts or is_tier0) and floating_collection_pattern.match(decl_text):
+                        report_violation("UDF_STATE_BLEED", filepath, node.start_point[0] + 1, "Floating module-level Set/Map singleton detected. Migrate mutable collection into the module's Zustand Store.")
 
             # Custom Event Dispatch
             dispatch_query = Query(JS_LANG, '(call_expression function: (member_expression object: (identifier) @obj (#eq? @obj "window") property: (property_identifier) @prop (#eq? @prop "dispatchEvent"))) @call')
@@ -160,7 +246,7 @@ def check_javascript_files():
                     )
                 ) @api_call
             ''')
-            allowed_verbs = {"get", "post", "delete", "getJson", "postJson", "deleteJson", "bindJobAction", "pollJob", "request", "workspace", "system"}
+            allowed_verbs = {"get", "post", "delete", "getJson", "postJson", "deleteJson", "fetchImmutableText", "bindJobAction", "pollJob", "request", "workspace", "system"}
             for match in QueryCursor(api_query).matches(tree.root_node):
                 for node in match[1].get("verb", []):
                     verb_name = full_content.encode('utf8')[node.start_byte:node.end_byte].decode('utf8')
@@ -175,7 +261,7 @@ def check_javascript_files():
                 for node in match[1].get("call", []):
                     line_idx = node.start_point[0]
                     line_text = lines[line_idx]
-                    if "Timer" not in line_text and "panicTimeout" not in line_text:
+                    if file not in ("utils.js", "sutram_sdk.js") and "Timer" not in line_text and "panicTimeout" not in line_text:
                         report_violation("DEBOUNCE_MANDATE", filepath, line_idx + 1, "Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling. (Exemptions granted for explicit Timer variables).")
 
             # Coarse Store Subscription Mandate
@@ -213,7 +299,6 @@ def check_javascript_files():
                     line_num,
                     "Folder cards (.entityType=${'folder'}) must include both 'filepath' and 'titleText' in .entityData for SelectionStore and Quickpack parity."
                 )
-
         if n_plus_one_bulk_vfs_pattern.search(full_content):
             report_violation(
                 "BULK_VFS_LOOP_BAN",
@@ -221,7 +306,35 @@ def check_javascript_files():
                 1,
                 "Sequential N+1 VFS mutation loop detected inside executeBulk*. Dispatch a single atomic 'fs/bulk' mutation instead."
             )
-
+        if "core" in filepath.parts and "fs" in filepath.parts:
+            for m in fs_domain_coupling_pattern.finditer(full_content):
+                line_num = full_content[:m.start()].count('\n') + 1
+                report_violation(
+                    "FS_DOMAIN_AGNOSTICISM_MANDATE",
+                    filepath,
+                    line_num,
+                    f"core/fs/{file} references compilation/domain symbol '{m.group(0)}'. Delegate via IoC hooks (e.g. 'insetu:ensure-fresh-artifact')."
+                )
+        for m in speculative_on_reveal_pattern.finditer(full_content):
+            line_num = full_content[:m.start()].count('\n') + 1
+            report_violation(
+                "SPECULATIVE_ON_REVEAL_BAN",
+                filepath,
+                line_num,
+                f"Speculative pre-warming ('{m.group(0)}') on card reveal/drawer open is banned; fetch on explicit click and use keepDrawerOpen: true."
+            )
+        if file == "insetu_sdk.js":
+            uri_cls_match = insetu_uri_class_pattern.search(full_content)
+            if uri_cls_match:
+                uri_body = uri_cls_match.group(1)
+                for m in insetu_uri_store_coupling_pattern.finditer(uri_body):
+                    line_num = full_content[:uri_cls_match.start(1) + m.start()].count('\n') + 1
+                    report_violation(
+                        "INSETU_URI_LEXICAL_PURITY_MANDATE",
+                        filepath,
+                        line_num,
+                        f"InSetuURI couples to live store state ('{m.group(0)}'). Keep InSetuURI strictly lexical and stateless."
+                    )
         if is_extension and duplicated_filter_pattern.search(full_content):
             report_violation(
                 "DUPLICATED_FILTER_PIPELINE_BAN",
@@ -229,6 +342,100 @@ def check_javascript_files():
                 1,
                 "Manual two-tier pinned repo check and fuzzyFilterObjects detected. Use 'this.filterItems(items, options)' on InSetuElement instead."
             )
+        if is_extension and component_execute_unload_ban_pattern.search(full_content):
+            report_violation(
+                "COMPONENT_EXECUTE_UNLOAD_BAN",
+                filepath,
+                1,
+                "Extension components are forbidden from invoking ExtensionRegistry.executeUnload() directly. Extension unloading is managed exclusively by SessionOrchestrator."
+            )
+        if is_extension and direct_manifest_slots_mutation_pattern.search(full_content):
+            report_violation(
+                "DIRECT_MANIFEST_SLOTS_MUTATION_BAN",
+                filepath,
+                1,
+                "Direct mutation of manifest.layoutSlots detected. Use ExtensionRegistry.setDynamicLayoutSlots(extName, slots) so baseline layout slots are restored on workspace swap."
+            )
+        if is_extension:
+            for m in manual_entity_chunks_prop_pattern.finditer(full_content):
+                line_num = full_content[:m.start()].count('\n') + 1
+                report_violation(
+                    "MANUAL_ENTITY_CHUNKS_PROP_BAN",
+                    filepath,
+                    line_num,
+                    "Manual 'chunks:' property inside .entityData in extension template is banned. Pass 'filepath' and let core/fs/fs.js resolve chunks from the live manifest."
+                )
+        for legacy_arr_match in legacy_array_persist_pattern.finditer(full_content):
+            line_num = full_content[:legacy_arr_match.start()].count('\n') + 1
+            report_violation(
+                "LEGACY_PERSIST_KEYS_ARRAY_BAN",
+                filepath,
+                line_num,
+                "Legacy array persistKeys detected in store instantiation. Migrate to persistenceSchema object ({ localSync, sessionSync })."
+            )
+        if file not in ("insetu_sdk.js", "ui_file_tree.js", "utils.js"):
+            for m in uri_raw_split_pattern.finditer(full_content):
+                line_num = full_content[:m.start()].count('\n') + 1
+                report_violation(
+                    "JS_URI_BASENAME_AND_SPLIT_MANDATE",
+                    filepath,
+                    line_num,
+                    f"Manual URI string splitting ({m.group(0).strip()}) detected. Use new InSetuURI(uri).basename, .parentUri, .withName(), or .pathSegments."
+                )
+            for m in generic_scheme_strip_pattern.finditer(full_content):
+                line_num = full_content[:m.start()].count('\n') + 1
+                report_violation(
+                    "URI_SCHEME_STRIP_BAN",
+                    filepath,
+                    line_num,
+                    "Stripping URI scheme via regex .replace() is banned. Use new InSetuURI(uri).pathSegments or this.utils.parseURI(uri)."
+                )
+        if bespoke_subtab_selection_menu_pattern.search(full_content) and file not in ("primitives.js", "sutram_sdk.js"):
+            report_violation(
+                "DECLARATIVE_SUBTAB_MENU_MANDATE",
+                filepath,
+                1,
+                "Bespoke sub-tab bulk selection dropdown detected. Declare bulkActionGroup, bulkEntityTypes, and menuActions on the slots:sub-navigation slot instead."
+            )
+        if file not in quickpack_share_allowed_files:
+            for act_match in entity_action_obj_pattern.finditer(full_content):
+                act_block = act_match.group(0)
+                if re.search(r'\bbulkable\s*:\s*true\b', act_block) and re.search(r'\bgroup\s*:\s*[\'"]share[\'"]', act_block):
+                    line_num = full_content[:act_match.start()].count('\n') + 1
+                    report_violation(
+                        "QUICKPACK_SHARE_GROUP_ISOLATION",
+                        filepath,
+                        line_num,
+                        "Domain extensions cannot register 'bulkable: true' actions in group 'share' (reserved for Quickpack export/staging). Use a domain group (e.g. 'vcs', 'file', 'tracker') and declare bulkActionGroup on the sub-navigation slot."
+                    )
+        for hooks_match in ui_hooks_block_pattern.finditer(full_content):
+            hooks_body = hooks_match.group(1)
+            for hook_key_match in re.finditer(r'[\'"](sutram:[^\'"]+|zone:[^\'"]+)[\'"]\s*:', hooks_body):
+                hook_key = hook_key_match.group(1)
+                if hook_key not in valid_sutram_ui_hooks:
+                    line_num = full_content[:hooks_match.start() + hook_key_match.start()].count('\n') + 1
+                    report_violation(
+                        "INVALID_SUTRAM_UI_HOOK_KEY",
+                        filepath,
+                        line_num,
+                        f"Unrecognized or deprecated UI hook '{hook_key}'. Must be an approved 'sutram:*' host contract hook."
+                    )
+        for schema_match in store_persistence_schema_pattern.finditer(full_content):
+            init_body, schema_body = schema_match.group(1), schema_match.group(2)
+            declared_init_keys = set(re.findall(r'(?:^|[,{\n])\s*([a-zA-Z0-9_]+)\s*:', init_body))
+            for sync_type in ("localSync", "sessionSync"):
+                sync_arr_match = re.search(rf'\b{sync_type}\s*:\s*\[([^\]]*)\]', schema_body)
+                if sync_arr_match:
+                    sync_keys = re.findall(r'[\'"]([a-zA-Z0-9_]+)[\'"]', sync_arr_match.group(1))
+                    for sk in sync_keys:
+                        if sk not in declared_init_keys:
+                            line_num = full_content[:schema_match.start()].count('\n') + 1
+                            report_violation(
+                                "ORPHANED_PERSISTENCE_KEY_BAN",
+                                filepath,
+                                line_num,
+                                f"Persistence key '{sk}' in {sync_type} is not declared in the store's initialState."
+                            )
         if not ts_available and file not in ["store.js", "system.js", "insetu_sdk.js", "sutram_sdk.js"]:
             for m in coarse_store_sub_pattern.finditer(full_content):
                 line_num = full_content[:m.start()].count('\n') + 1
@@ -289,7 +496,7 @@ def check_javascript_files():
 
                 if is_extension and floating_global_pattern.match(line.strip()):
                     report_violation("UDF_STATE_BLEED", filepath, line_num, "Floating global state detected. Migrate variable into the centralized Zustand AppStore.")
-                if file not in ["api.js", "sdk.js"] and re.search(r'\bthis\.api\.(?!(?:get|post|delete|getJson|postJson|deleteJson|bindJobAction|pollJob|request|workspace|system)\b)\w+', line):
+                if file not in ["api.js", "sdk.js"] and re.search(r'\bthis\.api\.(?!(?:get|post|delete|getJson|postJson|deleteJson|fetchImmutableText|bindJobAction|pollJob|request|workspace|system)\b)\w+', line):
                     report_violation("APPROVED_API_VERB_MANDATE", filepath, line_num, "Unapproved method called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).")
 
                 if is_extension and raw_poll_job_pattern.search(line) and file not in ("ext_tracker.js", "ext_flow.js"):
@@ -352,7 +559,11 @@ def check_javascript_files():
             if file not in ["api.js", "sdk.js"] and legacy_api_routing_pattern.search(line):
                 report_violation("SEMANTIC_API_ROUTING_MANDATE", filepath, line_num, "Direct invocation of api.workspace() or api.system() detected. Route through the semantic .get() or .post() chains instead.")
             if direct_browse_path_setstate_pattern.search(line):
-                report_violation("CANONICAL_BROWSE_PATH_MANDATE", filepath, line_num, "Direct setState on globalBrowsePath detected. Use AppStore.getState().setBrowsePath(pathArray, subId) to keep tabBrowsePaths and the URL hash in sync.")
+                report_violation("CANONICAL_BROWSE_PATH_MANDATE", filepath, line_num, "Deprecated globalBrowsePath or currentBrowsePath usage detected (RFC 0108). Use AppStore.getState().getBrowsePath(subId) / setBrowsePath(pathArray, subId) or FsStore.modals.browser.currentPath.")
+            if legacy_frontmatter_pubsub_pattern.search(line):
+                report_violation("LEGACY_FRONTMATTER_PUBSUB_BAN", filepath, line_num, "Deprecated frontmatter pub/sub event ('insetu:request-frontmatter' or 'insetu:editor:save-frontmatter') detected. Push metadata updates directly to the editor projection via editorEl.syncFrontmatter(yamlPatch) or FsStore.getState().updateBufferFrontmatter().")
+            if file != "store.js" and detached_sync_watermark_pattern.search(line):
+                report_violation("DETACHED_SYNC_WATERMARK_BAN", filepath, line_num, "Direct '.syncWatermarks' property access detected. Call AppStore.getState().getSyncWatermarks() to guarantee a live tenant-scoped reference.")
 
             if is_extension and re.search(r'class\s+\w+\s+extends\s+LitElement\b', line):
                 report_violation("SDK_ELEMENT_MANDATE", filepath, line_num, "Extension component extends raw LitElement. Inherit from InSetuElement to protect multi-tenant lifecycles.")
@@ -388,6 +599,8 @@ def check_javascript_files():
                 report_violation("LEGACY_BATCH_ACTIONS_BAN", filepath, line_num, "The 'batchActions' schema array is deprecated. Migrate bulk actions directly into 'entityActions' using 'bulkable: true' (ADR 0061).")
             if banned_has_actions_pattern.search(line):
                 report_violation("BANNED_HAS_ACTIONS_ATTRIBUTE", filepath, line_num, "The 'has-actions' attribute is deprecated. <insetu-card> and <sutram-card> now automatically query the ExtensionRegistry to mount the action tray.")
+            if banned_sub_nav_actions_slot_pattern.search(line):
+                report_violation("BANNED_SUB_NAV_ACTIONS_SLOT_BAN", filepath, line_num, "The 'slots:sub-navigation-actions' slot is deprecated. Declare 'menuActions' and 'menuStores' on the 'slots:sub-navigation' slot definition instead.")
 
             if unscoped_offline_storage_pattern.search(line):
                 report_violation("UNSCOPED_PERSISTENT_STORAGE", filepath, line_num, "Un-scoped persistent storage call detected on offline state. Consume window.inSetu.utils.getScopedStorage/setScopedStorage instead.")
@@ -469,3 +682,14 @@ def check_javascript_files():
                 report_violation("VIEW_TEXT_BLOB_MANDATE", filepath, line_num, "Deprecated vfs.openVirtualFile detected. Migrate to this.ui.viewTextBlob(title, content, suggestedFilename) or window.inSetu.ui.viewTextBlob instead.")
             if is_extension and registry_debounce_pattern.search(line):
                 report_violation("REGISTRY_DEBOUNCE_BAN", filepath, line_num, "Direct access to ExtensionRegistry.utils.debounce is banned. Use this.utils.debounce() via the SDK.")
+            if parse_uri_deprecation_pattern.search(line) and file not in ["insetu_sdk.js", "utils.js", "run_fsm_test.mjs"]:
+                report_violation("PARSE_URI_DEPRECATION_BAN", filepath, line_num, "parseURI() is deprecated. Instantiate `new InSetuURI(path)` directly.")
+
+    # Validate defaults/ext_template_js.txt for SDK import and subscription compliance
+    ext_tpl_path = BACKEND_DIR / "defaults" / "ext_template_js.txt"
+    if ext_tpl_path.exists():
+        tpl_js = ext_tpl_path.read_text(encoding="utf-8")
+        if legacy_sdk_import_ban_pattern.search(tpl_js):
+            report_violation("LEGACY_SDK_IMPORT_BAN", ext_tpl_path, 1, "defaults/ext_template_js.txt imports deprecated '/static/extensions/system/sdk.js'. Use '/static/extensions/system/insetu_sdk.js'.")
+        if coarse_store_sub_pattern.search(tpl_js):
+            report_violation("COARSE_STORE_SUBSCRIPTION_MANDATE", ext_tpl_path, 1, "defaults/ext_template_js.txt uses a 2-argument coarse store subscription. Use a 3-argument selector-scoped subscription.")

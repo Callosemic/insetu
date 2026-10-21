@@ -20,16 +20,6 @@ insetu/
 │   ├── 08_sutram_contracts.md      # Sutram Platform API & Interface Contracts.
 │   ├── ADR_INDEX.md                # Ledger of Logic for inSetu ADRs.
 │   └── adrs/                       # Architectural Decision Records.
-│       ├── 0030-kernel-utility-bisect-and-domain-relocation.md # Decoupling kernel utilities from core OS domains.
-│       ├── 0031-sutram-micro-kernel-vendorization-and-vfs-ledger-unification.md # Vendorizing Sutram and merging VFS tracking ledgers.
-│       ├── 0032-dynamic-polyglot-vendorization-and-importmap-resolution.md # Import map strategies for offline-first vendor libraries.
-│       ├── 0033-kernel-package-encapsulation-and-root-wrapper-cleanup.md # Moving kernel dependencies to isolated packages (akasa).
-│       ├── 0034-async-job-action-binding-and-gather-decoupling.md # Binding UI actions directly to background polling jobs.
-│       ├── 0035-vfs-file-resolution-hooks-and-topology-gateway.md # Centralized resolution of logical vfs:// and ctx:// paths.
-│       ├── 0036-vfs-manifest-sqlite-cqrs-and-delta-sync.md # Moving manifest indexing from JSON to SQLite CQRS.
-│       ├── 0037-gather-inversion-of-control-topology.md # Inverting context assembly dependencies to Cartographer.
-│       ├── 0038-decoupled-topology-engine-partitioned-manifest-two-stage-slew-limiting.md # Stage 1 (VFS) and Stage 2 (CTX) slew limiters.
-│       ├── 0039-decentralized-manifest-signature-sync-and-topology-boot.md # Syncing manifest signatures statelessly on UI boot.
 │       ├── 0040-system-configuration-ssot-and-multi-scoped-settings.md # Centralized settings schema definition and hierarchical scope isolation (daemon, workspace, repo).
 │       ├── 0041-deprecation-of-ui-zones-and-presentation-decoupling.md # Deprecation of UI zones and presentation decoupling.
 │       ├── 0042-vfs-logical-uri-boundary-standardization-and-path-heuristic-purge.md # Standardized vfs:// logical URI boundaries and purged legacy path heuristics.
@@ -58,36 +48,54 @@ insetu/
 │       ├── 0065-repository-data-containment-extension-state-hydration-and-security-hardening.md # Repository data containment (.insetu-data/), dual-scope notes migration, and cryptographic hook gating.
 │       ├── 0066-canonical-uris-inter-workspace-mounts-and-config-cascade-hardening.md # Canonical scheme:// URIs, inter-workspace ws:// mounts, and 3-tier configuration cascade hardening.
 │       ├── 0067-universal-extension-suite-modernization-and-domain-mounts.md # Universal extension suite modernization, declarative domain mounts, and SDK standardization.
-│       ├── 0068-hierarchical-vfs-sieve-sub-bucket-filtering-and-settings-hub.md # [comment required]
-│       ├── 0069-managed-app-server-preview-bulk-vcs-and-memory-telemetry.md # [comment required]
-│       └── archived/               # Superseded and historical ADR documents.
-│           ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
-│           ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
-│           ├── 0003-stateless-multi-tenant-routing.md # Initial stateless request-scoped multi-tenant REST routing setup.
-│           ├── 0004-asynchronous-vfs-commit-pipeline.md # Defines the non-blocking VFS write queue and thread safety.
-│           ├── 0005-transport-shell-decoupling.md # Decoupling of HTTP transport shell from pure domain logic.
-│           ├── 0006-tenant-isolated-compilation-locks.md # Defines thread-local locks for RAG payload compilations.
-│           ├── 0007-stateless-ui-factory-and-component-decoupling.md # UI decoupling from business logic via Zustand UDF.
-│           ├── 0008-offline-first-synchronization.md # Offline capabilities and Service Worker caching.
-│           ├── 0009-ephemeral-artifacts-and-immediate-jobs-ledger.md # Management of short-lived job artifacts and garbage collection.
-│           ├── 0010-vfs-boundary-exemptions.md # Rules for paths exempt from strict VFS isolation.
-│           ├── 0011-vfs-barrier-synchronization.md # Synchronization barriers for asynchronous VFS flushes.
-│           ├── 0012-extension-subdirectory-extraction.md # Extraction of domain extensions into isolated subdirectories.
-│           ├── 0013-posix-compliant-pathlib-migration.md # Standardization on POSIX paths for cross-platform parity.
-│           ├── 0014-event-bus-tenant-authorization.md # Authorization rules for cross-tenant event bus emissions.
-│           ├── 0015-codemirror6-migration.md # Transition from legacy editors to CodeMirror 6.
-│           ├── 0016-explicit-api-client-and-fetch-deprecation.md # Mandates the use of the centralized inSetu API client.
-│           ├── 0017-extension-sdk-and-pit-of-success.md # Defines the InSetuExtension and InSetuElement base classes.
-│           ├── 0018-event-sourced-vfs-ledger.md # SQLite event sourcing for VFS mutations and Watchdog events.
-│           ├── 0021_standardized_state_isolation.md # Unidirectional Data Flow and tenant state isolation.
-│           ├── 0022-differential-context-compilation.md # Surgical updates to RAG contexts avoiding full recompilation.
-│           ├── 0023-polymorphic-entity-action-card-registry.md # Dynamic context-aware actions for UI entity cards.
-│           ├── 0024-frontend-sdk-decoupling-and-domain-accessors.md # Front-end SDK abstraction (this.vfs, this.sys, this.editor).
-│           ├── 0025-declarative-app-shell-and-brokered-resource-management.md # Declarative UI layout definitions and slot brokering.
-│           ├── 0026-unified-token-gatehouse-and-tailscale-auth.md # Centralized REST/WebSocket authentication and Tailscale WHOIS.
-│           ├── 0027-global-multi-select-and-batch-action-registry.md # Global UI selection tray and batch action execution.
-│           ├── 0028-native-hash-routing-and-event-bus.md # Zero-bundler SPA routing using URL hashes.
-│           └── 0029-core-kernel-extraction-and-three-tier-architecture.md # Separation of Kernel, Core OS, and Domain Extensions.
+│       ├── 0068-hierarchical-vfs-sieve-sub-bucket-filtering-and-settings-hub.md # Hierarchical VFS sieve, .gitignore sub-bucket filtering, and unified OS Settings Hub.
+│       ├── 0069-managed-app-server-preview-bulk-vcs-and-memory-telemetry.md # Managed dev server preview supervisor, bulk Git VCS actions, and kernel memory telemetry.
+│       ├── 0070-akasa-kernel-lifecycle-encapsulation-and-lifeboat-resilience.md # [comment required]
+│       ├── 0071-synchronous-workspace-swap-fsm-three-way-occ-and-declarative-volumes.md # [comment required]
+│       ├── 0072-core-pipeline-akasa-membrane-declarative-volumes-and-jit-healing.md # [comment required]
+│       ├── 0073-devops-extension-suite-membrane-decoupling-and-declarative-diff-volumes.md # [comment required]
+│       ├── 0074-knowledge-suite-membrane-decoupling-declarative-volumes-and-substack-publishing.md # [comment required]
+│       ├── 0075-workflow-management-suite-membrane-decoupling-declarative-flow-volumes-and-tracker-hub-embedding.md # [comment required]
+│       ├── archived/               # Superseded and historical ADR documents.
+│       │   ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
+│       │   ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
+│       │   ├── 0003-stateless-multi-tenant-routing.md # Initial stateless request-scoped multi-tenant REST routing setup.
+│       │   ├── 0004-asynchronous-vfs-commit-pipeline.md # Defines the non-blocking VFS write queue and thread safety.
+│       │   ├── 0005-transport-shell-decoupling.md # Decoupling of HTTP transport shell from pure domain logic.
+│       │   ├── 0006-tenant-isolated-compilation-locks.md # Defines thread-local locks for RAG payload compilations.
+│       │   ├── 0007-stateless-ui-factory-and-component-decoupling.md # UI decoupling from business logic via Zustand UDF.
+│       │   ├── 0008-offline-first-synchronization.md # Offline capabilities and Service Worker caching.
+│       │   ├── 0009-ephemeral-artifacts-and-immediate-jobs-ledger.md # Management of short-lived job artifacts and garbage collection.
+│       │   ├── 0010-vfs-boundary-exemptions.md # Rules for paths exempt from strict VFS isolation.
+│       │   ├── 0011-vfs-barrier-synchronization.md # Synchronization barriers for asynchronous VFS flushes.
+│       │   ├── 0012-extension-subdirectory-extraction.md # Extraction of domain extensions into isolated subdirectories.
+│       │   ├── 0013-posix-compliant-pathlib-migration.md # Standardization on POSIX paths for cross-platform parity.
+│       │   ├── 0014-event-bus-tenant-authorization.md # Authorization rules for cross-tenant event bus emissions.
+│       │   ├── 0015-codemirror6-migration.md # Transition from legacy editors to CodeMirror 6.
+│       │   ├── 0016-explicit-api-client-and-fetch-deprecation.md # Mandates the use of the centralized inSetu API client.
+│       │   ├── 0017-extension-sdk-and-pit-of-success.md # Defines the InSetuExtension and InSetuElement base classes.
+│       │   ├── 0018-event-sourced-vfs-ledger.md # SQLite event sourcing for VFS mutations and Watchdog events.
+│       │   ├── 0021_standardized_state_isolation.md # Unidirectional Data Flow and tenant state isolation.
+│       │   ├── 0022-differential-context-compilation.md # Surgical updates to RAG contexts avoiding full recompilation.
+│       │   ├── 0023-polymorphic-entity-action-card-registry.md # Dynamic context-aware actions for UI entity cards.
+│       │   ├── 0024-frontend-sdk-decoupling-and-domain-accessors.md # Front-end SDK abstraction (this.vfs, this.sys, this.editor).
+│       │   ├── 0025-declarative-app-shell-and-brokered-resource-management.md # Declarative UI layout definitions and slot brokering.
+│       │   ├── 0026-unified-token-gatehouse-and-tailscale-auth.md # Centralized REST/WebSocket authentication and Tailscale WHOIS.
+│       │   ├── 0027-global-multi-select-and-batch-action-registry.md # Global UI selection tray and batch action execution.
+│       │   ├── 0028-native-hash-routing-and-event-bus.md # Zero-bundler SPA routing using URL hashes.
+│       │   ├── 0029-core-kernel-extraction-and-three-tier-architecture.md # Separation of Kernel, Core OS, and Domain Extensions.
+│       │   ├── 0030-kernel-utility-bisect-and-domain-relocation.md # Decoupling kernel utilities from core OS domains.
+│       │   ├── 0031-sutram-micro-kernel-vendorization-and-vfs-ledger-unification.md # Vendorizing Sutram and merging VFS tracking ledgers.
+│       │   ├── 0032-dynamic-polyglot-vendorization-and-importmap-resolution.md # Import map strategies for offline-first vendor libraries.
+│       │   ├── 0034-async-job-action-binding-and-gather-decoupling.md # Binding UI actions directly to background polling jobs.
+│       │   ├── 0035-vfs-file-resolution-hooks-and-topology-gateway.md # Centralized resolution of logical vfs:// and ctx:// paths.
+│       │   ├── 0036-vfs-manifest-sqlite-cqrs-and-delta-sync.md # Moving manifest indexing from JSON to SQLite CQRS.
+│       │   ├── 0037-gather-inversion-of-control-topology.md # Inverting context assembly dependencies to Cartographer.
+│       │   ├── 0038-decoupled-topology-engine-partitioned-manifest-two-stage-slew-limiting.md # Stage 1 (VFS) and Stage 2 (CTX) slew limiters.
+│       │   └── 0039-decentralized-manifest-signature-sync-and-topology-boot.md # Syncing manifest signatures statelessly on UI boot.
+│       └── superseded/             # Archived and superseded architectural decision records.
+│           ├── .gitkeep            # Git folder retention.
+│           └── 0033-kernel-package-encapsulation-and-root-wrapper-cleanup.md # Moving kernel dependencies to isolated packages (akasa).
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── app.py                      # [Micro-Kernel & Extension Bootloader]
@@ -273,6 +281,10 @@ insetu/
         ├── test_canonical_uris.py  # Unit tests for canonical URI enforcement, InSetuURI normalization, and legacy ledger migrations.
         ├── test_config_cascade.py  # Unit tests for the 3-tier configuration cascade, secret encryption, and lazy migration.
         ├── test_ext_preview_unit.py # Unittest suite for passive framework detection and preview server lifecycle.
+        ├── test_publish_extension.py # Unit tests for document publishing compilation and ephemeral wordcount macro stripping.
         ├── test_sdk_improvements.py # Unit tests for ctx.create_entity_file and worker lifecycle isolation for disabled extensions.
-        └── test_workspace_mounts.py # Unit tests for InterWorkspaceVFSDriver, ws:// read-only write barriers, and cross-workspace event broadcasting.
+        ├── test_sutram_compliance.py # Unit tests verifying Sutram consumer linter and JavaScript fitness compliance across core and extensions.
+        ├── test_vfs_three_way_merge.py # Unit tests for 3-way OCC text merging, ancestor ring buffers, and conflict fallback files.
+        ├── test_workspace_mounts.py # Unit tests for InterWorkspaceVFSDriver, ws:// read-only write barriers, and cross-workspace event broadcasting.
+        └── test_workspace_swap_fsm.py # Behavioral unit tests for the synchronous workspace swap FSM and Bound-Scope StoreRegistry hydration.
 ```

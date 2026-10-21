@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+import akasa
 import akasa.db as akasa_db
 import akasa.utils as akasa_utils
 from akasa.db import get_connection, apply_declarative_schema
@@ -15,11 +16,19 @@ from insetu.core.topology.engine_topology import (
     hook_request_vfs_manifest,
     mount_topology_volumes_dynamically,
 )
-from insetu.core.utils_core import InSetuURI, BucketAddress
+from insetu.core.utils_core import InSetuURI, BucketAddress, heal_sqlite_uri_column
 from insetu.extensions.tracker.engine_tracker import get_tracker_path, TRACKER_SCHEMA
 from insetu.extensions.notes.engine_notes import _resolve_intended_note_uri
 from insetu.extensions.skills.engine_skills import _canonical_skill_uri
-from insetu.extensions.flow.engine_flow import _migrate_batch_uris
+from insetu.extensions.flow.engine_flow import _migrate_batch_uris, handle_flow_pre_save
+from akasa.vfs import sync_vfs_barrier
+from akasa.vfs import VFSTransaction
+from flask import Flask
+from insetu.core.fs.engine_fs import fs_bp
+from insetu.core.gather.engine_gather import _canonicalize_manifest_entry, gather_bp, VFS_INDEX_SCHEMA
+from insetu.extensions.flow.engine_flow import flow_bp, _background_compile_workflows
+from akasa.extension import ExtensionContext
+from insetu.core.utils_core import execute_binary
 
 
 def _reset_db_connections():
@@ -39,20 +48,14 @@ def _reset_db_connections():
 
 class TestCanonicalURIs(unittest.TestCase):
     def setUp(self):
-        _reset_db_connections()
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root_path = Path(self.temp_dir.name).resolve()
         self.control_dir = self.root_path / ".insetu"
         (self.control_dir / "cache" / "db").mkdir(parents=True, exist_ok=True)
 
-        self.orig_cwd = akasa_utils._cwd
+        self.orig_cwd = akasa_utils.get_daemon_cwd()
         self.orig_env_ctrl = os.environ.get("AKASA_CONTROL_DIR")
-        os.environ["AKASA_CONTROL_DIR"] = ".insetu"
-        akasa_utils._cwd = self.root_path.as_posix()
-
-        akasa_utils._JSON_CACHE.clear()
-        akasa_utils._JSON_MTIME.clear()
-        load_config.clear_all()
+        akasa.reset_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
 
         # Create a sample repo with a file
         self.repo_dir = self.root_path / "alpha"
@@ -78,13 +81,7 @@ class TestCanonicalURIs(unittest.TestCase):
         mount_topology_volumes_dynamically(load_config("default"), workspace_id="default")
 
     def tearDown(self):
-        _reset_db_connections()
-        akasa_utils._cwd = self.orig_cwd
-        if self.orig_env_ctrl is not None:
-            os.environ["AKASA_CONTROL_DIR"] = self.orig_env_ctrl
-        akasa_utils._JSON_CACHE.clear()
-        akasa_utils._JSON_MTIME.clear()
-        load_config.clear_all()
+        akasa.reset_state(cwd=self.orig_cwd, control_dir=self.orig_env_ctrl or ".insetu")
         try:
             self.temp_dir.cleanup()
         except OSError:
@@ -108,11 +105,40 @@ class TestCanonicalURIs(unittest.TestCase):
             InSetuURI("notes/idea.md")
         with self.assertRaises(ValueError):
             InSetuURI("vfs:/alpha/main.py")
-
         valid_vfs = InSetuURI("vfs://alpha/main.py")
         self.assertEqual(valid_vfs.scheme, "vfs")
         self.assertEqual(valid_vfs.repo, "alpha")
         self.assertEqual(valid_vfs.path, "main.py")
+
+    def test_python_insetu_uri_manipulation_and_flow_archive_routing(self):
+        """Python InSetuURI supports parent_uri, join, with_name, and resolve_sibling_uri, and handle_flow_pre_save archives prior dated files."""
+        nested = InSetuURI("vfs://alpha/sotu/sotu_20261021.md")
+        self.assertEqual(str(nested.parent_uri), "vfs://alpha/sotu")
+        self.assertEqual(str(nested.with_name("sotu_20261022.md")), "vfs://alpha/sotu/sotu_20261022.md")
+        self.assertEqual(str(nested.parent_uri.join("archive", "sotu_20261020.md")), "vfs://alpha/sotu/archive/sotu_20261020.md")
+        self.assertEqual(str(nested.resolve_sibling_uri("sotu/archive/")), "vfs://alpha/sotu/archive")
+        self.assertEqual(str(nested.resolve_sibling_uri("vfs://sotu/archive/")), "vfs://alpha/sotu/archive")
+
+        # Verify handle_flow_pre_save moves previous dated response into repo's archive folder
+        sotu_dir = self.repo_dir / "sotu"
+        sotu_dir.mkdir(parents=True, exist_ok=True)
+        old_file = sotu_dir / "sotu_20261001.md"
+        old_file.write_text("Old SOTU content", encoding="utf-8")
+
+        handle_flow_pre_save(
+            workspace_id="default",
+            filepath="vfs://alpha/sotu/sotu_20261021.md",
+            content="New SOTU content",
+            data={
+                "original_response_path": "alpha/sotu/sotu_{date}.md",
+                "archive_path": "sotu/archive/",
+            },
+        )
+        sync_vfs_barrier("default")
+        archived_file = self.repo_dir / "sotu" / "archive" / "sotu_20261001.md"
+        self.assertTrue(archived_file.exists())
+        self.assertEqual(archived_file.read_text(encoding="utf-8"), "Old SOTU content")
+        self.assertFalse(old_file.exists())
 
     def test_from_external_input_normalizes_boundary_strings(self):
         """InSetuURI.from_external_input normalizes raw LLM/user strings and WSGI single-slash paths at ingress boundaries."""
@@ -137,14 +163,24 @@ class TestCanonicalURIs(unittest.TestCase):
         rows = [r["filepath"] for r in top_conn.execute("SELECT filepath FROM topology_ledger").fetchall()]
         self.assertIn("vfs://alpha/legacy.py", rows)
         self.assertTrue(all("://" in r for r in rows))
+        # Verify heal_sqlite_uri_column handles UNIQUE/PRIMARY KEY collisions between unprefixed and prefixed rows cleanly
+        top_conn.execute(
+            "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp, git_status) VALUES (?, ?, ?, ?, ?)",
+            ("alpha/legacy.py", "alpha", "main", 0.5, ""),
+        )
+        top_conn.commit()
+        heal_sqlite_uri_column(top_conn, "topology_ledger", "filepath", "vfs://")
+        healed_rows = [r["filepath"] for r in top_conn.execute("SELECT filepath FROM topology_ledger").fetchall()]
+        self.assertIn("vfs://alpha/legacy.py", healed_rows)
+        self.assertNotIn("alpha/legacy.py", healed_rows)
 
         trk_conn = get_connection("tracker", workspace_id="default")
         trk_conn.execute(
             "INSERT OR REPLACE INTO tracker_tickets (id, repo, ticket_type, status, title, filepath) VALUES (?, ?, ?, ?, ?, ?)",
             ("ALP-TODO-1", "alpha", "todo", "open", "Legacy Task", "alpha/.insetu-data/tracker/todos/open/ALP-TODO-1.md"),
         )
-        trk_conn.execute("UPDATE tracker_tickets SET filepath = 'vfs://' || filepath WHERE filepath NOT LIKE '%://%'")
         trk_conn.commit()
+        heal_sqlite_uri_column(trk_conn, "tracker_tickets", "filepath", "vfs://")
         t_row = trk_conn.execute("SELECT filepath FROM tracker_tickets WHERE id='ALP-TODO-1'").fetchone()
         self.assertEqual(t_row["filepath"], "vfs://alpha/.insetu-data/tracker/todos/open/ALP-TODO-1.md")
 
@@ -202,10 +238,8 @@ class TestCanonicalURIs(unittest.TestCase):
 
         # Second pass should be idempotent
         self.assertFalse(_migrate_batch_uris(legacy_batch))
-
     def test_vfs_transaction_rejects_non_canonical_paths(self):
         """VFSTransaction.read, .save, and .delete reject scheme-less paths unless is_absolute_artifact is True."""
-        from akasa.vfs import VFSTransaction
         vfs = VFSTransaction("default")
         with self.assertRaises(ValueError):
             vfs.read("alpha/main.py")
@@ -213,10 +247,8 @@ class TestCanonicalURIs(unittest.TestCase):
             vfs.save("alpha/main.py", "print(1)")
         with self.assertRaises(ValueError):
             vfs.delete("alpha/main.py")
-
     def test_manifest_entry_deep_canonicalization(self):
         """_canonicalize_manifest_entry upgrades bare keys, chunks, files, and meta pointers to canonical URIs."""
-        from insetu.core.gather.engine_gather import _canonicalize_manifest_entry
         raw_entry = {
             "files": ["alpha/main.py", "notes_context.txt"],
             "chunks": ["notes_context.txt", "notes_context_part2.txt"],
@@ -236,7 +268,6 @@ class TestCanonicalURIs(unittest.TestCase):
         self.assertEqual(canon_entry["meta"]["out_file"], "ctx://contexts/notes_context.txt")
     def test_expand_selection_handles_folders_and_files_for_quickpack(self):
         """expand_selection expands trailing-slash folder URIs, {filepath, folderpath, isDir} dicts, and unindexed subfolders into a flat List[str]."""
-        from akasa.extension import ExtensionContext
         sub_dir = self.repo_dir / "nested" / "preview"
         sub_dir.mkdir(parents=True, exist_ok=True)
         (sub_dir / "widget.py").write_text("x = 1\n", encoding="utf-8")
@@ -253,6 +284,134 @@ class TestCanonicalURIs(unittest.TestCase):
         self.assertTrue(all(isinstance(f, str) for f in expanded))
         self.assertIn("vfs://alpha/nested/preview/widget.py", expanded)
         self.assertIn("vfs://alpha/main.py", expanded)
+
+    def test_frontend_insetu_uri_value_object_in_node(self):
+        """Frontend InSetuURI in insetu_sdk.js preserves scheme:// across withName, parentUri, join, and pathSegments."""
+        sdk_path = (Path(__file__).resolve().parent.parent.parent / "insetu" / "core" / "system" / "insetu_sdk.js").resolve()
+        sdk_src = sdk_path.read_text(encoding="utf-8")
+        self.assertIn("export class InSetuURI", sdk_src)
+
+        node_script = """
+import assert from 'node:assert/strict';
+
+globalThis.window = { inSetu: { utils: {} } };
+window.inSetu.utils.parseURI = function(pathStr) {
+    if (!pathStr) {
+        return { scheme: '', volume: '', repo: '', relativePath: '', filename: '', raw: '' };
+    }
+    let str = String(pathStr).replace(/\\\\/g, '/').trim();
+    let scheme = '';
+    const schemeMatch = str.match(/^([a-zA-Z0-9_-]+):\\/\\/(.*)$/);
+    if (schemeMatch) {
+        scheme = schemeMatch[1];
+        str = schemeMatch[2];
+    }
+    str = str.replace(/^\\/+/, '');
+    const parts = str.split('/').filter(Boolean);
+    const volume = parts.length > 0 ? parts[0] : '';
+    const repo = parts.length > 1 ? parts[0] : (scheme === 'vfs' ? volume : '');
+    const relativePath = parts.length > 1 ? parts.slice(1).join('/') : (scheme === 'vfs' ? '' : str);
+    const filename = parts[parts.length - 1] || '';
+    return { scheme, volume, repo, relativePath, filename, raw: pathStr };
+};
+"""
+        # Extract the exact InSetuURI class definition from insetu_sdk.js
+        start_idx = sdk_src.index("export class InSetuURI {")
+        end_idx = sdk_src.index("window.inSetu = window.inSetu || {};", start_idx)
+        uri_class_code = sdk_src[start_idx:end_idx]
+
+        assertions = """
+// 1. Nested file rename preserves vfs:// scheme and parent path
+const nestedFile = new InSetuURI('vfs://alpha/src/components/button.js');
+assert.equal(nestedFile.basename, 'button.js');
+assert.equal(nestedFile.parentUri, 'vfs://alpha/src/components');
+assert.equal(nestedFile.withName('icon-button.js'), 'vfs://alpha/src/components/icon-button.js');
+assert.deepEqual(nestedFile.pathSegments, ['alpha', 'src', 'components', 'button.js']);
+assert.equal(nestedFile.isRootVolume, false);
+
+// 2. Repo-root file rename preserves vfs://<repo>/<newName>
+const repoFile = new InSetuURI('vfs://alpha/README.md');
+assert.equal(repoFile.parentUri, 'vfs://alpha');
+assert.equal(repoFile.withName('CONTRIBUTING.md'), 'vfs://alpha/CONTRIBUTING.md');
+
+// 3. Subfolder rename & join
+const subFolder = new InSetuURI('vfs://alpha/docs/guides/');
+assert.equal(subFolder.isRootVolume, false);
+assert.equal(subFolder.withName('reference'), 'vfs://alpha/docs/reference');
+assert.equal(subFolder.join('intro.md'), 'vfs://alpha/docs/guides/intro.md');
+
+// 4. Top-level repository volume detection
+const repoRoot = new InSetuURI('vfs://alpha/');
+assert.equal(repoRoot.isRootVolume, true);
+"""
+        full_script = f"{node_script}\n{uri_class_code}\n{assertions}"
+        res = execute_binary(["node", "--input-type=module", "-e", full_script], timeout=10.0)
+        self.assertEqual(res.returncode, 0, f"Frontend InSetuURI Node test failed:\n{res.stderr}")
+
+    def test_multipart_chunk_resolution_and_self_healing_fetch(self):
+        """
+        End-to-end verification of multi-part ctx:// chunk resolution and self-healing:
+        1. Compiles a multi-part workflow (> 1 chunk) where the un-suffixed base_uri does not exist on disk.
+        2. Verifies expand_selection and ctx.read_compiled_context resolve all _partN.txt chunks seamlessly.
+        3. Verifies GET /api/default/fs/fetch?file=<base_uri> resolves _part1.txt (200 OK, never 404).
+        4. Deletes physical cache files and verifies GET /api/default/fs/fetch self-heals on demand.
+        """
+        apply_declarative_schema("vfs_index", VFS_INDEX_SCHEMA, "default")
+        _ = gather_bp.get_context("default")
+        wf_ctx = flow_bp.get_context("default")
+
+        # Create two large files (~260 KB each) so the workflow exceeds the 400 KB chunk limit and splits into 2 parts
+        part_a = "A" * 260000
+        part_b = "B" * 260000
+        (self.repo_dir / "part_a.py").write_text(part_a, encoding="utf-8")
+        (self.repo_dir / "part_b.py").write_text(part_b, encoding="utf-8")
+
+        wf_ctx.store.set("workflows.json", "context_batches", [{
+            "id": "core_system_wrap",
+            "title": "Core System Wrap",
+            "domain": "Workflows",
+            "includes": ["vfs://alpha/part_a.py", "vfs://alpha/part_b.py"],
+        }])
+        sync_vfs_barrier("default")
+
+        _background_compile_workflows(wf_ctx, force_full=True)
+        sync_vfs_barrier("default")
+
+        base_uri = "ctx://workflows/workflow_core_system_wrap_context.txt"
+        part1_uri = "ctx://workflows/workflow_core_system_wrap_context_part1.txt"
+        part2_uri = "ctx://workflows/workflow_core_system_wrap_context_part2.txt"
+
+        # Un-suffixed base_uri must NOT exist physically on disk when split into parts, while _part1 and _part2 DO exist
+        self.assertIsNone(wf_ctx.resolve_path(base_uri, must_exist=True))
+        self.assertIsNotNone(wf_ctx.resolve_path(part1_uri, must_exist=True))
+        self.assertIsNotNone(wf_ctx.resolve_path(part2_uri, must_exist=True))
+
+        # 1. expand_selection([base_uri]) must return [_part1.txt, _part2.txt]
+        expanded = wf_ctx.expand_selection([base_uri])
+        self.assertEqual(expanded, [part1_uri, part2_uri])
+
+        # 2. ctx.read_compiled_context(base_uri) must concatenate both parts seamlessly
+        full_text = wf_ctx.read_compiled_context(base_uri)
+        self.assertIn(part_a[:1024], full_text)
+        self.assertIn(part_b[:1024], full_text)
+
+        # 3. HTTP GET /api/default/fs/fetch?file=<base_uri> must return 200 OK (resolving _part1.txt) instead of 404
+        app = Flask(__name__)
+        app.register_blueprint(fs_bp.bp)
+        client = app.test_client()
+
+        res = client.get(f"/api/default/fs/fetch?file={base_uri}")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn(part_a[:512].encode("utf-8"), res.data)
+
+        # 4. Wipe physical _part1.txt and _part2.txt from disk -> GET /api/default/fs/fetch must self-heal and return 200 OK
+        Path(wf_ctx.resolve_path(part1_uri)).unlink()
+        Path(wf_ctx.resolve_path(part2_uri)).unlink()
+        self.assertFalse(wf_ctx.is_context_on_disk(base_uri))
+
+        res_healed = client.get(f"/api/default/fs/fetch?file={base_uri}")
+        self.assertEqual(res_healed.status_code, 200)
+        self.assertTrue(wf_ctx.is_context_on_disk(base_uri))
 
 
 if __name__ == "__main__":

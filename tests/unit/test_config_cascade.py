@@ -1,12 +1,15 @@
+import ast
+import importlib
 import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from cryptography.fernet import Fernet
+import akasa
 import akasa.db as akasa_db
 import akasa.utils as akasa_utils
-import ast
 from akasa.auth import rotate_master_key, _on_security_settings_updated
 from akasa.extension import SettingsManager, _REGISTERED_SETTINGS_SCHEMAS, MASKED_SECRET_SENTINEL
 from akasa.utils import load_config, load_json_config, save_json_config
@@ -16,6 +19,7 @@ from insetu.core.system.engine_system import (
     hydrate_and_migrate_cascade_settings,
     save_system_config,
 )
+from insetu.core.topology.engine_topology import is_file_tracked_by_sieve, resolve_file_bucket
 from insetu.core.utils_core import sanitize_workspace_config
 
 
@@ -34,10 +38,9 @@ class TestConfigurationCascade(unittest.TestCase):
         self.control_dir = self.root_path / ".insetu"
         (self.control_dir / "cache" / "db").mkdir(parents=True, exist_ok=True)
 
-        self.orig_cwd = akasa_utils._cwd
+        self.orig_cwd = akasa_utils.get_daemon_cwd()
         self.orig_env_ctrl = os.environ.get("AKASA_CONTROL_DIR")
-        os.environ["AKASA_CONTROL_DIR"] = ".insetu"
-        akasa_utils._cwd = self.root_path.as_posix()
+        akasa.reset_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
 
         _init_worker_schema("default")
 
@@ -57,23 +60,11 @@ class TestConfigurationCascade(unittest.TestCase):
         )
 
         # Clear caches after seeding system.json so each test starts with a clean slate
-        akasa_utils._JSON_CACHE.clear()
-        akasa_utils._JSON_MTIME.clear()
-        load_config.clear_all()
+        akasa.reset_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
+        _init_worker_schema("default")
+
     def tearDown(self):
-        for attr in dir(akasa_db):
-            obj = getattr(akasa_db, attr)
-            if hasattr(obj, "connections") and isinstance(obj.connections, dict):
-                for c in list(obj.connections.values()):
-                    try: c.close()
-                    except Exception: pass
-                obj.connections.clear()
-        akasa_utils._cwd = self.orig_cwd
-        if self.orig_env_ctrl is not None:
-            os.environ["AKASA_CONTROL_DIR"] = self.orig_env_ctrl
-        akasa_utils._JSON_CACHE.clear()
-        akasa_utils._JSON_MTIME.clear()
-        load_config.clear_all()
+        akasa.reset_state(cwd=self.orig_cwd, control_dir=self.orig_env_ctrl or ".insetu")
         try:
             self.temp_dir.cleanup()
         except OSError:
@@ -109,11 +100,9 @@ class TestConfigurationCascade(unittest.TestCase):
         self.assertEqual(repo_disk.get("my-repo", {}).get("test_ext", {}).get("repo_strategy"), "merge")
         self.assertEqual(mgr.get("repo_strategy", repo="my-repo"), "merge")
         self.assertEqual(mgr.get("repo_strategy", repo="other-repo"), "rebase")
-
         # 4. Secure Vault -> secrets.json (Fernet v1: ciphertext on disk, plaintext on .get())
         with patch("akasa.auth.get_master_key") as mock_key:
-            from cryptography.fernet import Fernet as _Fernet
-            fixed_key = _Fernet.generate_key()
+            fixed_key = Fernet.generate_key()
             mock_key.return_value = fixed_key
             mgr.set("api_token", "super-secret-token-123")
             secrets_path = self.control_dir / "secrets.json"
@@ -131,18 +120,26 @@ class TestConfigurationCascade(unittest.TestCase):
             mgr.update({"api_token": MASKED_SECRET_SENTINEL, "ws_label": "Updated Label"})
             self.assertEqual(mgr.get("api_token"), "super-secret-token-123")
             self.assertEqual(mgr.get("ws_label"), "Updated Label")
-
             # Updating with empty string must clear the secret
             mgr.update({"api_token": ""})
             self.assertEqual(mgr.get("api_token"), "")
             self.assertEqual(mgr.get("api_token", mask_secrets=True), "")
 
+            # 6. Legacy plaintext secret migration on .get() must not emit config_mutated on a read
+            secrets_path.write_text(json.dumps({"test_ext": {"api_token": "legacy-plaintext-key"}}), encoding="utf-8")
+            akasa_utils._JSON_CACHE.clear()
+            akasa_utils._JSON_MTIME.clear()
+            with patch("akasa.hooks.hooks.emit") as mock_emit:
+                migrated_val = mgr.get("api_token")
+                self.assertEqual(migrated_val, "legacy-plaintext-key")
+                mock_emit.assert_not_called()
+            mgr._sync_vfs_barrier()
+            migrated_disk = json.loads(secrets_path.read_text(encoding="utf-8"))
+            self.assertTrue(migrated_disk["test_ext"]["api_token"].startswith("v1:"))
     def test_master_fernet_key_rotation_reencrypts_secrets(self):
         """rotate_master_key atomically decrypts and re-encrypts secrets.json with the new key."""
-        from cryptography.fernet import Fernet as _Fernet
-
-        key_1 = _Fernet.generate_key().decode("utf-8")
-        key_2 = _Fernet.generate_key().decode("utf-8")
+        key_1 = Fernet.generate_key().decode("utf-8")
+        key_2 = Fernet.generate_key().decode("utf-8")
         local_key_file = self.control_dir / "master_key.txt"
         local_key_file.write_text(key_1, encoding="utf-8")
 
@@ -177,14 +174,12 @@ class TestConfigurationCascade(unittest.TestCase):
         self.assertEqual(mgr.get("api_key"), "sk-live-secret-999")
     def test_all_ctx_settings_calls_reference_declared_schema_keys(self):
         """Every ctx.settings.get('key') and ctx.settings.set('key', ...) in Core and Extensions must exist in that module's settings_schema."""
-        import importlib as _importlib
-
         insetu_pkg_dir = Path(__file__).resolve().parent.parent.parent / "insetu"
         repo_root = insetu_pkg_dir.parent
         for py_file in sorted(insetu_pkg_dir.rglob("engine_*.py")):
             rel_mod = py_file.relative_to(repo_root).with_suffix("").as_posix().replace("/", ".")
             try:
-                _importlib.import_module(rel_mod)
+                importlib.import_module(rel_mod)
             except Exception:
                 pass
 
@@ -285,8 +280,6 @@ class TestConfigurationCascade(unittest.TestCase):
         self.assertEqual(hydrated_cfg["port"], 6060)
     def test_all_registered_extension_schemas_and_roundtrip(self):
         """Every Core and Domain Extension settings_schema must comply with 3-tier scope contracts and round-trip cleanly."""
-        import importlib as _importlib
-
         extension_modules = [
             "insetu.core.system.engine_system",
             "insetu.core.editor.engine_editor",
@@ -301,13 +294,12 @@ class TestConfigurationCascade(unittest.TestCase):
             "insetu.extensions.tailscale.engine_tailscale",
         ]
         for mod_name in extension_modules:
-            _importlib.import_module(mod_name)
+            importlib.import_module(mod_name)
 
         self.assertGreaterEqual(len(_REGISTERED_SETTINGS_SCHEMAS), 10)
 
         with patch("akasa.auth.get_master_key") as mock_key:
-            from cryptography.fernet import Fernet as _Fernet
-            mock_key.return_value = _Fernet.generate_key()
+            mock_key.return_value = Fernet.generate_key()
 
             for ext_name, schema_spec in _REGISTERED_SETTINGS_SCHEMAS.items():
                 schema = schema_spec("default") if callable(schema_spec) else schema_spec
@@ -373,11 +365,8 @@ class TestConfigurationCascade(unittest.TestCase):
                 )
             self.assertIn("target_repos", tpl_data)
             self.assertIn("ignore_dirs", tpl_data)
-
     def test_vfs_sieve_blank_slate_nullable_override_and_bucket_zero(self):
         """is_file_tracked_by_sieve honors Nullable Overrides (explicit [] vs None) and resolve_file_bucket routes to Bucket 0 or _dropped."""
-        from insetu.core.topology.engine_topology import is_file_tracked_by_sieve as _is_file_tracked, resolve_file_bucket as _resolve_bucket
-
         global_cfg = {
             "ignore_dirs": ["build", "dist"],
             "ignore_files": ["secret.txt"],
@@ -387,10 +376,10 @@ class TestConfigurationCascade(unittest.TestCase):
 
         # 1. Inherit State (repo overrides are None/omitted) -> uses global rules
         inherit_repo_cfg = {"repo_dir": "alpha", "apply_ignore": True}
-        self.assertTrue(_is_file_tracked("src/app.py", inherit_repo_cfg, global_cfg, repo_dir="alpha"))
-        self.assertFalse(_is_file_tracked("build/output.py", inherit_repo_cfg, global_cfg, repo_dir="alpha"))
-        self.assertFalse(_is_file_tracked("debug.log", inherit_repo_cfg, global_cfg, repo_dir="alpha"))
-        self.assertFalse(_is_file_tracked("src/style.css", inherit_repo_cfg, global_cfg, repo_dir="alpha"))
+        self.assertTrue(is_file_tracked_by_sieve("src/app.py", inherit_repo_cfg, global_cfg, repo_dir="alpha"))
+        self.assertFalse(is_file_tracked_by_sieve("build/output.py", inherit_repo_cfg, global_cfg, repo_dir="alpha"))
+        self.assertFalse(is_file_tracked_by_sieve("debug.log", inherit_repo_cfg, global_cfg, repo_dir="alpha"))
+        self.assertFalse(is_file_tracked_by_sieve("src/style.css", inherit_repo_cfg, global_cfg, repo_dir="alpha"))
 
         # 2. Override State (repo explicitly sets empty list [] or custom list) -> completely replaces global rules
         override_repo_cfg = {
@@ -400,9 +389,9 @@ class TestConfigurationCascade(unittest.TestCase):
             "repo_ignore_patterns": [],
             "exts": [".py", ".css", ".log"],
         }
-        self.assertTrue(_is_file_tracked("build/output.py", override_repo_cfg, global_cfg, repo_dir="alpha"))
-        self.assertTrue(_is_file_tracked("debug.log", override_repo_cfg, global_cfg, repo_dir="alpha"))
-        self.assertTrue(_is_file_tracked("src/style.css", override_repo_cfg, global_cfg, repo_dir="alpha"))
+        self.assertTrue(is_file_tracked_by_sieve("build/output.py", override_repo_cfg, global_cfg, repo_dir="alpha"))
+        self.assertTrue(is_file_tracked_by_sieve("debug.log", override_repo_cfg, global_cfg, repo_dir="alpha"))
+        self.assertTrue(is_file_tracked_by_sieve("src/style.css", override_repo_cfg, global_cfg, repo_dir="alpha"))
 
         # 3. Sub-Bucket Extraction & Bucket 0 Fallthrough
         sub_buckets = [
@@ -415,15 +404,15 @@ class TestConfigurationCascade(unittest.TestCase):
             }
         ]
         # Matched sub-bucket
-        b_docs, _ = _resolve_bucket("docs/guide.md", sub_buckets, repo_dir="alpha")
+        b_docs, _ = resolve_file_bucket("docs/guide.md", sub_buckets, repo_dir="alpha")
         self.assertEqual(b_docs["id"], "docs")
 
         # Dropped pattern -> returns _dropped sentinel (omitted from both sub-bucket and Bucket 0)
-        b_drop, _ = _resolve_bucket("docs/archived/old.md", sub_buckets, repo_dir="alpha")
+        b_drop, _ = resolve_file_bucket("docs/archived/old.md", sub_buckets, repo_dir="alpha")
         self.assertEqual(b_drop["id"], "_dropped")
 
         # Ignored pattern in sub-bucket -> passes through to Bucket 0 (returns None, None)
-        b_pass, _ = _resolve_bucket("docs/internal_notes.md", sub_buckets, repo_dir="alpha")
+        b_pass, _ = resolve_file_bucket("docs/internal_notes.md", sub_buckets, repo_dir="alpha")
         self.assertIsNone(b_pass)
 
 
