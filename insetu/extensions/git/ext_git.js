@@ -211,7 +211,7 @@ disconnectedCallback() {
         const manifestObj = AppStore.getState().manifest?.ctx?.[diffFile];
         if (manifestObj?.meta?.repo) return manifestObj.meta.repo;
         const allRepos = AppStore.getState().allRepos || [];
-        const base = diffFile.split('/').pop().replace('_diffs.txt', '');
+        const base = new this.utils.InSetuURI(diffFile).basename.replace('_diffs.txt', '');
         return allRepos.find(r => r.replace(/-/g, '_').toLowerCase() === base.toLowerCase() || base.toLowerCase().startsWith(r.replace(/-/g, '_').toLowerCase() + '_')) || '';
     }
 
@@ -370,16 +370,17 @@ disconnectedCallback() {
             const file = typeof fileObj === 'string' ? fileObj : fileObj.filename;
             const repoDir = typeof fileObj === 'object' ? fileObj.repo : null;
             if (this.hiddenOutputs && this.hiddenOutputs.includes(file)) return;
-            const safeFile = file.split('/').pop();
+            const safeFile = new this.utils.InSetuURI(file).basename;
             const baseFileUri = file.replace('ctx://diffs/', 'ctx://contexts/').replace('_diffs.txt', '_context.txt');
             const ctxManifest = AppStore.getState().manifest?.ctx || {};
             const contextManifestObj = ctxManifest[baseFileUri] || {};
             const diffManifestObj = ctxManifest[file] || {};
-
             const diffMeta = diffManifestObj.meta || {};
-            const contextMeta = contextManifestObj.meta || { title: diffMeta.title || safeFile, domain: diffMeta.domain || "Workspaces", desc: "Pending diff payload." };
+            const repoCfg = (this.ecosystem?.targetConfigs || []).find(r => r && r.repo_dir === repoDir);
+            const parentDomain = (repoCfg?.domain || '').trim() || 'Workspaces';
+            const contextMeta = contextManifestObj.meta || { title: diffMeta.title || safeFile, domain: (diffMeta.domain || '').trim() || parentDomain, desc: "Pending diff payload." };
             const extMeta = window.inSetu.events.emitHook('insetu:context-metadata', baseFileUri);
-            const finalCat = extMeta ? extMeta.cat : contextMeta.domain;
+            const finalCat = (extMeta ? extMeta.cat : (contextMeta.domain || diffMeta.domain || '')).trim() || parentDomain;
             const finalDesc = extMeta ? extMeta.desc : diffMeta.desc || contextMeta.desc;
             const finalTitle = extMeta ? extMeta.displayName.replace('.txt', '_diffs.txt') : contextMeta.title + (contextMeta.title.includes('(Diffs)') ? '' : " (Diffs)");
             const sizeStr = this.utils.formatArtifactSize(diffMeta);
@@ -452,8 +453,7 @@ disconnectedCallback() {
                                         filepath: f.filename, 
                                         repoDir: f.repoDir, 
                                         isFS: f.isFS,
-                                        outdated: isDirty,
-                                        chunks: AppStore.getState().manifest?.ctx?.[f.filename]?.chunks || [f.filename]
+                                        outdated: isDirty
                                     }}
                                     @card-clicked=${() => { if(this.vfs && this.vfs.viewAndCopy) this.vfs.viewAndCopy(f.filename); }}>
                                 </sutram-card>
@@ -612,7 +612,7 @@ export class InSetuGitPushProjection extends InSetuElement {
                         <div style="font-weight: bold; color: var(--intent-highlight); margin-bottom: 6px;">Selected Diff Buckets (${this.currentPushTargets.length}):</div>
                         <div style="display: flex; flex-wrap: wrap; gap: 6px; font-family: var(--font-mono);">
                             ${this.currentPushTargets.map(t => html`
-                                <span style="background: var(--bg); border: 1px solid var(--border); padding: 2px 8px; border-radius: 4px;">[${t.repo}]${(t.diff_file || '').split('/').pop()}</span>
+                                <span style="background: var(--bg); border: 1px solid var(--border); padding: 2px 8px; border-radius: 4px;">[${t.repo}]${new this.utils.InSetuURI(t.diff_file || '').basename}</span>
                             `)}
                         </div>
                     </div>
@@ -988,6 +988,40 @@ export class InSetuExtGitCtrl extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-git-ctrl', InSetuExtGitCtrl);
+window.addEventListener('insetu:ensure-fresh-artifact', (e) => {
+    const filePath = e.detail?.filepath || '';
+    if (!filePath.startsWith('ctx://diffs/')) return;
+    if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('git')) return;
+
+    const baseUri = filePath.replace(/_part\d+\.txt$/, '.txt');
+    const appState = AppStore.getState();
+    const dirtyRepos = appState.dirtyRepos || new Set();
+    const dirtyBuckets = appState.dirtyBuckets || new Set();
+    const manifestObj = appState.manifest?.ctx?.[baseUri] || appState.manifest?.ctx?.[filePath];
+    const addr = window.inSetu.utils.BucketAddress ? window.inSetu.utils.BucketAddress.fromFilepath(baseUri, manifestObj?.meta) : null;
+
+    const isDirty = !manifestObj ||
+                    (addr && addr.key && dirtyBuckets.has(addr.key)) ||
+                    (addr && addr.repo && dirtyRepos.has(addr.repo)) ||
+                    dirtyBuckets.has(baseUri) ||
+                    dirtyBuckets.has(filePath);
+
+    if (isDirty) {
+        const run = (async () => {
+            if (window.inSetu.ui?.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus("⏳ Compiling fresh diffs...", null);
+            }
+            await generateDiffs(!manifestObj);
+            if (addr && addr.key) dirtyBuckets.delete(addr.key);
+            if (addr && addr.repo) dirtyRepos.delete(addr.repo);
+            dirtyBuckets.delete(baseUri);
+            dirtyBuckets.delete(filePath);
+            AppStore.setState({ dirtyBuckets: new Set(dirtyBuckets), dirtyRepos: new Set(dirtyRepos) });
+        })();
+        if (Array.isArray(e.inSetuResponses)) e.inSetuResponses.push(run);
+    }
+});
+
 window.ExtensionRegistry.registerExtension('git', {
     name: "Version Control",
     version: "2.0.0",
@@ -1002,7 +1036,7 @@ window.ExtensionRegistry.registerExtension('git', {
             bulkLabel: (items) => `Commit & Push (${items.length})`,
             icon: 'send',
             intent: 'highlight',
-            group: 'share',
+            group: 'vcs',
             vfsBound: true,
             bulkable: true,
             order: 10,
@@ -1245,6 +1279,20 @@ window.ExtensionRegistry.registerExtension('git', {
             icon: "git-pull-request",
             intent: "warning",
             order: 2,
+            bulkActionGroup: "vcs",
+            bulkEntityTypes: ["diff"],
+            menuActions: [
+                {
+                    label: "Recompile Diffs",
+                    icon: "refresh-cw",
+                    onClick: () => generateDiffs(true)
+                },
+                {
+                    label: "Rescan Sweepable State",
+                    icon: "search",
+                    emitEvent: "insetu:git:diffs-refreshed"
+                }
+            ],
             component: "insetu-ext-git-diffs"
         }
     ]

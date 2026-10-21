@@ -10,16 +10,15 @@ import threading
 from collections import deque
 from typing import TypedDict, Optional, List, Dict, Any
 from flask import jsonify
-from akasa.hooks import hooks
-from akasa.utils import is_subpath
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import (
+    is_subpath,
     get_repo_path,
     get_sister_repos,
     execute_binary,
     is_port_listening as _is_port_listening,
     can_bind_port as _can_bind_port,
-    allocate_ephemeral_port as _allocate_ephemeral_port
+    allocate_ephemeral_port as _allocate_ephemeral_port,
 )
 
 PREVIEW_SETTINGS_SCHEMA = [
@@ -555,22 +554,17 @@ def stop_repo_server(ctx, repo_dir: str) -> Dict[str, Any]:
     if entry:
         _terminate_server_entry(entry)
     return _get_repo_status_snapshot(ctx, repo_dir)
-
-
-@hooks.on('topology_boot_complete')
-def auto_boot_pinned_preview_servers(workspace_id=None, **kwargs):
+@preview_bp.on('topology_boot_complete')
+def auto_boot_pinned_preview_servers(ctx, workspace_id=None, **kwargs):
     """Phase 2 Boot Hook: Spawns only repositories with explicit auto_start=True."""
-    wid = workspace_id or "default"
-    ctx = preview_bp.get_context(wid)
+    wid = ctx.workspace_id
     for repo_dir in get_sister_repos(wid):
         try:
             if ctx.settings.get("auto_start", False, repo=repo_dir):
                 start_repo_server(ctx, repo_dir)
         except Exception as e:
             print(f"⚠️ [Preview] Auto-start failed for '{repo_dir}' in workspace '{wid}': {e}")
-
-
-@hooks.on('workspace_shutdown')
+@preview_bp.on('workspace_shutdown')
 def cleanup_workspace_preview_servers(workspace_id=None, **kwargs):
     if not workspace_id:
         return
@@ -581,9 +575,7 @@ def cleanup_workspace_preview_servers(workspace_id=None, **kwargs):
                 to_stop.append(_PROCESS_REGISTRY.pop((ws_id, r_dir)))
     for entry in to_stop:
         _terminate_server_entry(entry)
-
-
-@hooks.on('system_shutdown')
+@preview_bp.on('system_shutdown')
 def cleanup_all_preview_servers(**kwargs):
     with _REGISTRY_LOCK:
         entries = list(_PROCESS_REGISTRY.values())

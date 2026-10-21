@@ -4,10 +4,8 @@ import shutil
 import subprocess
 from typing import TypedDict
 from flask import jsonify
-from insetu.core.sdk import InSetuExtension, ExtensionContext
+from insetu.core.sdk import InSetuExtension, ExtensionContext, SettingsManager
 from insetu.core.utils_core import execute_binary
-from akasa.extension import SettingsManager
-from akasa.hooks import hooks
 
 __depends__ = []
 
@@ -136,20 +134,19 @@ tailscale_bp = InSetuExtension(
 def _background_bind_serve(ctx, manual=False, **kwargs):
     ctx.jobs.update_progress("Configuring Tailscale Serve binding...")
     return _execute_serve_bind(ctx.workspace_id, manual=bool(manual))
-@hooks.on('topology_boot_complete')
-def auto_bind_on_workspace_boot(workspace_id=None, **kwargs):
+@tailscale_bp.on('topology_boot_complete')
+def auto_bind_on_workspace_boot(ctx, workspace_id=None, **kwargs):
     """Tenant Boot Hook: Evaluates auto-bind preference off-thread when the workspace mounts."""
     # Tailscale serve is a host daemon setting for port 5005; bind once on default workspace
-    if not workspace_id or workspace_id != 'default':
+    if ctx.workspace_id != 'default':
         return
 
     try:
-        ctx = tailscale_bp.get_context(workspace_id)
         if ctx.settings.get("auto_bind", True):
             # Dispatch to worker queue with job coalescing to prevent thundering herds
             ctx.jobs.submit("bind_serve_task", coalesce=True, job_category="system_background", manual=False)
     except Exception as e:
-        print(f"⚠️ [Tailscale] Auto-bind trigger failed for [{workspace_id}]: {e}")
+        print(f"⚠️ [Tailscale] Auto-bind trigger failed for [{ctx.workspace_id}]: {e}")
 class TailscaleBindPayload(TypedDict, total=False):
     pass
 

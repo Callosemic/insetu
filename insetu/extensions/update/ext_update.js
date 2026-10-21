@@ -195,16 +195,24 @@ export const UpdateStore = createExtensionStore('Update', {
         }
     },
     _debouncedStatusFn: null,
+    _statusEpoch: 0,
+    clearPayload: () => {
+        UpdateStore.setState(s => ({ _debouncedStatusFn: null, _statusEpoch: (s._statusEpoch || 0) + 1 }));
+    },
     fetchRepoStatus: (repo, silent = false) => {
         if (!repo) return;
+        const expectedWs = window.inSetu.utils.getActiveWorkspace();
+        const expectedEpoch = UpdateStore.getState()._statusEpoch || 0;
         let debounced = UpdateStore.getState()._debouncedStatusFn;
         if (!debounced) {
-            debounced = debounce(async (targetRepo, isSilent) => {
+            debounced = debounce(async (targetRepo, isSilent, originWs, originEpoch) => {
+                if (window.inSetu.utils.getActiveWorkspace() !== originWs) return;
+                if ((UpdateStore.getState()._statusEpoch || 0) !== originEpoch) return;
                 UpdateStore.getState()._executeFetchRepoStatus(targetRepo, isSilent);
             }, 500);
             UpdateStore.setState({ _debouncedStatusFn: debounced });
         }
-        debounced(repo, silent);
+        debounced(repo, silent, expectedWs, expectedEpoch);
     },
     _executeFetchRepoStatus: async (repo, silent = false) => {
         if (!repo) return;
@@ -634,16 +642,12 @@ this.subscribe(
             }
         });
     }
-    onWorkspaceLoad() {
+    onWorkspaceLoad(workspaceId) {
         const repos = AppStore.getState()?.allRepos || this.ecosystem?.allRepos || [];
         this.allRepos = repos;
         const firstRepo = repos[0] || '';
         UpdateStore.setState({ targetRepo: firstRepo });
-        if (firstRepo) {
-            UpdateStore.getState().fetchRepoStatus(firstRepo);
-        }
-        UpdateStore.getState().fetchEligibleRepos();
-        UpdateStore.getState().checkDependencies();
+        super.onWorkspaceLoad(workspaceId);
     }
 
     onViewActivated() {

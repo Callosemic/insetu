@@ -4,9 +4,7 @@ from pathlib import Path
 from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from akasa.hooks import hooks
-from akasa.utils import resolve_system_artifact_path
-from insetu.core.utils_core import InSetuURI, execute_binary
+from insetu.core.utils_core import InSetuURI, execute_binary, resolve_system_artifact_path
 
 __depends__ = []
 
@@ -43,13 +41,11 @@ dev_bp = InSetuExtension(
         }
 }
 )
-
 # 2. Intercept Ecosystem Hooks
-@hooks.on('vfs_mutated')
-def log_vfs_telemetry(mutations=None, workspace_id="default", **kwargs):
+@dev_bp.on('vfs_mutated')
+def log_vfs_telemetry(ctx, mutations=None, workspace_id="default", **kwargs):
     if not mutations: return
     try:
-        ctx = dev_bp.get_context(workspace_id)
         conn = ctx.db
         now = time.time()
         insert_data = []
@@ -67,11 +63,10 @@ def log_vfs_telemetry(mutations=None, workspace_id="default", **kwargs):
             conn.commit()
     except Exception as e:
         print(f"⚠️ [Dev Dash] Failed to log VFS telemetry: {e}")
-@hooks.on('bridge_error')
-def log_bridge_error(filepath=None, error_type=None, details=None, file_content=None, patch_payload=None, workspace_id="default", **kwargs):
+@dev_bp.on('bridge_error')
+def log_bridge_error(ctx, filepath=None, error_type=None, details=None, file_content=None, patch_payload=None, workspace_id="default", **kwargs):
     if not filepath: return
     try:
-        ctx = dev_bp.get_context(workspace_id)
         conn = ctx.db
         conn.execute(
             "INSERT INTO bridge_errors (filepath, error_type, details, file_content, patch_payload, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
@@ -80,11 +75,9 @@ def log_bridge_error(filepath=None, error_type=None, details=None, file_content=
         conn.commit()
     except Exception as e:
         print(f"⚠️ [Dev Dash] Failed to log bridge error: {e}")
-
-@hooks.on('system_error')
-def log_system_error(source="unknown", error_type="Exception", message="", traceback="", payload="", workspace_id="default", **kwargs):
+@dev_bp.on('system_error')
+def log_system_error(ctx, source="unknown", error_type="Exception", message="", traceback="", payload="", workspace_id="default", **kwargs):
     try:
-        ctx = dev_bp.get_context(workspace_id)
         conn = ctx.db
         conn.execute(
             "INSERT INTO system_errors (source, error_type, message, traceback, payload, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
@@ -134,8 +127,7 @@ def get_dev_metrics(ctx):
     now = time.time()
     cutoff = now - 3600  
     # Fetch all telemetry in the last hour from the correct workers ledger
-    import akasa.db as _kernel_db
-    w_conn = _kernel_db.get_connection("workers", workspace_id=ctx.workspace_id)
+    w_conn = ctx.get_db("workers")
     raw_telemetry = w_conn.execute("SELECT filepath, timestamp FROM vfs_event_log WHERE timestamp >= ?", (cutoff,)).fetchall()
 
     file_buckets = {}
@@ -211,11 +203,10 @@ def execute_sql_query(ctx):
     query = data.get("query", "").strip()
     if not query:
         return jsonify({"error": "SQL query string is required."}), 400
-    import akasa.db as _kernel_db
     clean_db_name = Path(db_name).stem or "workers"
 
     try:
-        conn = _kernel_db.get_connection(clean_db_name, workspace_id=ctx.workspace_id)
+        conn = ctx.get_db(clean_db_name)
         t0 = time.time()
         cursor = conn.execute(query)
         elapsed_ms = round((time.time() - t0) * 1000, 2)
@@ -324,10 +315,9 @@ def sweep_telemetry_worker(ctx, **kwargs):
 
     ctx.db.commit()
     return "Telemetry swept."
-@hooks.on('topology_boot_complete')
-def init_dev_workers(workspace_id=None, **kwargs):
+@dev_bp.on('topology_boot_complete')
+def init_dev_workers(ctx, workspace_id=None, **kwargs):
     try:
-        ctx = dev_bp.get_context(workspace_id)
         ctx.jobs.schedule("sweep_telemetry", interval_ms=60000, job_id="dev_telemetry_sweeper")
     except Exception:
         pass

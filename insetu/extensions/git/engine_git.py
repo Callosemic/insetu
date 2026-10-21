@@ -8,19 +8,14 @@ import json
 from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
-from akasa.utils import get_workspace_physics
-from akasa.hooks import hooks
-from akasa.vfs import mount_volume
 from insetu.core.utils_core import (
     get_repo_path,
     execute_binary,
-    get_domain_artifact_path,
     BucketAddress,
     get_safe_repo_id,
     InSetuURI,
-    get_available_contexts
+    get_available_contexts,
 )
-from insetu.core.system.legacy import move_tree_contents
 from insetu.core.topology.engine_topology import resolve_file_bucket, topology_bp
 from insetu.core.cartographer.cartographer import map_repositories
 def get_headless_git_env():
@@ -75,25 +70,28 @@ GIT_SETTINGS_SCHEMA = [
         "description": "Reconciliation strategy for branch divergence inside this repository."
     }
 ]
-git_bp = InSetuExtension('git', __name__, title="Version Control", description="Version control integration, diff generation, and workspace sweeping.", settings_schema=GIT_SETTINGS_SCHEMA)
+git_bp = InSetuExtension(
+    'git',
+    __name__,
+    title="Version Control",
+    description="Version control integration, diff generation, and workspace sweeping.",
+    settings_schema=GIT_SETTINGS_SCHEMA,
+    volumes={
+        "diffs": {
+            "scheme": "ctx",
+            "tier": "cache",
+            "path_key": "diffs_dir",
+            "legacy_dirs": ["ext/git/data/diffs", "cache/diffs"],
+        }
+    },
+)
 __depends__ = ['gather']
-
-@hooks.on('request_paths')
-def hook_git_request_paths(workspace_id=None, **kwargs):
-    return {
-        "diffs_dir": get_domain_artifact_path(workspace_id, "diffs", "git")
-    }
-@hooks.on('workspace_boot', priority=10)
-def mount_git_volumes(workspace_id=None, **kwargs):
-    ctx = git_bp.get_context(workspace_id)
-    control_dir = Path(ctx.paths.get("control_dir"))
-    diffs_dir = Path(ctx.paths.get("diffs_dir"))
-    move_tree_contents(control_dir.joinpath("ext", "git", "data", "diffs"), diffs_dir)
-    mount_volume(workspace_id, 'ctx', 'diffs', diffs_dir.as_posix())
-@hooks.on('register_compilation_steps')
+@git_bp.on('register_compilation_steps')
 def _register_git_compilation_step(workspace_id=None, **kwargs):
     return [{
         "id": "git_diffs",
+        "anchor": "body",
+        "order": 30,
         "depends_on": ["topology_scan"],
         "ext_name": "git",
         "worker_name": "compile_diffs_task"
@@ -187,20 +185,22 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
 
                     b, module = resolve_file_bucket(rel_to_repo, sub_buckets, repo_dir=config.get('repo_dir'))
                     if b and b.get("exclude_from_diffs"): continue
+                    parent_domain = (config.get("domain") or "").strip() or "Workspaces"
                     if b and module:
-                        b_id = f"ctx://diffs/{module}_diffs.txt"
-                        b_title = b.get("meta_map", {}).get(module, {}).get("title", module.replace('_', ' ').title())
-                        b_domain = b.get("meta_map", {}).get(module, {}).get("domain", b.get("domain", config.get("domain", "Workspaces")))
+                        b_id = f"ctx://diffs/{safe_r_dir}_{module}_diffs.txt"
+                        meta_entry = b.get("meta_map", {}).get(module, {})
+                        b_title = (meta_entry.get("title") or "").strip() or module.replace('_', ' ').title()
+                        b_domain = (meta_entry.get("domain") or "").strip() or (b.get("domain") or "").strip() or parent_domain
                         b_bucket_id = module
                     elif b:
                         b_id = f"ctx://diffs/{safe_r_dir}_{b.get('id', 'bucket')}_diffs.txt"
-                        b_title = b.get("title", b.get("id", "bucket").replace('_', ' ').title())
-                        b_domain = b.get("domain", config.get("domain", "Workspaces"))
+                        b_title = (b.get("title") or "").strip() or b.get("id", "bucket").replace('_', ' ').title()
+                        b_domain = (b.get("domain") or "").strip() or parent_domain
                         b_bucket_id = b.get('id', 'bucket')
                     else:
                         b_id = f"ctx://diffs/{safe_r_dir}_diffs.txt"
-                        b_title = config.get("title", safe_r_dir.replace('_', ' ').title())
-                        b_domain = config.get("domain", "Workspaces")
+                        b_title = (config.get("title") or "").strip() or safe_r_dir.replace('_', ' ').title()
+                        b_domain = parent_domain
                         b_bucket_id = "main"
 
                     if b_id not in bucketed_files: 
@@ -327,16 +327,14 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     new_content_full = header_str + "".join(text_blocks)
                     existing_content = ""
                     try:
-                        # Reconstruct full existing content from all chunks to prevent false positive diffs
-                        responses = ctx.emit('resolve_payload_chunks', uri=out_filename, manifest=working_manifest)
-                        chunks = next((r for r in responses if r), [out_filename])
-                        for c in chunks:
-                            chunk_text = ctx.vfs.read(c)
-                            if chunk_text:
-                                existing_content += chunk_text
+                        existing_content = ctx.read_compiled_context(out_filename, manifest=working_manifest)
                     except Exception:
                         pass
-                    if existing_content == new_content_full and out_filename in working_manifest:
+                    if (
+                        existing_content == new_content_full
+                        and out_filename in working_manifest
+                        and ctx.is_context_on_disk(out_filename, working_manifest[out_filename])
+                    ):
                         local_diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
                         local_manifest_deltas[out_filename] = working_manifest[out_filename]
                         continue
@@ -432,10 +430,9 @@ def _background_sweep_status(ctx, **kwargs):
             pass
 
     return {"message": "Scan complete.", "artifact": {"repos": results}}
-@hooks.on('topology_boot_complete')
-def pre_warm_git_sweep(workspace_id=None, **kwargs):
+@git_bp.on('topology_boot_complete')
+def pre_warm_git_sweep(ctx, workspace_id=None, **kwargs):
     """Pre-warms the Git sweepable state silently in the background after the topology settles."""
-    ctx = git_bp.get_context(workspace_id)
     ctx.jobs.submit_one_shot("sweep_status_task", 5000, job_category="system_background")
 class GitSweepStatusPayload(TypedDict, total=False):
     pass
@@ -518,10 +515,7 @@ def api_git_changelogs(ctx):
     changelogs = []
     # Abstracted horizontal cross-talk using the Event Bus
     try:
-        results = ctx.emit('request_changelog_suggestions', repo=repo)
-        for res in results:
-            if res:
-                changelogs.extend(res)
+        changelogs = ctx.emit_merge_list('request_changelog_suggestions', repo=repo)
     except Exception as e:
         print(f"Warning: Failed to fetch release log suggestions via Event Bus: {e}")
 
@@ -582,12 +576,11 @@ def _background_git_push(ctx, repo=None, message="", diff_file=None, targets=Non
                     rel_to_repo = abs_filepath.relative_to(resolved_repo_path).as_posix()
                 except ValueError:
                     rel_to_repo = filepath
-
                 if target_diff_names:
                     if sub_buckets:
                         b, module = resolve_file_bucket(rel_to_repo, sub_buckets, repo_dir=curr_repo)
                         if b and module:
-                            b_id = f"ctx://diffs/{module}_diffs.txt"
+                            b_id = f"ctx://diffs/{safe_r_dir}_{module}_diffs.txt"
                         elif b:
                             b_id = f"ctx://diffs/{safe_r_dir}_{b.get('id', 'bucket')}_diffs.txt"
                         else:
@@ -595,7 +588,7 @@ def _background_git_push(ctx, repo=None, message="", diff_file=None, targets=Non
                     else:
                         b_id = f"ctx://diffs/{safe_r_dir}_diffs.txt"
 
-                    if InSetuURI(b_id).basename in target_diff_names:
+                    if InSetuURI(b_id).basename in target_diff_names or (module and f"{module}_diffs.txt" in target_diff_names):
                         files_to_stage.add(rel_to_repo)
                 else:
                     files_to_stage.add(rel_to_repo)
@@ -673,11 +666,9 @@ def api_git_push(ctx):
         job_category="ui_blocking"
     )
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-@hooks.on('request_available_diffs')
-def provide_available_diffs(workspace_id=None, **kwargs):
+@git_bp.on('request_available_diffs')
+def provide_available_diffs(ctx, workspace_id=None, **kwargs):
     """Soft-dependency provider: Supplies expected diffs to the Gather/Flow UI dropdowns."""
-    ctx = git_bp.get_context(workspace_id)
-    paths = ctx.paths
     # 1. Derive the baseline topology directly from the SSOT using exclusion flags array
     base_contexts = get_available_contexts(workspace_id, exclusion_flags=["exclude_from_diffs", "exclude_from_context"], include_types=["gather"])
     expected_diffs = set()

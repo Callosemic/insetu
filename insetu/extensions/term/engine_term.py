@@ -6,8 +6,7 @@ import json
 from typing import TypedDict
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from akasa.hooks import hooks
-from akasa.utils import get_all_workspace_ids, is_extension_enabled
+from insetu.core.utils_core import is_extension_enabled
 try:
     from flask_sock import Sock
     HAS_SOCK = True

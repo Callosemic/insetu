@@ -53,14 +53,10 @@ export class InSetuExtDevDash extends InSetuElement {
                 }
             }
         );
-
         this.registerGlobalListener('sutram-route-changed', window, (e) => {
             if (e.detail.tab === 'dev' && (!e.detail.subTabs['dev'] || e.detail.subTabs['dev'] === 'dash')) {
                 DevStore.setState({ forceRefreshTick: Date.now() });
             }
-        });
-        this.registerGlobalListener('insetu:soft-refresh', window, () => {
-            DevStore.setState({ thrashingFiles: [], bridgeErrors: [], systemErrors: [] });
         });
         this.registerGlobalListener('insetu:vfs-mutated', window, this.utils.debounce((e) => {
             const payload = e.detail;
