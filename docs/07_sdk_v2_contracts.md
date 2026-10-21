@@ -15,7 +15,14 @@ my_ext_bp = InSetuExtension(
     module_name=__name__, 
     title="My Extension", 
     schema={"my_table": {"id": "TEXT PRIMARY KEY", "val": "TEXT"}},
-    settings_schema=[{"id": "api_key", "label": "API Key", "type": "text", "scope": "workspace", "default": ""}]
+    settings_schema=[{"id": "api_key", "label": "API Key", "type": "text", "scope": "workspace", "default": ""}],
+    volumes={
+        "my_domain": {
+            "tier": "data",  # "data" (.insetu/data/<ext>/) or "cache" (.insetu/cache/<ext>/)
+            "scheme": "ctx",
+            "legacy_dirs": ["ext/my_ext/data"]  # Auto-migrated on Phase 1 boot
+        }
+    }
 )
 
 # Retrieve a fully hydrated ExtensionContext bound to a tenant workspace
@@ -29,9 +36,12 @@ Route handlers (`@my_ext_bp.route('path')`) and background workers (`@my_ext_bp.
 * **`ctx.workspace_id`** *(String)*: The active multi-tenant tracking scope.
 * **`ctx.config`** *(Dict)*: Lazy configuration access to the active workspace configuration map.
 * **`ctx.paths`** *(Dict)*: Platform paths directory mappings (e.g., `ctx.paths['workspace_root']`).
-* **`ctx.resolve_path(filepath, is_absolute_artifact=False, must_exist=False)`** *(Method)*: Safely resolves a canonical URI (`vfs://`, `ctx://`, `ws://`) to physical disk coordinates; returns `None` if `must_exist=True` and the file does not physically exist.
+* **`ctx.manifest`** *(Property)*: Reads the centralized dual-root (`{"vfs": {...}, "ctx": {...}}`) manifest dictionary.
+* **`ctx.resolve_path(filepath, is_absolute_artifact=False, must_exist=False, allow_heal=True)`** *(Method)*: Safely resolves a canonical URI (`vfs://`, `ctx://`, `ws://`) to physical disk coordinates; returns `None` if `must_exist=True` and the file does not physically exist.
 * **`ctx.create_entity_file(folder, title, yaml_data, body_content="", prefix=None, filename=None)`** *(Method)*: Standardized Markdown entity generator. Creates a Markdown file with structured YAML frontmatter, slugifies the title, and commits the file atomically to the tenant VFS.
 * **`ctx.is_context_on_disk(base_uri, entry=None)`** *(Method)*: Verifies that all constituent chunk files for a compiled context entry physically exist on disk before bypassing compilation.
+* **`ctx.read_compiled_context(uri, manifest=None)`** *(Method)*: Reads and seamlessly concatenates all chunks of a multi-part `ctx://` artifact or single VFS file.
+* **`ctx.has_missing_domain_artifacts(domain_type)`** *(Method)*: Inspects whether any manifest entry for a specified domain type is missing its physical chunk files on disk.
 * **`ctx.compile_context(base_uri, header_block, text_blocks, files, meta, max_kb=None, is_ephemeral=False)`** *(Method)*: SDK gateway delegating context chunking and compilation to the core Gather engine.
 * **`ctx.reconcile_domain(domain_uri_prefix, manifest_deltas, domain_dir, filename_suffix="_context.txt", target_repos=None)`** *(Method)*: SDK gateway for flushing VFS barrier sentinels and reconciling domain manifest deltas in SQLite.
 * **`ctx.settings.get(key)`** *(Method)*: Retrieves configuration values from the extension's isolated settings UI.
@@ -74,7 +84,7 @@ Extensions are strictly forbidden from relative-importing OS chassis functions. 
 * **`this.vfs`**: `.viewSourceFile(path)`, `.viewFileGitDiff(path)`, `.isFileGitModified(path)`, `.fetchAndCopy(path)`, `.downloadFile(url)`, `.shareFiles(file, chunks)`, `.normalizeVfsURI(path)`, `.executeBulkMove(items)`, `.executeBulkArchive(items)`, `.executeBulkDelete(items)`
 * **`this.ui`**: `.openWorkspaceBrowser(options)`, `.openFolderBrowser(cb)`, `.setGlobalStatus(msg)`, `.viewTextBlob(title, content, suggestedFilename)`, `.popoutProjection(filepath)`
 * **`this.sys`**: `.executeWorkspaceMutation(path, payload)`, `.executeSystemCompile()`, `.switchTab(tabId)`, `.refreshManifest()`
-* **`AppStore.getState().setBrowsePath(pathArray, subId)`**: Updates active browse paths and automatically reflects directory navigation in the URL hash.
+* **`AppStore.getState().getBrowsePath(subId)`** / **`setBrowsePath(pathArray, subId)`**: Retrieves or updates active browse paths scoped strictly to a designated sub-tab identifier, reflecting navigation into the URL hash without cross-tab interference.
 * **`this.editor`**: `.getEditorContent()`, `.setEditorContent(text)`, `.insertTextAtCursor(text)`
 * **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.truncateFilename(filename, maxLen, ellipsis)`, `.copyRawText(text)`, `.normalizeEntityData(data)`, `.extractManifestFiles(manifest, targetKey, domain)`, `.debounce(fn, ms)`, `.formatArtifactSize(meta)`, `.getScopedStorage(key, defaultVal, wsId)`, `.setScopedStorage(key, value, wsId)`, `.removeScopedStorage(key, wsId)`, `.nativeShareFiles(files)`, `BucketAddress.fromFilepath(path, meta)`
 * **`.getOfflineMode(extName)`**: Retrieves the declarative offline mode capability (`"full"`, `"read_only"`, `"none"`) for a targeted extension.
@@ -150,6 +160,8 @@ window.ExtensionRegistry.registerExtension('my_ext', {
         icon: "star",
         intent: "primary",
         order: 10,
+        menuStores: ["App"], // Stores to observe for reactive menu item recalculation
+        menuActions: (slotCfg) => [{ label: 'New Item', icon: 'plus', onClick: () => { /* ... */ } }],
         component: "insetu-ext-component" // Exclude 'component' if defining a parent container tab
     }],
     // Declarative custom file editor matchers (ADR 0041)

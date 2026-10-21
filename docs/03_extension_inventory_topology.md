@@ -25,41 +25,46 @@ The core OS is strictly domain-agnostic. It does not know what a "citation" or a
 ## 2. Active Extensions (V1 Finalized)
 These are fully built and compliant extensions currently operating within the system. Note that all domain extensions now reside physically in the `insetu/extensions/` and `insetu/static/js/extensions/` directories to preserve the micro-kernel boundary.
 ### A. Git Operations (`engine_git.py`)
-* **Status:** Active Extension (Decoupled from Core Kernel, Upgraded with Dynamic Settings and Spatial Projections).
+* **Status:** Active Extension (Decoupled from Core Kernel, Upgraded with Dynamic Settings, Declarative Volumes, and Spatial Projections).
 * **Role:** Version control, diff generation, repository reconciliation strategies, and workspace sweeping.
-* **Dependencies (`__depends__`):** `None`
-* **Data Containment:** Ephemeral (direct `.git/` inspection) with configuration states bound to tenant settings databases.
+* **Dependencies (`__depends__`):** `['gather']`
+* **Data Containment:** Ephemeral (direct `.git/` inspection) with configuration states bound to tenant settings databases and declarative diff caching (`ctx://diffs/`).
 * **Injection Surfaces:**
     * Polymorphic Cards: Registers `git-push`, `git-sweep`, `git-ctrl-init`, `git-ctrl-remote`, `git-ctrl-pull`, `git-ctrl-branch`, `git-state-continue`, `git-state-abort`, and `git-resolve-conflicts` actions inside the centralized Entity-Action Registry.
     * Spatial Projections: Projects commit message drafting into `InSetuGitPushProjection` (`git:push`) and pull dry-run inspection into `sutram-report-projection` (`git:preview`) with integrated runtime reconciliation controls.
-    * Core Hooks: `@hooks.on('compile_contexts')` to trigger JIT background diff asset compilation; returns `next_kwargs` (`touched_diffs`) for worker step chaining into `engine_flow.py`.
+    * Compilation Pipeline: Registers the `git_diffs` step (`anchor: "body"`, `order: 30`) via `@git_bp.on('register_compilation_steps')` to compile diff payloads off-thread.
     * Configuration: Declares dynamic repo-level pull strategy selectors (`rebase`, `merge`, `ff_only`), as well as declarative `repoConfigOptions` (`git-repo-exclude`) and `bucketConfigOptions` (`git-exclude`).
 ### B. Citations (`engine_citations.py`)
-* **Status:** Active Extension (Upgraded to SDK V2).
-* **Role:** Manages the academic reference library, bibliography parsing, and citation generation.
+* **Status:** Active Extension (SDK V2 with IoC Topology Compilation & Membrane Decoupling).
+* **Role:** Manages academic reference libraries, bibliography parsing, citation insertion, and global/repo-scoped context generation.
 * **Dependencies (`__depends__`):** `None`
-* **Data Containment:** `~/.insetu/data/citations.db`
+* **Data Containment:** `{ARTIFACTS_BASE}/citations.db` (SQLite ledger synced with `library.json` and `citations_ui.json`).
 * **Injection Surfaces:**
-    * UI Hooks: `zone:modal-edit-toolbar` (Injects "📚 Cite" button).
-    * Config Hooks: `@hooks.on('mutate_workspace_config')` to inject `.bib` payload streams.
+    * Core Hooks: Blueprint-scoped `@citations_bp.on('mutate_workspace_config')`, `@citations_bp.on('gather_declare_topology')` (declaring global and scoped citation contexts with dynamic generator and recall callbacks), and `@citations_bp.on('pre_compile_document')`.
+    * UI Layout: Primary Navigation Tab (`library` -> `lib-main`, `lib-explore`, `lib-import`).
+    * Polymorphic Cards: Registers `cit-notes`, `cit-edit`, `cit-pin`, and `cit-import` entity actions.
 ### C. Research (`engine_research.py`)
-* **Status:** Active Extension (Upgraded to SDK V2).
-* **Role:** Web scraping, payload extraction, and localized inbox triage.
+* **Status:** Active Extension (SDK V2 with Managed Timeouts & Membrane Decoupling).
+* **Role:** Web scraping, search aggregation (Serper, Google, DuckDuckGo), payload extraction via Ingest, and AI-assisted batch triage.
 * **Dependencies (`__depends__`):** `['ingest']`
-* **Data Containment:** `~/.insetu/data/research.db` (Isolated Inbox).
+* **Data Containment:** `{ARTIFACTS_BASE}/research.db` (`research_jobs` and `research_inbox` tables).
 * **Injection Surfaces:**
-    * Worker Matrix: Submits long-running URL scraping routines to the `TaskQueue`.
-    * UI Hooks: Primary Navigation Tab injection (The Triage UI).
+    * Worker Matrix: Dispatches non-blocking metronome tasks (`gather_next_page`, `scrape_next_link`, `export_context_task`) with dynamic jitter pacing and active workspace validation.
+    * Spatial Projections: Decoupled article inspection into `InSetuResearchPreviewProjection` (`research:preview`).
+    * UI Layout: Sub-navigation Tab (`edit` -> `research`).
+    * Polymorphic Cards: Registers `rs-pause`, `rs-resume`, `rs-retry`, `rs-cancel`, and `rs-delete` actions on `research_job` entities.
 ### D. Kanban Tracker (`engine_tracker.py`)
-* **Status:** Active Extension (Upgraded to SDK V2 with Spatial Projections and .insetu-data Containment).
+* **Status:** Active Extension (SDK V2 with Pure .insetu-data Containment, Settings Hub Embedding & Membrane Decoupling).
 * **Role:** Project management, issue routing, sprint tracking, shadow board template spawning, task hierarchy tree inspection, and active focus isolation.
 * **Dependencies (`__depends__`):** `None`
-* **Data Containment:** `~/.insetu/data/tracker.db` (CQRS Cache) backed by asynchronous Markdown ticket commits via the VFS into `<repo>/.insetu-data/tracker/` (with automatic Phase 1 boot migration from legacy `.tracker/`).
+* **Data Containment:** `~/.insetu/data/tracker.db` (CQRS Cache) backed by asynchronous Markdown ticket commits via the VFS strictly into `<repo>/.insetu-data/tracker/`.
 * **Injection Surfaces:**
-    * Spatial Projections: Decoupled ticket editing into `InSetuTrackerEditProjection` (`tracker:edit`) pinned to spatial viewport columns.
-    * Config Hooks: Uses `@hooks.on('mutate_workspace_config')` to natively inject `.insetu-data/tracker/` (and legacy `.tracker/`) sub-buckets into the RAG Gatherer based on active schema types.
+    * Spatial Projections: Decoupled ticket editing into `InSetuTrackerEditProjection` (`tracker:edit`) pinned to spatial viewport columns with in-place frontmatter synchronization (`syncFrontmatter`).
+    * Settings Hub Integration: Embedded `InSetuExtTrackerSettings` (`?embedded=${true}`) inside the unified Settings Hub via declarative `settingsActions`, eliminating standalone global modal overlays.
+    * Dynamic Layout Slots: Manages custom sub-navigation and primary navigation tabs via `ExtensionRegistry.setDynamicLayoutSlots()` with declarative `menuActions: _buildTrackerMenuActions`.
+    * Config Hooks: Blueprint-scoped `@tracker_bp.on('mutate_workspace_config')` injecting `.insetu-data/tracker/` sub-buckets into the RAG Gatherer based on active schema types.
     * Virtual Module Templates: Projects `.insetu-data/tracker/prompts/ticket_authoring_guide.md` under `ctx://prompts/.templates/tracker/ticket_authoring_guide.md` (ADR 0064).
-    * VFS Hooks: Uses `vfs_mutated` to instantly sync the UI SQLite index.
+    * Core Hooks: Blueprint-scoped `@tracker_bp.on('workspace_boot')` (`heal_uri_column`), `@tracker_bp.on('topology_boot_complete')` (archiving scheduler and cache sync), `@tracker_bp.on('vfs_mutated')`, and `@tracker_bp.on('request_changelog_suggestions')`.
     * Polymorphic Cards: Registers `task-start`, `task-close`, `task-convert`, `task-hierarchy`, `task-focus`, `task-new-child`, `task-reopen`, `task-pause`, `task-spawn` entity actions.
 ### E. Code Formatting (`engine_format.py`)
 * **Status:** Active Extension.
@@ -68,32 +73,44 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * Polymorphic Cards: Registers `format-code` action.
 ### P. Document Publishing (`engine_publish.py`)
-* **Status:** Active Extension (Extracted from Format).
-* **Role:** Document compilation (Pandoc) to PDF, Word, HTML.
+* **Status:** Active Extension (SDK V2 with Substack Rich-Text Snippet Support & Membrane Decoupling).
+* **Role:** Multi-format document compilation via Pandoc (PDF, DOCX, HTML, and Substack/Medium HTML fragments) with wordcount macro stripping.
 * **Dependencies (`__depends__`):** `None`
-* **Data Containment:** Ephemeral.
+* **Data Containment:** Ephemeral artifacts in `{ARTIFACTS_BASE}/` with automatic TTL cleanup via `ctx.jobs.register_ephemeral`.
 * **Injection Surfaces:**
-    * Broadcasts `pre_compile_document` to intercept bibliography mappings.
-    * Listens to `@hooks.on('vfs_resolve_file')` to resolve compiled publish artifacts via VFS.
+    * Core Hooks: Blueprint-scoped `@publish_bp.on('vfs_resolve_file')` resolving compiled outputs for VFS `/download/` routes.
+    * Middleware: Dispatches `pre_compile_document` to collect citation bibliographies and editor macro patterns (`strip_macros`), stripping standalone and inline wordcount tags before Pandoc invocation.
+    * Polymorphic Cards: Registers `publish-doc` entity action on `.md` files.
+    * UI Modals: `<insetu-ext-publish-modals>` featuring Substack rich-text paste (`copyRichHtml`) and raw HTML tags copy.
 ### F. Workflows (`engine_flow.py`)
-* **Status:** Active Extension (Upgraded to Spatial Projections).
-* **Role:** Manage LLM execution pipelines and automated context batching.
+* **Status:** Active Extension (SDK V2 with Declarative Volumes, Parallel JIT Compilation, Batch Duplication & Membrane Decoupling).
+* **Role:** Manage LLM execution pipelines, automated context batching, and target URI dependency resolution.
 * **Dependencies (`__depends__`):** `['gather']`
+* **Data Containment:** Declarative cache volume `ctx://workflows/` (`.insetu/cache/workflows/`).
 * **Injection Surfaces:**
-    * Spatial Projections: Decoupled batch execution inspection (`InSetuFlowViewProjection`, `flow:view`) and batch editing (`InSetuFlowEditProjection`, `flow:edit`) into spatial columns.
-    * Core Hooks: `@hooks.on('request_paths')` and `@hooks.on('workspace_boot')` for `ctx://workflows` volume mounting, `@hooks.on('register_compilation_steps')` for DAG chain compilation, and `@hooks.on('pre_file_save')` for response archiving.
-
+    * Spatial Projections: Decoupled batch execution inspection (`InSetuFlowViewProjection`, `flow:view`) and batch editing (`InSetuFlowEditProjection`, `flow:edit`) into spatial columns with yenVUI `.flow-section` and `<sutram-tag>` styling.
+    * Core Hooks: Blueprint-scoped `@flow_bp.on('mutate_workspace_config')`, `@flow_bp.on('register_compilation_steps')` (`anchor: "body"`, `order: 40`), and `@flow_bp.on('pre_file_save')` for response archiving.
+    * JIT Context Healing: Subscribes to `insetu:ensure-fresh-artifact` for on-demand `ctx://workflows/` compilation.
+    * Polymorphic Cards: Registers `flow-edit` and `flow-duplicate` (`duplicateBatch`) entity actions.
+    * UI Layout: Sub-navigation Tab (`context` -> `flow`) with declarative `menuActions: _buildFlowMenuActions`.
 ### G. Favorites (`engine_favorites.py`)
-* **Status:** Active Extension (Upgraded to SDK V2).
-* **Role:** Pinning files and folders for quick access, maintaining a localized SQLite cache.
+* **Status:** Active Extension (SDK V2 with Canonical URIs & Folder Integrity).
+* **Role:** Pinning files and folders for quick access, maintaining a localized SQLite cache mirrored to `bookmarks.json`.
 * **Dependencies (`__depends__`):** `None`
-* **Data Containment:** `~/.insetu/data/favorites.db`
-
+* **Data Containment:** `{ARTIFACTS_BASE}/favorites.db` (`favorites` table) synchronized with `bookmarks.json`.
+* **Injection Surfaces:**
+    * Core Hooks: State hydration and URI healing via `ctx.db.heal_uri_column("favorites", "path", "vfs://")`.
+    * Polymorphic Cards: Registers `fave_toggle_file`, `fave_toggle_repo`, and `fave_toggle_folder` with folder trailing slash preservation and folder entity data contract parity.
+    * UI Layout: Sub-navigation Tab (`edit` -> `favorites`).
 ### H. Skills Tracker (`engine_skills.py`)
-* **Status:** Active Extension.
-* **Role:** Spaced repetition and track logging using the SM-2 algorithm.
+* **Status:** Active Extension (SDK V2 with Declarative Volumes & Membrane Decoupling).
+* **Role:** Spaced-repetition practice tracking and metric analysis using the SM-2 algorithm.
 * **Dependencies (`__depends__`):** `None`
-* **Data Containment:** Global SQLite ledger (`~/.insetu/skills.db`) and localized markdown files.
+* **Data Containment:** `{ARTIFACTS_BASE}/skills.db` (`skills_ledger` table) backed by sovereign Markdown practice files under declarative volume `ctx://skills/` (`.insetu/data/skills/`).
+* **Injection Surfaces:**
+    * Core Hooks: Blueprint-scoped `@skills_bp.on('topology_boot_complete')` for ledger hydration and URI normalization (`ctx.db.heal_uri_column`).
+    * Spatial Projections: Projects interactive practice runs into `InSetuSkillsSessionProjection` (`skills:session`).
+    * Entity Creation: Standardized on `ctx.create_entity_file()` for practice card generation.
 ### I. Terminal Interface (`engine_term.py`)
 * **Status:** Active Extension (Fully Graduated to SDK V2).
 * **Role:** Manages native full-duplex PTY WebSocket sessions directly inside the event loop using flask-sock and Xterm.js. Features virtual keyboard action controls, touch gesture navigation (swipes, long-press, double-tap), context menu actions (`tc-copy`, `tc-paste`, `tc-sigint`), and explicit `status` endpoint checks.
@@ -110,37 +127,39 @@ These are fully built and compliant extensions currently operating within the sy
     * Polymorphic Cards: Registers actions for taking, resolving, and ignoring tickets.
     * UI Hooks: Primary Edit Sub-navigation Tab injection.
 ### K. Automation Hooks (`engine_hooks.py`)
-* **Status:** Active Extension (SDK V2 with Cryptographic Gating).
+* **Status:** Active Extension (SDK V2 with Cryptographic Gating & Membrane Decoupling).
 * **Role:** IFTTT-style local command automation triggered by VFS events.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `{ARTIFACTS_BASE}/hooks.db` (`hooks_rules` table), `workers.db` execution logs, and cryptographic command approval signatures in `.insetu/system.json`.
 * **Injection Surfaces:**
-    * VFS Hooks: `@hooks.on('vfs_mutated')`.
+    * Core Hooks: Blueprint-scoped `@hooks_bp.on('topology_resolved', priority=100)` with `get_system_index_path()` centralization.
     * UI Hooks: Sub-navigation Tab injection (`ctrl` -> `hooks`).
     * Polymorphic Cards: Registers actions (`hook-toggle`, `hook-execute`, `hook-edit`, `hook-delete`) for `hook_rule` entities.
 ### L. Developer Dashboard (`engine_dev.py`)
 * **Status:** Active Extension (SDK V2).
 * **Role:** Telemetry tracking for file thrashing, Yomama Sync Bridge errors, and invocation boot log exports.
 * **Dependencies (`__depends__`):** `None`
-* **Data Containment:** `{ARTIFACTS_BASE}/dev.db` (`file_telemetry` and `bridge_errors` tables).
+* **Data Containment:** `{ARTIFACTS_BASE}/dev.db` (`file_telemetry`, `bridge_errors`, and `system_errors` tables).
 * **Injection Surfaces:**
-    * Core Hooks: `@hooks.on('vfs_mutated')` and `@hooks.on('bridge_error')`.
-    * UI Hooks: Primary Navigation Tab injection (`dev` -> `dash`).
+    * Core Hooks: Blueprint-scoped `@dev_bp.on('vfs_mutated')`, `@dev_bp.on('bridge_error')`, and `@dev_bp.on('system_error')`.
+    * UI Hooks: Primary Navigation Tab injection (`dev` -> `dash`, `logs`, `sql`, `memory`).
 ### M. Notes Library (`engine_notes.py` & `ext_notes.js`)
-* **Status:** Active Extension (SDK V2 with Dual-Scope Storage).
+* **Status:** Active Extension (SDK V2 with Declarative Volumes, Menu Actions & Membrane Decoupling).
 * **Role:** Workspace-level and repository-scoped markdown notes management with frontmatter indexing (`ctx://contexts/notes_context.txt`).
 * **Dependencies (`__depends__`):** `None`
-* **Data Containment:** `{ARTIFACTS_BASE}/notes.db` (`notes_ledger` table) backed by global `ctx://notes/` and repository-scoped `vfs://{repo}/.insetu-data/notes/` markdown assets.
+* **Data Containment:** `{ARTIFACTS_BASE}/notes.db` (`notes_ledger` table) backed by declarative `ctx://notes/` volume (`NotesVFSDriver`) and repository-scoped `vfs://{repo}/.insetu-data/notes/` markdown assets.
 * **Injection Surfaces:**
-    * Core Hooks: `@hooks.on('vfs_mutated')` and `@hooks.on('compile_contexts')`.
-    * UI Hooks: Sub-navigation Tab injection (`edit` -> `notes`), `customEditors` matcher for `ctx://notes/` pathing.
+    * Core Hooks: Blueprint-scoped `@notes_bp.on('mutate_workspace_config')`, `@notes_bp.on('topology_boot_complete')`, `@notes_bp.on('vfs_mutated')`, and `@notes_bp.on('gather_declare_topology')`.
+    * UI Layout: Sub-navigation Tab (`edit` -> `notes`) with declarative `menuActions` (`New Note`, `Pre-Cache Notes`).
+    * Spatial Projections: Multi-projection note editing in `InSetuExtNotesEditor` pinned to spatial viewports with in-place frontmatter synchronization (`syncFrontmatter`).
+    * Custom Editors: Declarative matcher for `ctx://notes/` and `.insetu-data/notes/` paths.
 ### N. Tailscale Network Manager (`engine_tailscale.py` & `ext_tailscale.js`)
 * **Status:** Active Extension (SDK V2 / Declarative).
 * **Role:** Automated HTTPS port binding over Tailscale Serve on workspace boot.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** Ephemeral.
 * **Injection Surfaces:**
-    * Core Hooks: `@hooks.on('topology_boot_complete')` triggering non-blocking background worker tasks.
+    * Core Hooks: Blueprint-scoped `@tailscale_bp.on('topology_boot_complete')` triggering non-blocking background worker tasks.
     * Settings Schema: Declarative port mode selector and manual bind action trigger.
 ### O. Semantic Update (`engine_update.py` & `ext_update.js`)
 * **Status:** Active Extension (SDK V2 with Spatial Projections and DAG Chaining).
@@ -159,16 +178,24 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * Network Interceptor: Wraps `window.inSetu.api` via `OfflineHttpProvider`.
     * UI Slots: Primary Navigation Tab (`offline`) housing `ledger` and `log` sub-tabs, and global storage modal.
-
 ### Q. Cronic Job Manager (`engine_cronic.py` & `ext_cronic.js`)
-* **Status:** Active Extension (SDK V2).
+* **Status:** Active Extension (SDK V2 with Membrane Decoupling & InSetuURI Standardization).
 * **Role:** Schedules Python/bash scripts as system cron tasks, manages log rotation, and handles crontab drift healing.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `{ARTIFACTS_BASE}/cronic.db` (`cronic_jobs` table) and `.insetu/data/cronic_*.log` execution logs.
 * **Injection Surfaces:**
-    * Core Hooks: `@hooks.on('topology_boot_complete')` for crontab drift healing and daily log sweeping.
-    * UI Slots: Primary Navigation Tab (`cronic` -> `main`).
+    * Core Hooks: Blueprint-scoped `@cronic_bp.on('topology_boot_complete')` for crontab drift healing, daily log sweeping, and `ctx.db.heal_uri_column`.
+    * UI Slots: Primary Navigation Tab (`cronic` -> `main`) with `InSetuURI` basename resolution.
     * Polymorphic Cards: Registers `cronic-schedule-file` entity action for `.py` and `.sh` files.
+### R. Managed App Server & Web Preview (`engine_preview.py` & `ext_preview.js`)
+* **Status:** Active Extension (SDK V2 with Repo-Scoped Settings and Pop-Out Parity).
+* **Role:** Multi-profile development server supervisor (`static`, `uvicorn`, `flask`, `django`, `streamlit`, `gradio`, `marimo`, `vite`, `storybook`, `mkdocs`, `hugo`, `custom`), sticky port allocator (`5100–5199`), Tailscale HTTPS serve binder, and live `<iframe>` web application previewer.
+* **Dependencies (`__depends__`):** `None`
+* **Data Containment:** Ephemeral process registry and in-memory log ring buffers (`collections.deque`) with per-repository configurations vaulted in `.insetu/repo.settings.json`.
+* **Injection Surfaces:**
+    * Core Hooks: `@hooks.on('topology_boot_complete')` for opt-in `auto_start` server spawning, and `@hooks.on('workspace_shutdown')` / `@hooks.on('system_shutdown')` for process group (`os.killpg`) teardown.
+    * UI Slots: Sub-navigation Tab (`ctrl` -> `preview`) with `allow_popout: true`.
+    * Polymorphic Cards: Registers `preview-html-file` entity action on `.html` files and folders.
 
 ---
 
@@ -201,6 +228,7 @@ These are domain-specific features currently hardcoded into the Micro-Kernel tha
 | `dev` | `<Micro-Kernel>` | None (Currently) |
 | `flow` | `gather` | None (Currently) |
 | `tailscale` | `<Micro-Kernel>` | None (Currently) |
+| `preview` | `<Micro-Kernel>` | None (Currently) |
 > **Architectural Note: Hard vs. Soft Horizontal Relationships**
 > The table above represents **Hard Dependencies** (where an extension will fail to boot if its upstream requirement is missing). 
 > For **Soft Dependencies** (opportunistic cross-talk, such as the `git` extension asking the `tracker` extension for recent tickets to populate a UI), extensions MUST use the Event Bus. This ensures that if the target extension is disabled by the user, the requesting extension gracefully degrades rather than crashing.
