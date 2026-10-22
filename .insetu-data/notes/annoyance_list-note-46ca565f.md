@@ -4,15 +4,40 @@ title: inSetu Bug list
 repo: insetu
 sub_bucket: None
 created_at: '2026-08-04T10:11:37'
-updated_at: '2026-10-18T11:04:03'
+updated_at: '2026-10-19T23:24:54'
 tags: []
 ---
 
 ## Current Bug list
 
 ### Current Priorities
+- [ ] yomama should confirm genesis patch over-writes
+- [ ] files module seems like it has se
+unclosed html tag or something like that. adjacent file tags have different font sizes
+- [ ] got a flow compilation error in another workplace that didn't have flow installed
+- [ ] can't pop from raw edit back to yaml, and let's put raw edit permanently next to delete, so that it doesn't occupy the same place as save when save is not there (only save is anchored right)
+- [ ] if a projection is launched behind a window or focused but is behind a window, have its tab-bar fade to teh front briefly to show that it's there.
+- [ ] Files search should also match folders
+- [ ] rename broken?
+- [ ] git diffs bulk selection for push and commit opens a button on the quickpacks dropdown, but the proper pattern would be to have a second-row right-side menu that exposes a bulk push/commit command.
+- [ ] restore tap active tab to refresh functionality across os
+- [ ] quickpack action drawer should be width constrained and side scrollable like all action bars.
+- [ ] update tracker prompt or maybe tracker itself; maybe it should just expose a tracker://{repo}/ mount that can be written to, hiding ./insetu-data/tracker/ ? - this also provides a pattern for global tickets
+- [ ] update akasa to testing standards of insetu and sutram
+- [ ] malloc code at top of both app.py and cli.py - move to akasa and import?
+- [ ] (akasa) Key Rotation Error Resilience: In akasa/auth/__init__.py, rotate_master_key iterates across all workspaces and re-encrypts their secrets.json. If an individual tenant's secrets.json fails to re-encrypt (for example, due to an unhandled permission issue on disk), the function prints a warning and proceeds to overwrite master_key.txt. While suitable for single-host local operations, staging the rotated secrets in memory and committing them along with master_key.txt in a two-phase check would prevent partial key rotation in multi-tenant edge cases.
+- [ ] on first attempt at popout of a text file, it brought up a blank window with this error:
+ext_term.js:358 WebSocket connection to 'wss://gookcentre.tail8e12bd.ts.net:9005/api/default/term/stream?token=5902e4d96014258709a102190345fd31' failed: Invalid frame header
+_connectWebSocket @ ext_term.js:358
+- [ ] (Flow) every little vfs update seems to refresh/flash the Batch Workflow popup modal?
+- [ ] move tailscale to core?
+- [ ] filter seems to filter out quickpacks
+- [ ] when resizing smaller, can't gain columns
+- [ ] bulk move should start from current directory
+- [ ] system error ledger errors should be copy-pastable
+- [ ] update repo selection box is empty
 - [ ] flow shows contexts like diffs as missing in the editor, but of course diffs are sometimes missing. not a useful view and kinda in the way
-- [ ] in yomama, if it's a syntax error, it doesn't need a diff
+- [ ] in yomama, if it's a syntax error, it doesn't need a diff, just needs a text box for viewing the error
 - [ ] top level icons like Dev that disappear on offline and reappear when reconnect don't get their icons
 - [ ] bulk git commit (selecting more than one diff bunch)
 - [ ] flow when dirty should change to the construction icon?
@@ -31,6 +56,7 @@ tags: []
 - [ ] surface share too large error to UI
 - [ ] select all in fs
 - scrolling between projections should drag floating windows
+- [ ] bridge testing suite
 
 
 ### unsorted
