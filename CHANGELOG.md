@@ -2,6 +2,88 @@
 
 <!-- version list -->
 
+## v0.26.0 (2026-10-21)
+
+### Bug Fixes
+
+- Register prompts core module, resolve fallback bridge AST hygiene, and vendorize lucide
+  ([`7b427c3`](https://github.com/Callosemic/insetu/commit/7b427c3b76c29fcc4f1de44740079d4d1098ed2a))
+
+- **app**: App shell wsgi connection teardown, file descriptor scaling, and config cascade template
+  parity
+  ([`ea9e166`](https://github.com/Callosemic/insetu/commit/ea9e1667eefdb3d0439ad1a09f0771fd104a33c8))
+
+- **bridge**: Resolver no-op precedence, expansion risk override, and akasa membrane isolation
+  ([`cb43c4e`](https://github.com/Callosemic/insetu/commit/cb43c4e125e462397be62db2dbcb2f2c555f4dfc))
+
+- **core**: Bound thread stack size and dynamically resolve working directory in app shell
+  ([`4ccf9ce`](https://github.com/Callosemic/insetu/commit/4ccf9ce4ee04d36cb8d4896910caf1ba42ec46b9))
+
+### Features
+
+- Canonical URI enforcement, inter-workspace virtual mounts (ws://), 3-tier config decoupling, and
+  terminal cache vacuuming
+  ([`07fdb63`](https://github.com/Callosemic/insetu/commit/07fdb63ab255400fad8487281dee1a0fc9cc180d))
+
+- Core pipeline membrane decoupling, declarative volumes, jit artifact healing, and prompts menu
+  modernization
+  ([`4be9610`](https://github.com/Callosemic/insetu/commit/4be9610c6dd997b10cc901b44c727e79106cce33))
+
+- Core prompt engine, virtual module templates, job api unification, and cartographer caching
+  ([`54ab9a1`](https://github.com/Callosemic/insetu/commit/54ab9a1d42a1ceb4c3a6e0ba24dc0a3542324c06))
+
+- Encapsulate akasa kernel lifecycle, implement workspace swap fsm, 3-way occ merge, and enforce
+  4-file membrane boundary
+  ([`410612f`](https://github.com/Callosemic/insetu/commit/410612f85896c990113b7cc70baeb64420075537))
+
+- Hierarchical vfs sieve, sub-bucket pattern filtering, unified settings hub, and chatbot artifact
+  healing
+  ([`8cfd9de`](https://github.com/Callosemic/insetu/commit/8cfd9def5bc39196700c676ead36dfc728f6a46d))
+
+- Synchronous workspace swap FSM, 3-way OCC merge, embedded topology hub, and declarative volume
+  mounts
+  ([`f9c99e8`](https://github.com/Callosemic/insetu/commit/f9c99e8c042682aba251dd09f0353d93b8ff0b91))
+
+- **extensions**: Decouple knowledge suite from akasa membrane, add declarative volumes, citations
+  ioc topology, and substack publishing
+  ([`67b2225`](https://github.com/Callosemic/insetu/commit/67b222598df3fa9661666712d2f5158dd572d6b6))
+
+- **extensions**: Enable notes multi-projection windowing, pop-out sub-id hydration, and
+  custom-editor component parity
+  ([`5ae9075`](https://github.com/Callosemic/insetu/commit/5ae9075f16b04fb8bbc5f35fc240bd8ac92a49ac))
+
+- **extensions**: Membrane decoupling, declarative flow volumes, JIT compilation, and tracker
+  settings hub embedding
+  ([`c3e4c96`](https://github.com/Callosemic/insetu/commit/c3e4c9651ac8a16eeea5fcfafeb134c7a97711d1))
+
+- **extensions**: Modernize extension suite with canonical URIs, bindStore, and cross-workspace
+  domain mounts
+  ([`62dbea2`](https://github.com/Callosemic/insetu/commit/62dbea23088f185ea0870b93b4d161eb4213d5f2))
+
+- **extensions**: Unify selector subscriptions, jobs api, repository data containment, and state
+  hydration
+  ([`1266538`](https://github.com/Callosemic/insetu/commit/12665388c9c8401c17ca0387bef917c8dc6c5154))
+
+- **preview**: Package app server supervisor, add sutram vendorizer, and harden architectural
+  fitness rules
+  ([`e244e24`](https://github.com/Callosemic/insetu/commit/e244e24a75c3551bb8428a557a1e85a062427796))
+
+- **preview,git,dev**: Add managed app server preview, bulk vcs push, and memory telemetry profiler
+  ([`ea6c2bd`](https://github.com/Callosemic/insetu/commit/ea6c2bd47ce4546052d04846162db672d01c54b5))
+
+- **vfs**: Atomic bulk mutation gateway, popout presence negotiation, and sutram service worker
+  consolidation
+  ([`552666c`](https://github.com/Callosemic/insetu/commit/552666cf0a30aee328cd84dfe9775852ed3af0a5))
+
+### Refactoring
+
+- **devops**: Decouple extensions from kernel membrane and harden git, term, and update lifecycles
+  ([`bd88129`](https://github.com/Callosemic/insetu/commit/bd881290239c6a8b6d33e44ca83a9655c4926ec3))
+
+- **kernel**: Encapsulate app shell lifecycle into akasa substrate and harden lifeboat fs
+  ([`601cfbb`](https://github.com/Callosemic/insetu/commit/601cfbba83dece828c3ea2b1aa6eb2fca808028b))
+
+
 ## v0.25.0 (2026-10-15)
 
 ### Bug Fixes
