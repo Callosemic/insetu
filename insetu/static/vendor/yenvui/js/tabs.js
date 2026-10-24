@@ -17,6 +17,7 @@ import{html as e,css as r}from"lit";import{YenvuiBase as n}from"./yenvui-base.js
             background: var(--bg-deep);
             border-bottom: 1px solid var(--border);
             flex-shrink: 0;
+            overscroll-behavior-x: none;
             touch-action: pan-x pan-y;
         }
         .tabs-container::-webkit-scrollbar {

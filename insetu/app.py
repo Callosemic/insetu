@@ -13,6 +13,29 @@ import threading
 import time
 import logging
 from contextlib import redirect_stdout
+os.environ.setdefault("AKASA_CONTROL_DIR", ".insetu")
+
+
+def _preseed_daemon_port_env() -> None:
+    """Pure-stdlib port pre-seeder: guarantees INSETU_PORT is populated in os.environ before any boot panic can occur."""
+    if "INSETU_PORT" in os.environ:
+        return
+    ctrl_dir = Path(os.getcwd()).joinpath(os.environ.get("AKASA_CONTROL_DIR", ".insetu"))
+    for fname in ("host.json",):
+        fpath = ctrl_dir.joinpath(fname)
+        if fpath.exists():
+            try:
+                raw = json.loads(fpath.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    port_val = raw.get("port") or (raw.get("system", {}).get("port") if isinstance(raw.get("system"), dict) else None)
+                    if isinstance(port_val, int) and port_val > 0:
+                        os.environ["INSETU_PORT"] = str(port_val)
+                        return
+            except Exception:
+                continue
+
+
+_preseed_daemon_port_env()
 
 _sibling_akasa = Path(__file__).resolve().parent.parent.parent.joinpath("akasa")
 if _sibling_akasa.exists() and (_sibling_akasa / "akasa").is_dir():
@@ -26,6 +49,7 @@ import akasa.utils as _akasa_utils
 from akasa.utils import (
     load_config,
     get_workspace_physics,
+    get_system_index_path,
     is_core_module,
 )
 from insetu.core.utils_core import CORE_MODULES_TUPLE
@@ -90,8 +114,8 @@ def load_workspace_extensions():
         preload_all = bool(sys_settings.get("preload_all_extensions", cfg.get("preload_all_extensions", False)))
     except Exception:
         pass
-    # 1. Sweep system.json for a Union of all required extensions globally
-    index_path = Path(_akasa_utils.get_daemon_cwd()).joinpath(".insetu", "system.json").as_posix()
+    # 1. Sweep workspaces index for a Union of all required extensions globally
+    index_path = get_system_index_path()
     if os.path.exists(index_path):
         try:
             with open(index_path, 'r', encoding='utf-8') as f:
@@ -418,7 +442,7 @@ def manifest():
     manifest_data["start_url"] = f"/?node={pwa_scope}"
     cfg_path, _ = get_workspace_physics()
     # Append a cache-busting timestamp query parameter so browsers re-evaluate the custom icons
-    ts = int(os.path.getmtime(cfg_path)) if os.path.exists(cfg_path) else 1
+    ts = int(Path(cfg_path).stat().st_mtime) if Path(cfg_path).exists() else 1
     if "icons" in manifest_data:
         for icon in manifest_data["icons"]:
             if "icon-192" in icon.get("src", ""):
@@ -521,18 +545,24 @@ def run_app():
     wz_logger = logging.getLogger('werkzeug')
     wz_logger.setLevel(logging.INFO)
     wz_logger.addFilter(QuietPollingFilter())
-
-    cfg = load_config()
-    sys_settings = SettingsManager('system', 'default')
-    if "INSETU_PORT" not in os.environ:
+    try:
+        cfg = load_config()
+        sys_settings = SettingsManager('system', 'default')
         resolved_port = sys_settings.get("port", cfg.get("port", 5005))
-        os.environ["INSETU_PORT"] = str(resolved_port)
+        if "INSETU_PORT" not in os.environ or os.environ["INSETU_PORT"] == "5005":
+            os.environ["INSETU_PORT"] = str(resolved_port)
 
-    port = int(os.environ["INSETU_PORT"])
-    print(f"🚀 Starting inSetu Developer OS (Port {port})...")
-    print(f"👉 Open http://127.0.0.1:{port} in your browser")
-    use_reloader = os.environ.get("INSETU_RELOADER", "0") == "1"
-    app.run(debug=True, use_reloader=use_reloader, port=port)
+        port = int(os.environ.get("INSETU_PORT", 5005))
+        print(f"🚀 Starting inSetu Developer OS (Port {port})...")
+        print(f"👉 Open http://127.0.0.1:{port} in your browser")
+        use_reloader = os.environ.get("INSETU_RELOADER", "0") == "1"
+        app.run(debug=True, use_reloader=use_reloader, port=port)
+    except Exception:
+        try:
+            hooks.emit("system_shutdown")
+        except Exception:
+            pass
+        raise
 
 if __name__ == "__main__":
     run_app()

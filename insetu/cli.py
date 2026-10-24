@@ -28,16 +28,19 @@ def scaffold_profiles(cwd):
     os.makedirs(base_dir, exist_ok=True)
 
     defaults_dir = Path(__file__).resolve().parent.joinpath("defaults").as_posix()
-    for target_name, src_name in [
-        ("config.json", "config_json.txt"),
-        ("host.json", "host_json.txt"),
-        ("workspaces.json", "workspaces_json.txt"),
-        (".gitignore", "gitignore.txt")
+    for target_name, src_name, fallback_payload in [
+        ("config.json", "config_json.txt", None),
+        ("host.json", "host_json.txt", {"port": 5005}),
+        ("workspaces.json", "workspaces_json.txt", {"workspaces": {"default": {"config_path": "config.json"}}, "active_workspace": "default"}),
+        (".gitignore", "gitignore.txt", None)
     ]:
         target_p = Path(base_dir).joinpath(target_name).as_posix()
         src_p = Path(defaults_dir).joinpath(src_name).as_posix()
-        if not os.path.exists(target_p) and os.path.exists(src_p):
-            shutil.copy(src_p, target_p)
+        if not os.path.exists(target_p):
+            if os.path.exists(src_p):
+                shutil.copy(src_p, target_p)
+            elif fallback_payload is not None:
+                Path(target_p).write_text(json.dumps(fallback_payload, indent=2), encoding="utf-8")
 
     os.makedirs(Path(base_dir).joinpath("data").as_posix(), exist_ok=True)
     os.makedirs(Path(base_dir).joinpath("cache", "db").as_posix(), exist_ok=True)

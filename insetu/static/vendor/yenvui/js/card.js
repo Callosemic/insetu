@@ -1,9 +1,10 @@
-import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js";import{YenvuiGestureController as h,getEventPath as m}from"./physics.js";export class YenvuiCard extends p{static properties={titleText:{type:String},detailText:{type:String},detailPrefix:{type:String},detailSuffix:{type:String},descriptionText:{type:String},statusText:{type:String},icon:{type:String},intentColor:{type:String},intent:{type:String},selected:{type:Boolean,reflect:!0},disableSelection:{type:Boolean},_overlayActive:{type:Boolean,reflect:!0},_hasActions:{type:Boolean,reflect:!0,attribute:"has-actions"},compact:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0},stale:{type:Boolean,reflect:!0}};static styles=d`
+import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js";import{YenvuiGestureController as h,getEventPath as v}from"./physics.js";export class YenvuiCard extends p{static properties={titleText:{type:String},detailText:{type:String},detailPrefix:{type:String},detailSuffix:{type:String},descriptionText:{type:String},statusText:{type:String},icon:{type:String},intentColor:{type:String},intent:{type:String},selected:{type:Boolean,reflect:!0},disableSelection:{type:Boolean},_overlayActive:{type:Boolean,reflect:!0},_hasActions:{type:Boolean,reflect:!0,attribute:"has-actions"},compact:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0},stale:{type:Boolean,reflect:!0}};static styles=d`
         :host {
             display: block;
             margin-bottom: var(--card-margin-bottom, 12px);
             position: relative;
-            touch-action: pan-x pan-y;
+            touch-action: pan-y;
+            overscroll-behavior-x: none;
             content-visibility: var(--card-content-visibility, auto);
             contain-intrinsic-size: var(--card-contain-intrinsic-size, auto 76px);
             -webkit-text-size-adjust: 100%;
@@ -19,7 +20,8 @@ import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
             contain-intrinsic-size: none;
         }
         .card-wrapper {
-            touch-action: pan-x pan-y;
+            touch-action: pan-y;
+            overscroll-behavior-x: none;
             background: var(--bg-card, var(--input-bg));
             border: 1px solid var(--border);
             border-top: var(--card-border-top, 1px solid var(--border));
@@ -409,7 +411,7 @@ import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
                     @click=${e=>{e.stopPropagation(),e.preventDefault(),this._overlayActive=!this._overlayActive}}>
                     <yv-icon name="chevron-left" style="width: 14px; height: 14px;"></yv-icon>
                 </div>
-                <div class="actions-tray" @click=${{handleEvent:e=>{if(this._isPanning){e.stopPropagation(),e.preventDefault();return}const r=m(e),i=r.some(o=>o.tagName==="SUTRAM-DROPDOWN"||o.tagName==="YENVUI-DROPDOWN"),a=r.some(o=>o.classList&&o.classList.contains("menu-item"));if(i&&!a)return;const c=r.some(o=>{if(!o.tagName)return!1;const l=o.tagName.toUpperCase();return!!(l==="BUTTON"||l==="SUTRAM-ASYNC-BTN"||l==="YENVUI-ASYNC-BTN"||a)})},capture:!0}}>
+                <div class="actions-tray" @click=${{handleEvent:e=>{if(this._isPanning){e.stopPropagation(),e.preventDefault();return}const r=v(e),i=r.some(o=>o.tagName==="SUTRAM-DROPDOWN"||o.tagName==="YENVUI-DROPDOWN"),a=r.some(o=>o.classList&&o.classList.contains("menu-item"));if(i&&!a)return;const c=r.some(o=>{if(!o.tagName)return!1;const l=o.tagName.toUpperCase();return!!(l==="BUTTON"||l==="SUTRAM-ASYNC-BTN"||l==="YENVUI-ASYNC-BTN"||a)})},capture:!0}}>
                     ${t?"":n`<span class="tray-caption">${this.titleText}</span>`}
                     <div class="actions-wrapper">
                         <slot name="actions" @slotchange=${this._handleSlotChange}></slot>

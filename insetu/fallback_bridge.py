@@ -32,6 +32,8 @@ def parse_blocks(text):
             current_file = line.replace("<<<<<<< FILE:", "").strip()
             if current_file not in files: files[current_file] = []
             state = "OUTSIDE"
+        elif line.startswith("<<<<<<< ID:"):
+            continue
         elif line.startswith("<<<<<<< COMMENT"):
             state = "COMMENT"
             comment_lines = []
@@ -41,6 +43,10 @@ def parse_blocks(text):
         elif line.startswith("======="):
             if state == "SEARCH":
                 state = "REPLACE"
+                replace_lines = []
+            elif state in ("OUTSIDE", "COMMENT") and current_file:
+                state = "REPLACE"
+                search_lines = []
                 replace_lines = []
         elif line.startswith(">>>>>>> REPLACE"):
             if state == "REPLACE" and current_file:
@@ -534,7 +540,7 @@ def api_emergency_dump():
                 if len(chunks) == 1:
                     zf.writestr(bucket_name, chunks[0])
                 else:
-                    stem, ext = os.path.splitext(bucket_name)
+                    stem, ext = Path(bucket_name).stem, Path(bucket_name).suffix
                     for idx, chunk_text in enumerate(chunks, start=1):
                         zf.writestr(f"{stem}_part{idx}{ext}", chunk_text)
 
