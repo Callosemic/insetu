@@ -119,7 +119,8 @@ def check_javascript_files():
     gather_repo_sub_pattern = re.compile(r'stores\.Gather\.getState\(\)\.(?:allRepos|pinnedRepos|targetConfigs)')
     sutram_settings_event_pattern = re.compile(r'addEventListener\s*\(\s*[\'"]sutram-settings-(?:action|save)[\'"]')
     legacy_system_uri_pattern = re.compile(r'system://')
-    sutram_form_control_pattern = re.compile(r'<(?:input|select|textarea)\b(?!.*type=["\'](?:checkbox|radio|file)["\'])')
+    sutram_form_control_pattern = re.compile(r'<(?:input|select|textarea)\b(?!.*type=["\']file["\'])')
+    cross_store_mutation_pattern = re.compile(r'(?:window\.inSetu\.stores\.([A-Za-z0-9_]+)|([A-Za-z0-9_]+Store))\.setState\s*\(')
     legacy_refresh_pattern = re.compile(r'\bon(?:Sub)?NavReselected\s*\(')
     unmanaged_document_input_listener_pattern = re.compile(r"document\.addEventListener\(\s*['\"](input|change)['\"]")
     open_virtual_file_pattern = re.compile(r'\b(?:this\.vfs|window\.inSetu\.vfs|vfs)\.openVirtualFile\s*\(')
@@ -170,6 +171,7 @@ def check_javascript_files():
         "sutram:popout-projection",
         "sutram:is-swapping-scope",
         "sutram:is-swapping-workspace",
+        "sutram:resolve-primary-tab-meta",
         "sutram:resolve-route-hash",
         "sutram:resolve-item-size",
     }
@@ -194,6 +196,16 @@ def check_javascript_files():
     insetu_uri_class_pattern = re.compile(r'export\s+class\s+InSetuURI\b([\s\S]*?)^}', re.MULTILINE)
     insetu_uri_store_coupling_pattern = re.compile(r'\b(?:AppStore|derivedVfsFiles|stores\.App)\b')
     manual_entity_chunks_prop_pattern = re.compile(r'\.entityData=\$\{\{[\s\S]{0,400}?\bchunks\s*:')
+    unprefixed_api_route_pattern = re.compile(
+        r'\b(?:this\.api|window\.inSetu\.api(?:\.workspace)?)\.(?:get|post|delete|getJson|postJson|deleteJson|bindJobAction)\(\s*([\'`"])([^\'`"$?\s]+)(?:\?[^\'`"]*)?\1'
+    )
+    known_api_modules = {
+        "bridge", "gather", "cartographer", "config", "editor", "fs", "system",
+        "workers", "auth", "security", "topology", "offline", "llm", "agent", "prompts",
+        "citations", "cronic", "dev", "favorites", "flow", "format", "freshdesk",
+        "git", "hooks", "ingest", "notes", "preview", "publish", "research", "skills",
+        "tailscale", "term", "tracker", "update"
+    }
 
     # Initialize Tree-sitter for Hybrid Parsing
     ts_available = False
@@ -207,16 +219,30 @@ def check_javascript_files():
         ts_available = True
     except ImportError:
         print("⚠️ [WARNING] Tree-sitter not installed. Falling back to legacy regex. (Run `pip install -e .[syntax]`)")
+    ext_dir = BACKEND_DIR / "extensions"
+    tier3_ext_names = sorted([
+        d.name for d in ext_dir.iterdir()
+        if d.is_dir() and not d.name.startswith("__")
+    ]) if ext_dir.exists() else []
+    tier3_store_names = [f"{name.capitalize()}" for name in tier3_ext_names] + ["Kanban"]
+    tier2_ext_leak_pattern = re.compile(
+        r'\bstores\.(?:' + '|'.join(re.escape(s) for s in tier3_store_names) + r')\b'
+        r'|ctx://(?:' + '|'.join(re.escape(n) for n in tier3_ext_names) + r')/'
+        r'|\.insetu-data/(?:' + '|'.join(re.escape(n) for n in tier3_ext_names) + r')/'
+    ) if tier3_ext_names else None
+
     js_scan_roots = [FRONTEND_DIR, BACKEND_DIR / "core", BACKEND_DIR / "extensions"]
     for filepath in collect_unique_files(js_scan_roots, [".js"]):
         file = filepath.name
         is_tier0 = "sutram" in filepath.parts and "vendor" not in filepath.parts
+        is_core_js = "core" in filepath.parts and not is_tier0
         is_extension = file.startswith("ext_") or "extensions" in filepath.parts
         with open(filepath, "r", encoding="utf-8") as f:
             lines = f.readlines()
-
         is_lit_component = any(re.search(r'from\s+[\'"]lit[\'"]', l) for l in lines)
         full_content = "".join(lines)
+        declared_stores = set(re.findall(r'createExtensionStore\(\s*[\'"]([A-Za-z0-9_]+)[\'"]', full_content))
+        declared_store_vars = {f"{s}Store" for s in declared_stores} | set(re.findall(r'const\s+([A-Za-z0-9_]+Store)\s*=\s*createExtensionStore', full_content))
         # --- 1. TREE-SITTER AST STRUCTURAL PASS ---
         if ts_available:
             tree = parser.parse(bytes(full_content, "utf8"))
@@ -251,7 +277,7 @@ def check_javascript_files():
                 for node in match[1].get("verb", []):
                     verb_name = full_content.encode('utf8')[node.start_byte:node.end_byte].decode('utf8')
                     line_n = node.start_point[0] + 1
-                    if verb_name not in allowed_verbs and file not in ["api.js", "sdk.js"]:
+                    if verb_name not in allowed_verbs and file not in ["api.js", "sdk.js", "insetu_sdk.js"]:
                         report_violation("APPROVED_API_VERB_MANDATE", filepath, line_n, f"Unapproved method '.{verb_name}' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).")
                     if verb_name == "pollJob" and is_extension and file not in ("ext_tracker.js", "ext_flow.js"):
                         print(f"⚠️ [WARNING: BIND_JOB_ACTION_PREFERENCE] {file}:{line_n}\n   ↳ Imperative this.api.pollJob detected. Prefer declarative this.api.bindJobAction when possible.")
@@ -306,6 +332,15 @@ def check_javascript_files():
                 1,
                 "Sequential N+1 VFS mutation loop detected inside executeBulk*. Dispatch a single atomic 'fs/bulk' mutation instead."
             )
+        if is_core_js and tier2_ext_leak_pattern:
+            for m in tier2_ext_leak_pattern.finditer(full_content):
+                line_num = full_content[:m.start()].count('\n') + 1
+                report_violation(
+                    "TIER2_EXTENSION_NAME_LEAK_BAN",
+                    filepath,
+                    line_num,
+                    f"Tier 2 core module '{file}' contains hardcoded Tier 3 extension reference '{m.group(0)}'. Use ExtensionRegistry or IoC hooks instead."
+                )
         if "core" in filepath.parts and "fs" in filepath.parts:
             for m in fs_domain_coupling_pattern.finditer(full_content):
                 line_num = full_content[:m.start()].count('\n') + 1
@@ -365,6 +400,21 @@ def check_javascript_files():
                     line_num,
                     "Manual 'chunks:' property inside .entityData in extension template is banned. Pass 'filepath' and let core/fs/fs.js resolve chunks from the live manifest."
                 )
+        if file not in ("api.js", "insetu_sdk.js", "sutram_sdk.js"):
+            for m in unprefixed_api_route_pattern.finditer(full_content):
+                raw_route = m.group(2).strip().lstrip("/")
+                if not raw_route:
+                    continue
+                segments = [s for s in raw_route.split("/") if s]
+                first_seg = segments[0] if segments else ""
+                if len(segments) < 2 or first_seg not in known_api_modules:
+                    line_num = full_content[:m.start()].count('\n') + 1
+                    report_violation(
+                        "CANONICAL_API_ROUTE_PREFIX_MANDATE",
+                        filepath,
+                        line_num,
+                        f"Non-canonical API route '{raw_route}' detected. Always specify the explicit '<module>/<endpoint>' prefix (e.g. 'flow/batches', 'prompts/resolve')."
+                    )
         for legacy_arr_match in legacy_array_persist_pattern.finditer(full_content):
             line_num = full_content[:legacy_arr_match.start()].count('\n') + 1
             report_violation(
@@ -608,8 +658,15 @@ def check_javascript_files():
                 report_violation("DOMAIN_STORE_TOPOLOGY_MIRROR_BAN", filepath, line_num, "Domain store mirrors AppStore topology properties (targetConfigs/allRepos). Read topology reactively from AppStore or this.ecosystem instead.")
             if singleton_modal_ban_pattern.search(line):
                 report_violation("SINGLETON_MODAL_BAN", filepath, line_num, "References to FsStore.fileModal or <insetu-file-modal> are banned. Use activeBuffers maps and agnostic projections instead.")
-            if is_extension and is_lit_component and re.search(r'<button\b[^>]*class=["\'][^"\'\n]*\bbtn-sm\b', line):
-                report_violation("SUTRAM_BUTTON_MANDATE", filepath, line_num, "Raw <button class=\"btn-sm\"> detected in Lit extension template. Use <sutram-btn> or <sutram-async-btn> primitives instead.")
+            if is_extension:
+                for store_match in cross_store_mutation_pattern.finditer(line):
+                    ns_store, var_store = store_match.group(1), store_match.group(2)
+                    if ns_store and ns_store not in declared_stores:
+                        report_violation("CROSS_STORE_MUTATION_BAN", filepath, line_num, f"Cross-store state mutation on 'stores.{ns_store}.setState()' detected. Extensions may only call .setState() on their own store.")
+                    elif var_store and var_store not in declared_store_vars:
+                        report_violation("CROSS_STORE_MUTATION_BAN", filepath, line_num, f"Cross-store state mutation on '{var_store}.setState()' detected. Extensions may only call .setState() on their own store.")
+            if is_extension and is_lit_component and re.search(r'<button\b', line):
+                report_violation("SUTRAM_BUTTON_MANDATE", filepath, line_num, "Raw <button> detected in Lit extension template. Use <sutram-btn> or <sutram-async-btn> primitives instead.")
 
             if is_lit_component and re.search(r'<sutram-btn\b(?!.*label=)[^>]*>[^<]+\S', line) and 'slot=' not in line:
                 report_violation("SUTRAM_BUTTON_DECLARATIVE_LABEL_MANDATE", filepath, line_num, "Raw text child node detected in <sutram-btn>. Use declarative label=\"...\" property attribute instead.")

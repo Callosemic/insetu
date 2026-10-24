@@ -198,7 +198,6 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 node.lineno,
                 "Ad-hoc ThreadPoolExecutor() instantiation detected outside Akasa kernel. Use ctx.jobs.map_parallel() or akasa.workers.run_parallel() to prevent thread sprawl and SQLite connection leaks."
             )
-
         if func_name == "submit_immediate_job" or is_jobs_submit:
             has_category = any(kw.arg == "job_category" for kw in node.keywords if kw.arg)
             if not has_category:
@@ -207,6 +206,15 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     self.filepath,
                     node.lineno,
                     f"Call to '{func_name}()' must explicitly specify a 'job_category' parameter."
+                )
+
+        if not self.is_test and func_name == "find_active_pipeline_job":
+            if any(kw.arg == "force_full" for kw in node.keywords):
+                report_violation(
+                    "FIND_ACTIVE_PIPELINE_JOB_PREDICATE_MANDATE",
+                    self.filepath,
+                    node.lineno,
+                    "Deprecated 'force_full=' keyword passed to find_active_pipeline_job(). Pass an IoC 'predicate=' callable instead."
                 )
 
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
@@ -319,10 +327,12 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 if node.func.value.id == 'shutil' and node.func.attr in ('move', 'rmtree'):
                     if self.filename not in VFS_WRITE_WHITELIST:
                         report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Synchronous shutil.move/rmtree detected. Route through the async VFS queue.")
-
         if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Attribute):
-            if getattr(node.func.value.value, 'id', '') == 'os' and node.func.value.attr == 'path' and node.func.attr in ('join', 'basename', 'dirname'):
-                report_violation("PATHLIB_MANDATE", self.filepath, node.lineno, f"os.path.{node.func.attr} detected. Migrate to pathlib.Path.")
+            if getattr(node.func.value.value, 'id', '') == 'os' and node.func.value.attr == 'path':
+                if node.func.attr in ('join', 'basename', 'dirname', 'splitext', 'getmtime', 'getsize'):
+                    report_violation("PATHLIB_MANDATE", self.filepath, node.lineno, f"os.path.{node.func.attr} detected. Migrate to pathlib.Path.")
+                elif is_ext and node.func.attr in ('exists', 'relpath', 'expanduser', 'abspath', 'isdir', 'isfile'):
+                    report_violation("PATHLIB_MANDATE", self.filepath, node.lineno, f"os.path.{node.func.attr} detected in extension. Migrate to pathlib.Path.")
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'get':
             if len(node.args) > 0 and isinstance(node.args[0], ast.Constant):
                 arg_val = node.args[0].value
@@ -474,20 +484,54 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     report_violation("STATELESS_EVENT_ISOLATION", self.filepath, child.lineno, "ExtensionContext instantiated inside request_paths hook. This triggers an infinite recursion loop.")
                 elif isinstance(child, ast.Attribute) and child.attr == 'paths':
                     report_violation("STATELESS_EVENT_ISOLATION", self.filepath, child.lineno, "Accessing .paths inside request_paths hook triggers an infinite recursion loop.")
+        is_worker = any(
+            isinstance(dec, ast.Call) and getattr(dec.func, 'attr', '') == 'worker'
+            for dec in node.decorator_list
+        )
+        if is_worker and not self.is_test:
+            all_pos_args = list(node.args.posonlyargs) + list(node.args.args)
+            if not all_pos_args or all_pos_args[0].arg != "ctx":
+                report_violation(
+                    "WORKER_CTX_FIRST_PARAM_MANDATE",
+                    self.filepath,
+                    node.lineno,
+                    f"Worker function '{node.name}' decorated with @*.worker must declare 'ctx' as its first parameter."
+                )
+            if "core" in self.filepath.parts or "extensions" in self.filepath.parts:
+                all_declared_args = all_pos_args[1:] + list(node.args.kwonlyargs)
+                for arg_node in all_declared_args:
+                    if arg_node.arg in ("job_id", "workspace_id"):
+                        continue
+                    if arg_node.annotation is None:
+                        report_violation(
+                            "WORKER_TYPED_SIGNATURE_MANDATE",
+                            self.filepath,
+                            node.lineno,
+                            f"Worker '{node.name}' parameter '{arg_node.arg}' is missing an explicit type annotation. Worker signatures are the SSOT for synchronous contract validation."
+                        )
+            for child in ast.walk(node):
+                if isinstance(child, ast.Yield):
+                    report_violation("BANNED_MAGIC_GENERATOR", self.filepath, child.lineno, "Yield detected in worker task. Use ctx.jobs.update_progress() to prevent generator hijacking.")
+                if (
+                    isinstance(child, ast.Call)
+                    and isinstance(child.func, ast.Name)
+                    and child.func.id == "isinstance"
+                    and len(child.args) >= 2
+                    and isinstance(child.args[0], ast.Name)
+                    and child.args[0].id == "force_full"
+                    and isinstance(child.args[1], ast.Name)
+                    and child.args[1].id == "list"
+                ):
+                    report_violation(
+                        "WORKER_PARAMETER_OVERLOAD_BAN",
+                        self.filepath,
+                        child.lineno,
+                        "Legacy 'isinstance(force_full, list)' parameter overloading detected. Use explicit 'target_repos: Optional[List[str]] = None' instead."
+                    )
 
         if is_ext:
             if 'system_boot' in hook_events:
                 report_violation("SYSTEM_BOOT_EXTENSION_BAN", self.filepath, node.lineno, "Extensions are banned from subscribing to 'system_boot'. Subscribe to tenant-scoped 'workspace_boot' instead.")
-            is_worker = any(
-                isinstance(dec, ast.Call) and getattr(dec.func, 'attr', '') == 'worker'
-                for dec in node.decorator_list
-            )
-            if is_worker:
-                if node.args.kwarg is None:
-                    report_violation("WORKER_KWARGS_SIGNATURE_MANDATE", self.filepath, node.lineno, f"Worker function '{node.name}' decorated with @*.worker must accept '**kwargs' in its signature.")
-                for child in ast.walk(node):
-                    if isinstance(child, ast.Yield):
-                        report_violation("BANNED_MAGIC_GENERATOR", self.filepath, child.lineno, "Yield detected in worker task. Use ctx.jobs.update_progress() to prevent generator hijacking.")
             for dec in node.decorator_list:
                 if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute) and dec.func.attr == 'route':
                     if not ast.get_docstring(node):
@@ -569,6 +613,22 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         self.generic_visit(node)
     def visit_Constant(self, node):
         if isinstance(node.value, str):
+            if 'core' in self.filepath.parts and not self.is_test and self.filename != "legacy.py":
+                ext_dir = BACKEND_DIR / "extensions"
+                tier3_names = {
+                    d.name for d in ext_dir.iterdir()
+                    if d.is_dir() and not d.name.startswith("__")
+                } if ext_dir.exists() else set()
+                if any(
+                    f"ctx://{ext_n}/" in node.value or f".insetu-data/{ext_n}/" in node.value
+                    for ext_n in tier3_names
+                ):
+                    report_violation(
+                        "TIER2_EXTENSION_NAME_LEAK_BAN",
+                        self.filepath,
+                        node.lineno,
+                        f"Tier 2 core module hardcodes Tier 3 extension URI path '{node.value}'. Use declarative extension attributes or IoC hooks instead."
+                    )
             if "system://" in node.value and self.filename not in ("routes_fs.py", "fallback_bridge.py"):
                 report_violation(
                     "LEGACY_SYSTEM_URI_BAN",
@@ -583,13 +643,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     node.lineno,
                     "Legacy '::' repository boundary syntax detected in string literal. Use canonical 'vfs://' URI scheme."
                 )
-            if "workspaces.json" in node.value and self.filename != "extension.py":
+            if "system.json" in node.value and self.filename not in ("legacy.py", "utils.py") and not self.is_test:
                 report_violation(
-                    "LEGACY_SWITCHBOARD_REFERENCE_BAN",
+                    "LEGACY_SYSTEM_JSON_BAN",
                     self.filepath,
                     node.lineno,
-                    f"Hardcoded reference to deprecated 'workspaces.json' detected in string literal '{node.value}'. "
-                    "Use load_config(), get_all_workspace_ids(), or '.insetu/system.json' instead."
+                    f"Hardcoded reference to legacy 'system.json' detected in '{node.value}'. "
+                    "Use 'host.json' (get_daemon_host_config_path()) or 'workspaces.json' (get_system_index_path()) instead."
                 )
             if any(sql in node.value for sql in ("INSERT INTO jobs", "INSERT OR REPLACE INTO jobs", "DELETE FROM jobs")) and self.filename not in ("workers.py", "__init__.py") and not self.is_test:
                 report_violation(
@@ -650,7 +710,6 @@ def check_python_files():
                                     1,
                                     f"Banned decoupled domain function '{banned_func}' found in core/utils_core.py. Route through event bus hooks instead."
                                 )
-
                         is_ext = file.startswith("engine_") and 'extensions' in filepath.parts
                         if is_ext:
                             has_depends = any(
@@ -660,6 +719,65 @@ def check_python_files():
                             )
                             if not has_depends:
                                 report_violation("EXTENSION_DAG", filepath, 1, f"Missing '__depends__ = []' declaration in extension engine.")
+                            declared_ext_deps = set()
+                            for n in ast.walk(tree):
+                                if isinstance(n, ast.Assign):
+                                    for t in n.targets:
+                                        if isinstance(t, ast.Name) and t.id in ('__external_depends__', '__external_binaries__'):
+                                            report_violation(
+                                                "LEGACY_EXTERNAL_DUNDER_BAN",
+                                                filepath,
+                                                n.lineno,
+                                                f"Legacy module-level '{t.id}' global detected. Declare 'external_dependencies' / 'external_binaries' directly on InSetuExtension(...) instead."
+                                            )
+                                elif isinstance(n, ast.Call) and (getattr(n.func, 'id', '') == 'InSetuExtension' or getattr(n.func, 'attr', '') == 'InSetuExtension'):
+                                    for kw in n.keywords:
+                                        if kw.arg == 'external_dependencies' and isinstance(kw.value, (ast.List, ast.Tuple)):
+                                            for elt in kw.value.elts:
+                                                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                                    declared_ext_deps.add(elt.value.lower().replace('-', '_'))
+
+                            # Enforce Strategy Subclass Signature Parity within the module
+                            class_defs = {n.name: n for n in tree.body if isinstance(n, ast.ClassDef)}
+                            for cls_name, cls_node in class_defs.items():
+                                for base in cls_node.bases:
+                                    base_name = getattr(base, 'id', None)
+                                    if base_name and base_name in class_defs:
+                                        base_cls = class_defs[base_name]
+                                        base_methods = {
+                                            m.name: m for m in base_cls.body
+                                            if isinstance(m, ast.FunctionDef) and not m.name.startswith('_')
+                                        }
+                                        for sub_m in cls_node.body:
+                                            if isinstance(sub_m, ast.FunctionDef) and sub_m.name in base_methods:
+                                                if sub_m.args.kwarg is not None:
+                                                    continue
+                                                base_m = base_methods[sub_m.name]
+                                                base_arg_Count = len(base_m.args.args)
+                                                sub_arg_count = len(sub_m.args.args)
+                                                if sub_arg_count < base_arg_Count:
+                                                    report_violation(
+                                                        "SUBCLASS_SIGNATURE_PARITY_MANDATE",
+                                                        filepath,
+                                                        sub_m.lineno,
+                                                        f"Subclass '{cls_name}.{sub_m.name}' accepts fewer parameters ({sub_arg_count}) than base '{base_name}.{sub_m.name}' ({base_arg_Count})."
+                                                    )
+                            if 'beautifulsoup4' in declared_ext_deps:
+                                declared_ext_deps.add('bs4')
+                            if 'python_semantic_release' in declared_ext_deps:
+                                declared_ext_deps.add('semantic_release')
+
+                            tracked_third_party = {'bs4', 'markdownify', 'playwright', 'mistune', 'jsbeautifier', 'autopep8', 'flask_sock', 'semantic_release'}
+                            for n in ast.walk(tree):
+                                if isinstance(n, ast.Import):
+                                    for alias in n.names:
+                                        root_pkg = alias.name.split('.')[0].lower()
+                                        if root_pkg in tracked_third_party and root_pkg not in declared_ext_deps:
+                                            report_violation("UNDECLARED_EXTERNAL_DEPENDENCY_IMPORT", filepath, n.lineno, f"Extension imports optional package '{root_pkg}' without declaring it in InSetuExtension(..., external_dependencies=[...]) or __external_depends__.")
+                                elif isinstance(n, ast.ImportFrom) and n.module:
+                                    root_pkg = n.module.split('.')[0].lower()
+                                    if root_pkg in tracked_third_party and root_pkg not in declared_ext_deps:
+                                        report_violation("UNDECLARED_EXTERNAL_DEPENDENCY_IMPORT", filepath, n.lineno, f"Extension imports from optional package '{root_pkg}' without declaring it in InSetuExtension(..., external_dependencies=[...]) or __external_depends__.")
 
                             has_insetu_ext = False
                             for n in ast.walk(tree):

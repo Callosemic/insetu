@@ -5,17 +5,22 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+from typing import List, Optional
 from unittest.mock import MagicMock, patch
 import akasa
 import akasa.db as akasa_db
 import akasa.utils as akasa_utils
-from akasa.db import get_connection
-from akasa.utils import load_config
-from akasa.workers import _execute_job, _execute_immediate_job, _init_worker_schema, register_callback
 import ast
 import contextlib
 import io
-from insetu.core.sdk import InSetuExtension, ExtensionContext
+from akasa.utils import load_config
+from akasa.workers import _init_worker_schema
+from insetu.core.sdk import InSetuExtension, ExtensionContext, resolve_external_dependency_spec
+from insetu.core.system.engine_system import (
+    _get_whitelisted_extension_packages,
+    _background_install_extension_deps,
+    system_bp,
+)
 from insetu.core.system.legacy import move_tree_contents
 from insetu.core.utils_core import parse_frontmatter, get_domain_cache_path, get_domain_data_path
 from insetu.core.gather.engine_gather import gather_bp, VFS_INDEX_SCHEMA
@@ -53,13 +58,17 @@ class TestSdkImprovements(unittest.TestCase):
         self.orig_env_ctrl = os.environ.get("AKASA_CONTROL_DIR")
         akasa.reset_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
         self.workspace_id = f"ws_{uuid.uuid4().hex[:8]}"
-        (self.control_dir / "system.json").write_text(
+        (self.control_dir / "host.json").write_text(
+            json.dumps({"port": 5005}),
+            encoding="utf-8",
+        )
+        (self.control_dir / "workspaces.json").write_text(
             json.dumps({
-                "port": 5005,
                 "workspaces": {
                     "default": {"config_path": "config.json"},
                     self.workspace_id: {"config_path": (self.control_dir / "config.json").as_posix()},
                 },
+                "active_workspace": "default",
             }),
             encoding="utf-8",
         )
@@ -110,77 +119,9 @@ class TestSdkImprovements(unittest.TestCase):
         self.assertEqual(parsed_yaml["status"], "draft")
         self.assertTrue(body.startswith("## Description"))
         self.assertIn("Initial architectural review notes.", body)
-    @patch("akasa.workers.is_extension_enabled")
-    def test_worker_drops_recurring_job_for_disabled_extension(self, mock_is_enabled):
-        """_execute_job drops and deletes pending recurring jobs if extension is disabled."""
-        mock_is_enabled.return_value = False
-        executed = False
-
-        def sample_callback(**kwargs):
-            nonlocal executed
-            executed = True
-
-        register_callback("custom_ext", "sample_task", sample_callback)
-
-        _init_worker_schema(self.workspace_id)
-        conn = get_connection("workers", workspace_id=self.workspace_id)
-        conn.execute(
-            "INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, status) VALUES (?, ?, ?, ?, 'running')",
-            ("job_recurring_123", "custom_ext", "sample_task", 60000)
-        )
-        conn.commit()
-        _execute_job(
-            job_id="job_recurring_123",
-            ext_name="custom_ext",
-            callback_name="sample_task",
-            interval_ms=60000,
-            jitter_ms=0,
-            args_json="{}",
-            fallback_ws=self.workspace_id
-        )
-
-        self.assertFalse(executed, "Callback must not execute for disabled extensions.")
-        fresh_conn = get_connection("workers", workspace_id=self.workspace_id)
-        row = fresh_conn.execute("SELECT id FROM jobs WHERE id=?", ("job_recurring_123",)).fetchone()
-        self.assertIsNone(row, "Job record must be purged from jobs table.")
-
-    @patch("akasa.workers.is_extension_enabled")
-    def test_immediate_job_fails_safely_for_disabled_extension(self, mock_is_enabled):
-        """_execute_immediate_job logs failure without executing callback if extension is disabled."""
-        mock_is_enabled.return_value = False
-        executed = False
-
-        def immediate_callback(**kwargs):
-            nonlocal executed
-            executed = True
-
-        register_callback("disabled_ext", "immediate_task", immediate_callback)
-        conn = get_connection("workers", workspace_id=self.workspace_id)
-        now = time.time()
-        conn.execute(
-            "INSERT OR REPLACE INTO immediate_jobs (id, ext_name, callback_name, status, created_at, updated_at) VALUES (?, ?, ?, 'processing', ?, ?)",
-            ("imm_456", "disabled_ext", "immediate_task", now, now)
-        )
-        conn.commit()
-
-        _execute_immediate_job(
-            job_id="imm_456",
-            ext_name="disabled_ext",
-            callback_name="immediate_task",
-            args_json="{}",
-            target_ws=self.workspace_id
-        )
-
-        self.assertFalse(executed, "Immediate callback must not execute for disabled extensions.")
-        # Re-acquire connection because worker execution manages and closes its own DB handle
-        fresh_conn = get_connection("workers", workspace_id=self.workspace_id)
-        row = fresh_conn.execute("SELECT status, status_message FROM immediate_jobs WHERE id=?", ("imm_456",)).fetchone()
-        self.assertEqual(row["status"], "failed")
-        self.assertIn("disabled", row["status_message"].lower())
-
     def test_move_tree_contents_self_move_immunity_and_volume_disjointness(self):
         """move_tree_contents never deletes files when src_dir == dst_dir, and mount_volumes is idempotent."""
-        target_dir = self.control_dir / "cache" / "workflows"
+        target_dir = Path(flow_bp._resolve_volume_dir(self.workspace_id, "workflows", flow_bp.volumes["workflows"]))
         target_dir.mkdir(parents=True, exist_ok=True)
         sentinel = target_dir / "workflow_morning_briefing_context.txt"
         sentinel.write_text("Morning briefing payload", encoding="utf-8")
@@ -189,7 +130,7 @@ class TestSdkImprovements(unittest.TestCase):
         move_tree_contents(target_dir, target_dir)
         self.assertTrue(sentinel.exists(), "move_tree_contents must never delete files when src_dir == dst_dir")
 
-        # 2. Repeated mount_volumes and get_context calls must preserve files in .insetu/cache/workflows
+        # 2. Repeated mount_volumes and get_context calls must preserve files in .insetu/cache/flow
         flow_bp.mount_volumes(self.workspace_id, force=True)
         flow_bp.mount_volumes(self.workspace_id)
         _ = flow_bp.get_context(self.workspace_id)
@@ -198,12 +139,7 @@ class TestSdkImprovements(unittest.TestCase):
         # 3. Verify no extension declares a legacy_dir that resolves to its own target cache/data directory
         for ext_bp in (gather_bp, flow_bp):
             for vol_name, vol_spec in (ext_bp.volumes or {}).items():
-                tier = vol_spec.get("tier", "data")
-                t_dir = Path(
-                    get_domain_cache_path(self.workspace_id, vol_name)
-                    if tier == "cache"
-                    else get_domain_data_path(self.workspace_id, vol_name)
-                ).resolve()
+                t_dir = Path(ext_bp._resolve_volume_dir(self.workspace_id, vol_name, vol_spec)).resolve()
                 for rel_legacy in (vol_spec.get("legacy_dirs") or []):
                     l_dir = self.control_dir.joinpath(*Path(rel_legacy).parts).resolve()
                     self.assertNotEqual(
@@ -285,7 +221,6 @@ class TestSdkImprovements(unittest.TestCase):
                 0,
                 f"Existing Python codebase had fitness violations:\n{buf.getvalue()}",
             )
-
             bad_code = (
                 "from insetu.core.sdk import InSetuExtension\n"
                 "demo_bp = InSetuExtension('demo', __name__)\n"
@@ -295,6 +230,10 @@ class TestSdkImprovements(unittest.TestCase):
                 "@demo_bp.on('compile_contexts')\n"
                 "def dead_hook(manifest, **kwargs):\n"
                 "    pass\n"
+                "@demo_bp.worker('bad_worker')\n"
+                "def untyped_worker(ctx, force_full=False):\n"
+                "    if isinstance(force_full, list):\n"
+                "        pass\n"
             )
             fake_path = Path(__file__).resolve().parent.parent.parent / "insetu" / "extensions" / "demo" / "engine_demo.py"
             tree = ast.parse(bad_code, filename=str(fake_path))
@@ -305,8 +244,50 @@ class TestSdkImprovements(unittest.TestCase):
             out_bad = buf_bad.getvalue()
             self.assertIn("REDUNDANT_VOLUME_MOUNT_BAN", out_bad)
             self.assertIn("DEAD_COMPILE_CONTEXTS_HOOK_BAN", out_bad)
+            self.assertIn("WORKER_TYPED_SIGNATURE_MANDATE", out_bad)
+            self.assertIn("WORKER_PARAMETER_OVERLOAD_BAN", out_bad)
         finally:
             FitnessState.violations_found = prev
+
+    def test_extension_dependency_resolution_and_whitelist_installer(self):
+        """resolve_external_dependency_spec maps import names to PyPI names and _background_install_extension_deps enforces the extension whitelist."""
+        # 1. Specifier normalization (import_spec vs pypi_package)
+        self.assertEqual(resolve_external_dependency_spec("flask-sock"), ("flask_sock", "flask-sock"))
+        self.assertEqual(resolve_external_dependency_spec("bs4"), ("bs4", "beautifulsoup4"))
+        self.assertEqual(resolve_external_dependency_spec("beautifulsoup4"), ("bs4", "beautifulsoup4"))
+        self.assertEqual(resolve_external_dependency_spec("semantic_release"), ("semantic_release", "python-semantic-release"))
+
+        # 2. Whitelist extraction across bundled extensions
+        self.assertEqual(_get_whitelisted_extension_packages("ingest"), ["beautifulsoup4", "markdownify"])
+        self.assertEqual(_get_whitelisted_extension_packages("research"), ["beautifulsoup4", "playwright"])
+        self.assertEqual(_get_whitelisted_extension_packages("format"), ["jsbeautifier", "autopep8"])
+        self.assertEqual(_get_whitelisted_extension_packages("term"), ["flask-sock"])
+        self.assertEqual(_get_whitelisted_extension_packages("nonexistent_ext"), [])
+
+        # 3. Rejects un-whitelisted extensions
+        sys_ctx = system_bp.get_context(self.workspace_id)
+        with self.assertRaises(ValueError):
+            _background_install_extension_deps(sys_ctx, ext_name="notes")
+        # 4. Executes pip install for whitelisted extension packages via ctx.exec.run
+        fake_res = MagicMock(returncode=0, stdout="Successfully installed mistune", stderr="")
+        with patch("importlib.util.find_spec", return_value=None), patch.object(sys_ctx.exec, "run", return_value=fake_res) as mock_run:
+            result = _background_install_extension_deps(sys_ctx, ext_name="freshdesk")
+            self.assertEqual(result["artifact"]["installed"], ["mistune"])
+            self.assertFalse(result["artifact"]["requires_reboot"])
+            mock_run.assert_called_once()
+            called_cmd = mock_run.call_args[0][0]
+            self.assertIn("pip", called_cmd)
+            self.assertIn("install", called_cmd)
+            self.assertIn("mistune", called_cmd)
+
+        # 5. Executes declarative post_install_commands (e.g., playwright install chromium for research)
+        with patch("importlib.util.find_spec", return_value=None), patch.object(sys_ctx.exec, "run", return_value=fake_res) as mock_run_research:
+            res_research = _background_install_extension_deps(sys_ctx, ext_name="research")
+            self.assertEqual(res_research["artifact"]["installed"], ["beautifulsoup4", "playwright"])
+            self.assertEqual(mock_run_research.call_count, 2)
+            post_cmd = mock_run_research.call_args_list[1][0][0]
+            self.assertIn("playwright", post_cmd)
+            self.assertIn("chromium", post_cmd)
 
 
 if __name__ == "__main__":

@@ -151,14 +151,53 @@ class TestSutramCompliance(unittest.TestCase):
         self.assertNotIn("onReveal", fs_js)
         self.assertNotIn("flow_workflows", fs_js)
         self.assertNotIn("stores.Gather", fs_js)
-
         sdk_js = (BACKEND_DIR / "core" / "system" / "insetu_sdk.js").read_text(encoding="utf-8")
         self.assertIn("emitHookAll:", sdk_js)
+        self.assertIn("_resolveScopedPath:", sdk_js)
         start_idx = sdk_js.index("export class InSetuURI {")
         end_idx = sdk_js.index("window.inSetu = window.inSetu || {};", start_idx)
         uri_class_src = sdk_js[start_idx:end_idx]
         self.assertNotIn("derivedVfsFiles", uri_class_src)
         self.assertNotIn("AppStore", uri_class_src)
+
+    def test_canonical_api_route_resolution_contract(self):
+        """
+        Verifies that InSetuElement.api._resolveScopedPath:
+        1. Preserves canonical self-prefixed routes ('flow/batches/save' -> 'flow/batches/save').
+        2. Preserves cross-module routes ('prompts/resolve?file=...' -> 'prompts/resolve?file=...').
+        3. Gracefully prefixes legacy relative routes ('batches/save' -> 'flow/batches/save').
+        """
+        sdk_js = (BACKEND_DIR / "core" / "system" / "insetu_sdk.js").read_text(encoding="utf-8")
+        self.assertIn("_resolveScopedPath:", sdk_js)
+        self.assertIn("this.api._resolveScopedPath(path)", sdk_js)
+        api_js = (BACKEND_DIR / "core" / "system" / "api.js").read_text(encoding="utf-8")
+        self.assertIn("getJson:", api_js)
+        self.assertIn("postJson:", api_js)
+        self.assertIn("deleteJson:", api_js)
+
+    def test_dual_representation_macro_preview_contract(self):
+        """
+        Verifies the Dual-Representation Buffer Contract (2026-10-20 RFC):
+        1. resolveFileFetchUrl only emits 'insetu:file-fetch-url' when !isFS so editable buffers always fetch raw source from fs/fetch.
+        2. FsStore implements toggleBufferPreview posting live content to prompts/resolve.
+        3. file-preview and editor-toggle-macro-preview entity actions are registered.
+        4. prompts.js routes editable cards to previewMode: false and read-only templates to previewMode: true.
+        """
+        fs_js = (BACKEND_DIR / "core" / "fs" / "fs.js").read_text(encoding="utf-8")
+        ui_editor_js = (BACKEND_DIR / "core" / "system" / "components" / "ui_editor.js").read_text(encoding="utf-8")
+        prompts_js = (BACKEND_DIR / "core" / "prompts" / "prompts.js").read_text(encoding="utf-8")
+        self.assertIn("if (!isFS)", fs_js)
+        self.assertIn("toggleBufferPreview:", fs_js)
+        self.assertIn("id: 'file-preview'", fs_js)
+        self.assertIn("id: 'file-copy-expanded'", fs_js)
+        self.assertIn("id: 'file-share-expanded'", fs_js)
+        self.assertIn("id: 'file-download-expanded'", fs_js)
+        self.assertIn("resolveExpandedExportText", fs_js)
+        self.assertIn("Macro-Expanded Preview (Read-Only)", fs_js)
+        self.assertIn("if (this._buffer?.previewMode) return;", fs_js)
+        self.assertIn("id: 'editor-toggle-macro-preview'", ui_editor_js)
+        self.assertIn("{ previewMode: !isEditable }", prompts_js)
+        self.assertNotIn("insetu:file-fetch-url", prompts_js)
 
 
 if __name__ == "__main__":

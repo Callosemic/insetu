@@ -25,6 +25,7 @@ from akasa.vfs import sync_vfs_barrier
 from akasa.vfs import VFSTransaction
 from flask import Flask
 from insetu.core.fs.engine_fs import fs_bp
+from insetu.core.prompts.engine_prompts import prompts_bp
 from insetu.core.gather.engine_gather import _canonicalize_manifest_entry, gather_bp, VFS_INDEX_SCHEMA
 from insetu.extensions.flow.engine_flow import flow_bp, _background_compile_workflows
 from akasa.extension import ExtensionContext
@@ -61,13 +62,20 @@ class TestCanonicalURIs(unittest.TestCase):
         self.repo_dir = self.root_path / "alpha"
         self.repo_dir.mkdir(parents=True, exist_ok=True)
         (self.repo_dir / "main.py").write_text("print('hello')\n", encoding="utf-8")
-
-        (self.control_dir / "system.json").write_text(
-            json.dumps({"port": 5005, "workspaces": {"default": {"config_path": "config.json"}}}),
+        (self.control_dir / "host.json").write_text(
+            json.dumps({"port": 5005}),
+            encoding="utf-8",
+        )
+        (self.control_dir / "workspaces.json").write_text(
+            json.dumps({
+                "workspaces": {"default": {"config_path": "config.json"}},
+                "active_workspace": "default",
+            }),
             encoding="utf-8",
         )
         (self.control_dir / "config.json").write_text(
             json.dumps({
+                "extensions": ["config", "flow"],
                 "ignore_dirs": ["node_modules", ".git", ".insetu"],
                 "include_extensions": [".py", ".md"],
                 "target_repos": [{"repo_dir": "alpha", "title": "Alpha", "exts": [".py", ".md"]}],
@@ -408,10 +416,67 @@ assert.equal(repoRoot.isRootVolume, true);
         Path(wf_ctx.resolve_path(part1_uri)).unlink()
         Path(wf_ctx.resolve_path(part2_uri)).unlink()
         self.assertFalse(wf_ctx.is_context_on_disk(base_uri))
-
         res_healed = client.get(f"/api/default/fs/fetch?file={base_uri}")
         self.assertEqual(res_healed.status_code, 200)
         self.assertTrue(wf_ctx.is_context_on_disk(base_uri))
+
+    def test_prompts_resolve_get_and_live_post_buffer_with_nested_macros(self):
+        """GET and POST /api/default/prompts/resolve expand nested {{include_prompt:...}} blocks and {{ macro_* }} parameters without mutating disk."""
+        p_ctx = prompts_bp.get_context("default")
+        p_ctx.vfs.save(
+            "ctx://prompts/role_base.md",
+            "---\ntitle: Role Base\n---\nAct as the {{ macro_role }} for {{ macro_project }}.\n\n{{ macro_directives }}",
+        )
+        p_ctx.vfs.save(
+            "ctx://prompts/directives.md",
+            "### Tone\nKeep prose grounded.",
+        )
+        p_ctx.vfs.save(
+            "ctx://prompts/standup.md",
+            '{{include_prompt: ctx://prompts/role_base.md { role: "Lead Architect"; project: "inSetu"; directives: "{{include_prompt: ctx://prompts/directives.md}}" }}}\n\n# Task',
+        )
+        sync_vfs_barrier("default")
+
+        app = Flask(__name__)
+        app.register_blueprint(prompts_bp.bp)
+        app.register_blueprint(fs_bp.bp)
+        client = app.test_client()
+
+        # 1. GET /fs/fetch returns raw unexpanded source
+        raw_res = client.get("/api/default/fs/fetch?file=ctx://prompts/standup.md")
+        self.assertEqual(raw_res.status_code, 200)
+        self.assertIn(b"{{include_prompt:", raw_res.data)
+
+        # 2. GET /prompts/resolve expands outer template, inner directives macro, and all macro_* variables
+        resolved_res = client.get("/api/default/prompts/resolve?file=ctx://prompts/standup.md")
+        self.assertEqual(resolved_res.status_code, 200)
+        resolved_text = resolved_res.data.decode("utf-8")
+        self.assertIn("Act as the Lead Architect for inSetu.", resolved_text)
+        self.assertIn("### Tone\nKeep prose grounded.", resolved_text)
+        self.assertNotIn("{{ macro_", resolved_text)
+        # 3. POST /prompts/resolve evaluates unsaved in-memory buffer text without touching disk
+        unsaved_buffer = '{{include_prompt: ctx://prompts/role_base.md { macro_role: "Reviewer"; macro_project: "Akasa"; macro_directives: "Check AST rules." }}}'
+        post_res = client.post("/api/default/prompts/resolve", json={
+            "filepath": "ctx://prompts/standup.md",
+            "content": unsaved_buffer,
+        })
+        self.assertEqual(post_res.status_code, 200)
+        post_text = post_res.data.decode("utf-8")
+        self.assertIn("Act as the Reviewer for Akasa.", post_text)
+        self.assertIn("Check AST rules.", post_text)
+
+        # 4. Default fallback syntax {{ macro_var | default }} expands when parameter is omitted
+        p_ctx.vfs.save(
+            "ctx://prompts/with_default.md",
+            "Role: {{ macro_role | Staff Engineer }}",
+        )
+        sync_vfs_barrier("default")
+        def_res = client.post("/api/default/prompts/resolve", json={
+            "filepath": "ctx://prompts/standup.md",
+            "content": "{{include_prompt: ctx://prompts/with_default.md}}",
+        })
+        self.assertEqual(def_res.status_code, 200)
+        self.assertEqual(def_res.data.decode("utf-8").strip(), "Role: Staff Engineer")
 
 
 if __name__ == "__main__":

@@ -50,12 +50,12 @@ insetu/
 │       ├── 0067-universal-extension-suite-modernization-and-domain-mounts.md # Universal extension suite modernization, declarative domain mounts, and SDK standardization.
 │       ├── 0068-hierarchical-vfs-sieve-sub-bucket-filtering-and-settings-hub.md # Hierarchical VFS sieve, .gitignore sub-bucket filtering, and unified OS Settings Hub.
 │       ├── 0069-managed-app-server-preview-bulk-vcs-and-memory-telemetry.md # Managed dev server preview supervisor, bulk Git VCS actions, and kernel memory telemetry.
-│       ├── 0070-akasa-kernel-lifecycle-encapsulation-and-lifeboat-resilience.md # [comment required]
-│       ├── 0071-synchronous-workspace-swap-fsm-three-way-occ-and-declarative-volumes.md # [comment required]
-│       ├── 0072-core-pipeline-akasa-membrane-declarative-volumes-and-jit-healing.md # [comment required]
-│       ├── 0073-devops-extension-suite-membrane-decoupling-and-declarative-diff-volumes.md # [comment required]
-│       ├── 0074-knowledge-suite-membrane-decoupling-declarative-volumes-and-substack-publishing.md # [comment required]
-│       ├── 0075-workflow-management-suite-membrane-decoupling-declarative-flow-volumes-and-tracker-hub-embedding.md # [comment required]
+│       ├── 0070-akasa-kernel-lifecycle-encapsulation-and-lifeboat-resilience.md # Akasa kernel lifecycle encapsulation, 4-file membrane isolation, and Lifeboat FS resilience.
+│       ├── 0071-synchronous-workspace-swap-fsm-three-way-occ-and-declarative-volumes.md # Synchronous workspace swap FSM, 3-way OCC text merging, and declarative volume mounts.
+│       ├── 0072-core-pipeline-akasa-membrane-declarative-volumes-and-jit-healing.md # Core pipeline Akasa membrane decoupling, declarative volumes, and JIT artifact healing.
+│       ├── 0073-devops-extension-suite-membrane-decoupling-and-declarative-diff-volumes.md # DevOps extension suite membrane decoupling and declarative diff volume mounts.
+│       ├── 0074-knowledge-suite-membrane-decoupling-declarative-volumes-and-substack-publishing.md # Knowledge suite membrane decoupling, declarative volumes, and Substack HTML snippet publishing.
+│       ├── 0075-workflow-management-suite-membrane-decoupling-declarative-flow-volumes-and-tracker-hub-embedding.md # Workflow management suite membrane decoupling, declarative flow volumes, and tracker settings hub embedding.
 │       ├── archived/               # Superseded and historical ADR documents.
 │       │   ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │       │   ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -282,7 +282,7 @@ insetu/
         ├── test_config_cascade.py  # Unit tests for the 3-tier configuration cascade, secret encryption, and lazy migration.
         ├── test_ext_preview_unit.py # Unittest suite for passive framework detection and preview server lifecycle.
         ├── test_publish_extension.py # Unit tests for document publishing compilation and ephemeral wordcount macro stripping.
-        ├── test_sdk_improvements.py # Unit tests for ctx.create_entity_file and worker lifecycle isolation for disabled extensions.
+        ├── test_sdk_improvements.py # Unit tests for ctx.create_entity_file, declarative volume migrations, and worker contract fitness rules.
         ├── test_sutram_compliance.py # Unit tests verifying Sutram consumer linter and JavaScript fitness compliance across core and extensions.
         ├── test_vfs_three_way_merge.py # Unit tests for 3-way OCC text merging, ancestor ring buffers, and conflict fallback files.
         ├── test_workspace_mounts.py # Unit tests for InterWorkspaceVFSDriver, ws:// read-only write barriers, and cross-workspace event broadcasting.

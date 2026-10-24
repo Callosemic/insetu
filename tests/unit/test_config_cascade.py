@@ -46,15 +46,21 @@ class TestConfigurationCascade(unittest.TestCase):
 
         # Ensure system schema is registered
         _REGISTERED_SETTINGS_SCHEMAS["system"] = SYSTEM_SETTINGS_SCHEMA
-
-        # Seed baseline system.json
-        self.system_json_path = self.control_dir / "system.json"
-        self.system_json_path.write_text(
+        # Seed baseline host.json and workspaces.json
+        self.host_json_path = self.control_dir / "host.json"
+        self.workspaces_json_path = self.control_dir / "workspaces.json"
+        self.host_json_path.write_text(
             json.dumps({
                 "port": 5005,
                 "enable_watchdog": True,
                 "preload_all_extensions": False,
+            }, indent=2),
+            encoding="utf-8",
+        )
+        self.workspaces_json_path.write_text(
+            json.dumps({
                 "workspaces": {"default": {"config_path": "config.json"}},
+                "active_workspace": "default",
             }, indent=2),
             encoding="utf-8",
         )
@@ -79,10 +85,9 @@ class TestConfigurationCascade(unittest.TestCase):
             {"id": "api_token", "type": "password", "scope": "workspace", "secure": True, "default": ""},
         ]
         mgr = SettingsManager("test_ext", "default", schema=test_schema)
-
-        # 1. Daemon Scope -> system.json
+        # 1. Daemon Scope -> host.json
         mgr.set("daemon_flag", True)
-        sys_disk = json.loads(self.system_json_path.read_text(encoding="utf-8"))
+        sys_disk = json.loads(self.host_json_path.read_text(encoding="utf-8"))
         self.assertTrue(sys_disk.get("test_ext", {}).get("daemon_flag"))
         self.assertTrue(mgr.get("daemon_flag"))
 
@@ -157,18 +162,17 @@ class TestConfigurationCascade(unittest.TestCase):
         self.assertTrue(rotated)
         self.assertEqual(local_key_file.read_text(encoding="utf-8").strip(), key_2)
         self.assertEqual(mgr.get("api_key"), "sk-live-secret-999")
-
-        # Simulate invalid key saved to system.json via security_settings_updated hook
-        sys_data = load_json_config(self.system_json_path.as_posix(), {})
+        # Simulate invalid key saved to host.json via security_settings_updated hook
+        sys_data = load_json_config(self.host_json_path.as_posix(), {})
         sys_data["security"] = {"master_fernet_key": "not-a-valid-fernet-key"}
-        save_json_config(self.system_json_path.as_posix(), sys_data, workspace_id="default")
+        save_json_config(self.host_json_path.as_posix(), sys_data, workspace_id="default")
         mgr._sync_vfs_barrier()
 
         _on_security_settings_updated(workspace_id="default")
         mgr._sync_vfs_barrier()
 
-        # Verify invalid plaintext key was scrubbed from system.json and existing secrets remain intact
-        cleaned_sys = json.loads(self.system_json_path.read_text(encoding="utf-8"))
+        # Verify invalid plaintext key was scrubbed from host.json and existing secrets remain intact
+        cleaned_sys = json.loads(self.host_json_path.read_text(encoding="utf-8"))
         self.assertNotIn("security", cleaned_sys)
         self.assertEqual(local_key_file.read_text(encoding="utf-8").strip(), key_2)
         self.assertEqual(mgr.get("api_key"), "sk-live-secret-999")
