@@ -1,4 +1,4 @@
-import{html as e,css as n}from"lit";import{YenvuiBase as a}from"./yenvui-base.js";export class YenvuiSearchBar extends a{static properties={placeholder:{type:String},value:{type:String}};static styles=n`
+import{html as e,css as i}from"lit";import{YenvuiBase as n}from"./yenvui-base.js";export class YenvuiSearchBar extends n{static properties={placeholder:{type:String},value:{type:String}};static styles=i`
         :host { display: block; }
         .fuzzy-search-wrapper {
             display: flex;
@@ -38,20 +38,6 @@ import{html as e,css as n}from"lit";import{YenvuiBase as a}from"./yenvui-base.js
             padding: 2px 8px;
             cursor: pointer;
             margin-left: 8px;
-        }
-        /* High Contrast Themes */
-        :host([data-theme="light"]) .fuzzy-search-wrapper {
-            background: transparent;
-            border: none;
-        }
-        :host([data-theme="e-ink"]) .fuzzy-search-wrapper {
-            border: none !important;
-            border-radius: 0 !important;
-            background: transparent !important;
-        }
-        :host([data-theme="e-ink"]) input {
-            border: none !important;
-            box-shadow: none !important;
         }
     `;constructor(){super(),this.placeholder="Search...",this.value="",this._debounceTimer=null}disconnectedCallback(){super.disconnectedCallback(),this._debounceTimer&&clearTimeout(this._debounceTimer)}_handleInput(t){const r=t.target.value;this._debounceTimer&&clearTimeout(this._debounceTimer),this._debounceTimer=setTimeout(()=>{this.dispatchEvent(new CustomEvent("yenvui-search-changed",{detail:{value:r},bubbles:!0,composed:!0}))},250)}_handleClear(){this._debounceTimer&&clearTimeout(this._debounceTimer),this.dispatchEvent(new CustomEvent("yenvui-search-changed",{detail:{value:""},bubbles:!0,composed:!0}))}render(){return e`
             <div class="fuzzy-search-wrapper">

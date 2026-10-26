@@ -551,12 +551,12 @@ def run_app():
         resolved_port = sys_settings.get("port", cfg.get("port", 5005))
         if "INSETU_PORT" not in os.environ or os.environ["INSETU_PORT"] == "5005":
             os.environ["INSETU_PORT"] = str(resolved_port)
-
         port = int(os.environ.get("INSETU_PORT", 5005))
         print(f"🚀 Starting inSetu Developer OS (Port {port})...")
         print(f"👉 Open http://127.0.0.1:{port} in your browser")
         use_reloader = os.environ.get("INSETU_RELOADER", "0") == "1"
-        app.run(debug=True, use_reloader=use_reloader, port=port)
+        use_debug = os.environ.get("INSETU_DEBUG", "0") == "1" or use_reloader
+        app.run(debug=use_debug, use_reloader=use_reloader, port=port)
     except Exception:
         try:
             hooks.emit("system_shutdown")

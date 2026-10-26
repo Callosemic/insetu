@@ -1,4 +1,3 @@
-from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 
 SCHEMA = {
@@ -20,8 +19,8 @@ SETTINGS = [
     settings_schema=SETTINGS
 )
 __depends__ = []
-
-@{{ext_name}}_bp.route('list', methods=['GET'])
+@{{ext_name}}_bp.route('list', methods=['GET'], docstring="[sync] Lists all stored items for this extension.")
 def api_list(ctx):
+    """Lists all stored items for this extension."""
     items = ctx.db.get_all("{{ext_name}}_items")
-    return jsonify({"items": items})
+    return {"items": items}

@@ -11,11 +11,10 @@ self.HOST_ASSETS = [
 self.HOST_BYPASS_PATTERNS = [
     '/api/',
     '/submit',
-    '/download/',
     '/recovery',
     '/api/system/panic'
 ];
 // Force SW update cycle to purge stale HTTP cache state
-self.OS_CACHE_VERSION = 'v5';
+self.OS_CACHE_VERSION = 'v6';
 
 importScripts('/static/vendor/sutram/js/sw-core.js');

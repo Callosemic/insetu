@@ -37,9 +37,14 @@ def scaffold_profiles(cwd):
         target_p = Path(base_dir).joinpath(target_name).as_posix()
         src_p = Path(defaults_dir).joinpath(src_name).as_posix()
         if not os.path.exists(target_p):
+            copied = False
             if os.path.exists(src_p):
-                shutil.copy(src_p, target_p)
-            elif fallback_payload is not None:
+                try:
+                    shutil.copy(src_p, target_p)
+                    copied = True
+                except OSError:
+                    copied = False
+            if not copied and fallback_payload is not None:
                 Path(target_p).write_text(json.dumps(fallback_payload, indent=2), encoding="utf-8")
 
     os.makedirs(Path(base_dir).joinpath("data").as_posix(), exist_ok=True)
