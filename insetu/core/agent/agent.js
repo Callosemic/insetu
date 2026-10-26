@@ -10,7 +10,7 @@ export const AgentStore = createExtensionStore('Agent', {
     fetchSessions: async () => {
         AgentStore.setState({ loading: true });
         try {
-            const res = await window.inSetu.api.workspace.get('agent/sessions');
+            const res = await window.inSetu.api.get('agent/sessions');
             if (res.ok) {
                 const data = await res.json();
                 AgentStore.setState({ sessions: data.sessions || [] });
@@ -141,12 +141,11 @@ export class InSetuCoreAgent extends InSetuElement {
             }
         });
     }
-
     async _selectSession(id) {
         this.activeSessionId = id;
         AgentStore.setState({ activeSessionId: id });
         try {
-            const res = await this.api.workspace.get(`agent/messages/${id}`);
+            const res = await this.api.get(`agent/messages/${id}`);
             if (res.ok) {
                 const data = await res.json();
                 this.messages = data.messages || [];
@@ -165,9 +164,8 @@ export class InSetuCoreAgent extends InSetuElement {
         this.messages = [...this.messages, { role: 'user', content: userText, timestamp: Date.now() / 1000 }];
         this.activeJobMessage = "Submitting prompt...";
         this.requestUpdate();
-
         try {
-            const res = await this.api.workspace.post('agent/prompt', {
+            const res = await this.api.post('agent/prompt', {
                 session_id: this.activeSessionId,
                 prompt: userText,
                 attached_files: this.attachedFiles
@@ -207,7 +205,7 @@ export class InSetuCoreAgent extends InSetuElement {
                         intent="primary" 
                         style="width: 100%;"
                         .onClick=${async () => {
-                            const res = await this.api.workspace.post('agent/sessions', { title: "New Conversation" });
+                            const res = await this.api.post('agent/sessions', { title: "New Conversation" });
                             if (res.ok) {
                                 const data = await res.json();
                                 await AgentStore.getState().fetchSessions();

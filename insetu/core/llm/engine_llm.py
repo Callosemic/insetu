@@ -2,8 +2,8 @@ import os
 import json
 import urllib.request
 import subprocess
-from typing import TypedDict, List, Dict, Any, Generator
-from flask import jsonify, Response, stream_with_context
+from typing import TypedDict, List, Dict, Any, Generator, Optional
+from flask import Response, stream_with_context
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import execute_binary
 
@@ -53,10 +53,10 @@ __depends__ = []
 class ChatMessage(TypedDict):
     role: str
     content: str
-
-class ChatCompletionPayload(TypedDict):
+class ChatCompletionPayload(TypedDict, total=False):
     messages: List[ChatMessage]
-    system: str
+    system: Optional[str]
+    tier: Optional[str]
 
 def _stream_anthropic(api_key: str, model: str, messages: list, system_prompt: str) -> Generator[str, None, None]:
     url = "https://api.anthropic.com/v1/messages"
@@ -160,10 +160,9 @@ def _stream_claude_cli(model: str, messages: list, system_prompt: str) -> Genera
             
     except Exception as e:
         yield f"data: {json.dumps({'error': f'Failed to execute Claude CLI: {str(e)}'})}\n\n"
-
-@llm_bp.route('chat/completions', methods=['POST'], request_schema=ChatCompletionPayload, docstring="Streams LLM inference utilizing the configured workspace provider.")
-def api_chat_completions(ctx):
-    data = ctx.req.json or {}
+@llm_bp.route('complete', methods=['POST'], request_schema=ChatCompletionPayload, docstring="[sync] Executes a complete LLM inference turn and returns the aggregated text response.")
+def api_llm_complete(ctx):
+    data = ctx.payload or {}
     messages = data.get("messages", [])
     system_prompt = data.get("system", "")
 
@@ -172,7 +171,48 @@ def api_chat_completions(ctx):
     api_key = ctx.settings.get("api_key", "")
 
     if provider in ["anthropic", "gemini"] and not api_key:
-        return jsonify({"error": f"API key is missing for provider '{provider}'. Please update your Workspace Configuration."}), 400
+        return {"error": f"API key is missing for provider '{provider}'. Please update your Workspace Configuration."}, 400
+
+    full_response = ""
+    stream_gen = None
+    if provider == "anthropic":
+        stream_gen = _stream_anthropic(api_key, model, messages, system_prompt)
+    elif provider == "gemini":
+        stream_gen = _stream_gemini(api_key, model, messages, system_prompt)
+    elif provider == "claude_cli":
+        stream_gen = _stream_claude_cli(model, messages, system_prompt)
+    else:
+        return {"error": f"Unknown provider: {provider}"}, 400
+
+    for sse_line in stream_gen:
+        if sse_line.startswith("data: "):
+            data_str = sse_line[6:].strip()
+            if data_str == "[DONE]":
+                break
+            try:
+                chunk_obj = json.loads(data_str)
+                if "text" in chunk_obj:
+                    full_response += chunk_obj["text"]
+                elif "error" in chunk_obj:
+                    return {"error": chunk_obj["error"]}, 500
+            except json.JSONDecodeError:
+                continue
+
+    return {"text": full_response, "provider": provider, "model": model}
+
+
+@llm_bp.route('chat/completions', methods=['POST'], request_schema=ChatCompletionPayload, docstring="Streams LLM inference utilizing the configured workspace provider.")
+def api_chat_completions(ctx):
+    data = ctx.payload or {}
+    messages = data.get("messages", [])
+    system_prompt = data.get("system", "")
+
+    provider = ctx.settings.get("provider", "anthropic")
+    model = ctx.settings.get("model", "claude-3-5-sonnet-latest")
+    api_key = ctx.settings.get("api_key", "")
+
+    if provider in ["anthropic", "gemini"] and not api_key:
+        return {"error": f"API key is missing for provider '{provider}'. Please update your Workspace Configuration."}, 400
 
     def generate():
         if provider == "anthropic":

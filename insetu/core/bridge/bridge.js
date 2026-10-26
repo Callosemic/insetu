@@ -196,7 +196,7 @@ export const BridgeStore = createExtensionStore('Bridge', {
     setTelemetry: (tel) => BridgeStore.setState({ telemetry: tel }),
     fetchHistory: async () => {
         try {
-            const res = await window.inSetu.api.workspace.get('bridge/history');
+            const res = await window.inSetu.api.get('bridge/history');
             if (res.ok) {
                 const data = await res.json();
                 BridgeStore.setState({ historyRecords: data.history || [] });
@@ -463,7 +463,7 @@ export class InSetuExtBridge extends InSetuElement {
             const textVal = BridgeStore.getState().getCompiledPayload();
             BridgeStore.setState({ viewMode: 'console', consoleOutput: "Dispatching transaction to the Bridge...", telemetry: null });
             const activeFiles = BridgeStore.getState().getActiveFiles();
-            const action = this.api.bindJobAction('sync', {
+            const action = this.api.bindJobAction('bridge/sync', {
                 text: textVal,
                 active_files: activeFiles,
                 dry_run: dryRunActive,
@@ -1130,42 +1130,6 @@ export class InSetuBridgeEditProjection extends InSetuElement {
     }
 }
 customElements.define('insetu-bridge-edit-projection', InSetuBridgeEditProjection);
-
-export class InSetuExtBridgeHistoryActions extends InSetuElement {
-    static get extensionName() { return 'bridge'; }
-    static properties = { _viewMode: { type: String } };
-    static styles = [sharedStyles, css`
-        :host { display: flex; align-items: stretch; height: 100%; }
-    `];
-
-    constructor() {
-        super();
-        this._viewMode = 'transaction';
-    }
-    connectedCallback() {
-        super.connectedCallback();
-        this._viewMode = BridgeStore.getState().historyViewMode || 'transaction';
-        this.subscribe(
-            BridgeStore,
-            state => state.historyViewMode || 'transaction',
-            (historyViewMode) => {
-                this._viewMode = historyViewMode;
-            }
-        );
-    }
-    render() {
-        const isTx = this._viewMode === 'transaction';
-        return html`
-            <button 
-                class="system-action-btn"
-                @click=${() => BridgeStore.setState({ historyViewMode: isTx ? 'file' : 'transaction' })}
-                title="${isTx ? 'Switch to By File view' : 'Switch to By Turn view'}">
-                <yv-icon name="${isTx ? 'folder-kanban' : 'file-text'}" style="width: 15px; height: 15px;"></yv-icon>
-            </button>
-        `;
-    }
-}
-customElements.define('insetu-ext-bridge-history-actions', InSetuExtBridgeHistoryActions);
 export class InSetuExtBridgeActions extends InSetuElement {
     static get extensionName() { return 'bridge'; }
     static properties = {
@@ -1209,7 +1173,10 @@ export class InSetuExtBridgeActions extends InSetuElement {
         `;
     }
 }
-customElements.define('insetu-ext-bridge-actions', InSetuExtBridgeActions);
+if (!customElements.get('insetu-ext-bridge-actions')) {
+    customElements.define('insetu-ext-bridge-actions', InSetuExtBridgeActions);
+}
+
 export class InSetuExtBridgeHistory extends InSetuElement {
     static get extensionName() { return 'bridge'; }
     static properties = {
@@ -1279,7 +1246,7 @@ export class InSetuExtBridgeHistory extends InSetuElement {
         const activeRepos = this.ecosystem.pinnedRepos;
         const repoFilteredRecords = filteredRecords.filter(r => {
             if (activeRepos.has('ALL')) return true;
-            const parsedRepo = this.utils.parseURI(r.filepath || '').repo;
+            const parsedRepo = new this.utils.InSetuURI(r.filepath || '').repo;
             return activeRepos.has(r.repo) || activeRepos.has(parsedRepo);
         });
 
@@ -1606,6 +1573,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             icon: "bridge",
             intent: "highlight",
             order: 1,
+            headerActionComponent: "insetu-ext-bridge-actions",
             component: "insetu-ext-bridge"
         },
         {
@@ -1616,21 +1584,16 @@ window.ExtensionRegistry.registerExtension('bridge', {
             icon: "history",
             intent: "neutral",
             order: 2,
+            menuStores: ["Bridge"],
+            menuActions: () => {
+                const isTx = (BridgeStore.getState().historyViewMode || 'transaction') === 'transaction';
+                return [{
+                    label: isTx ? 'Switch to By File View' : 'Switch to By Turn View',
+                    icon: isTx ? 'folder-kanban' : 'file-text',
+                    onClick: () => BridgeStore.setState({ historyViewMode: isTx ? 'file' : 'transaction' })
+                }];
+            },
             component: "insetu-ext-bridge-history"
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "edit",
-            targetSub: "bridge",
-            component: "insetu-ext-bridge-actions",
-            order: 1
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "edit",
-            targetSub: "history",
-            component: "insetu-ext-bridge-history-actions",
-            order: 1
         }
     ]
 });

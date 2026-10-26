@@ -410,7 +410,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 ctx.emit_background('bridge_error', filepath=resolved_path, error_type='patch_failed', details="Failed to anchor patch block in memory.", file_content=content, patch_payload=json.dumps(b))
                 continue
             # Step i: Phase 3 - Full-File AST Syntax Gate (Scoped to last chunk)
-            ext = os.path.splitext(resolved_path)[1].lower()
+            ext = Path(resolved_path).suffix.lower()
             syntax_error = False
             err_str = ""
             is_last_block = (b == blocks[-1])

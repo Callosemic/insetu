@@ -4,8 +4,7 @@ import time
 import hashlib
 import zlib
 import traceback
-from typing import TypedDict, Literal, List, Dict
-from flask import jsonify
+from typing import TypedDict, Literal, List, Dict, Optional
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import InSetuURI
 
@@ -63,7 +62,7 @@ def bridge_history(ctx):
     """Phase C: Returns the ephemeral ledger history for the UI."""
     # Explicitly exclude the 'compressed_state' BLOB to prevent JSON serialization crashes
     records = ctx.db.execute("SELECT patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, timestamp, ttl_expires_at, patch_count, chunks_json FROM bridge_ledger ORDER BY timestamp DESC LIMIT 100").fetchall()
-    return jsonify({"history": [dict(r) for r in records]})
+    return {"history": [dict(r) for r in records]}
 
 class BridgeRevertPayload(TypedDict, total=False):
     patch_id: str
@@ -73,20 +72,20 @@ class BridgeRevertPayload(TypedDict, total=False):
 @bridge_bp.route('revert', methods=['POST'], request_schema=BridgeRevertPayload, docstring="Reverts a single patch or entire transaction to a specific state ('initial' or 'final').")
 def bridge_revert(ctx):
     """Phase 5: Forward-replay reversion. Handles both single-file and multi-file atomic transactions."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     patch_id = data.get("patch_id")
     transaction_id = data.get("transaction_id")
     if not patch_id and not transaction_id: 
-        return jsonify({"error": "patch_id or transaction_id required"}), 400
+        return {"error": "patch_id or transaction_id required"}, 400
 
     targets = []
     if patch_id:
         record = ctx.db.execute("SELECT * FROM bridge_ledger WHERE patch_id=?", (patch_id,)).fetchone()
-        if not record: return jsonify({"error": "Patch not found"}), 404
+        if not record: return {"error": "Patch not found"}, 404
         targets.append(record)
     else:
         records = ctx.db.execute("SELECT * FROM bridge_ledger WHERE transaction_id=?", (transaction_id,)).fetchall()
-        if not records: return jsonify({"error": "Transaction not found"}), 404
+        if not records: return {"error": "Transaction not found"}, 404
         seen = set()
         for r in records:
             if r['filepath'] not in seen:
@@ -146,9 +145,8 @@ def bridge_revert(ctx):
 
             vfs.save(filepath, content)
             reverted_count += 1
-
         ctx.db.commit()
-    return jsonify({"status": "success", "message": f"Atomic revert complete. Reverted {reverted_count} file(s)."})
+    return {"status": "success", "message": f"Atomic revert complete. Reverted {reverted_count} file(s)."}
 
 class BridgeSyncPayload(TypedDict, total=False):
     text: str
@@ -174,23 +172,45 @@ class BridgeSyncPayload(TypedDict, total=False):
 def bridge_sync(ctx):
     """Receives Yomama payloads from the UI and dispatches the sync."""
     try:
-        raw_data = ctx.req.get_json(silent=True) or {}
+        raw_data = ctx.payload or {}
         safe_kwargs = {
             k: v for k, v in raw_data.items()
             if k not in ("task_name", "coalesce", "job_category", "job_id")
         }
         job_id = ctx.jobs.submit("sync_task", coalesce="args", job_category="ui_blocking", **safe_kwargs)
-        return jsonify({"status": "accepted", "job_id": job_id}), 202
+        return {"status": "accepted", "job_id": job_id}, 202
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": f"Bridge Dispatch Error ({type(e).__name__}): {str(e)}"}), 500
-
+        return {"error": f"Bridge Dispatch Error ({type(e).__name__}): {str(e)}"}, 500
 # 3. Background Workers
 @bridge_bp.worker("sync_task")
-def _background_bridge_sync(ctx, job_id=None, **kwargs):
+def _background_bridge_sync(
+    ctx,
+    text: str = "",
+    active_files: Optional[List[str]] = None,
+    dry_run: bool = False,
+    pinned_repos: Optional[List[str]] = None,
+    confirmed_candidates: Optional[Dict[str, str]] = None,
+    allow_deep_search: bool = False,
+    force: bool = False,
+    ignore_syntax: bool = False,
+    ignore_syntax_errors: bool = False,
+    job_id: Optional[str] = None,
+):
     """Executes the bridge matrix off-thread and enforces the VFS synchronization barrier."""
     ctx.jobs.update_progress("Analyzing patch matrices and running AST validation...")
-    sync_output_json = execute_bridge_sync(ctx.workspace_id, kwargs)
+    sync_payload = {
+        "text": text,
+        "active_files": active_files or [],
+        "dry_run": dry_run,
+        "pinned_repos": pinned_repos or ["ALL"],
+        "confirmed_candidates": confirmed_candidates or {},
+        "allow_deep_search": allow_deep_search,
+        "force": force,
+        "ignore_syntax": ignore_syntax,
+        "ignore_syntax_errors": ignore_syntax_errors,
+    }
+    sync_output_json = execute_bridge_sync(ctx.workspace_id, sync_payload)
 
     try:
         sync_data = json.loads(sync_output_json)
@@ -200,8 +220,10 @@ def _background_bridge_sync(ctx, job_id=None, **kwargs):
         return {"message": "Transaction evaluated.", "artifact": sync_data}
     except Exception:
         return {"message": sync_output_json}
+
+
 @bridge_bp.worker("sweep_ledger")
-def _sweep_ledger_worker(ctx, job_id=None, **kwargs):
+def _sweep_ledger_worker(ctx, job_id: Optional[str] = None):
     """Metronome TTL Housekeeping: Purges historical rows older than 48 hours."""
     now = time.time()
     try:
