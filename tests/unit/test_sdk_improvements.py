@@ -15,7 +15,12 @@ import contextlib
 import io
 from akasa.utils import load_config
 from akasa.workers import _init_worker_schema
-from insetu.core.sdk import InSetuExtension, ExtensionContext, resolve_external_dependency_spec
+from insetu.core.sdk import (
+    InSetuExtension,
+    ExtensionContext,
+    get_registered_capabilities,
+    resolve_external_dependency_spec,
+)
 from insetu.core.system.engine_system import (
     _get_whitelisted_extension_packages,
     _background_install_extension_deps,
@@ -27,6 +32,10 @@ from insetu.core.gather.engine_gather import gather_bp, VFS_INDEX_SCHEMA
 from insetu.extensions.flow.engine_flow import flow_bp, _background_compile_workflows
 from akasa.db import apply_declarative_schema
 from akasa.vfs import sync_vfs_barrier
+from insetu.core.agent.engine_agent import agent_bp, AGENT_SCHEMA, _execute_agent_turn
+from insetu.core.bridge.engine_bridge import bridge_bp, BRIDGE_SCHEMA
+from insetu.core.llm.engine_llm import llm_bp
+from insetu.core.topology.engine_topology import TOPOLOGY_SCHEMA, mount_topology_volumes_dynamically
 from tests.fitness.core import FitnessState
 from tests.fitness.rules_python import BackendFitnessVisitor, check_python_files
 
@@ -222,11 +231,17 @@ class TestSdkImprovements(unittest.TestCase):
                 f"Existing Python codebase had fitness violations:\n{buf.getvalue()}",
             )
             bad_code = (
+                "from flask import jsonify\n"
                 "from insetu.core.sdk import InSetuExtension\n"
+                "from insetu.core.gather.engine_gather import _pack_selection_worker\n"
                 "demo_bp = InSetuExtension('demo', __name__)\n"
                 "__depends__ = []\n"
                 "def bad_init():\n"
                 "    demo_bp.mount_volumes(workspace_id='default')\n"
+                "@demo_bp.route('list', methods=['GET'])\n"
+                "def bad_route(ctx):\n"
+                "    _ = ctx.req.args.get('q')\n"
+                "    return jsonify({'ok': True})\n"
                 "@demo_bp.on('compile_contexts')\n"
                 "def dead_hook(manifest, **kwargs):\n"
                 "    pass\n"
@@ -246,8 +261,134 @@ class TestSdkImprovements(unittest.TestCase):
             self.assertIn("DEAD_COMPILE_CONTEXTS_HOOK_BAN", out_bad)
             self.assertIn("WORKER_TYPED_SIGNATURE_MANDATE", out_bad)
             self.assertIn("WORKER_PARAMETER_OVERLOAD_BAN", out_bad)
+            self.assertIn("FLASK_TRANSPORT_LEAK_BAN", out_bad)
+            self.assertIn("CROSS_MODULE_PRIVATE_IMPORT_BAN", out_bad)
         finally:
             FitnessState.violations_found = prev
+    def test_capability_registry_and_in_process_ctx_call(self):
+        """get_registered_capabilities indexes @route capabilities and ctx.call() executes them in-process returning native dicts."""
+        caps = get_registered_capabilities()
+        self.assertIn("system.topology", caps)
+        self.assertIn("gather.repos.template", caps)
+
+        sys_ctx = system_bp.get_context(self.workspace_id)
+        tpl = sys_ctx.call("gather.repos.template")
+        self.assertIsInstance(tpl, dict)
+        self.assertIn("sub_buckets", tpl)
+        self.assertIn("apply_ignore", tpl)
+
+    def test_llm_and_bridge_capability_dispatch(self):
+        """ctx.call('llm.complete') aggregates inference and ctx.call('bridge.sync') executes VFS patches in-process."""
+        apply_declarative_schema("bridge", BRIDGE_SCHEMA, self.workspace_id)
+        apply_declarative_schema("topology", TOPOLOGY_SCHEMA, self.workspace_id)
+
+        repo_dir = self.root_path / "alpha"
+        repo_dir.mkdir(parents=True, exist_ok=True)
+        target_file = repo_dir / "service.py"
+        target_file.write_text("port = 5000\n", encoding="utf-8")
+
+        (self.control_dir / "config.json").write_text(
+            json.dumps({
+                "workspace_root": self.root_path.as_posix(),
+                "extensions": ["config", "llm", "bridge"],
+                "target_repos": [{"repo_dir": "alpha", "title": "Alpha", "exts": [".py"]}],
+            }),
+            encoding="utf-8",
+        )
+        akasa_utils.load_config.clear_all()
+        mount_topology_volumes_dynamically(load_config(self.workspace_id), workspace_id=self.workspace_id)
+
+        sys_ctx = system_bp.get_context(self.workspace_id)
+        llm_ctx = llm_bp.get_context(self.workspace_id)
+        llm_ctx.settings.set("api_key", "mock-test-key")
+
+        # 1. Test ctx.call("llm.complete")
+        mock_chunks = [
+            'data: {"text": "Here is the patch:\\n"}\n\n',
+            'data: {"text": "<<<<<<< FILE: vfs://alpha/service.py\\n<<<<<<< SEARCH\\nport = 5000\\n=======\\nport = 8080\\n>>>>>>> REPLACE"}\n\n',
+            'data: [DONE]\n\n',
+        ]
+        with patch("insetu.core.llm.engine_llm._stream_anthropic", return_value=iter(mock_chunks)):
+            res = sys_ctx.call("llm.complete", messages=[{"role": "user", "content": "Update port to 8080"}])
+            self.assertIsInstance(res, dict)
+            self.assertIn("port = 8080", res.get("text", ""))
+            self.assertEqual(res.get("provider"), "anthropic")
+
+        # 2. Test ctx.call("bridge.sync")
+        patch_text = (
+            "<<<<<<< FILE: vfs://alpha/service.py\n"
+            "<<<<<<< SEARCH\n"
+            "port = 5000\n"
+            "=======\n"
+            "port = 8080\n"
+            ">>>>>>> REPLACE"
+        )
+        bridge_res = sys_ctx.call(
+            "bridge.sync",
+            text=patch_text,
+            active_files=["vfs://alpha/service.py"],
+            dry_run=False,
+            wait=True,
+        )
+        self.assertIsInstance(bridge_res, dict)
+        self.assertTrue(bridge_res.get("can_commit"))
+        self.assertEqual(bridge_res.get("summary", {}).get("resolved"), 1)
+        sync_vfs_barrier(self.workspace_id)
+        self.assertEqual(target_file.read_text(encoding="utf-8"), "port = 8080\n")
+
+    def test_agent_turn_react_worker_chain(self):
+        """_execute_agent_turn orchestrates context packing, LLM inference, and Yomama patch verification via capability calls."""
+        apply_declarative_schema("agent", AGENT_SCHEMA, self.workspace_id)
+        apply_declarative_schema("bridge", BRIDGE_SCHEMA, self.workspace_id)
+        apply_declarative_schema("vfs_index", VFS_INDEX_SCHEMA, self.workspace_id)
+
+        repo_dir = self.root_path / "alpha"
+        repo_dir.mkdir(parents=True, exist_ok=True)
+        file_path = repo_dir / "calc.py"
+        file_path.write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+
+        agent_ctx = agent_bp.get_context(self.workspace_id)
+        agent_ctx.db.insert_or_replace("chat_sessions", {
+            "session_id": "ses_test",
+            "title": "Fix Math",
+            "updated_at": time.time(),
+        })
+
+        mock_patch_reply = (
+            "I will fix the subtraction operator.\n\n"
+            "<<<<<<< FILE: vfs://alpha/calc.py\n"
+            "<<<<<<< SEARCH\n"
+            "def add(a, b):\n"
+            "    return a - b\n"
+            "=======\n"
+            "def add(a, b):\n"
+            "    return a + b\n"
+            ">>>>>>> REPLACE"
+        )
+        def fake_call(cap_name, **kwargs):
+            if cap_name == "gather.pack_selection":
+                return {"base_filename": "ctx://contexts/test_ctx.txt"}
+            elif cap_name == "llm.complete":
+                return {"text": mock_patch_reply}
+            elif cap_name == "bridge.sync":
+                return {"can_commit": True, "patches": []}
+            return {}
+
+        with patch.object(agent_ctx, "call", side_effect=fake_call), \
+            patch.object(agent_ctx, "read_compiled_context", return_value="def add(a, b): ..."):
+            result = _execute_agent_turn(
+                agent_ctx,
+                session_id="ses_test",
+                user_prompt="Fix add function in vfs://alpha/calc.py",
+                attached_files=["vfs://alpha/calc.py"],
+            )
+
+        self.assertEqual(result["message"], "Turn complete.")
+        cursor = agent_ctx.db.execute("SELECT * FROM chat_messages WHERE session_id=?", ("ses_test",))
+        messages = [dict(r) for r in cursor.fetchall()]
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["role"], "assistant")
+        self.assertIn("def add(a, b):", messages[0]["content"])
 
     def test_extension_dependency_resolution_and_whitelist_installer(self):
         """resolve_external_dependency_spec maps import names to PyPI names and _background_install_extension_deps enforces the extension whitelist."""

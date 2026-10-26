@@ -56,6 +56,10 @@ insetu/
 │       ├── 0073-devops-extension-suite-membrane-decoupling-and-declarative-diff-volumes.md # DevOps extension suite membrane decoupling and declarative diff volume mounts.
 │       ├── 0074-knowledge-suite-membrane-decoupling-declarative-volumes-and-substack-publishing.md # Knowledge suite membrane decoupling, declarative volumes, and Substack HTML snippet publishing.
 │       ├── 0075-workflow-management-suite-membrane-decoupling-declarative-flow-volumes-and-tracker-hub-embedding.md # Workflow management suite membrane decoupling, declarative flow volumes, and tracker settings hub embedding.
+│       ├── 0076-dual-representation-macro-preview-dependency-whitelisting-and-tier2-membrane-decoupling.md # [comment required]
+│       ├── 0077-devops-suite-flask-decoupling-typed-workers-and-canonical-routing.md # [comment required]
+│       ├── 0078-knowledge-suite-flask-decoupling-typed-workers-and-canonical-routing.md # [comment required]
+│       ├── 0079-workflow-management-suite-flask-decoupling-typed-workers-and-canonical-routing.md # [comment required]
 │       ├── archived/               # Superseded and historical ADR documents.
 │       │   ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │       │   ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -281,6 +285,7 @@ insetu/
         ├── test_canonical_uris.py  # Unit tests for canonical URI enforcement, InSetuURI normalization, and legacy ledger migrations.
         ├── test_config_cascade.py  # Unit tests for the 3-tier configuration cascade, secret encryption, and lazy migration.
         ├── test_ext_preview_unit.py # Unittest suite for passive framework detection and preview server lifecycle.
+        ├── test_fallback_bridge.py # Unit tests for the Lifeboat recovery bridge block parser, genesis patches, and recovery endpoints.
         ├── test_publish_extension.py # Unit tests for document publishing compilation and ephemeral wordcount macro stripping.
         ├── test_sdk_improvements.py # Unit tests for ctx.create_entity_file, declarative volume migrations, and worker contract fitness rules.
         ├── test_sutram_compliance.py # Unit tests verifying Sutram consumer linter and JavaScript fitness compliance across core and extensions.

@@ -114,6 +114,7 @@ class TestCanonicalURIs(unittest.TestCase):
         with self.assertRaises(ValueError):
             InSetuURI("vfs:/alpha/main.py")
         valid_vfs = InSetuURI("vfs://alpha/main.py")
+        self.assertFalse(hasattr(valid_vfs, "__dict__"), "InSetuURI must declare __slots__ = () to preserve AkasaURI slotted layout")
         self.assertEqual(valid_vfs.scheme, "vfs")
         self.assertEqual(valid_vfs.repo, "alpha")
         self.assertEqual(valid_vfs.path, "main.py")

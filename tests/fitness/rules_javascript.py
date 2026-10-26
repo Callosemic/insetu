@@ -212,10 +212,15 @@ def check_javascript_files():
     parser = None
     JS_LANG = None
     try:
-        from tree_sitter import Language, Parser, Query, QueryCursor
-        import tree_sitter_javascript as ts_js
-        JS_LANG = Language(ts_js.language())
-        parser = Parser(JS_LANG)
+        from tree_sitter import (
+            Language as _Language,
+            Parser as _Parser,
+            Query as _Query,
+            QueryCursor as _QueryCursor,
+        )
+        import tree_sitter_javascript as _ts_js
+        JS_LANG = _Language(_ts_js.language())
+        parser = _Parser(JS_LANG)
         ts_available = True
     except ImportError:
         print("⚠️ [WARNING] Tree-sitter not installed. Falling back to legacy regex. (Run `pip install -e .[syntax]`)")
@@ -247,8 +252,8 @@ def check_javascript_files():
         if ts_available:
             tree = parser.parse(bytes(full_content, "utf8"))
             # UDF State Bleed
-            udf_query = Query(JS_LANG, '(program (lexical_declaration) @udf)')
-            for match in QueryCursor(udf_query).matches(tree.root_node):
+            udf_query = _Query(JS_LANG, '(program (lexical_declaration) @udf)')
+            for match in _QueryCursor(udf_query).matches(tree.root_node):
                 for node in match[1].get("udf", []):
                     decl_text = full_content.encode('utf8')[node.start_byte:node.end_byte].decode('utf8').strip()
                     if is_extension and decl_text.startswith("let"):
@@ -257,14 +262,14 @@ def check_javascript_files():
                         report_violation("UDF_STATE_BLEED", filepath, node.start_point[0] + 1, "Floating module-level Set/Map singleton detected. Migrate mutable collection into the module's Zustand Store.")
 
             # Custom Event Dispatch
-            dispatch_query = Query(JS_LANG, '(call_expression function: (member_expression object: (identifier) @obj (#eq? @obj "window") property: (property_identifier) @prop (#eq? @prop "dispatchEvent"))) @call')
-            for match in QueryCursor(dispatch_query).matches(tree.root_node):
+            dispatch_query = _Query(JS_LANG, '(call_expression function: (member_expression object: (identifier) @obj (#eq? @obj "window") property: (property_identifier) @prop (#eq? @prop "dispatchEvent"))) @call')
+            for match in _QueryCursor(dispatch_query).matches(tree.root_node):
                 for node in match[1].get("call", []):
                     if is_extension:
                         report_violation("CUSTOM_EVENT_DISPATCH_MANDATE", filepath, node.start_point[0] + 1, "Raw window.dispatchEvent detected. Route through this.dispatch(eventName, detail) for streamlined multi-tenant boundaries.")
 
             # Approved API Verbs & PollJob Warnings
-            api_query = Query(JS_LANG, '''
+            api_query = _Query(JS_LANG, '''
                 (call_expression
                     function: (member_expression
                         object: (member_expression object: (this) property: (property_identifier) @api_prop (#eq? @api_prop "api"))
@@ -273,7 +278,7 @@ def check_javascript_files():
                 ) @api_call
             ''')
             allowed_verbs = {"get", "post", "delete", "getJson", "postJson", "deleteJson", "fetchImmutableText", "bindJobAction", "pollJob", "request", "workspace", "system"}
-            for match in QueryCursor(api_query).matches(tree.root_node):
+            for match in _QueryCursor(api_query).matches(tree.root_node):
                 for node in match[1].get("verb", []):
                     verb_name = full_content.encode('utf8')[node.start_byte:node.end_byte].decode('utf8')
                     line_n = node.start_point[0] + 1
@@ -282,8 +287,8 @@ def check_javascript_files():
                     if verb_name == "pollJob" and is_extension and file not in ("ext_tracker.js", "ext_flow.js"):
                         print(f"⚠️ [WARNING: BIND_JOB_ACTION_PREFERENCE] {file}:{line_n}\n   ↳ Imperative this.api.pollJob detected. Prefer declarative this.api.bindJobAction when possible.")
             # Debounce Mandate (clearTimeout)
-            debounce_query = Query(JS_LANG, '(call_expression function: (identifier) @func (#eq? @func "clearTimeout")) @call')
-            for match in QueryCursor(debounce_query).matches(tree.root_node):
+            debounce_query = _Query(JS_LANG, '(call_expression function: (identifier) @func (#eq? @func "clearTimeout")) @call')
+            for match in _QueryCursor(debounce_query).matches(tree.root_node):
                 for node in match[1].get("call", []):
                     line_idx = node.start_point[0]
                     line_text = lines[line_idx]
@@ -291,7 +296,7 @@ def check_javascript_files():
                         report_violation("DEBOUNCE_MANDATE", filepath, line_idx + 1, "Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling. (Exemptions granted for explicit Timer variables).")
 
             # Coarse Store Subscription Mandate
-            sub_query = Query(JS_LANG, '''
+            sub_query = _Query(JS_LANG, '''
                 (call_expression
                     function: (member_expression
                         object: (this)
@@ -300,7 +305,7 @@ def check_javascript_files():
                     arguments: (arguments) @args
                 ) @call
             ''')
-            for match in QueryCursor(sub_query).matches(tree.root_node):
+            for match in _QueryCursor(sub_query).matches(tree.root_node):
                 for node in match[1].get("call", []):
                     args_node = node.child_by_field_name("arguments")
                     if args_node:

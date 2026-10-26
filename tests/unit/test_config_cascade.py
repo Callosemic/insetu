@@ -414,10 +414,67 @@ class TestConfigurationCascade(unittest.TestCase):
         # Dropped pattern -> returns _dropped sentinel (omitted from both sub-bucket and Bucket 0)
         b_drop, _ = resolve_file_bucket("docs/archived/old.md", sub_buckets, repo_dir="alpha")
         self.assertEqual(b_drop["id"], "_dropped")
-
         # Ignored pattern in sub-bucket -> passes through to Bucket 0 (returns None, None)
         b_pass, _ = resolve_file_bucket("docs/internal_notes.md", sub_buckets, repo_dir="alpha")
         self.assertIsNone(b_pass)
+
+    def test_preseed_daemon_port_env_and_cli_scaffold_fallbacks(self):
+        """_preseed_daemon_port_env extracts port from host.json before boot panic, and scaffold_profiles handles missing defaults."""
+        from insetu.app import _preseed_daemon_port_env as _preseed_port
+        from insetu.cli import scaffold_profiles as _scaffold_profiles
+
+        orig_port = os.environ.get("INSETU_PORT")
+        orig_ctrl = os.environ.get("AKASA_CONTROL_DIR")
+        try:
+            # 1. Custom port in host.json populates INSETU_PORT
+            os.environ["AKASA_CONTROL_DIR"] = self.control_dir.as_posix()
+            (self.control_dir / "host.json").write_text(json.dumps({"port": 8123}), encoding="utf-8")
+            os.environ.pop("INSETU_PORT", None)
+            with patch("os.getcwd", return_value=self.root_path.as_posix()):
+                _preseed_port()
+            self.assertEqual(os.environ.get("INSETU_PORT"), "8123")
+
+            # 2. Existing INSETU_PORT in environment is respected and never overwritten
+            os.environ["INSETU_PORT"] = "9090"
+            with patch("os.getcwd", return_value=self.root_path.as_posix()):
+                _preseed_port()
+            self.assertEqual(os.environ.get("INSETU_PORT"), "9090")
+
+            # 3. Nested system.port fallback
+            (self.control_dir / "host.json").write_text(json.dumps({"system": {"port": 7123}}), encoding="utf-8")
+            os.environ.pop("INSETU_PORT", None)
+            with patch("os.getcwd", return_value=self.root_path.as_posix()):
+                _preseed_port()
+            self.assertEqual(os.environ.get("INSETU_PORT"), "7123")
+
+            # 4. Malformed JSON does not raise unhandled exceptions
+            (self.control_dir / "host.json").write_text("{broken json", encoding="utf-8")
+            os.environ.pop("INSETU_PORT", None)
+            with patch("os.getcwd", return_value=self.root_path.as_posix()):
+                _preseed_port()
+            self.assertNotIn("INSETU_PORT", os.environ)
+
+            # 5. CLI scaffold_profiles generates fallback payloads when template files are absent
+            with tempfile.TemporaryDirectory() as fresh_ws:
+                fresh_path = Path(fresh_ws)
+                with patch("shutil.copy", side_effect=FileNotFoundError("Template absent")):
+                    _scaffold_profiles(fresh_path.as_posix())
+                fresh_ctrl = fresh_path / ".insetu"
+                self.assertTrue((fresh_ctrl / "host.json").exists())
+                self.assertTrue((fresh_ctrl / "workspaces.json").exists())
+                host_data = json.loads((fresh_ctrl / "host.json").read_text(encoding="utf-8"))
+                ws_data = json.loads((fresh_ctrl / "workspaces.json").read_text(encoding="utf-8"))
+                self.assertEqual(host_data.get("port"), 5005)
+                self.assertIn("default", ws_data.get("workspaces", {}))
+        finally:
+            if orig_port is not None:
+                os.environ["INSETU_PORT"] = orig_port
+            else:
+                os.environ.pop("INSETU_PORT", None)
+            if orig_ctrl is not None:
+                os.environ["AKASA_CONTROL_DIR"] = orig_ctrl
+            else:
+                os.environ.pop("AKASA_CONTROL_DIR", None)
 
 
 if __name__ == "__main__":

@@ -182,12 +182,12 @@ StoreRegistry.setScopeProvider(() => activeWs);
 // 1. Assert synchronous initial hydration preserved ws_alpha's localStorage columns despite empty sessionStorage
 assert.equal(LayoutStore.getState().columns.left.pinned.length, 1, 'ws_alpha left column must hydrate from localStorage');
 assert.equal(LayoutStore.getState().columns.center.pinned[0].id, 'fs:files', 'ws_alpha center column must hydrate fs:files');
-
-// 2. Simulate resize setCapacity(2) after hydration -> must NOT wipe ws_alpha columns
+// 2. Simulate resize setCapacity(2) and column pin mutation after hydration -> must flush before scope transition and never wipe ws_alpha columns
 LayoutStore.getState().setCapacity(2);
+LayoutStore.getState().pinToColumn('right', { id: 'notes:notes', label: 'Notes' });
 const savedAlphaLocal = JSON.parse(localStorage.getItem('sutram_local_ws_alpha_Layout_columns'));
 assert.equal(savedAlphaLocal.left.pinned[0].id, 'gather:gather', 'Resize capacity mutation must not wipe ws_alpha localStorage');
-// 3. Transactional switch to ws_beta -> suppresses intermediate compileLayout and hydrates ws_beta
+// 3. Transactional switch to ws_beta -> flushes ws_alpha's pending debounced writes, suppresses intermediate compileLayout, and hydrates ws_beta
 let recompileEvents = 0;
 const transitionEvents = [];
 window.addEventListener('sutram-layout-recompile', () => { recompileEvents++; });
@@ -230,13 +230,13 @@ assert.ok(trackerAction, 'tracker_domain_vocab action must be returned by getSet
 assert.equal(trackerAction.component, 'insetu-ext-tracker-settings', 'Declarative component tag must be preserved');
 assert.equal(trackerAction.saveLabel, 'Save Kanban Configuration', 'Custom saveLabel must be preserved');
 assert.equal(trackerAction.extName, 'tracker', 'Originating extName must be attached');
-
-// 4. Switch back to ws_alpha -> must restore ws_alpha's exact layout
+// 4. Switch back to ws_alpha -> must restore ws_alpha's exact layout including the right-column pin flushed during transition
 activeWs = 'ws_alpha';
 StoreRegistry.beginScopeTransition('ws_alpha');
 StoreRegistry.endScopeTransition();
 assert.equal(LayoutStore.getState().columns.left.pinned[0].id, 'gather:gather', 'Returning to ws_alpha must restore left column');
 assert.equal(LayoutStore.getState().columns.center.pinned[0].id, 'fs:files', 'Returning to ws_alpha must restore center column');
+assert.equal(LayoutStore.getState().columns.right.pinned[0].id, 'notes:notes', 'Returning to ws_alpha must restore right column flushed on transition');
 """
             (tmp_path / "run_fsm_test.mjs").write_text(node_script, encoding="utf-8")
             res = execute_binary(["node", (tmp_path / "run_fsm_test.mjs").as_posix()], cwd=tmp_path.as_posix(), timeout=10.0)

@@ -3,6 +3,7 @@ import importlib.util
 import inspect
 import io
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -174,6 +175,64 @@ class TestSutramCompliance(unittest.TestCase):
         self.assertIn("getJson:", api_js)
         self.assertIn("postJson:", api_js)
         self.assertIn("deleteJson:", api_js)
+
+    def test_workflow_management_suite_canonical_api_routes(self):
+        """
+        Verifies that all API calls across the Workflow Automation and Task Management
+        extension suite (cronic, favorites, flow, hooks, tracker) use explicit canonical
+        route prefixes (<module>/<endpoint>) to eliminate runtime path prepending ambiguity.
+        """
+        ext_dir = BACKEND_DIR / "extensions"
+        management_files = {
+            "cronic": ext_dir / "cronic" / "ext_cronic.js",
+            "favorites": ext_dir / "favorites" / "ext_favorites.js",
+            "flow": ext_dir / "flow" / "ext_flow.js",
+            "hooks": ext_dir / "hooks" / "ext_hooks.js",
+            "tracker": ext_dir / "tracker" / "ext_tracker.js",
+        }
+
+        api_call_pattern = re.compile(
+            r'\b(?:this\.api|window\.inSetu\.api(?:\.workspace)?)\.(?:get|post|delete|getJson|postJson|deleteJson|bindJobAction)\(\s*([\'`"])([^?\'"`\s)]+)'
+        )
+        known_modules = {
+            "bridge", "gather", "cartographer", "config", "editor", "fs", "system",
+            "workers", "auth", "security", "topology", "offline", "llm", "agent", "prompts",
+            "citations", "cronic", "dev", "favorites", "flow", "format", "freshdesk",
+            "git", "hooks", "ingest", "notes", "preview", "publish", "research", "skills",
+            "tailscale", "term", "tracker", "update"
+        }
+        banned_unprefixed_routes = {
+            "toggle", "delete", "list", "status", "logs", "schedule", "run_now", "kill",
+            "add", "batches", "save", "execute", "new", "index", "files", "spawn_template",
+            "vocab_settings", "restore_metadata", "transition"
+        }
+
+        for ext_name, js_file in management_files.items():
+            self.assertTrue(js_file.exists(), f"Extension file missing: {js_file}")
+            content = js_file.read_text(encoding="utf-8")
+            matches = list(api_call_pattern.finditer(content))
+            self.assertGreater(
+                len(matches),
+                0,
+                f"Expected API calls in {ext_name} ({js_file.name}), but none were found."
+            )
+
+            for match in matches:
+                raw_route = match.group(2).strip().lstrip("/")
+                segments = [s for s in raw_route.split("/") if s]
+                prefix = segments[0] if segments else ""
+                self.assertIn(
+                    prefix,
+                    known_modules,
+                    f"Non-canonical API route '{raw_route}' in {ext_name} ({js_file.name}). "
+                    f"Prefix '{prefix}' is not in known API modules."
+                )
+                self.assertNotIn(
+                    raw_route,
+                    banned_unprefixed_routes,
+                    f"Banned unprefixed relative route '{raw_route}' found in {ext_name} ({js_file.name}). "
+                    f"Must be prefixed with '{ext_name}/{raw_route}'."
+                )
 
     def test_dual_representation_macro_preview_contract(self):
         """

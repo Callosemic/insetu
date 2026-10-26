@@ -55,9 +55,8 @@ class TestPublishExtension(unittest.TestCase):
             self.temp_dir.cleanup()
         except OSError:
             pass
-
     def test_download_route_resolves_publish_ephemeral_artifacts(self):
-        """GET /download/<safe_name> resolves ephemeral artifacts registered via vfs_resolve_file hooks."""
+        """GET /api/default/fs/fetch?file=<safe_name>&download=1 resolves ephemeral artifacts registered via vfs_resolve_file hooks."""
         pub_ctx = publish_bp.get_context("default")
         artifacts_dir = Path(pub_ctx.paths["artifacts_base"])
         artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -65,7 +64,7 @@ class TestPublishExtension(unittest.TestCase):
         artifact_file = artifacts_dir / safe_name
         artifact_file.write_text("<h2>Substack Heading</h2><p>Body paragraph.</p>", encoding="utf-8")
 
-        dl_res = self.client.get(f"/download/{safe_name}")
+        dl_res = self.client.get(f"/api/default/fs/fetch?file={safe_name}&download=1")
         self.assertEqual(dl_res.status_code, 200)
         self.assertIn(b"<h2>Substack Heading</h2>", dl_res.data)
 

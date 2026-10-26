@@ -544,8 +544,52 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                             if not has_schema:
                                 report_violation("ROUTE_REQUEST_SCHEMA_MANDATE", self.filepath, node.lineno, f"Mutating route '{node.name}' ({', '.join(methods)}) is missing a mandatory 'request_schema' contract.")
         self.generic_visit(node)
+    def visit_Attribute(self, node):
+        if (
+            not self.is_test
+            and ("core" in self.filepath.parts or "extensions" in self.filepath.parts or self.filename == "engine_template_py.txt")
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "ctx"
+            and node.attr == "req"
+        ):
+            report_violation(
+                "FLASK_TRANSPORT_LEAK_BAN",
+                self.filepath,
+                node.lineno,
+                "Direct 'ctx.req' access detected in core/extension module. Read unified parameters from 'ctx.payload' instead."
+            )
+        self.generic_visit(node)
+
     def visit_ImportFrom(self, node):
         self._check_sqlite_import(node)
+        if (
+            not self.is_test
+            and node.module
+            and node.module.startswith("insetu.")
+            and node.module != "insetu.core.utils_core"
+            and node.level == 0
+        ):
+            for alias in node.names:
+                if alias.name.startswith("_"):
+                    report_violation(
+                        "CROSS_MODULE_PRIVATE_IMPORT_BAN",
+                        self.filepath,
+                        node.lineno,
+                        f"Cross-module import of private symbol '{alias.name}' from '{node.module}' is banned. Use public APIs or ctx.call() instead."
+                    )
+        if (
+            not self.is_test
+            and ("core" in self.filepath.parts or "extensions" in self.filepath.parts or self.filename == "engine_template_py.txt")
+            and self.filename != "engine_system.py"  # api_system_openapi uses @system_bp.bp.route directly
+            and node.module == "flask"
+            and any(alias.name == "jsonify" for alias in node.names)
+        ):
+            report_violation(
+                "FLASK_TRANSPORT_LEAK_BAN",
+                self.filepath,
+                node.lineno,
+                "Direct 'from flask import jsonify' in core and extension modules is banned. Return plain Python dicts and let AkasaExtension.route marshal at the HTTP edge."
+            )
         if node.module and (node.module == 'akasa' or node.module.startswith('akasa.')):
             if not self.is_test and not self.is_membrane_whitelisted:
                 report_violation(
