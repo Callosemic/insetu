@@ -22,7 +22,11 @@ my_ext_bp = InSetuExtension(
             "scheme": "ctx",
             "legacy_dirs": ["ext/my_ext/data"]  # Auto-migrated on Phase 1 boot
         }
-    }
+    },
+    external_dependencies=["beautifulsoup4", "playwright"],  # Whitelisted PyPI packages
+    external_binaries=["git", "node"],                       # Required system binaries in PATH
+    post_install_commands=[["$PYTHON", "-m", "playwright", "install", "chromium"]],
+    requires_reboot_on_install=False
 )
 
 # Retrieve a fully hydrated ExtensionContext bound to a tenant workspace
@@ -49,6 +53,7 @@ Route handlers (`@my_ext_bp.route('path')`) and background workers (`@my_ext_bp.
 * **`ctx.iter_shared_mount_files(domain, exts=None)`** *(Method)*: Traverses virtual mount trees for a specified domain across authorized publisher workspaces, yielding `(target_ws, ws_uri)`.
 * **`ctx.get_manifest_files(target_key)`** *(Method)*: SSOT helper to extract polymorphic lists of files or chunks from the active manifest.
 * **`ctx.expand_selection(items)`** *(Method)*: SSOT helper to expand polymorphic selection payloads (files, folders, virtual URIs) into deduplicated physical/logical paths.
+* **`ctx.call(capability_name, **kwargs)`** *(Method)*: In-process capability dispatcher executing registered `@route` endpoints across blueprints and returning native dictionaries without HTTP transport overhead.
 * **`ctx.emit(event_name, **kwargs)`** *(Method)*: Emits a synchronous event, automatically injecting the tenant workspace ID.
 * **`ctx.emit_background(event_name, **kwargs)`** *(Method)*: Emits a background event, automatically injecting the tenant workspace ID.
 
@@ -88,6 +93,9 @@ Extensions are strictly forbidden from relative-importing OS chassis functions. 
 * **`this.editor`**: `.getEditorContent()`, `.setEditorContent(text)`, `.insertTextAtCursor(text)`
 * **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.truncateFilename(filename, maxLen, ellipsis)`, `.copyRawText(text)`, `.normalizeEntityData(data)`, `.extractManifestFiles(manifest, targetKey, domain)`, `.debounce(fn, ms)`, `.formatArtifactSize(meta)`, `.getScopedStorage(key, defaultVal, wsId)`, `.setScopedStorage(key, value, wsId)`, `.removeScopedStorage(key, wsId)`, `.nativeShareFiles(files)`, `BucketAddress.fromFilepath(path, meta)`
 * **`.getOfflineMode(extName)`**: Retrieves the declarative offline mode capability (`"full"`, `"read_only"`, `"none"`) for a targeted extension.
+* **`.getMissingDependencies(extName)`**: Inspects whether the target extension has missing Python packages or system binaries.
+* **`.installExtensionDependencies(extName, onInstalled)`**: Dispatches an in-app background job installing declared whitelisted packages and executing post-install commands.
+* **`FsStore.getState().toggleBufferPreview(filepath, forcePreview)`**: Toggles live macro-expanded preview mode on the target buffer.
 ### 3.2 Client Network Gateway (ADR 0016)
 
 Network synchronization must route through the client API abstraction to inherit multi-tenant isolation tokens natively. Raw `fetch()` is banned. All API methods enforce client-side extension enablement checks against `window.ACTIVE_EXTENSIONS` prior to network dispatch, returning a 403 Forbidden response if the target extension is disabled.

@@ -17,38 +17,37 @@ Extensions may reside either in the global distribution directory (`insetu/exten
 Do not hook into `system_boot` to execute `CREATE TABLE`. Pass a `schema` dictionary to the constructor. The OS will automatically handle schema migrations via diffing on boot.
 
 ```python
-from insetu.sdk import InSetuExtension
+from insetu.core.sdk import InSetuExtension
 
 MY_SCHEMA = {
-    "my_table": {
-        "id": "TEXT PRIMARY KEY",
-        "name": "TEXT NOT NULL"
-    }
+"my_table": {
+"id": "TEXT PRIMARY KEY",
+"name": "TEXT NOT NULL"
+}
 }
 MY_SETTINGS = [
-    {
-        "id": "api_key",
-        "label": "API Key",
-        "type": "text",
-        "scope": "workspace", # Options: "workspace", "daemon", "repo"
-        "default": "",
-        "description": "Global API key for this extension."
-    }
+{
+"id": "api_key",
+"label": "API Key",
+"type": "password",
+"scope": "workspace", # Options: "workspace", "daemon", "repo"
+"secure": True,
+"default": "",
+"description": "Global API key for this extension."
+}
 ]
 my_ext_bp = InSetuExtension(
-    'my_ext', 
-    __name__, 
-    title="My Custom Extension", 
-    description="Provides streamlined custom feature capabilities to the workspace context.", 
-    schema=MY_SCHEMA, 
-    settings_schema=MY_SETTINGS,
-    dependencies=["beautifulsoup4"], # Optional: Auto-detects missing PyPI packages
-    optional_dependencies={"playwright": "Required for advanced scraping."}
+'my_ext',
+**name**,
+title="My Custom Extension",
+description="Provides streamlined custom feature capabilities to the workspace context.",
+schema=MY_SCHEMA,
+settings_schema=MY_SETTINGS,
+external_dependencies=["beautifulsoup4"], # Optional: Whitelisted PyPI packages
+external_binaries=["git", "pandoc"],      # Optional: Host CLI binary requirements
 )
-# Modules may also declare host CLI binary requirements:
-# __external_binaries__ = ["git", "pandoc"]
-```
 
+```
 ### The Extension Context (`ctx`)
 Routes must be declared relative to the extension root (e.g., `@bp.route('list')`). The SDK automatically resolves this to `/api/<workspace_id>/ext_name/list`. 
 
@@ -60,27 +59,32 @@ Handlers must accept the `ctx` object. This object enforces spatial physics and 
 * **`ctx.vfs.read(filepath)`**: Reads files safely. Automatically unwraps `vfs://` (physical) and `ctx://` (artifact) URI schemes to support cross-domain fetching.
 * **`ctx.resolve_path(filepath)`**: Anchors relative paths to the physical workspace bounds natively.
 ```python
-@my_ext_bp.route('save', methods=['POST'])
+@my_ext_bp.route('save', methods=['POST'], docstring="[sync] Saves structured record data.")
 def save_data(ctx):
-    data = ctx.req.json
+    """Saves structured record data."""
+    data = ctx.payload
     # Write to the DB safely
     ctx.db.execute("INSERT INTO my_table (id, name) VALUES (?, ?)", (data['id'], data['name']))
     ctx.db.commit()
     return {"status": "success"}
 
-Asynchronous Background Workers (@worker)
+```
+
+### 2.4 Asynchronous Background Workers (@worker)
+
 Extensions executing long-running asynchronous background operations (e.g., polling, web scraping, tree sweeping) must declare them via the blueprint-level `@worker` decorator rather than raw standalone functions or unmanaged threads.
 
 Progress must be reported explicitly through the `ctx.jobs.update_progress()` interface; using Python generator `yield` statements for progress reporting is strictly banned.
 
 ```python
 @my_ext_bp.worker("sync_task")
-def background_sync(ctx, force_all=False, **kwargs):
-ctx.jobs.update_progress("Initializing remote synchronization loop...")
-# Execute off-thread operations safely using context boundaries
-return {"status": "completed", "message": "Synchronization complete."}
+def background_sync(ctx, force_all: bool = False):
+    ctx.jobs.update_progress("Initializing remote synchronization loop...")
+    # Execute off-thread operations safely using context boundaries
+    return {"status": "completed", "message": "Synchronization complete."}
 
 ```
+
 When scheduling background tasks in the worker ledger, use the explicit function matching your lifecycle intent:
 * **Recurring Metronome Tasks**: Use `submit_job(job_id, ext_name, callback_name, interval_ms, ...)` where `interval_ms > 0`.
 * **One-Shot Delayed Tasks**: Use `submit_one_shot_job(job_id, ext_name, callback_name, delay_ms, ...)` for tasks that execute once after `delay_ms` elapses and self-destruct from the ledger upon completion.

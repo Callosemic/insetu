@@ -14,8 +14,8 @@ The core OS is strictly domain-agnostic. It does not know what a "citation" or a
 * **`app.py` / `insetu/core/bridge/engine_bridge.py` (The Sync Bridge):** The Yomama translation layer and physical atomic commit engine. Features Phase C JSON Telemetry rendering, interactive confirmation cards, and the Receipts history tab (`insetu-ext-bridge-history`) backing the Ephemeral Patch Ledger (`bridge_ledger`).
 * **`insetu/core/cartographer/cartographer.py` (The Cartographer):** Generates code indices and maps workspace topology.
 * **`insetu/core/offline/engine_offline.py` (The Offline Engine):** Tier 0 core engine managing local caching, IndexedDB state warming, and offline synchronization quotas.
-* **`insetu/core/llm/engine_llm.py` (The LLM Gateway):** Universal inference orchestrator supporting Anthropic, Gemini, and Claude CLI streaming.
-* **`insetu/core/agent/engine_agent.py` & `agent.js` (The Agent Harness):** Autonomous ReAct worker chain and multi-turn chat UI orchestrating context gathering, LLM inference, and Yomama patch verification.
+* **`insetu/core/llm/engine_llm.py` (The LLM Gateway):** Universal inference orchestrator supporting Anthropic, Gemini, and Claude CLI streaming, providing both streaming (`chat/completions`) and aggregated capability (`complete`) endpoints.
+* **`insetu/core/agent/engine_agent.py` & `agent.js` (The Agent Harness):** Autonomous ReAct worker chain and multi-turn chat UI orchestrating context gathering, LLM inference, and Yomama patch verification via in-process capability dispatch (`ctx.call`).
 * **`insetu/core/prompts/engine_prompts.py` & `prompts.js` (The Prompt Engine):** Tier 2 Core engine managing workspace prompts, virtual `.templates/` projection across active modules and global user templates, and macro resolution.
 * **`insetu/core/system/cli_commands.py` (CLI Command Engine):** Modularized command suite driving onboarding initialization (`insetu init`), service control, and desktop application shortcuts.
 * **`insetu/kernel/hooks.py` (The Event Bus):** The API substrate allowing extensions to intercept RAG compilation, VFS commits, and OS process lifecycle events.
@@ -35,7 +35,7 @@ These are fully built and compliant extensions currently operating within the sy
     * Compilation Pipeline: Registers the `git_diffs` step (`anchor: "body"`, `order: 30`) via `@git_bp.on('register_compilation_steps')` to compile diff payloads off-thread.
     * Configuration: Declares dynamic repo-level pull strategy selectors (`rebase`, `merge`, `ff_only`), as well as declarative `repoConfigOptions` (`git-repo-exclude`) and `bucketConfigOptions` (`git-exclude`).
 ### B. Citations (`engine_citations.py`)
-* **Status:** Active Extension (SDK V2 with IoC Topology Compilation & Membrane Decoupling).
+* **Status:** Active Extension (SDK V2 with IoC Topology Compilation, Transport Decoupling & Canonical Routing).
 * **Role:** Manages academic reference libraries, bibliography parsing, citation insertion, and global/repo-scoped context generation.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `{ARTIFACTS_BASE}/citations.db` (SQLite ledger synced with `library.json` and `citations_ui.json`).
@@ -44,7 +44,7 @@ These are fully built and compliant extensions currently operating within the sy
     * UI Layout: Primary Navigation Tab (`library` -> `lib-main`, `lib-explore`, `lib-import`).
     * Polymorphic Cards: Registers `cit-notes`, `cit-edit`, `cit-pin`, and `cit-import` entity actions.
 ### C. Research (`engine_research.py`)
-* **Status:** Active Extension (SDK V2 with Managed Timeouts & Membrane Decoupling).
+* **Status:** Active Extension (SDK V2 with Managed Timeouts, Ingest Capability Dispatch & In-App Dependency Installation).
 * **Role:** Web scraping, search aggregation (Serper, Google, DuckDuckGo), payload extraction via Ingest, and AI-assisted batch triage.
 * **Dependencies (`__depends__`):** `['ingest']`
 * **Data Containment:** `{ARTIFACTS_BASE}/research.db` (`research_jobs` and `research_inbox` tables).
@@ -54,7 +54,7 @@ These are fully built and compliant extensions currently operating within the sy
     * UI Layout: Sub-navigation Tab (`edit` -> `research`).
     * Polymorphic Cards: Registers `rs-pause`, `rs-resume`, `rs-retry`, `rs-cancel`, and `rs-delete` actions on `research_job` entities.
 ### D. Kanban Tracker (`engine_tracker.py`)
-* **Status:** Active Extension (SDK V2 with Pure .insetu-data Containment, Settings Hub Embedding & Membrane Decoupling).
+* **Status:** Active Extension (SDK V2 with Pure .insetu-data Containment, Flask Transport Decoupling, Typed Workers & Canonical Route Normalization).
 * **Role:** Project management, issue routing, sprint tracking, shadow board template spawning, task hierarchy tree inspection, and active focus isolation.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `~/.insetu/data/tracker.db` (CQRS Cache) backed by asynchronous Markdown ticket commits via the VFS strictly into `<repo>/.insetu-data/tracker/`.
@@ -73,7 +73,7 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * Polymorphic Cards: Registers `format-code` action.
 ### P. Document Publishing (`engine_publish.py`)
-* **Status:** Active Extension (SDK V2 with Substack Rich-Text Snippet Support & Membrane Decoupling).
+* **Status:** Active Extension (SDK V2 with Substack Rich-Text Snippet Support, Binary Whitelisting & Canonical Fetch Routing).
 * **Role:** Multi-format document compilation via Pandoc (PDF, DOCX, HTML, and Substack/Medium HTML fragments) with wordcount macro stripping.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** Ephemeral artifacts in `{ARTIFACTS_BASE}/` with automatic TTL cleanup via `ctx.jobs.register_ephemeral`.
@@ -83,7 +83,7 @@ These are fully built and compliant extensions currently operating within the sy
     * Polymorphic Cards: Registers `publish-doc` entity action on `.md` files.
     * UI Modals: `<insetu-ext-publish-modals>` featuring Substack rich-text paste (`copyRichHtml`) and raw HTML tags copy.
 ### F. Workflows (`engine_flow.py`)
-* **Status:** Active Extension (SDK V2 with Declarative Volumes, Parallel JIT Compilation, Batch Duplication & Membrane Decoupling).
+* **Status:** Active Extension (SDK V2 with Declarative Volumes, Flask Transport Decoupling, Typed Workers, JIT Volume Healing & Macro Action Parity).
 * **Role:** Manage LLM execution pipelines, automated context batching, and target URI dependency resolution.
 * **Dependencies (`__depends__`):** `['gather']`
 * **Data Containment:** Declarative cache volume `ctx://workflows/` (`.insetu/cache/workflows/`).
@@ -94,7 +94,7 @@ These are fully built and compliant extensions currently operating within the sy
     * Polymorphic Cards: Registers `flow-edit` and `flow-duplicate` (`duplicateBatch`) entity actions.
     * UI Layout: Sub-navigation Tab (`context` -> `flow`) with declarative `menuActions: _buildFlowMenuActions`.
 ### G. Favorites (`engine_favorites.py`)
-* **Status:** Active Extension (SDK V2 with Canonical URIs & Folder Integrity).
+* **Status:** Active Extension (SDK V2 with Flask Transport Decoupling, Canonical URIs & InSetuURI Adoption).
 * **Role:** Pinning files and folders for quick access, maintaining a localized SQLite cache mirrored to `bookmarks.json`.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `{ARTIFACTS_BASE}/favorites.db` (`favorites` table) synchronized with `bookmarks.json`.
@@ -103,7 +103,7 @@ These are fully built and compliant extensions currently operating within the sy
     * Polymorphic Cards: Registers `fave_toggle_file`, `fave_toggle_repo`, and `fave_toggle_folder` with folder trailing slash preservation and folder entity data contract parity.
     * UI Layout: Sub-navigation Tab (`edit` -> `favorites`).
 ### H. Skills Tracker (`engine_skills.py`)
-* **Status:** Active Extension (SDK V2 with Declarative Volumes & Membrane Decoupling).
+* **Status:** Active Extension (SDK V2 with Declarative Volumes, Sutram Presentation Purity & Transport Decoupling).
 * **Role:** Spaced-repetition practice tracking and metric analysis using the SM-2 algorithm.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `{ARTIFACTS_BASE}/skills.db` (`skills_ledger` table) backed by sovereign Markdown practice files under declarative volume `ctx://skills/` (`.insetu/data/skills/`).
@@ -114,12 +114,12 @@ These are fully built and compliant extensions currently operating within the sy
 ### I. Terminal Interface (`engine_term.py`)
 * **Status:** Active Extension (Fully Graduated to SDK V2).
 * **Role:** Manages native full-duplex PTY WebSocket sessions directly inside the event loop using flask-sock and Xterm.js. Features virtual keyboard action controls, touch gesture navigation (swipes, long-press, double-tap), context menu actions (`tc-copy`, `tc-paste`, `tc-sigint`), and explicit `status` endpoint checks.
-* **Dependencies (`__depends__`):** `None` (`__external_depends__`: `["flask-sock"]`)
+* **Dependencies (`__depends__`):** `None` (`external_dependencies`: `["flask-sock"]`)
 * **Data Containment:** Ephemeral stream contexts.
 * **Injection Surfaces:**
     * UI Hooks: Primary Navigation Tab injection.
 ### J. Freshdesk Support (`engine_freshdesk.py`)
-* **Status:** Active Extension (SDK V2).
+* **Status:** Active Extension (SDK V2 with Transport Decoupling, Typed Workers & Declarative Dependencies).
 * **Role:** Support ticket synchronization, reply management, and agent triaging.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `~/.insetu/data/freshdesk.db`
@@ -127,10 +127,10 @@ These are fully built and compliant extensions currently operating within the sy
     * Polymorphic Cards: Registers actions for taking, resolving, and ignoring tickets.
     * UI Hooks: Primary Edit Sub-navigation Tab injection.
 ### K. Automation Hooks (`engine_hooks.py`)
-* **Status:** Active Extension (SDK V2 with Cryptographic Gating & Membrane Decoupling).
+* **Status:** Active Extension (SDK V2 with Host Cryptographic Gating, Flask Transport Decoupling, Typed Workers & Sub-Navigation Menu Consolidation).
 * **Role:** IFTTT-style local command automation triggered by VFS events.
 * **Dependencies (`__depends__`):** `None`
-* **Data Containment:** `{ARTIFACTS_BASE}/hooks.db` (`hooks_rules` table), `workers.db` execution logs, and cryptographic command approval signatures in `.insetu/system.json`.
+* **Data Containment:** `{ARTIFACTS_BASE}/hooks.db` (`hooks_rules` table), `workers.db` execution logs, and cryptographic command approval signatures in `.insetu/workspaces.json`.
 * **Injection Surfaces:**
     * Core Hooks: Blueprint-scoped `@hooks_bp.on('topology_resolved', priority=100)` with `get_system_index_path()` centralization.
     * UI Hooks: Sub-navigation Tab injection (`ctrl` -> `hooks`).
@@ -144,7 +144,7 @@ These are fully built and compliant extensions currently operating within the sy
     * Core Hooks: Blueprint-scoped `@dev_bp.on('vfs_mutated')`, `@dev_bp.on('bridge_error')`, and `@dev_bp.on('system_error')`.
     * UI Hooks: Primary Navigation Tab injection (`dev` -> `dash`, `logs`, `sql`, `memory`).
 ### M. Notes Library (`engine_notes.py` & `ext_notes.js`)
-* **Status:** Active Extension (SDK V2 with Declarative Volumes, Menu Actions & Membrane Decoupling).
+* **Status:** Active Extension (SDK V2 with Declarative Volumes, Pathlib Compliance & Transport Decoupling).
 * **Role:** Workspace-level and repository-scoped markdown notes management with frontmatter indexing (`ctx://contexts/notes_context.txt`).
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `{ARTIFACTS_BASE}/notes.db` (`notes_ledger` table) backed by declarative `ctx://notes/` volume (`NotesVFSDriver`) and repository-scoped `vfs://{repo}/.insetu-data/notes/` markdown assets.
@@ -179,7 +179,7 @@ These are fully built and compliant extensions currently operating within the sy
     * Network Interceptor: Wraps `window.inSetu.api` via `OfflineHttpProvider`.
     * UI Slots: Primary Navigation Tab (`offline`) housing `ledger` and `log` sub-tabs, and global storage modal.
 ### Q. Cronic Job Manager (`engine_cronic.py` & `ext_cronic.js`)
-* **Status:** Active Extension (SDK V2 with Membrane Decoupling & InSetuURI Standardization).
+* **Status:** Active Extension (SDK V2 with Flask Transport Decoupling, Typed Workers, Binary Whitelisting & Canonical Route Normalization).
 * **Role:** Schedules Python/bash scripts as system cron tasks, manages log rotation, and handles crontab drift healing.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `{ARTIFACTS_BASE}/cronic.db` (`cronic_jobs` table) and `.insetu/data/cronic_*.log` execution logs.
@@ -259,6 +259,7 @@ To enforce **ADR 0002 (Domain Decoupling)**, extensions must never query each ot
 | `force_topology_scan` | `<Micro-Kernel>` | `engine_topology` | Forces physical disk walks to rebuild the `topology_ledger` SSOT. |
 | `request_vfs_manifest` | `<Micro-Kernel>` | `engine_topology` | Returns the `"vfs"` domain portion of the partitioned manifest. |
 | `gather_declare_topology` | `engine_gather` | All Extensions | Emitted during context sweeps to collect declarative topology schemas (`generator_callback`, `recall_callback`). |
+| `heal_missing_domain_volume` | `engine_gather` | Domain Extensions | Emitted during JIT artifact resolution when non-contexts cache volumes (e.g. workflows) are missing on disk. |
 | `register_compilation_steps` | `engine_gather` | All Extensions | Emitted to build topologically sorted background compilation pipelines. |
 | `compilation_sequence_complete` | `engine_gather` | `cartographer` | Emitted when all background compilation steps in a chain have finished. |
 | `register_manifest_signatures` | `<Micro-Kernel>` | All Extensions | Yields domain-specific manifest signatures (hashes/timestamps) for decentralized delta sync. |

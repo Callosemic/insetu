@@ -1,7 +1,6 @@
 # ADR 0040: System Configuration SSOT and Multi-Scoped Settings
-
 ## Status
-Accepted
+Accepted (Partially Superseded: `.insetu/system.json` split into `.insetu/host.json` for daemon settings and `.insetu/workspaces.json` for the workspace routing index; `config.json` sanitized to pure topology in ADR 0066)
 
 ## Context
 Previously, system routing indexes and daemon configurations were stored in `.insetu/workspaces.json`. As inSetu expanded to support daemon-wide preferences (e.g. server port, watchdog flags, extension preloading) alongside tenant workspace lists and repository-level overrides, storing all preferences in a single un-scoped configuration file created scope ambiguity and data coupling.

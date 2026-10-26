@@ -26,10 +26,9 @@ Extensions must remain perfectly decoupled to survive dynamic tenant hot-swaps a
 ---
 ## 2. Backend OS Substrate & I/O Hygiene
 The backend must never block the ASGI event loop or bypass the topology ledgers.
-
-*   **Async Worker Execution (ADR 0005, 0034)**
-    *   ❌ **Noncompliant:** Executing heavy SQLite queries or disk sweeps synchronously on the main thread, spinning up rogue `threading.Thread(target=..., daemon=True)` loops that evade the OS Metronome, worker functions decorated with `@*.worker` missing `**kwargs`, or `ctx.jobs.submit()` calls missing `job_category`.
-    *   ✅ **Gold Standard:** Returning a `202 Accepted` immediately with a `job_id`, deferring all execution to a formal `@ext_bp.worker` accepting `**kwargs` and routed through `ctx.jobs.submit(..., job_category=...)`.
+*   **Async Worker Execution & Typed Worker Contracts (ADR 0005, 0034)**
+    *   ❌ **Noncompliant:** Executing heavy SQLite queries or disk sweeps synchronously on the main thread, spinning up rogue `threading.Thread(target=..., daemon=True)` loops, `@*.worker` functions missing `ctx` as their first parameter or missing explicit type annotations on parameters, overloading `force_full` with `list`, or `ctx.jobs.submit()` calls missing `job_category`.
+    *   ✅ **Gold Standard:** Deferring all heavy execution to a formal `@ext_bp.worker` declaring `ctx` first with explicit parameter type annotations (`WORKER_TYPED_SIGNATURE_MANDATE`), and dispatching via `ctx.jobs.submit(..., job_category=...)`.
 *   **Virtual File System Transactions (ADR 0004, 0018)**
     *   ❌ **Noncompliant:** Using native `open('file.md', 'w')`, `os.remove()`, or passing leaky abstraction flags like `ctx.vfs.save(..., data={"action": "delete"})` to remove files.
     *   ✅ **Gold Standard:** Exclusively using `ctx.vfs.save()` and the formalized `ctx.vfs.delete()` methods, ensuring mutations are correctly staged in the atomic write queue and broadcast to the Event Ledger.
@@ -61,9 +60,9 @@ The frontend chassis must remain a "dumb" visual grid, isolating business logic 
 *   **Layout Padding & Geometry Hacks**
     *   ❌ **Noncompliant:** Using negative margins (e.g., `margin: -20px -20px 0 -20px;`) to defeat a parent container's padding, or hardcoding fixed horizontal margins/padding on layout primitives to compensate for container constraints.
     *   ✅ **Gold Standard:** Using the declarative `?flush=${true}` property on `<sutram-modal>` or `<sutram-collapsible>` to natively remove Shadow DOM padding, allowing child elements to flow cleanly edge-to-edge. Rely on the parent container (e.g., `<sutram-scroll-view>`) to establish unified bounding box padding.
-*   **API Network Gateway (ADR 0016)**
-    *   ❌ **Noncompliant:** Using raw `fetch()` or manually constructing API paths like `/api/${workspaceId}/...`.
-    *   ✅ **Gold Standard:** Routing entirely through `this.api.get()`, `this.api.post()`, or `this.api.postJson()`, which natively handle tenant scope isolation and security token handshakes.
+*   **API Network Gateway & Canonical Route Prefix (ADR 0016)**
+    *   ❌ **Noncompliant:** Using raw `fetch()`, manually constructing `/api/${workspaceId}/...` URLs, or passing un-prefixed relative route strings (`this.api.get('list')`).
+    *   ✅ **Gold Standard:** Routing entirely through `this.api.getJson('<module>/<endpoint>')` or `this.api.postJson('<module>/<endpoint>', payload)` with an explicit `<module>/<endpoint>` prefix (`CANONICAL_API_ROUTE_PREFIX_MANDATE`).
 
 *   **Non-Destructive Loading States**
     *   ❌ **Noncompliant:** Completely unmounting DOM lists or replacing the active view with a `<div class="spinner">` during data refreshes, triggering severe Layout Shifts and obliterating spatial memory.
