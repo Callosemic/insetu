@@ -2,6 +2,50 @@
 
 <!-- version list -->
 
+## v0.27.0 (2026-10-26)
+
+### Bug Fixes
+
+- Gate app debug mode, harden cli profile scaffolding, and bump service worker cache version
+  ([`78d0c42`](https://github.com/Callosemic/insetu/commit/78d0c429dfe673a312cac10561970f788d854d55))
+
+- Pre-seed recovery port, harden fallback scaffolding, and align bridge parser with id headers
+  ([`31ba441`](https://github.com/Callosemic/insetu/commit/31ba44149a45b3d2a54a52c7de081cc441711d19))
+
+### Features
+
+- Dual-representation macro previews, in-app dependency installer, and tier-2 core decoupling
+  ([`27779df`](https://github.com/Callosemic/insetu/commit/27779df6b290c2bfe94513390578fdc966b4125a))
+
+- Harden capability dispatch, recovery bridge unit tests, and ast transport linter guardrails
+  ([`abca35c`](https://github.com/Callosemic/insetu/commit/abca35c624c8edd61b9d3c5b567c653c1bacd2c7))
+
+- Modernize knowledge and support extension suite with transport decoupling, typed workers, and
+  canonical routing
+  ([`ce4d7ac`](https://github.com/Callosemic/insetu/commit/ce4d7ac12e9ff2617576ed7dc5a55d04d1d8cbe2))
+
+- **core**: Harden pipeline typed worker contracts, hierarchical cartographer comments, and
+  dual-representation prompt previews
+  ([`0904d2e`](https://github.com/Callosemic/insetu/commit/0904d2e32f84dc5199993f39e7c5eeeb38c0ee09))
+
+- **devops**: Modernize extension suite with flask decoupling, typed workers, and canonical routing
+  ([`0c47993`](https://github.com/Callosemic/insetu/commit/0c479930ed926384bf6f3a6a327581aa9da38e9f))
+
+- **workflow**: Modernize management suite with flask decoupling, typed workers, and canonical route
+  prefixes
+  ([`eafb8a5`](https://github.com/Callosemic/insetu/commit/eafb8a5c6fb4d2e6314a6739c40006f3de1b365f))
+
+### Refactoring
+
+- **core**: Decouple flask transport, route capability calls, and modernize bridge navigation
+  ([`56c8cb3`](https://github.com/Callosemic/insetu/commit/56c8cb307dd5c6f96e4c067a3bef08404398340a))
+
+### Testing
+
+- **fitness**: Harden AST/JS architectural linters and expand behavioral unit tests
+  ([`4917196`](https://github.com/Callosemic/insetu/commit/4917196a695aa6d5457649ce7ff7e31d9d5ee04d))
+
+
 ## v0.26.0 (2026-10-21)
 
 ### Bug Fixes
