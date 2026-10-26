@@ -9,7 +9,7 @@ export function canonicalizeFlowUri(uri) {
 }
 export function resolveFlowPromptUri(rawPrompt) {
     if (!rawPrompt) return '';
-    const opts = FlowStore.getState().availableOptions || window.inSetu?.stores?.Gather?.getState()?.gatherOptions || {};
+    const opts = FlowStore.getState().availableOptions || {};
     const prompts = opts.prompts || [];
     if (prompts.includes(rawPrompt)) return rawPrompt;
     const base = new window.inSetu.utils.InSetuURI(rawPrompt).basename;
@@ -24,7 +24,7 @@ export function classifyFlowTargetUri(rawInc) {
     const vfsFiles = appState.derivedVfsFiles || [];
     const allRepos = appState.allRepos || [];
     const flowState = FlowStore.getState ? FlowStore.getState() : {};
-    const opts = flowState.availableOptions || window.inSetu?.stores?.Gather?.getState()?.gatherOptions || {};
+    const opts = flowState.availableOptions || {};
     const availContexts = opts.contexts || [];
     const availDiffs = opts.diffs || [];
     const availPrompts = opts.prompts || [];
@@ -102,12 +102,6 @@ export const FlowStore = createExtensionStore('Flow', {
                     batches: data.batches || [],
                     availableOptions: nextOptions
                 });
-                const gatherStore = window.inSetu?.stores?.Gather;
-                if (gatherStore && typeof gatherStore.setState === 'function') {
-                    gatherStore.setState(state => ({
-                        gatherOptions: { ...(state?.gatherOptions || {}), ...nextOptions }
-                    }));
-                }
             }
         } catch (e) {
             console.error("Error loading batches:", e);
@@ -228,7 +222,7 @@ export class InSetuExtFlow extends InSetuElement {
                 const itemRepos = meta.repos || (meta.repo ? [meta.repo] : []);
                 itemRepos.forEach(r => repos.add(r));
             } else {
-                const parsedRepo = this.utils.parseURI(uri).repo;
+                const parsedRepo = new this.utils.InSetuURI(uri).repo;
                 if (parsedRepo) repos.add(parsedRepo);
             }
         });
@@ -281,9 +275,34 @@ export class InSetuExtFlow extends InSetuElement {
             if (!payload || !payload.mutations) return;
             const vb = FlowStore.getState().viewingBatch;
             if (!vb || !vb.include_prompt) return;
-            const promptTouched = payload.mutations.some(m => m.filepath && (m.filepath.includes('prompts') || m.filepath.includes('.templates') || m.filepath.endsWith(vb.include_prompt.split('/').pop())));
+            const promptBase = new this.utils.InSetuURI(vb.include_prompt).basename;
+            const promptTouched = payload.mutations.some(m => m.filepath && (m.filepath.includes('prompts') || m.filepath.includes('.templates') || (promptBase && m.filepath.endsWith(promptBase))));
             if (promptTouched) {
                 this._refreshBatchPromptText(vb);
+            }
+        });
+        this.registerGlobalListener('insetu:ensure-fresh-artifact', window, (e) => {
+            const filePath = e.detail?.filepath || '';
+            if (!filePath.startsWith('ctx://workflows/')) return;
+            if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('flow')) return;
+            const baseUri = filePath.replace(/_part\d+\.txt$/, '.txt');
+            const appState = AppStore.getState();
+            const dirtyRepos = appState.dirtyRepos || new Set();
+            const dirtyBuckets = appState.dirtyBuckets || new Set();
+            const manifestObj = appState.manifest?.ctx?.[baseUri] || appState.manifest?.ctx?.[filePath];
+            const meta = manifestObj?.meta || {};
+            const itemRepos = Array.isArray(meta.repos) ? meta.repos : (meta.repo ? [meta.repo] : []);
+            const isMissing = !manifestObj;
+            const hasUpstreamDirty = itemRepos.some(r => dirtyRepos.has(r) || Array.from(dirtyBuckets).some(b => b.startsWith(`${r}::`)));
+            const isDirty = isMissing || hasUpstreamDirty || dirtyBuckets.has('global::workflows') || dirtyBuckets.has(baseUri);
+            if (isDirty && window.inSetu.stores?.Gather && Array.isArray(e.inSetuResponses)) {
+                e.inSetuResponses.push((async () => {
+                    if (window.inSetu.ui?.setGlobalStatus) {
+                        window.inSetu.ui.setGlobalStatus("⏳ Compiling fresh workflow...", null);
+                    }
+                    const targetRepos = (!isMissing && itemRepos.length > 0) ? itemRepos : null;
+                    await window.inSetu.stores.Gather.getState().executeCompile(null, isMissing, null, targetRepos);
+                })());
             }
         });
         this.registerGlobalListener('sutram-sync-complete', window, () => {
@@ -388,7 +407,7 @@ export class InSetuExtFlow extends InSetuElement {
             const appState = appStore?.getState ? appStore.getState() : {};
             const categoryOrder = appState?.categoryOrder || [];
             const manifest = appState?.manifest?.ctx || {};
-            const gatherOptions = FlowStore.getState().availableOptions || window.inSetu?.stores?.Gather?.getState()?.gatherOptions || {};
+            const gatherOptions = FlowStore.getState().availableOptions || {};
             const repoFilteredBatches = this.batches.map(b => {
                 const actualFilename = `ctx://workflows/workflow_${b.id}_context.txt`;
                 const manifestObj = manifest[actualFilename] || {};
@@ -488,8 +507,8 @@ export class InSetuExtFlow extends InSetuElement {
                                                 const addr = window.inSetu.utils.BucketAddress.fromFilepath(filename, meta);
                                                 if ((AppStore.getState().dirtyBuckets || new Set()).has(addr.key)) return true;
                                                 return (b.includes || []).some(inc => {
-                                                    const uri = window.inSetu.utils.parseURI(inc);
-                                                    const incAddr = (uri.scheme === 'vfs') 
+                                                    const uri = new window.inSetu.utils.InSetuURI(inc);
+                                                    const incAddr = (uri.scheme === 'vfs')  
                                                         ? window.inSetu.utils.BucketAddress.fromVfsPath(inc) 
                                                         : window.inSetu.utils.BucketAddress.fromFilepath(inc, manifestCtx[inc]?.meta);
                                                     return (AppStore.getState().dirtyBuckets || new Set()).has(incAddr.key);
@@ -710,12 +729,9 @@ export class InSetuFlowViewProjection extends InSetuElement {
                                 `;
                             }) : html`<div style="padding: 12px 0; color: var(--intent-danger); font-size: 0.85rem; text-align: center;">No files mapped to this batch.</div>`}
                         </div>
-
                         <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; width: 100%; padding-top: 2px;">
                             ${(() => {
                                 const baseFile = `ctx://workflows/workflow_${this.viewingBatch.id}_context.txt`;
-                                const manifestCtx = AppStore.getState().manifest?.ctx || {};
-                                const manifestObj = manifestCtx[baseFile];
                                 return html`
                                     <sutram-entity-actions 
                                         ?scrollable=${true}
@@ -723,7 +739,6 @@ export class InSetuFlowViewProjection extends InSetuElement {
                                         .entityData=${{ 
                                             filepath: baseFile, 
                                             isFS: false,
-                                            chunks: manifestObj?.chunks || [baseFile],
                                             showOnly: ['file-copy', 'file-download', 'file-share', 'file-view-parts']
                                         }}>
                                     </sutram-entity-actions>
@@ -753,8 +768,8 @@ export class InSetuFlowViewProjection extends InSetuElement {
                                             .entityData=${{ 
                                                 filepath: promptPath, 
                                                 isFS: !promptPath.includes('/.templates/') || promptPath.includes('/.templates/user/'),
-                                                transientContent: resolvedText,
-                                                showOnly: ['file-copy', 'file-edit']
+                                                supportsMacroPreview: true,
+                                                showOnly: ['file-copy', 'file-copy-expanded', 'file-edit']
                                             }}>
                                         </sutram-entity-actions>
                                     `;
@@ -882,7 +897,7 @@ export class InSetuFlowEditProjection extends InSetuElement {
         const targetId = this.editingBatch?.id;
         if (!targetId || !confirm("Delete this workflow batch?")) return;
         try {
-            const res = await this.api.post('batches/delete', { id: targetId }, { collapseKey: `flow:batch:delete:${targetId}` });
+            const res = await this.api.post('flow/batches/delete', { id: targetId }, { collapseKey: `flow:batch:delete:${targetId}` });
             if (res.ok) {
                 const responseData = await res.json();
                 if (Array.isArray(responseData.batches)) {
@@ -937,7 +952,7 @@ export class InSetuFlowEditProjection extends InSetuElement {
             if (this.editForm.archivePath) payload.archive_path = this.editForm.archivePath.trim();
         }
         try {
-            const res = await this.api.post('batches/save', payload, { collapseKey: `flow:batch:save:${newId}` });
+            const res = await this.api.post('flow/batches/save', payload, { collapseKey: `flow:batch:save:${newId}` });
             if (res.ok) {
                 const responseData = await res.json();
                 const savedBatch = { ...payload };
@@ -977,7 +992,7 @@ export class InSetuFlowEditProjection extends InSetuElement {
     render() {
         const appState = AppStore.getState ? AppStore.getState() : {};
         const manifest = appState?.manifest?.ctx || {};
-        const gatherOptions = FlowStore.getState().availableOptions || window.inSetu?.stores?.Gather?.getState()?.gatherOptions || {};
+        const gatherOptions = FlowStore.getState().availableOptions || {};
         const allFiles = [
             ...(gatherOptions?.diffs || []), 
             ...(gatherOptions?.contexts || []),
@@ -1221,39 +1236,6 @@ function _buildFlowMenuActions() {
         }
     ];
 }
-
-window.addEventListener('insetu:ensure-fresh-artifact', (e) => {
-    const filePath = e.detail?.filepath || '';
-    if (!filePath.startsWith('ctx://workflows/')) return;
-    if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('flow')) return;
-
-    const baseUri = filePath.replace(/_part\d+\.txt$/, '.txt');
-    const appState = AppStore.getState();
-    const dirtyRepos = appState.dirtyRepos || new Set();
-    const dirtyBuckets = appState.dirtyBuckets || new Set();
-    const manifestObj = appState.manifest?.ctx?.[baseUri] || appState.manifest?.ctx?.[filePath];
-    const meta = manifestObj?.meta || {};
-    const itemRepos = Array.isArray(meta.repos) ? meta.repos : (meta.repo ? [meta.repo] : []);
-
-    const isMissing = !manifestObj;
-    const hasUpstreamDirty = itemRepos.some(r => dirtyRepos.has(r) || Array.from(dirtyBuckets).some(b => b.startsWith(`${r}::`)));
-    const isDirty = isMissing || hasUpstreamDirty || dirtyBuckets.has('global::workflows') || dirtyBuckets.has(baseUri);
-
-    if (isDirty && window.inSetu.stores?.Gather) {
-        const run = (async () => {
-            if (window.inSetu.ui?.setGlobalStatus) {
-                window.inSetu.ui.setGlobalStatus("⏳ Compiling fresh workflow...", null);
-            }
-            const targetRepos = (!isMissing && itemRepos.length > 0) ? itemRepos : null;
-            await window.inSetu.stores.Gather.getState().executeCompile(null, isMissing, null, targetRepos);
-            dirtyBuckets.delete('global::workflows');
-            dirtyBuckets.delete(baseUri);
-            itemRepos.forEach(r => dirtyRepos.delete(r));
-            AppStore.setState({ dirtyBuckets: new Set(dirtyBuckets), dirtyRepos: new Set(dirtyRepos) });
-        })();
-        if (Array.isArray(e.inSetuResponses)) e.inSetuResponses.push(run);
-    }
-});
 
 window.ExtensionRegistry.registerExtension('flow', {
     name: "Workflows",

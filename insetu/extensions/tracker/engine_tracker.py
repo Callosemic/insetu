@@ -5,9 +5,8 @@ import re
 import json
 import uuid
 import random
-from typing import TypedDict
+from typing import TypedDict, Optional, List, Dict, Any
 from datetime import datetime, timedelta
-from flask import request, jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.core.topology.engine_topology import get_topology_files_for_repo
 from insetu.core.utils_core import (
@@ -151,7 +150,7 @@ TRACKER_SETTINGS_SCHEMA = [
 tracker_bp = InSetuExtension('tracker', __name__, title="Issue Tracker", description="Markdown-based Kanban issue tracking.", schema=TRACKER_SCHEMA, settings_schema=TRACKER_SETTINGS_SCHEMA)
 __depends__ = []
 @tracker_bp.worker("archive_stale_task")
-def _background_archive_stale_tickets(ctx, **kwargs):
+def _background_archive_stale_tickets(ctx):
     ctx.jobs.update_progress("Sweeping for stale entries...")
     count = archive_stale_tickets(workspace_id=ctx.workspace_id)
     return f"Archived {count} stale tickets."
@@ -195,7 +194,7 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     ctx = tracker_bp.get_context(workspace_id)
     try:
         content = ctx.vfs.read(rel_path)
-        if content is None and abs_path and os.path.exists(abs_path):
+        if content is None and abs_path and Path(abs_path).exists():
             content = ctx.vfs.read(abs_path, is_absolute_artifact=True)
         if content is None:
             return
@@ -471,7 +470,7 @@ def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", s
     ctx.sync_vfs_barrier()
     return canonical_uri
 @tracker_bp.worker("harmonize_vocab_task")
-def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
+def _background_harmonize_vocabulary(ctx, renames: Optional[List[Dict[str, Any]]] = None):
     """Background Metronome job to migrate physical Markdown files to new semantic types."""
     if not renames: return
     conn = ctx.db
@@ -550,12 +549,14 @@ def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
 
     return new_rel_path
 @tracker_bp.worker("enforce_tickets_task")
-def _background_enforce_tickets(ctx, specific_file=None, **kwargs):
+def _background_enforce_tickets(ctx, specific_file: Optional[str] = None):
     ctx.jobs.update_progress("Enforcing declarative ticket states...")
     enforce_declarative_tickets(workspace_id=ctx.workspace_id, specific_file=specific_file)
     return "Ticket housekeeping complete."
+
+
 @tracker_bp.worker("sync_cache_task")
-def _background_sync_cache(ctx, **kwargs):
+def _background_sync_cache(ctx):
     ctx.jobs.update_progress("Hydrating tracker cache...")
     _sync_disk_to_db(ctx.workspace_id)
     ctx.jobs.submit("enforce_tickets_task", job_category="system_background")
@@ -811,7 +812,12 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
 
     return enforced_count
 @tracker_bp.worker("spawn_template_task")
-def _background_spawn_template(ctx, target_repo=None, template_id=None, variables=None, **kwargs):
+def _background_spawn_template(
+    ctx,
+    target_repo: Optional[str] = None,
+    template_id: Optional[str] = None,
+    variables: Optional[Dict[str, str]] = None,
+):
     variables = variables or {}
     ctx.jobs.update_progress("Spawning template instance...")
     all_tickets = ctx.db.get_all("tracker_tickets")
@@ -897,15 +903,15 @@ class TrackerSpawnPayload(TypedDict, total=False):
 @tracker_bp.route('spawn_template', methods=['POST'], request_schema=TrackerSpawnPayload, docstring="Spawns a new ticket tree from an existing template.")
 def api_tracker_spawn_template(ctx):
     """Spawns a new ticket tree from an existing template."""
-    data = ctx.req.json
+    data = ctx.payload or {}
     target_repo = data.get('target_repo')
     template_id = data.get('template_id')
     variables = data.get('variables', {})
     if not target_repo or not template_id:
-        return jsonify({"error": "Target repo and template_id required."}), 400
+        return {"error": "Target repo and template_id required."}, 400
 
     job_id = ctx.jobs.submit("spawn_template_task", target_repo=target_repo, template_id=template_id, variables=variables, job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202
 
 def archive_stale_tickets(workspace_id=None):
     """Sweeps all repos for tickets passing the dynamic log and archive thresholds."""
@@ -976,7 +982,7 @@ def api_tracker_system_schemas(ctx):
     """SSOT: Provides the immutable system schemas to the frontend."""
     # Hydrate the isSystem flag dynamically over the wire
     hydrated_schemas = [{**s, "isSystem": True} for s in SYSTEM_SCHEMAS]
-    return jsonify({"system_schemas": hydrated_schemas})
+    return {"system_schemas": hydrated_schemas}
 class TrackerVocabPayload(TypedDict, total=False):
     hierarchy_labels: dict
     kanban_profiles: list
@@ -987,8 +993,8 @@ class TrackerVocabPayload(TypedDict, total=False):
 @tracker_bp.route('vocab_settings', methods=['POST'], request_schema=TrackerVocabPayload, docstring="Saves custom Kanban vocabulary and structural layout settings, triggering a background harmonization job if renames are detected.")
 def save_vocab_settings(ctx):
     """Intercepts vocabulary changes to trigger the background harmonization engine."""
-    data = ctx.req.json
-    repo = ctx.req.args.get('repo')
+    data = ctx.payload or {}
+    repo = data.get('repo')
 
     payload = {}
     for key in ['hierarchy_labels', 'kanban_profiles', 'kanban_repo_map', 'parent_tabs', 'global_views']:
@@ -1003,9 +1009,9 @@ def save_vocab_settings(ctx):
     if renames:
         ctx.settings.set('tracker_is_migrating', True)
         job_id = ctx.jobs.submit("harmonize_vocab_task", renames=renames, job_category="ui_blocking")
-        return jsonify({"status": "accepted", "job_id": job_id}), 202
+        return {"status": "accepted", "job_id": job_id}, 202
 
-    return jsonify({"status": "ok", "migrating": False})
+    return {"status": "ok", "migrating": False}
 class TrackerNewPayload(TypedDict, total=False):
     repo: str
     type: str
@@ -1023,7 +1029,7 @@ class TrackerNewPayload(TypedDict, total=False):
 @tracker_bp.route('new', methods=['POST'], request_schema=TrackerNewPayload, docstring="Creates a new markdown-based Kanban ticket.")
 def api_tracker_new(ctx):
     """Creates a new markdown-based Kanban ticket."""
-    data = ctx.req.json
+    data = ctx.payload or {}
     try:
         new_path = create_ticket(
             ctx=ctx,
@@ -1041,9 +1047,9 @@ def api_tracker_new(ctx):
             size=data.get('size', ''),
             tier=data.get('tier')
         )
-        return jsonify({"status": "success", "filepath": new_path})
+        return {"status": "success", "filepath": new_path}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 @tracker_bp.route('index', methods=['GET'], docstring="Retrieves a unique index of distinct tags, sub-buckets, and status counts across active tickets.")
 def api_tracker_index(ctx):
     """CQRS Aggregation Path: Leverages SQLite json_each to compile distinct tags and buckets in C."""
@@ -1073,13 +1079,13 @@ def api_tracker_index(ctx):
         """).fetchall()
         status_counts = {r[0]: r[1] for r in status_rows}
 
-        return jsonify({
+        return {
             "tags": tags,
             "sub_buckets": sub_buckets,
             "status_counts": status_counts
-        })
+        }
     except Exception as e:
-        return jsonify({"tags": [], "sub_buckets": [], "status_counts": {}})
+        return {"tags": [], "sub_buckets": [], "status_counts": {}}
 class TrackerFilesResponse(TypedDict):
     tasks: list
 @tracker_bp.route('files', methods=['GET'], response_schema=TrackerFilesResponse, docstring="Returns a JSON array of all active Kanban tickets across the workspace.")
@@ -1091,7 +1097,7 @@ def api_tracker_files(ctx):
         count_check = conn.execute("SELECT count(*) FROM tracker_tickets").fetchone()[0]
         if count_check == 0:
             ctx.jobs.submit("sync_cache_task", job_category="system_background")
-            return jsonify({"tasks": [], "hydrating": True})
+            return {"tasks": [], "hydrating": True}
 
         include_archived = ctx.settings.get("include_archived_in_log", False)
         if isinstance(include_archived, str):
@@ -1133,9 +1139,9 @@ def api_tracker_files(ctx):
         return f'{{"tasks": {json_result}}}', 200, {'Content-Type': 'application/json'}
     except Exception as e:
         print(f"⚠️ [Tracker Error] api_tracker_files failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 @tracker_bp.worker("restore_metadata_task")
-def _background_restore_metadata(ctx, **kwargs):
+def _background_restore_metadata(ctx):
     ctx.jobs.update_progress("Scanning Git history for wiped ticket metadata...")
     restored_count = restore_ticket_metadata_from_git(workspace_id=ctx.workspace_id)
     return f"Restored metadata for {restored_count} tickets from Git history."
@@ -1146,7 +1152,7 @@ class TrackerRestorePayload(TypedDict, total=False):
 def api_tracker_restore_metadata(ctx):
     """Scans Git history to restore wiped metadata (e.g. creation dates) for all tickets."""
     job_id = ctx.jobs.submit("restore_metadata_task", job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202
 def restore_ticket_metadata_from_git(workspace_id=None):
     from insetu.extensions.git.engine_git import execute_git as _execute_git
     ctx = tracker_bp.get_context(workspace_id)
@@ -1154,7 +1160,7 @@ def restore_ticket_metadata_from_git(workspace_id=None):
     restored_count = 0
     for current_repo in repos:
         repo_path = get_repo_path(current_repo, workspace_id)
-        if not os.path.exists(repo_path): continue
+        if not Path(repo_path).exists(): continue
         repo_files = get_topology_files_for_repo(workspace_id, current_repo)
         tracker_files = [f for f in repo_files if _is_tracker_path(f)]
 
@@ -1299,7 +1305,7 @@ class TrackerTransitionPayload(TypedDict, total=False):
 @tracker_bp.route('transition', methods=['POST'], request_schema=TrackerTransitionPayload, docstring="Transitions a Kanban ticket to a new status or type, automatically relocating the markdown file on disk.")
 def api_tracker_transition(ctx):
     """Transitions a Kanban ticket to a new status or type, automatically relocating the markdown file on disk."""
-    data = ctx.req.json
+    data = ctx.payload or {}
     try:
         new_path = transition_ticket(
             ctx=ctx,
@@ -1308,9 +1314,9 @@ def api_tracker_transition(ctx):
             new_status=data['new_status'],
             new_type=data.get('new_type')
         )
-        return jsonify({"status": "success", "new_filepath": new_path})
+        return {"status": "success", "new_filepath": new_path}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 @tracker_bp.on('request_changelog_suggestions')
 def provide_changelog_suggestions(repo, workspace_id=None, **kwargs):
     """Provides recent closed tickets to other extensions (like Git) without exposing DB internals."""

@@ -16,8 +16,8 @@ The tracker enforces a hierarchical 3-Tier schema to keep your work organized (e
 
 ### 3. Automated Housekeeping
 To prevent your LLM context payloads from bloating over time, the tracker employs an automated background metronome:
-* **Grace Period:** Closed tickets remain in their original folders for a configured grace period (default 7 days) before being swept to the `.tracker/log/` folder.
-* **Archiving:** Logged tickets are eventually swept into `.tracker/log/archived/` (default 30 days) where they are permanently preserved but excluded from the active virtual file system (VFS) context payload.
+* **Grace Period:** Closed tickets remain in their original folders for a configured grace period (default 7 days) before being swept to the `.insetu-data/tracker/log/` folder.
+* **Archiving:** Logged tickets are eventually swept into `.insetu-data/tracker/log/archived/` (default 30 days) where they are permanently preserved but excluded from the active virtual file system (VFS) context payload.
 
 ## 🚀 Features
 
@@ -27,20 +27,19 @@ To prevent your LLM context payloads from bloating over time, the tracker employ
 * **Historical Changelogs:** Generate markdown changelogs of recently closed and logged work directly from the UI to feed into your Git commits or sprint reviews.
 
 ## 📂 File Structure
-
-The tracker manages an isolated `.tracker/` directory within each repository. It uses smart pluralization and semantic folder structures:
-
-```text
+The tracker manages an isolated .insetu-data/tracker/ directory within each repository. It uses smart pluralization and semantic folder structures:
 [repo_dir]/
-└── .tracker/
-    ├── epics/
-    │   ├── open/
-    │   ├── active/
-    │   └── closed/
-    ├── tasks/
-    │   ├── open/
-    │   └── active/
-    └── log/
-        └── archived/
+└── .insetu-data/
+    └── tracker/
+        ├── epics/
+        │   ├── open/
+        │   ├── active/
+        │   └── closed/
+        ├── tasks/
+        │   ├── open/
+        │   └── active/
+        └── log/
+            └── archived/
+
 
 ```

@@ -4,8 +4,7 @@ import json
 import uuid
 import re
 import traceback
-from typing import TypedDict, Optional
-from flask import jsonify
+from typing import TypedDict, Optional, List, Dict, Any, Union, Literal
 from insetu.core.sdk import InSetuExtension, ExtensionContext, slugify
 from insetu.core.utils_core import (
     InSetuURI,
@@ -128,6 +127,12 @@ def _normalize_stored_batches(ctx) -> list:
     if changed:
         ctx.store.set("workflows.json", "context_batches", batches)
     return batches
+@flow_bp.on('heal_missing_domain_volume')
+def _heal_missing_workflows_volume(ctx, volume=None, workspace_id=None, **kwargs):
+    if volume == "workflows":
+        _background_compile_workflows(ctx, force_full=True)
+
+
 @flow_bp.on('register_compilation_steps')
 def _register_flow_compilation_step(workspace_id=None, **kwargs):
     return [{
@@ -139,11 +144,15 @@ def _register_flow_compilation_step(workspace_id=None, **kwargs):
         "worker_name": "compile_workflows_task"
     }]
 @flow_bp.worker("compile_workflows_task")
-def _background_compile_workflows(ctx, **kwargs):
-    target_repos = kwargs.get("target_repos")
-    force_full = kwargs.get("force_full", False)
+def _background_compile_workflows(
+    ctx,
+    force_full: Union[bool, Literal["compile_only"]] = False,
+    compile_only: bool = False,
+    target_repos: Optional[List[str]] = None,
+    ledger_events: Optional[List[Dict[str, Any]]] = None,
+    chain_state: Optional[Dict[str, Any]] = None,
+):
     ctx.jobs.update_progress("Packing active workflows...")
-    if ctx.config.get("extensions") and "flow" not in ctx.config.get("extensions", []): return
     # Ensure all preceding VFS writes (such as newly generated gather context parts) settle on disk
     ctx.sync_vfs_barrier()
     if not force_full and hasattr(ctx, "has_missing_domain_artifacts") and ctx.has_missing_domain_artifacts("flow"):
@@ -162,19 +171,18 @@ def _background_compile_workflows(ctx, **kwargs):
         )
         return {"message": "No active workflows to pack. Cleared stale workflow entries."}
 
-    chain_state = kwargs.get("chain_state", {})
-    touched_buckets = chain_state.get("touched_buckets")
-    touched_diffs = chain_state.get("touched_diffs")
-    ledger_events = kwargs.get("ledger_events", [])
-
-    active_repos = set(target_repos or [])
+    effective_chain_state = chain_state if chain_state is not None else (ctx.jobs.chain_state or {})
+    touched_buckets = effective_chain_state.get("touched_buckets")
+    touched_diffs = effective_chain_state.get("touched_diffs")
+    ledger_events = ledger_events or []
+    explicit_target_repos = set(target_repos or [])
+    mutated_vfs_files = set()
     for e in ledger_events:
         fp = e.get("filepath", "") if isinstance(e, dict) else str(e)
         if fp:
             try:
-                r = InSetuURI(fp).repo
-                if r:
-                    active_repos.add(r)
+                u = InSetuURI(fp)
+                mutated_vfs_files.add(str(u))
             except Exception:
                 pass
 
@@ -216,7 +224,10 @@ def _background_compile_workflows(ctx, **kwargs):
                 repo_cand = chunk_uri.repo
                 if repo_cand and repo_cand not in ('contexts', 'diffs', 'prompts', 'workflows'):
                     batch_repos.add(repo_cand)
-                if chunk_uri.scheme == 'vfs' and (not active_repos or repo_cand in active_repos):
+                if chunk_uri.scheme == 'vfs' and (
+                    str(chunk_uri) in mutated_vfs_files
+                    or (explicit_target_repos and repo_cand in explicit_target_repos)
+                ):
                     has_targeted_raw_files = True
 
         existing_entry = current_manifest.get(base_uri)
@@ -314,18 +325,17 @@ def api_flow_batches(ctx):
     def _is_base(name):
         if not name or not isinstance(name, str): return False
         return not bool(re.search(r'_part\d+\.txt$', name))
-
     try:
-        return jsonify({
+        return {
             "batches": all_batches,
             "available_contexts": sorted([c for c in expected_contexts if _is_base(c)]),
             "available_diffs": sorted([d for d in set(available_diffs) if _is_base(d)]),
             "available_prompts": sorted([p for p in available_prompts if isinstance(p, str)]),
             "artifacts_dir": paths["artifacts_base"],
             "profile_dir": Path(paths["config_path"]).parent.as_posix()
-        })
+        }
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 @flow_bp.on('pre_file_save')
 def handle_flow_pre_save(workspace_id=None, filepath=None, content=None, data=None, **kwargs):
     if not data or not filepath:
@@ -364,13 +374,13 @@ class FlowBatchSavePayload(TypedDict, total=False):
 @flow_bp.route('batches/save', methods=['POST'], request_schema=FlowBatchSavePayload, docstring="Creates or updates a workflow batch configuration.")
 def api_flow_batches_save(ctx):
     """Creates or updates a workflow batch configuration."""
-    raw_data = ctx.req.json or {}
+    raw_data = ctx.payload or {}
     data = dict(raw_data)
     batches = ctx.store.get("workflows.json", "context_batches", [])
     original_id = data.pop("original_id", None)
     batch_id = data.get("id") or slugify(data.get("title", ""))
     if not batch_id:
-        return jsonify({"error": "Batch id or title is required."}), 400
+        return {"error": "Batch id or title is required."}, 400
     data["id"] = batch_id
 
     existing = None
@@ -393,17 +403,16 @@ def api_flow_batches_save(ctx):
     # ctx://workflows/workflow_<id>_context.txt artifact always share one id.
     normalized_batches = _normalize_stored_batches(ctx)
     saved_batch = normalized_batches[saved_idx] if saved_idx < len(normalized_batches) else data
-
     # Backend-Driven Orchestration: Automatically trigger workflow compilation
     job_id = ctx.jobs.submit("compile_workflows_task", coalesce=True, job_category="ui_blocking")
 
-    return jsonify({"status": "success", "job_id": job_id, "batch": saved_batch, "batches": normalized_batches, "manifest": ctx.manifest})
+    return {"status": "success", "job_id": job_id, "batch": saved_batch, "batches": normalized_batches, "manifest": ctx.manifest}
 class FlowBatchDeletePayload(TypedDict):
     id: str
 @flow_bp.route('batches/delete', methods=['POST'], request_schema=FlowBatchDeletePayload, docstring="Deletes a workflow batch configuration.")
 def api_flow_batches_delete(ctx):
     """Deletes a workflow batch configuration."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     batch_id = data.get("id")
     batches = ctx.store.get("workflows.json", "context_batches", [])
     updated_batches = [b for b in batches if isinstance(b, dict) and b.get("id") != batch_id]
@@ -412,4 +421,4 @@ def api_flow_batches_delete(ctx):
     # Backend-Driven Orchestration: Automatically trigger workflow compilation
     job_id = ctx.jobs.submit("compile_workflows_task", coalesce=True, job_category="ui_blocking")
 
-    return jsonify({"status": "success", "job_id": job_id, "batches": updated_batches, "manifest": ctx.manifest})
+    return {"status": "success", "job_id": job_id, "batches": updated_batches, "manifest": ctx.manifest}

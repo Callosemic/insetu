@@ -8,9 +8,8 @@ import uuid
 import datetime
 from pathlib import Path
 from typing import TypedDict, Optional
-from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from insetu.core.utils_core import get_system_index_path, load_json_config, save_json_config
+from insetu.core.utils_core import get_daemon_host_config_path, load_json_config, save_json_config
 from insetu.core.topology.engine_topology import resolve_file_bucket
 
 HOOKS_SCHEMA = {
@@ -33,7 +32,13 @@ hooks_bp = InSetuExtension(
 )
 __depends__ = ['gather']
 @hooks_bp.worker("execute_rule_task")
-def _background_execute_rule(ctx, rule_id, rule_name, command, workspace_id=None, **kwargs):
+def _background_execute_rule(
+    ctx,
+    rule_id: str,
+    rule_name: str,
+    command: str,
+    workspace_id: Optional[str] = None,
+):
     """Executes a hook rule's command off-thread to protect Flask event loop responsiveness."""
     ctx.jobs.update_progress(f"Running hook [{rule_name}]: {command}")
 
@@ -42,9 +47,8 @@ def _background_execute_rule(ctx, rule_id, rule_name, command, workspace_id=None
     # Resolve execution context
     expanded_cmd = command.strip()
     exec_cwd = ws_root
-    
     if expanded_cmd.startswith('~'):
-        expanded_cmd = os.path.expanduser(expanded_cmd)
+        expanded_cmd = Path(expanded_cmd).expanduser().as_posix()
     # Enforce non-interactive environment
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
@@ -135,18 +139,18 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
                 job_category="system_background"
             )
 def _get_approved_hook_ids(ctx) -> set:
-    sys_path = get_system_index_path()
-    sys_data = load_json_config(sys_path, {})
-    return set(sys_data.get("approved_hooks", {}).get(ctx.workspace_id, []))
+    host_path = get_daemon_host_config_path()
+    host_data = load_json_config(host_path, {})
+    return set(host_data.get("approved_hooks", {}).get(ctx.workspace_id, []))
 
 def _mark_hook_approved(ctx, rule_id: str, command: str):
     sig = f"{rule_id}:{hashlib.sha256(command.encode('utf-8')).hexdigest()[:16]}"
-    sys_path = get_system_index_path()
-    sys_data = load_json_config(sys_path, {})
-    approved = set(sys_data.setdefault("approved_hooks", {}).get(ctx.workspace_id, []))
+    host_path = get_daemon_host_config_path()
+    host_data = load_json_config(host_path, {})
+    approved = set(host_data.setdefault("approved_hooks", {}).get(ctx.workspace_id, []))
     approved.add(sig)
-    sys_data["approved_hooks"][ctx.workspace_id] = sorted(list(approved))
-    save_json_config(sys_path, sys_data, workspace_id="default")
+    host_data["approved_hooks"][ctx.workspace_id] = sorted(list(approved))
+    save_json_config(host_path, host_data, workspace_id="default")
 
 def _ensure_hooks_hydrated(ctx):
     count = ctx.db.execute("SELECT count(*) FROM hooks_rules").fetchone()[0]
@@ -175,13 +179,12 @@ def _ensure_hooks_hydrated(ctx):
 def _flush_hooks_to_json(ctx):
     rules = ctx.db.get_all("hooks_rules", order_by="created_at DESC")
     ctx.store.set("rules.json", "rules", rules)
-
 @hooks_bp.route('list', methods=['GET'], docstring="Lists all configured automation rules.")
 def list_rules(ctx):
     """Lists all configured automation rules."""
     _ensure_hooks_hydrated(ctx)
     rules = ctx.db.get_all("hooks_rules", order_by="created_at DESC")
-    return jsonify({"rules": rules})
+    return {"rules": rules}
 class HookSavePayload(TypedDict, total=False):
     name: str
     trigger_type: str
@@ -192,16 +195,16 @@ class HookSavePayload(TypedDict, total=False):
 @hooks_bp.route('save', methods=['POST'], request_schema=HookSavePayload, docstring="Creates or updates a local automation rule.")
 def save_rule(ctx):
     """Creates or updates a local automation rule."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     rule_id = data.get('id') or f"rule_{uuid.uuid4().hex[:8]}"
-    name = data.get('name', '').strip()
+    name = str(data.get('name') or '').strip()
     trigger_type = data.get('trigger_type', 'repo_update')
-    trigger_target = data.get('trigger_target', 'ALL').strip()
-    command = data.get('command', '').strip()
+    trigger_target = str(data.get('trigger_target') or 'ALL').strip()
+    command = str(data.get('command') or '').strip()
     enabled = 1 if data.get('enabled', True) else 0
     now = datetime.datetime.now().isoformat()
     if not name or not command:
-        return jsonify({"error": "Rule name and command are required."}), 400
+        return {"error": "Rule name and command are required."}, 400
 
     _ensure_hooks_hydrated(ctx)
     ctx.db.insert_or_replace("hooks_rules", {
@@ -215,18 +218,18 @@ def save_rule(ctx):
     })
     _mark_hook_approved(ctx, rule_id, command)
     _flush_hooks_to_json(ctx)
-    return jsonify({"status": "success", "id": rule_id})
+    return {"status": "success", "id": rule_id}
 class HookTogglePayload(TypedDict):
     id: str
     enabled: bool
 @hooks_bp.route('toggle', methods=['POST'], request_schema=HookTogglePayload, docstring="Enables or disables an automation rule.")
 def toggle_rule(ctx):
     """Enables or disables an automation rule."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     rule_id = data.get('id')
     enabled = 1 if data.get('enabled') else 0
     if not rule_id:
-        return jsonify({"error": "Rule ID required."}), 400
+        return {"error": "Rule ID required."}, 400
 
     _ensure_hooks_hydrated(ctx)
     ctx.db.execute("UPDATE hooks_rules SET enabled = ? WHERE id = ?", (enabled, rule_id))
@@ -236,20 +239,20 @@ def toggle_rule(ctx):
         if row:
             _mark_hook_approved(ctx, rule_id, row["command"])
     _flush_hooks_to_json(ctx)
-    return jsonify({"status": "success"})
+    return {"status": "success"}
 class HookIdPayload(TypedDict):
     id: str
 @hooks_bp.route('execute', methods=['POST'], request_schema=HookIdPayload, docstring="Manually executes an automation rule.")
 def execute_rule_manual(ctx):
     """Manually executes an automation rule."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     rule_id = data.get('id')
     if not rule_id:
-        return jsonify({"error": "Rule ID required."}), 400
+        return {"error": "Rule ID required."}, 400
 
     rule = ctx.db.execute("SELECT name, command FROM hooks_rules WHERE id = ?", (rule_id,)).fetchone()
     if not rule:
-        return jsonify({"error": "Rule not found."}), 404
+        return {"error": "Rule not found."}, 404
     job_id = ctx.jobs.submit(
         "execute_rule_task", 
         rule_id=rule_id, 
@@ -257,23 +260,23 @@ def execute_rule_manual(ctx):
         command=rule['command'],
         job_category="ui_blocking"
     )
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202
 @hooks_bp.route('delete', methods=['POST'], request_schema=HookIdPayload, docstring="Permanently deletes an automation rule.")
 def delete_rule(ctx):
     """Permanently deletes an automation rule."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     rule_id = data.get('id')
     if not rule_id:
-        return jsonify({"error": "Rule ID required."}), 400
+        return {"error": "Rule ID required."}, 400
 
     _ensure_hooks_hydrated(ctx)
     ctx.db.delete("hooks_rules", "id", rule_id)
     _flush_hooks_to_json(ctx)
-    return jsonify({"status": "success"})
+    return {"status": "success"}
 @hooks_bp.route('logs', methods=['GET'], docstring="Retrieves logs for executed automation rules.")
 def get_logs(ctx):
     """Retrieves logs for executed automation rules."""
     try:
-        return jsonify({"logs": ctx.jobs.get_recent_logs(limit=20)})
+        return {"logs": ctx.jobs.get_recent_logs(limit=20)}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500

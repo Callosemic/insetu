@@ -50,7 +50,7 @@ export const KanbanStore = createExtensionStore('Kanban', {
     loadEditFrontmatter: (yaml, content) => {
         const state = KanbanStore.getState();
         const filepath = state.editTaskForm.filepath;
-        const { repo: parsedRepo, relativePath } = window.inSetu.utils.parseURI(filepath);
+        const { repo: parsedRepo, relativePath } = new window.inSetu.utils.InSetuURI(filepath);
         const cleanFp = parsedRepo ? `${parsedRepo}/${relativePath}` : relativePath;
         const repo = parsedRepo || 'global';
         const defaultTitle = cleanFp.split('/').pop();
@@ -1394,7 +1394,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
             alert("Title is required.");
             throw new Error("Title is required.");
         }
-        const res = await this.api.postJson('new', {
+        const res = await this.api.postJson('tracker/new', {
             repo, tier, type, status, title, tags, description: desc, sub_bucket, delivery_date: deliveryDate,
             parent_id: parentId, depends_on: (dependsOn || []).join(', '), priority, size
         });
@@ -1560,7 +1560,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 </div>
                 <sutram-async-btn slot="footer" label="🚀 Spawn Template" intent="primary" .onClick=${async () => {
                     try {
-                        const res = await this.api.post('spawn_template', {
+                        const res = await this.api.post('tracker/spawn_template', {
                             target_repo: this._spawnTargetRepo,
                             template_id: this._spawnTask.id,
                             variables: this._spawnForm
@@ -2482,8 +2482,7 @@ export class InSetuExtTrackerSettings extends InSetuElement {
         });
         // Strip out system schemas before writing to the physical database
         const profilesToSave = this.customSchemas.filter(s => !s.isSystem);
-
-        const res = await this.api.post(`vocab_settings`, {
+        const res = await this.api.post(`tracker/vocab_settings`, {
             kanban_profiles: profilesToSave,
             kanban_repo_map: this.repoMap,
             global_views: cleanViews,

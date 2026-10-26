@@ -4,7 +4,6 @@ import json
 import uuid
 import datetime
 from typing import TypedDict, Optional
-from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import InSetuURI
 
@@ -40,16 +39,15 @@ def _ensure_favorites_hydrated(ctx):
 def _flush_favorites_to_json(ctx):
     items = ctx.db.get_all(table="favorites", order_by="created_at DESC")
     ctx.store.set("bookmarks.json", "favorites", items)
-
 @favorites_bp.route('list', methods=['GET'], docstring="Lists all favorited files, folders, and resources.")
 def list_favorites(ctx):
     """Lists all favorited files, folders, and resources."""
     try:
         _ensure_favorites_hydrated(ctx)
         items = ctx.db.get_all(table="favorites", order_by="created_at DESC")
-        return jsonify({"favorites": items})
+        return {"favorites": items}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 class FavoriteAddPayload(TypedDict, total=False):
     folderpath: str
     filepath: str
@@ -59,32 +57,32 @@ class FavoriteAddPayload(TypedDict, total=False):
 @favorites_bp.route('add', methods=['POST'], request_schema=FavoriteAddPayload, docstring="Pins a new file or folder to the favorites bar.")
 def add_favorite(ctx):
     """Pins a new file or folder to the favorites bar."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     # Support both legacy paths and the new explicit folderpath/filepath paradigm
-    folderpath = data.get('folderpath', '').strip()
-    filepath = data.get('filepath', '').strip()
-    raw_path = folderpath if folderpath else (filepath or data.get('path', '').strip())
+    folderpath = str(data.get('folderpath') or '').strip()
+    filepath = str(data.get('filepath') or '').strip()
+    raw_path = folderpath if folderpath else (filepath or str(data.get('path') or '').strip())
     if not raw_path:
-        return jsonify({"error": "Filepath or folderpath is required"}), 400
+        return {"error": "Filepath or folderpath is required"}, 400
     uri = InSetuURI(raw_path)
-    fav_type = 'folder' if (folderpath or uri.is_dir) else data.get('type', 'file').strip()
+    fav_type = 'folder' if (folderpath or uri.is_dir) else str(data.get('type') or 'file').strip()
     path = f"{str(uri).rstrip('/')}/" if fav_type == 'folder' else str(uri)
-    name = data.get('name', '').strip() or uri.basename
+    name = str(data.get('name') or '').strip() or uri.basename
     try:
         _ensure_favorites_hydrated(ctx)
         # Prevent duplication entries
         exists = ctx.db.execute("SELECT id FROM favorites WHERE path = ?", (path,)).fetchone()
         if exists:
-            return jsonify({"status": "success", "message": "Already favorited", "id": exists['id']})
+            return {"status": "success", "message": "Already favorited", "id": exists['id']}
         fav_id = f"fav_{uuid.uuid4().hex[:8]}"
         now = datetime.datetime.now().isoformat()
         ctx.db.insert_or_replace("favorites", {
             "id": fav_id, "path": path, "type": fav_type, "name": name, "created_at": now
         })
         _flush_favorites_to_json(ctx)
-        return jsonify({"status": "success", "id": fav_id})
+        return {"status": "success", "id": fav_id}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 class FavoriteDeletePayload(TypedDict, total=False):
     pass
 @favorites_bp.route('delete/<fav_id>', methods=['DELETE', 'POST'], request_schema=FavoriteDeletePayload, docstring="Removes a pinned item from the favorites bar.")
@@ -94,6 +92,6 @@ def delete_favorite(ctx, fav_id):
         _ensure_favorites_hydrated(ctx)
         ctx.db.delete("favorites", "id", fav_id)
         _flush_favorites_to_json(ctx)
-        return jsonify({"status": "success"})
+        return {"status": "success"}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500

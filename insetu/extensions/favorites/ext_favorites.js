@@ -207,7 +207,7 @@ export class InSetuExtFavorites extends InSetuElement {
                 ${this.items.map(item => {
                     const isContext = item.type === 'file' && (item.path.startsWith('ctx://') || item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_'));
                     const eType = item.type === 'folder' ? 'folder' : (isContext ? 'file:context' : 'file');
-                    const { repo, relativePath } = this.utils.parseURI(item.path);
+                    const { repo, relativePath } = new this.utils.InSetuURI(item.path);
                     const displayPath = repo ? `${repo}/${relativePath}` : relativePath;
                     return html`
                     <sutram-card

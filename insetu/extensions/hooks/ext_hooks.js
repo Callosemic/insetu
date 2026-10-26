@@ -134,11 +134,10 @@ export class InSetuExtHooks extends InSetuElement {
     async saveRule() {
         const { name, command } = this.ruleForm;
         if (!name || !command) return alert("Rule name and command are required.");
-
         try {
             const payload = { ...this.ruleForm };
             if (this.editingRule) payload.id = this.editingRule.id;
-            await this.api.post('save', payload);
+            await this.api.post('hooks/save', payload);
             HooksStore.setState({ ruleModalOpen: false });
             HooksStore.getState().fetchRules();
         } catch (e) {
@@ -148,7 +147,7 @@ export class InSetuExtHooks extends InSetuElement {
 
     async toggleRule(rule) {
         try {
-            await this.api.post('toggle', { id: rule.id, enabled: !rule.enabled });
+            await this.api.post('hooks/toggle', { id: rule.id, enabled: !rule.enabled });
             HooksStore.getState().fetchRules();
         } catch (e) {
             alert(`Error toggling rule: ${e.message}`);
@@ -158,14 +157,14 @@ export class InSetuExtHooks extends InSetuElement {
     async deleteRule(ruleId) {
         if (!confirm("Are you sure you want to delete this automation rule?")) return;
         try {
-            await this.api.post('delete', { id: ruleId });
+            await this.api.post('hooks/delete', { id: ruleId });
             HooksStore.getState().fetchRules();
         } catch (e) {
             alert(`Error deleting rule: ${e.message}`);
         }
     }
     _getExecuteRuleAction(ruleId) {
-        return this.api.bindJobAction('execute', { id: ruleId }, {
+        return this.api.bindJobAction('hooks/execute', { id: ruleId }, {
             onProgress: () => {
                 if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("⏳ Executing rule...", null);
             },
@@ -344,16 +343,6 @@ export class InSetuExtHooks extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-hooks', InSetuExtHooks);
-export class InSetuExtHooksActions extends InSetuElement {
-    static get extensionName() { return 'hooks'; }
-    static styles = [sharedStyles, css`:host { display: flex; align-items: stretch; height: 100%; }`];
-    render() {
-        return html`
-            <button class="system-action-btn" title="New Rule" @click=${() => this.dispatch('insetu:hooks:edit', { data: null })}><yv-icon name="plus" style="width: 14px; height: 14px;"></yv-icon></button>
-        `;
-    }
-}
-customElements.define('insetu-ext-hooks-actions', InSetuExtHooksActions);
 window.ExtensionRegistry.registerExtension('hooks', {
     name: "Automation Hooks",
     version: "1.0.0",
@@ -410,14 +399,14 @@ window.ExtensionRegistry.registerExtension('hooks', {
             icon: "webhook",
             intent: "highlight",
             order: 3,
+            menuActions: [
+                {
+                    label: "New Rule",
+                    icon: "plus",
+                    onClick: () => window.inSetu?.events?.emit('insetu:hooks:edit', { data: null })
+                }
+            ],
             component: "insetu-ext-hooks"
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "ctrl",
-            targetSub: "hooks",
-            component: "insetu-ext-hooks-actions",
-            order: 1
         }
     ]
 });

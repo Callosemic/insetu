@@ -104,18 +104,17 @@ export class InSetuExtCronic extends InSetuElement {
         CronicStore.getState().fetchStatus();
         CronicStore.getState().fetchJobs();
     }
-
     async _toggleJob(job) {
-        await this.api.post('toggle', { job_id: job.id, enabled: !job.enabled });
+        await this.api.post('cronic/toggle', { job_id: job.id, enabled: !job.enabled });
         CronicStore.getState().fetchJobs();
     }
     async _deleteJob(jobId) {
         if (!confirm("Delete this scheduled cronic job?")) return;
-        await this.api.post('delete', { job_id: jobId });
+        await this.api.post('cronic/delete', { job_id: jobId });
         CronicStore.getState().fetchJobs();
     }
     _getRunNowAction(jobId) {
-        return this.api.bindJobAction('run_now', { job_id: jobId }, {
+        return this.api.bindJobAction('cronic/run_now', { job_id: jobId }, {
             onProgress: (msg) => this.setStatus(`⏳ ${msg}`, null),
             onComplete: (statusData) => {
                 this.setStatus(`✅ ${statusData.message}`, 2000);
@@ -126,7 +125,7 @@ export class InSetuExtCronic extends InSetuElement {
     }
 
     _getKillAction(jobId) {
-        return this.api.bindJobAction('kill', { job_id: jobId }, {
+        return this.api.bindJobAction('cronic/kill', { job_id: jobId }, {
             onProgress: (msg) => this.setStatus(`⏳ ${msg}`, null),
             onComplete: (statusData) => {
                 this.setStatus(`✅ ${statusData.message}`, 2000);

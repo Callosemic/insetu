@@ -8,7 +8,6 @@ import uuid
 import time
 from pathlib import Path
 from typing import TypedDict, Optional
-from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import InSetuURI, is_extension_enabled
 
@@ -22,13 +21,13 @@ CRONIC_SCHEMA = {
         "last_status": "TEXT"
     }
 }
-
 cronic_bp = InSetuExtension(
     'cronic',
     __name__,
     title="Cronic Job Manager",
     description="Schedule scripts and executable files as system cron tasks.",
-    schema=CRONIC_SCHEMA
+    schema=CRONIC_SCHEMA,
+    external_binaries=["crontab"],
 )
 __depends__ = []
 
@@ -56,9 +55,8 @@ def _sync_system_crontab(ctx):
     for job in jobs:
         if not job.get('enabled'):
             continue
-
         abs_path = str(ctx.resolve_path(job['filepath']))
-        ext = os.path.splitext(abs_path)[1].lower()
+        ext = Path(abs_path).suffix.lower()
         if ext == '.py':
             cmd = f'"{python_bin}" "{abs_path}"'
         elif ext == '.sh':
@@ -75,7 +73,7 @@ def _sync_system_crontab(ctx):
 @cronic_bp.route('status', methods=['GET'], docstring="Checks if the underlying OS environment supports crontab scheduling.")
 def get_status(ctx):
     """Checks if the underlying OS environment supports crontab scheduling."""
-    return jsonify({"has_crontab": has_crontab()})
+    return {"has_crontab": has_crontab()}
 def _ensure_cronic_hydrated(ctx):
     count = ctx.db.execute("SELECT count(*) FROM cronic_jobs").fetchone()[0]
     saved = ctx.store.get("schedules.json", "jobs", None)
@@ -94,23 +92,22 @@ def _ensure_cronic_hydrated(ctx):
 def _flush_cronic_to_json(ctx):
     jobs = ctx.db.get_all("cronic_jobs")
     ctx.store.set("schedules.json", "jobs", jobs)
-
 @cronic_bp.route('list', methods=['GET'], docstring="Lists all configured cronic jobs and their current execution status.")
 def list_jobs(ctx):
     """Lists all configured cronic jobs and their current execution status."""
     _ensure_cronic_hydrated(ctx)
-    return jsonify({"jobs": ctx.db.get_all("cronic_jobs")})
+    return {"jobs": ctx.db.get_all("cronic_jobs")}
 class CronicSchedulePayload(TypedDict):
     filepath: str
     schedule: str
 @cronic_bp.route('schedule', methods=['POST'], request_schema=CronicSchedulePayload, docstring="Schedules a script file to execute periodically via the system crontab.")
 def schedule_job(ctx):
     """Schedules a script file to execute periodically via the system crontab."""
-    data = ctx.req.json or {}
-    filepath = data.get("filepath", "").strip()
-    schedule = data.get("schedule", "0 * * * *").strip()
+    data = ctx.payload or {}
+    filepath = str(data.get("filepath") or "").strip()
+    schedule = str(data.get("schedule") or "0 * * * *").strip()
     if not filepath or not (filepath.endswith('.py') or filepath.endswith('.sh')):
-        return jsonify({"error": "Only .py or .sh files can be scheduled."}), 400
+        return {"error": "Only .py or .sh files can be scheduled."}, 400
     _ensure_cronic_hydrated(ctx)
     filepath = str(InSetuURI(filepath))
     job_id = f"job_{uuid.uuid4().hex[:8]}"
@@ -124,14 +121,14 @@ def schedule_job(ctx):
 
     _flush_cronic_to_json(ctx)
     _sync_system_crontab(ctx)
-    return jsonify({"status": "success", "job_id": job_id})
+    return {"status": "success", "job_id": job_id}
 class CronicTogglePayload(TypedDict):
     job_id: str
     enabled: bool
 @cronic_bp.route('toggle', methods=['POST'], request_schema=CronicTogglePayload, docstring="Enables or disables an existing scheduled job.")
 def toggle_job(ctx):
     """Enables or disables an existing scheduled job."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     job_id = data.get("job_id")
     enabled = 1 if data.get("enabled") else 0
 
@@ -139,35 +136,34 @@ def toggle_job(ctx):
     ctx.db.update("cronic_jobs", {"enabled": enabled}, "id", job_id)
     _flush_cronic_to_json(ctx)
     _sync_system_crontab(ctx)
-    return jsonify({"status": "success"})
+    return {"status": "success"}
 class CronicIdPayload(TypedDict):
     job_id: str
 @cronic_bp.route('delete', methods=['POST'], request_schema=CronicIdPayload, docstring="Permanently removes a job from the schedule.")
 def delete_job(ctx):
     """Permanently removes a job from the schedule."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     job_id = data.get("job_id")
 
     _ensure_cronic_hydrated(ctx)
     ctx.db.delete("cronic_jobs", "id", job_id)
     _flush_cronic_to_json(ctx)
     _sync_system_crontab(ctx)
-    return jsonify({"status": "success"})
+    return {"status": "success"}
 @cronic_bp.route('logs', methods=['GET'], docstring="Retrieves the recent execution logs for a specified job ID.")
 def get_logs(ctx):
     """Retrieves the recent execution logs for a specified job ID."""
-    job_id = ctx.req.args.get("job_id")
+    job_id = ctx.payload.get("job_id")
     if not job_id:
-        return jsonify({"logs": "No job ID supplied."}), 400
+        return {"logs": "No job ID supplied."}, 400
     log_file = Path(ctx.paths["artifacts_base"]).joinpath(f"cronic_{job_id}.log").as_posix()
     content = ctx.vfs.read(log_file, is_absolute_artifact=True)
     if content is not None:
         lines = content.splitlines(keepends=True)
-        return jsonify({"logs": "".join(lines[-100:])})
-    return jsonify({"logs": "No execution logs recorded yet."})
+        return {"logs": "".join(lines[-100:])}
+    return {"logs": "No execution logs recorded yet."}
 @cronic_bp.worker("run_manual_task")
-def _run_manual_worker(ctx, job_id=None, **kwargs):
-    cronic_job_id = kwargs.get("cronic_job_id")
+def _run_manual_worker(ctx, cronic_job_id: Optional[str] = None, job_id: Optional[str] = None):
     job = ctx.db.get_by_id("cronic_jobs", cronic_job_id)
     if not job:
         raise ValueError("Cronic job record not found.")
@@ -175,7 +171,7 @@ def _run_manual_worker(ctx, job_id=None, **kwargs):
     if not resolved:
         raise ValueError(f"File path for job '{cronic_job_id}' could not be resolved.")
     abs_path = str(resolved)
-    ext = os.path.splitext(abs_path)[1].lower()
+    ext = Path(abs_path).suffix.lower()
     log_file = Path(ctx.paths["artifacts_base"]).joinpath(f"cronic_{job['id']}.log").as_posix()
     Path(log_file).parent.mkdir(parents=True, exist_ok=True)
     if ext == '.py':
@@ -199,12 +195,11 @@ def _run_manual_worker(ctx, job_id=None, **kwargs):
 @cronic_bp.route('run_now', methods=['POST'], request_schema=CronicIdPayload, docstring="Manually dispatches a cronic job to run immediately in the background.")
 def run_now(ctx):
     """Manually dispatches a cronic job to run immediately in the background."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     job_id = ctx.jobs.submit("run_manual_task", cronic_job_id=data.get("job_id"), job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202
 @cronic_bp.worker("kill_task")
-def _kill_task_worker(ctx, job_id=None, **kwargs):
-    cronic_job_id = kwargs.get("cronic_job_id")
+def _kill_task_worker(ctx, cronic_job_id: Optional[str] = None, job_id: Optional[str] = None):
     job = ctx.db.get_by_id("cronic_jobs", cronic_job_id)
     if not job:
         raise ValueError("Cronic job record not found.")
@@ -233,27 +228,25 @@ def _kill_task_worker(ctx, job_id=None, **kwargs):
 @cronic_bp.route('kill', methods=['POST'], request_schema=CronicIdPayload, docstring="Terminates any currently running processes executing the specified cronic job script.")
 def kill_job(ctx):
     """Terminates any currently running processes executing the specified cronic job script."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     job_id = ctx.jobs.submit("kill_task", cronic_job_id=data.get("job_id"), job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202
 @cronic_bp.worker("sweep_logs_task")
-def _sweep_logs_worker(ctx, **kwargs):
+def _sweep_logs_worker(ctx):
     """Garbage collect logs older than 30 days."""
     log_dir = ctx.paths.get("artifacts_base")
-    if not log_dir or not os.path.exists(log_dir):
+    if not log_dir or not Path(log_dir).exists():
         return "No logs to sweep."
 
     cutoff = time.time() - (30 * 86400)
     count = 0
-    for f in os.listdir(log_dir):
-        if f.startswith("cronic_") and f.endswith(".log"):
-            f_path = Path(log_dir).joinpath(f).as_posix()
-            if os.path.getmtime(f_path) < cutoff:
-                try:
-                    ctx.vfs.delete(f_path, data={"is_absolute_artifact": True, "ignore_ledger": True})
-                    count += 1
-                except Exception:
-                    pass
+    for f_path_obj in Path(log_dir).glob("cronic_*.log"):
+        if f_path_obj.stat().st_mtime < cutoff:
+            try:
+                ctx.vfs.delete(f_path_obj.as_posix(), data={"is_absolute_artifact": True, "ignore_ledger": True})
+                count += 1
+            except Exception:
+                pass
     return f"Swept {count} old log files."
 @cronic_bp.on('topology_boot_complete')
 def cronic_workspace_boot(workspace_id=None, **kwargs):
@@ -292,10 +285,9 @@ def cronic_workspace_boot(workspace_id=None, **kwargs):
                     if match:
                         schedule = match.group(1).strip()
                         cmd = match.group(2).strip()
-
                         fp_match = re.search(r'"([^"]+)"(?:\s*>>)?$', cmd) or re.search(r'([^\s]+)$', cmd)
                         abs_fp = fp_match.group(1) if fp_match else ""
-                        rel_fp = os.path.relpath(abs_fp, ws_root) if abs_fp.startswith(ws_root) else abs_fp
+                        rel_fp = Path(abs_fp).relative_to(ws_root).as_posix() if abs_fp.startswith(ws_root) else abs_fp
                         canon_fp = rel_fp if "://" in rel_fp else f"vfs://{rel_fp.lstrip('/')}"
                         active_cron_jobs[c_job_id] = (schedule, str(InSetuURI(canon_fp)))
 
