@@ -128,12 +128,7 @@ export class InSetuExtPrompts extends InSetuElement {
                 });
             }
         });
-        this.registerGlobalListener('insetu:file-fetch-url', window, (e) => {
-            if (e.detail && isPromptPath(e.detail)) {
-                const activeWs = window.inSetu.utils.getActiveWorkspace();
-                e.inSetuResponses.push(`/api/${activeWs}/prompts/resolve?file=` + encodeURIComponent(e.detail));
-            }
-        });
+
         this.registerGlobalListener('insetu:global-manifest-files', window, (e) => {
             const rawPrompts = PromptsStore.getState().prompts || [];
             if (rawPrompts.length === 0) e.inSetuResponses.push(['ctx://prompts/.gitkeep']);
@@ -203,8 +198,8 @@ export class InSetuExtPrompts extends InSetuElement {
                     @card-clicked=${(e) => {
                         if (e.detail.isSource && window.inSetu.vfs.viewSourceFile) {
                             const fn = e.detail.filename || '';
-                            const isEditable = !fn.includes('/.templates/') || fn.includes('/.templates/user/');
-                            window.inSetu.vfs.viewSourceFile(fn, isEditable);
+                            const isEditable = (!fn.includes('/.templates/') || fn.includes('/.templates/user/')) && !fn.startsWith('ws://');
+                            window.inSetu.vfs.viewSourceFile(fn, isEditable, false, { previewMode: !isEditable });
                         }
                     }}
                     @path-changed=${(e) => AppStore.getState().setBrowsePath(e.detail.path || [], this._getSubKey())}>
@@ -248,13 +243,35 @@ function _buildPromptsMenuActions(slotCfg = {}) {
         }] : [])
     ];
 }
-
 function isPromptPath(filepath) {
     if (!filepath) return false;
     const raw = typeof filepath === 'object' ? (filepath.src || filepath.filepath || filepath.oldPath || '') : filepath;
     const str = String(raw).replace(/\\/g, '/');
     return str.includes('prompts') || str.includes('.templates');
 }
+
+window.addEventListener('insetu:can-preview-file', (e) => {
+    if (e.detail && isPromptPath(e.detail)) {
+        e.inSetuResponses.push(true);
+    }
+});
+
+window.addEventListener('insetu:resolve-buffer-preview', (e) => {
+    const { filepath, content, isDirty } = e.detail || {};
+    const hasIncludeMacro = typeof content === 'string' && /\{\{\s*(?:include_prompt\s*:|macro_[a-zA-Z0-9_]+|[a-zA-Z0-9_]+\s*\|)/.test(content);
+    if (filepath && (isPromptPath(filepath) || hasIncludeMacro)) {
+        e.inSetuResponses.push((async () => {
+            if (isDirty && typeof content === 'string') {
+                try {
+                    const postRes = await window.inSetu.api.workspace.post('prompts/resolve', { filepath, content });
+                    if (postRes.ok) return await postRes.text();
+                } catch (_) {}
+            }
+            const getRes = await window.inSetu.api.workspace.get(`prompts/resolve?file=${encodeURIComponent(filepath)}&t=${Date.now()}`, { cache: 'no-store' });
+            return getRes.ok ? await getRes.text() : (content ?? '');
+        })());
+    }
+});
 
 window.ExtensionRegistry.registerExtension('prompts', {
     name: "Prompt Library",
@@ -281,7 +298,7 @@ window.ExtensionRegistry.registerExtension('prompts', {
                 const res = await window.inSetu.api.request(`/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(srcUri)}`, {}, activeWs);
                 if (!res.ok) throw new Error("Failed to read prompt content.");
                 const text = await res.text();
-                const relDest = window.inSetu.utils.parseURI(destUri).relativePath || destUri;
+                const relDest = new window.inSetu.utils.InSetuURI(destUri).relativePath || destUri;
                 await window.inSetu.sys.executeWorkspaceMutation('fs/save', {
                     filepath: destUri,
                     content: text

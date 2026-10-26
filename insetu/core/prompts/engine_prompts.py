@@ -2,10 +2,10 @@ from pathlib import Path
 import os
 import re
 from typing import TypedDict, List
-from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from insetu.core.utils_core import (
     resolve_macro_includes,
+    parse_frontmatter,
     InSetuURI,
     get_workspace_physics,
     get_tenant_control_dir,
@@ -105,14 +105,12 @@ def inject_prompts_config(cfg, workspace_id=None, **kwargs):
                 "exclude_from_diffs": True,
                 "is_system": True
             })
-
-
 @prompts_bp.on('topology_boot_complete')
 def migrate_legacy_prompt_macros_on_boot(workspace_id=None, **kwargs):
     """One-time boot migration upgrading legacy scheme-less {{include_prompt: ...}} tags in prompt files to canonical ctx://prompts/ URIs."""
     try:
         ctx = prompts_bp.get_context(workspace_id)
-        pattern = re.compile(r'(\{\{\s*include_prompt\s*:\s*)([^\s{}]+)(\s*(?:\{[\s\S]*?\})?\s*\}\})')
+        pattern = re.compile(r'(\{\{\s*include_prompt\s*:\s*)([^\s{};,\'"]+)')
         for prompt_uri in ctx.vfs.walk("ctx://prompts", exts=['.md', '.txt']):
             if "/.templates/" in prompt_uri and "/.templates/user/" not in prompt_uri:
                 continue
@@ -122,7 +120,7 @@ def migrate_legacy_prompt_macros_on_boot(workspace_id=None, **kwargs):
             changed = False
             def _upgrade_match(m):
                 nonlocal changed
-                prefix, raw_target, suffix = m.group(1), m.group(2).strip().strip('\'"'), m.group(3)
+                prefix, raw_target = m.group(1), m.group(2).strip().strip('\'"')
                 if "://" in raw_target or raw_target.startswith(('./', '../')):
                     return m.group(0)
                 clean = raw_target
@@ -131,7 +129,7 @@ def migrate_legacy_prompt_macros_on_boot(workspace_id=None, **kwargs):
                         clean = clean[len(p):]
                 clean = clean.lstrip('/')
                 changed = True
-                return f"{prefix}ctx://prompts/{clean}{suffix}"
+                return f"{prefix}ctx://prompts/{clean}"
             new_content = pattern.sub(_upgrade_match, content)
             if changed and new_content != content:
                 ctx.vfs.save(prompt_uri, new_content, data={"ignore_ledger": True})
@@ -183,35 +181,42 @@ def provide_available_prompts(workspace_id=None, **kwargs):
 class PromptsListResponse(TypedDict):
     prompts: List[str]
     profile_dir: str
-
-
-class PromptResolveQuery(TypedDict):
+class PromptResolveQuery(TypedDict, total=False):
     file: str
-
-
+    filepath: str
+    content: str
 @prompts_bp.route('list', methods=['GET'], response_schema=PromptsListResponse, docstring="[sync] Lists all available workspace, repository, virtual module template, and mounted prompts.")
 def api_prompts_list(ctx):
     """Provides a list of available prompts (including virtual .templates) for the UI."""
     prompts = provide_available_prompts(workspace_id=ctx.workspace_id)
-    return jsonify({
+    return {
         "prompts": prompts,
         "profile_dir": Path(ctx.paths["config_path"]).parent.as_posix()
-    })
-@prompts_bp.route('resolve', methods=['GET'], request_schema=PromptResolveQuery, docstring="[sync] Fetches a canonical prompt URI and recursively resolves {{include_prompt: ...}} macros.")
+    }
+@prompts_bp.route('resolve', methods=['GET', 'POST'], request_schema=PromptResolveQuery, docstring="[sync] Fetches a canonical prompt URI (or evaluates an unsaved POST buffer) and recursively resolves {{include_prompt: ...}} macros.")
 def api_prompts_resolve(ctx):
-    """Fetches a canonical prompt URI and recursively resolves {{include_prompt: ...}} macros."""
-    filename = ctx.req.args.get('file', '').strip()
-    if not filename:
-        return jsonify({"error": "File required"}), 400
+    """Fetches a canonical prompt URI or live POST buffer and recursively resolves {{include_prompt: ...}} macros."""
+    data = ctx.payload or {}
+    filename = str(data.get('file') or data.get('filepath') or '').strip()
+    live_content = data.get('content')
 
-    target_uri = str(InSetuURI(filename))
-    content = ctx.vfs.read(target_uri)
+    if not filename and live_content is None:
+        return {"error": "File required"}, 400
+
+    target_uri = str(InSetuURI(filename)) if filename else "ctx://prompts/preview.md"
+    content = live_content if live_content is not None else ctx.vfs.read(target_uri)
     if content is not None:
+        _, main_body, _ = parse_frontmatter(content)
+
         def read_prompt(target_req):
-            return ctx.vfs.read(str(InSetuURI(target_req)))
+            raw_inc = ctx.vfs.read(str(InSetuURI(target_req)))
+            if raw_inc is None:
+                return None
+            _, inc_body, _ = parse_frontmatter(raw_inc)
+            return inc_body
 
         pattern = r'\{\{\s*include_prompt\s*:\s*([^\s{}]+)\s*(?:\{([\s\S]*?)\})?\s*\}\}'
-        resolved_content = resolve_macro_includes(content, target_uri, pattern, read_prompt)
+        resolved_content = resolve_macro_includes(main_body, target_uri, pattern, read_prompt)
         return resolved_content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
     return "Prompt not found.", 404

@@ -8,8 +8,7 @@ import time
 import threading
 import traceback
 import uuid
-from typing import TypedDict, List, Dict, Any, Literal, Optional
-from flask import jsonify
+from typing import TypedDict, List, Dict, Any, Literal, Optional, Union
 from insetu.core.sdk import (
     InSetuExtension,
     ExtensionContext,
@@ -55,7 +54,7 @@ GATHER_SETTINGS_SCHEMA = [
         "type": "number",
         "scope": "workspace",
         "default": 0,
-        "description": "Set to 0 to disable chunking. Context files exceeding this limit will be cleanly split into numbered parts."
+        "description": "Set to 0 to use the default 400 KB chunk limit. Context files exceeding this limit will be cleanly split into numbered parts."
     },
     {
         "id": "domain_colors",
@@ -115,12 +114,15 @@ def compile_context_payload(workspace_id, output_dir, base_uri, header_block, te
                         existing_meta[k] = v
                 return existing_entry  # Skip chunk disk I/O while keeping metadata (domain, title, desc) fresh.
     vfs = ctx.vfs
-    max_bytes = (max_kb * 1024) if max_kb and max_kb > 0 else float('inf')
+    effective_max_kb = max_kb if (max_kb and max_kb > 0) else 400
+    max_bytes = effective_max_kb * 1024
     chunks = []
 
-    def get_chunk_name(chunk_num):
-        if chunk_num == 1: return base_uri
-        base, ext = os.path.splitext(base_uri)
+    def get_chunk_name(chunk_num, total_chunks):
+        if total_chunks == 1 and chunk_num == 1:
+            return base_uri
+        ext = Path(base_uri).suffix
+        base = base_uri[:-len(ext)] if ext else base_uri
         return f"{base}_part{chunk_num}{ext}"
     timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     stamp = f"Generated: {timestamp_str}\n\n"
@@ -174,8 +176,11 @@ def compile_context_payload(workspace_id, output_dir, base_uri, header_block, te
                     "parts": [new_header, s_block]
                 })
     chunk_sizes = []
+    total_bins = len(bins)
+    if total_bins > 1 and ctx.resolve_path(base_uri, must_exist=True, allow_heal=False):
+        vfs.delete(base_uri, data={"ignore_ledger": True})
     for i, b in enumerate(bins):
-        chunk_name = get_chunk_name(i + 1)
+        chunk_name = get_chunk_name(i + 1, total_bins)
         # Join parts once in O(N) time and queue via VFS
         vfs.save(chunk_name, "".join(b["parts"]), data={"ignore_ledger": True})
         chunks.append(chunk_name)
@@ -241,9 +246,13 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
 def get_ordered_compilation_steps(ctx):
     """Delegates compilation sequence resolution to Akasa's generic DAG orchestrator."""
     return ctx.resolve_dag_chain('register_compilation_steps')
-
 @gather_bp.worker("execute_delayed_compile")
-def _execute_delayed_compile(ctx, job_id=None, force_full=False, ledger_events=None, **kwargs):
+def _execute_delayed_compile(
+    ctx,
+    job_id: Optional[str] = None,
+    force_full: bool = False,
+    ledger_events: Optional[List[Dict[str, Any]]] = None,
+):
     ordered_steps = get_ordered_compilation_steps(ctx)
     if ordered_steps:
         ctx.jobs.submit_chain(
@@ -253,6 +262,8 @@ def _execute_delayed_compile(ctx, job_id=None, force_full=False, ledger_events=N
             force_full=force_full, 
             ledger_events=ledger_events
         )
+
+
 @gather_bp.on('topology_boot_complete', priority=90)
 def init_gather_workers(workspace_id=None, **kwargs):
     ws_id = workspace_id
@@ -265,7 +276,8 @@ def init_gather_workers(workspace_id=None, **kwargs):
                 ordered_steps, 
                 on_complete_hook="compilation_sequence_complete", 
                 job_category="system_background", 
-                force_full="compile_only"
+                force_full=True,
+                compile_only=True,
             )
     except Exception as e:
         print(f"Warning: Boot scan failed: {e}")
@@ -693,7 +705,7 @@ def generate_context_file(workspace_id=None, target_repos=None):
             if uri_key in old_manifest:
                 manifest[uri_key] = old_manifest[uri_key]
             else:
-                size_bytes = os.path.getsize(f_path)
+                size_bytes = Path(f_path).stat().st_size
                 is_quickpack = f_name.startswith(('quickpack_', 'selection_'))
                 domain_name = "Quickpacks" if is_quickpack else "Exported Contexts"
                 title_name = "Quickpack" if is_quickpack else f"{f_name.replace('.txt','')}"
@@ -761,12 +773,12 @@ def vacuum_unaccounted_cache_on_complete(workspace_id=None, **kwargs):
     except Exception as e:
         print(f"⚠️ [Gather Vacuum] Post-compilation cache sweep warning: {e}")
 @gather_bp.worker("pack_selection_task")
-def _pack_selection_worker(ctx, items=None, gather_only=True, job_id=None, **kwargs):
-    if items is None:
-        items = kwargs.get('items', [])
-    if 'gather_only' in kwargs:
-        gather_only = kwargs['gather_only']
-
+def _pack_selection_worker(
+    ctx,
+    items: Optional[List[Union[str, Dict[str, Any]]]] = None,
+    gather_only: bool = True,
+    job_id: Optional[str] = None,
+):
     if not items:
         return {"message": "No valid files selected for compilation."}
     ctx.jobs.update_progress("Compiling selected files into context payload...")
@@ -853,13 +865,12 @@ def api_clear_quickpacks(ctx):
             ctx.vfs.delete(f_uri, data={"ignore_ledger": True})
             if f_uri in manifest_data:
                 tombstones[f_uri] = None
-
     if not tombstones:
-        return jsonify({"status": "success", "message": "No quickpacks to clear."})
+        return {"status": "success", "message": "No quickpacks to clear."}
 
     ctx.sync_vfs_barrier()
     ctx.save_manifest(tombstones, is_full_compile=False)
-    return jsonify({"status": "success", "message": f"Cleared {len(tombstones)} quickpack(s)."})
+    return {"status": "success", "message": f"Cleared {len(tombstones)} quickpack(s)."}
 
 class PackSelectionPayload(TypedDict, total=False):
     items: List[Dict[str, str]]
@@ -867,15 +878,23 @@ class PackSelectionPayload(TypedDict, total=False):
 
 @gather_bp.route('pack_selection', methods=['POST'], request_schema=PackSelectionPayload, docstring="Compiles a specific list of files into a downloadable Quickpack context. 'items' should be a list of dicts with a 'filepath' key.")
 def api_gather_pack_selection(ctx):
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     items = data.get('items', [])
-    gather_only = data.get('gather_only', True)
+    gather_only = bool(data.get('gather_only', True))
     if not items:
-        return jsonify({"error": "Items list required."}), 400
+        return {"error": "Items list required."}, 400
     job_id = ctx.jobs.submit("pack_selection_task", job_category="ui_blocking", items=items, gather_only=gather_only)
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202
 @gather_bp.worker("compile_contexts")
-def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=None, job_id=None, **kwargs):
+def _background_compile(
+    ctx,
+    force_full: Union[bool, Literal["compile_only"]] = False,
+    compile_only: bool = False,
+    ledger_events: Optional[List[Dict[str, Any]]] = None,
+    target_repos: Optional[List[str]] = None,
+    is_pipeline: bool = False,
+    job_id: Optional[str] = None,
+):
     ws_lock = get_compiler_lock(ctx.workspace_id)
     # Increased to 15s to survive heavy Boot-Time Heuristic Git sweeps
     acquired = ws_lock.acquire(timeout=15.0)
@@ -931,7 +950,7 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
         # Pure Granular Routing: Extensions must inject updates into a clean delta payload.
         # This eliminates the need to load, diff, or overwrite the global manifest.
         delta_manifest = {}
-        ctx.emit('compile_contexts', manifest=delta_manifest, is_full_sweep=needs_full_compile if not forced_repos else forced_repos, ledger_events=ledger_events)
+        ctx.emit('compile_contexts', manifest=delta_manifest, is_full_sweep=bool(needs_full_compile), forced_repos=forced_repos, ledger_events=ledger_events)
         if delta_manifest:
             ctx.sync_vfs_barrier()
             ctx.save_manifest(delta_manifest, is_full_compile=False)
@@ -967,7 +986,8 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
         err_trace = traceback.format_exc()
         print(f"CRITICAL COMPILER ERROR:\n{err_trace}")
         try:
-            hooks.emit_background('system_error', source="Gather:Compile", error_type=type(e).__name__, message=str(e), traceback=err_trace, payload=str(kwargs), workspace_id=ctx.workspace_id)
+            err_payload = json.dumps({"force_full": bool(force_full), "target_repos": target_repos})
+            hooks.emit_background('system_error', source="Gather:Compile", error_type=type(e).__name__, message=str(e), traceback=err_trace, payload=err_payload, workspace_id=ctx.workspace_id)
         except Exception: pass
         raise e
     finally:
@@ -981,10 +1001,9 @@ class RepoTemplateResponse(TypedDict, total=False):
     exts: Optional[List[str]]
     apply_ignore: bool
     sub_buckets: List[Any]
-
 @gather_bp.route('repos/template', methods=['GET'], response_schema=RepoTemplateResponse, docstring="Returns the default configuration dictionary template required when appending a new target repository.")
 def api_repo_template(ctx):
-    return jsonify(get_default_repo_template(""))
+    return get_default_repo_template("")
 @gather_bp.on('register_compilation_steps')
 def _register_gather_step(workspace_id=None, **kwargs):
     return [{
@@ -1113,21 +1132,31 @@ def hook_resolve_payload_chunks(uri=None, workspace_id=None, manifest=None, **kw
     if not uri:
         return []
     try:
+        uri_str = str(uri)
+        parsed = InSetuURI(uri_str)
+        if parsed.scheme != 'ctx' or not uri_str.endswith('.txt'):
+            return [uri_str]
+
         ctx = gather_bp.get_context(workspace_id)
         if manifest:
-            chunks = extract_manifest_files(manifest, target_key=uri, domain='ctx')
+            chunks = extract_manifest_files(manifest, target_key=uri_str, domain='ctx')
         else:
-            chunks = ctx.get_manifest_files(target_key=uri)
+            chunks = ctx.get_manifest_files(target_key=uri_str)
 
         if chunks:
             return chunks
-        base_uri = re.sub(r'_part\d+\.txt$', '.txt', str(uri))
+        base_uri = re.sub(r'_part\d+\.txt$', '.txt', uri_str)
         part1_uri = re.sub(r'\.txt$', '_part1.txt', base_uri)
-        if ctx.resolve_path(part1_uri, must_exist=True, allow_heal=False):
+        if part1_uri != base_uri and ctx.resolve_path(part1_uri, must_exist=True, allow_heal=False):
             parts = []
             idx = 1
             while True:
-                cand = base_uri if idx == 1 and ctx.resolve_path(base_uri, must_exist=True, allow_heal=False) else re.sub(r'\.txt$', f'_part{idx}.txt', base_uri)
+                if idx == 1 and ctx.resolve_path(base_uri, must_exist=True, allow_heal=False):
+                    cand = base_uri
+                else:
+                    cand = re.sub(r'\.txt$', f'_part{idx}.txt', base_uri)
+                    if cand == base_uri:
+                        break
                 if ctx.resolve_path(cand, must_exist=True, allow_heal=False):
                     parts.append(cand)
                     idx += 1
@@ -1135,9 +1164,9 @@ def hook_resolve_payload_chunks(uri=None, workspace_id=None, manifest=None, **kw
                     break
             if parts:
                 return parts
-        return [uri]
+        return [uri_str]
     except Exception:
-        return [uri]
+        return [str(uri)]
 _LOCAL_HEAL_GUARD = threading.local()
 
 
@@ -1188,11 +1217,10 @@ def _resolve_or_heal_compiled_ctx_artifact(filename=None, workspace_id=None, **k
     # Self-heal cold/wiped cache on demand for the requested domain
     try:
         _LOCAL_HEAL_GUARD.active = True
-        if parsed.volume == "workflows":
+        if parsed.volume != "contexts":
             if ctx.has_missing_domain_artifacts("gather"):
                 generate_context_file(wid)
-            from insetu.extensions.flow.engine_flow import _background_compile_workflows as _compile_wf
-            _compile_wf(workspace_id=wid, force_full=True)
+            hooks.emit('heal_missing_domain_volume', volume=parsed.volume, workspace_id=wid)
         else:
             generate_context_file(wid)
         ctx.sync_vfs_barrier()
@@ -1283,9 +1311,9 @@ def api_manifest_version(ctx):
         conn = ctx.get_db("vfs_index")
         row = conn.execute("SELECT MAX(timestamp) as max_ts FROM manifest_ledger").fetchone()
         max_ts = row['max_ts'] if row and row['max_ts'] else 0.0
-        return jsonify({"version": max_ts})
+        return {"version": max_ts}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 @gather_bp.on('register_manifest_signatures')
 def hook_gather_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs):
     """Yields lightweight context artifact signatures for the ctx domain."""
@@ -1306,14 +1334,14 @@ class ManifestEntryResponse(TypedDict, total=False):
 @gather_bp.route('manifest/entry', methods=['GET'], request_schema=ManifestEntryQuery, response_schema=ManifestEntryResponse, docstring="Fetches a single context manifest entry by context URI.")
 def api_gather_manifest_entry(ctx):
     """Surgically fetches a single manifest entry by context path."""
-    path = ctx.req.args.get('path', '').strip()
+    path = str(ctx.payload.get('path') or '').strip()
     if not path:
-        return jsonify({"error": "Path parameter required"}), 400
+        return {"error": "Path parameter required"}, 400
     target_uri = str(InSetuURI(path))
     conn = ctx.get_db("vfs_index")
     row = conn.execute("SELECT filepath, entry_json FROM manifest_ledger WHERE filepath=?", (target_uri,)).fetchone()
     if not row or not row['entry_json']:
-        return jsonify({"path": target_uri, "entry": None, "status": "deleted"}), 200
+        return {"path": target_uri, "entry": None, "status": "deleted"}, 200
     entry = json.loads(row['entry_json'])
     if _heal_entry_domain(ctx, entry):
         conn.execute(
@@ -1321,4 +1349,4 @@ def api_gather_manifest_entry(ctx):
             (json.dumps(entry, sort_keys=True, separators=(',', ':')), target_uri)
         )
         conn.commit()
-    return jsonify({"path": target_uri, "entry": entry})
+    return {"path": target_uri, "entry": entry}

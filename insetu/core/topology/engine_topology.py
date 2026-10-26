@@ -7,10 +7,11 @@ import threading
 import traceback
 import queue
 from pathlib import Path
-from flask import jsonify
+from typing import Optional, List, Dict, Any, Union, Literal
 from insetu.core.sdk import (
     InSetuExtension,
     ExtensionContext,
+    SettingsManager,
     get_connection,
     sse_bus,
     hooks,
@@ -65,8 +66,14 @@ def _register_topology_compilation_step(workspace_id=None, **kwargs):
         "worker_name": "scan_topology_task"
     }]
 @topology_bp.worker("scan_topology_task")
-def _background_scan_topology(ctx, ledger_events=None, force_full=False, target_repos=None, **kwargs):
-    if force_full and force_full != "compile_only":
+def _background_scan_topology(
+    ctx,
+    ledger_events: Optional[List[Dict[str, Any]]] = None,
+    force_full: Union[bool, Literal["compile_only"]] = False,
+    compile_only: bool = False,
+    target_repos: Optional[List[str]] = None,
+):
+    if force_full and force_full != "compile_only" and not compile_only:
         sweep_label = "Full Sweep" if not target_repos else f"Targeted Sweep: {target_repos}"
         ctx.jobs.update_progress(f"Scanning physical disk ({sweep_label})...")
         ctx.emit('force_topology_scan', target_repos=target_repos)
@@ -139,11 +146,10 @@ def hook_topology_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs)
         repo = r['repo']
         vfs_sigs[repo] = f"{r['cnt']}-{r['max_ts']}-{r['mod_cnt'] or 0}"
     return {"vfs": vfs_sigs}
-
 @topology_bp.route('vfs', methods=['GET'])
 def api_topology_vfs_repo(ctx):
     """Surgically fetches the VFS bucket structure and git modification state for a specific repository."""
-    repo = ctx.req.args.get('repo', '').strip()
+    repo = str(ctx.payload.get('repo') or '').strip()
     conn = ctx.db
     if repo:
         rows = conn.execute("SELECT filepath, bucket_id, git_status FROM topology_ledger WHERE repo=?", (repo,)).fetchall()
@@ -160,7 +166,7 @@ def api_topology_vfs_repo(ctx):
         files_by_bucket[key]["files"].append(r['filepath'])
         if r['git_status']:
             files_by_bucket[key]["git_modified"].append(r['filepath'])
-    return jsonify({"repo": repo, "buckets": files_by_bucket})
+    return {"repo": repo, "buckets": files_by_bucket}
 @topology_bp.on('force_topology_scan', priority=10)
 def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
     """Synchronously forces a full physical disk walk to rebuild the Topology Ledger."""
@@ -304,9 +310,8 @@ def broadcast_cross_workspace_mutations(mutations=None, workspace_id=None, **kwa
     # Guardrail: Never re-broadcast synthetic ws:// mutations to prevent infinite loops
     if any(m.get("filepath", "").startswith("ws://") for m in mutations):
         return
-    from insetu.core.sdk import SettingsManager as _SettingsManager
 
-    pub_settings = _SettingsManager('system', workspace_id)
+    pub_settings = SettingsManager('system', workspace_id)
     exports = pub_settings.get("export_shared_domains", {})
     if not exports:
         return
@@ -316,7 +321,7 @@ def broadcast_cross_workspace_mutations(mutations=None, workspace_id=None, **kwa
         if target_ws == workspace_id:
             continue
 
-        target_settings = _SettingsManager('system', target_ws)
+        target_settings = SettingsManager('system', target_ws)
         mounts = target_settings.get("shared_mounts", [])
         if not mounts:
             continue
@@ -577,14 +582,16 @@ def init_topology_on_boot(workspace_id=None, **kwargs):
     job_id = f"tpl_boot_{uuid.uuid4().hex[:8]}"
     ctx.jobs.submit("boot_scan_task", job_category="ui_blocking", job_id=job_id, is_pipeline=True)
 @topology_bp.worker("boot_scan_task")
-def _background_boot_scan(ctx, job_id=None, **kwargs):
+def _background_boot_scan(ctx, is_pipeline: bool = False, job_id: Optional[str] = None):
     ctx.jobs.update_progress("Initializing workspace topology...")
     force_topology_scan(workspace_id=ctx.workspace_id)
     # Flush dirty tracking to ensure clean boot UI state
     hooks.emit('topology_resolved', workspace_id=ctx.workspace_id, dirty_repos=[], dirty_buckets=[], events=[], clear_all=True)
     hooks.emit('topology_boot_complete', workspace_id=ctx.workspace_id)
+
+
 @topology_bp.worker("resolve_topology_task")
-def _background_resolve_topology(ctx, job_id=None, **kwargs):
+def _background_resolve_topology(ctx, job_id: Optional[str] = None):
     """
     Processes the event buffer after physical disk I/O settles, updates the tracking 
     ledger, and emits `topology_resolved` to awaken downstream compilers.
