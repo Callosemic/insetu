@@ -9,7 +9,6 @@ import subprocess
 import threading
 from collections import deque
 from typing import TypedDict, Optional, List, Dict, Any
-from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import (
     is_subpath,
@@ -98,13 +97,13 @@ PREVIEW_SETTINGS_SCHEMA = [
         "description": "Automatically bind 'tailscale serve --bg --https=<port>' when the server starts."
     }
 ]
-
 preview_bp = InSetuExtension(
     'preview',
     __name__,
     title="App Server & Preview",
     description="Managed per-repository development server supervisor and live web previewer.",
-    settings_schema=PREVIEW_SETTINGS_SCHEMA
+    settings_schema=PREVIEW_SETTINGS_SCHEMA,
+    external_dependencies=["uvicorn"],
 )
 __depends__ = []
 
@@ -395,7 +394,7 @@ def _get_repo_status_snapshot(ctx, repo_dir: str) -> Dict[str, Any]:
     entry_target = cfg_all.get("entry_target") or ""
     auto_start = bool(cfg_all.get("auto_start", False))
     tailscale_https = bool(cfg_all.get("tailscale_https", False))
-    detected_mode, inferred_target = _detect_repo_mode(ctx, repo_dir, repo_path, serve_dir=serve_dir) if os.path.exists(repo_path) else ("static", "")
+    detected_mode, inferred_target = _detect_repo_mode(ctx, repo_dir, repo_path, serve_dir=serve_dir) if Path(repo_path).exists() else ("static", "")
     effective_mode = detected_mode if configured_mode == "auto" else configured_mode
 
     key = (ctx.workspace_id, repo_dir)
@@ -436,12 +435,10 @@ def _get_repo_status_snapshot(ctx, repo_dir: str) -> Dict[str, Any]:
         "tailscale_https": tailscale_https,
         "logs": recent_logs[-50:]
     }
-
-
 def start_repo_server(ctx, repo_dir: str, overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     overrides = overrides or {}
     repo_path = get_repo_path(repo_dir, ctx.workspace_id)
-    if not repo_path or not os.path.exists(repo_path):
+    if not repo_path or not Path(repo_path).exists():
         raise ValueError(f"Repository path not found for '{repo_dir}'.")
 
     # Persist any explicit configuration overrides (except auto_start unless explicitly passed)
@@ -600,54 +597,54 @@ class PreviewRepoTargetPayload(TypedDict):
 @preview_bp.route('status', methods=['GET'], docstring="[sync] Passively inspects server status, sticky ports, and detected modes across all workspace repositories without spawning processes.")
 def api_preview_status(ctx):
     """Passively inspects server status, sticky ports, and detected modes across all workspace repositories."""
-    req_repo = (ctx.req.args.get('repo') or '').strip()
+    req_repo = str(ctx.payload.get('repo') or '').strip()
     repos = [req_repo] if req_repo else get_sister_repos(ctx.workspace_id)
     servers = {}
     for r_dir in repos:
         if r_dir:
             servers[r_dir] = _get_repo_status_snapshot(ctx, r_dir)
-    return jsonify({"servers": servers})
+    return {"servers": servers}
 
 
 @preview_bp.route('start', methods=['POST'], request_schema=PreviewStartPayload, docstring="[sync] Starts or restarts a managed development server for a target repository and returns its status and sticky port.")
 def api_preview_start(ctx):
     """Starts or restarts a managed development server for a target repository."""
-    data = ctx.req.json or {}
-    repo_dir = (data.get("repo") or "").strip()
+    data = ctx.payload or {}
+    repo_dir = str(data.get("repo") or "").strip()
     if not repo_dir:
-        return jsonify({"error": "Repository name ('repo') is required."}), 400
+        return {"error": "Repository name ('repo') is required."}, 400
     try:
         snapshot = start_repo_server(ctx, repo_dir, overrides=data)
-        return jsonify({"status": "success", "server": snapshot})
+        return {"status": "success", "server": snapshot}
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        return {"error": str(e)}, 400
 
 
 @preview_bp.route('stop', methods=['POST'], request_schema=PreviewRepoTargetPayload, docstring="[sync] Terminates a running development server process group for a target repository.")
 def api_preview_stop(ctx):
     """Terminates a running development server process group for a target repository."""
-    data = ctx.req.json or {}
-    repo_dir = (data.get("repo") or "").strip()
+    data = ctx.payload or {}
+    repo_dir = str(data.get("repo") or "").strip()
     if not repo_dir:
-        return jsonify({"error": "Repository name ('repo') is required."}), 400
+        return {"error": "Repository name ('repo') is required."}, 400
     snapshot = stop_repo_server(ctx, repo_dir)
-    return jsonify({"status": "success", "server": snapshot})
+    return {"status": "success", "server": snapshot}
 
 
 @preview_bp.route('logs', methods=['GET'], request_schema=PreviewRepoTargetPayload, docstring="[sync] Returns buffered stdout/stderr lines for a repository's managed preview server.")
 def api_preview_logs(ctx):
     """Returns buffered stdout/stderr lines for a repository's managed preview server."""
-    repo_dir = (ctx.req.args.get("repo") or "").strip()
+    repo_dir = str(ctx.payload.get("repo") or "").strip()
     if not repo_dir:
-        return jsonify({"error": "Repository parameter ('repo') is required."}), 400
+        return {"error": "Repository parameter ('repo') is required."}, 400
     snapshot = _get_repo_status_snapshot(ctx, repo_dir)
     key = (ctx.workspace_id, repo_dir)
     with _REGISTRY_LOCK:
         entry = _PROCESS_REGISTRY.get(key)
         full_logs = list(entry.get("logs", [])) if entry else []
-    return jsonify({
+    return {
         "repo": repo_dir,
         "status": snapshot["status"],
         "port": snapshot["port"],
         "logs": full_logs
-    })
+    }

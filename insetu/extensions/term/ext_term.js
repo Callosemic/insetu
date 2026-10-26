@@ -219,7 +219,7 @@ export class InSetuExtTerm extends InSetuElement {
     }
     async _checkStatus() {
         try {
-            const res = await this.api.get('status');
+            const res = await this.api.get('term/status');
             if (res.ok) {
                 const data = await res.json();
                 this._hasSock = data.has_sock;
@@ -448,10 +448,19 @@ export class InSetuExtTerm extends InSetuElement {
     render() {
         if (!this._hasSock) {
             return html`
-                <div style="padding: 20px; background: var(--input-bg); border: 1px solid var(--intent-warning); border-radius: 6px; color: var(--text); margin: 20px;">
-                    <h3 style="margin-top: 0; color: var(--intent-warning);">⚠️ Missing Backend Dependency</h3>
-                    <p>The Terminal extension requires <code>flask-sock</code> for WebSocket PTY streaming.</p>
-                    <p style="font-family: var(--font-mono); background: var(--bg); padding: 10px; border-radius: 4px;">pip install insetu[term]</p>
+                <div style="padding: 20px; background: var(--input-bg); border: 1px solid var(--intent-warning); border-radius: 6px; color: var(--text); margin: 20px; display: flex; flex-direction: column; gap: 12px;">
+                    <h3 style="margin: 0; color: var(--intent-warning);">⚠️ Missing Backend Dependency</h3>
+                    <p style="margin: 0;">The Terminal extension requires <code>flask-sock</code> for WebSocket PTY streaming.</p>
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                        <code style="font-family: var(--font-mono); background: var(--bg); padding: 8px 12px; border-radius: 4px; border: 1px solid var(--border);">pip install flask-sock</code>
+                        <sutram-async-btn
+                            intent="primary"
+                            icon="download"
+                            label="Install flask-sock & Reboot"
+                            style="margin: 0;"
+                            .onClick=${this.installExtensionDependencies('term')}>
+                        </sutram-async-btn>
+                    </div>
                 </div>
             `;
         }
@@ -495,26 +504,6 @@ export class InSetuExtTerm extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-term', InSetuExtTerm);
-export class InSetuExtTermActions extends InSetuElement {
-    static get extensionName() { return 'term'; }
-    static styles = [sharedStyles, css`
-        button {
-            background: transparent; color: var(--text); border: 1px solid var(--border);
-            border-radius: 4px; cursor: pointer; font-weight: bold; width: 34px; height: 34px;
-            display: flex; align-items: center; justify-content: center; padding: 0;
-            font-size: 1.1rem; transition: background 0.2s; margin: 0;
-        }
-        button:hover { background: var(--input-bg); }
-    `];
-    render() {
-        return html`
-            <button title="Toggle Keyboard Bar" @click=${() => {
-                window.inSetu.events.emit('insetu:term:toggle-keyboard');
-            }}><yv-icon name="keyboard" style="width: 14px; height: 14px;"></yv-icon></button>
-        `;
-    }
-}
-customElements.define('insetu-ext-term-actions', InSetuExtTermActions);
 window.ExtensionRegistry.registerExtension('term', {
         name: "Terminal Interface",
         version: "2.0.0",
@@ -584,14 +573,14 @@ window.ExtensionRegistry.registerExtension('term', {
             intent: "danger",
             order: 1,
             allow_popout: true,
+            menuActions: [
+                {
+                    label: "Toggle Keyboard Bar",
+                    icon: "keyboard",
+                    emitEvent: "insetu:term:toggle-keyboard"
+                }
+            ],
             component: "insetu-ext-term"
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "ctrl",
-            targetSub: "term",
-            component: "insetu-ext-term-actions",
-            order: 1
         }
     ]
 });

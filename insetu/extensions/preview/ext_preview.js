@@ -31,7 +31,7 @@ export const PreviewStore = createExtensionStore('Preview', {
     fetchStatus: async () => {
         PreviewStore.setState({ loading: true });
         try {
-            const res = await window.inSetu.api.workspace.get('preview/status?t=' + Date.now());
+            const res = await window.inSetu.api.get('preview/status?t=' + Date.now());
             if (res.ok) {
                 const data = await res.json();
                 const servers = data.servers || {};
@@ -55,7 +55,7 @@ export const PreviewStore = createExtensionStore('Preview', {
         const repo = repoOverride || PreviewStore.getState().selectedRepo;
         if (!repo) return;
         try {
-            const res = await window.inSetu.api.workspace.get(`preview/logs?repo=${encodeURIComponent(repo)}&t=${Date.now()}`);
+            const res = await window.inSetu.api.get(`preview/logs?repo=${encodeURIComponent(repo)}&t=${Date.now()}`);
             if (res.ok) {
                 const data = await res.json();
                 PreviewStore.setState(state => ({
@@ -272,8 +272,7 @@ export class InSetuExtPreview extends InSetuElement {
             const rawFp = e.detail?.filepath || '';
             const isDir = !!e.detail?.isDir;
             if (!rawFp) return;
-
-            const parsed = this.utils.parseURI(rawFp);
+            const parsed = new this.utils.InSetuURI(rawFp);
             const repo = parsed.repo;
             if (!repo) return;
 
@@ -349,7 +348,6 @@ export class InSetuExtPreview extends InSetuElement {
         const sep = cleanSub.includes('?') ? '&' : '?';
         return `${baseOrigin}/${cleanSub}${sep}_t=${this.reloadTick || 1}`;
     }
-
     async _startServer(repoOverride = null) {
         const repo = repoOverride || this.selectedRepo;
         if (!repo) return;
@@ -357,7 +355,7 @@ export class InSetuExtPreview extends InSetuElement {
             repo,
             ...(this._draftConfig || {})
         };
-        const res = await this.api.post('start', payload);
+        const res = await this.api.post('preview/start', payload);
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             throw new Error(err.error || 'Failed to start server.');
@@ -378,10 +376,9 @@ export class InSetuExtPreview extends InSetuElement {
             this.setStatus(`Server running on port :${srv.port}`, 2500);
         }
     }
-
     async _stopServer() {
         if (!this.selectedRepo) return;
-        const res = await this.api.post('stop', { repo: this.selectedRepo });
+        const res = await this.api.post('preview/stop', { repo: this.selectedRepo });
         if (res.ok) {
             const data = await res.json();
             PreviewStore.setState(state => ({
@@ -391,10 +388,9 @@ export class InSetuExtPreview extends InSetuElement {
             this.setStatus(`Stopped server for '${this.selectedRepo}'.`, 2000);
         }
     }
-
     async _saveRepoConfig() {
         if (!this.selectedRepo) return;
-        const res = await this.api.post(`settings?repo=${encodeURIComponent(this.selectedRepo)}`, this._draftConfig);
+        const res = await this.api.post(`preview/settings?repo=${encodeURIComponent(this.selectedRepo)}`, this._draftConfig);
         if (res.ok) {
             await PreviewStore.getState().fetchStatus();
             this._syncDraftFromServer(this.selectedRepo);
@@ -405,7 +401,7 @@ export class InSetuExtPreview extends InSetuElement {
     async _toggleAutoBoot(checked) {
         if (!this.selectedRepo) return;
         this._draftConfig = { ...this._draftConfig, auto_start: checked };
-        await this.api.post(`settings?repo=${encodeURIComponent(this.selectedRepo)}`, { auto_start: checked });
+        await this.api.post(`preview/settings?repo=${encodeURIComponent(this.selectedRepo)}`, { auto_start: checked });
         await PreviewStore.getState().fetchStatus();
     }
 

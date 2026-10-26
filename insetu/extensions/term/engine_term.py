@@ -4,7 +4,6 @@ import threading
 import traceback
 import json
 from typing import TypedDict
-from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from insetu.core.utils_core import is_extension_enabled
 try:
@@ -24,11 +23,18 @@ try:
     SUPPORT_PTY = True
 except ImportError:
     SUPPORT_PTY = False
-
 TERM_SETTINGS_SCHEMA = []
-term_bp = InSetuExtension('term', __name__, title="Terminal Interface", description="Native terminal emulator.", settings_schema=TERM_SETTINGS_SCHEMA)
+term_bp = InSetuExtension(
+    'term',
+    __name__,
+    title="Terminal Interface",
+    description="Native terminal emulator.",
+    settings_schema=TERM_SETTINGS_SCHEMA,
+    external_dependencies=["flask-sock"],
+    requires_reboot_on_install=True,
+)
 __depends__ = []
-__external_depends__ = ["flask-sock"]
+
 if HAS_SOCK:
     sock = Sock()
     term_bp.sock = sock
@@ -46,10 +52,10 @@ def set_winsize(fd, row, col, xpix=0, ypix=0):
 @term_bp.route('status', methods=['GET'], docstring="Checks if the underlying system supports PTY streams and Websocket connections.")
 def term_status(ctx):
     """Checks if the underlying system supports PTY streams and Websocket connections."""
-    return jsonify({
+    return {
         "has_sock": HAS_SOCK,
         "support_pty": SUPPORT_PTY
-    })
+    }
 if HAS_SOCK:
     @sock.route('/api/<workspace_id>/term/stream')
     def term_stream(ws, workspace_id):

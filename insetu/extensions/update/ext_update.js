@@ -34,11 +34,10 @@ export const UpdateStore = createExtensionStore('Update', {
     lastPublishTime: 0,
     latestBuildArtifact: null,
     isPrerelease: false,
-
     _runPreviewJob: async (repo, endpoint, actionType, defaultOutput, defaultChangelog, tab, defaultCaption, extraPayload = {}) => {
         if (!repo) return;
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('update')) return;
-        const res = await window.inSetu.api.workspace.post(endpoint, { repo, ...extraPayload });
+        const res = await window.inSetu.api.post(endpoint, { repo, ...extraPayload });
         if (res.status === 202) {
             const data = await res.json();
             return new Promise((resolve, reject) => {
@@ -62,7 +61,7 @@ export const UpdateStore = createExtensionStore('Update', {
                                 const ep = actionType === 'publish' ? 'publish' : (actionType === 'first_release' ? 'first_release' : 'bump');
                                 const msg = actionType === 'publish' ? 'Publish' : (actionType === 'first_release' ? 'First Release' : 'Bump');
                                 const extra = actionType === 'bump' ? { prerelease: UpdateStore.getState().isPrerelease } : {};
-                                const postRes = await window.inSetu.api.workspace.post(`update/${ep}`, { repo, ...extra });
+                                const postRes = await window.inSetu.api.post(`update/${ep}`, { repo, ...extra });
                                 if (postRes.status === 202) {
                                     const pData = await postRes.json();
                                     window.inSetu.utils.pollJob(pData.job_id, {
@@ -148,7 +147,7 @@ export const UpdateStore = createExtensionStore('Update', {
         if (state.isBackendMissing) return;
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('update')) return;
         try {
-            const res = await window.inSetu.api.workspace.get('update/eligible_repos');
+            const res = await window.inSetu.api.get('update/eligible_repos');
             if (res.status === 404) {
                 UpdateStore.setState({ isBackendMissing: true });
                 return;
@@ -179,7 +178,7 @@ export const UpdateStore = createExtensionStore('Update', {
     checkDependencies: async () => {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('update')) return;
         try {
-            const res = await window.inSetu.api.workspace.get('system/config');
+            const res = await window.inSetu.api.get('system/config');
             if (res.ok) {
                 const data = await res.json();
                 const extMeta = (data.meta?.available_extensions || []).find(e => e.id === 'update');
@@ -221,7 +220,7 @@ export const UpdateStore = createExtensionStore('Update', {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('update')) return;
         if (!silent) UpdateStore.setState({ repoLoading: true });
         try {
-            const res = await window.inSetu.api.workspace.post('update/status', { repo });
+            const res = await window.inSetu.api.post('update/status', { repo });
             if (res.status === 404) {
                 UpdateStore.setState({ isBackendMissing: true, repoLoading: false });
                 return;
@@ -669,13 +668,26 @@ this.subscribe(
         return html`
             <div style="display: flex; flex-direction: column; height: 100%;">
                 ${this.missingDependencies.length > 0 ? html`
-                    <div style="background: var(--input-bg); border: 1px solid var(--intent-warning); border-radius: 4px; padding: 12px 15px; margin-bottom: 15px; display: flex; align-items: flex-start; gap: 10px;">
-                        <yv-icon name="alert-triangle" style="width: 18px; height: 18px; color: var(--intent-warning); flex-shrink: 0; margin-top: 2px;"></yv-icon>
-                        <div style="display: flex; flex-direction: column; gap: 4px;">
-                            <span style="font-weight: bold; color: var(--intent-warning); font-size: 0.95rem;">Missing Dependencies</span>
-                            <span style="font-size: 0.85rem; color: var(--text);">Run the following command to install required Python packages:</span>
-                            <code style="background: var(--bg); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); user-select: all; margin-top: 4px;">pip install ${this.missingDependencies.join(' ')}</code>
+                    <div style="background: var(--input-bg); border: 1px solid var(--intent-warning); border-radius: 4px; padding: 12px 15px; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: flex-start; gap: 10px;">
+                            <yv-icon name="alert-triangle" style="width: 18px; height: 18px; color: var(--intent-warning); flex-shrink: 0; margin-top: 2px;"></yv-icon>
+                            <div style="display: flex; flex-direction: column; gap: 4px;">
+                                <span style="font-weight: bold; color: var(--intent-warning); font-size: 0.95rem;">Missing Dependencies</span>
+                                <span style="font-size: 0.85rem; color: var(--text);">Install required Python packages into the active daemon environment:</span>
+                                <code style="background: var(--bg); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); user-select: all; margin-top: 4px;">pip install ${this.missingDependencies.join(' ')}</code>
+                            </div>
                         </div>
+                        <sutram-async-btn
+                            size="sm"
+                            intent="primary"
+                            icon="download"
+                            label="Install Missing Packages"
+                            style="margin: 0;"
+                            .onClick=${this.installExtensionDependencies('update', async () => {
+                                await UpdateStore.getState().checkDependencies();
+                                if (this.targetRepo) UpdateStore.getState().fetchRepoStatus(this.targetRepo);
+                            })}>
+                        </sutram-async-btn>
                     </div>
                 ` : ''}
                 ${this.missingBinaries.length > 0 ? html`
@@ -755,16 +767,14 @@ this.subscribe(
                                     ${this.repoLoading ? 'refreshing repo state...' : (this.repoVersion ? `v${this.repoVersion}` : 'Unversioned')}
                                 </span>
                                 ${!this.repoLoading && this.repoConfigured ? html`
-                                    <button style="background: transparent; border: 1px dashed var(--intent-warning); color: var(--intent-warning); border-radius: 4px; padding: 2px 6px; font-size: 0.7rem; font-weight: bold; cursor: pointer;"
-                                        title="Force version override"
+                                    <sutram-btn size="sm" variant="tinted" intent="warning" label="Force Override" title="Force version override" style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.72rem;"
                                         @click=${() => {
                                             const newVer = prompt("Force version override to (e.g., 0.5.0):", this.repoVersion || "0.1.0");
                                             if (newVer) {
                                                 UpdateStore.getState().forceVersion(this.targetRepo, newVer.trim());
                                             }
                                         }}>
-                                        Force Override
-                                    </button>
+                                    </sutram-btn>
                                 ` : ''}
                             </div>
                             ${!this.repoLoading && this.repoConfigured && !this.hasRelease ? html`

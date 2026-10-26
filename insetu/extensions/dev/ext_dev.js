@@ -74,7 +74,7 @@ export class InSetuExtDevDash extends InSetuElement {
     async fetchMetrics() {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('dev')) return;
         try {
-            const res = await this.api.get('metrics');
+            const res = await this.api.get('dev/metrics');
             if (res.ok) {
                 const data = await res.json();
                 DevStore.setState({ 
@@ -282,7 +282,7 @@ export class InSetuExtDevLogs extends InSetuElement {
     async fetchLogs() {
         this.loading = true;
         try {
-            const res = await this.api.get('logs');
+            const res = await this.api.get('dev/logs');
             if (res.ok) {
                 const data = await res.json();
                 DevStore.setState({ backendLogs: data.logs || '' });
@@ -305,7 +305,7 @@ export class InSetuExtDevLogs extends InSetuElement {
         }
     }
     _getDownloadLogsAction() {
-        return this.api.bindJobAction('logs/download', {}, {
+        return this.api.bindJobAction('dev/logs/download', {}, {
             onProgress: (msg) => {
                 if (window.inSetu?.ui?.setGlobalStatus) {
                     window.inSetu.ui.setGlobalStatus(`⏳ ${msg || 'Exporting logs...'}`, null);
@@ -349,18 +349,6 @@ export class InSetuExtDevLogs extends InSetuElement {
 }
 customElements.define('insetu-ext-dev-logs', InSetuExtDevLogs);
 
-export class InSetuExtDevLogsActions extends InSetuElement {
-    static get extensionName() { return 'dev'; }
-    static styles = [sharedStyles, css`
-        button { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-weight: bold; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; padding: 0; font-size: 1.1rem; transition: background 0.2s; margin: 0; }
-        button:hover { background: var(--input-bg); }
-    `];
-    render() {
-        return html`<button title="Refresh Logs" @click=${() => this.dispatch('insetu:force-refresh', { parentId: 'dev', subId: 'logs' })}>🔄</button>`;
-    }
-}
-customElements.define('insetu-ext-dev-logs-actions', InSetuExtDevLogsActions);
-
 export class InSetuExtDevSql extends InSetuElement {
     static get extensionName() { return 'dev'; }
     static properties = {
@@ -402,10 +390,9 @@ export class InSetuExtDevSql extends InSetuElement {
     onWorkspaceLoad(workspaceId) { this._fetchDatabases(); }
     onViewActivated() { this._fetchDatabases(); }
     onForceRefresh() { this._fetchDatabases(); }
-
     async _fetchDatabases() {
         try {
-            const res = await this.api.get('sql/databases');
+            const res = await this.api.get('dev/sql/databases');
             if (res.ok) {
                 const data = await res.json();
                 if (data.databases && data.databases.length > 0) {
@@ -419,13 +406,12 @@ export class InSetuExtDevSql extends InSetuElement {
             console.warn("Failed to fetch database list", e);
         }
     }
-
     async _executeQuery() {
         if (!this.query.trim()) return;
         this.loading = true;
         this.result = null;
         try {
-            const res = await this.api.post('sql/query', {
+            const res = await this.api.post('dev/sql/query', {
                 db_name: this.selectedDb,
                 query: this.query
             });
@@ -467,12 +453,12 @@ export class InSetuExtDevSql extends InSetuElement {
                         </sutram-select>
                         <div class="presets" style="flex: 1;">
                             <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold;">Quick Presets:</span>
-                            <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM topology_ledger ORDER BY timestamp DESC LIMIT 20;', 'topology')}>Topology Ledger</button>
-                            <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM manifest_ledger ORDER BY timestamp DESC LIMIT 20;', 'vfs_index')}>Manifest Ledger</button>
-                            <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM vfs_event_log ORDER BY timestamp DESC LIMIT 20;', 'workers')}>VFS Event Log</button>
-                            <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM immediate_jobs ORDER BY created_at DESC LIMIT 20;', 'workers')}>Immediate Jobs</button>
-                            <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM system_errors ORDER BY timestamp DESC LIMIT 20;', 'dev')}>System Errors</button>
-                            <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM bridge_errors ORDER BY timestamp DESC LIMIT 20;', 'dev')}>Bridge Errors</button>
+                            <sutram-btn size="sm" intent="neutral" label="Topology Ledger" style="margin: 0;" @click=${() => this._applyPreset('SELECT * FROM topology_ledger ORDER BY timestamp DESC LIMIT 20;', 'topology')}></sutram-btn>
+                            <sutram-btn size="sm" intent="neutral" label="Manifest Ledger" style="margin: 0;" @click=${() => this._applyPreset('SELECT * FROM manifest_ledger ORDER BY timestamp DESC LIMIT 20;', 'vfs_index')}></sutram-btn>
+                            <sutram-btn size="sm" intent="neutral" label="VFS Event Log" style="margin: 0;" @click=${() => this._applyPreset('SELECT * FROM vfs_event_log ORDER BY timestamp DESC LIMIT 20;', 'workers')}></sutram-btn>
+                            <sutram-btn size="sm" intent="neutral" label="Immediate Jobs" style="margin: 0;" @click=${() => this._applyPreset('SELECT * FROM immediate_jobs ORDER BY created_at DESC LIMIT 20;', 'workers')}></sutram-btn>
+                            <sutram-btn size="sm" intent="neutral" label="System Errors" style="margin: 0;" @click=${() => this._applyPreset('SELECT * FROM system_errors ORDER BY timestamp DESC LIMIT 20;', 'dev')}></sutram-btn>
+                            <sutram-btn size="sm" intent="neutral" label="Bridge Errors" style="margin: 0;" @click=${() => this._applyPreset('SELECT * FROM bridge_errors ORDER BY timestamp DESC LIMIT 20;', 'dev')}></sutram-btn>
                         </div>
                     </div>
 
@@ -583,13 +569,12 @@ export class InSetuExtDevMemory extends InSetuElement {
 
     onViewActivated() { this.fetchMemory(); }
     onForceRefresh() { this.fetchMemory(); }
-
     async fetchMemory(action = null) {
         this.loading = true;
         try {
             const res = action
-                ? await this.api.system.post('memory', { action })
-                : await this.api.system.get('memory?t=' + Date.now());
+                ? await this.api.post('system/memory', { action })
+                : await this.api.get('system/memory?t=' + Date.now());
             if (res.ok) {
                 const data = await res.json();
                 DevStore.setState({ memoryTelemetry: data });
@@ -776,14 +761,14 @@ window.ExtensionRegistry.registerExtension('dev', {
             icon: "terminal",
             intent: "neutral",
             order: 2,
+            menuActions: [
+                {
+                    label: "Refresh Logs",
+                    icon: "refresh-cw",
+                    onClick: () => window.inSetu?.events?.emit('insetu:force-refresh', { parentId: 'dev', subId: 'logs' })
+                }
+            ],
             component: "insetu-ext-dev-logs"
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "dev",
-            targetSub: "logs",
-            component: "insetu-ext-dev-logs-actions",
-            order: 1
         },
         {
             slot: "slots:sub-navigation",

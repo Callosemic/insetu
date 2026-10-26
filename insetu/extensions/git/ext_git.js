@@ -188,6 +188,30 @@ export class InSetuExtGitDiffs extends InSetuElement {
                 }
             }
         });
+        this.registerGlobalListener('insetu:ensure-fresh-artifact', window, (e) => {
+            const filePath = e.detail?.filepath || '';
+            if (!filePath.startsWith('ctx://diffs/')) return;
+            if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('git')) return;
+            const baseUri = filePath.replace(/_part\d+\.txt$/, '.txt');
+            const appState = AppStore.getState();
+            const dirtyRepos = appState.dirtyRepos || new Set();
+            const dirtyBuckets = appState.dirtyBuckets || new Set();
+            const manifestObj = appState.manifest?.ctx?.[baseUri] || appState.manifest?.ctx?.[filePath];
+            const addr = window.inSetu.utils.BucketAddress ? window.inSetu.utils.BucketAddress.fromFilepath(baseUri, manifestObj?.meta) : null;
+            const isDirty = !manifestObj ||
+                            (addr && addr.key && dirtyBuckets.has(addr.key)) ||
+                            (addr && addr.repo && dirtyRepos.has(addr.repo)) ||
+                            dirtyBuckets.has(baseUri) ||
+                            dirtyBuckets.has(filePath);
+            if (isDirty && Array.isArray(e.inSetuResponses)) {
+                e.inSetuResponses.push((async () => {
+                    if (window.inSetu.ui?.setGlobalStatus) {
+                        window.inSetu.ui.setGlobalStatus("⏳ Compiling fresh diffs...", null);
+                    }
+                    await generateDiffs(!manifestObj);
+                })());
+            }
+        });
         this._fetchSweepStatusSilent();
         GitStore.getState().fetchStatus();
     }
@@ -258,7 +282,7 @@ disconnectedCallback() {
         try {
             const allChangelogs = [];
             for (const r of uniqueRepos) {
-                const res = await this.api.get(`changelogs?repo=${encodeURIComponent(r)}&t=${Date.now()}`);
+                const res = await this.api.get(`git/changelogs?repo=${encodeURIComponent(r)}&t=${Date.now()}`);
                 if (res.ok) {
                     const data = await res.json();
                     if (Array.isArray(data.changelogs)) {
@@ -280,7 +304,7 @@ disconnectedCallback() {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('git')) return;
         this.sweepLoading = true;
         try {
-            const res = await this.api.post('sweep/status', {});
+            const res = await this.api.post('git/sweep/status', {});
             if (!res.ok) throw new Error("Failed to start scan");
             const data = await res.json();
             window.inSetu.utils.pollJob(data.job_id, {
@@ -307,7 +331,7 @@ disconnectedCallback() {
         }
     }
     _getSweepAllAction() {
-        return this.api.bindJobAction('sweep/push', () => {
+        return this.api.bindJobAction('git/sweep/push', () => {
             const selections = {};
             const totalFiles = Object.keys(this.sweepFiles).reduce((acc, repo) => {
                 if (this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(repo)) {
@@ -329,7 +353,7 @@ disconnectedCallback() {
         });
     }
     _getRepoSweepAction(repo) {
-        return this.api.bindJobAction('sweep/push', () => {
+        return this.api.bindJobAction('git/sweep/push', () => {
             const files = this.selectedSweepFiles[repo] || [];
             if (files.length === 0) throw new Error("No files selected to sweep.");
             const msg = prompt(`Enter a commit message to sweep metadata for ${repo}:`, "chore: sweep remaining state");
@@ -578,7 +602,7 @@ export class InSetuGitPushProjection extends InSetuElement {
     }
     _getPushAction() {
         let pushedLabel = '';
-        return this.api.bindJobAction('push', () => {
+        return this.api.bindJobAction('git/push', () => {
             const msg = (this.gitPushMessage || '').trim();
             const repo = (this.currentPushRepo || '').trim();
             const diffFile = this.currentPushDiffFile || '';
@@ -743,7 +767,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
             const strategies = {};
             await Promise.all(
                 repos.map(async (repo) => {
-                    const res = await this.api.get(`settings?repo=${encodeURIComponent(repo)}`);
+                    const res = await this.api.get(`git/settings?repo=${encodeURIComponent(repo)}`);
                     if (res.ok) {
                         const data = await res.json();
                         strategies[repo] = data.pull_strategy || 'rebase';
@@ -755,7 +779,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
         } catch(e) { console.error("Failed to load extension settings", e); }
     }
     _getPreviewPullAction(repo) {
-        return this.api.bindJobAction('fetch_preview', { repo }, {
+        return this.api.bindJobAction('git/fetch_preview', { repo }, {
             onProgress: (msg) => {
                 this.pullMessage = msg;
                 if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg}`, null);
@@ -782,8 +806,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
                             </sutram-select>
                         </div>
                     ` : null;
-
-                    const executePull = this.api.bindJobAction('pull', () => {
+                    const executePull = this.api.bindJobAction('git/pull', () => {
                         closeWin();
                         const strat = (currentStrategy === 'runtime') ? (GitStore.getState().runtimeStrategy || 'rebase') : currentStrategy;
                         return { repo, strategy: strat };
@@ -827,9 +850,8 @@ export class InSetuExtGitCtrl extends InSetuElement {
             }
         });
     }
-
     async _checkoutBranch(repo, branch, createNew = false) {
-        const action = this.api.bindJobAction('checkout', { repo, branch, create_new: createNew }, {
+        const action = this.api.bindJobAction('git/checkout', { repo, branch, create_new: createNew }, {
             onComplete: (statusData) => {
                 alert(`✅ Checkout successful for ${repo}\n\n${statusData.message}`);
                 GitStore.setState({ branchModalOpen: false });
@@ -839,9 +861,8 @@ export class InSetuExtGitCtrl extends InSetuElement {
         });
         try { await action(); } catch(e) {}
     }
-
     _getConnectRemoteAction(resolution = null) {
-        return this.api.bindJobAction('remote/add', () => {
+        return this.api.bindJobAction('git/remote/add', () => {
             const repo = this.activeRemoteRepo;
             const url = (this.remoteUrlInput || '').trim();
             if (!url) throw new Error("Please enter a valid Git URL.");
@@ -867,7 +888,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
         try { await this._getPreviewPullAction(repo)(); } catch(e) { this.activePullJobId = null; }
     }
     _getInitRepoAction(repo, branch = 'main') {
-        return this.api.bindJobAction('init', { repo, branch }, {
+        return this.api.bindJobAction('git/init', { repo, branch }, {
             onProgress: (msg) => this.pullMessage = msg,
             onComplete: (statusData) => {
                 this.activePullJobId = null;
@@ -988,39 +1009,6 @@ export class InSetuExtGitCtrl extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-git-ctrl', InSetuExtGitCtrl);
-window.addEventListener('insetu:ensure-fresh-artifact', (e) => {
-    const filePath = e.detail?.filepath || '';
-    if (!filePath.startsWith('ctx://diffs/')) return;
-    if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('git')) return;
-
-    const baseUri = filePath.replace(/_part\d+\.txt$/, '.txt');
-    const appState = AppStore.getState();
-    const dirtyRepos = appState.dirtyRepos || new Set();
-    const dirtyBuckets = appState.dirtyBuckets || new Set();
-    const manifestObj = appState.manifest?.ctx?.[baseUri] || appState.manifest?.ctx?.[filePath];
-    const addr = window.inSetu.utils.BucketAddress ? window.inSetu.utils.BucketAddress.fromFilepath(baseUri, manifestObj?.meta) : null;
-
-    const isDirty = !manifestObj ||
-                    (addr && addr.key && dirtyBuckets.has(addr.key)) ||
-                    (addr && addr.repo && dirtyRepos.has(addr.repo)) ||
-                    dirtyBuckets.has(baseUri) ||
-                    dirtyBuckets.has(filePath);
-
-    if (isDirty) {
-        const run = (async () => {
-            if (window.inSetu.ui?.setGlobalStatus) {
-                window.inSetu.ui.setGlobalStatus("⏳ Compiling fresh diffs...", null);
-            }
-            await generateDiffs(!manifestObj);
-            if (addr && addr.key) dirtyBuckets.delete(addr.key);
-            if (addr && addr.repo) dirtyRepos.delete(addr.repo);
-            dirtyBuckets.delete(baseUri);
-            dirtyBuckets.delete(filePath);
-            AppStore.setState({ dirtyBuckets: new Set(dirtyBuckets), dirtyRepos: new Set(dirtyRepos) });
-        })();
-        if (Array.isArray(e.inSetuResponses)) e.inSetuResponses.push(run);
-    }
-});
 
 window.ExtensionRegistry.registerExtension('git', {
     name: "Version Control",

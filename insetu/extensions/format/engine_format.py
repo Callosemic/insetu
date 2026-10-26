@@ -1,20 +1,19 @@
 from pathlib import Path
 import os
 import sys
-from typing import TypedDict
-from flask import jsonify
+from typing import TypedDict, Optional
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import InSetuURI
-
 format_bp = InSetuExtension(
     'format',
     __name__,
     title="Code Formatting",
-    description="Source code beautification and formatting."
+    description="Source code beautification and formatting.",
+    external_dependencies=["jsbeautifier", "autopep8"],
 )
 __depends__ = []
 @format_bp.worker("format_code_task")
-def _background_format_code(ctx, filepath=None, **kwargs):
+def _background_format_code(ctx, filepath: Optional[str] = None):
     ctx.jobs.update_progress("Formatting source code...")
     if not filepath:
         raise ValueError("Filepath is required for code formatting.")
@@ -57,17 +56,16 @@ def _background_format_code(ctx, filepath=None, **kwargs):
         raise ValueError(f"Unsupported file type for code formatting: {ext}")
 class FormatCodePayload(TypedDict):
     filepath: str
-
 @format_bp.route('format-code', methods=['POST'], request_schema=FormatCodePayload, docstring="Formats the specified source code file using standard beautifiers (e.g. autopep8, black, jsbeautifier).")
 def api_format_code(ctx):
     """Formats the specified source code file using standard beautifiers (e.g. autopep8, black, jsbeautifier)."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     filepath = data.get('filepath')
     if not filepath:
-        return jsonify({"error": "Filepath required"}), 400
+        return {"error": "Filepath required"}, 400
 
     job_id = ctx.jobs.submit("format_code_task", filepath=filepath, job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202
 def run_formatter():
     try:
         import jsbeautifier as _jsbeautifier
@@ -112,10 +110,10 @@ def run_formatter():
     formatted_count = 0
     with ctx.vfs as vfs:
         for filepath in js_files:
-            if os.path.exists(filepath):
+            if Path(filepath).exists():
                 try:
                     res = _jsbeautifier.beautify_file(filepath, opts)
-                    rel_path = os.path.relpath(filepath, workspace_root).replace("\\", "/")
+                    rel_path = Path(filepath).relative_to(workspace_root).as_posix()
                     vfs.save(f"vfs://{rel_path}", res)
                     print(f"  [+] Formatted: {rel_path}")
                     formatted_count += 1

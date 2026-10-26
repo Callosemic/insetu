@@ -2,7 +2,6 @@ import os
 import time
 from pathlib import Path
 from typing import TypedDict, Optional
-from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from insetu.core.utils_core import InSetuURI, execute_binary, resolve_system_artifact_path
 
@@ -100,27 +99,27 @@ class CmdExecResponse(TypedDict):
 @dev_bp.route('exec', methods=['POST'], request_schema=CmdExecPayload, response_schema=CmdExecResponse, docstring="Executes an arbitrary shell command within the workspace sandbox for testing and verification.")
 def api_dev_exec(ctx):
     """Executes an arbitrary shell command within the workspace sandbox for testing and verification."""
-    data = ctx.req.json or {}
-    cmd = data.get("command", "").strip()
+    data = ctx.payload or {}
+    cmd = str(data.get("command") or "").strip()
     if not cmd:
-        return jsonify({"error": "Command string is required."}), 400
+        return {"error": "Command string is required."}, 400
 
     timeout = min(int(data.get("timeout", 30)), 120)
     cwd = data.get("cwd")
 
     try:
         res = ctx.exec.run(cmd, shell=True, cwd=cwd, timeout=timeout)
-        return jsonify({
+        return {
             "exit_code": res.returncode,
             "stdout": res.stdout or "",
             "stderr": res.stderr or ""
-        })
+        }
     except Exception as e:
-        return jsonify({
+        return {
             "exit_code": -1,
             "stdout": "",
             "stderr": str(e)
-        }), 500
+        }, 500
 @dev_bp.route('metrics', methods=['GET'], docstring="Retrieves system telemetry metrics, including file thrashing limits and bridge errors.")
 def get_dev_metrics(ctx):
     """Retrieves system telemetry metrics, including file thrashing limits and bridge errors."""
@@ -176,12 +175,11 @@ def get_dev_metrics(ctx):
         ORDER BY timestamp DESC
         LIMIT 50
     """).fetchall()
-
-    return jsonify({
+    return {
         "thrashing": thrashing_data,
         "bridge_errors": [dict(r) for r in error_rows],
         "system_errors": [dict(r) for r in system_error_rows]
-    })
+    }
 @dev_bp.route('sql/databases', methods=['GET'], docstring="Lists all available SQLite databases within the tenant cache/db directory.")
 def list_sql_databases(ctx):
     """Lists all available SQLite databases within the tenant cache/db directory."""
@@ -190,7 +188,7 @@ def list_sql_databases(ctx):
     if db_dir.exists() and db_dir.is_dir():
         for p in db_dir.glob("*.db"):
             dbs.append(p.stem)
-    return jsonify({"databases": sorted(list(set(dbs)))})
+    return {"databases": sorted(list(set(dbs)))}
 class SqlQueryPayload(TypedDict, total=False):
     db_name: str
     query: str
@@ -198,11 +196,11 @@ class SqlQueryPayload(TypedDict, total=False):
 @dev_bp.route('sql/query', methods=['POST'], request_schema=SqlQueryPayload, docstring="Executes a constrained SQL query against a target workspace database.")
 def execute_sql_query(ctx):
     """Executes a constrained SQL query against a target workspace database."""
-    data = ctx.req.json or {}
-    db_name = data.get("db_name", "workers").strip()
-    query = data.get("query", "").strip()
+    data = ctx.payload or {}
+    db_name = str(data.get("db_name") or "workers").strip()
+    query = str(data.get("query") or "").strip()
     if not query:
-        return jsonify({"error": "SQL query string is required."}), 400
+        return {"error": "SQL query string is required."}, 400
     clean_db_name = Path(db_name).stem or "workers"
 
     try:
@@ -215,7 +213,7 @@ def execute_sql_query(ctx):
         if is_select:
             columns = [col[0] for col in cursor.description]
             rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
-            return jsonify({
+            return {
                 "status": "success",
                 "database": clean_db_name,
                 "type": "select",
@@ -223,22 +221,22 @@ def execute_sql_query(ctx):
                 "rows": rows,
                 "row_count": len(rows),
                 "elapsed_ms": elapsed_ms
-            })
+            }
         else:
             conn.commit()
-            return jsonify({
+            return {
                 "status": "success",
                 "database": clean_db_name,
                 "type": "mutation",
                 "affected_rows": cursor.rowcount,
                 "elapsed_ms": elapsed_ms
-            })
+            }
     except Exception as e:
-        return jsonify({
+        return {
             "status": "error",
             "database": clean_db_name,
             "error": str(e)
-        }), 400
+        }, 400
 @dev_bp.route('logs', methods=['GET'], docstring="Retrieves the systemd journal logs for the background backend daemon.")
 def get_backend_logs(ctx):
     """Retrieves the systemd journal logs for the background backend daemon."""
@@ -249,16 +247,16 @@ def get_backend_logs(ctx):
             capture_output=True, text=True, timeout=5
         )
         if res.returncode == 0 and res.stdout.strip():
-            return jsonify({"status": "success", "logs": res.stdout.strip()})
+            return {"status": "success", "logs": res.stdout.strip()}
         else:
-            return jsonify({
+            return {
                 "status": "success", 
                 "logs": "No systemd logs found for 'insetu.service'.\nIf you are running via 'insetu serve' directly in your terminal, the logs will print there instead."
-            })
+            }
     except Exception as e:
-        return jsonify({"status": "error", "logs": f"Failed to fetch logs: {str(e)}"})
+        return {"status": "error", "logs": f"Failed to fetch logs: {str(e)}"}
 @dev_bp.worker("download_boot_logs_task")
-def download_boot_logs_worker(ctx, **kwargs):
+def download_boot_logs_worker(ctx):
     ctx.jobs.update_progress("Extracting current invocation systemd logs...")
     try:
         # 1. Retrieve the unique InvocationID for the current service run
@@ -285,12 +283,11 @@ def download_boot_logs_worker(ctx, **kwargs):
     ctx.vfs.save(out_file, log_content, data={"ignore_ledger": True})
     abs_out_path = resolve_system_artifact_path(out_file, ctx.workspace_id)
     ctx.jobs.register_ephemeral(abs_out_path, ttl_seconds=3600, owner="dev_logs")
-
     return {
         "message": "Invocation logs exported successfully.",
         "artifact": {
             "file": out_file,
-            "url": f"/download/{out_file}"
+            "url": f"/api/{ctx.workspace_id}/fs/fetch?file={out_file}&download=1"
         }
     }
 class DownloadLogsPayload(TypedDict, total=False):
@@ -300,11 +297,10 @@ class DownloadLogsPayload(TypedDict, total=False):
 def api_download_logs(ctx):
     """Exports the current backend daemon invocation logs to a downloadable text file."""
     job_id = ctx.jobs.submit("download_boot_logs_task", job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
-
+    return {"status": "accepted", "job_id": job_id}, 202
 # 4. Background Garbage Collection
 @dev_bp.worker("sweep_telemetry")
-def sweep_telemetry_worker(ctx, **kwargs):
+def sweep_telemetry_worker(ctx):
     # Retain 2 hours of telemetry to support the 1-hour dashboard window
     cutoff = time.time() - 7200
     ctx.db.execute("DELETE FROM file_telemetry WHERE timestamp < ?", (cutoff,))

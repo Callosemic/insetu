@@ -3,7 +3,6 @@ import json
 import shutil
 import subprocess
 from typing import TypedDict
-from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext, SettingsManager
 from insetu.core.utils_core import execute_binary
 
@@ -128,10 +127,11 @@ tailscale_bp = InSetuExtension(
     __name__, 
     title="Tailscale Network Manager", 
     description="Auto-bind inSetu over Tailscale Serve on boot.",
-    settings_schema=TAILSCALE_SETTINGS_SCHEMA
+    settings_schema=TAILSCALE_SETTINGS_SCHEMA,
+    external_binaries=["tailscale"],
 )
 @tailscale_bp.worker("bind_serve_task")
-def _background_bind_serve(ctx, manual=False, **kwargs):
+def _background_bind_serve(ctx, manual: bool = False):
     ctx.jobs.update_progress("Configuring Tailscale Serve binding...")
     return _execute_serve_bind(ctx.workspace_id, manual=bool(manual))
 @tailscale_bp.on('topology_boot_complete')
@@ -149,9 +149,8 @@ def auto_bind_on_workspace_boot(ctx, workspace_id=None, **kwargs):
         print(f"⚠️ [Tailscale] Auto-bind trigger failed for [{ctx.workspace_id}]: {e}")
 class TailscaleBindPayload(TypedDict, total=False):
     pass
-
 @tailscale_bp.route('bind', methods=['POST'], request_schema=TailscaleBindPayload, docstring="Manually triggers 'tailscale serve' to expose the local inSetu port to the Tailnet.")
 def api_bind_tailscale(ctx):
     """Manually triggers 'tailscale serve' to expose the local inSetu port to the Tailnet."""
     job_id = ctx.jobs.submit("bind_serve_task", job_category="ui_blocking", manual=True)
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202
