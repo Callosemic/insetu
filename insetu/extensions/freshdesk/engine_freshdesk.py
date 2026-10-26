@@ -5,8 +5,7 @@ import re
 import urllib.request
 import urllib.error
 from pathlib import Path
-from typing import TypedDict, Optional
-from flask import jsonify
+from typing import TypedDict, Optional, Dict, Any, Union
 from insetu.core.sdk import InSetuExtension
 # Declarative schema for settings so users can input credentials via the UI
 FRESHDESK_SETTINGS_SCHEMA = [
@@ -74,10 +73,10 @@ freshdesk_bp = InSetuExtension(
     title="Freshdesk Support",
     description="B2B helpdesk ticket streaming, local thread caching, and agent replies.",
     schema=DB_SCHEMA,
-    settings_schema=FRESHDESK_SETTINGS_SCHEMA
+    settings_schema=FRESHDESK_SETTINGS_SCHEMA,
+    external_dependencies=["mistune"],
 )
-__depends__ = [] # Extension DAG resolution array
-__external_depends__ = ["mistune"] # External PyPI dependencies
+__depends__ = []
 def _fd_request(ctx, endpoint, method='GET', payload=None):
     api_key = ctx.settings.get("api_key")
     domain = ctx.settings.get("domain")
@@ -100,7 +99,7 @@ def _fd_request(ctx, endpoint, method='GET', payload=None):
         err_msg = e.read().decode('utf-8')
         raise ValueError(f"Freshdesk API Error: {err_msg}")
 @freshdesk_bp.worker("fetch_tickets_task")
-def _background_fetch_tickets(ctx, filters=None, **kwargs):
+def _background_fetch_tickets(ctx, filters: Optional[Dict[str, Any]] = None):
     if filters is None: filters = {}
     page = filters.get("page", 1)
     two_page_spread = filters.get("twoPageSpread", False)
@@ -190,12 +189,14 @@ def _background_fetch_tickets(ctx, filters=None, **kwargs):
 
     return {"message": "Tickets fetched.", "artifact": {"tickets": filtered_tickets, "my_agent_id": my_id, "ledger": merged, "contiguous_count": contiguous_count}}
 @freshdesk_bp.worker("fetch_conversations_task")
-def _background_fetch_conversations(ctx, ticket_id=None, **kwargs):
+def _background_fetch_conversations(ctx, ticket_id: Optional[Union[int, str]] = None):
     ctx.jobs.update_progress('Fetching conversations...')
     data = _fd_request(ctx, f"tickets/{ticket_id}/conversations")
     return {"message": "Conversations fetched.", "artifact": {"conversations": data}}
+
+
 @freshdesk_bp.worker("take_ticket_task")
-def _background_take_ticket(ctx, ticket_id=None, **kwargs):
+def _background_take_ticket(ctx, ticket_id: Optional[Union[int, str]] = None):
     ctx.jobs.update_progress('Assigning ticket...')
     me_data = _fd_request(ctx, "agents/me")
     my_id = me_data.get('id')
@@ -205,8 +206,10 @@ def _background_take_ticket(ctx, ticket_id=None, **kwargs):
     updated_ticket['responder_name'] = my_name
 
     return {"message": f"Ticket assigned to {my_name}.", "artifact": {"ticket": updated_ticket}}
+
+
 @freshdesk_bp.worker("post_reply_task")
-def _background_post_reply(ctx, ticket_id=None, body=None, **kwargs):
+def _background_post_reply(ctx, ticket_id: Optional[Union[int, str]] = None, body: Optional[str] = None):
     ctx.jobs.update_progress('Sending reply...')
     if not body:
         raise ValueError("Reply body is missing.")
@@ -246,32 +249,31 @@ def _background_post_reply(ctx, ticket_id=None, body=None, **kwargs):
 
     return {"message": "Reply sent.", "artifact": {}}
 @freshdesk_bp.worker("resolve_ticket_task")
-def _background_resolve_ticket(ctx, ticket_id=None, **kwargs):
+def _background_resolve_ticket(ctx, ticket_id: Optional[Union[int, str]] = None):
     ctx.jobs.update_progress('Marking ticket as resolved...')
     updated_ticket = _fd_request(ctx, f"tickets/{ticket_id}", method='PUT', payload={"status": 4})
     return {"message": "Ticket resolved.", "artifact": {"ticket": updated_ticket}}
 class FreshdeskTicketPayload(TypedDict, total=False):
     pass
-
 @freshdesk_bp.route('tickets/<int:ticket_id>/resolve', methods=['POST'], request_schema=FreshdeskTicketPayload, docstring="Marks a specific Freshdesk ticket as resolved.")
 def resolve_freshdesk_ticket(ctx, ticket_id):
     """Marks a specific Freshdesk ticket as resolved."""
     job_id = ctx.jobs.submit("resolve_ticket_task", ticket_id=ticket_id, job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202
 class FreshdeskReplyPayload(TypedDict):
     body: str
 @freshdesk_bp.route('tickets/<int:ticket_id>/reply', methods=['POST'], request_schema=FreshdeskReplyPayload, docstring="Posts a reply to a specific Freshdesk ticket.")
 def post_freshdesk_reply(ctx, ticket_id):
     """Posts a reply to a specific Freshdesk ticket."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     body = data.get("body", "")
     job_id = ctx.jobs.submit("post_reply_task", ticket_id=ticket_id, body=body, job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202
 @freshdesk_bp.route('tickets/<int:ticket_id>/take', methods=['POST'], request_schema=FreshdeskTicketPayload, docstring="Assigns the specified Freshdesk ticket to the current authenticated agent.")
 def take_freshdesk_ticket(ctx, ticket_id):
     """Assigns the specified Freshdesk ticket to the current authenticated agent."""
     job_id = ctx.jobs.submit("take_ticket_task", ticket_id=ticket_id, job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202
 @freshdesk_bp.route('tickets/<int:ticket_id>/thread', methods=['GET'], docstring="[sync] Returns the cached markdown thread for a specific ticket.")
 def get_freshdesk_thread(ctx, ticket_id):
     """Returns the cached markdown thread for a specific ticket."""
@@ -279,26 +281,26 @@ def get_freshdesk_thread(ctx, ticket_id):
     content = ctx.vfs.read(ticket_archive_path, is_absolute_artifact=True)
     if content is not None:
         return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
-    return jsonify({"error": "Thread not cached yet."}), 404
+    return {"error": "Thread not cached yet."}, 404
 
 @freshdesk_bp.route('tickets/<int:ticket_id>/conversations', methods=['POST'], request_schema=FreshdeskTicketPayload, docstring="Fetches the conversation thread for a specific ticket.")
 def get_freshdesk_conversations(ctx, ticket_id):
     """Fetches the conversation thread for a specific ticket."""
     job_id = ctx.jobs.submit("fetch_conversations_task", ticket_id=ticket_id, job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202
 @freshdesk_bp.route('tickets/ignored', methods=['GET'], docstring="Retrieves a list of ticket IDs that the user has chosen to ignore.")
 def get_ignored_tickets(ctx):
     """Retrieves a list of ticket IDs that the user has chosen to ignore."""
     try:
         rows = ctx.db.get_all("freshdesk_ignored")
-        return jsonify([row['ticket_id'] for row in rows])
+        return [row['ticket_id'] for row in rows]
     except Exception:
-        return jsonify([])
+        return []
 @freshdesk_bp.route('tickets/<int:ticket_id>/ignore', methods=['POST'], request_schema=FreshdeskTicketPayload, docstring="Marks a specific ticket as ignored so it no longer appears in the UI.")
 def ignore_freshdesk_ticket(ctx, ticket_id):
     """Marks a specific ticket as ignored so it no longer appears in the UI."""
     ctx.db.insert_or_replace("freshdesk_ignored", {"ticket_id": ticket_id})
-    return jsonify({"status": "success"})
+    return {"status": "success"}
 class FreshdeskFetchPayload(TypedDict, total=False):
     filterAssignee: str
     filterStatus: str
@@ -310,6 +312,6 @@ def get_freshdesk_tickets(ctx):
     """
     Secure proxy endpoint using the asynchronous jobs ledger to prevent event loop starvation.
     """
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     job_id = ctx.jobs.submit("fetch_tickets_task", coalesce=True, filters=data, job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202

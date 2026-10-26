@@ -134,13 +134,13 @@ export class InSetuExtCitations extends InSetuElement {
     async loadMainLibrary() {
         this.mainLoading = true;
         try {
-            const idxRes = await this.api.get('index');
+            const idxRes = await this.api.get('citations/index');
             if (idxRes.ok) {
                 const d = await idxRes.json();
                 if(d.publications) CitationStore.setState({ cachedPublications: d.publications });
                 if(d.authors) CitationStore.setState({ cachedAuthors: d.authors });
             }
-            const res = await this.api.get('list');
+            const res = await this.api.get('citations/list');
             if (res.ok) {
                 const data = await res.json();
                 CitationStore.setState({ localLibrary: data.citations || [] });
@@ -163,8 +163,8 @@ export class InSetuExtCitations extends InSetuElement {
         }
         try {
             const pageToFetch = loadMore ? this.currentExplorePage : 1;
-            const res = await this.api.post('search', { 
-                q: query, 
+            const res = await this.api.post('citations/search', { 
+                q: query,  
                 source: this.exploreSource, 
                 field: this.exploreField, 
                 category: category, 
@@ -208,7 +208,7 @@ export class InSetuExtCitations extends InSetuElement {
                 const jsonPayload = JSON.parse(ev.target.result);
                 const reqBody = { citations: jsonPayload.items || jsonPayload, strategy: this.importStrategy };
                 this.importLog += `Uploading ${reqBody.citations.length} records...\n`;
-                const res = await this.api.post('import', reqBody);
+                const res = await this.api.post('citations/import', reqBody);
                 const data = await res.json();
                 if (res.ok) {
                     this.importLog += `✅ ${data.message}\n`;
@@ -230,7 +230,7 @@ export class InSetuExtCitations extends InSetuElement {
             return { importingIds: newSet };
         });
         try {
-            await this.api.post('import', { citations: [payload], strategy: 'overwrite' }, { collapseKey: `citations:import:${payload.id}` });
+            await this.api.post('citations/import', { citations: [payload], strategy: 'overwrite' }, { collapseKey: `citations:import:${payload.id}` });
             this.loadMainLibrary();
         } catch (err) {
             alert("Error importing citation: " + err.message);
@@ -283,7 +283,7 @@ export class InSetuExtCitations extends InSetuElement {
     async _saveAttachmentList(newAtts) {
         if (!this.activeAttachCitation) return;
         try {
-            const res = await this.api.post(`${encodeURIComponent(this.activeAttachCitation.id)}/attach`, { attachments: newAtts }, { collapseKey: `citations:attach:${this.activeAttachCitation.id}` });
+            const res = await this.api.post(`citations/${encodeURIComponent(this.activeAttachCitation.id)}/attach`, { attachments: newAtts }, { collapseKey: `citations:attach:${this.activeAttachCitation.id}` });
             if (res.ok) {
                 const data = await res.json().catch(()=>({}));
                 CitationStore.setState({ activeAttachCitation: { ...this.activeAttachCitation, _attachments: newAtts } });
@@ -325,7 +325,7 @@ export class InSetuExtCitations extends InSetuElement {
         if (!this.activeEditCitation) return;
         if (!confirm(`Are you sure you want to completely delete this citation ([@${this.activeEditCitation.id}]) from your library?`)) return Promise.resolve();
         try {
-            const res = await this.api.delete(`${encodeURIComponent(this.activeEditCitation.id)}`, { collapseKey: `citations:delete:${this.activeEditCitation.id}` });
+            const res = await this.api.delete(`citations/${encodeURIComponent(this.activeEditCitation.id)}`, { collapseKey: `citations:delete:${this.activeEditCitation.id}` });
             if (res.ok) {
                 const data = await res.json().catch(()=>({}));
                 const id = this.activeEditCitation.id;
@@ -367,7 +367,7 @@ export class InSetuExtCitations extends InSetuElement {
         }
         if (payload.id !== this.activeEditCitation.id) payload.id = this.activeEditCitation.id;
         try {
-            const res = await this.api.post('import', { citations: [payload], strategy: 'overwrite' }, { collapseKey: `citations:import:${payload.id}` });
+            const res = await this.api.post('citations/import', { citations: [payload], strategy: 'overwrite' }, { collapseKey: `citations:import:${payload.id}` });
             if (res.ok) {
                 const data = await res.json().catch(()=>({}));
                 CitationStore.setState({ activeEditCitation: null });
@@ -532,12 +532,16 @@ export class InSetuExtCitations extends InSetuElement {
                     <h3 style="margin-top: 0; color: var(--intent-primary);">Import CSL-JSON</h3>
                     <p style="font-size: 0.9rem; color: var(--text-muted);">Select a JSON export from Zotero or Better BibTeX.</p>
                     <div style="margin: 15px 0;">
-                        <label style="font-weight: bold; font-size: 0.9rem; display: block; margin-bottom: 5px;">Conflict Strategy:</label>
-                        <div style="display: flex; gap: 15px; font-size: 0.9rem;" @change=${e => this.importStrategy = e.target.value}>
-                            <label><input type="radio" name="lib-merge-strat" value="overwrite" ?checked=${this.importStrategy === 'overwrite'}> Overwrite Existing</label>
-                            <label><input type="radio" name="lib-merge-strat" value="skip" ?checked=${this.importStrategy === 'skip'}> Skip Existing</label>
-                            <label><input type="radio" name="lib-merge-strat" value="manual" ?checked=${this.importStrategy === 'manual'}> Manual Resolve</label>
-                        </div>
+                        <sutram-select
+                            label="Conflict Strategy"
+                            .value=${this.importStrategy}
+                            .options=${[
+                                { value: 'overwrite', label: 'Overwrite Existing' },
+                                { value: 'skip', label: 'Skip Existing' },
+                                { value: 'manual', label: 'Manual Resolve' }
+                            ]}
+                            @sutram-input-changed=${e => this.importStrategy = e.detail.value}>
+                        </sutram-select>
                     </div>
                     <sutram-btn size="sm" intent="success" icon="folder" label="Choose File" style="margin: 0; padding: 8px 16px;" @click=${() => this.shadowRoot.getElementById('lib-file-picker').click()}></sutram-btn>
                     <input type="file" id="lib-file-picker" accept=".json,application/json" style="display: none;" @change=${this._handleImportFile}>
@@ -562,11 +566,11 @@ export class InSetuExtCitations extends InSetuElement {
                         ${(this.activeAttachCitation?._attachments || []).length === 0 ? html`<span style="color: var(--text-muted); font-style: italic;">Not pinned to any repository.</span>` : (this.activeAttachCitation?._attachments || []).map((a, idx) => html`
                             <div style="display: flex; justify-content: space-between; align-items: center; background: var(--pane-bg); border: 1px solid var(--border); padding: 6px 10px; border-radius: 4px;">
                                 <span style="font-size: 0.85rem; font-family: monospace; color: var(--text);">${a.repo} ${a.bucket !== 'None' ? ' : ' + a.bucket : ''}</span>
-                                <button style="background: transparent; border: none; cursor: pointer; padding: 0;" @click=${() => {
+                                <sutram-btn size="sm" variant="text" intent="danger" icon="x" label="Remove" style="margin: 0;" @click=${() => {
                                     const atts = [...this.activeAttachCitation._attachments];
                                     atts.splice(idx, 1);
                                     this._saveAttachmentList(atts);
-                                }}><yv-icon name="x" style="width: 14px; height: 14px; color: var(--intent-danger);"></yv-icon></button>
+                                }}></sutram-btn>
                             </div>
                         `)}
                     </div>

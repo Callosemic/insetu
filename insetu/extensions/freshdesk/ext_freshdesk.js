@@ -117,10 +117,9 @@ export class InSetuExtFreshdesk extends InSetuElement {
 
         return sMatch && aMatch;
     }
-
     async loadIgnored() {
         try {
-            const res = await this.api.get('tickets/ignored');
+            const res = await this.api.get('freshdesk/tickets/ignored');
             if (res.ok) {
                 const ids = await res.json();
                 FreshdeskStore.setState({ ignoredTickets: Array.isArray(ids) ? ids : [] });
@@ -134,16 +133,15 @@ export class InSetuExtFreshdesk extends InSetuElement {
         const state = FreshdeskStore.getState();
         const newIgnored = [...(state.ignoredTickets || []), ticketId];
         FreshdeskStore.setState({ ignoredTickets: newIgnored });
-
         try {
-            await this.api.post(`tickets/${ticketId}/ignore`, {});
+            await this.api.post(`freshdesk/tickets/${ticketId}/ignore`, {});
             if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("🚫 Ticket Ignored!", 2000);
         } catch (err) {
             console.error("Failed to save ignored tickets schema", err);
         }
     }
     _getResolveTicketAction(ticketId) {
-        return this.api.bindJobAction(`tickets/${ticketId}/resolve`, {}, {
+        return this.api.bindJobAction(`freshdesk/tickets/${ticketId}/resolve`, {}, {
             onProgress: (msg) => FreshdeskStore.setState({ loadingMsg: msg }),
             onComplete: (statusData) => {
                 const updatedTicket = statusData.artifact.ticket;
@@ -163,9 +161,8 @@ export class InSetuExtFreshdesk extends InSetuElement {
         FreshdeskStore.setState({ loadingMsg: "Resolving ticket...", activeJobId: 'starting' });
         try { await this._getResolveTicketAction(ticketId)(); } catch(e) {}
     }
-
     _getTakeTicketAction(ticketId) {
-        return this.api.bindJobAction(`tickets/${ticketId}/take`, {}, {
+        return this.api.bindJobAction(`freshdesk/tickets/${ticketId}/take`, {}, {
             onProgress: (msg) => FreshdeskStore.setState({ loadingMsg: msg }),
             onComplete: (statusData) => {
                 const updatedTicket = statusData.artifact.ticket;
@@ -185,9 +182,8 @@ export class InSetuExtFreshdesk extends InSetuElement {
         FreshdeskStore.setState({ loadingMsg: "Assigning ticket to you...", activeJobId: 'starting' });
         try { await this._getTakeTicketAction(ticketId)(); } catch(e) {}
     }
-
     _getSendReplyAction() {
-        return this.api.bindJobAction(`tickets/${this.selectedTicket?.id}/reply`, () => {
+        return this.api.bindJobAction(`freshdesk/tickets/${this.selectedTicket?.id}/reply`, () => {
             const content = FreshdeskStore.getState().replyContent;
             if (!content.trim()) throw new Error("Reply content missing.");
             return { body: content };
@@ -209,7 +205,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
         const ticketId = this.selectedTicket?.id;
         if (!ticketId) return;
         try {
-            const res = await this.api.get(`tickets/${ticketId}/thread`);
+            const res = await this.api.get(`freshdesk/tickets/${ticketId}/thread`);
             if (res.ok) {
                 const txt = await res.text();
                 // Enforce DRY Utility Centralization Mandate
@@ -223,7 +219,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
         }
     }
     _getFetchConversationsAction(ticketId) {
-        return this.api.bindJobAction(`tickets/${ticketId}/conversations`, {}, {
+        return this.api.bindJobAction(`freshdesk/tickets/${ticketId}/conversations`, {}, {
             onComplete: (statusData) => {
                 FreshdeskStore.setState({ conversations: statusData.artifact.conversations || [], conversationsLoading: false });
             },
@@ -256,10 +252,9 @@ export class InSetuExtFreshdesk extends InSetuElement {
             activeJobId: 'starting',
             lastFetchedPage: nextPage + 1
         });
-
         try {
             // ADR 0017: Utilize the native component this.api wrapper
-            const res = await this.api.post('tickets/fetch', {
+            const res = await this.api.post('freshdesk/tickets/fetch', {
                 filterAssignee: state.filterAssignee,
                 filterStatus: state.filterStatus,
                 page: nextPage,

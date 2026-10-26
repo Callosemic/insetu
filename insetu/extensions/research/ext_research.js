@@ -104,8 +104,8 @@ export class InSetuExtResearch extends InSetuElement {
         const fetchWs = this.workspaceId;
         try {
             const [jRes, iRes] = await Promise.all([
-                this.api.get('jobs'),
-                this.api.get('inbox?status=pending,duplicate,in_library')
+                this.api.get('research/jobs'),
+                this.api.get('research/inbox?status=pending,duplicate,in_library')
             ]);
             if (window.inSetu.utils.getActiveWorkspace() !== fetchWs) return;
 
@@ -156,22 +156,20 @@ export class InSetuExtResearch extends InSetuElement {
         })();
         if (dateRange === null) throw new Error("Valid date configuration required for custom ranges.");
         if (!query) throw new Error("Query required.");
-
         const maxResults = formMax === 'custom' ? (parseInt(maxCustom, 10) || 50) : parseInt(formMax, 10);
         try {
-            await this.api.post('start', { query, provider, parser: parser, target_dir: targetDir, max_results: maxResults, date_range: dateRange });
+            await this.api.post('research/start', { query, provider, parser: parser, target_dir: targetDir, max_results: maxResults, date_range: dateRange });
             ResearchStore.setState(s => ({ searchForm: { ...s.searchForm, query: '' }, newJobModalOpen: false }));
             await this.fetchState();
         } catch (err) {
             throw new Error(err.message || "Failed to start job.");
         }
     }
-
     async handleJobAction(jobId, action) {
         if (action === 'delete' && !confirm("Are you sure you want to permanently delete this research job and all its scraped items? This cannot be undone.")) return;
 
         try {
-            await this.api.post(`${jobId}/action`, { action });
+            await this.api.post(`research/${jobId}/action`, { action });
             if (action === 'delete') {
                 ResearchStore.setState({ selectedJobId: null, selectedItemId: null, aiTriageMode: false });
             }
@@ -196,9 +194,8 @@ export class InSetuExtResearch extends InSetuElement {
             const success = await this.sys.executeWorkspaceMutation('fs/save', { filepath, content: item.raw_markdown }, { silent: true });
             if (!success) return alert("Failed to write Markdown to disk.");
         }
-
         try {
-            await this.api.post(`inbox/${inboxId}/disposition`, { status });
+            await this.api.post(`research/inbox/${inboxId}/disposition`, { status });
             if (this.selectedItemId === inboxId) {
                 ResearchStore.setState({ selectedItemId: null });
                 if (window.Sutram?.stores?.Layout) {
@@ -219,7 +216,7 @@ export class InSetuExtResearch extends InSetuElement {
         }
     }
     _getGenerateContextAction(jobId) {
-        return this.api.bindJobAction(`${jobId}/export_context`, {}, {
+        return this.api.bindJobAction(`research/${jobId}/export_context`, {}, {
             onComplete: async (statusData) => {
                 const files = statusData.artifact.files || [];
                 for (const f of files) {
@@ -314,12 +311,14 @@ export class InSetuExtResearch extends InSetuElement {
         const cardStatusExtra = job.status === 'gathering'  
             ? `(Page ${Math.floor((meta.start_index || 0) / 10) + 1} - ${job.total_links} found)`
             : `(${job.processed_links}/${job.total_links} scraped)`;
-
         const activeInbox = this.inbox.filter(i => i.job_id === this.selectedJobId);
         return html`
             <div id="rs-detail-header" style="margin-bottom: 15px; padding: 15px; background: var(--input-bg); border-radius: 6px; border: 1px solid var(--border);">
-                <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px;">
-                    <div style="font-weight: bold; color: var(--intent-primary); font-size: 1.15rem; word-break: break-word; display: flex; align-items: center; gap: 8px;"><yv-icon name="search" style="width: 18px; height: 18px;"></yv-icon> ${job.query}</div>
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
+                        <sutram-btn size="sm" intent="neutral" icon="arrow-left" label="Back to Jobs" style="margin: 0; flex-shrink: 0;" @click=${() => ResearchStore.setState({ selectedJobId: null, selectedItemId: null, aiTriageMode: false })}></sutram-btn>
+                        <div style="font-weight: bold; color: var(--intent-primary); font-size: 1.15rem; word-break: break-word; display: flex; align-items: center; gap: 8px;"><yv-icon name="search" style="width: 18px; height: 18px; flex-shrink: 0;"></yv-icon> ${job.query}</div>
+                    </div>
                     <sutram-async-btn style="flex-shrink: 0;" icon="copy" label="Copy" intent="neutral" .onClick=${() => this.utils.copyRawText(job.query)}></sutram-async-btn>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
@@ -401,14 +400,31 @@ export class InSetuExtResearch extends InSetuElement {
                     </div>
                 `}
             </div>
-            ${this.newJobModalOpen ? html`
+            ${this.newJobModalOpen ? (() => {
+                const missingPkgs = this.getMissingDependencies('research').packages;
+                const needsPlaywright = (this.searchForm.provider === 'google') && missingPkgs.includes('playwright');
+                const needsBs4 = (this.searchForm.provider === 'duckduckgo' || this.searchForm.parser === 'bs4') && missingPkgs.includes('beautifulsoup4');
+                return html`
             <sutram-modal ?open=${true} ?fullscreen=${true} titleText="New Research Job" @sutram-modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
                 <div slot="body" style="display: contents;">
                     ${bindStoreInput(ResearchStore, 'searchForm.query', this.searchForm.query, { placeholder: 'Search Query...', style: 'width: 100%;' })}
                     <div style="display: flex; gap: 10px;">
-                        ${bindStoreInput(ResearchStore, 'searchForm.provider', this.searchForm.provider || 'serper', { type: 'select', style: 'flex: 1;', selectOptions: [{value: 'serper', label: 'Google (Serper.dev API)'}, {value: 'google', label: 'Google (Playwright)'}, {value: 'duckduckgo', label: 'DuckDuckGo'}] })}
+                        ${bindStoreInput(ResearchStore, 'searchForm.provider', this.searchForm.provider || 'serper', { type: 'select', style: 'flex: 1;', selectOptions: [{value: 'serper', label: 'Google (Serper.dev API)'}, {value: 'google', label: missingPkgs.includes('playwright') ? 'Google (Playwright — ⚠️ Missing playwright)' : 'Google (Playwright)'}, {value: 'duckduckgo', label: missingPkgs.includes('beautifulsoup4') ? 'DuckDuckGo (⚠️ Missing beautifulsoup4)' : 'DuckDuckGo'}] })}
                         ${bindStoreInput(ResearchStore, 'searchForm.dateRange', this.searchForm.dateRange || '', { type: 'select', style: 'flex: 1;', selectOptions: [{value: '', label: 'Any Time'}, {value: 'd', label: 'Past Day'}, {value: 'w', label: 'Past Week'}, {value: 'm', label: 'Past Month'}, {value: 'y', label: 'Past Year'}, {value: 'custom', label: 'Custom Range (Exact)...'}, {value: 'custom_year', label: 'Custom Range (Years)...'}] })}
                     </div>
+                    ${(needsPlaywright || needsBs4) ? html`
+                        <div style="background: var(--input-bg); border: 1px solid var(--intent-warning); border-radius: 6px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
+                            <span style="font-size: 0.8rem; color: var(--intent-warning);">Selected provider/parser requires <strong>${missingPkgs.join(', ')}</strong>.</span>
+                            <sutram-async-btn
+                                size="sm"
+                                intent="primary"
+                                icon="download"
+                                label="Install Missing Packages"
+                                style="margin: 0;"
+                                .onClick=${this.installExtensionDependencies('research')}>
+                            </sutram-async-btn>
+                        </div>
+                    ` : ''}
                     <div style="display: ${this.searchForm.dateRange === 'custom' ? 'flex' : 'none'}; gap: 10px;">
                         ${bindStoreInput(ResearchStore, 'searchForm.dateStart', this.searchForm.dateStart, { type: 'date', style: 'flex: 1;' })}
                         ${bindStoreInput(ResearchStore, 'searchForm.dateEnd', this.searchForm.dateEnd, { type: 'date', style: 'flex: 1;' })}
@@ -437,7 +453,8 @@ export class InSetuExtResearch extends InSetuElement {
                 </div>
                 <sutram-async-btn slot="footer" icon="rocket" label="Start Scraping" loadingLabel="Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></sutram-async-btn>
             </sutram-modal>
-            ` : ''}
+            `;
+            })() : ''}
         `;
     }
 }
@@ -493,7 +510,7 @@ export class InSetuResearchPreviewProjection extends InSetuElement {
             if (!success) return alert("Failed to write Markdown to disk.");
         }
         try {
-            await this.api.post(`inbox/${inboxId}/disposition`, { status });
+            await this.api.post(`research/inbox/${inboxId}/disposition`, { status });
             if (window.Sutram?.stores?.Layout) {
                 window.Sutram.stores.Layout.getState().closeWindow('research:preview');
             }
@@ -536,33 +553,6 @@ export class InSetuResearchPreviewProjection extends InSetuElement {
     }
 }
 customElements.define('insetu-research-preview-projection', InSetuResearchPreviewProjection);
-export class InSetuExtResearchActions extends InSetuElement {
-    static get extensionName() { return 'research'; }
-    static properties = { selectedJobId: { type: String } };
-    static styles = [sharedStyles, css`
-        .research-back-btn { 
-            background: var(--intent-neutral); color: white; border: none; padding: 0 12px; font-size: 14px; border-radius: 4px; cursor: pointer; font-weight: bold; margin: 0; height: 34px; display: flex; align-items: center; 
-        }
-        .research-back-btn:hover { filter: brightness(1.2); }
-    `];
-    constructor() { super(); this.selectedJobId = null; }
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(
-            ResearchStore,
-            state => state.selectedJobId,
-            (selectedJobId) => {
-                this.selectedJobId = selectedJobId;
-            }
-        );
-        this.selectedJobId = ResearchStore.getState().selectedJobId;
-    }
-    render() {
-        if (!this.selectedJobId) return html``;
-        return html`<button class="research-back-btn" @click=${() => ResearchStore.setState({ selectedJobId: null, selectedItemId: null })}>🔙 Back to Jobs</button>`;
-    }
-}
-customElements.define('insetu-ext-research-actions', InSetuExtResearchActions);
 window.ExtensionRegistry.registerExtension('research', {
     name: "Research Inbox",
     version: "2.0.0",
@@ -619,13 +609,6 @@ window.ExtensionRegistry.registerExtension('research', {
     ],
     layoutSlots: [
         {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "edit",
-            targetSub: "research",
-            component: "insetu-ext-research-actions",
-            order: 1
-        },
-        {
             slot: "slots:sub-navigation",
             targetParent: "edit",
             id: "research",
@@ -633,28 +616,14 @@ window.ExtensionRegistry.registerExtension('research', {
             icon: "search",
             intent: "highlight",
             order: 4,
+            menuActions: [
+                {
+                    label: "New Research Job",
+                    icon: "plus",
+                    onClick: () => ResearchStore.setState({ newJobModalOpen: true })
+                }
+            ],
             component: "insetu-ext-research"
         }
     ]
 });
-// --- HEADLESS EXTENSION STATE SYNCHRONIZATION ---
-// Executes independently of the UI component to ensure the inbox is pre-hydrated.
-async function syncResearchState() {
-    try {
-        const [jRes, iRes] = await Promise.all([
-            window.inSetu.api.get('research/jobs'),
-            window.inSetu.api.get('research/inbox?status=pending,duplicate,in_library')
-        ]);
-        if (jRes.ok && iRes.ok) {
-            const jData = await jRes.json();
-            const iData = await iRes.json();
-            const parsedJobs = (jData.jobs || []).map(j => ({
-                ...j,
-                meta: (() => { try { return JSON.parse(j.meta_json || '{}'); } catch(e) { return {}; } })()
-            }));
-            ResearchStore.setState({ jobs: parsedJobs, inbox: iData.items || [] });
-        }
-    } catch(e) {
-        console.warn("Headless research sync failed:", e);
-    }
-}

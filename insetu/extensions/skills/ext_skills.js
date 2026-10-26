@@ -209,7 +209,7 @@ export class InSetuExtSkills extends InSetuElement {
         SkillsStore.getState().fetchDomainConfig();
     }
     async _handleCreateSkill(e) {
-        e.preventDefault();
+        if (e && e.preventDefault) e.preventDefault();
         const domain = this._newSkillForm.domain || this._newSkillDomain || Object.keys(this.domainConfig)[0];
 
         const metrics = {};
@@ -233,7 +233,7 @@ export class InSetuExtSkills extends InSetuElement {
             metrics: metrics
         };
         try {
-            const res = await this.api.post('create', payload, {
+            const res = await this.api.post('skills/create', payload, {
                 collapseKey: `skills:create:${payload.name}`
             });
             const data = await res.json();
@@ -247,62 +247,11 @@ export class InSetuExtSkills extends InSetuElement {
             alert(`Failed to compile item structure: ${err.message}`);
         }
     }
-
-    _handleStatusChange(e) {
-        const newStatus = e.target.value;
-        if (newStatus !== this.selectedItem.status) {
-            const shouldClear = confirm("🔄 You are changing the mastery stage. Would you like to reset the completed parts checklist for this new stage?");
-            if (shouldClear) {
-                SkillsStore.getState().updateMetricField('completed_parts', '');
-            }
-        }
-        SkillsStore.setState({ formStatus: newStatus });
-    }
-
-    _togglePartCompletion(part, isChecked) {
-        const currentPartsStr = this.formMetrics.completed_parts || '';
-        const parsedParts = currentPartsStr.split(',').map(p => p.trim()).filter(p => p);
-        const completedParts = isChecked ? (parsedParts.includes(part) ? parsedParts : [...parsedParts, part]) : parsedParts.filter(p => p !== part);
-
-        SkillsStore.getState().updateMetricField('completed_parts', completedParts.join(', '));
-    }
-
-    _renderPartsCheckboxes() {
-        const partsStr = this.formMetrics.parts !== undefined ? this.formMetrics.parts : (this.selectedItem.metrics?.parts || '');
-        if (!partsStr) return '';
-
-        const allParts = partsStr.split(',').map(p => p.trim()).filter(p => p);
-        const completedPartsStr = this.formMetrics.completed_parts || '';
-        const completedParts = completedPartsStr.split(',').map(p => p.trim()).filter(p => p);
-
-        return html`
-            <div style="margin-top: 10px; border-top: 1px solid var(--border); padding-top: 15px;">
-                <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 8px; color: var(--text-muted);">
-                    🧩 Section Coverage Checklist
-                </label>
-                <div style="display: flex; flex-direction: column; gap: 8px; background: var(--bg); padding: 12px; border-radius: 4px; border: 1px solid var(--border);">
-                    ${allParts.map(part => {
-                        const isChecked = completedParts.includes(part);
-                        return html`
-                            <label style="display: flex; align-items: center; gap: 10px; font-size: 0.9rem; cursor: pointer; user-select: none;">
-                                <input type="checkbox" ?checked=${isChecked} 
-                                    @change=${(e) => this._togglePartCompletion(part, e.target.checked)}
-                                    style="margin: 0; width: 16px; height: 16px; cursor: pointer;">
-                                <span style="${isChecked ? 'text-decoration: line-through; color: var(--text-muted); opacity: 0.7;' : 'font-weight: 500;'}">
-                                    ${part}
-                                </span>
-                            </label>
-                        `;
-                    })}
-                </div>
-            </div>
-        `;
-    }
     async _deleteSkillItem() {
         if (!this.selectedItem) return;
         if (!confirm(`⚠️ Are you absolutely sure you want to permanently delete "${this.selectedItem.name}"?\nThis action will destroy the markdown file on disk and cannot be undone.`)) return;
         try {
-            const res = await this.api.post('delete', { filepath: this.selectedItem.filepath }, { 
+            const res = await this.api.post('skills/delete', { filepath: this.selectedItem.filepath }, { 
                 collapseKey: `skills:delete:${this.selectedItem.filepath}`,
                 pendingMutations: [this.selectedItem.filepath]
             });
@@ -332,7 +281,7 @@ export class InSetuExtSkills extends InSetuElement {
             custom_steps: this.formMetrics.custom_steps || ''
         };
         try {
-            const res = await this.api.post('update', payload, { 
+            const res = await this.api.post('skills/update', payload, { 
                 collapseKey: `skills:update:${this.selectedItem.filepath}`,
                 pendingMutations: [this.selectedItem.filepath]
             });
@@ -349,69 +298,6 @@ export class InSetuExtSkills extends InSetuElement {
         } catch (err) {
             alert(`Failed to save adjustments: ${err.message}`);
         }
-    }
-    async _submitPracticeSession() {
-        if (!this.selectedItem) return;
-        const payload = {
-            filepath: this.selectedItem.filepath,
-            score: this.formScore,
-            status: this.formStatus || this.selectedItem.status,
-            name: this._editName || this.selectedItem.name,
-            tags: this._editTags,
-            group: this._editGroup,
-            metrics: this.formMetrics
-        };
-        try {
-            const res = await this.api.post('log', payload, { 
-                collapseKey: `skills:log:${this.selectedItem.filepath}`,
-                pendingMutations: [this.selectedItem.filepath]
-            });
-            const data = await res.json();
-            const item = this.selectedItem;
-            SkillsStore.setState({ selectedItem: null });
-            if (data.job_id === 'offline_queue') {
-                SkillsStore.setState(s => ({
-                    playlist: s.playlist.filter(p => p.id !== item.id),
-                    allSkills: s.allSkills.map(p => p.id === item.id ? { ...p, status: payload.status, metrics: payload.metrics } : p)
-                }));
-            }
-            alert("Practice entry committed atomically into text ledger!");
-        } catch (err) {
-            console.error("Practice logging failed:", err);
-            alert(`Network error sync loop failed: ${err.message}`);
-        }
-    }
-    _renderMetricInput(key, def) {
-        if (key === 'parts' || key === 'completed_parts' || key === 'custom_steps') return '';
-        const value = this.formMetrics[key] !== undefined ? this.formMetrics[key] : '';
-
-        if (def.type === 'rating' || (def.min !== undefined && def.max !== undefined)) {
-            const min = def.min !== undefined ? def.min : 1;
-            const max = def.max !== undefined ? def.max : 5;
-            const options = [];
-            for (let i = min; i <= max; i++) {
-                options.push({ value: i, label: String(i) });
-            }
-
-            return html`
-                <sutram-select 
-                    .label=${def.label} 
-                    .value=${value !== '' ? value : min} 
-                    .options=${options}
-                    @sutram-input-changed=${(e) => SkillsStore.getState().updateMetricField(key, parseInt(e.detail.value, 10))}>
-                </sutram-select>
-            `;
-        }
-
-        return html`
-            <sutram-input 
-                type="number" 
-                .label=${def.label + (def.unit ? ` (${def.unit})` : '')}
-                .value=${value} 
-                placeholder="e.g. 120"
-                @sutram-input-changed=${(e) => SkillsStore.getState().updateMetricField(key, e.detail.value === '' ? '' : parseFloat(e.detail.value))}>
-            </sutram-input>
-        `;
     }
     _renderGroupsTab() {
         const structuredGroups = [...this.groupsList];
@@ -566,7 +452,7 @@ export class InSetuExtSkills extends InSetuElement {
                 ?fullscreen=${true}
                 titleText="Add New Training Skill Item"
                 @sutram-modal-closed=${() => SkillsStore.setState({ newSkillModalOpen: false })}>
-                <form slot="body" @submit=${this._handleCreateSkill} style="display: contents;">
+                <div slot="body" style="display: contents;">
                     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
                         <sutram-input label="Item Name / Track Title" placeholder="e.g. Stairway to Heaven" .value=${this._newSkillForm.name || ''} @sutram-input-changed=${e => this._newSkillForm.name = e.detail.value}></sutram-input>
                         <div>
@@ -642,8 +528,8 @@ export class InSetuExtSkills extends InSetuElement {
                             </div>
                         `;
                     })()}
-                    <button type="submit" style="background: var(--intent-success); font-weight: bold; width: 100%; padding: 12px; margin-top: 10px;">➕ Initialize Track on Disk</button>
-                </form>
+                </div>
+                <sutram-async-btn slot="footer" intent="success" icon="plus" label="Initialize Track on Disk" style="width: 100%; display: block;" .onClick=${(e) => this._handleCreateSkill(e)}></sutram-async-btn>
             </sutram-modal>
             ` : ''}
         `;
@@ -773,7 +659,7 @@ export class InSetuSkillsSessionProjection extends InSetuElement {
             metrics: this.formMetrics
         };
         try {
-            const res = await this.api.post('log', payload, { 
+            const res = await this.api.post('skills/log', payload, { 
                 collapseKey: `skills:log:${this.selectedItem.filepath}`,
                 pendingMutations: [this.selectedItem.filepath]
             });

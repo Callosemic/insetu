@@ -5,7 +5,6 @@ import json
 import urllib.request
 import urllib.parse
 from typing import TypedDict, Optional, List
-from flask import request, jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import InSetuURI
 CITATIONS_SCHEMA = {
@@ -174,10 +173,9 @@ def get_metadata_index(ctx):
                 authors.add(f"{family}, {given}")
             elif family:
                 authors.add(family)
-
-        return jsonify({"publications": pubs, "authors": sorted(list(authors))})
+        return {"publications": pubs, "authors": sorted(list(authors))}
     except Exception as e:
-        return jsonify({"publications": [], "authors": []})
+        return {"publications": [], "authors": []}
 def _ensure_citations_hydrated(ctx):
     count = ctx.db.execute("SELECT count(*) FROM citations").fetchone()[0]
     saved = ctx.store.get("library.json", "citations", None)
@@ -216,15 +214,15 @@ def get_citations(ctx):
             item = json.loads(row['raw_json'])
             item['_attachments'] = json.loads(row['attachments']) if row['attachments'] else []
             items.append(item)
-        return jsonify({"citations": items})
+        return {"citations": items}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 class AttachCitationPayload(TypedDict):
     attachments: List[dict]
 @citations_bp.route('<path:csl_id>/attach', methods=['POST'], request_schema=AttachCitationPayload, docstring="Attaches files or metadata pointers to a specific citation ID.")
 def attach_citation(ctx, csl_id):
     """Attaches files or metadata pointers to a specific citation ID."""
-    data = ctx.req.json
+    data = ctx.payload or {}
     attachments = data.get("attachments", [])
     try:
         _ensure_citations_hydrated(ctx)
@@ -232,11 +230,18 @@ def attach_citation(ctx, csl_id):
         conn.execute("UPDATE citations SET attachments = ? WHERE id = ?", (json.dumps(attachments), csl_id))
         conn.commit()
         _flush_citations_to_json(ctx)
-        return jsonify({"status": "success"})
+        return {"status": "success"}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 @citations_bp.worker("search_task")
-def _background_citation_search(ctx, query, source, field, category, page, **kwargs):
+def _background_citation_search(
+    ctx,
+    query: str = "",
+    source: str = "openalex",
+    field: str = "all",
+    category: str = "",
+    page: int = 1,
+):
     try:
         ctx.jobs.update_progress("Querying global academic catalogs...")
         safe_query = urllib.parse.quote(query) if query else ""
@@ -327,34 +332,34 @@ class SearchCitationsPayload(TypedDict, total=False):
 @citations_bp.route('search', methods=['POST'], request_schema=SearchCitationsPayload, docstring="Queries global academic catalogs for citations matching the criteria.")
 def search_global_citations(ctx):
     """Queries global academic catalogs for citations matching the criteria."""
-    data = ctx.req.json or {}
-    query = data.get('q', '').strip()
-    source = data.get('source', 'openalex').strip()
-    field = data.get('field', 'all').strip()
-    category = data.get('category', '').strip()
+    data = ctx.payload or {}
+    query = str(data.get('q') or '').strip()
+    source = str(data.get('source') or 'openalex').strip()
+    field = str(data.get('field') or 'all').strip()
+    category = str(data.get('category') or '').strip()
 
     try:
         page = int(data.get('page', 1))
     except ValueError:
         page = 1
     if not query and not category:
-        return jsonify({"citations": []})
+        return {"citations": []}
     job_id = ctx.jobs.submit("search_task", query=query, source=source, field=field, category=category, page=page, job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202
 class ImportCitationsPayload(TypedDict, total=False):
     citations: List[dict]
     strategy: str
 @citations_bp.route('import', methods=['POST'], request_schema=ImportCitationsPayload, docstring="Imports an array of CSL-JSON citation objects into the global library, resolving conflicts based on the chosen strategy.")
 def import_citations(ctx):
     """Imports an array of CSL-JSON citation objects into the global library, resolving conflicts based on the chosen strategy."""
-    data = ctx.req.json
+    data = ctx.payload
     if not data:
-        return jsonify({"error": "Missing JSON payload"}), 400
+        return {"error": "Missing JSON payload"}, 400
 
     strategy = data.get("strategy", "overwrite") # overwrite, skip, or manual
     items = data.get("citations", []) if isinstance(data, dict) and "citations" in data else data
     if not isinstance(items, list):
-        return jsonify({"error": "Invalid format.\nExpecting array of CSL-JSON objects."}), 400
+        return {"error": "Invalid format.\nExpecting array of CSL-JSON objects."}, 400
     try:
         _ensure_citations_hydrated(ctx)
         conn = ctx.db
@@ -386,15 +391,14 @@ def import_citations(ctx):
             count += 1
         conn.commit()
         _flush_citations_to_json(ctx)
-
-        return jsonify({
+        return {
             "status": "success",  
             "imported": count, 
             "conflicts": conflicts,
             "message": f"Successfully integrated {count} records."
-        })
+        }
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 class DeleteCitationPayload(TypedDict, total=False):
     pass
 @citations_bp.route('<path:csl_id>', methods=['DELETE'], request_schema=DeleteCitationPayload, docstring="Permanently removes a citation from the global library.")
@@ -405,13 +409,13 @@ def delete_citation(ctx, csl_id):
         conn = ctx.db
         cursor = conn.execute("DELETE FROM citations WHERE id = ?", (csl_id,))
         if cursor.rowcount == 0:
-            return jsonify({"error": "Citation not found"}), 404
+            return {"error": "Citation not found"}, 404
         conn.commit()
         _flush_citations_to_json(ctx)
 
-        return jsonify({"status": "success", "message": f"Deleted citation {csl_id}"})
+        return {"status": "success", "message": f"Deleted citation {csl_id}"}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 @citations_bp.on('pre_compile_document')
 def inject_citation_middleware(text, workspace_id=None, **kwargs):
     """Parses text for citation macros and injects bibliography temp files and citeproc flags into the compiler."""

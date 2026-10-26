@@ -5,7 +5,6 @@ import uuid
 import datetime
 from pathlib import Path
 from typing import TypedDict, Optional, Any
-from flask import request, jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import parse_frontmatter, InSetuURI, slugify
 SKILLS_SCHEMA = {
@@ -141,9 +140,9 @@ def get_practice_playlist(ctx):
             d = dict(row)
             d['metrics'] = json.loads(d['metrics_json'])
             items.append(d)
-        return jsonify({"playlist": items})
+        return {"playlist": items}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 class LogSkillPayload(TypedDict, total=False):
     filepath: str
     score: int
@@ -156,18 +155,18 @@ class LogSkillPayload(TypedDict, total=False):
 @skills_bp.route('log', methods=['POST'], request_schema=LogSkillPayload, docstring="Logs a practice session and updates the SM-2 spaced repetition clocks.")
 def log_skill_practice(ctx):
     """Logs a practice run against the user's global profile tracking framework."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     filename = data.get('filepath')  # Maps strictly to user space base filename
     score = int(data.get('score', 3))
     updates = data.get('metrics', {})
     if not filename:
-        return jsonify({"error": "Filename tracking reference required"}), 400
+        return {"error": "Filename tracking reference required"}, 400
     try:
         canon_uri = _canonical_skill_uri(filename)
         conn = ctx.db
         row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (canon_uri,)).fetchone()
         if not row:
-            return jsonify({"error": "Global user skill record not found"}), 404
+            return {"error": "Global user skill record not found"}, 404
         current_interval = row['interval_days'] or 1
         if score >= 3:
             if current_interval == 1: next_interval = 3
@@ -207,11 +206,10 @@ def log_skill_practice(ctx):
 
         ctx.vfs.save(final_uri, final_content)
         ctx.sync_vfs_barrier()
-
         _parse_and_upsert_skill(final_uri, workspace_id=ctx.workspace_id)
-        return jsonify({"status": "success", "interval_days": next_interval, "next_review": next_review_date.isoformat(), "filepath": final_uri})
+        return {"status": "success", "interval_days": next_interval, "next_review": next_review_date.isoformat(), "filepath": final_uri}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 class UpdateSkillPayload(TypedDict, total=False):
     filepath: str
     name: str
@@ -224,16 +222,16 @@ class UpdateSkillPayload(TypedDict, total=False):
 @skills_bp.route('update', methods=['POST'], request_schema=UpdateSkillPayload, docstring="Updates structural properties of a skill item without affecting practice clocks.")
 def update_skill_structure(ctx):
     """Updates structural track properties without affecting the SM-2 spaced repetition clocks."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     filename = data.get('filepath')
     if not filename:
-        return jsonify({"error": "Filename tracking reference required"}), 400
+        return {"error": "Filename tracking reference required"}, 400
     try:
         canon_uri = _canonical_skill_uri(filename)
         conn = ctx.db
         row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (canon_uri,)).fetchone()
         if not row:
-            return jsonify({"error": "Global user skill record not found"}), 404
+            return {"error": "Global user skill record not found"}, 404
         content = ctx.vfs.read(canon_uri) or ""
 
         existing_metrics = json.loads(row['metrics_json']) if row['metrics_json'] else {}
@@ -266,30 +264,29 @@ def update_skill_structure(ctx):
 
         ctx.vfs.save(final_uri, final_content)
         ctx.sync_vfs_barrier()
-
         _parse_and_upsert_skill(final_uri, workspace_id=ctx.workspace_id)
-        return jsonify({"status": "success", "filepath": final_uri})
+        return {"status": "success", "filepath": final_uri}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 class DeleteSkillPayload(TypedDict):
     filepath: str
 
 @skills_bp.route('delete', methods=['POST'], request_schema=DeleteSkillPayload, docstring="Permanently deletes a skill tracking record and its associated physical markdown file.")
 def delete_skill_item(ctx):
     """Permanently purges a skill markdown asset from user space disk and index ledger."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     filename = data.get('filepath')
     if not filename:
-        return jsonify({"error": "Filename tracking reference required"}), 400
+        return {"error": "Filename tracking reference required"}, 400
     try:
         canon_uri = _canonical_skill_uri(filename)
         conn = ctx.db
         ctx.vfs.delete(canon_uri)
         conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (canon_uri,))
         conn.commit()
-        return jsonify({"status": "success"})
+        return {"status": "success"}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 @skills_bp.route('list', methods=['GET'], docstring="Retrieves all registered skill items across the entire user profile.")
 def get_all_skills(ctx):
     """Returns every tracking item registered across the user profile layout."""
@@ -302,9 +299,9 @@ def get_all_skills(ctx):
             d = dict(row)
             d['metrics'] = json.loads(d['metrics_json'])
             items.append(d)
-        return jsonify({"skills": items})
+        return {"skills": items}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 class CreateSkillPayload(TypedDict, total=False):
     name: str
     domain: str
@@ -318,17 +315,17 @@ class CreateSkillPayload(TypedDict, total=False):
 @skills_bp.route('create', methods=['POST'], request_schema=CreateSkillPayload, docstring="Generates a new skill tracking physical markdown file and inserts it into the index.")
 def create_new_skill(ctx):
     """Generates a physical markdown file structure inside global user space."""
-    data = ctx.req.json or {}
-    name = data.get('name', '').strip()
-    domain = data.get('domain', 'musical_repertoire').strip()
-    tags = data.get('tags', '').strip()
-    group_name = data.get('group', '').strip()
-    status = data.get('status', 'untouched').strip()
-    custom_steps = data.get('custom_steps', '').strip()
-    parts = data.get('parts', '').strip()
+    data = ctx.payload or {}
+    name = str(data.get('name') or '').strip()
+    domain = str(data.get('domain') or 'musical_repertoire').strip()
+    tags = str(data.get('tags') or '').strip()
+    group_name = str(data.get('group') or '').strip()
+    status = str(data.get('status') or 'untouched').strip()
+    custom_steps = str(data.get('custom_steps') or '').strip()
+    parts = str(data.get('parts') or '').strip()
     initial_metrics = data.get('metrics', {})
     if not name:
-        return jsonify({"error": "Name required"}), 400
+        return {"error": "Name required"}, 400
     try:
         filename = f"{slugify(name)}.md"
         s_id = "SKL-" + uuid.uuid4().hex[:8].upper()
@@ -358,8 +355,7 @@ def create_new_skill(ctx):
             filename=filename
         )
         ctx.sync_vfs_barrier()
-
         _parse_and_upsert_skill(canon_uri, workspace_id=ctx.workspace_id)
-        return jsonify({"status": "success", "filepath": canon_uri})
+        return {"status": "success", "filepath": canon_uri}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500

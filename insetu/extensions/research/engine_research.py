@@ -8,7 +8,6 @@ import urllib.parse
 import urllib.error
 import json
 from typing import TypedDict, Optional
-from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import is_extension_enabled, get_workspace_physics
 RESEARCH_SCHEMA = {
@@ -75,15 +74,35 @@ RESEARCH_SETTINGS_SCHEMA = [
         "description": "Random jitter in milliseconds added to individual URL scrapes."
     }
 ]
-research_bp = InSetuExtension('research', __name__, title="Research Inbox", description="Web search, scraping, and AI triage inbox.", schema=RESEARCH_SCHEMA, settings_schema=RESEARCH_SETTINGS_SCHEMA)
+research_bp = InSetuExtension(
+    'research',
+    __name__,
+    title="Research Inbox",
+    description="Web search, scraping, and AI triage inbox.",
+    schema=RESEARCH_SCHEMA,
+    settings_schema=RESEARCH_SETTINGS_SCHEMA,
+    external_dependencies=["beautifulsoup4", "playwright"],
+    post_install_commands=[["$PYTHON", "-m", "playwright", "install", "chromium"]],
+)
 __depends__ = ['ingest']
+
+
+@research_bp.on('vfs_resolve_file')
+def resolve_research_artifacts(ctx, filename=None, workspace_id=None, **kwargs):
+    if not filename or '/' in str(filename).replace('\\', '/'):
+        return None
+    cand = Path(ctx.paths["artifacts_base"]).joinpath(str(filename))
+    if cand.exists():
+        return cand.as_posix(), True
+    return None
+
 
 # --- SEARCH STRATEGY PATTERN ---
 class SearchProvider:
-    def execute_search(self, query, max_results=10, date_range=None, start_index=0):
+    def execute_search(self, query, max_results=10, date_range=None, start_index=0, workspace_id='default'):
         raise NotImplementedError
 class DuckDuckGoHTMLProvider(SearchProvider):
-    def execute_search(self, query, max_results=10, date_range=None, start_index=0):
+    def execute_search(self, query, max_results=10, date_range=None, start_index=0, workspace_id='default'):
         try:
             from bs4 import BeautifulSoup as _BeautifulSoup
         except ImportError:
@@ -122,7 +141,7 @@ class DuckDuckGoHTMLProvider(SearchProvider):
                 
         return results
 class GooglePlaywrightProvider(SearchProvider):
-    def execute_search(self, query, max_results=10, date_range=None, start_index=0):
+    def execute_search(self, query, max_results=10, date_range=None, start_index=0, workspace_id='default'):
         try:
             from playwright.sync_api import sync_playwright as _sync_playwright, TimeoutError as _PlaywrightTimeoutError
         except ImportError:
@@ -214,11 +233,11 @@ class GooglePlaywrightProvider(SearchProvider):
             except Exception as e:
                 # Drop an audit log of the raw SERP DOM to debug layout changes or CAPTCHAs
                 try:
-                    cfg_path, _ = get_workspace_physics()
+                    cfg_path, _ = get_workspace_physics(workspace_id)
                     log_dir = Path(cfg_path).parent / "cache" / "logs" / "research_dumps"
-                    os.makedirs(log_dir.as_posix(), exist_ok=True)
+                    log_dir.mkdir(parents=True, exist_ok=True)
                     dump_path = log_dir / f"google_serp_fail_{int(time.time())}.html"
-                    dump_ctx = research_bp.get_context('default')
+                    dump_ctx = research_bp.get_context(workspace_id)
                     dump_ctx.vfs.save(dump_path.as_posix(), page.content(), data={"is_absolute_artifact": True, "ignore_ledger": True})
                     print(f"  [!] SERP parsing failed. Raw HTML dumped to: {dump_path}")
                 except Exception:
@@ -292,7 +311,7 @@ def get_provider(provider_name):
     raise ValueError(f"Unknown provider: {provider_name}")
 # --- ASYNCHRONOUS EVENT LOOP (METRONOME DISPATCHER) ---
 @research_bp.worker("gather_next_page")
-def gather_next_page(ctx, research_job_id=None, job_id=None, **kwargs):
+def gather_next_page(ctx, research_job_id: Optional[str] = None, job_id: Optional[str] = None):
   """Metronome callback to fetch a single SERP page, preventing rate limits."""
   target_id = research_job_id or job_id
   workspace_id = ctx.workspace_id
@@ -351,9 +370,8 @@ def gather_next_page(ctx, research_job_id=None, job_id=None, **kwargs):
       conn.execute("UPDATE research_jobs SET status='failed', meta_json=? WHERE id=?", (json.dumps(meta), target_id))
       conn.commit()
       ctx.jobs.cancel(f"research_gather_{target_id}")
-
 @research_bp.worker("scrape_next_link")
-def scrape_next_link(ctx, research_job_id=None, job_id=None, **kwargs):
+def scrape_next_link(ctx, research_job_id: Optional[str] = None, job_id: Optional[str] = None):
     """Executes a single link scrape inside the centralized ThreadPool."""
     target_id = research_job_id or job_id
     conn = ctx.db
@@ -378,10 +396,9 @@ def scrape_next_link(ctx, research_job_id=None, job_id=None, **kwargs):
       job_data = conn.execute("SELECT meta_json FROM research_jobs WHERE id=?", (target_id,)).fetchone()
       meta = json.loads(job_data['meta_json']) if job_data and job_data['meta_json'] else {}
       parser_type = meta.get('parser', 'jina')
-      from insetu.extensions.ingest.engine_ingest import extract_markdown_from_url as _extract_markdown_from_url
-      extracted = _extract_markdown_from_url(ctx, target_url, method=parser_type)
+      extracted = ctx.call("ingest.url", url=target_url, method=parser_type, wait=True)
       now_str = datetime.now().isoformat(timespec='seconds')
-      conn.execute("UPDATE research_inbox SET raw_markdown=?, title=?, scraped_at=? WHERE id=?", (extracted["clean_markdown"], extracted["title"], now_str, inbox_id))
+      conn.execute("UPDATE research_inbox SET raw_markdown=?, title=?, scraped_at=? WHERE id=?", (extracted.get("markdown", ""), extracted.get("title", "Untitled"), now_str, inbox_id))
     except Exception as e:
         now_str = datetime.now().isoformat(timespec='seconds')
         conn.execute("UPDATE research_inbox SET raw_markdown=?, scraped_at=? WHERE id=?", (f"Extraction Error: {str(e)}", now_str, inbox_id))
@@ -410,18 +427,18 @@ class ResearchStartPayload(TypedDict, total=False):
 def start_job(ctx):
     """Starts a new asynchronous research and scraping job."""
     workspace_id = ctx.workspace_id
-    data = ctx.req.json
-    query = data.get('query', '').strip()
+    data = ctx.payload or {}
+    query = str(data.get('query') or '').strip()
     provider_name = data.get('provider', 'duckduckgo')
     max_results = int(data.get('max_results', 10))
-    date_range = data.get('date_range', '').strip()
+    date_range = str(data.get('date_range') or '').strip()
     parser = data.get('parser', 'jina')
     target_dir = data.get('target_dir', 'research/')
     if not is_extension_enabled('ingest', workspace_id):
-        return jsonify({"error": "Pre-flight Validation Failed: Extension 'ingest' is required but not enabled in this workspace."}), 422
+        return {"error": "Pre-flight Validation Failed: Extension 'ingest' is required but not enabled in this workspace."}, 422
 
     if not query:
-        return jsonify({"error": "Query required"}), 400
+        return {"error": "Query required"}, 400
 
     job_id = str(uuid.uuid4())
     now_str = datetime.now().isoformat(timespec='seconds')
@@ -443,9 +460,9 @@ def start_job(ctx):
       ctx.jobs.schedule("gather_next_page", g_int, jitter_ms=g_jit, job_id=f"research_gather_{job_id}", research_job_id=job_id)
 
       # Return immediately so the UI doesn't hang
-      return jsonify({"status": "success", "job_id": job_id, "message": "Gathering links asynchronously."})
+      return {"status": "success", "job_id": job_id, "message": "Gathering links asynchronously."}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 class ResearchActionPayload(TypedDict, total=False):
     action: str
     meta: dict
@@ -453,14 +470,14 @@ class ResearchActionPayload(TypedDict, total=False):
 def job_action(ctx, job_id):
     """Performs lifecycle actions (pause, resume, cancel, retry, delete) on a specific research job."""
     workspace_id = ctx.workspace_id
-    data = ctx.req.json
+    data = ctx.payload or {}
     action = data.get('action') # 'pause', 'resume', 'cancel'
 
     conn = ctx.db
     job = conn.execute("SELECT status FROM research_jobs WHERE id=?", (job_id,)).fetchone()
 
     if not job:
-        return jsonify({"error": "Job not found"}), 404
+        return {"error": "Job not found"}, 404
 
     current_status = job['status']
 
@@ -468,19 +485,19 @@ def job_action(ctx, job_id):
         conn.execute("UPDATE research_jobs SET status='paused' WHERE id=?", (job_id,))
         conn.commit()
         # The Metronome will detect the paused status and self-terminate the ledger entry on its next execution
-        return jsonify({"status": "success", "message": "Job paused"})
+        return {"status": "success", "message": "Job paused"}
     elif action == 'cancel' and current_status in ('running', 'paused', 'gathering'):
         conn.execute("UPDATE research_jobs SET status='cancelled' WHERE id=?", (job_id,))
         conn.execute("DELETE FROM research_inbox WHERE job_id=?", (job_id,))
         conn.commit()
-        return jsonify({"status": "success", "message": "Job cancelled"})
+        return {"status": "success", "message": "Job cancelled"}
     elif action == 'resume' and current_status == 'paused':
         conn.execute("UPDATE research_jobs SET status='running' WHERE id=?", (job_id,))
         conn.commit()
         _, _, s_int, s_jit = _get_research_intervals(workspace_id)
         # Dispatch to the Metronome
         ctx.jobs.schedule("scrape_next_link", s_int, jitter_ms=s_jit, job_id=f"research_{job_id}", research_job_id=job_id)
-        return jsonify({"status": "success", "message": "Job resumed"})
+        return {"status": "success", "message": "Job resumed"}
     elif action == 'update_meta':
         job_data = conn.execute("SELECT meta_json FROM research_jobs WHERE id=?", (job_id,)).fetchone()
         meta = json.loads(job_data['meta_json'] if job_data and job_data['meta_json'] else '{}')
@@ -488,7 +505,7 @@ def job_action(ctx, job_id):
         meta.update(meta_updates)
         conn.execute("UPDATE research_jobs SET meta_json=? WHERE id=?", (json.dumps(meta), job_id))
         conn.commit()
-        return jsonify({"status": "success", "message": "Metadata updated"})
+        return {"status": "success", "message": "Metadata updated"}
     elif action == 'delete':
         conn.execute("DELETE FROM research_jobs WHERE id=?", (job_id,))
         conn.execute("DELETE FROM research_inbox WHERE job_id=?", (job_id,))
@@ -496,7 +513,7 @@ def job_action(ctx, job_id):
         ctx.jobs.cancel(f"research_{job_id}")
         ctx.jobs.cancel(f"research_gather_{job_id}")
 
-        return jsonify({"status": "success", "message": "Job permanently deleted"})
+        return {"status": "success", "message": "Job permanently deleted"}
 
     elif action == 'retry' and current_status == 'failed':
         job_data = conn.execute("SELECT meta_json, total_links FROM research_jobs WHERE id=?", (job_id,)).fetchone()
@@ -518,26 +535,26 @@ def job_action(ctx, job_id):
         else:
             ctx.jobs.schedule("scrape_next_link", s_int, jitter_ms=s_jit, job_id=f"research_{job_id}", research_job_id=job_id)
 
-        return jsonify({"status": "success", "message": f"Job retrying in {target_status} phase"})
+        return {"status": "success", "message": f"Job retrying in {target_status} phase"}
 
-    return jsonify({"error": f"Invalid transition from {current_status} to {action}"}), 400
+    return {"error": f"Invalid transition from {current_status} to {action}"}, 400
 @research_bp.route('jobs', methods=['GET'], docstring="Retrieves the history of active and past research jobs.")
 def list_jobs(ctx):
     """Retrieves the history of active and past research jobs."""
     jobs = ctx.db.get_all("research_jobs", order_by="created_at DESC")
-    return jsonify({"jobs": jobs})
+    return {"jobs": jobs}
 @research_bp.route('inbox', methods=['GET'], docstring="Retrieves scraped research links currently awaiting triage in the inbox.")
 def list_inbox(ctx):
     """Retrieves scraped research links currently awaiting triage in the inbox."""
-    status_filter = ctx.req.args.get('status', 'pending')
+    status_filter = str(ctx.payload.get('status') or 'pending')
     statuses = tuple(status_filter.split(','))
     conn = ctx.db
     placeholders = ','.join(['?'] * len(statuses))
     cursor = conn.execute(f"SELECT * FROM research_inbox WHERE status IN ({placeholders})", statuses)
     items = [dict(row) for row in cursor.fetchall()]
-    return jsonify({"items": items})
+    return {"items": items}
 @research_bp.worker("export_context_task")
-def _background_export_context(ctx, research_job_id, **kwargs):
+def _background_export_context(ctx, research_job_id: str):
     ctx.jobs.update_progress("Compiling research context...")
     conn = ctx.db
     cursor = conn.execute("SELECT id, title, raw_markdown FROM research_inbox WHERE job_id=? AND status='pending' AND scraped_at IS NOT NULL", (research_job_id,))
@@ -568,7 +585,7 @@ def _background_export_context(ctx, research_job_id, **kwargs):
         out_path = Path(ctx.paths["artifacts_base"]).joinpath(filename).as_posix()
         ctx.vfs.save(out_path, chunk, data={"is_absolute_artifact": True})
         ctx.jobs.register_ephemeral(out_path, ttl_seconds=3600, owner="research")
-        artifacts.append({"filename": filename, "download_url": f"/download/{filename}"})
+        artifacts.append({"filename": filename, "download_url": f"/api/{ctx.workspace_id}/fs/fetch?file={filename}&download=1"})
 
     return {"message": "Context packed.", "artifact": {"files": artifacts}}
 class ExportContextPayload(TypedDict, total=False):
@@ -578,17 +595,17 @@ class ExportContextPayload(TypedDict, total=False):
 def export_context(ctx, job_id):
     """Packs all scraped content for a job into plain text artifacts suitable for LLM injection."""
     jid = ctx.jobs.submit("export_context_task", research_job_id=job_id, job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": jid}), 202
+    return {"status": "accepted", "job_id": jid}, 202
 class InboxDispositionPayload(TypedDict):
     status: str
 @research_bp.route('inbox/<inbox_id>/disposition', methods=['POST'], request_schema=InboxDispositionPayload, docstring="Applies a triage decision (accepted, rejected, force_scrape) to an item in the inbox.")
 def inbox_disposition(ctx, inbox_id):
     """Applies a triage decision (accepted, rejected, force_scrape) to an item in the inbox."""
     workspace_id = ctx.workspace_id
-    data = ctx.req.json
+    data = ctx.payload or {}
     status = data.get('status')
     if status not in ('accepted', 'rejected', 'force_scrape'):
-        return jsonify({"error": "Invalid status"}), 400
+        return {"error": "Invalid status"}, 400
 
     conn = ctx.db
     if status == 'force_scrape':
@@ -600,7 +617,7 @@ def inbox_disposition(ctx, inbox_id):
             conn.commit()
             _, _, s_int, s_jit = _get_research_intervals(workspace_id)
             ctx.jobs.schedule("scrape_next_link", s_int, jitter_ms=s_jit, job_id=f"research_{job_id}", research_job_id=job_id)
-        return jsonify({"status": "success"})
+        return {"status": "success"}
     conn.execute("UPDATE research_inbox SET status=? WHERE id=?", (status, inbox_id))
 
     # Check if this disposition empties the triage queue for a completed job
@@ -614,4 +631,4 @@ def inbox_disposition(ctx, inbox_id):
                 conn.execute("UPDATE research_jobs SET status='reviewed' WHERE id=?", (job_id,))
 
     conn.commit()
-    return jsonify({"status": "success"})
+    return {"status": "success"}

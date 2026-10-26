@@ -95,19 +95,26 @@ export class InSetuExtPublishModals extends InSetuElement {
         await this.utils.copyToClipboard(htmlStr);
         this.setStatus("✅ Copied raw HTML source tags to clipboard!", 2500);
     }
-
     render() {
         if (!this.publishModalOpen) return html``;
         const isSnippetMode = this.publishMode === 'html_snippet';
+        const missingBins = this.getMissingDependencies('publish').binaries;
+        const missingPandoc = missingBins.includes('pandoc');
+        const missingPdflatex = missingBins.includes('pdflatex');
         return html`
             <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Publish Document" @sutram-modal-closed=${() => PublishStore.setState({ publishModalOpen: false, snippetHtml: '', publishError: '' })}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 12px;">
+                    ${missingPandoc ? html`
+                        <div style="padding: 10px 12px; background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 6px; color: var(--intent-danger); font-size: 0.82rem;">
+                            ⚠️ System binary <code>pandoc</code> was not found in PATH. Install Pandoc on your host OS to compile documents.
+                        </div>
+                    ` : ''}
                     <sutram-select 
                         label="Target Format"
                         .value=${this.publishMode}
                         .options=${[
                             { value: 'html_snippet', label: 'Substack / Rich-Text Snippet (HTML Fragment)' },
-                            { value: 'pdf', label: 'PDF Document (Requires LaTeX/pdflatex)' },
+                            { value: 'pdf', label: missingPdflatex ? 'PDF Document (⚠️ Missing pdflatex binary in PATH)' : 'PDF Document (LaTeX/pdflatex)' },
                             { value: 'docx', label: 'Word Document (.docx)' },
                             { value: 'html', label: 'Standalone HTML Webpage (.html)' }
                         ]}
@@ -154,7 +161,7 @@ export class InSetuExtPublishModals extends InSetuElement {
                         label="${isSnippetMode ? 'Generate & Copy Substack Snippet' : 'Compile & Download'}" 
                         intent="primary" 
                         style="flex: 1; margin: 0;"
-                        .onClick=${this.api.bindJobAction('compile-document', 
+                        .onClick=${this.api.bindJobAction('publish/compile-document', 
                             () => {
                                 PublishStore.setState({ publishError: '', snippetHtml: '' });
                                 return { filepath: this.currentPublishTarget, format: this.publishMode };

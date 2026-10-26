@@ -6,12 +6,17 @@ import urllib.parse
 import uuid
 import json
 from typing import TypedDict, Optional
-from flask import jsonify
 from insetu.core.sdk import InSetuExtension
-ingest_bp = InSetuExtension('ingest', __name__, title="URL Ingestion", description="Webpage fetching and Markdown conversion.")
+ingest_bp = InSetuExtension(
+    'ingest',
+    __name__,
+    title="URL Ingestion",
+    description="Webpage fetching and Markdown conversion.",
+    external_dependencies=["beautifulsoup4", "markdownify"],
+)
 __depends__ = []
 @ingest_bp.worker("ingest_task")
-def _background_ingest(ctx, url, method, **kwargs):
+def _background_ingest(ctx, url: str, method: str = "jina"):
     ctx.jobs.update_progress('Fetching and converting URL content...')
     extracted = extract_markdown_from_url(ctx, url, method)
     safe_title = extracted["title"].replace('"', "'")
@@ -133,9 +138,9 @@ class IngestUrlPayload(TypedDict, total=False):
 @ingest_bp.route('url', methods=['POST'], request_schema=IngestUrlPayload, docstring="Fetches content from a URL and converts it into clean Markdown.")
 def api_ingest_url(ctx):
     """Fetches content from a URL and converts it into clean Markdown."""
-    data = ctx.req.json or {}
-    target_url = data.get("url", "").strip()
-    if not target_url: return jsonify({"error": "URL is required"}), 400
+    data = ctx.payload or {}
+    target_url = str(data.get("url") or "").strip()
+    if not target_url: return {"error": "URL is required"}, 400
 
     job_id = ctx.jobs.submit("ingest_task", url=target_url, method=data.get("method", "jina"), job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202

@@ -5,7 +5,6 @@ import uuid
 import shutil
 from typing import TypedDict, Optional
 from datetime import datetime
-from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext, DefaultVFSDriver
 from insetu.core.utils_core import parse_frontmatter, InSetuURI
 
@@ -15,7 +14,7 @@ class NotesVFSDriver(DefaultVFSDriver):
     """VFS Driver for ctx://notes that transparently resolves notes relocated to <repo>/.insetu-data/notes/."""
     def resolve(self, uri_obj, workspace_id, physical_target):
         primary_path = super().resolve(uri_obj, workspace_id, physical_target)
-        if primary_path and os.path.exists(primary_path):
+        if primary_path and Path(primary_path).exists():
             return primary_path
 
         rel_name = Path(uri_obj.path).name if uri_obj.path else ""
@@ -120,7 +119,7 @@ def _parse_and_upsert_note(abs_path, rel_path, workspace_id, valid_repos=None):
     if valid_repos is None:
         valid_repos = {r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")}
     content = ctx.vfs.read(rel_path)
-    if content is None and abs_path and os.path.exists(abs_path):
+    if content is None and abs_path and Path(abs_path).exists():
         content = ctx.vfs.read(abs_path, is_absolute_artifact=True)
     if content is None:
         return
@@ -226,7 +225,7 @@ def api_notes_list(ctx):
         d['tags'] = json.loads(d['tags'])
         notes.append(d)
     notes.extend(_discover_mounted_notes(ctx))
-    return jsonify({"notes": notes})
+    return {"notes": notes}
 class NoteNewPayload(TypedDict, total=False):
     title: str
     repo: Optional[str]
@@ -235,7 +234,7 @@ class NoteNewPayload(TypedDict, total=False):
 @notes_bp.route('new', methods=['POST'], request_schema=NoteNewPayload, docstring="Generates a new markdown note file with managed YAML frontmatter.")
 def api_notes_new(ctx):
     """Generates a new note file with managed YAML frontmatter."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     title = data.get("title", "Untitled Note")
     repo = data.get("repo", "global")
     valid_repos = {r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")}
@@ -250,7 +249,7 @@ def api_notes_new(ctx):
         yaml_data["tags"] = [t.strip() for t in tags.split(',') if t.strip()]
 
     filepath, _ = ctx.create_entity_file(folder, title, yaml_data, prefix="note")
-    return jsonify({"status": "success", "filepath": filepath})
+    return {"status": "success", "filepath": filepath}
 @notes_bp.on('gather_declare_topology')
 def declare_notes_topology(ctx, target_repos=None, ledger_events=None, workspace_id=None, **kwargs):
     """Declares the notes library to the Gather engine for centralized chunking and context compilation."""

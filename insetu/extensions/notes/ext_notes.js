@@ -99,15 +99,7 @@ export const NotesStore = createExtensionStore('Notes', {
                 cacheBlobContent: content
             });
 
-            // Optimistic outbox injection for immediate offline editor reads before IndexedDB settles
-            window.inSetu.stores.Offline = window.inSetu.stores.Offline || { getState: () => ({}) };
-            const currentOutbox = window.inSetu.stores.Offline.getState().outboxItems || [];
-            if (typeof window.inSetu.stores.Offline.setState === 'function') {
-                window.inSetu.stores.Offline.setState({ 
-                    outboxItems: [...currentOutbox, { method: 'POST', path: 'fs/save', payload: { filepath, content } }] 
-                });
-            }
-            NotesStore.setState(s => ({ 
+            NotesStore.setState(s => ({  
                 notes: [{ filepath, title, repo, sub_bucket: bucket, tags: tagsArr, updated_at: now }, ...s.notes],
                 newNoteModalOpen: false, 
                 editNoteFilepath: filepath,

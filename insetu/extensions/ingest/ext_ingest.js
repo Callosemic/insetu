@@ -71,7 +71,7 @@ export class InSetuExtIngestModals extends InSetuElement {
         );
     }
     _getImportAction() {
-        return this.api.bindJobAction('url', () => {
+        return this.api.bindJobAction('ingest/url', () => {
             const url = this.ingestUrl.trim();
             if (!url) throw new Error("Please enter a valid URL.");
             IngestStore.setState({ ingestStatus: 'Fetching and converting...', ingestError: null });
@@ -112,6 +112,8 @@ export class InSetuExtIngestModals extends InSetuElement {
     }
     render() {
         if (!this.ingestModalOpen) return html``;
+        const missingPkgs = this.getMissingDependencies('ingest').packages;
+        const bs4Missing = missingPkgs.length > 0;
         return html`
             <sutram-modal ?open=${true} titleText="Import from URL" @sutram-modal-closed=${() => IngestStore.setState({ ingestModalOpen: false })}>
                 <div slot="body" style="display: contents;">
@@ -122,10 +124,24 @@ export class InSetuExtIngestModals extends InSetuElement {
                         .value=${this.ingestMethod} 
                         .options=${[
                             {value: 'jina', label: 'Jina Reader API (Clean formatting, remote server)'},
-                            {value: 'bs4', label: 'BeautifulSoup Local (Fallback, requires bs4 & markdownify)'}
+                            {value: 'bs4', label: bs4Missing ? `BeautifulSoup Local (⚠️ Missing ${missingPkgs.join(', ')})` : 'BeautifulSoup Local (bs4 & markdownify)'}
                         ]} 
                         @sutram-input-changed=${e => IngestStore.setState({ ingestMethod: e.detail.value })}>
                     </sutram-select>
+
+                    ${this.ingestMethod === 'bs4' && bs4Missing ? html`
+                        <div style="background: var(--input-bg); border: 1px solid var(--intent-warning); border-radius: 6px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
+                            <span style="font-size: 0.8rem; color: var(--intent-warning);">Local parsing requires <strong>${missingPkgs.join(', ')}</strong>.</span>
+                            <sutram-async-btn
+                                size="sm"
+                                intent="primary"
+                                icon="download"
+                                label="Install Now"
+                                style="margin: 0;"
+                                .onClick=${this.installExtensionDependencies('ingest')}>
+                            </sutram-async-btn>
+                        </div>
+                    ` : ''}
 
                     ${this.ingestStatus ? html`<div style="color: var(--text-muted); font-weight: bold; margin-bottom: 10px;">${this.ingestStatus}</div>` : ''}
                     ${this.ingestError ? html`<div style="color: var(--intent-danger); font-weight: bold; margin-bottom: 10px;">❌ Error: ${this.ingestError}</div>` : ''}

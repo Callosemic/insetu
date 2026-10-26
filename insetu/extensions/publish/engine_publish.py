@@ -6,15 +6,14 @@ import tempfile
 import subprocess
 import shutil
 from typing import TypedDict, Optional
-from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import InSetuURI, parse_frontmatter
-
 publish_bp = InSetuExtension(
     'publish',
     __name__,
     title="Document Publishing",
-    description="Document compilation via Pandoc (PDF, DOCX, HTML)."
+    description="Document compilation via Pandoc (PDF, DOCX, HTML).",
+    external_binaries=["pandoc", "pdflatex"],
 )
 __depends__ = []
 @publish_bp.on('vfs_resolve_file')
@@ -22,13 +21,12 @@ def resolve_publish_artifacts(ctx, filename=None, workspace_id=None, **kwargs):
     if not filename: return None
     # Strict deterministic boundary: only claim direct basename matches to prevent path hijacking
     if '/' in filename.replace('\\', '/'): return None
-
-    cand = Path(ctx.paths["artifacts_base"]).joinpath(filename).as_posix()
-    if os.path.exists(cand):
-        return cand, True
+    cand = Path(ctx.paths["artifacts_base"]).joinpath(filename)
+    if cand.exists():
+        return cand.as_posix(), True
     return None
 @publish_bp.worker("compile_task")
-def _background_compile(ctx, filepath, target_format, job_id=None, **kwargs):
+def _background_compile(ctx, filepath: str, target_format: str = "pdf", job_id: Optional[str] = None):
     label = "HTML Snippet" if target_format == "html_snippet" else target_format.upper()
     ctx.jobs.update_progress(f"Compiling document to {label}...")
     mem_file, download_name = compile_document_payload(ctx.workspace_id, filepath, target_format)
@@ -40,9 +38,8 @@ def _background_compile(ctx, filepath, target_format, job_id=None, **kwargs):
     Path(out_path).write_bytes(raw_bytes)
 
     ctx.jobs.register_ephemeral(out_path, ttl_seconds=3600, owner="publish")
-
     artifact = {
-        "download_url": f"/download/{safe_name}",
+        "download_url": f"/api/{ctx.workspace_id}/fs/fetch?file={safe_name}&download=1",
         "filename": download_name,
         "format": target_format
     }
@@ -59,13 +56,13 @@ class CompileDocumentPayload(TypedDict, total=False):
 @publish_bp.route('compile-document', methods=['POST'], request_schema=CompileDocumentPayload, docstring="Compiles a Markdown document into a target format (PDF, DOCX, HTML) using Pandoc.")
 def api_publish_compile_document(ctx):
     """Compiles a Markdown document into a target format (PDF, DOCX, HTML) using Pandoc."""
-    data = ctx.req.json or {}
+    data = ctx.payload or {}
     filepath = data.get('filepath')
     if not filepath:
-        return jsonify({"error": "Filepath required"}), 400
+        return {"error": "Filepath required"}, 400
 
     job_id = ctx.jobs.submit("compile_task", filepath=filepath, target_format=data.get('format', 'pdf'), job_category="ui_blocking")
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
+    return {"status": "accepted", "job_id": job_id}, 202
 def compile_document_payload(workspace_id, filepath, target_format):
     ctx = publish_bp.get_context(workspace_id)
     chunks = ctx.emit_first('resolve_payload_chunks', uri=filepath, default=[filepath])
