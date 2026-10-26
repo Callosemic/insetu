@@ -173,7 +173,7 @@ export class InSetuSystemSettings extends InSetuElement {
             alert('Network error: ' + e.message);
         }
     }
-    async _fetchExtSettings(extName, repo = '') {
+    async _fetchExtSettings(extName, repo = '', preserveNonRepoEdits = false) {
         try {
             const allRepos = this.ecosystem?.allRepos || [];
             const targetRepo = repo || this._selectedRepo || allRepos[0] || '';
@@ -184,7 +184,18 @@ export class InSetuSystemSettings extends InSetuElement {
             const res = await window.inSetu.api.workspace.get(extName + '/settings' + qs);
             if (res.ok) {
                 const data = await res.json();
-                this._extForms = { ...this._extForms, [extName]: data };
+                const merged = { ...data };
+                if (preserveNonRepoEdits) {
+                    const prevForm = this._extForms[extName] || {};
+                    const allSchemas = { ...window.inSetu.settingsSchemas, ...window.inSetu.serverSchemas, ...(this._sysConfigMeta?.settings_schemas || {}) };
+                    const schema = allSchemas[extName] || [];
+                    schema.forEach(f => {
+                        if (f && f.id && f.scope !== 'repo' && prevForm[f.id] !== undefined && prevForm[f.id] !== data[f.id]) {
+                            merged[f.id] = prevForm[f.id];
+                        }
+                    });
+                }
+                this._extForms = { ...this._extForms, [extName]: merged };
                 this.requestUpdate();
             }
         } catch (e) {}
@@ -196,6 +207,26 @@ export class InSetuSystemSettings extends InSetuElement {
         }
         this._activeView = 'ext:' + extName;
         await this._fetchExtSettings(extName, this._selectedRepo);
+    }
+    _renderCustomActionComponent(tagName) {
+        if (!tagName) return html``;
+        if (tagName === 'insetu-ext-tracker-settings') {
+            return html`<insetu-ext-tracker-settings id="hub-custom-action-panel" ?embedded=${true}></insetu-ext-tracker-settings>`;
+        }
+        const Ctor = typeof customElements !== 'undefined' ? customElements.get(tagName) : null;
+        if (Ctor) {
+            if (!this._customActionNodes) this._customActionNodes = new Map();
+            let node = this._customActionNodes.get(tagName);
+            if (!node) {
+                node = new Ctor();
+                node.id = 'hub-custom-action-panel';
+                node.embedded = true;
+                node.setAttribute('embedded', '');
+                this._customActionNodes.set(tagName, node);
+            }
+            return node;
+        }
+        return html``;
     }
     _getCatalogModules() {
         const allSchemas = { ...window.inSetu.settingsSchemas, ...window.inSetu.serverSchemas, ...(this._sysConfigMeta?.settings_schemas || {}) };
@@ -305,7 +336,7 @@ export class InSetuSystemSettings extends InSetuElement {
             const { extName, repo } = e.detail || {};
             if (extName && repo) {
                 this._selectedRepo = repo;
-                this._fetchExtSettings(extName, repo);
+                this._fetchExtSettings(extName, repo, true);
             }
         });
         this.registerGlobalListener('sutram-settings-custom-action', this, (e) => {
@@ -370,6 +401,7 @@ export class InSetuSystemSettings extends InSetuElement {
                 if (data.meta?.settings_schemas) {
                     window.inSetu.serverSchemas = { ...(window.inSetu.serverSchemas || {}), ...data.meta.settings_schemas };
                 }
+                window.inSetu.utils.syncExtensionDependencyMeta?.(data);
                 this.requestUpdate();
             }
         } catch(e) {}
@@ -773,8 +805,18 @@ export class InSetuSystemSettings extends InSetuElement {
                                     </span>
                                 ` : ''}
                                 ${missingPy.length > 0 ? html`
-                                    <div style="font-size: 0.75rem; color: var(--intent-warning); font-family: var(--font-mono); background: var(--bg); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); margin-top: 4px;">
-                                        Missing Python packages: <strong>pip install ${missingPy.join(' ')}</strong>
+                                    <div style="font-size: 0.75rem; color: var(--intent-warning); font-family: var(--font-mono); background: var(--bg); padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border); margin-top: 4px; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
+                                        <span>Missing Python packages: <strong>pip install ${missingPy.join(' ')}</strong></span>
+                                        <sutram-async-btn
+                                            size="sm"
+                                            intent="primary"
+                                            icon="download"
+                                            label="Install Now"
+                                            style="margin: 0;"
+                                            .onClick=${this.installExtensionDependencies(ext.id, async () => {
+                                                await this._openSettings('sys:extensions');
+                                            })}>
+                                        </sutram-async-btn>
                                     </div>
                                 ` : ''}
                                 ${missingBins.length > 0 ? html`
@@ -921,7 +963,9 @@ export class InSetuSystemSettings extends InSetuElement {
                         <div style="padding: 20px; display: flex; flex-direction: column; gap: 15px;">
                             ${typeof activeCustomAction?.render === 'function'
                                 ? activeCustomAction.render()
-                                : (this._activeView === 'sys:topology'
+                                : (activeCustomAction?.component
+                                    ? this._renderCustomActionComponent(activeCustomAction.component)
+                                    : (this._activeView === 'sys:topology'
                                     ? html`
                                         <insetu-ext-config
                                             id="hub-topology-editor"
@@ -952,7 +996,7 @@ export class InSetuSystemSettings extends InSetuElement {
                                                             this._extForms = { ...this._extForms, [activeExtModule.id]: e.detail.formData };
                                                         }}>
                                                     </sutram-settings-form>
-                                                `))))}
+                                                `)))))}
                         </div>
                     ` : html`
                         <div style="padding: 12px 20px; background: var(--input-bg); border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; position: sticky; top: 0; z-index: 20;">

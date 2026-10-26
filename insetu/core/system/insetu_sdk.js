@@ -71,7 +71,7 @@ export class BucketAddress {
                 return BucketAddress.fromKey(key);
             }
         }
-        const parsed = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(normUri) : { repo: 'global' };
+        const parsed = new InSetuURI(normUri);
         return new BucketAddress(parsed.repo || 'global', 'main');
     }
 }
@@ -123,7 +123,7 @@ export class InSetuURI {
         this.isTemplate = this.isUserTemplate || this.isReadOnlyTemplate;
         this.isSharedMount = scheme === 'ws';
         this.isReadOnly = this.isSharedMount || this.isCompiledArtifact || this.isReadOnlyTemplate;
-        this.isEditable = !this.isReadOnly && (scheme === 'vfs' || (scheme === 'ctx' && ['prompts', 'notes', 'skills'].includes(volume)) || scheme === 'virtual' || scheme === 'yomama');
+        this.isEditable = !this.isReadOnly && (scheme === 'vfs' || scheme === 'ctx' || scheme === 'virtual' || scheme === 'yomama');
         this.isSource = !this.isCompiledArtifact;
     }
 
@@ -217,6 +217,19 @@ window.inSetu.utils = window.inSetu.utils || {};
 window.inSetu.utils.BucketAddress = BucketAddress;
 window.inSetu.utils.InSetuURI = InSetuURI;
 window.inSetu.utils.canonicalizeURI = (raw, defaultScheme = 'vfs') => InSetuURI.canonicalize(raw, defaultScheme);
+window.inSetu.utils.syncExtensionDependencyMeta = function(configResponseData) {
+    const depMeta = {};
+    (configResponseData?.meta?.available_extensions || []).forEach(ext => {
+        depMeta[ext.id] = {
+            missingExternals: ext.missing_externals || [],
+            missingBinaries: ext.missing_binaries || []
+        };
+    });
+    if (window.inSetu?.stores?.App) {
+        window.inSetu.stores.App.setState({ extensionDependencyMeta: depMeta });
+    }
+    return depMeta;
+};
 
 export class InSetuElement extends SutramElement {
     static properties = {
@@ -255,7 +268,7 @@ export class InSetuElement extends SutramElement {
             if (typeof alwaysInclude === 'function' && alwaysInclude(item)) return true;
             if (currentPins.has('ALL')) return true;
             const itemRepo = item[repoField] || (
-                item.filepath ? (this.utils.parseURI(item.filepath).repo || '') : ''
+                item.filepath ? (new InSetuURI(item.filepath).repo || '') : ''
             );
 
             return currentPins.has(itemRepo);
@@ -299,10 +312,49 @@ export class InSetuElement extends SutramElement {
         if (window.inSetu?.isCore && window.inSetu.isCore(name)) return true;
         return !!(window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes(name));
     }
-
     getOfflineMode(name = this.extName) {
         const manifest = window.ExtensionRegistry?.getExtension(name);
         return manifest?.offline_mode || 'full';
+    }
+
+    getMissingDependencies(name = this.extName) {
+        const meta = window.inSetu?.stores?.App?.getState()?.extensionDependencyMeta?.[name];
+        return {
+            packages: meta?.missingExternals || [],
+            binaries: meta?.missingBinaries || []
+        };
+    }
+
+    installExtensionDependencies(name = this.extName, onInstalled = null) {
+        return this.api.bindJobAction(
+            'system/extensions/install_deps',
+            { ext_name: name },
+            {
+                onProgress: (msg) => this.setStatus(`⏳ ${msg}`, null),
+                onComplete: async (statusData) => {
+                    try {
+                        const cRes = await window.inSetu.api.workspace.get('system/config?t=' + Date.now(), { cache: 'no-store' });
+                        if (cRes.ok) {
+                            const data = await cRes.json();
+                            window.inSetu.utils.syncExtensionDependencyMeta(data);
+                        }
+                    } catch (_) {}
+                    const artifact = statusData?.artifact || {};
+                    if (artifact.requires_reboot) {
+                        this.setStatus(`✅ Packages installed for '${name}'. Rebooting daemon...`, 3000);
+                        await window.inSetu.api.workspace.post('system/reboot', {});
+                        setTimeout(() => window.location.reload(), 2000);
+                        return;
+                    }
+                    this.setStatus(`✅ ${statusData?.message || 'Dependencies installed!'}`, 3000);
+                    if (typeof onInstalled === 'function') await onInstalled(statusData);
+                    this.requestUpdate();
+                },
+                onError: (err) => {
+                    alert(`Dependency installation failed:\n\n${err.message}`);
+                }
+            }
+        );
     }
 
     setStatus(msg, timeout = 3000, isError = false) {
@@ -387,26 +439,41 @@ export class InSetuElement extends SutramElement {
                     });
                 };
             },
+            _resolveScopedPath: (path) => {
+                const cleanPath = String(path || '').replace(/^\/+/, '');
+                const pathWithoutQuery = cleanPath.split('?')[0];
+                const segments = pathWithoutQuery.split('/').filter(Boolean);
+                if (segments.length >= 2) {
+                    const firstSeg = segments[0];
+                    const isKnownModule = (
+                        firstSeg === this.extName ||
+                        (window.inSetu?.isCore && window.inSetu.isCore(firstSeg)) ||
+                        (Array.isArray(window.ACTIVE_EXTENSIONS) && window.ACTIVE_EXTENSIONS.includes(firstSeg)) ||
+                        (window.ExtensionRegistry?.hasExtension && window.ExtensionRegistry.hasExtension(firstSeg))
+                    );
+                    if (isKnownModule) {
+                        return cleanPath;
+                    }
+                }
+                return `${this.extName}/${cleanPath}`;
+            },
             get: (path, options = {}) => {
                 if (!window.inSetu.isCore(this.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(this.extName)) {
                     return Promise.resolve(new Response(JSON.stringify({ error: "Extension disabled" }), { status: 403 }));
                 }
-                const cleanPath = path.startsWith('/') ? path.substring(1) : path;
-                return window.inSetu.api.workspace.get(`${this.extName}/${cleanPath}`, options);
+                return window.inSetu.api.workspace.get(this.api._resolveScopedPath(path), options);
             },
             post: (path, payload, options = {}) => {
                 if (!window.inSetu.isCore(this.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(this.extName)) {
                     return Promise.resolve(new Response(JSON.stringify({ error: "Extension disabled" }), { status: 403 }));
                 }
-                const cleanPath = path.startsWith('/') ? path.substring(1) : path;
-                return window.inSetu.api.workspace.post(`${this.extName}/${cleanPath}`, payload, options);
+                return window.inSetu.api.workspace.post(this.api._resolveScopedPath(path), payload, options);
             },
             delete: (path, options = {}) => {
                 if (!window.inSetu.isCore(this.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(this.extName)) {
                     return Promise.resolve(new Response(JSON.stringify({ error: "Extension disabled" }), { status: 403 }));
                 }
-                const cleanPath = path.startsWith('/') ? path.substring(1) : path;
-                return window.inSetu.api.workspace.delete(`${this.extName}/${cleanPath}`, options);
+                return window.inSetu.api.workspace.delete(this.api._resolveScopedPath(path), options);
             },
             fetchImmutableText: async (path, options = {}) => {
                 return window.inSetu.api.fetchImmutableText(path, options, this.workspaceId);
@@ -907,20 +974,32 @@ window.ExtensionRegistry.registerExtension('system', {
             return 'right';
         },
         'sutram:resolve-primary-tab-meta': ({ id }) => {
-            const tabMap = {
+            const slots = window.ExtensionRegistry?.getLayoutSlots?.() || [];
+            const primarySlot = slots.find(s => s.slot === 'slots:primary-navigation' && (s.id === id || s.rawId === id));
+            if (primarySlot && (primarySlot.icon || primarySlot.intent)) {
+                const intentColorMap = {
+                    primary: 'var(--intent-primary)',
+                    highlight: 'var(--intent-highlight)',
+                    warning: 'var(--intent-warning)',
+                    danger: 'var(--intent-danger)',
+                    success: 'var(--intent-success)',
+                    neutral: 'var(--text-muted)'
+                };
+                return {
+                    color: intentColorMap[primarySlot.intent] || 'var(--intent-primary)',
+                    icon: primarySlot.icon || 'folder'
+                };
+            }
+            const coreTabMap = {
                 'context': { color: 'var(--intent-primary)', icon: 'folder-code' },
                 'edit': { color: 'var(--intent-highlight)', icon: 'edit-3' },
                 'diagnostics': { color: 'var(--intent-warning)', icon: 'activity' },
                 'tasks': { color: 'var(--intent-warning)', icon: 'check-square' },
                 'ctrl': { color: 'var(--intent-danger)', icon: 'terminal' },
-                'dev': { color: 'var(--intent-success)', icon: 'code' },
                 'offline': { color: 'var(--text-muted)', icon: 'wifi-off' },
-                'library': { color: 'var(--intent-highlight)', icon: 'book-open' },
-                'cronic': { color: 'var(--intent-warning)', icon: 'clock' },
-                'skills': { color: 'var(--intent-success)', icon: 'award' },
-                'practice': { color: 'var(--intent-success)', icon: 'target' }
+                'library': { color: 'var(--intent-highlight)', icon: 'book-open' }
             };
-            return tabMap[id] || null;
+            return coreTabMap[id] || null;
         },
         'sutram:resolve-route-hash': ({ colId, subId }) => {
             const activeWs = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';

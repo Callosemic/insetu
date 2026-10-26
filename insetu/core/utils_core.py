@@ -14,7 +14,6 @@ from collections import OrderedDict
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple, Union
-from ruamel.yaml import YAML
 from akasa.auth import (
     ensure_master_key_on_disk,
     encrypt_secret,
@@ -39,7 +38,9 @@ from akasa.utils import (
     get_tenant_control_dir,
     get_daemon_cwd,
     set_daemon_cwd,
+    heal_daemon_config_files,
     get_system_index_path,
+    get_daemon_host_config_path,
     get_core_modules,
     is_core_module,
     is_extension_enabled,
@@ -86,13 +87,13 @@ def hook_vfs_resolve_path(filename=None, workspace_id=None, **kwargs):
     if not filename:
         return None
     return resolve_logical_path(filename, workspace_id=workspace_id)
-
-
 class InSetuURI(AkasaURI):
     """
     Host application URI class enforcing strict canonical scheme:// prefixes
     for all internal operations, with explicit boundary parsing for external user/LLM inputs.
     """
+    __slots__ = ()
+
     def __init__(self, raw: Any = ""):
         if isinstance(raw, (InSetuURI, AkasaURI)):
             raw_str = str(raw)
@@ -236,7 +237,7 @@ class InSetuURI(AkasaURI):
         phys = self.resolve(workspace_id)
         if phys and os.path.exists(phys):
             try:
-                return os.path.getmtime(phys)
+                return Path(phys).stat().st_mtime
             except OSError:
                 return None
         return None
@@ -271,12 +272,11 @@ def _lazy_mount_missing_volume(workspace_id=None, scheme=None, volume=None, **kw
     """
     wid = workspace_id or "default"
     if scheme == 'ctx' and volume:
-        from akasa.vfs import mount_volume as _mount_volume, register_driver as _register_driver, DefaultVFSDriver as _DefaultVFSDriver
-        _register_driver('ctx', _DefaultVFSDriver())
+        register_driver('ctx', DefaultVFSDriver())
         path_key = f"{volume}_dir"
         paths_dict = hooks.emit_merge_dict('request_paths', workspace_id=wid)
         if path_key in paths_dict:
-            _mount_volume(wid, 'ctx', volume, paths_dict[path_key])
+            mount_volume(wid, 'ctx', volume, paths_dict[path_key])
             return
     elif scheme == 'vfs':
         from insetu.core.topology.engine_topology import mount_topology_volumes_dynamically as _mount_topology
@@ -351,14 +351,59 @@ class BucketAddress:
 
     def __hash__(self) -> int:
         return hash(self.key)
-
-
 def _get_yaml_engine():
-    yaml = YAML(typ='rt')
+    from ruamel.yaml import YAML as _YAML
+    yaml = _YAML(typ='rt')
     yaml.preserve_quotes = True
     yaml.indent(mapping=2, sequence=4, offset=2)
     yaml.width = 4096  # Prevent premature multi-line string wrapping
     return yaml
+
+
+def _fallback_parse_simple_yaml(raw_yaml: str) -> Dict[str, Any]:
+    data: Dict[str, Any] = {}
+    for line in raw_yaml.splitlines():
+        s = line.strip()
+        if not s or s.startswith('#') or ':' not in s:
+            continue
+        k, v = s.split(':', 1)
+        k = k.strip()
+        v = v.strip()
+        if v.startswith(('[', '{')):
+            try:
+                data[k] = json.loads(v)
+                continue
+            except Exception:
+                pass
+        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+            v = v[1:-1]
+        elif v.lower() == 'true':
+            v = True
+        elif v.lower() == 'false':
+            v = False
+        elif v.isdigit():
+            v = int(v)
+        data[k] = v
+    return data
+
+
+def _fallback_dump_simple_yaml(yaml_data: Dict[str, Any]) -> str:
+    lines = []
+    for k, v in yaml_data.items():
+        if isinstance(v, bool):
+            lines.append(f"{k}: {'true' if v else 'false'}")
+        elif isinstance(v, (int, float)):
+            lines.append(f"{k}: {v}")
+        elif isinstance(v, (list, dict)):
+            lines.append(f"{k}: {json.dumps(v)}")
+        else:
+            s_val = str(v if v is not None else "")
+            if any(ch in s_val for ch in (':', '#', '\n', '"', "'")) or s_val != s_val.strip():
+                lines.append(f"{k}: {json.dumps(s_val)}")
+            else:
+                lines.append(f"{k}: {s_val}")
+    return "\n".join(lines)
+
 
 def parse_frontmatter(content):
     if not content:
@@ -378,10 +423,14 @@ def parse_frontmatter(content):
                 parsed = engine.load(io.StringIO(raw_yaml))
                 if isinstance(parsed, dict):
                     yaml_data = parsed
+            except ImportError:
+                yaml_data = _fallback_parse_simple_yaml(raw_yaml)
             except Exception as e:
                 print(f"⚠️ [YAML Error] Frontmatter parse failure: {e}")
 
     return yaml_data, body, yaml_match
+
+
 def update_frontmatter(content, new_data):
     yaml_data, body, _ = parse_frontmatter(content)
 
@@ -390,22 +439,156 @@ def update_frontmatter(content, new_data):
     else:
         yaml_data = dict(new_data)
 
-    engine = _get_yaml_engine()
-    stream = io.StringIO()
-    engine.dump(yaml_data, stream)
-    formatted_yaml = stream.getvalue().strip()
+    try:
+        engine = _get_yaml_engine()
+        stream = io.StringIO()
+        engine.dump(yaml_data, stream)
+        formatted_yaml = stream.getvalue().strip()
+    except ImportError:
+        formatted_yaml = _fallback_dump_simple_yaml(yaml_data)
 
     return f"---\n{formatted_yaml}\n---\n\n{body}"
+def _extract_balanced_include_macros(text: str):
+    """
+    Finds all {{include_prompt: ...}} blocks using balanced brace/quote scanning so nested
+    {{include_prompt: ...}} directives or braces inside parameter strings never truncate the match.
+    Yields (start_idx, end_idx, include_path, params_str).
+    """
+    header_re = re.compile(r'\{\{\s*include_prompt\s*:\s*')
+    pos = 0
+    n = len(text)
+    while pos < n:
+        m = header_re.search(text, pos)
+        if not m:
+            break
+        start_idx = m.start()
+        cursor = m.end()
+        path_start = cursor
+        in_quote = None
+        while cursor < n:
+            ch = text[cursor]
+            if in_quote:
+                if ch == in_quote and text[cursor - 1] != '\\':
+                    in_quote = None
+                cursor += 1
+                continue
+            if ch in ('"', "'"):
+                in_quote = ch
+                cursor += 1
+                continue
+            if ch.isspace() or ch in ('{', ';') or text[cursor:cursor + 2] == '}}':
+                break
+            cursor += 1
+        include_path = text[path_start:cursor].strip().rstrip(';,').strip('\'"')
+        params_start = cursor
+        brace_depth = 2
+        in_quote = None
+        end_idx = -1
+        while cursor < n:
+            ch = text[cursor]
+            if in_quote:
+                if ch == in_quote and text[cursor - 1] != '\\':
+                    in_quote = None
+                cursor += 1
+                continue
+            if ch in ('"', "'"):
+                in_quote = ch
+                cursor += 1
+                continue
+            if ch == '{':
+                brace_depth += 1
+                cursor += 1
+            elif ch == '}':
+                brace_depth -= 1
+                cursor += 1
+                if brace_depth == 0:
+                    end_idx = cursor
+                    break
+            else:
+                cursor += 1
+        if end_idx == -1:
+            break
+        raw_params = text[params_start:end_idx - 2].strip()
+        if raw_params.startswith(';'):
+            raw_params = raw_params[1:].strip()
+        if raw_params.startswith('{') and raw_params.endswith('}'):
+            raw_params = raw_params[1:-1].strip()
+        yield start_idx, end_idx, include_path, raw_params
+        pos = end_idx
+
+
+def _parse_macro_params(params_str: str) -> Dict[str, str]:
+    """Parses key: value pairs from an include_prompt parameter block, supporting quotes and nested braces."""
+    params: Dict[str, str] = {}
+    if not params_str or not params_str.strip():
+        return params
+    i = 0
+    n = len(params_str)
+    while i < n:
+        while i < n and (params_str[i].isspace() or params_str[i] in (';', ',')):
+            i += 1
+        if i >= n:
+            break
+        key_match = re.match(r'[\'"]?([a-zA-Z0-9_]+)[\'"]?\s*[:=]\s*', params_str[i:])
+        if not key_match:
+            i += 1
+            continue
+        key = key_match.group(1)
+        i += key_match.end()
+        if i >= n:
+            params[key] = ""
+            break
+        if params_str[i] in ('"', "'", '`'):
+            quote_ch = params_str[i]
+            i += 1
+            val_chars = []
+            while i < n:
+                if params_str[i] == '\\' and i + 1 < n:
+                    nxt = params_str[i + 1]
+                    if nxt == 'n':
+                        val_chars.append('\n')
+                    elif nxt == 't':
+                        val_chars.append('\t')
+                    else:
+                        val_chars.append(nxt)
+                    i += 2
+                    continue
+                if params_str[i] == quote_ch:
+                    i += 1
+                    break
+                val_chars.append(params_str[i])
+                i += 1
+            params[key] = "".join(val_chars)
+        else:
+            val_start = i
+            b_depth = 0
+            while i < n:
+                ch = params_str[i]
+                if ch == '{':
+                    b_depth += 1
+                elif ch == '}':
+                    if b_depth > 0:
+                        b_depth -= 1
+                    else:
+                        break
+                elif ch == ';' and b_depth == 0:
+                    break
+                i += 1
+            params[key] = params_str[val_start:i].strip()
+    return params
+
+
 def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth=0):
     if depth > 5:
         return text + "\n[!] INCLUSION DEPTH LIMIT EXCEEDED"
-    def replacer(match):
-        include_path = match.group(1).strip().strip('\'"')
-        params_str = match.group(2) if len(match.groups()) > 1 and match.group(2) else ""
+    if not text:
+        return text
+
+    def _resolve_target_uri(include_path: str) -> str:
         cur_uri = InSetuURI(current_filepath)
         if "://" in include_path:
-            target_path = str(InSetuURI(include_path))
-        elif include_path.startswith('./') or include_path.startswith('../'):
+            return str(InSetuURI(include_path))
+        if include_path.startswith('./') or include_path.startswith('../'):
             base_prefix = f"{cur_uri.scheme}://{cur_uri.volume}" if cur_uri.volume else f"{cur_uri.scheme}://"
             rel_parts = [p for p in cur_uri.path.split('/')[:-1] if p]
             for p in include_path.split('/'):
@@ -417,26 +600,55 @@ def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth
                 else:
                     rel_parts.append(p)
             joined_rel = '/'.join(rel_parts)
-            target_path = f"{base_prefix}/{joined_rel}".rstrip('/') if joined_rel else base_prefix
-        else:
-            # Strict contract: non-relative macro includes without a scheme are rejected by read_callback
-            target_path = include_path
+            return f"{base_prefix}/{joined_rel}".rstrip('/') if joined_rel else base_prefix
+        return include_path
+    def _apply_params_and_recurse(inc_content: str, target_path: str, params_str: str) -> str:
+        if params_str:
+            resolved_params_str = resolve_macro_includes(params_str, current_filepath, pattern, read_callback, depth + 1)
+            parsed_params = _parse_macro_params(resolved_params_str)
+            for raw_key, val in parsed_params.items():
+                clean_key = raw_key[len('macro_'):] if raw_key.startswith('macro_') else raw_key
+                macro_pattern = r'\{\{\s*(?:macro_)?' + re.escape(clean_key) + r'(?:\s*\|[^{}]*)?\s*\}\}'
+                inc_content = re.sub(macro_pattern, lambda _, v=val: v, inc_content)
+        # Resolve any remaining {{ macro_name | default_value }} placeholders to their default_value
+        inc_content = re.sub(
+            r'\{\{\s*(?:macro_)?[a-zA-Z0-9_]+\s*\|\s*([^{}]*?)\s*\}\}',
+            lambda m: m.group(1).strip(),
+            inc_content
+        )
+        return resolve_macro_includes(inc_content, target_path, pattern, read_callback, depth + 1)
 
-        inc_content = read_callback(target_path)
+    if "include_prompt" in text:
+        spans = list(_extract_balanced_include_macros(text))
+        if spans:
+            out_parts = []
+            last_idx = 0
+            for start_idx, end_idx, include_path, params_str in spans:
+                out_parts.append(text[last_idx:start_idx])
+                target_path = _resolve_target_uri(include_path)
+                try:
+                    inc_content = read_callback(target_path)
+                except Exception:
+                    inc_content = None
+                if inc_content is not None:
+                    out_parts.append(_apply_params_and_recurse(inc_content, target_path, params_str))
+                else:
+                    out_parts.append(f"[!] MACRO TARGET NOT FOUND: {include_path}")
+                last_idx = end_idx
+            out_parts.append(text[last_idx:])
+            return "".join(out_parts)
+
+    def replacer(match):
+        include_path = match.group(1).strip().rstrip(';,').strip('\'"')
+        params_str = match.group(2) if len(match.groups()) > 1 and match.group(2) else ""
+        target_path = _resolve_target_uri(include_path)
+        try:
+            inc_content = read_callback(target_path)
+        except Exception:
+            inc_content = None
         if inc_content is not None:
-            if params_str:
-                param_matches = re.finditer(r'([a-zA-Z0-9_]+)\s*:\s*(?:"((?:[^"\\]|\\.)*)"|([^;}]*))', params_str)
-                for pm in param_matches:
-                    key = pm.group(1)
-                    if pm.group(2) is not None:
-                        val = pm.group(2).replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
-                    else:
-                        val = pm.group(3).strip()
-                    macro_pattern = r'\{\{\s*macro_' + re.escape(key) + r'\s*\}\}'
-                    inc_content = re.sub(macro_pattern, lambda _: val, inc_content)
-            return resolve_macro_includes(inc_content, target_path, pattern, read_callback, depth + 1)
-        else:
-            return f"[!] MACRO TARGET NOT FOUND: {include_path}"
+            return _apply_params_and_recurse(inc_content, target_path, params_str)
+        return f"[!] MACRO TARGET NOT FOUND: {include_path}"
 
     return re.sub(pattern, replacer, text)
 def _get_base_step_and_diffs(lines):
@@ -673,8 +885,7 @@ def start_filesystem_observer(**kwargs):
     if _WATCHDOG_OBSERVER is not None:
         stop_filesystem_observer()
     from akasa.extension import SettingsManager as _SettingsManager
-    from akasa.utils import get_all_workspace_ids as _get_all_workspace_ids
-    workspace_ids = _get_all_workspace_ids()
+    workspace_ids = get_all_workspace_ids()
     if not _SettingsManager('system', 'default').get("enable_watchdog", True):
         return None
 

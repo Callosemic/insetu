@@ -41,6 +41,7 @@ export const AppStore = createExtensionStore('App', {
     deletedMutations: new Set(),
     activeModules: [],
     pendingModules: [],
+    extensionDependencyMeta: {},
     syncWatermarks: {
         lastManifestSyncTs: 0,
         lastPolledTs: 0,

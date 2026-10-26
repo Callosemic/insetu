@@ -11,6 +11,7 @@ from insetu.core.utils_core import (
     get_all_workspace_ids,
     get_tenant_control_dir,
     get_workspace_physics,
+    heal_daemon_config_files,
     load_json_config,
     save_json_config,
 )
@@ -46,30 +47,8 @@ def move_tree_contents(src_dir: Path, dst_dir: Path):
         pass
 @hooks.on('system_boot', priority=4)
 def split_system_json(**kwargs):
-    """Splits legacy system.json into daemon host.json and multi-tenant workspaces.json."""
-    base_dir = Path(get_tenant_control_dir("default"))
-    sys_path = base_dir.joinpath("system.json")
-    host_path = base_dir.joinpath("host.json")
-    ws_path = base_dir.joinpath("workspaces.json")
-    existing_ws_data = load_json_config(ws_path.as_posix(), {}) if ws_path.exists() else {}
-    if sys_path.exists():
-        try:
-            data = load_json_config(sys_path.as_posix(), {})
-            sys_workspaces = data.pop("workspaces", {})
-            existing_workspaces = existing_ws_data.get("workspaces", {}) if isinstance(existing_ws_data, dict) and not existing_ws_data.get("_deprecated") else {}
-            merged_workspaces = {"default": {"config_path": "config.json"}, **existing_workspaces, **(sys_workspaces if isinstance(sys_workspaces, dict) else {})}
-            active_ws = data.pop("active_workspace", None) or existing_ws_data.get("active_workspace", "default")
-            save_json_config(ws_path.as_posix(), {"workspaces": merged_workspaces, "active_workspace": active_ws}, workspace_id="default")
-            if data:
-                host_data = load_json_config(host_path.as_posix(), {}) if host_path.exists() else {}
-                host_data.update(data)
-                save_json_config(host_path.as_posix(), host_data, workspace_id="default")
-            try: os.remove(sys_path.as_posix())
-            except Exception: pass
-        except Exception:
-            pass
-    elif ws_path.exists() and existing_ws_data.get("_deprecated"):
-        save_json_config(ws_path.as_posix(), {"workspaces": {"default": {"config_path": "config.json"}}, "active_workspace": "default"}, workspace_id="default")
+    """Delegates legacy system.json splitting (into host.json and workspaces.json) to the Akasa kernel."""
+    heal_daemon_config_files(remove_legacy_system_json=True)
 
 
 @hooks.on('system_boot', priority=5)

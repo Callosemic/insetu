@@ -14,6 +14,7 @@ from akasa.extension import (
     DatabaseWrapper,
     MASKED_SECRET_SENTINEL,
     get_registered_settings_schemas,
+    get_registered_capabilities,
 )
 from akasa.db import (
     get_connection,
@@ -90,7 +91,7 @@ class InSetuContext(_BaseExtensionContext):
         self.emit('save_manifest', manifest_data=manifest_data, is_full_compile=is_full_compile)
         if hasattr(self, '_manifest_cache'):
             del self._manifest_cache
-    def resolve_path(self, filepath: str, is_absolute_artifact: bool = False, must_exist: bool = False, allow_heal: bool = True) -> Optional[str]:
+    def resolve_path(self, filepath: str, is_absolute_artifact: bool = False, must_exist: bool = False, allow_heal: bool = False) -> Optional[str]:
         if not filepath:
             return None
         uri = InSetuURI(filepath)
@@ -219,14 +220,35 @@ class InSetuContext(_BaseExtensionContext):
 
     def update_frontmatter(self, content: str, new_data: Dict[str, Any]) -> str:
         return update_frontmatter(content, new_data)
-
-
 # Export ExtensionContext alias pointing to InSetuContext for backward compatibility
 ExtensionContext = InSetuContext
 
+# Canonical bidirectional map between Python import specifiers and PyPI package names
+EXTERNAL_DEP_SPEC_MAP: Dict[str, Tuple[str, str]] = {
+    "bs4": ("bs4", "beautifulsoup4"),
+    "beautifulsoup4": ("bs4", "beautifulsoup4"),
+    "flask_sock": ("flask_sock", "flask-sock"),
+    "flask-sock": ("flask_sock", "flask-sock"),
+    "semantic_release": ("semantic_release", "python-semantic-release"),
+    "python-semantic-release": ("semantic_release", "python-semantic-release"),
+}
+
+
+def resolve_external_dependency_spec(dep_str: str) -> Tuple[str, str]:
+    """
+    Normalizes an external dependency declaration into (import_specifier, pypi_package_name).
+    Prevents importlib.util.find_spec() false negatives on hyphenated or aliased packages.
+    """
+    clean = str(dep_str or "").strip()
+    if not clean:
+        return "", ""
+    if clean in EXTERNAL_DEP_SPEC_MAP:
+        return EXTERNAL_DEP_SPEC_MAP[clean]
+    return clean.replace("-", "_"), clean
+
 
 class InSetuExtension(AkasaExtension):
-    """Tier 2 Developer OS Blueprint wrapper supporting declarative VFS volume mounts and InSetuContext injection."""
+    """Tier 2 Developer OS Blueprint wrapper supporting declarative VFS volume mounts, dependency contracts, and InSetuContext injection."""
     context_class = InSetuContext
 
     def __init__(
@@ -240,6 +262,10 @@ class InSetuExtension(AkasaExtension):
         settings_schema=None,
         extra_schemas=None,
         volumes: Optional[Dict[str, Dict[str, Any]]] = None,
+        external_dependencies: Optional[List[str]] = None,
+        external_binaries: Optional[List[str]] = None,
+        post_install_commands: Optional[List[List[str]]] = None,
+        requires_reboot_on_install: bool = False,
     ):
         super().__init__(
             name,
@@ -252,6 +278,10 @@ class InSetuExtension(AkasaExtension):
             extra_schemas=extra_schemas,
         )
         self.volumes = volumes or {}
+        self.external_dependencies = list(external_dependencies or [])
+        self.external_binaries = list(external_binaries or [])
+        self.post_install_commands = list(post_install_commands or [])
+        self.requires_reboot_on_install = bool(requires_reboot_on_install)
         self._mounted_workspaces = set()
         if self.volumes:
             self._validate_volume_layout()
@@ -268,7 +298,6 @@ class InSetuExtension(AkasaExtension):
                     f"{key[0]}/{self.name}/ directory. Declare a distinct 'subdir' for one of them."
                 )
             seen[key] = vol_name
-
     def _resolve_volume_dir(self, workspace_id: str, vol_name: str, vol_spec: Dict[str, Any]) -> str:
         """SSOT for volume placement: <control>/<tier>/<ext_name>[/<subdir>]."""
         tier = vol_spec.get("tier", "data")
@@ -283,11 +312,11 @@ class InSetuExtension(AkasaExtension):
         target = Path(base).joinpath(*Path(subdir).parts)
         os.makedirs(target.as_posix(), exist_ok=True)
         return target.as_posix()
-    def get_context(self, workspace_id: Optional[str] = None, job_id: Optional[str] = None) -> InSetuContext:
+    def get_context(self, workspace_id: Optional[str] = None, job_id: Optional[str] = None, payload: Optional[Dict[str, Any]] = None, **kwargs) -> InSetuContext:
         wid = workspace_id or sniff_tenant_id() or "default"
         if self.volumes:
             self.mount_volumes(wid)
-        return super().get_context(wid, job_id=job_id)
+        return super().get_context(wid, job_id=job_id, payload=payload, **kwargs)
 
     def mount_volumes(self, workspace_id: Optional[str] = None, force: bool = False) -> None:
         """Mounts all declarative VFS volumes and migrates legacy directories once per workspace."""

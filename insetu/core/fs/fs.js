@@ -119,6 +119,26 @@ export async function viewFileGitDiff(filepath) {
         }, layout.focusedColumn || 'center', 1);
     }
 }
+export function isBufferReadOnly(buf) {
+    if (!buf) return true;
+    return !(buf.isFS || buf.forceEdit) || Boolean(buf.isTruncated || buf.previewMode);
+}
+
+export function hasMacroSyntax(text) {
+    return typeof text === 'string' && /\{\{\s*(?:include_prompt\s*:|macro_[a-zA-Z0-9_]+|[a-zA-Z0-9_]+\s*\|)/.test(text);
+}
+export function canPreviewFileMacros(filepath, content = '') {
+    if (hasMacroSyntax(content)) return true;
+    if (!filepath) return false;
+    return Boolean(window.inSetu?.events?.emitHook?.('insetu:can-preview-file', filepath));
+}
+
+export async function resolveLiveBufferPreview(filepath, rawContent, isDirty = true) {
+    const hookPromise = window.inSetu?.events?.emitHook?.('insetu:resolve-buffer-preview', { filepath, content: rawContent, isDirty });
+    const resolved = hookPromise ? await hookPromise : null;
+    return typeof resolved === 'string' ? resolved : rawContent;
+}
+
 function _deriveFrontmatterProjection(text, isMarkdown, forceFrontmatterMode = false) {
     if (typeof text !== 'string' || text === 'Loading...') {
         return { yamlMeta: {}, bodyContent: '', hasFrontmatter: Boolean(forceFrontmatterMode) };
@@ -188,6 +208,9 @@ export const FsStore = createExtensionStore('Fs', {
                 docRevision: 0,
                 savedRevision: 0,
                 frontmatterMode: false,
+                previewMode: false,
+                previewContent: null,
+                previewLoading: false,
                 yamlMeta: {},
                 bodyContent: '',
                 hasFrontmatter: false,
@@ -210,6 +233,10 @@ export const FsStore = createExtensionStore('Fs', {
         const key = normalizeVfsURI(filepath) || filepath;
         FsStore.setState(s => {
             const existing = s.activeBuffers[key] || { filename: key, docRevision: 0, savedRevision: 0 };
+            // Store-level invariant: reject user edits to content while buffer is in a read-only state (previewMode, isTruncated, or !isFS)
+            if (options.userEdit && isBufferReadOnly(existing) && data.content !== undefined) {
+                return s;
+            }
             const nextDocRev = options.userEdit ? (existing.docRevision || 0) + 1 : (data.docRevision ?? existing.docRevision ?? 0);
             const nextSavedRev = options.markSaved ? nextDocRev : (data.savedRevision ?? existing.savedRevision ?? 0);
             const nextBuf = {
@@ -261,6 +288,33 @@ export const FsStore = createExtensionStore('Fs', {
         }
         FsStore.getState().updateBuffer(key, patch, { userEdit, skipFrontmatterParse: true });
         return serialized;
+    },
+    toggleBufferPreview: async (filepath, forcePreview = null) => {
+        const key = normalizeVfsURI(filepath) || filepath;
+        const buf = FsStore.getState().activeBuffers[key];
+        if (!buf || buf.content === 'Loading...') return;
+        const nextPreview = forcePreview !== null ? Boolean(forcePreview) : !buf.previewMode;
+        if (!nextPreview) {
+            FsStore.getState().updateBuffer(key, { previewMode: false, previewLoading: false }, { skipFrontmatterParse: true });
+            return;
+        }
+        FsStore.getState().updateBuffer(key, { previewMode: true, previewLoading: true }, { skipFrontmatterParse: true });
+        try {
+            const rawSource = buf.isTruncated ? (buf.fullText ?? buf.content) : buf.content;
+            const isDirty = buf.content !== buf.originalContent;
+            const resolvedText = await resolveLiveBufferPreview(key, rawSource, isDirty);
+            FsStore.getState().updateBuffer(key, {
+                previewMode: true,
+                previewContent: resolvedText,
+                previewLoading: false
+            }, { skipFrontmatterParse: true });
+        } catch (e) {
+            FsStore.getState().updateBuffer(key, {
+                previewMode: true,
+                previewContent: buf.content,
+                previewLoading: false
+            }, { skipFrontmatterParse: true });
+        }
     },
     closeBuffer: (filepath) => {
         const key = normalizeVfsURI(filepath) || filepath;
@@ -387,7 +441,25 @@ export async function ensureFreshContext(filePath) {
     const responses = window.inSetu?.events?.emitHookAll
         ? window.inSetu.events.emitHookAll('insetu:ensure-fresh-artifact', { filepath: filePath, uri: parsedUri })
         : [window.inSetu?.events?.emitHook?.('insetu:ensure-fresh-artifact', { filepath: filePath, uri: parsedUri })];
-    await Promise.all((responses || []).filter(Boolean));
+    const validPromises = (responses || []).filter(Boolean);
+    if (validPromises.length > 0) {
+        await Promise.all(validPromises);
+        const baseUri = filePath.replace(/_part\d+\.txt$/, '.txt');
+        const appState = AppStore.getState();
+        const dirtyRepos = new Set(appState.dirtyRepos || []);
+        const dirtyBuckets = new Set(appState.dirtyBuckets || []);
+        const manifestObj = appState.manifest?.ctx?.[baseUri] || appState.manifest?.ctx?.[filePath];
+        const meta = manifestObj?.meta || {};
+        const addr = window.inSetu.utils.BucketAddress ? window.inSetu.utils.BucketAddress.fromFilepath(baseUri, meta) : null;
+        const itemRepos = Array.isArray(meta.repos) ? meta.repos : (meta.repo ? [meta.repo] : []);
+        if (addr && addr.key) dirtyBuckets.delete(addr.key);
+        if (addr && addr.repo) dirtyRepos.delete(addr.repo);
+        itemRepos.forEach(r => dirtyRepos.delete(r));
+        if (baseUri.startsWith('ctx://workflows/')) dirtyBuckets.delete('global::workflows');
+        dirtyBuckets.delete(baseUri);
+        dirtyBuckets.delete(filePath);
+        AppStore.setState({ dirtyBuckets, dirtyRepos });
+    }
 }
 export async function fetchAndCopy(filePath, explicitUrl = null) {
     try {
@@ -395,7 +467,7 @@ export async function fetchAndCopy(filePath, explicitUrl = null) {
         const activeWs = window.inSetu.utils.getActiveWorkspace();
         const resolvedChunks = getChunks(filePath);
         const targetFile = (resolvedChunks && resolvedChunks.length > 0) ? resolvedChunks[0] : filePath;
-        const fetchUrl = (targetFile === filePath && explicitUrl) ? explicitUrl : resolveFileFetchUrl(targetFile, true);
+        const fetchUrl = (targetFile === filePath && explicitUrl) ? explicitUrl : resolveFileFetchUrl(targetFile, false);
         const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
 
         if (!res.ok) throw new Error("File not found on disk.");
@@ -648,27 +720,44 @@ export function resolveEntityExportTarget(data = {}) {
         };
     }
     const resolvedBaseName = rawPath ? new window.inSetu.utils.InSetuURI(rawPath).basename : '';
-    if (data.transientContent !== undefined) {
-        const hasUnresolvedMacro = typeof data.transientContent === 'string' && /\{\{\s*include_prompt\s*:/.test(data.transientContent);
-        if (!hasUnresolvedMacro) {
-            return { mode: 'memory', text: data.transientContent, filename: resolvedBaseName || 'export.txt' };
-        }
-    }
-
     const activeBuf = FsStore.getState().activeBuffers?.[normPath] || FsStore.getState().activeBuffers?.[rawPath];
     if (activeBuf && (activeBuf.isFS || activeBuf.forceEdit)) {
         const fullText = activeBuf.isTruncated ? activeBuf.fullText : activeBuf.content;
-        const hasUnresolvedMacro = typeof fullText === 'string' && /\{\{\s*include_prompt\s*:/.test(fullText);
-        if (!hasUnresolvedMacro && fullText !== undefined && fullText !== 'Loading...') {
+        if (fullText !== undefined && fullText !== 'Loading...') {
             return { mode: 'memory', text: fullText, filename: resolvedBaseName || 'export.txt' };
         }
     }
-
+    if (data.transientContent !== undefined && !activeBuf?.previewMode) {
+        return { mode: 'memory', text: data.transientContent, filename: resolvedBaseName || 'export.txt' };
+    }
     return {
         mode: 'chunks',
-        chunks: [rawPath],
-        isFS: !!data.isFS
+        chunks: [normPath || rawPath],
+        isFS: true
     };
+}
+
+export async function resolveExpandedExportText(data = {}) {
+    const rawPath = data.filepath || '';
+    const normPath = normalizeVfsURI(rawPath) || rawPath;
+    const resolvedBaseName = normPath ? new window.inSetu.utils.InSetuURI(normPath).basename : 'export.txt';
+    const activeBuf = FsStore.getState().activeBuffers?.[normPath] || FsStore.getState().activeBuffers?.[rawPath];
+
+    if (activeBuf?.previewMode && typeof activeBuf.previewContent === 'string' && !activeBuf.previewLoading) {
+        return { text: activeBuf.previewContent, filename: resolvedBaseName };
+    }
+    if (activeBuf && activeBuf.content !== undefined && activeBuf.content !== 'Loading...') {
+        const rawSource = activeBuf.isTruncated ? (activeBuf.fullText ?? activeBuf.content) : activeBuf.content;
+        const isDirty = activeBuf.content !== activeBuf.originalContent;
+        const expanded = await resolveLiveBufferPreview(normPath, rawSource, isDirty);
+        return { text: expanded, filename: resolvedBaseName };
+    }
+    if (data.transientContent !== undefined) {
+        const expanded = await resolveLiveBufferPreview(normPath, data.transientContent, true);
+        return { text: expanded, filename: resolvedBaseName };
+    }
+    const expanded = await resolveLiveBufferPreview(normPath, null, false);
+    return { text: expanded || '', filename: resolvedBaseName };
 }
 export function prepareBufferSavePayload(buf, filepath) {
     if (!buf || buf.content === 'Loading...' || buf.content === undefined) return null;
@@ -1726,7 +1815,26 @@ window.ExtensionRegistry.registerExtension('fs', {
             match: (data) => !data.isSkeleton,
             onClick: (data, e) => {
                 if (window.inSetu.vfs.viewSourceFile) {
-                    window.inSetu.vfs.viewSourceFile(data.filepath, data.isFS || false);
+                    window.inSetu.vfs.viewSourceFile(data.filepath, data.isFS || false, false, { previewMode: false });
+                }
+            }
+        },
+        {
+            targetEntity: 'file',
+            id: 'file-preview',
+            label: 'Preview',
+            icon: 'eye',
+            group: 'edit',
+            vfsBound: false,
+            intent: 'highlight',
+            order: 10.5,
+            match: (data) => {
+                if (data.isSkeleton || data.isDir) return false;
+                return Boolean(data.hasMacros || canPreviewFileMacros(data.filepath));
+            },
+            onClick: (data, e) => {
+                if (window.inSetu.vfs.viewSourceFile) {
+                    window.inSetu.vfs.viewSourceFile(data.filepath, data.isFS || false, false, { previewMode: true });
                 }
             }
         },
@@ -1844,6 +1952,26 @@ window.ExtensionRegistry.registerExtension('fs', {
         },
         {
             targetEntity: 'file',
+            id: 'file-copy-expanded',
+            label: 'Copy Expanded',
+            icon: 'sparkles',
+            group: 'edit',
+            vfsBound: false,
+            intent: 'highlight',
+            order: 12.5,
+            match: (data) => {
+                if (data.isSkeleton || data.isDir) return false;
+                return Boolean(data.supportsMacroPreview || data.hasMacros || canPreviewFileMacros(data.filepath, data.transientContent || ''));
+            },
+            asyncAction: async (data, e) => {
+                const { text } = await resolveExpandedExportText(data);
+                await navigator.clipboard.writeText(text).then(() => {
+                    if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("✅ Copied Expanded!", 2000);
+                }).catch(err => alert("Clipboard API failed. Please manually select the text and copy it directly."));
+            }
+        },
+        {
+            targetEntity: 'file',
             id: 'file-browse',
             label: 'Browse',
             icon: 'folder',
@@ -1881,6 +2009,28 @@ window.ExtensionRegistry.registerExtension('fs', {
                     return;
                 }
                 shareFiles(data.filepath, target.chunks, target.isFS);
+            }
+        },
+        {
+            targetEntity: 'file',
+            id: 'file-share-expanded',
+            label: 'Share Expanded',
+            icon: 'sparkles',
+            group: 'share',
+            vfsBound: false,
+            keepDrawerOpen: true,
+            intent: 'highlight',
+            order: 15.5,
+            match: (data) => {
+                if (data.isSkeleton || data.isDir) return false;
+                if (!navigator.share || !navigator.canShare) return false;
+                return Boolean(data.supportsMacroPreview || data.hasMacros || canPreviewFileMacros(data.filepath, data.transientContent || ''));
+            },
+            onClick: (data, e) => {
+                if (e) e.stopPropagation();
+                resolveExpandedExportText(data).then(({ text, filename }) => {
+                    window.inSetu.utils.nativeShareFiles([{ content: text || '', filename }]).catch(()=>{});
+                });
             }
         },
         {
@@ -1934,9 +2084,33 @@ window.ExtensionRegistry.registerExtension('fs', {
                         await new Promise(r => setTimeout(r, 300));
                     }
                 } else {
-                    const baseFetchUrl = resolveFileFetchUrl(data.filepath, data.isFS);
+                    const baseFetchUrl = resolveFileFetchUrl(data.filepath, true);
                     const fetchUrl = baseFetchUrl.includes('/fs/fetch?') ? `${baseFetchUrl}&download=1` : baseFetchUrl;
                     await window.inSetu.vfs.fetchAndDownloadState(data.filepath, fetchUrl);
+                }
+            }
+        },
+        {
+            targetEntity: 'file',
+            id: 'file-download-expanded',
+            label: 'Download Expanded',
+            icon: 'sparkles',
+            group: 'file',
+            vfsBound: false,
+            intent: 'highlight',
+            order: 18.5,
+            match: (data) => {
+                if (data.isSkeleton || data.isDir) return false;
+                return Boolean(data.supportsMacroPreview || data.hasMacros || canPreviewFileMacros(data.filepath, data.transientContent || ''));
+            },
+            asyncAction: async (data, e) => {
+                try {
+                    const { text, filename } = await resolveExpandedExportText(data);
+                    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+                    downloadBlob(blob, filename);
+                    if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("✅ Downloaded Expanded!", 2000);
+                } catch (err) {
+                    alert("Error downloading expanded file: " + err.message);
                 }
             }
         }
@@ -2124,7 +2298,7 @@ async function saveNewFolder() {
         }
     });
 }
-export async function hydrateVfsBuffer(filepath, { isFS = null, forceReload = false } = {}) {
+export async function hydrateVfsBuffer(filepath, { isFS = null, forceReload = false, previewMode = false } = {}) {
     if (!filepath || typeof filepath !== 'string') return null;
     const normPath = normalizeVfsURI(filepath);
     const fsState = FsStore.getState();
@@ -2149,6 +2323,9 @@ export async function hydrateVfsBuffer(filepath, { isFS = null, forceReload = fa
             isFS: effectiveIsFS,
             forceEdit: false,
             isMemoryOnly: false,
+            previewMode: Boolean(previewMode),
+            previewContent: null,
+            previewLoading: Boolean(previewMode),
             isMarkdown,
             isSupportedEditor,
             ext,
@@ -2213,10 +2390,10 @@ export async function hydrateVfsBuffer(filepath, { isFS = null, forceReload = fa
     fsState.hydratingPromises[normPath] = promise;
     return promise;
 }
-
-export async function viewSourceFile(filepath, isFS = false, bypassHook = false) {
+export async function viewSourceFile(filepath, isFS = false, bypassHook = false, options = {}) {
     if (!filepath || typeof filepath !== 'string') return;
     const normPath = normalizeVfsURI(filepath);
+    const wantPreview = Boolean(options && options.previewMode);
 
     if (!bypassHook) {
         // ADR 0041: Declarative Custom Editors Engine
@@ -2229,11 +2406,13 @@ export async function viewSourceFile(filepath, isFS = false, bypassHook = false)
             }
         }
     }
-
-    const hydrationPromise = hydrateVfsBuffer(normPath, { isFS, forceReload: true });
+    const hydrationPromise = hydrateVfsBuffer(normPath, { isFS, forceReload: true, previewMode: wantPreview });
     routeToSpatialGrid(normPath);
     closeBrowseModal();
     await hydrationPromise;
+    if (wantPreview) {
+        await FsStore.getState().toggleBufferPreview(normPath, true);
+    }
 }
 function closeBrowseModal() {
     FsStore.getState().setModal('browser', { open: false });
@@ -2521,6 +2700,7 @@ export class InSetuEditorProjection extends InSetuElement {
         FsStore.getState().scheduleAutoSave?.(targetPath, 2000);
     }
     _cleanArtifacts() {
+        if (this._buffer?.previewMode) return;
         const cleanFn = window.inSetu?.utils?.cleanCodeArtifacts;
         if (!cleanFn) return;
         const cmEditor = this.shadowRoot.querySelector('insetu-markdown-editor');
@@ -2670,6 +2850,12 @@ export class InSetuEditorProjection extends InSetuElement {
                 this._toggleZenMode();
             }
         });
+        this.registerGlobalListener('insetu:editor:toggle-preview', window, (e) => {
+            const normTarget = e.detail?.filepath ? normalizeVfsURI(e.detail.filepath) : '';
+            if (normTarget === this._normPath() || e.detail?.filepath === this.filepath || e.detail?.filepath === this.dataset.subId) {
+                FsStore.getState().toggleBufferPreview(this._normPath());
+            }
+        });
         // Live 3-Way Rebase & Hot-Swap Listener (Driven by BroadcastChannel or SSE)
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             if (!this.filepath || !this._buffer) return;
@@ -2707,12 +2893,11 @@ export class InSetuEditorProjection extends InSetuElement {
                 reconcileBufferWithDisk(normPath);
             }
         });
-
         this.registerGlobalListener('insetu:editor-insert-text', window, (e) => {
             const normTarget = e.detail?.filepath ? normalizeVfsURI(e.detail.filepath) : '';
             if (normTarget === this._normPath() || e.detail.filepath === this.filepath || e.detail.filepath === this.dataset.subId) {
                 const m = this._buffer;
-                if (!m) return;
+                if (!m || m.previewMode) return;
                 const cmEditor = this.shadowRoot.querySelector('insetu-markdown-editor');
                 if (m.isSupportedEditor && cmEditor) {
                     cmEditor.insertAtCursor(e.detail.text);
@@ -2728,7 +2913,6 @@ export class InSetuEditorProjection extends InSetuElement {
 
         this._loadPreference(this.filepath);
     }
-
     updated(changedProperties) {
         super.updated(changedProperties);
         if (changedProperties.has('filepath') && this.filepath && this.filepath !== this._lastLoadedFilepath) {
@@ -2785,10 +2969,13 @@ export class InSetuEditorProjection extends InSetuElement {
             return html`<div style="padding: 20px;"><sutram-spinner text="Loading file..."></sutram-spinner></div>`;
         }
         const m = this._buffer;
-        const shouldBeReadOnly = !(m.isFS || m.forceEdit) || !!m.isTruncated;
+        const isPreview = Boolean(m.previewMode);
+        const shouldBeReadOnly = isBufferReadOnly(m);
         const kbSize = Math.round((m.fullText?.length || 0) / 1024);
-        const hasDetectedFrontmatter = Boolean(m.isMarkdown && (this.frontmatterMode || (this._yamlData && Object.keys(this._yamlData).length > 0)));
-        const editorTextValue = this.frontmatterMode ? this._bodyContent : m.content;
+        const hasDetectedFrontmatter = Boolean(!isPreview && m.isMarkdown && (this.frontmatterMode || (this._yamlData && Object.keys(this._yamlData).length > 0)));
+        const rawSourceText = this.frontmatterMode ? this._bodyContent : m.content;
+        const editorTextValue = isPreview ? (m.previewContent ?? rawSourceText) : rawSourceText;
+        const supportsMacroPreview = canPreviewFileMacros(m.filename, m.content || '');
         return html`
             <div style="display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); position: relative;">
                 <div style="padding: 8px 15px 6px 15px; background: var(--bg); flex-shrink: 0; display: ${this._hasTitleSlot ? 'block' : 'none'};">
@@ -2806,10 +2993,12 @@ export class InSetuEditorProjection extends InSetuElement {
                                 isFS: m.isFS,
                                 isMarkdown: m.isMarkdown,
                                 writingMode: this._writingMode,
+                                previewMode: isPreview,
+                                supportsMacroPreview,
                                 isSkeleton: false,
                                 isDirty: this.isDirty,
                                 transientContent: editorTextValue,
-                                suppress: ['file-edit'],
+                                suppress: ['file-edit', 'file-preview'],
                                 chunks: window.inSetu?.vfs?.getChunks ? window.inSetu.vfs.getChunks(m.filename) : [m.filename]
                             }}>
                         </sutram-entity-actions>
@@ -2862,6 +3051,15 @@ export class InSetuEditorProjection extends InSetuElement {
                         </slot>
                     </div>
                 ` : ''}
+                ${isPreview ? html`
+                    <div style="display: flex; background: color-mix(in srgb, var(--intent-highlight) 18%, var(--input-bg)); color: var(--text); padding: 8px 16px; font-size: 0.85rem; font-weight: bold; justify-content: space-between; align-items: center; flex-shrink: 0; border-bottom: 1px solid var(--intent-highlight); gap: 10px;">
+                        <span style="display: flex; align-items: center; gap: 8px;">
+                            <yv-icon name="eye" style="width: 16px; height: 16px; color: var(--intent-highlight); flex-shrink: 0;"></yv-icon>
+                            <span>${m.previewLoading ? 'Resolving macro preview...' : 'Macro-Expanded Preview (Read-Only)'}</span>
+                        </span>
+                        <sutram-btn size="sm" icon="${m.isFS ? 'edit-3' : 'code'}" label="${m.isFS ? 'Edit Raw Source' : 'View Raw Source'}" intent="highlight" @click=${() => FsStore.getState().toggleBufferPreview(this._normPath(), false)} style="margin: 0;"></sutram-btn>
+                    </div>
+                ` : ''}
                 ${m.isTruncated ? html`
                     <div style="display: flex; background: var(--intent-warning); color: var(--bg-deep); padding: 8px 20px; font-weight: bold; justify-content: space-between; align-items: center; flex-shrink: 0; border-bottom: 1px solid var(--border);">
                         <span>⚠️ Only showing the first 200kb of <b>${kbSize}kb</b>.</span>
@@ -2880,6 +3078,7 @@ export class InSetuEditorProjection extends InSetuElement {
                             @editor-selection=${(e) => { this._transientCursorPos = e.detail?.cursor ?? 0; }}
                             @editor-scroll=${(e) => { this._transientScrollTop = e.detail?.top ?? 0; }}
                             @content-changed=${(e) => {
+                                if (this._buffer?.previewMode) return;
                                 if (this.frontmatterMode) {
                                     this._bodyContent = e.detail.value;
                                     this._syncFrontmatterToBuffer(true);
@@ -2897,6 +3096,7 @@ export class InSetuEditorProjection extends InSetuElement {
                             ?disabled=${shouldBeReadOnly}
                             ?flush=${true}
                             @sutram-input-changed=${(e) => {
+                                if (this._buffer?.previewMode) return;
                                 window.inSetu.stores.Fs?.getState()?.updateBuffer(this._normPath(), { content: e.detail.value }, { userEdit: true });
                                 this._triggerDebouncedAutoSave();
                             }}>
@@ -2947,15 +3147,16 @@ if (!customElements.get('insetu-frontmatter-editor')) {
     customElements.define('insetu-frontmatter-editor', InSetuFrontmatterEditor);
 }
 export const extractManifestFiles = (...args) => window.inSetu.utils.extractManifestFiles(...args);
-
 window.inSetu.vfs.normalizeVfsURI = normalizeVfsURI;
 export function resolveFileFetchUrl(filepath, isFS = false) {
     if (!filepath) return '';
     if (filepath.startsWith('/download/') || filepath.startsWith('http://') || filepath.startsWith('https://')) {
         return filepath;
     }
-    const overrideUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', filepath);
-    if (overrideUrl) return overrideUrl;
+    if (!isFS) {
+        const overrideUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', filepath);
+        if (overrideUrl) return overrideUrl;
+    }
     const activeWs = window.inSetu.utils.getActiveWorkspace();
     return `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(filepath)}`;
 }

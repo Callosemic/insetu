@@ -10,37 +10,7 @@ import urllib.request
 from pathlib import Path
 
 
-def scaffold_profiles(cwd):
-    """Ensures baseline .insetu control directory and default configuration files exist."""
-    base_dir = Path(cwd).joinpath(".insetu").as_posix()
-    is_new_hub = not os.path.exists(base_dir)
-    os.makedirs(base_dir, exist_ok=True)
-
-    defaults_dir = Path(__file__).resolve().parent.parent.parent.joinpath("defaults").as_posix()
-
-    target_config = Path(base_dir).joinpath("config.json").as_posix()
-    if not os.path.exists(target_config):
-        src_config = Path(defaults_dir).joinpath("config_json.txt").as_posix()
-        if os.path.exists(src_config):
-            shutil.copy(src_config, target_config)
-
-    os.makedirs(Path(base_dir).joinpath("data").as_posix(), exist_ok=True)
-    os.makedirs(Path(base_dir).joinpath("cache", "db").as_posix(), exist_ok=True)
-
-    target_sys = Path(base_dir).joinpath("system.json").as_posix()
-    if not os.path.exists(target_sys):
-        src_sys = Path(defaults_dir).joinpath("system_json.txt").as_posix()
-        if os.path.exists(src_sys):
-            shutil.copy(src_sys, target_sys)
-
-    target_gitignore = Path(base_dir).joinpath(".gitignore").as_posix()
-    if not os.path.exists(target_gitignore):
-        src_gitignore = Path(defaults_dir).joinpath("gitignore.txt").as_posix()
-        if os.path.exists(src_gitignore):
-            shutil.copy(src_gitignore, target_gitignore)
-
-    if is_new_hub:
-        print(f"[*] Initialized local inSetu environment at {base_dir}")
+from insetu.cli import scaffold_profiles
 def _discover_candidate_repos(cwd):
     """Scans the current directory for candidate repositories to track."""
     from insetu.core.utils_core import get_default_repo_template as _get_default_repo_template
@@ -103,22 +73,9 @@ def _ensure_root_gitignore(target_cwd):
     except Exception:
         pass
 def _ensure_master_key_on_disk():
-    """Synchronously ensures the global master_key.txt exists on disk before CLI encryption."""
-    from cryptography.fernet import Fernet as _Fernet
-    control_dir_name = os.environ.get("AKASA_CONTROL_DIR", ".insetu")
-    global_key_path = Path.home().joinpath(control_dir_name, "master_key.txt")
-    local_key_path = Path(os.getcwd()).joinpath(control_dir_name, "master_key.txt")
-
-    if local_key_path.exists() and local_key_path.stat().st_size > 0:
-        if not global_key_path.exists():
-            global_key_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(local_key_path.as_posix(), global_key_path.as_posix())
-        return
-
-    if not global_key_path.exists() or global_key_path.stat().st_size == 0:
-        global_key_path.parent.mkdir(parents=True, exist_ok=True)
-        key = _Fernet.generate_key()
-        global_key_path.write_bytes(key)
+    """Delegates synchronous Fernet master_key.txt generation/elevation to the Akasa auth SSOT."""
+    from insetu.core.utils_core import ensure_master_key_on_disk as _akasa_ensure_master_key
+    return _akasa_ensure_master_key()
 
 
 def handle_init(cwd, args):
@@ -131,8 +88,8 @@ def handle_init(cwd, args):
         target_cwd.mkdir(parents=True, exist_ok=True)
         cwd = target_cwd.as_posix()
         os.chdir(cwd)
-        import akasa.utils as _akasa_utils
-        _akasa_utils._cwd = cwd
+        from insetu.core.utils_core import set_daemon_cwd as _set_daemon_cwd
+        _set_daemon_cwd(cwd)
 
     base_dir = Path(cwd).joinpath(".insetu")
     config_path = base_dir.joinpath("config.json")
@@ -219,15 +176,23 @@ def handle_init(cwd, args):
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config_payload, f, indent=2)
 
-    sys_path = base_dir.joinpath("system.json")
+    host_path = base_dir.joinpath("host.json")
     try:
-        sys_data = json.loads(sys_path.read_text(encoding="utf-8")) if sys_path.exists() else {}
+        host_data = json.loads(host_path.read_text(encoding="utf-8")) if host_path.exists() else {}
     except Exception:
-        sys_data = {}
-    sys_data["port"] = port
-    if "workspaces" not in sys_data:
-        sys_data["workspaces"] = {"default": {"config_path": "config.json"}}
-    sys_path.write_text(json.dumps(sys_data, indent=2), encoding="utf-8")
+        host_data = {}
+    host_data["port"] = port
+    host_path.write_text(json.dumps(host_data, indent=2), encoding="utf-8")
+
+    ws_index_path = base_dir.joinpath("workspaces.json")
+    try:
+        ws_index_data = json.loads(ws_index_path.read_text(encoding="utf-8")) if ws_index_path.exists() else {}
+    except Exception:
+        ws_index_data = {}
+    if "workspaces" not in ws_index_data:
+        ws_index_data["workspaces"] = {"default": {"config_path": "config.json"}}
+    ws_index_data.setdefault("active_workspace", "default")
+    ws_index_path.write_text(json.dumps(ws_index_data, indent=2), encoding="utf-8")
     ws_settings_path = base_dir.joinpath("workspace.settings.json")
     try:
         ws_settings = json.loads(ws_settings_path.read_text(encoding="utf-8")) if ws_settings_path.exists() else {}
@@ -247,7 +212,7 @@ def handle_init(cwd, args):
     try:
         _ensure_master_key_on_disk()
         if llm_api_key:
-            from akasa.auth import encrypt_secret as _encrypt_secret
+            from insetu.core.utils_core import encrypt_secret as _encrypt_secret
             secrets_path = base_dir.joinpath("secrets.json")
             try:
                 secrets_data = json.loads(secrets_path.read_text(encoding="utf-8")) if secrets_path.exists() else {}
@@ -311,7 +276,7 @@ WantedBy=default.target
         subprocess.run(["systemctl", "--user", "enable", service_name], check=True)
         subprocess.run(["systemctl", "--user", "start", service_name], check=True)
 
-        from akasa.utils import load_config as _load_config
+        from insetu.core.utils_core import load_config as _load_config
         cfg = _load_config()
         port = int(os.environ.get("INSETU_PORT", cfg.get("port", 5005)))
 
@@ -331,7 +296,7 @@ WantedBy=default.target
             print("No inSetu service found to uninstall.")
 
     elif action == "status":
-        from akasa.utils import load_config as _load_config
+        from insetu.core.utils_core import load_config as _load_config
         cfg = _load_config()
         port = int(os.environ.get("INSETU_PORT", cfg.get("port", 5005)))
         print("inSetu Service Telemetry:")
@@ -411,7 +376,7 @@ def launch_gui(cwd):
         print("Desktop GUI requires pywebview. Install with: pip install pywebview (or pip install insetu[gui])")
         sys.exit(1)
 
-    from akasa.utils import load_config as _load_config
+    from insetu.core.utils_core import load_config as _load_config
     from insetu.app import run_app as _run_app
 
     scaffold_profiles(cwd)

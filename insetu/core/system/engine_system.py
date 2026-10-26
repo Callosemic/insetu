@@ -3,6 +3,7 @@ import os
 import gc
 import re
 import sys
+import copy
 import json
 import shutil
 import socket
@@ -13,7 +14,7 @@ import threading
 import time
 import traceback
 from typing import TypedDict, Optional, List, Dict, Any
-from flask import request, jsonify
+from flask import jsonify
 from insetu.core.sdk import (
     InSetuExtension,
     SettingsManager,
@@ -22,6 +23,7 @@ from insetu.core.sdk import (
     set_mount_authorizer,
     get_system_deltas,
     provision_workspace_schemas,
+    resolve_external_dependency_spec,
 )
 from insetu.core.utils_core import (
     load_config,
@@ -152,7 +154,7 @@ def hydrate_and_migrate_cascade_settings(cfg, workspace_id=None, **kwargs):
     """
     Transparent 3-Tier Cascade Bridge:
     1. Lazily migrates legacy `extensions`, `instance_title`, `instance_emoji`, and `port`
-        from `config.json` into `workspace.settings.json` / `system.json` if not yet present.
+        from `config.json` into `workspace.settings.json` / `host.json` if not yet present.
     2. Hydrates the in-memory `cfg` dictionary so all runtime consumers (`is_extension_enabled`,
         hooks, and UI config endpoints) see the authoritative settings without polluting `config.json`.
     """
@@ -294,29 +296,6 @@ def api_system_openapi():
             }
         }
     }
-    paths["/download/{filename}"] = {
-        "get": {
-            "summary": "Universal Artifact Download Gateway",
-            "description": "Downloads contexts, artifacts, and vault files from the physical workspace.",
-            "parameters": [
-                {
-                    "name": "filename",
-                    "in": "path",
-                    "required": True,
-                    "schema": {"type": "string"}
-                }
-            ],
-            "responses": {
-                "200": {
-                    "description": "Returns the raw binary or text file.",
-                    "content": {
-                        "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}
-                    }
-                }
-            }
-        }
-    }
-
     paths["/api/system/stream"] = {
         "get": {
             "summary": "Server-Sent Events (SSE) Telemetry",
@@ -506,8 +485,8 @@ class SystemDeltasResponse(TypedDict):
     signatures: Dict[str, Any]
 @system_bp.route('deltas', methods=['GET'], request_schema=DeltasQueryPayload, response_schema=SystemDeltasResponse, docstring="Returns real-time file mutation logs, active/pending background compilation modules, and domain signatures modified since the 'since' timestamp.")
 def api_system_deltas(ctx):
-    since = float(ctx.req.args.get('since', 0.0))
-    return jsonify(get_system_deltas(ctx.workspace_id, since_ts=since))
+    since = float(ctx.payload.get('since', 0.0))
+    return get_system_deltas(ctx.workspace_id, since_ts=since)
 
 class PipelineSubmitPayload(TypedDict, total=False):
     force_full: bool
@@ -516,8 +495,8 @@ class PipelineSubmitPayload(TypedDict, total=False):
 @system_bp.route('pipeline/submit', methods=['POST'], request_schema=PipelineSubmitPayload, docstring="Triggers the background context compilation sequence. Handles differential deltas or full sweeps via the Akasa DAG Orchestrator.")
 def api_system_pipeline_submit(ctx):
     try:
-        data = ctx.req.get_json(force=True, silent=True) or {}
-        force_full = data.get("force_full", False)
+        data = ctx.payload or {}
+        force_full = bool(data.get("force_full", False))
         # Reattach check: Attach to any active stage of the compilation pipeline to prevent concurrent chain collisions.
         ordered_steps = ctx.resolve_dag_chain('register_compilation_steps')
 
@@ -534,11 +513,14 @@ def api_system_pipeline_submit(ctx):
                 upstream_worker_names = [s.get('worker_name') for s in ordered_steps if s.get('worker_name')]
         else:
             upstream_worker_names = [s.get('worker_name') for s in ordered_steps if s.get('worker_name')]
-        active_job_id = ctx.jobs.find_active_pipeline_job(upstream_worker_names, force_full=force_full)
+        active_job_id = ctx.jobs.find_active_pipeline_job(
+            upstream_worker_names,
+            predicate=lambda job_args: bool(job_args.get("force_full") or not force_full),
+        )
         if active_job_id:
-            return jsonify({"status": "accepted", "job_id": active_job_id, "message": "Reattached to active compilation."}), 202
+            return {"status": "accepted", "job_id": active_job_id, "message": "Reattached to active compilation."}, 202
         if not ordered_steps:
-            return jsonify({"error": "No compilation steps registered."}), 400
+            return {"error": "No compilation steps registered."}, 400
 
         payload = {"force_full": force_full}
         if "target_repos" in data:
@@ -551,10 +533,10 @@ def api_system_pipeline_submit(ctx):
             **payload
         )
 
-        return jsonify({"status": "accepted", "job_id": job_id}), 202
+        return {"status": "accepted", "job_id": job_id}, 202
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"status": "error", "error": f"Pipeline Dispatch Error ({type(e).__name__}): {str(e)}"}), 500
+        return {"status": "error", "error": f"Pipeline Dispatch Error ({type(e).__name__}): {str(e)}"}, 500
 @system_bp.on('pre_file_save')
 def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=None, **kwargs):
     if data and data.get("is_new_repo") and data.get("repo_dir"):
@@ -602,44 +584,33 @@ def get_system_config(workspace_id):
                             available_ids.add(ext_name)
                             title = ext_name.replace('_', ' ').title()
                             desc = ""
-                            # Extract metadata from the mounted extension
-                            err = None
-                            mod = sys.modules.get(f"insetu.extensions.{ext_name}.engine_{ext_name}") or \
-                                        sys.modules.get(f"insetu.extensions.engine_{ext_name}") or \
-                                        sys.modules.get(f"insetu.engine_{ext_name}")
-                            if not mod:
-                                    def safe_import(target):
-                                            try:
-                                                    return importlib.import_module(target), None
-                                            except ModuleNotFoundError as e:
-                                                    if e.name == target.split('.')[-1] or e.name == target or (e.name and target.startswith(f"{e.name}.")):
-                                                            return None, None
-                                                    return None, f"Missing dependency: {e.name}"
-                                            except Exception as e:
-                                                    return None, str(e)
-
-                                    for target in [
-                                            f"insetu.extensions.{ext_name}.engine_{ext_name}",
-                                            f"insetu.extensions.engine_{ext_name}",
-                                            f"insetu.engine_{ext_name}"
-                                    ]:
-                                            mod, err = safe_import(target)
-                                            if mod or err: break
+                            # Extract metadata from the mounted extension via unified resolver
+                            mod, bp_obj, err = _resolve_extension_module_and_bp(ext_name, include_error=True)
                             missing_exts = []
                             missing_bins = []
                             if err:
                                     title = f"⚠️ {title} (Broken)"
                                     desc = f"Failed to load: {err}"
                             elif mod:
-                                    bp_obj = getattr(mod, f"{ext_name}_bp", None)
                                     if bp_obj:
                                             title = getattr(bp_obj, 'title', title)
                                             desc = getattr(bp_obj, 'description', desc)
-                                    for dep in getattr(mod, '__external_depends__', []):
-                                            if importlib.util.find_spec(dep) is None:
-                                                    missing_exts.append(dep)
+                                    raw_deps = list(getattr(bp_obj, 'external_dependencies', None) or [])
+                                    seen_pkgs = set()
+                                    for dep in raw_deps:
+                                            import_spec, pypi_pkg = resolve_external_dependency_spec(dep)
+                                            if not import_spec or pypi_pkg in seen_pkgs:
+                                                    continue
+                                            seen_pkgs.add(pypi_pkg)
+                                            if importlib.util.find_spec(import_spec) is None:
+                                                    missing_exts.append(pypi_pkg)
 
-                                    for binary in getattr(mod, '__external_binaries__', []):
+                                    raw_bins = list(getattr(bp_obj, 'external_binaries', None) or [])
+                                    seen_bins = set()
+                                    for binary in raw_bins:
+                                            if not binary or binary in seen_bins:
+                                                    continue
+                                            seen_bins.add(binary)
                                             if not shutil.which(binary):
                                                     missing_bins.append(binary)
                             available.append({"id": ext_name, "title": title, "description": desc, "missing_externals": missing_exts, "missing_binaries": missing_bins})
@@ -684,6 +655,118 @@ def save_system_config(workspace_id, payload):
 
     # Emits a globally decoupled config invalidation event
     hooks.emit('config_mutated', workspace_id=workspace_id)
+def _resolve_extension_module_and_bp(ext_name: str, include_error: bool = False):
+    """Resolves (module, InSetuExtension_instance[, error_str]) for a given extension name without hardcoding domain names."""
+    if not ext_name or not re.match(r'^[a-z0-9_]+$', ext_name):
+        return (None, None, None) if include_error else (None, None)
+    mod = (
+        sys.modules.get(f"insetu.extensions.{ext_name}.engine_{ext_name}")
+        or sys.modules.get(f"insetu.extensions.engine_{ext_name}")
+        or sys.modules.get(f"insetu.engine_{ext_name}")
+    )
+    err = None
+    if not mod:
+        for target in (
+            f"insetu.extensions.{ext_name}.engine_{ext_name}",
+            f"insetu.extensions.engine_{ext_name}",
+            f"insetu.engine_{ext_name}",
+        ):
+            try:
+                mod = importlib.import_module(target)
+                if mod:
+                    break
+            except ModuleNotFoundError as e:
+                if e.name == target.split('.')[-1] or e.name == target or (e.name and target.startswith(f"{e.name}.")):
+                    continue
+                err = f"Missing dependency: {e.name}"
+                break
+            except Exception as e:
+                err = str(e)
+                break
+    bp_obj = getattr(mod, f"{ext_name}_bp", None) if mod else None
+    if include_error:
+        return mod, bp_obj, err
+    return mod, bp_obj
+
+
+def _get_whitelisted_extension_packages(ext_name: str) -> List[str]:
+    """Returns the canonical list of PyPI packages declared by an extension, preventing arbitrary package installation."""
+    mod, bp_obj = _resolve_extension_module_and_bp(ext_name)
+    if not mod or not bp_obj:
+        return []
+    raw_deps = list(getattr(bp_obj, 'external_dependencies', None) or [])
+    packages: List[str] = []
+    for dep in raw_deps:
+        _, pypi_pkg = resolve_external_dependency_spec(dep)
+        if pypi_pkg and pypi_pkg not in packages:
+            packages.append(pypi_pkg)
+    return packages
+@system_bp.worker("install_extension_deps_task")
+def _background_install_extension_deps(ctx, ext_name: str = ""):
+    clean_ext = (ext_name or "").strip().lower()
+    allowed_packages = _get_whitelisted_extension_packages(clean_ext)
+    if not allowed_packages:
+        raise ValueError(f"No installable Python dependencies declared for extension '{clean_ext}'.")
+
+    missing_packages = []
+    for pkg in allowed_packages:
+        import_spec, pypi_pkg = resolve_external_dependency_spec(pkg)
+        if importlib.util.find_spec(import_spec) is None:
+            missing_packages.append(pypi_pkg)
+
+    target_packages = missing_packages if missing_packages else allowed_packages
+    ctx.jobs.update_progress(f"Installing {', '.join(target_packages)} for [{clean_ext}]...")
+
+    cmd = [sys.executable, "-m", "pip", "install", *target_packages]
+    res = ctx.exec.run(cmd, timeout=300)
+    output_log = ((res.stdout or "") + "\n" + (res.stderr or "")).strip()
+    if res.returncode != 0:
+        raise RuntimeError(f"pip install failed (exit {res.returncode}):\n{output_log[-1000:]}")
+
+    importlib.invalidate_caches()
+    _, bp_obj = _resolve_extension_module_and_bp(clean_ext)
+    post_cmds = list(getattr(bp_obj, "post_install_commands", None) or [])
+    for cmd_args in post_cmds:
+        if not cmd_args:
+            continue
+        resolved_cmd = [sys.executable if token == "$PYTHON" else token for token in cmd_args]
+        ctx.jobs.update_progress(f"Running post-install step for [{clean_ext}]: {' '.join(cmd_args)}...")
+        post_res = ctx.exec.run(resolved_cmd, timeout=300)
+        output_log += "\n" + ((post_res.stdout or "") + "\n" + (post_res.stderr or "")).strip()
+
+    ctx.emit(f"{clean_ext}_dependencies_installed", installed=target_packages)
+    requires_reboot = bool(getattr(bp_obj, "requires_reboot_on_install", False))
+    return {
+        "message": f"Installed {', '.join(target_packages)} for '{clean_ext}'.",
+        "artifact": {
+            "ext_name": clean_ext,
+            "installed": target_packages,
+            "requires_reboot": requires_reboot,
+            "output": output_log[-2000:],
+        },
+    }
+
+
+class ExtensionInstallDepsPayload(TypedDict):
+    ext_name: str
+@system_bp.route('extensions/install_deps', methods=['POST'], request_schema=ExtensionInstallDepsPayload, docstring="Installs declared external Python dependencies for a target extension into the active daemon environment.")
+def api_system_install_extension_deps(ctx):
+    data = ctx.payload or {}
+    ext_name = str(data.get("ext_name") or "").strip().lower()
+    if not ext_name:
+        return {"error": "ext_name is required."}, 400
+    allowed = _get_whitelisted_extension_packages(ext_name)
+    if not allowed:
+        return {"error": f"Extension '{ext_name}' has no declared external Python dependencies."}, 400
+    job_id = ctx.jobs.submit(
+        "install_extension_deps_task",
+        coalesce="args",
+        job_category="ui_blocking",
+        ext_name=ext_name,
+    )
+    return {"status": "accepted", "job_id": job_id, "packages": allowed}, 202
+
+
 @system_bp.route('reboot', methods=['POST'], docstring="[sync] Clean in-place process replacement to restart the OS daemon.")
 def api_system_reboot(ctx):
     """Clean in-place process replacement to restart the OS daemon."""
@@ -698,19 +781,18 @@ def api_system_reboot(ctx):
         os.execv(python_exe, [python_exe] + sys.argv)
 
     threading.Thread(target=restart, daemon=True).start()
-    return jsonify({"status": "success", "message": "Rebooting inSetu OS..."})
+    return {"status": "success", "message": "Rebooting inSetu OS..."}
 class SystemConfigPayload(TypedDict, total=False):
     extensions: List[str]
     target_repos: List[Dict[str, Any]]
-
 @system_bp.route('config', methods=['GET', 'POST'], request_schema={"POST": SystemConfigPayload}, docstring="[sync] Retrieves or updates the global workspace configuration.")
 def api_system_config(ctx):
     try:
-        if ctx.req.method == 'GET':
-            data = get_system_config(ctx.workspace_id)
-            return jsonify(data)
+        is_post = ctx.method == 'POST' or bool(ctx.payload and ("extensions" in ctx.payload or "target_repos" in ctx.payload))
+        if not is_post:
+            return get_system_config(ctx.workspace_id)
         else:
-            payload = ctx.req.get_json(silent=True) or {}
+            payload = ctx.payload or {}
 
             from flask import current_app as _current_app
             requires_reboot = False
@@ -719,14 +801,14 @@ def api_system_config(ctx):
                     requires_reboot = True
 
             save_system_config(ctx.workspace_id, payload)
-            return jsonify({
+            return {
                 "status": "success", 
                 "message": "Configuration saved successfully.", 
                 "requires_reboot": requires_reboot
-            })
+            }
     except Exception as e:
         print(f"Config Route Error: {traceback.format_exc()}")
-        return jsonify({"error": f"Server Error: {str(e)}"}), 500
+        return {"error": f"Server Error: {str(e)}"}, 500
 class TopologyResponse(TypedDict):
     repos: List[str]
     port: int
@@ -742,7 +824,7 @@ def api_system_topology(ctx):
     try:
         from insetu.core.utils_core import get_sister_repos as _get_sister_repos
         cfg = load_config(ctx.workspace_id)
-        target_repos = cfg.get("target_repos", [])
+        target_repos = copy.deepcopy(cfg.get("target_repos", []) or [])
         cfg_path, ws_root = get_workspace_physics(ctx.workspace_id)
 
         for c in target_repos:
@@ -758,7 +840,7 @@ def api_system_topology(ctx):
                             if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
                                 if module not in b["meta_map"]:
                                     b["meta_map"][module] = {"title": module.replace('_', ' ').title()}
-        return jsonify({
+        return {
             "repos": _get_sister_repos(ctx.workspace_id),
             "port": int(os.environ.get("INSETU_PORT", cfg.get("port", 5005))),
             "term_port": cfg.get("term_port", 8181),
@@ -768,10 +850,10 @@ def api_system_topology(ctx):
             "tab_order": cfg.get("tab_order", ["context", "edit", "tasks", "ctrl", "library"]),
             "hidden_outputs": cfg.get("hidden_outputs", ["ctx://contexts/context_prompt.md", "ctx://diffs/context_prompt_diffs.txt"]),
             "config_missing": not os.path.exists(cfg_path)
-        })
+        }
     except Exception as e:
         print(f"Topology Route Error: {traceback.format_exc()}")
-        return jsonify({"error": f"Server Error: {str(e)}"}), 500
+        return {"error": f"Server Error: {str(e)}"}, 500
 class ManifestResponse(TypedDict):
     vfs: Dict[str, Any]
     ctx: Dict[str, Any]
@@ -788,17 +870,17 @@ def api_system_manifest(ctx):
     for entry in (ctx_manifest or {}).values():
         heal_manifest_entry_domain(entry, target_repos=target_repos)
 
-    return jsonify({"vfs": vfs_manifest, "ctx": ctx_manifest}), 200, headers
+    return {"vfs": vfs_manifest, "ctx": ctx_manifest}, 200, headers
 class WorkspaceCreatePayload(TypedDict):
     id: str
     workspace_root: str
 @system_bp.route('workspaces/create', methods=['POST'], request_schema=WorkspaceCreatePayload, docstring="[sync] Provisions and mounts an isolated workspace.")
 def api_create_workspace(ctx):
     try:
-        data = ctx.req.json or {}
-        ws_id = data.get('id', '').strip().lower()
+        data = ctx.payload or {}
+        ws_id = str(data.get('id') or '').strip().lower()
         if not ws_id or ws_id in ['default', 'none']:
-            return jsonify({"error": "A unique, valid alphanumeric workspace ID is required"}), 400
+            return {"error": "A unique, valid alphanumeric workspace ID is required"}, 400
         index_path = get_system_index_path()
 
         w_data = load_json_config(index_path, {"workspaces": {"default": {"config_path": "config.json"}}})
@@ -806,10 +888,10 @@ def api_create_workspace(ctx):
             w_data["workspaces"] = {"default": {"config_path": "config.json"}}
 
         if ws_id in w_data.get("workspaces", {}):
-            return jsonify({"error": f"Workspace '{ws_id}' already exists"}), 400
-        custom_root = data.get('workspace_root', '').strip()
+            return {"error": f"Workspace '{ws_id}' already exists"}, 400
+        custom_root = str(data.get('workspace_root') or '').strip()
         if not custom_root:
-            return jsonify({"error": "Workspace Root Directory Path is strictly required to ensure absolute codebase isolation."}), 400
+            return {"error": "Workspace Root Directory Path is strictly required to ensure absolute codebase isolation."}, 400
         resolved_root = os.path.abspath(os.path.expanduser(custom_root))
 
         ws_insetu_dir = Path(resolved_root).joinpath(".insetu")
@@ -842,19 +924,19 @@ def api_create_workspace(ctx):
         provision_workspace_schemas(ws_id)
         hooks.emit('workspace_boot', workspace_id=ws_id)
 
-        return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
+        return {"status": "success", "workspaces": w_data["workspaces"]}
     except Exception as e:
         print(f"Workspace Create Error: {traceback.format_exc()}")
-        return jsonify({"error": f"Server Error: {str(e)}"}), 500
+        return {"error": f"Server Error: {str(e)}"}, 500
 class WorkspaceDeletePayload(TypedDict):
     id: str
 @system_bp.route('workspaces/delete', methods=['POST'], request_schema=WorkspaceDeletePayload, docstring="[sync] Permanently deletes a workspace and its tracking metadata.")
 def api_delete_workspace(ctx):
     try:
-        data = ctx.req.json or {}
-        ws_id = data.get('id', '').strip().lower()
+        data = ctx.payload or {}
+        ws_id = str(data.get('id') or '').strip().lower()
         if ws_id == 'default':
-            return jsonify({"error": "The root system default workspace framework cannot be deleted."}), 400
+            return {"error": "The root system default workspace framework cannot be deleted."}, 400
         index_path = get_system_index_path()
 
         w_data = load_json_config(index_path, {"workspaces": {"default": {"config_path": "config.json"}}})
@@ -862,7 +944,7 @@ def api_delete_workspace(ctx):
             w_data["workspaces"] = {"default": {"config_path": "config.json"}}
 
         if ws_id not in w_data.get("workspaces", {}):
-            return jsonify({"error": "Target workspace not found."}), 404
+            return {"error": "Target workspace not found."}, 404
         del w_data["workspaces"][ws_id]
         hooks.emit('workspace_shutdown', workspace_id=ws_id)
         local_insetu_dir = Path(get_daemon_cwd()).joinpath(".insetu").as_posix()
@@ -872,10 +954,10 @@ def api_delete_workspace(ctx):
 
         save_json_config(index_path, w_data, workspace_id="default")
 
-        return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
+        return {"status": "success", "workspaces": w_data["workspaces"]}
     except Exception as e:
         print(f"Workspace Delete Error: {traceback.format_exc()}")
-        return jsonify({"error": f"Server Error: {str(e)}"}), 500
+        return {"error": f"Server Error: {str(e)}"}, 500
 class JobStatusResponse(TypedDict):
     id: str
     ext_name: str
@@ -887,10 +969,10 @@ def api_job_status(ctx, job_id):
     try:
         status_payload = ctx.jobs.get_status(job_id)
         if not status_payload:
-            return jsonify({"error": "Job not found in active workspace context."}), 404
-        return jsonify(status_payload)
+            return {"error": "Job not found in active workspace context."}, 404
+        return status_payload
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 class WorkspacesResponse(TypedDict):
     workspaces: Dict[str, Dict[str, str]]
 
@@ -899,43 +981,43 @@ class WorkspacesSwitchPayload(TypedDict):
 @system_bp.route('workspaces', methods=['GET', 'POST'], request_schema={"POST": WorkspacesSwitchPayload}, response_schema=WorkspacesResponse, docstring="[sync] GET lists all mounted tenant workspaces. POST validates and switches session context to a target 'active_workspace'.")
 def api_workspaces(ctx):
     index_path = get_system_index_path()
+    is_post = ctx.method == 'POST' or bool(ctx.payload and ("active_workspace" in ctx.payload or "workspace_id" in ctx.payload))
 
-    if ctx.req.method == 'GET':
+    if not is_post:
         data = load_json_config(index_path, {})
         if "workspaces" not in data:
             data["workspaces"] = {"default": {"config_path": "config.json"}}
-        return jsonify(data)
-    if ctx.req.method == 'POST':
-        data = ctx.req.json or {}
-        new_active = data.get("active_workspace") or data.get("workspace_id")
-        old_active = sniff_tenant_id()
-        if not os.path.exists(index_path):
-            return jsonify({"error": "system.json not found."}), 404
-        w_data = load_json_config(index_path, {})
-        if new_active not in w_data.get("workspaces", {}) and new_active != "default":
-            return jsonify({"error": "Workspace ID not found."}), 400
+        return data
 
-        if old_active and old_active != new_active:
-            hooks.emit('workspace_shutdown', workspace_id=old_active)
+    data = ctx.payload or {}
+    new_active = data.get("active_workspace") or data.get("workspace_id")
+    old_active = sniff_tenant_id()
+    if not os.path.exists(index_path):
+        return {"error": "workspaces.json not found."}, 404
+    w_data = load_json_config(index_path, {})
+    if new_active not in w_data.get("workspaces", {}) and new_active != "default":
+        return {"error": "Workspace ID not found."}, 400
 
-        # Stateless UDF: Session state managed by client
-    return jsonify({"status": "success", "message": f"Validated workspace {new_active}"})
+    if old_active and old_active != new_active:
+        hooks.emit('workspace_shutdown', workspace_id=old_active)
+
+    return {"status": "success", "message": f"Validated workspace {new_active}"}
 @system_bp.route('config/test_bucketing', methods=['POST'], docstring="[sync] Dry-runs sub-bucket regex and folder matching for a repository.")
 def api_system_config_test_bucketing(ctx):
     try:
-        data = ctx.req.get_json(silent=True) or {}
+        data = ctx.payload or {}
         repo_cfg = data.get("repo_cfg", {})
 
         cfg_path, ws_root = get_workspace_physics(ctx.workspace_id)
         repo_dir = repo_cfg.get("repo_dir")
         if not repo_dir:
-            return jsonify({"error": "repo_dir missing"}), 400
+            return {"error": "repo_dir missing"}, 400
 
         physical_path = repo_cfg.get("physical_path")
         repo_path = Path(physical_path).expanduser().resolve() if physical_path else Path(ws_root).joinpath(repo_dir).resolve()
 
         if not repo_path.exists():
-            return jsonify({"error": f"Path not found: {repo_path}"}), 404
+            return {"error": f"Path not found: {repo_path}"}, 404
 
         from insetu.core.topology.engine_topology import get_valid_workspace_files as _get_valid_workspace_files, resolve_file_bucket as _resolve_file_bucket
         valid_files = _get_valid_workspace_files(repo_path.as_posix(), repo_cfg, ctx.workspace_id)
@@ -951,10 +1033,10 @@ def api_system_config_test_bucketing(ctx):
                 buckets_map[bucket_id] = []
             buckets_map[bucket_id].append(f)
 
-        return jsonify({"status": "success", "buckets": buckets_map})
+        return {"status": "success", "buckets": buckets_map}
     except Exception as e:
         print(f"Bucketing Test Error: {traceback.format_exc()}")
-        return jsonify({"error": f"Server Error: {str(e)}"}), 500
+        return {"error": f"Server Error: {str(e)}"}, 500
 class ListLocalResponse(TypedDict):
     current: str
     dirs: List[str]
@@ -962,7 +1044,7 @@ class ListLocalResponse(TypedDict):
 @system_bp.route('fs/list_local', methods=['GET'], response_schema=ListLocalResponse, docstring="[sync] Stateless directory explorer that reads absolute host paths for workspace mounts.")
 def api_list_local_host_dirs(ctx):
     """Stateless directory explorer that reads absolute host paths for workspace mounts."""
-    target = ctx.req.args.get('path', '').strip()
+    target = str(ctx.payload.get('path') or '').strip()
     if not target:
         target = os.path.expanduser('~')
     else:
@@ -978,12 +1060,12 @@ def api_list_local_host_dirs(ctx):
                 continue
             if os.path.isdir(Path(target).joinpath(item).as_posix()):
                 dirs.append(item)
-        return jsonify({"current": target, "dirs": dirs})
+        return {"current": target, "dirs": dirs}
     except Exception as e:
-        return jsonify({"current": target, "dirs": [], "error": str(e)}), 500
+        return {"current": target, "dirs": [], "error": str(e)}, 500
 @system_bp.route('memory', methods=['GET', 'POST'], docstring="[sync] Inspects backend RAM usage, internal caches, top Python object types, and optionally triggers GC + glibc malloc_trim or tracemalloc.")
 def api_system_memory(ctx):
-    action = ctx.req.args.get('action') or ((ctx.req.get_json(silent=True) or {}).get('action') if ctx.req.method == 'POST' else None)
+    action = ctx.payload.get('action')
     if action == 'trim':
         reclaim_process_memory()
     elif action == 'tracemalloc_start':
@@ -1044,12 +1126,11 @@ def api_system_memory(ctx):
         {"group": k, "count": v}
         for k, v in sorted(thread_groups.items(), key=lambda x: x[1], reverse=True)
     ]
-
-    return jsonify({
+    return {
         "process": proc_mem,
         "caches": caches_info,
         "threads": threads_summary,
         "top_object_types": top_objects,
         "tracemalloc_active": tracemalloc.is_tracing(),
         "tracemalloc_top": trace_top
-    })
+    }

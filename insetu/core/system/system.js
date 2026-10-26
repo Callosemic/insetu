@@ -117,10 +117,10 @@ async function bootExtensions() {
         let matchingExt = activeExts.find(ext => subParts.includes(ext) || ext === targetPath || targetPath.startsWith(`${ext}:`));
         if (!matchingExt) {
             const dataMatch = targetPath.match(/\.(?:insetu-data|insetu\/data)\/([a-z0-9_]+)\//);
+            const ctxMatch = targetPath.match(/^ctx:\/\/([a-z0-9_]+)\//);
             if (dataMatch) matchingExt = dataMatch[1];
-            else if (targetPath.startsWith('ctx://notes/') || targetPath.includes('/notes/')) matchingExt = 'notes';
-            else if (targetPath.startsWith('ctx://prompts/')) matchingExt = 'prompts';
-            else if (targetPath.includes('term')) matchingExt = 'term';
+            else if (ctxMatch) matchingExt = ctxMatch[1];
+            else matchingExt = activeExts.find(ext => targetPath.includes(`/${ext}/`) || targetPath === ext);
         }
         if (matchingExt && matchingExt !== 'fs' && activeExts.includes(matchingExt)) {
             popoutScripts.push(`/static/extensions/${matchingExt}/ext_${matchingExt}.js`);
@@ -198,7 +198,7 @@ async function checkManifestVersion() {
         let expiredLocks = false;
         for (const [path, lock] of Object.entries(locks)) {
             if (lock.expires > now) {
-                const parsed = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(path) : { repo: path.split('/')[0] };
+                const parsed = window.inSetu?.utils?.InSetuURI ? new window.inSetu.utils.InSetuURI(path) : { repo: '' };
                 if (parsed.repo) lockedRepos.add(parsed.repo);
             } else {
                 delete locks[path];
@@ -788,6 +788,7 @@ export async function executeBootSequence(options = {}) {
                 if (data.meta?.core_modules) {
                     window.inSetu.CORE_MODULES = new Set(data.meta.core_modules);
                 }
+                window.inSetu.utils.syncExtensionDependencyMeta?.(data);
 
                 // Surface missing extension dependencies directly to the UI
                 const bypassed = config.bypassed_extensions || data.meta?.bypassed_extensions || [];
@@ -864,6 +865,7 @@ export async function executeBootSequence(options = {}) {
                 if (data.meta?.core_modules) {
                     window.inSetu.CORE_MODULES = new Set(data.meta.core_modules);
                 }
+                window.inSetu.utils.syncExtensionDependencyMeta?.(data);
                 // Synchronize branding tokens while we have the config
                 AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
                 const statusBar = document.querySelector('sutram-status-bar');
@@ -1102,7 +1104,7 @@ export async function executeBootSequence(options = {}) {
                     const baseTitle = document.querySelector('sutram-status-bar')?.baseTitle || 'inSetu Workbench';
                     const pinnedItem = layout.columns[colId]?.pinned?.find(p => p.id === resolvedTargetId || p.rawId === subId);
                     const rawTarget = (subId === 'editor' && deepPath.length > 0) ? deepPath.join('/') : (resolvedTargetId || subId);
-                    const parsed = window.inSetu?.utils?.parseURI ? window.inSetu.utils.parseURI(rawTarget) : {};
+                    const parsed = window.inSetu?.utils?.InSetuURI ? new window.inSetu.utils.InSetuURI(rawTarget) : {};
                     const itemLabel = (rawTarget.includes('://') || rawTarget.includes('/'))
                         ? rawTarget.replace(/\/+$/, '').split('/').pop()
                         : (pinnedItem?.label || rawTarget);
@@ -1274,6 +1276,7 @@ async function _hydrateWorkspaceEnvironment(targetWs, previousExts = []) {
             window.inSetu.CORE_MODULES = new Set(data.meta.core_modules);
         }
         await bootExtensions();
+        window.inSetu.utils.syncExtensionDependencyMeta?.(data);
         AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
         const statusBar = document.querySelector('sutram-status-bar');
         if (statusBar) {

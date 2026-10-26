@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { resolveDirectoryState } from '../../../vendor/sutram/js/utils.js';
+import { resolveDirectoryState, SutramWorker } from '../../../vendor/sutram/js/utils.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { SutramCard } from '../../../vendor/sutram/js/primitives.js';
 import { InSetuElement } from '/static/extensions/system/insetu_sdk.js';
@@ -80,6 +80,7 @@ export class InSetuFileTree extends InSetuElement {
         searchPlaceholder: { type: String },
         entityType: { type: String },
         _searchQuery: { type: String },
+        _searchResults: { type: Array, state: true },
         _pendingMutations: { type: Object },
         _deletedMutations: { type: Object },
         _gitModifiedFiles: { type: Object }
@@ -111,6 +112,8 @@ constructor() {
         this.enableSearch = false;
         this.searchPlaceholder = 'Search...';
         this._searchQuery = '';
+        this._searchResults = [];
+        this._searchReqId = 0;
         this._cachedTree = null;
         this._pendingMutations = new Set();
         this._gitModifiedFiles = new Set();
@@ -139,10 +142,27 @@ constructor() {
             );
         }
     }
-
     willUpdate(changedProperties) {
-        if (changedProperties.has('files') || changedProperties.has('stripPrefix') || changedProperties.has('_pendingMutations') || changedProperties.has('_deletedMutations')) {
+        const filesChanged = changedProperties.has('files') || changedProperties.has('stripPrefix') || changedProperties.has('_pendingMutations') || changedProperties.has('_deletedMutations');
+        if (filesChanged) {
             this._cachedTree = null;
+        }
+        if (filesChanged || changedProperties.has('_searchQuery')) {
+            if (this.enableSearch && this._searchQuery) {
+                const { mergedFiles } = this._getMergedUris();
+                if (mergedFiles.length < 500) {
+                    this._searchResults = window.inSetu.utils.fuzzyFilterObjects(mergedFiles, this._searchQuery);
+                } else {
+                    const reqId = ++this._searchReqId;
+                    SutramWorker.dispatch('FUZZY_SEARCH', { items: mergedFiles, query: this._searchQuery }).then(({ results }) => {
+                        if (reqId === this._searchReqId) {
+                            this._searchResults = results || [];
+                        }
+                    });
+                }
+            } else {
+                this._searchResults = [];
+            }
         }
     }
     _getMergedUris() {
@@ -192,8 +212,7 @@ constructor() {
         let directoryEntries = [];
         let flatResults = [];
         if (isSearching) {
-            const { mergedFiles } = this._getMergedUris();
-            flatResults = window.inSetu.utils.fuzzyFilterObjects(mergedFiles, this._searchQuery);
+            flatResults = this._searchResults || [];
         } else {
             const tree = this._getTree();
             const { validPath, entries } = resolveDirectoryState(tree, this.currentPath, {
@@ -238,7 +257,7 @@ constructor() {
                         .items=${flatResults}
                         .renderItem=${fullFilepath => {
                             if (!fullFilepath || typeof fullFilepath !== 'string') return html``;
-                            const parsed = this.utils.parseURI(fullFilepath);
+                            const parsed = new this.utils.InSetuURI(fullFilepath);
                             const isGitMod = this._gitModifiedFiles.has(fullFilepath);
                             const cardSuffix = parsed.isSharedMount ? `🌐 ${parsed.volume}` : (parsed.isUserTemplate ? 'User Template' : (parsed.isReadOnlyTemplate ? 'Template' : (isGitMod ? 'M' : '')));
                             return html`
@@ -274,8 +293,8 @@ constructor() {
                             if (!node || typeof node !== 'object') return html``;
                             const isDirNode = node.type === 'directory';
                             const fullTarget = node.canonicalUri || node.fullPath || '';
-                            const parsed = this.utils.parseURI(fullTarget);
-                            const displayName = node.name || parsed.basename || String(fullTarget).replace(/\/+$/, '').split('/').pop() || fullTarget;
+                            const parsed = new this.utils.InSetuURI(fullTarget);
+                            const displayName = node.name || parsed.basename || fullTarget;
                             const isUserTemplateRoot = fullTarget.endsWith('/.templates/user');
                             const isReadOnlyTemplateNode = !parsed.isUserTemplate && !isUserTemplateRoot && fullTarget.includes('/.templates');
 

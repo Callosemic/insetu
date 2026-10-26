@@ -223,20 +223,16 @@ if (window.ExtensionRegistry) {
                 return `/?popout=true&token=${encodeURIComponent(token)}#/${encodeURIComponent(ws)}/${encodeURIComponent(colId)}/editor/${encodeURIComponent(id)}`;
             },
             'sutram:restore-docked-projection': ({ id, colId }) => {
-                if (id.startsWith('ctx://notes/') || id.includes('.insetu-data/notes/')) {
-                    if (window.inSetu?.stores?.Notes?.getState()?.openNoteEditor) {
-                        window.inSetu.stores.Notes.getState().openNoteEditor(id);
-                        return true;
-                    }
-                } else if (id.includes('.insetu-data/tracker/')) {
-                    const normTaskUri = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(id) : id;
-                    window.inSetu.events.emit('insetu:tracker:open-edit-task', { filepath: normTaskUri });
+                const normId = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(id) : id;
+                const customEd = window.ExtensionRegistry?.resolveCustomEditor?.(normId);
+                if (customEd && typeof customEd.onOpen === 'function') {
+                    customEd.onOpen(normId);
                     return true;
-                } else if (window.inSetu?.vfs?.viewSourceFile) {
-                    const isReadOnlyTpl = !id.includes('/.templates/user/') && id.includes('/.templates/');
-                    const isShared = id.startsWith('ws://');
-                    const isEditable = !isReadOnlyTpl && !isShared && (!id.startsWith('ctx://') || id.startsWith('ctx://prompts/'));
-                    window.inSetu.vfs.viewSourceFile(id, isEditable);
+                }
+                if (window.inSetu?.vfs?.viewSourceFile) {
+                    const parsed = window.inSetu?.utils?.InSetuURI ? new window.inSetu.utils.InSetuURI(normId) : null;
+                    const isEditable = parsed ? parsed.isEditable : (!normId.startsWith('ws://') && !normId.includes('/.templates/'));
+                    window.inSetu.vfs.viewSourceFile(normId, isEditable);
                     return true;
                 }
                 return false;
@@ -250,6 +246,18 @@ if (window.ExtensionRegistry) {
             }
         },
         entityActions: [
+            {
+                targetEntity: 'editor',
+                id: 'editor-toggle-macro-preview',
+                label: (data) => data?.previewMode ? (data?.isFS ? 'Edit Source' : 'Raw Source') : 'Preview Macros',
+                icon: (data) => data?.previewMode ? 'edit-3' : 'eye',
+                group: 'tools',
+                vfsBound: false,
+                intent: 'highlight',
+                order: 10.5,
+                match: (data) => !!data?.supportsMacroPreview,
+                emitEvent: (data) => ({ name: 'insetu:editor:toggle-preview', detail: { filepath: data.filepath } })
+            },
             {
                 targetEntity: 'editor',
                 id: 'editor-toggle-prose',

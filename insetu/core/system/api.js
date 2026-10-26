@@ -19,9 +19,11 @@ const offlineProvider = new OfflineHttpProvider({
     },
     isOfflineCapable: (url) => {
         const extName = url.split('/api/')[1]?.split('/')[1] || '';
-        if (['fs', 'editor', 'notes', 'tracker', 'flow'].includes(extName)) return true;
-        const offlineMode = window.ExtensionRegistry?.getExtension(extName)?.offline_mode || 'none';
-        return offlineMode !== 'read_only' && offlineMode !== 'none';
+        const extManifest = window.ExtensionRegistry?.getExtension(extName);
+        if (extManifest && extManifest.offline_mode) {
+            return extManifest.offline_mode !== 'read_only' && extManifest.offline_mode !== 'none';
+        }
+        return Boolean(window.inSetu?.isCore && window.inSetu.isCore(extName));
     },
     onEnqueue: (count, bodyString, headers, url, method, scopeId, options = {}) => {
         // Pure IoC: Execute explicit cache directives passed from domain extensions
@@ -233,6 +235,24 @@ window.inSetu.api = {
         const body = isFD ? payload : JSON.stringify(payload);
         return this.workspace(path, { ...options, method: 'POST', headers, body });
     },
+    getJson: async function(path, options = {}) {
+        const res = await this.get(path, options);
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+        return res.json();
+    },
+    postJson: async function(path, payload, options = {}) {
+        const res = await this.post(path, payload, options);
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+        return res.json();
+    },
+    deleteJson: async function(path, options = {}) {
+        const res = await this.delete(path, options);
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+        return res.json();
+    },
+    pollJob: function(jobId, options = {}) {
+        return window.inSetu.utils.pollJob(jobId, options);
+    },
     keepalivePost: function(path, payload, workspaceId = null) {
         const ws = workspaceId || (window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default');
         const cleanPath = path.startsWith('/') ? path.substring(1) : path;
@@ -338,7 +358,12 @@ class SSEPipeline {
             const data = JSON.parse(e.data);
             bc.postMessage({ type: 'job_progress', data });
             if (this._shouldDrop(data.workspace_id)) return;
-            const isPipelineJob = ['topology', 'cartographer', 'gather', 'git', 'flow'].includes(data.ext_name);
+            const isChainedPipelineJob = Boolean(
+                data.artifact?.root_job_id ||
+                data.artifact?.chain_history ||
+                data.artifact?.next_job_id ||
+                ['topology', 'cartographer', 'gather'].includes(data.ext_name)
+            );
 
             // 1. ALWAYS emit step completion hooks regardless of job_category to keep manifest & dirty states fresh
             if (data.status === 'completed' && data.artifact) {
@@ -348,10 +373,9 @@ class SSEPipeline {
                     artifact: data.artifact
                 });
             }
-
             // Route events to the UI spinner strictly if they belong to the 'ui_blocking' category
             if (data.job_category === 'ui_blocking') {
-                if (isPipelineJob) {
+                if (isChainedPipelineJob) {
                     window.inSetu.events.emitHook('insetu:compile-progress', data);
                 }
 
@@ -362,7 +386,7 @@ class SSEPipeline {
                     }
                 }
                 // 2. Only terminate UI spinners when the ENTIRE chain completes
-                const isStatusTrackedJob = isPipelineJob || data.ext_name === 'bridge';
+                const isStatusTrackedJob = isChainedPipelineJob || data.ext_name === 'bridge';
                 if (isStatusTrackedJob && (data.status === 'completed' || data.status === 'failed') && !(data.artifact && data.artifact.next_job_id)) {
                     window.inSetu.events.emitHook('insetu:compile-progress', { status: 'terminated' });
                     if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {

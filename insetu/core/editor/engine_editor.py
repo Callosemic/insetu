@@ -3,7 +3,7 @@ import json
 import urllib.request
 from pathlib import Path
 from typing import TypedDict, Optional
-from flask import jsonify, send_file
+from flask import send_file
 from insetu.core.sdk import InSetuExtension
 
 DB_SCHEMA = {
@@ -63,27 +63,26 @@ def _ensure_editor_prefs_hydrated(ctx):
         if saved is None:
             all_rows = ctx.db.get_all("file_preferences")
             ctx.store.set("preferences.json", "items", all_rows)
-
 @editor_bp.route('preference', methods=['GET'])
 def get_preference(ctx):
-    filepath = ctx.req.args.get('file', '').strip()
+    filepath = str(ctx.payload.get('file') or '').strip()
     if not filepath:
-        return jsonify({"writing_mode": False, "doc_type": None})
+        return {"writing_mode": False, "doc_type": None}
     _ensure_editor_prefs_hydrated(ctx)
     row = ctx.db.get_by_id("file_preferences", filepath, id_col="filepath")
     if not row:
-        return jsonify({"writing_mode": False, "doc_type": None})
-    return jsonify({
+        return {"writing_mode": False, "doc_type": None}
+    return {
         "writing_mode": bool(row.get('writing_mode')),
         "doc_type": row.get('doc_type')
-    })
+    }
 
 @editor_bp.route('preference', methods=['POST'], docstring="[sync] Updates the editor writing mode and document type for a specific file.")
 def set_preference(ctx):
-    data = ctx.req.json or {}
-    filepath = data.get("filepath", "").strip()
+    data = ctx.payload or {}
+    filepath = str(data.get("filepath") or "").strip()
     if not filepath:
-        return jsonify({"error": "filepath required"}), 400
+        return {"error": "filepath required"}, 400
 
     _ensure_editor_prefs_hydrated(ctx)
     writing_mode = 1 if data.get("writing_mode") else 0
@@ -95,7 +94,7 @@ def set_preference(ctx):
     })
     all_rows = ctx.db.get_all("file_preferences")
     ctx.store.set("preferences.json", "items", all_rows)
-    return jsonify({"status": "success"})
+    return {"status": "success"}
 
 class VendorizePayload(TypedDict):
     mode: str
@@ -118,13 +117,12 @@ def serve_vendor_asset(ctx, filename):
         return send_file(target_path.as_posix(), mimetype='application/javascript')
 
     return "Vendor asset not found.", 404
-
 @editor_bp.route('vendorize', methods=['POST'], request_schema=VendorizePayload, response_schema=VendorizeResponse, docstring="[sync] Dynamically fetches and vendorizes a missing CodeMirror 6 language pack into .insetu/ per ADR 0032.")
 def vendorize_language(ctx):
-    data = ctx.req.json or {}
-    mode = (data.get("mode") or "").strip().lower()
+    data = ctx.payload or {}
+    mode = str(data.get("mode") or "").strip().lower()
     if not mode:
-        return jsonify({"error": "mode parameter is required"}), 400
+        return {"error": "mode parameter is required"}, 400
 
     vendor_dir = Path(ctx.paths["artifacts_base"]).joinpath("vendor", "codemirror")
     filename = f"lang-{mode}.js"
@@ -143,6 +141,6 @@ def vendorize_language(ctx):
             vendor_dir.mkdir(parents=True, exist_ok=True)
             target_path.write_text(code_str, encoding='utf-8')
         except Exception as e:
-            return jsonify({"error": f"Failed to fetch language bundle for '{mode}': {str(e)}"}), 500
+            return {"error": f"Failed to fetch language bundle for '{mode}': {str(e)}"}, 500
 
-    return jsonify({"status": "success", "path": public_route})
+    return {"status": "success", "path": public_route}

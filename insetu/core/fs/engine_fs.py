@@ -3,17 +3,17 @@ import json
 import uuid
 import time
 import datetime
+import mimetypes
 import traceback
 from pathlib import Path
 from typing import TypedDict, Optional, List, Dict, Any, Tuple
 import werkzeug.utils
-from flask import request, jsonify, send_file
+from flask import request, send_file
 from insetu.core.sdk import InSetuExtension, hooks
 from insetu.core.utils_core import (
     InSetuURI,
     get_repo_path,
     execute_binary,
-    sniff_tenant_id,
     compute_vfs_sha256 as _compute_sha256,
     record_vfs_ancestor as _record_ancestor,
     lookup_vfs_ancestor as _lookup_ancestor,
@@ -39,49 +39,97 @@ def _is_readonly_template_path(filepath: str) -> bool:
     return '/.templates/' in norm or norm.startswith(('.templates/', 'ctx://prompts/.templates/'))
 class FileTargetPayload(TypedDict):
     file: str
-@fs_bp.route('exists', methods=['GET'], request_schema=FileTargetPayload, docstring="Verifies if a file exists on the Virtual File System.")
+_TEXT_MIME_PREFIXES = ('text/', 'application/json', 'application/javascript', 'application/xml', 'application/x-yaml', 'application/toml')
+_TEXT_EXTENSIONS = {'.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.md', '.txt', '.html', '.htm', '.css', '.sh', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.sql', '.rs', '.go', '.c', '.cpp', '.h', '.java', '.rb', '.gitignore', '.gitkeep', '.env'}
+
+
+def _is_binary_file(resolved_path: str, guessed_mime: Optional[str]) -> bool:
+    ext = Path(resolved_path).suffix.lower()
+    if ext in _TEXT_EXTENSIONS:
+        return False
+    if guessed_mime:
+        if any(guessed_mime.startswith(p) for p in _TEXT_MIME_PREFIXES):
+            return False
+        return True
+    return False
+
+
+@fs_bp.route('exists', methods=['GET'], request_schema=FileTargetPayload, docstring="[sync] Verifies if a file exists on the Virtual File System.")
 def api_fs_exists(ctx):
     """Silent validation route that verifies file existence for the UI."""
     workspace_id = ctx.workspace_id
-    filename = ctx.req.args.get('file', '').strip()
+    filename = str(ctx.payload.get('file') or '').strip()
     if not filename:
-        return jsonify({"exists": False, "path": filename})
-    uri = InSetuURI(filename)
-    return jsonify({"exists": uri.exists(workspace_id), "path": str(uri)})
-@fs_bp.route('fetch', methods=['GET'], request_schema=FileTargetPayload, docstring="Fetches or downloads the content of a target canonical VFS/CTX/WS URI.")
+        return {"exists": False, "path": filename}
+    uri = InSetuURI.from_external_input(filename)
+    return {"exists": uri.exists(workspace_id), "path": str(uri)}
+
+
+@fs_bp.route('fetch', methods=['GET'], request_schema=FileTargetPayload, docstring="Fetches or streams the content of a target canonical VFS/CTX/WS URI or workspace artifact.")
 def api_fs_fetch(ctx):
-    """Unified URI read and download gateway for vfs://, ctx://, and ws:// resources."""
+    """Unified authenticated URI read, binary streaming, and attachment download gateway."""
     workspace_id = ctx.workspace_id
-    filename = ctx.req.args.get('file', '').strip()
+    filename = str(ctx.payload.get('file') or '').strip()
 
     if not filename:
-        return jsonify({"error": "Filepath required"}), 400
+        return {"error": "Filepath required"}, 400
 
-    uri = InSetuURI(filename)
-    as_download = ctx.req.args.get('download') == '1'
+    resolved_path = None
+    uri = None
+    if "://" not in filename and "/" not in filename.replace("\\", "/"):
+        hook_res = hooks.emit_first(
+            'vfs_resolve_file',
+            filename=filename,
+            workspace_id=workspace_id,
+            predicate=lambda r: bool(r and Path(r[0] if isinstance(r, tuple) else r).exists())
+        )
+        if hook_res:
+            resolved_path = hook_res[0] if isinstance(hook_res, tuple) else hook_res
 
-    if as_download:
+    if not resolved_path:
+        uri = InSetuURI.from_external_input(filename)
         resolved_path = uri.resolve_if_exists(workspace_id)
-        if not resolved_path:
-            return jsonify({"error": "File object not found"}), 404
-        safe_basename = Path(resolved_path).name
-        base, ext = os.path.splitext(safe_basename)
-        dl_name = f"{base}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
-        res = send_file(resolved_path, as_attachment=True, download_name=dl_name, mimetype='application/octet-stream')
-        res.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-        return res
+
+    dl_param = str(ctx.payload.get('download') or '').lower()
+    as_download = dl_param in ('1', 'true', 'yes')
+    inline_param = str(ctx.payload.get('inline') or '').lower() in ('1', 'true')
+
+    if resolved_path and Path(resolved_path).is_file():
+        guessed_mime, _ = mimetypes.guess_type(resolved_path)
+        is_binary = _is_binary_file(resolved_path, guessed_mime)
+        if as_download or is_binary:
+            res_p = Path(resolved_path)
+            dl_name = (
+                f"{res_p.stem}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}{res_p.suffix}"
+                if as_download
+                else res_p.name
+            )
+            effective_mime = 'application/octet-stream' if (as_download and not inline_param) else (guessed_mime or 'application/octet-stream')
+            res = send_file(
+                resolved_path,
+                as_attachment=(as_download and not inline_param),
+                download_name=dl_name,
+                mimetype=effective_mime
+            )
+            res.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            return res
+
+    if uri is None:
+        uri = InSetuURI.from_external_input(filename)
     content = uri.read(workspace_id)
+    if content is None and resolved_path and Path(resolved_path).exists():
+        content = ctx.vfs.read(resolved_path, is_absolute_artifact=True)
     if content is not None:
         ctx.vfs.record_ancestor(str(uri), content)
         return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
-    resolved = uri.resolve(workspace_id)
-    return jsonify({
+    resolved = resolved_path or uri.resolve(workspace_id)
+    return {
         "error": "File not found.",
         "uri": str(uri),
         "resolved_path": resolved,
-        "exists_on_disk": bool(resolved and os.path.exists(resolved)),
+        "exists_on_disk": bool(resolved and Path(resolved).exists()),
         "pending_write": has_pending_vfs_write(resolved) if resolved else False
-    }), 404
+    }, 404
 
 class FileGitDiffResponse(TypedDict):
     filepath: str
@@ -94,9 +142,9 @@ class FileGitDiffResponse(TypedDict):
 def api_fs_git_diff(ctx):
     """Retrieves the Git HEAD baseline and current working tree text for a file."""
     workspace_id = ctx.workspace_id
-    filename = ctx.req.args.get('file', '').strip()
+    filename = str(ctx.payload.get('file') or '').strip()
     if not filename:
-        return jsonify({"error": "Filepath required"}), 400
+        return {"error": "Filepath required"}, 400
 
     uri = InSetuURI(filename)
     repo_dir = uri.repo
@@ -120,46 +168,16 @@ def api_fs_git_diff(ctx):
                     is_untracked = True
             except Exception:
                 is_untracked = True
-
-    return jsonify({
+    return {
         "filepath": str(uri),
         "repo": repo_dir,
         "head_content": head_content,
         "working_content": working_content,
         "is_untracked": is_untracked,
         "is_modified": head_content != working_content
-    })
-# Bypass the InSetuExtension wrapper to retain the global /download/ path for absolute URLs
-@fs_bp.bp.route('/download/<path:filename>')
-def download_file(filename):
-    """Universal download gateway for contexts, artifacts, and vault files."""
-    workspace_id = sniff_tenant_id()
-    resolved_path = None
-    if "://" not in filename and "/" not in filename.replace("\\", "/"):
-        hook_res = hooks.emit_first(
-            'vfs_resolve_file',
-            filename=filename,
-            workspace_id=workspace_id,
-            predicate=lambda r: bool(r and os.path.exists(r[0] if isinstance(r, tuple) else r))
-        )
-        if hook_res:
-            resolved_path = hook_res[0] if isinstance(hook_res, tuple) else hook_res
-    if not resolved_path:
-        uri = InSetuURI.from_external_input(filename)
-        resolved_path = uri.resolve_if_exists(workspace_id)
-    if not resolved_path:
-        return jsonify({"error": "File object not found"}), 404
-
-    safe_basename = Path(resolved_path).name
-    base, ext = os.path.splitext(safe_basename)
-    dl_name = f"{base}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
-    res = send_file(resolved_path, as_attachment=(request.args.get('inline') != '1'), download_name=dl_name, mimetype='application/octet-stream')
-    res.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    res.headers['Pragma'] = 'no-cache'
-    res.headers['Expires'] = '0'
-    return res
+    }
 @fs_bp.worker("search_task")
-def _background_fs_search(ctx, query="", **kwargs):
+def _background_fs_search(ctx, query: str = ""):
     ctx.jobs.update_progress("Searching workspace files...")
     results = ctx.emit_merge_list('vfs_search', query=query)
     results.sort(key=lambda x: x["score"], reverse=True)
@@ -168,17 +186,17 @@ def _background_fs_search(ctx, query="", **kwargs):
 
 class FileSearchPayload(TypedDict):
     q: str
-
 @fs_bp.route('search', methods=['POST'], request_schema=FileSearchPayload, docstring="Fuzzy search across workspace files.")
 def api_fs_search(ctx):
     try:
-        data = ctx.req.get_json(silent=True) or {}
-        query = data.get('q', '').lower()
-        if not query: return jsonify({"results": []})
-        job_id = ctx.jobs.submit("search_task", job_category="system_background", query=query)
-        return jsonify({"status": "accepted", "job_id": job_id}), 202
+        data = ctx.payload
+        query = str(data.get('q') or '').lower()
+        if not query:
+            return {"results": []}
+        job_id = ctx.jobs.submit("search_task", job_category="ui_blocking", query=query)
+        return {"status": "accepted", "job_id": job_id}, 202
     except Exception as e:
-        return jsonify({"error": f"Search dispatch failed: {str(e)}"}), 500
+        return {"error": f"Search dispatch failed: {str(e)}"}, 500
 
 class FileMovePayload(TypedDict):
     filepath: str
@@ -187,13 +205,13 @@ class FileMovePayload(TypedDict):
 def api_fs_move(ctx):
     workspace_id = ctx.workspace_id
     try:
-        data = ctx.req.get_json(silent=True) or {}
-        filepath = data.get("filepath", "").strip()
-        dest_path = data.get("dest_path", "").strip()
+        data = ctx.payload
+        filepath = str(data.get("filepath") or "").strip()
+        dest_path = str(data.get("dest_path") or "").strip()
         if not filepath or not dest_path:
-                return jsonify({"error": "Filepath and destination required"}), 400
+                return {"error": "Filepath and destination required"}, 400
         if _is_readonly_template_path(filepath) or _is_readonly_template_path(dest_path):
-                return jsonify({"error": "403 Forbidden: Built-in module templates are read-only. Fork the template to your workspace prompts to edit it."}), 403
+                return {"error": "403 Forbidden: Built-in module templates are read-only. Fork the template to your workspace prompts to edit it."}, 403
         src_uri = str(InSetuURI(filepath))
         dst_uri = str(InSetuURI(dest_path))
         res, code = ctx.vfs.move(src_uri, dst_uri)
@@ -202,12 +220,12 @@ def api_fs_move(ctx):
                 {"filepath": src_uri, "operation": "delete", "relocated_to": dst_uri},
                 {"filepath": dst_uri, "operation": "save", "relocated_from": src_uri},
             ])
-        return jsonify(res), code
+        return res, code
     except Exception as e:
         try:
-            hooks.emit_background('system_error', source="VFS:Move", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
+            hooks.emit_background('system_error', source="VFS:Move", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.payload or {}), workspace_id=workspace_id)
         except Exception: pass
-        return jsonify({"error": f"VFS Move Error: {str(e)}"}), 500
+        return {"error": f"VFS Move Error: {str(e)}"}, 500
 
 class FileActionPayload(TypedDict):
     filepath: str
@@ -215,12 +233,12 @@ class FileActionPayload(TypedDict):
 def api_fs_archive(ctx):
     workspace_id = ctx.workspace_id
     try:
-        data = ctx.req.get_json(silent=True) or {}
-        filepath = data.get("filepath", "").strip()
+        data = ctx.payload
+        filepath = str(data.get("filepath") or "").strip()
         if not filepath:
-                return jsonify({"error": "Filepath required"}), 400
+                return {"error": "Filepath required"}, 400
         if _is_readonly_template_path(filepath):
-                return jsonify({"error": "403 Forbidden: Built-in module templates are read-only."}), 403
+                return {"error": "403 Forbidden: Built-in module templates are read-only."}, 403
         uri = InSetuURI(filepath)
 
         parent_path = uri.path.rpartition('/')[0] if '/' in uri.path else ''
@@ -241,32 +259,32 @@ def api_fs_archive(ctx):
                 {"filepath": src_uri, "operation": "delete", "relocated_to": rel_dest},
                 {"filepath": rel_dest, "operation": "save", "relocated_from": src_uri},
             ])
-        return jsonify(res), code
+        return res, code
     except Exception as e:
         try:
-            hooks.emit_background('system_error', source="VFS:Archive", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
+            hooks.emit_background('system_error', source="VFS:Archive", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.payload or {}), workspace_id=workspace_id)
         except Exception: pass
-        return jsonify({"error": f"VFS Archive Error: {str(e)}"}), 500
+        return {"error": f"VFS Archive Error: {str(e)}"}, 500
 @fs_bp.route('delete', methods=['POST'], request_schema=FileActionPayload, docstring="[sync] Permanently deletes a file from the Virtual File System.")
 def api_fs_delete(ctx):
     workspace_id = ctx.workspace_id
     try:
-        data = ctx.req.get_json(silent=True) or {}
-        filepath = data.get("filepath", "").strip()
+        data = ctx.payload
+        filepath = str(data.get("filepath") or "").strip()
         if not filepath:
-                return jsonify({"error": "Filepath required"}), 400
+                return {"error": "Filepath required"}, 400
         if _is_readonly_template_path(filepath):
-                return jsonify({"error": "403 Forbidden: Built-in module templates are read-only."}), 403
+                return {"error": "403 Forbidden: Built-in module templates are read-only."}, 403
         target_uri = str(InSetuURI(filepath))
         res, code = ctx.vfs.delete(target_uri)
         if isinstance(res, dict) and code < 400:
             res.setdefault("mutations", [{"filepath": target_uri, "operation": "delete"}])
-        return jsonify(res), code
+        return res, code
     except Exception as e:
         try:
-            hooks.emit_background('system_error', source="VFS:Delete", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
+            hooks.emit_background('system_error', source="VFS:Delete", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.payload or {}), workspace_id=workspace_id)
         except Exception: pass
-        return jsonify({"error": f"VFS Delete Error: {str(e)}"}), 500
+        return {"error": f"VFS Delete Error: {str(e)}"}, 500
 
 class BulkMutationItem(TypedDict, total=False):
     action: str  # 'move' | 'archive' | 'delete'
@@ -276,15 +294,14 @@ class BulkMutationItem(TypedDict, total=False):
 
 class FileBulkPayload(TypedDict):
     operations: List[BulkMutationItem]
-
 @fs_bp.route('bulk', methods=['POST'], request_schema=FileBulkPayload, docstring="[sync] Executes a batch of VFS file or directory mutations (move, archive, delete) in a single atomic operation.")
 def api_fs_bulk(ctx):
     workspace_id = ctx.workspace_id
     try:
-        data = ctx.req.get_json(silent=True) or {}
+        data = ctx.payload
         raw_ops = data.get("operations", [])
         if not raw_ops or not isinstance(raw_ops, list):
-            return jsonify({"error": "A non-empty 'operations' list is required"}), 400
+            return {"error": "A non-empty 'operations' list is required"}, 400
 
         normalized_ops = []
         for item in raw_ops:
@@ -327,9 +344,8 @@ def api_fs_bulk(ctx):
                     "dest_path": rel_dest,
                     "is_dir": bool(item.get("is_dir"))
                 })
-
         if not normalized_ops:
-            return jsonify({"error": "No valid bulk operations provided"}), 400
+            return {"error": "No valid bulk operations provided"}, 400
         res, code = ctx.vfs.bulk(normalized_ops)
         if isinstance(res, dict) and code < 400:
             receipt_mutations = []
@@ -349,13 +365,13 @@ def api_fs_bulk(ctx):
                         "relocated_from": op["filepath"]
                     })
             res.setdefault("mutations", receipt_mutations)
-        return jsonify(res), code
+        return res, code
     except Exception as e:
         try:
-            hooks.emit_background('system_error', source="VFS:Bulk", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
+            hooks.emit_background('system_error', source="VFS:Bulk", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.payload or {}), workspace_id=workspace_id)
         except Exception:
             pass
-        return jsonify({"error": f"VFS Bulk Error: {str(e)}"}), 500
+        return {"error": f"VFS Bulk Error: {str(e)}"}, 500
 class FileUploadRequest(TypedDict):
     file: List[bytes]
     dest_dir: str
@@ -364,15 +380,14 @@ class FileUploadResponse(TypedDict):
     status: str
     message: str
     filepaths: List[str]
-
 @fs_bp.route('upload', methods=['POST'], request_schema=FileUploadRequest, response_schema=FileUploadResponse, docstring="[sync] Uploads multiple files via multipart/form-data to a specified directory.")
 def api_fs_upload(ctx):
     """Native multipart/form-data uploader for robust binary handling."""
     workspace_id = ctx.workspace_id
-    if 'file' not in ctx.req.files:
-            return jsonify({"error": "No files provided"}), 400
-    files = ctx.req.files.getlist('file')
-    dest_dir = ctx.req.form.get('dest_dir', '').strip()
+    if 'file' not in request.files:
+            return {"error": "No files provided"}, 400
+    files = request.files.getlist('file')
+    dest_dir = str(ctx.payload.get('dest_dir') or '').strip()
 
     db_conn = ctx.get_db("workers")
     uploaded_paths = []
@@ -401,17 +416,16 @@ def api_fs_upload(ctx):
                     "INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
                     (filepath, 'modified' if not is_new else 'added', time.time())
             )
-
-    hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=mutations)
+    hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=mutations)
     db_conn.commit()
     if not uploaded_paths:
-            return jsonify({"error": "No valid files uploaded"}), 400
-    return jsonify({
+            return {"error": "No valid files uploaded"}, 400
+    return {
         "status": "success",
         "message": f"{len(uploaded_paths)} file(s) uploaded successfully.",
         "filepaths": uploaded_paths,
         "mutations": mutations
-    })
+    }
 class FileSavePayload(TypedDict, total=False):
     filepath: str
     content: str
@@ -422,20 +436,20 @@ def api_fs_save(ctx):
     """Universal save-back endpoint with 3-way OCC merge and explicit path routing guardrails."""
     workspace_id = ctx.workspace_id
     try:
-        data = ctx.req.get_json(silent=True)
+        data = dict(ctx.payload) if ctx.payload else None
         if not data:
-                return jsonify({"error": "Invalid or missing JSON payload"}), 400
+                return {"error": "Invalid or missing JSON payload"}, 400
 
         # Protect VFS sandbox and ledger parity from malicious API injections
         if "is_absolute_artifact" in data:
                 del data["is_absolute_artifact"]
         if "ignore_ledger" in data:
                 del data["ignore_ledger"]
-        filepath, content = data.get("filepath", "").strip(), data.get("content", "")
+        filepath, content = str(data.get("filepath") or "").strip(), data.get("content", "")
         if not filepath: 
-                return jsonify({"error": "Filepath is required"}), 400
+                return {"error": "Filepath is required"}, 400
         if _is_readonly_template_path(filepath):
-                return jsonify({"error": "403 Forbidden: Built-in module templates are read-only. Fork the template to your workspace prompts to edit it."}), 403
+                return {"error": "403 Forbidden: Built-in module templates are read-only. Fork the template to your workspace prompts to edit it."}, 403
         filepath = str(InSetuURI(filepath))
         base_hash = data.get("base_hash")
         base_content_fallback = data.get("base_content")
@@ -467,7 +481,7 @@ def api_fs_save(ctx):
                         if ancestor_text is not None
                         else f"OCC Conflict: File was modified externally. Offline changes saved to {conflict_name}"
                     )
-                    return jsonify({"error": reason}), 409
+                    return {"error": reason}, 409
         result = ctx.vfs.save(filepath, content, data)
         saved_hash = ctx.vfs.record_ancestor(filepath, content)
         if isinstance(result, dict):
@@ -477,11 +491,11 @@ def api_fs_save(ctx):
                 result["status"] = "merged"
                 result["merged_content"] = content
                 result["message"] = "Merged concurrent edits cleanly."
-        return jsonify(result)
+        return result
     except Exception as e:
         try:
             # Masking content string to prevent payload blowout in the ledger
             safe_payload = {"filepath": data.get("filepath")} if isinstance(data, dict) else {}
             hooks.emit_background('system_error', source="VFS:Save", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(safe_payload), workspace_id=workspace_id)
         except Exception: pass
-        return jsonify({"error": f"File System Error: {str(e)}"}), 500
+        return {"error": f"File System Error: {str(e)}"}, 500
