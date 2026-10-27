@@ -456,9 +456,11 @@ disconnectedCallback() {
                                 // Extract sizes if previously stuffed into detailText
                                 const sizeStr = (f.detailText && f.detailText.includes(' | ')) ? f.detailText.split(' | ')[1] : "";
                                 const isDirty = (() => {
+                                    const dirtySet = AppStore.getState().dirtyBuckets || new Set();
+                                    if (dirtySet.has(f.filename)) return true;
                                     const manifestObj = AppStore.getState().manifest?.ctx?.[f.filename];
                                     const addr = window.inSetu.utils.BucketAddress.fromFilepath(f.filename, manifestObj?.meta);
-                                    return AppStore.getState().dirtyBuckets.has(addr.key);
+                                    return dirtySet.has(String(addr.key).toLowerCase()) || dirtySet.has(addr.key);
                                 })();
                                 const isLocked = isGitLoading && isDirty;
                                 return html`
