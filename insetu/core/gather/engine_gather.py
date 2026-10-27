@@ -201,7 +201,10 @@ def compile_context_payload(workspace_id, output_dir, base_uri, header_block, te
         "chunks": chunks,
         "meta": meta_copy
     }
-    manifest_entry["meta"]["size_bytes"] = sum(chunk_sizes)
+    total_bytes = sum(chunk_sizes)
+    manifest_entry["meta"]["size_bytes"] = total_bytes
+    manifest_entry["meta"]["estimated_tokens"] = total_bytes // 4
+    manifest_entry["meta"]["file_count"] = len(files)
     manifest_entry["meta"]["chunk_sizes"] = chunk_sizes
     manifest_entry["meta"]["content_hash"] = content_hash
     manifest_entry["meta"]["file"] = base_uri
@@ -241,7 +244,7 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
             events = list(event_dict.values())
         except Exception:
             pass
-    ctx.jobs.submit_one_shot("execute_delayed_compile", 12000, job_id=job_id, force_full=False, ledger_events=events)
+    ctx.jobs.submit_one_shot("execute_delayed_compile", 2500, job_id=job_id, force_full=False, ledger_events=events)
 
 def get_ordered_compilation_steps(ctx):
     """Delegates compilation sequence resolution to Akasa's generic DAG orchestrator."""
@@ -770,6 +773,9 @@ def vacuum_unaccounted_cache_on_complete(workspace_id=None, **kwargs):
         vacuum_manifest_artifacts(ctx, "ctx://diffs", expected_by_volume["diffs"], exempt_abs_paths=active_ephemerals)
         vacuum_manifest_artifacts(ctx, "ctx://workflows", expected_by_volume["workflows"], exempt_abs_paths=active_ephemerals)
         ctx.sync_vfs_barrier()
+        from insetu.core.sdk import sse_bus as _sse_bus
+        if _sse_bus:
+            _sse_bus.emit_sse("manifest_settled", {"workspace_id": workspace_id or "default", "timestamp": time.time()})
     except Exception as e:
         print(f"⚠️ [Gather Vacuum] Post-compilation cache sweep warning: {e}")
 @gather_bp.worker("pack_selection_task")
@@ -955,7 +961,7 @@ def _background_compile(
             ctx.sync_vfs_barrier()
             ctx.save_manifest(delta_manifest, is_full_compile=False)
             touched_files.extend(list(delta_manifest.keys()))
-        # Map compiled output URIs back to their abstract architectural bucket IDs
+        # Map compiled output URIs and any evaluated ledger_events back to their abstract architectural bucket IDs
         logical_buckets = set()
         final_manifest = ctx.manifest.get("ctx", {})
         for filepath in touched_files:
@@ -964,6 +970,23 @@ def _background_compile(
                 meta = entry.get("meta", {})
                 addr = BucketAddress.from_uri(filepath, meta=meta)
                 logical_buckets.add(addr.key)
+
+        target_configs_map = {
+            c.get("repo_dir"): c for c in (ctx.config.get("target_repos") or []) if isinstance(c, dict) and c.get("repo_dir")
+        }
+        for ev in (ledger_events or []):
+            ev_fp = ev.get("filepath", "") if isinstance(ev, dict) else str(ev)
+            if not ev_fp:
+                continue
+            ev_uri = InSetuURI(ev_fp)
+            r_dir = ev_uri.repo
+            rel_p = ev_uri.path
+            if r_dir and r_dir in target_configs_map:
+                r_cfg = target_configs_map[r_dir]
+                b, mod = resolve_file_bucket(rel_p, r_cfg.get("sub_buckets", []), repo_dir=r_dir)
+                b_id = mod if (b and mod) else (b.get("id") if b else "main")
+                if b_id and b_id != "_dropped":
+                    logical_buckets.add(f"{r_dir}::{b_id}")
 
         logical_buckets_list = list(logical_buckets)
 
@@ -1263,8 +1286,6 @@ def hook_save_manifest(manifest_data=None, is_full_compile=False, workspace_id=N
                 for fp, entry in manifest_data.items():
                     seen_paths.add(fp)
                     new_json = json.dumps(entry, sort_keys=True, separators=(',', ':'))
-                    if existing_map.get(fp) == new_json:
-                        continue # No semantic change, preserve the old timestamp
                     conn.execute(
                         "INSERT OR REPLACE INTO manifest_ledger (filepath, entry_json, timestamp) VALUES (?, ?, ?)",
                         (fp, new_json, now_ts)
@@ -1290,14 +1311,11 @@ def hook_save_manifest(manifest_data=None, is_full_compile=False, workspace_id=N
                 else:
                     existing_rows = conn.execute("SELECT filepath, entry_json FROM manifest_ledger").fetchall()
                 existing_map = {r['filepath']: r['entry_json'] for r in existing_rows}
-
                 for fp, entry in manifest_data.items():
                     if entry is None:
                         conn.execute("UPDATE manifest_ledger SET entry_json = NULL, timestamp = ? WHERE filepath = ?", (now_ts, fp))
                     else:
                         new_json = json.dumps(entry, sort_keys=True, separators=(',', ':'))
-                        if existing_map.get(fp) == new_json:
-                            continue # No semantic change, preserve the old timestamp
                         conn.execute(
                             "INSERT OR REPLACE INTO manifest_ledger (filepath, entry_json, timestamp) VALUES (?, ?, ?)",
                             (fp, new_json, now_ts)

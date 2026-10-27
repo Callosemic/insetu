@@ -15,9 +15,6 @@ export const executeCompile = async (onProgress = null, forceFull = false, start
     }
     compilePromiseWs = activeWs;
     compilePromise = (async () => {
-        // Snapshot the dirty state at the exact moment compilation begins
-        const snapshotRepos = Array.from(AppStore.getState().dirtyRepos || []);
-        const snapshotBuckets = Array.from(AppStore.getState().dirtyBuckets || []);
         AppStore.setState({ isPipelineActive: true });
         if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('syncing');
         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus('⏳ Initializing pipeline...', null);
@@ -67,16 +64,7 @@ export const executeCompile = async (onProgress = null, forceFull = false, start
                 }
                 if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('synced');
                 if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus('✅ Sync Complete', 2000);
-                // Clear dirty trackers upon successful context generation
-                AppStore.setState(s => {
-                    const newDirtyRepos = new Set(s.dirtyRepos);
-                    if (targetRepos && targetRepos.length > 0) {
-                        targetRepos.forEach(r => newDirtyRepos.delete(r));
-                    } else {
-                        snapshotRepos.forEach(r => newDirtyRepos.delete(r));
-                    }
-                    return { dirtyRepos: newDirtyRepos };
-                });
+                // Manifest watermarks (vfs.source_ts vs ctx.meta.timestamp) automatically reconcile dirtyBuckets/dirtyRepos on setState({ manifest }) above.
             } else {
                 if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('pending'); // Fallback if error
             }
@@ -125,6 +113,7 @@ window.inSetu.stores.Gather = GatherStore;
 window.addEventListener('insetu-gather-settings-changed', () => {
     GatherStore.getState().fetchSettings();
 });
+
 window.addEventListener('insetu:ensure-fresh-artifact', (e) => {
     const filePath = e.detail?.filepath || '';
     if (!filePath || !filePath.startsWith('ctx://contexts/')) return;
@@ -143,7 +132,6 @@ window.addEventListener('insetu:ensure-fresh-artifact', (e) => {
                     itemRepos.some(r => dirtyRepos.has(r) || Array.from(dirtyBuckets).some(b => b.startsWith(`${r}::`))) ||
                     dirtyBuckets.has(baseUri) ||
                     dirtyBuckets.has(filePath);
-
     if (isDirty) {
         const run = (async () => {
             if (window.inSetu.ui?.setGlobalStatus) {
@@ -153,12 +141,6 @@ window.addEventListener('insetu:ensure-fresh-artifact', (e) => {
                 ? itemRepos
                 : ((addr && addr.repo && addr.repo !== 'orphan' && addr.repo !== 'global') ? [addr.repo] : null);
             await GatherStore.getState().executeCompile(null, !manifestObj, null, targetRepos);
-            if (addr && addr.key) dirtyBuckets.delete(addr.key);
-            if (addr && addr.repo) dirtyRepos.delete(addr.repo);
-            itemRepos.forEach(r => dirtyRepos.delete(r));
-            dirtyBuckets.delete(baseUri);
-            dirtyBuckets.delete(filePath);
-            AppStore.setState({ dirtyBuckets: new Set(dirtyBuckets), dirtyRepos: new Set(dirtyRepos) });
         })();
         if (Array.isArray(e.inSetuResponses)) e.inSetuResponses.push(run);
     }
@@ -557,7 +539,8 @@ export class InSetuExtGather extends InSetuElement {
                                                     const isDirty = (() => {
                                                         const manifestObj = AppStore.getState().manifest?.ctx?.[f.filename];
                                                         const addr = window.inSetu.utils.BucketAddress.fromFilepath(f.filename, manifestObj?.meta);
-                                                        return (AppStore.getState().dirtyBuckets || new Set()).has(addr.key);
+                                                        const dirtySet = AppStore.getState().dirtyBuckets || new Set();
+                                                        return dirtySet.has(String(addr.key).toLowerCase()) || dirtySet.has(addr.key);
                                                     })();
                                                     const isLocked = f.isSkeleton || (isGatherLoading && isDirty);
                                                     let baseIntent = 'primary';

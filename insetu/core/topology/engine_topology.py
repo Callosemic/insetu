@@ -152,17 +152,25 @@ def api_topology_vfs_repo(ctx):
     repo = str(ctx.payload.get('repo') or '').strip()
     conn = ctx.db
     if repo:
-        rows = conn.execute("SELECT filepath, bucket_id, git_status FROM topology_ledger WHERE repo=?", (repo,)).fetchall()
+        rows = conn.execute("SELECT filepath, bucket_id, git_status, timestamp FROM topology_ledger WHERE repo=?", (repo,)).fetchall()
     else:
-        rows = conn.execute("SELECT filepath, repo, bucket_id, git_status FROM topology_ledger").fetchall()
+        rows = conn.execute("SELECT filepath, repo, bucket_id, git_status, timestamp FROM topology_ledger").fetchall()
 
     files_by_bucket = {}
     for r in rows:
         r_name = repo or r['repo']
         b_id = r['bucket_id']
         key = f"{r_name}::{b_id}"
+        row_ts = float(r['timestamp'] or 0.0)
         if key not in files_by_bucket:
-            files_by_bucket[key] = {"files": [], "git_modified": [], "meta": {"type": "vfs_bucket", "repo": r_name, "bucket_id": b_id}}
+            files_by_bucket[key] = {
+                "files": [],
+                "git_modified": [],
+                "source_ts": row_ts,
+                "meta": {"type": "vfs_bucket", "repo": r_name, "bucket_id": b_id},
+            }
+        elif row_ts > files_by_bucket[key]["source_ts"]:
+            files_by_bucket[key]["source_ts"] = row_ts
         files_by_bucket[key]["files"].append(r['filepath'])
         if r['git_status']:
             files_by_bucket[key]["git_modified"].append(r['filepath'])
@@ -189,8 +197,8 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
         for repo_cfg in target_configs:
             repo_dir = repo_cfg.get("repo_dir")
             if not repo_dir: continue
-
             repo_path = get_repo_path(repo_dir, workspace_id)
+            repo_base_obj = Path(repo_path) if repo_path else None
             valid_files = get_valid_workspace_files(repo_path, repo_cfg, workspace_id)
             git_status_map = _get_repo_git_status_map(repo_path)
             sub_buckets = repo_cfg.get("sub_buckets", [])
@@ -201,7 +209,13 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
                 bucket_id = module if (b and module) else (b.get("id") if b else "main")
                 filepath = f"vfs://{repo_dir}/{f}"
                 g_status = git_status_map.get(f, "")
-                rows_to_insert.append((filepath, repo_dir, bucket_id, now_ts, g_status))
+                file_ts = now_ts
+                if repo_base_obj:
+                    try:
+                        file_ts = (repo_base_obj / f).stat().st_mtime
+                    except Exception:
+                        file_ts = now_ts
+                rows_to_insert.append((filepath, repo_dir, bucket_id, file_ts, g_status))
             if rows_to_insert:
                 conn.executemany(
                     "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp, git_status) VALUES (?, ?, ?, ?, ?)",
@@ -212,20 +226,27 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
 @topology_bp.on('vfs_manifest_mutated')
 def _invalidate_topology_manifest(workspace_id=None, **kwargs):
     hook_request_vfs_manifest.invalidate(workspace_id=workspace_id)
-
 @topology_bp.on('request_vfs_manifest')
 @thread_safe_cache(ttl=2.0, key_maker=lambda workspace_id=None, **kwargs: str(workspace_id))
 def hook_request_vfs_manifest(workspace_id=None, **kwargs):
-    """Returns the vfs manifest derived directly from the topology ledger via raw tuple queries."""
+    """Returns the vfs manifest derived directly from the topology ledger via raw tuple queries, including per-bucket source_ts watermarks."""
     try:
         ctx = topology_bp.get_context(workspace_id)
-        cursor = ctx.db.execute("SELECT repo, bucket_id, filepath, git_status FROM topology_ledger")
+        cursor = ctx.db.execute("SELECT repo, bucket_id, filepath, git_status, timestamp FROM topology_ledger")
 
         manifest = {}
-        for repo, bucket_id, filepath, git_status in cursor.fetchall():
+        for repo, bucket_id, filepath, git_status, ts in cursor.fetchall():
             manifest_key = f"{repo}::{bucket_id}"
+            row_ts = float(ts or 0.0)
             if manifest_key not in manifest:
-                manifest[manifest_key] = {"files": [], "git_modified": [], "meta": {"type": "vfs_bucket", "repo": repo, "bucket_id": bucket_id}}
+                manifest[manifest_key] = {
+                    "files": [],
+                    "git_modified": [],
+                    "source_ts": row_ts,
+                    "meta": {"type": "vfs_bucket", "repo": repo, "bucket_id": bucket_id},
+                }
+            elif row_ts > manifest[manifest_key]["source_ts"]:
+                manifest[manifest_key]["source_ts"] = row_ts
             manifest[manifest_key]["files"].append(filepath)
             if git_status:
                 manifest[manifest_key]["git_modified"].append(filepath)
@@ -507,23 +528,15 @@ def resolve_topology_buffer(workspace_id):
                 if phys_file.exists() and phys_file.is_file():
                     try: phys_mtime = phys_file.stat().st_mtime
                     except Exception: pass
-            existing = conn.execute("SELECT timestamp FROM topology_ledger WHERE filepath = ?", (filepath,)).fetchone()
-            is_genuinely_modified = True
-
-            if phys_mtime is None:
-                is_genuinely_modified = False
-            elif existing:
-                if phys_mtime <= existing["timestamp"]:
-                    is_genuinely_modified = False
-            if is_genuinely_modified:
+            if phys_mtime is not None:
+                mutation_ts = max(float(phys_mtime), time.time())
                 conn.execute(
                     "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp) VALUES (?, ?, ?, ?)",
-                    (filepath, repo_dir, bucket_id, time.time())
+                    (filepath, repo_dir, bucket_id, mutation_ts)
                 )
                 dirty_repos.add(repo_dir)
                 dirty_buckets.add(f"{repo_dir}::{bucket_id}")
-    # Refresh git_status across any touched repositories
-    now_ts = time.time()
+    # Refresh git_status across any touched repositories without overwriting file mtime timestamps
     status_updates = []
     for touched_repo in dirty_repos:
         if touched_repo == "global":
@@ -536,10 +549,10 @@ def resolve_topology_buffer(workspace_id):
             rel_f = InSetuURI(fp).path
             new_st = g_map.get(rel_f, "")
             if (r_row["git_status"] or "") != new_st:
-                status_updates.append((new_st, now_ts, fp))
+                status_updates.append((new_st, fp))
 
     if status_updates:
-        conn.executemany("UPDATE topology_ledger SET git_status = ?, timestamp = ? WHERE filepath = ?", status_updates)
+        conn.executemany("UPDATE topology_ledger SET git_status = ? WHERE filepath = ?", status_updates)
     conn.commit()
 
     hooks.emit(
