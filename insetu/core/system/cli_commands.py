@@ -475,3 +475,100 @@ $Shortcut.Save()
 """
         subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], check=True)
         print(f"Windows Start Menu shortcut generated: {shortcut_path}")
+
+
+def _acquire_local_boot_token(port: int) -> str:
+    """Exchanges a localhost bootstrap handshake with the active daemon to obtain X-InSetu-Token."""
+    url = f"http://127.0.0.1:{port}/auth/bootstrap"
+    req = urllib.request.Request(
+        url,
+        headers={"Content-Type": "application/json"},
+        data=b"{}",
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return str(data.get("token") or "")
+    except Exception:
+        return ""
+
+
+def handle_mcp_stdio(cwd: str, args: list):
+    """
+    MCP 2025-03-26 Stdio Bridge:
+    Proxies JSON-RPC messages over stdin/stdout to the running HTTP daemon on 127.0.0.1:<port>,
+    or executes headlessly in-process when the daemon is offline.
+    """
+    workspace_id = "default"
+    for i, arg in enumerate(args):
+        if arg in ("-w", "--workspace") and i + 1 < len(args):
+            workspace_id = args[i + 1].strip()
+        elif arg.startswith("--workspace="):
+            workspace_id = arg.split("=", 1)[1].strip()
+
+    from insetu.core.utils_core import load_config as _load_config
+    cfg = _load_config(workspace_id)
+    port = int(os.environ.get("INSETU_PORT", cfg.get("port", 5005)))
+
+    daemon_online = check_daemon_alive(port)
+    boot_token = _acquire_local_boot_token(port) if daemon_online else ""
+    headless_ctx = None
+
+    if not daemon_online or not boot_token:
+        import contextlib as _contextlib
+        with _contextlib.redirect_stdout(sys.stderr):
+            import insetu.app as _insetu_app
+            from insetu.core.mcp.engine_mcp import mcp_bp as _mcp_bp
+            _ = _insetu_app
+            headless_ctx = _mcp_bp.get_context(workspace_id)
+
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            rpc_req = json.loads(line)
+        except json.JSONDecodeError:
+            err_resp = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
+            sys.stdout.write(json.dumps(err_resp) + "\n")
+            sys.stdout.flush()
+            continue
+
+        if daemon_online and boot_token:
+            target_url = f"http://127.0.0.1:{port}/api/{workspace_id}/mcp"
+            http_req = urllib.request.Request(
+                target_url,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-InSetu-Token": boot_token,
+                    "X-Workspace-ID": workspace_id,
+                },
+                data=json.dumps(rpc_req).encode("utf-8"),
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(http_req, timeout=60.0) as resp:
+                    if resp.status == 202:
+                        continue
+                    body_bytes = resp.read()
+                    if body_bytes:
+                        sys.stdout.write(body_bytes.decode("utf-8").strip() + "\n")
+                        sys.stdout.flush()
+                continue
+            except Exception as e:
+                err_resp = {
+                    "jsonrpc": "2.0",
+                    "id": rpc_req.get("id"),
+                    "error": {"code": -32603, "message": f"Daemon proxy error: {e}"},
+                }
+                sys.stdout.write(json.dumps(err_resp) + "\n")
+                sys.stdout.flush()
+                continue
+
+        if headless_ctx is not None:
+            from insetu.core.mcp.engine_mcp import handle_mcp_jsonrpc as _handle_mcp_jsonrpc
+            resp_obj = _handle_mcp_jsonrpc(headless_ctx, rpc_req)
+            if resp_obj is not None:
+                sys.stdout.write(json.dumps(resp_obj) + "\n")
+                sys.stdout.flush()

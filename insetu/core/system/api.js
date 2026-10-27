@@ -213,7 +213,7 @@ window.inSetu.api = {
         const activeWs = window.inSetu.utils.getActiveWorkspace();
         const cleanPath = path.startsWith('/') ? path.substring(1) : path;
         const extName = cleanPath.split('/')[0];
-        const isCore = window.inSetu?.CORE_MODULES ? window.inSetu.CORE_MODULES.has(extName) : ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline', 'llm', 'agent', 'prompts'].includes(extName);
+        const isCore = window.inSetu?.CORE_MODULES ? window.inSetu.CORE_MODULES.has(extName) : ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline', 'llm', 'agent', 'prompts', 'mcp'].includes(extName);
         if (extName && !isCore && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extName)) {
             return new Response(JSON.stringify({ error: `Extension '${extName}' is disabled in workspace '${activeWs}'.` }), { status: 403, statusText: "Forbidden" });
         }
@@ -341,17 +341,25 @@ class SSEPipeline {
             if (this._shouldDrop(data.workspace_id)) return;
             window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: data.mutations });
         });
+        this.source.addEventListener('manifest_settled', (e) => {
+            const data = JSON.parse(e.data);
+            bc.postMessage({ type: 'manifest_settled', data });
+            if (this._shouldDrop(data.workspace_id)) return;
+            if (window.inSetu?.sys?.refreshManifest) {
+                window.inSetu.sys.refreshManifest();
+            }
+            if (window.inSetu?.ui?.setSyncStatus) {
+                window.inSetu.ui.setSyncStatus('synced');
+            }
+        });
         this.source.addEventListener('topology_resolved', (e) => {
             const data = JSON.parse(e.data);
             bc.postMessage({ type: 'topology_resolved', data });
             if (this._shouldDrop(data.workspace_id)) return;
-            const state = AppStore.getState();
-            if (data.clear_all) {
-                AppStore.setState({ dirtyRepos: new Set(), dirtyBuckets: new Set() });
-            } else if ((data.dirty_repos && data.dirty_repos.length > 0) || (data.dirty_buckets && data.dirty_buckets.length > 0)) {
-                const newRepos = new Set([...state.dirtyRepos, ...(data.dirty_repos || [])]);
-                const newBuckets = new Set([...state.dirtyBuckets, ...(data.dirty_buckets || [])]);
-                AppStore.setState({ dirtyRepos: newRepos, dirtyBuckets: newBuckets });
+            if ((data.dirty_repos && data.dirty_repos.length > 0) || (data.dirty_buckets && data.dirty_buckets.length > 0)) {
+                if (window.inSetu?.sys?.refreshManifest) {
+                    window.inSetu.sys.refreshManifest();
+                }
             }
         });
         this.source.addEventListener('job_progress', (e) => {

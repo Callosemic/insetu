@@ -162,6 +162,73 @@ AppStore.subscribe(
                 allFiles.add(`vfs://${cfg.repo_dir}/.gitkeep`);
             }
         });
+        // Relational Watermark Derivation: Compare VFS bucket source_ts against compiled CTX artifact timestamp
+        const compiledGatherTs = {};
+        const AddrCls = window.inSetu?.utils?.BucketAddress;
+        Object.entries(ctxManifest).forEach(([uri, entry]) => {
+            if (!entry || typeof entry !== 'object') return;
+            const meta = entry.meta || {};
+            if (meta.type && meta.type !== 'gather') return;
+            if (uri.includes('quickpack_') || uri.includes('selection_')) return;
+            const ts = Number(meta.timestamp || 0);
+            if (AddrCls) {
+                const addr = AddrCls.fromFilepath(uri, meta);
+                if (addr && addr.key) {
+                    const normAddrKey = String(addr.key).toLowerCase();
+                    compiledGatherTs[normAddrKey] = Math.max(compiledGatherTs[normAddrKey] || 0, ts);
+                }
+            } else if (meta.repo && meta.bucket_id) {
+                const k = `${String(meta.repo).toLowerCase()}::${String(meta.bucket_id).toLowerCase()}`;
+                compiledGatherTs[k] = Math.max(compiledGatherTs[k] || 0, ts);
+            }
+        });
+
+        const derivedDirtyBuckets = new Set();
+        const derivedDirtyRepos = new Set();
+        const bucketSourceTsMap = {};
+        const repoMaxSourceTs = {};
+        Object.entries(vfsManifest).forEach(([bucketKey, bucketObj]) => {
+            if (!bucketObj || !Array.isArray(bucketObj.files) || bucketObj.files.length === 0) return;
+            const nonKeepFiles = bucketObj.files.filter(f => f && !f.endsWith('/.gitkeep') && !f.endsWith('/.keep'));
+            if (nonKeepFiles.length === 0) return;
+
+            const normKey = String(bucketKey).toLowerCase();
+            const [repoName] = normKey.split('::');
+            const sourceTs = Number(bucketObj.source_ts || 0);
+            bucketSourceTsMap[normKey] = sourceTs;
+            if (repoName) {
+                repoMaxSourceTs[repoName] = Math.max(repoMaxSourceTs[repoName] || 0, sourceTs);
+            }
+
+            const repoCfg = configs.find(c => c && String(c.repo_dir || '').toLowerCase() === repoName);
+            if (repoCfg && repoCfg.exclude_from_context) return;
+
+            const compiledTs = Number(compiledGatherTs[normKey] || 0);
+            if (sourceTs > 0 && (compiledTs === 0 || sourceTs > compiledTs + 0.5)) {
+                derivedDirtyBuckets.add(normKey);
+                if (repoName) derivedDirtyRepos.add(repoName);
+            }
+        });
+
+        // Evaluate all compiled CTX artifacts (including diffs and composite multi-repo artifacts) against their VFS source watermarks
+        Object.entries(ctxManifest).forEach(([uri, entry]) => {
+            if (!entry || typeof entry !== 'object') return;
+            if (uri.includes('quickpack_') || uri.includes('selection_')) return;
+            const meta = entry.meta || {};
+            const artTs = Number(meta.timestamp || 0);
+            const addr = AddrCls ? AddrCls.fromFilepath(uri, meta) : null;
+            const normAddrKey = addr && addr.key ? String(addr.key).toLowerCase() : '';
+            let refSourceTs = normAddrKey && bucketSourceTsMap[normAddrKey] !== undefined
+                ? bucketSourceTsMap[normAddrKey]
+                : 0;
+            if (refSourceTs === 0) {
+                const itemRepos = Array.isArray(meta.repos) ? meta.repos : (meta.repo ? [meta.repo] : []);
+                refSourceTs = itemRepos.reduce((acc, r) => Math.max(acc, repoMaxSourceTs[String(r).toLowerCase()] || 0), 0);
+            }
+            if (refSourceTs > 0 && (artTs === 0 || refSourceTs > artTs + 0.5)) {
+                derivedDirtyBuckets.add(uri);
+            }
+        });
 
         const nextFiles = Array.from(allFiles);
         const nextCtxKeys = Object.keys(ctxManifest);
@@ -170,41 +237,18 @@ AppStore.subscribe(
         const filesUnchanged = shallowEqual ? shallowEqual(curState.derivedVfsFiles, nextFiles) : false;
         const gitModUnchanged = shallowEqual ? shallowEqual(curState.derivedGitModifiedSet, gitMod) : false;
         const ctxKeysUnchanged = shallowEqual ? shallowEqual(curState.derivedCtxKeys, nextCtxKeys) : false;
+        const dirtyBucketsUnchanged = shallowEqual ? shallowEqual(curState.dirtyBuckets, derivedDirtyBuckets) : false;
+        const dirtyReposUnchanged = shallowEqual ? shallowEqual(curState.dirtyRepos, derivedDirtyRepos) : false;
 
-        if (!filesUnchanged || !gitModUnchanged || !ctxKeysUnchanged) {
+        if (!filesUnchanged || !gitModUnchanged || !ctxKeysUnchanged || !dirtyBucketsUnchanged || !dirtyReposUnchanged) {
             AppStore.setState({
                 derivedVfsFiles: filesUnchanged ? curState.derivedVfsFiles : nextFiles,
                 derivedGitModifiedSet: gitModUnchanged ? curState.derivedGitModifiedSet : gitMod,
-                derivedCtxKeys: ctxKeysUnchanged ? curState.derivedCtxKeys : nextCtxKeys
+                derivedCtxKeys: ctxKeysUnchanged ? curState.derivedCtxKeys : nextCtxKeys,
+                dirtyBuckets: dirtyBucketsUnchanged ? curState.dirtyBuckets : derivedDirtyBuckets,
+                dirtyRepos: dirtyReposUnchanged ? curState.dirtyRepos : derivedDirtyRepos
             });
         }
     }
 );
-
-// Centralized Invalidation Listener (ADR 0103)
-window.addEventListener('insetu:compile-step-complete', (e) => {
-    const artifact = e.detail?.artifact || {};
-    const cleared = artifact.cleared_buckets || artifact.touched_buckets || [];
-    const isFull = artifact.is_full_sweep || false;
-    AppStore.setState(state => {
-        const newBuckets = new Set(state.dirtyBuckets || []);
-        const newRepos = new Set(state.dirtyRepos || []);
-        if (isFull) {
-            newBuckets.clear();
-            newRepos.clear();
-        } else if (Array.isArray(cleared)) {
-            cleared.forEach(bKey => {
-                newBuckets.delete(bKey);
-                if (typeof bKey === 'string' && bKey.includes('::')) {
-                    const repo = bKey.split('::')[0];
-                    const stillHasDirtyBucket = Array.from(newBuckets).some(k => k.startsWith(`${repo}::`));
-                    if (!stillHasDirtyBucket) {
-                        newRepos.delete(repo);
-                    }
-                }
-            });
-        }
-        return { dirtyBuckets: newBuckets, dirtyRepos: newRepos };
-    });
-});
 

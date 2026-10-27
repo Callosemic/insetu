@@ -457,8 +457,13 @@ export class InSetuSystemSettings extends InSetuElement {
                 const data = await res.json();
                 if (data.requires_reboot) {
                     this.setStatus("Reboot required. Restarting...", 3000, true);
+                    AppStore.setState({ isRebooting: true, rebootType: 'reboot' });
                     await window.inSetu.api.workspace.post('system/reboot', {});
-                    setTimeout(() => window.location.reload(), 2000);
+                    if (window.inSetu?.sys?.waitForDaemonReboot) {
+                        window.inSetu.sys.waitForDaemonReboot();
+                    } else {
+                        setTimeout(() => window.location.reload(), 2500);
+                    }
                 } else {
                     this.setStatus("Extensions updated. Refreshing UI...", 2000);
                     if (window.inSetu.sys.performSoftRefresh) await window.inSetu.sys.performSoftRefresh();

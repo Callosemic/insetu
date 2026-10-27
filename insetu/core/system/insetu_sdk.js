@@ -308,6 +308,9 @@ export class InSetuElement extends SutramElement {
     get ui() { return window.inSetu.ui; }
     get sys() { return window.inSetu.sys; }
     get editor() { return window.inSetu.editor; }
+    get manifest() {
+        return window.inSetu?.stores?.App?.getState()?.manifest || { vfs: {}, ctx: {} };
+    }
     isExtensionActive(name = this.extName) {
         if (window.inSetu?.isCore && window.inSetu.isCore(name)) return true;
         return !!(window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes(name));
@@ -343,7 +346,11 @@ export class InSetuElement extends SutramElement {
                     if (artifact.requires_reboot) {
                         this.setStatus(`✅ Packages installed for '${name}'. Rebooting daemon...`, 3000);
                         await window.inSetu.api.workspace.post('system/reboot', {});
-                        setTimeout(() => window.location.reload(), 2000);
+                        if (window.inSetu?.sys?.waitForDaemonReboot) {
+                            window.inSetu.sys.waitForDaemonReboot();
+                        } else {
+                            setTimeout(() => window.location.reload(), 2500);
+                        }
                         return;
                     }
                     this.setStatus(`✅ ${statusData?.message || 'Dependencies installed!'}`, 3000);
@@ -621,7 +628,7 @@ export class InSetuElement extends SutramElement {
 }
 window.inSetu = window.inSetu || {};
 // Pre-seed foundational OS chassis modules to protect against offline cache misses or backend latency
-const _baseCore = ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline', 'llm', 'agent', 'prompts'];
+const _baseCore = ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline', 'llm', 'agent', 'prompts', 'mcp'];
 window.inSetu.CORE_MODULES = window.inSetu.CORE_MODULES && window.inSetu.CORE_MODULES.size > 0 
     ? window.inSetu.CORE_MODULES 
     : new Set(window.CORE_MODULES || _baseCore);

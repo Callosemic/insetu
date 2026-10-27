@@ -539,20 +539,47 @@ async function executeSecurityHandshake() {
     }
 
     try {
-        // Attempt a seamless, zero-config Tailscale or Localhost handshake first
-        let res = await fetch('/auth/bootstrap', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}),
-            signal: AbortSignal.timeout(2000) // Fast 2s timeout for VPN blackholes
-        });
+        // Attempt a seamless, zero-config Tailscale or Localhost handshake first.
+        // Retry transient connection/5xx errors for up to ~4s so in-place os.execv() reboots never false-fail.
+        let res = null;
+        let lastErr = null;
+        for (let attempt = 0; attempt < 6; attempt++) {
+            try {
+                res = await fetch('/auth/bootstrap?t=' + Date.now(), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({}),
+                    cache: 'no-store',
+                    signal: AbortSignal.timeout(2500)
+                });
+                if (res.status < 500) {
+                    break;
+                }
+            } catch (fetchErr) {
+                lastErr = fetchErr;
+                res = null;
+            }
+            if (!navigator.onLine) break;
+            if (attempt < 5) {
+                await new Promise(r => setTimeout(r, 600));
+            }
+        }
+        if (!res) {
+            throw lastErr || new Error("Bootstrap endpoint unreachable");
+        }
 
         if (res.ok) {
             const data = await res.json();
-            sessionStorage.setItem('insetu_boot_token', data.token);
-            localStorage.setItem('insetu_boot_token', data.token);
-            AppStore.setState({ authToken: data.token, isOffline: false });
-            return true;
+            if (data && data.status === 'recovery') {
+                window.location.href = '/recovery';
+                return new Promise(() => {});
+            }
+            if (data && data.token) {
+                sessionStorage.setItem('insetu_boot_token', data.token);
+                localStorage.setItem('insetu_boot_token', data.token);
+                AppStore.setState({ authToken: data.token, isOffline: false });
+                return true;
+            }
         }
         // Fallback: Challenge issued, render HTML auth gate
         if (res.status === 401) {
@@ -732,14 +759,9 @@ export async function executeBootSequence(options = {}) {
                         artifact: data.artifact
                     });
                 }
-            } else if (type === 'topology_resolved') {
-                const state = AppStore.getState();
-                if (data.clear_all) {
-                    AppStore.setState({ dirtyRepos: new Set(), dirtyBuckets: new Set() });
-                } else if ((data.dirty_repos && data.dirty_repos.length > 0) || (data.dirty_buckets && data.dirty_buckets.length > 0)) {
-                    const newRepos = new Set([...state.dirtyRepos, ...(data.dirty_repos || [])]);
-                    const newBuckets = new Set([...state.dirtyBuckets, ...(data.dirty_buckets || [])]);
-                    AppStore.setState({ dirtyRepos: newRepos, dirtyBuckets: newBuckets });
+            } else if (type === 'manifest_settled' || type === 'topology_resolved') {
+                if (window.inSetu?.sys?.refreshManifest) {
+                    window.inSetu.sys.refreshManifest();
                 }
             } else if (type === 'outbox_reconciled') {
                 AppStore.setState({ isOffline: false, isReconciling: false, outboxCount: 0, pendingMutations: new Set(), deletedMutations: new Set() });

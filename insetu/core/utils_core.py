@@ -24,7 +24,7 @@ from akasa.hooks import hooks
 CORE_MODULES_TUPLE = (
     "bridge", "gather", "cartographer", "config", "editor", "fs",
     "system", "workers", "auth", "security", "topology", "offline",
-    "llm", "agent", "prompts"
+    "llm", "agent", "prompts", "mcp"
 )
 
 from akasa.process import execute_binary
@@ -45,6 +45,8 @@ from akasa.utils import (
     is_core_module,
     is_extension_enabled,
     get_active_modules,
+    set_tenant_resolver,
+    resolve_active_tenant,
     sniff_tenant_id,
     slugify,
     is_subpath,
@@ -59,6 +61,8 @@ from akasa.utils import (
     is_port_listening,
     can_bind_port,
     allocate_ephemeral_port,
+    atomic_write_bytes,
+    atomic_write_text,
 )
 from akasa.vfs import (
     VFSTransaction,
@@ -403,6 +407,15 @@ def _fallback_dump_simple_yaml(yaml_data: Dict[str, Any]) -> str:
             else:
                 lines.append(f"{k}: {s_val}")
     return "\n".join(lines)
+def load_yaml_string(raw_yaml: str) -> Any:
+    """Centralized YAML string parser using the round-trip ruamel.yaml engine with safe fallback."""
+    if not raw_yaml or not raw_yaml.strip():
+        return {}
+    try:
+        engine = _get_yaml_engine()
+        return engine.load(io.StringIO(raw_yaml))
+    except ImportError:
+        return _fallback_parse_simple_yaml(raw_yaml)
 
 
 def parse_frontmatter(content):
@@ -681,16 +694,34 @@ def _get_base_step_and_diffs(lines):
 
             return best_step, diffs
     return 4, []
+def _parse_kv_directive_lines(lines: List[str]) -> Dict[str, str]:
+    directives: Dict[str, str] = {}
+    for raw_line in lines:
+        s = raw_line.strip()
+        if not s or ":" not in s:
+            continue
+        k, v = s.split(":", 1)
+        directives[k.strip().upper()] = v.strip()
+    return directives
+
+
 def parse_blocks(text):
     files = {}
     current_file = None
     current_id = None
     state = "OUTSIDE"
     current_type = "exact"
-    comment_lines, search_lines, replace_lines = [], [], []
-
-    if "<<<<<<< FILE:" in text:
-        text = "<<<<<<< FILE:" + text.split("<<<<<<< FILE:", 1)[1]
+    comment_lines, search_lines, replace_lines, ast_lines = [], [], [], []
+    first_markers = [
+        idx for idx in (
+            text.find("<<<<<<< FILE:"),
+            text.find("<<<<<<< COMMENT"),
+            text.find("<<<<<<< RELOCATE"),
+            text.find("<<<<<<< RENAME"),
+        ) if idx != -1
+    ]
+    if first_markers:
+        text = text[min(first_markers):]
 
     text = re.sub(
         r'^[ \t\xa0]*(?:>[ \t\xa0]*)+REPLACE[ \t\xa0]*(?:\n[ \t\xa0]*(?:>[ \t\xa0]*)+$)*',
@@ -698,19 +729,34 @@ def parse_blocks(text):
         text,
         flags=re.MULTILINE
     )
+    text = re.sub(
+        r'^[ \t\xa0]*(?:>[ \t\xa0]*)+EXECUTE[ \t\xa0]*(?:\n[ \t\xa0]*(?:>[ \t\xa0]*)+$)*',
+        '>>>>>>> EXECUTE',
+        text,
+        flags=re.MULTILINE
+    )
 
     lines = text.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
     for line in lines:
+        stripped = line.strip()
         if line.startswith("<<<<<<< FILE:"):
-            current_file = line.replace("<<<<<<< FILE:", "").strip()
-            if current_file not in files: files[current_file] = []
+            raw_file_target = line.replace("<<<<<<< FILE:", "").strip()
+            current_file = str(InSetuURI.from_external_input(raw_file_target)) if raw_file_target else ""
+            if current_file not in files:
+                files[current_file] = []
             current_id = None
             state = "OUTSIDE"
         elif line.startswith("<<<<<<< ID:"):
             current_id = line.replace("<<<<<<< ID:", "").strip()
-        elif line.startswith("<<<<<<< COMMENT"):
+        elif stripped.startswith("<<<<<<< COMMENT"):
             state = "COMMENT"
             comment_lines = []
+        elif stripped.startswith("<<<<<<< RELOCATE"):
+            state = "RELOCATE"
+            ast_lines = []
+        elif stripped.startswith("<<<<<<< RENAME"):
+            state = "RENAME"
+            ast_lines = []
         elif line.startswith("<<<<<<< SEARCH"):
             state = "SEARCH"
             search_lines = []
@@ -724,6 +770,46 @@ def parse_blocks(text):
                 state = "REPLACE"
                 search_lines = []
                 replace_lines = []
+        elif stripped == ">>>>>>> EXECUTE":
+            if state in ("RELOCATE", "RENAME"):
+                kv = _parse_kv_directive_lines(ast_lines)
+                if state == "RELOCATE":
+                    raw_src = kv.get("FROM") or current_file or ""
+                    raw_dst = kv.get("TO") or ""
+                    src_file = str(InSetuURI.from_external_input(raw_src)) if raw_src else ""
+                    dst_file = str(InSetuURI.from_external_input(raw_dst)) if raw_dst else ""
+                    sym_name = kv.get("SYMBOL") or ""
+                    if src_file:
+                        files.setdefault(src_file, []).append({
+                            "id": current_id,
+                            "type": "relocate",
+                            "comment": "\n".join(comment_lines).strip(),
+                            "symbol": sym_name,
+                            "source_uri": src_file,
+                            "target_uri": dst_file,
+                            "raw_directive": "\n".join(ast_lines),
+                            "search": "",
+                            "replace": "",
+                        })
+                elif state == "RENAME":
+                    scope_val = kv.get("SCOPE") or current_file or "vfs://"
+                    target_sym = kv.get("TARGET") or ""
+                    replace_sym = kv.get("REPLACE_WITH") or ""
+                    files.setdefault(scope_val, []).append({
+                        "id": current_id,
+                        "type": "rename",
+                        "comment": "\n".join(comment_lines).strip(),
+                        "target_symbol": target_sym,
+                        "new_symbol": replace_sym,
+                        "scope_prefix": scope_val,
+                        "raw_directive": "\n".join(ast_lines),
+                        "search": "",
+                        "replace": "",
+                    })
+                comment_lines = []
+                ast_lines = []
+                current_id = None
+            state = "OUTSIDE"
         elif line.startswith(">>>>>>> REPLACE"):
             if state == "REPLACE" and current_file:
                 files[current_file].append({
@@ -737,9 +823,14 @@ def parse_blocks(text):
                 current_id = None
             state = "OUTSIDE"
         else:
-            if state == "COMMENT": comment_lines.append(line)
-            elif state == "SEARCH": search_lines.append(line)
-            elif state == "REPLACE": replace_lines.append(line)
+            if state == "COMMENT":
+                comment_lines.append(line)
+            elif state in ("RELOCATE", "RENAME"):
+                ast_lines.append(line)
+            elif state == "SEARCH":
+                search_lines.append(line)
+            elif state == "REPLACE":
+                replace_lines.append(line)
     return files
 def clean_date_str(val):
     """Safely normalizes varied date inputs into a standard ISO format."""

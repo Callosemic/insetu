@@ -444,21 +444,9 @@ export async function ensureFreshContext(filePath) {
     const validPromises = (responses || []).filter(Boolean);
     if (validPromises.length > 0) {
         await Promise.all(validPromises);
-        const baseUri = filePath.replace(/_part\d+\.txt$/, '.txt');
-        const appState = AppStore.getState();
-        const dirtyRepos = new Set(appState.dirtyRepos || []);
-        const dirtyBuckets = new Set(appState.dirtyBuckets || []);
-        const manifestObj = appState.manifest?.ctx?.[baseUri] || appState.manifest?.ctx?.[filePath];
-        const meta = manifestObj?.meta || {};
-        const addr = window.inSetu.utils.BucketAddress ? window.inSetu.utils.BucketAddress.fromFilepath(baseUri, meta) : null;
-        const itemRepos = Array.isArray(meta.repos) ? meta.repos : (meta.repo ? [meta.repo] : []);
-        if (addr && addr.key) dirtyBuckets.delete(addr.key);
-        if (addr && addr.repo) dirtyRepos.delete(addr.repo);
-        itemRepos.forEach(r => dirtyRepos.delete(r));
-        if (baseUri.startsWith('ctx://workflows/')) dirtyBuckets.delete('global::workflows');
-        dirtyBuckets.delete(baseUri);
-        dirtyBuckets.delete(filePath);
-        AppStore.setState({ dirtyBuckets, dirtyRepos });
+        if (window.inSetu?.sys?.refreshManifest) {
+            await window.inSetu.sys.refreshManifest();
+        }
     }
 }
 export async function fetchAndCopy(filePath, explicitUrl = null) {
@@ -627,7 +615,7 @@ export function updateManifestState(mutations) {
         if (window.inSetu?.vfs?.shareTextCache?.has(normPath)) {
             window.inSetu.vfs.shareTextCache.delete(normPath);
         }
-
+        const nowSec = Date.now() / 1000;
         if (m.operation === 'delete') {
             ['vfs', 'ctx'].forEach(manifestKey => {
                 Object.keys(newManifest[manifestKey]).forEach(key => {
@@ -635,22 +623,27 @@ export function updateManifestState(mutations) {
                     if (obj.files) {
                         const origLen = obj.files.length;
                         const newFiles = [];
+                        let bucketTouched = false;
                         obj.files.forEach(f => {
                             if (f === normPath) {
                                 if (moveDest && !newFiles.includes(moveDest)) newFiles.push(moveDest);
                                 changed = true;
+                                bucketTouched = true;
                             } else if (f.startsWith(normPath + '/')) {
                                 if (moveDest) {
                                     const newChild = moveDest + f.substring(normPath.length);
                                     if (!newFiles.includes(newChild)) newFiles.push(newChild);
                                 }
                                 changed = true;
+                                bucketTouched = true;
                             } else {
                                 newFiles.push(f);
                             }
                         });
-                        if (newFiles.length !== origLen || changed) {
-                            newManifest[manifestKey][key] = { ...obj, files: newFiles };
+                        if (newFiles.length !== origLen || bucketTouched) {
+                            const nextObj = { ...obj, files: newFiles };
+                            if (manifestKey === 'vfs') nextObj.source_ts = nowSec;
+                            newManifest[manifestKey][key] = nextObj;
                         }
                     }
                 });
@@ -663,7 +656,14 @@ export function updateManifestState(mutations) {
         } else if (m.operation === 'save') {
             if (isRelocatedSave) return;
 
-            const alreadyInManifest = Object.values(newManifest.vfs).some(obj => obj.files && obj.files.includes(normPath));
+            let alreadyInManifest = false;
+            Object.entries(newManifest.vfs).forEach(([bKey, obj]) => {
+                if (obj && Array.isArray(obj.files) && obj.files.includes(normPath)) {
+                    alreadyInManifest = true;
+                    newManifest.vfs[bKey] = { ...obj, source_ts: nowSec };
+                    changed = true;
+                }
+            });
             if (!alreadyInManifest && normPath.startsWith('vfs://')) {
                 const parsed = new window.inSetu.utils.InSetuURI(normPath);
                 const repoDir = parsed.repo || 'global';
@@ -672,6 +672,7 @@ export function updateManifestState(mutations) {
                     if (key.startsWith(repoDir + '::')) {
                         newManifest.vfs[key] = {
                             ...newManifest.vfs[key],
+                            source_ts: nowSec,
                             files: [...(newManifest.vfs[key].files || []), normPath]
                         };
                         changed = true;
@@ -683,6 +684,7 @@ export function updateManifestState(mutations) {
                     const firstKey = Object.keys(newManifest.vfs)[0] || `${repoDir}::main`;
                     newManifest.vfs[firstKey] = {
                         ...newManifest.vfs[firstKey],
+                        source_ts: nowSec,
                         meta: newManifest.vfs[firstKey]?.meta || { type: "vfs_bucket", repo: repoDir, bucket_id: "main" },
                         files: [...(newManifest.vfs[firstKey]?.files || []), normPath]
                     };
@@ -2555,7 +2557,7 @@ export class InSetuEditorProjection extends InSetuElement {
         }
         :host([zen-mode]) .zen-exit-btn { display: flex; }
         :host([zen-mode]) .zen-exit-btn:hover { opacity: 1; color: var(--intent-danger); border-color: var(--intent-danger); }
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); overflow: hidden; container-type: inline-size; }
+        :host { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; width: 100%; background: var(--bg); overflow: hidden; container-type: inline-size; }
         .editor-header {
             display: flex; justify-content: space-between; align-items: center; 
             padding: 6px 15px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0;
@@ -2806,10 +2808,20 @@ export class InSetuEditorProjection extends InSetuElement {
         }
     }
     async _ensureBufferLoaded(filepath) {
-        if (!filepath || filepath.startsWith('yomama://') || filepath.startsWith('virtual://')) return;
+        if (!filepath) return;
+        if (filepath.startsWith('yomama://') || filepath.startsWith('virtual://')) {
+            const normPath = this._normPath();
+            const memBuf = FsStore.getState().activeBuffers?.[normPath] || FsStore.getState().activeBuffers?.[filepath] || null;
+            if (memBuf) {
+                this._syncFromBuffer(memBuf, true);
+                this.requestUpdate();
+            }
+            return;
+        }
         const buf = await hydrateVfsBuffer(filepath, { forceReload: false });
         if (buf) {
             this._syncFromBuffer(buf, true);
+            this.requestUpdate();
         }
     }
 

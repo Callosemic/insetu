@@ -3,20 +3,37 @@ import { html, css } from 'lit';
 import { AppStore } from '/static/extensions/system/store.js';
 import { InSetuElement } from '/static/extensions/system/insetu_sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
-
 function _pollUntilDaemonReady() {
     const check = async () => {
         try {
-            const ping = await window.inSetu.api.request('/?t=' + Date.now(), { cache: 'no-store' });
-            if (ping && ping.ok) {
+            const ping = await window.inSetu.api.request('/auth/bootstrap?t=' + Date.now(), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}',
+                cache: 'no-store',
+                signal: AbortSignal.timeout(1500)
+            });
+            if (ping && (ping.ok || ping.status === 401)) {
+                const data = await ping.json().catch(() => ({}));
+                if (data && data.status === 'recovery') {
+                    window.location.href = '/recovery';
+                    return;
+                }
+                if (data && data.token) {
+                    sessionStorage.setItem('insetu_boot_token', data.token);
+                    localStorage.setItem('insetu_boot_token', data.token);
+                }
                 window.location.reload();
                 return;
             }
         } catch (err) {}
-        setTimeout(check, 1000);
+        setTimeout(check, 800);
     };
-    setTimeout(check, 1000);
+    setTimeout(check, 1200);
 }
+window.inSetu = window.inSetu || {};
+window.inSetu.sys = window.inSetu.sys || {};
+window.inSetu.sys.waitForDaemonReboot = _pollUntilDaemonReady;
 const DEFAULT_GLOBAL_SIEVE = {
     ignore_dirs: ['node_modules', '__pycache__', 'venv', '.venv', '.git', '.insetu', 'dist', 'build'],
     ignore_files: ['.DS_Store'],

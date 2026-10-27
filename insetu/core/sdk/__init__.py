@@ -55,6 +55,8 @@ from insetu.core.utils_core import (
     get_domain_cache_path,
     get_domain_data_path,
     heal_sqlite_uri_column,
+    set_tenant_resolver,
+    resolve_active_tenant,
     sniff_tenant_id,
 )
 
