@@ -53,7 +53,7 @@ def scaffold_profiles(cwd):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension]")
+        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension | mcp]")
         sys.exit(1)
 
     command = sys.argv[1]
@@ -61,7 +61,7 @@ def main():
 
     if command in ("-h", "--help", "help"):
         print("inSetu Developer OS CLI")
-        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension]")
+        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension | mcp]")
         sys.exit(0)
 
     if command == "serve":
@@ -105,9 +105,14 @@ def main():
         from insetu.core.system.cli_commands import handle_service as _handle_service
         _handle_service(sys.argv[2], cwd)
 
+    elif command == "mcp":
+        scaffold_profiles(cwd)
+        from insetu.core.system.cli_commands import handle_mcp_stdio as _handle_mcp_stdio
+        _handle_mcp_stdio(cwd, sys.argv[2:])
+
     else:
         print(f"Unknown command: {command}")
-        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension]")
+        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension | mcp]")
         sys.exit(1)
 
 

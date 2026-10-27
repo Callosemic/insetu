@@ -222,9 +222,8 @@ import{css as e}from"lit";export const sharedStyles=e`
         cursor: not-allowed;
         opacity: 0.7;
     }
-
     .yv-select { cursor: pointer; appearance: auto; }
-    .yv-textarea { resize: vertical; min-height: 80px; }
+    .yv-textarea { resize: vertical; min-height: var(--textarea-min-height, 38px); }
     .yv-textarea--monospace { font-family: var(--font-mono, monospace); font-size: 0.9rem; }
     .yv-textarea--borderless {
         border: none !important;

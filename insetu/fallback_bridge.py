@@ -206,6 +206,10 @@ HTML_TEMPLATE = """
                                 if (data && data.status === 'recovery') {
                                     window.location.href = '/recovery';
                                 } else {
+                                    if (data && data.token) {
+                                        sessionStorage.setItem('insetu_boot_token', data.token);
+                                        localStorage.setItem('insetu_boot_token', data.token);
+                                    }
                                     window.location.href = '/';
                                 }
                             }
@@ -551,11 +555,20 @@ def api_emergency_dump():
 @app.route('/api/system/reboot', methods=['POST'])
 def system_reboot():
     def restart():
-        time.sleep(1.0)
+        time.sleep(0.6)
+        os.environ.pop("INSETU_PANIC_DETAILS", None)
+        os.environ.pop("INSETU_SIMULATE_PANIC", None)
+        os.environ.pop("WERKZEUG_RUN_MAIN", None)
+        os.environ.pop("WERKZEUG_SERVER_FD", None)
+        if os.path.exists(".panic_lock"):
+            try:
+                os.remove(".panic_lock")
+            except OSError:
+                pass
         python_exe = sys.executable
         cli_script = os.path.abspath(sys.argv[0])
         os.execv(python_exe, [python_exe, cli_script] + sys.argv[1:])
-    
+
     threading.Thread(target=restart, daemon=True).start()
     return jsonify({"status": "success", "message": "Rebooting..."})
 
