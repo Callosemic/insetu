@@ -11,6 +11,7 @@ tags: []
 ## Current Bug list
 
 ### Current Priorities
+- [ ] pyproject.toml just bouncing in and out of CODE INDEX and causing some mild thrashing
 - [ ] where did my api tokens go?
 - [ ] yomama should confirm genesis patch over-writes
 - [ ] files module seems like it has se
