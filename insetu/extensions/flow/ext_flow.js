@@ -504,14 +504,18 @@ export class InSetuExtFlow extends InSetuElement {
                                             const repoStr = b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : '';
                                             const isDirty = (() => {
                                                 if (!isCompiledInManifest) return true;
+                                                const dirtySet = AppStore.getState().dirtyBuckets || new Set();
+                                                if (dirtySet.has(filename)) return true;
                                                 const addr = window.inSetu.utils.BucketAddress.fromFilepath(filename, meta);
-                                                if ((AppStore.getState().dirtyBuckets || new Set()).has(addr.key)) return true;
+                                                if (dirtySet.has(String(addr.key).toLowerCase()) || dirtySet.has(addr.key)) return true;
                                                 return (b.includes || []).some(inc => {
+                                                    if (dirtySet.has(inc)) return true;
                                                     const uri = new window.inSetu.utils.InSetuURI(inc);
                                                     const incAddr = (uri.scheme === 'vfs')  
                                                         ? window.inSetu.utils.BucketAddress.fromVfsPath(inc) 
                                                         : window.inSetu.utils.BucketAddress.fromFilepath(inc, manifestCtx[inc]?.meta);
-                                                    return (AppStore.getState().dirtyBuckets || new Set()).has(incAddr.key);
+                                                    const normIncKey = String(incAddr.key).toLowerCase();
+                                                    return dirtySet.has(normIncKey) || dirtySet.has(incAddr.key);
                                                 });
                                             })();
                                             const isLocked = isFlowLoading && isDirty;
