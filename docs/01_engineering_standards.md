@@ -24,6 +24,7 @@ Tier 2 represents "inSetu proper." It builds the local-first AI Workbench produc
 7. **Agent Harness (`engine_agent.py`, `agent.js`):** Autonomous ReAct orchestration engine integrating context packing, inference streaming, Yomama Bridge validation, and self-healing patch retry loops.
 8. **Editor Substrate (`engine_editor.py`, `ui_editor.js`):** Dynamic CodeMirror language vendorization gateway, document typing, and multi-projection editor state management.
 9. **Prompt Library (`engine_prompts.py`, `prompts.js`):** Core prompt management, virtual `.templates/` module prompt projection, and recursive `{{include_prompt: ...}}` macro resolution.
+10. **Model Context Protocol Gateway (`engine_mcp.py`):** Model Context Protocol (MCP 2025-03-26) JSON-RPC 2.0 server exposing tools (`cartographer.extract`, `fs.fetch`, `bridge.sync`), resources, and prompts over HTTP (`/api/<workspace_id>/mcp`) and stdio transport.
 
 ### Tier 3: Domain Extensions
 All other feature modules are Tier 3 Domain Extensions that plug into the core substrate via the `InSetuExtension` SDK and the synchronous/asynchronous Event Bus (`hooks` / `window.inSetu.events`):
@@ -62,7 +63,7 @@ The OS kernel must never assume default namespaces or hardcode repository paths.
     * *Version Control Topology Parity (VFS Git Status Reflection):* The physical file topology ledger (`topology_ledger`) must reflect working-tree version control status (`git_status`) directly in its index. Domain manifest serializers (`request_vfs_manifest`) and signature providers (`register_manifest_signatures`) must project git modification vectors (`git_modified`, `mod_cnt`) into partitioned VFS schemas, enabling presentation layers to render revision status statelessly without polling VCS binaries from the UI or route handlers.
 * **DRY Utility Centralization**: Any structural framework logic required by multiple engines MUST be centralized in `insetu/kernel/utils.py` (Tier 1 Kernel utilities) or `insetu/core/utils_core.py` (Tier 2 Developer OS physics). Executing system commands or external CLI binaries MUST route through `execute_binary()` in `utils_core.py` or `ctx.exec.run()` to guarantee PATH, virtual environment (`sys.executable`), and desktop shell resolution.
 "Fat Controllers" copying/pasting prefix logic are architectural failures.
-* **Dynamic Working Directory Resolution (`utils._cwd`)**: Modules must never import `_cwd` by value (e.g., `from akasa.utils import _cwd`), as this freezes working directory resolution at module evaluation time and breaks dynamic multi-tenant workspace routing. Always import `akasa.utils as utils` and query `utils._cwd` dynamically (`BANNED_CWD_VALUE_IMPORT`).
+* **Dynamic Working Directory Resolution (`get_daemon_cwd` / `set_daemon_cwd`)**: Modules and tests must never import `_cwd` by value (`BANNED_CWD_VALUE_IMPORT`) or mutate `._cwd` directly as a module attribute (`DIRECT_CWD_MUTATION_BAN`), as doing so desynchronizes Ring 0 context state from the `akasa.utils` facade. Always resolve the active working directory via `get_daemon_cwd()`, update it via `set_daemon_cwd()`, or reset test harnesses via `akasa.reset_state(cwd=..., control_dir=".insetu")`.
 * **Repository Data Containment Mandate (`.insetu-data/`)**: Domain extensions managing repository-scoped Markdown assets or persistent records within target repositories (e.g., `tracker` managing Kanban tickets, `notes` managing repository notes) MUST contain these assets under `<repo>/.insetu-data/<domain>/` rather than polluting repository root directories with ad-hoc dotfolders (e.g., `.tracker/`). Engines MUST maintain automatic backward-compatible migration (`move_tree_contents`) during Phase 1 boot, and MUST automatically exclude `.insetu-data/` sub-buckets from Git working tree diffs via `@hooks.on('mutate_workspace_config')` (ADR 0065).
 * **Cryptographic Automation Execution Gating**: Extensions executing external host commands based on persistent file rules (e.g., `hooks`) MUST validate rule definitions against cryptographic SHA-256 command signatures recorded in `.insetu/host.json` (`get_daemon_host_config_path()`) under `approved_hooks`. Rules loaded from disk without active operator signatures must default to disabled status (`enabled = 0`).
 * **The Artifact Parser Anti-Pattern**: Never parse generated output artifacts (e.g., compiled `.txt` diff dumps, RAG context payloads, or rendered UI strings) to determine system state or drive backend execution. Artifacts are strictly one-way projections for human or LLM consumption. Always query the underlying SSOT directly (e.g., executing `git status` via subprocess instead of reading a `_diffs.txt` file).
@@ -94,6 +95,7 @@ The Yomama Sync Bridge is a surgical tool. Applying string patches blindly to di
 * **Optimistic Concurrency Control (OCC) & Deterministic 3-Way Merge**: File save mutations accepting an optional `base_hash` parameter verify physical disk parity prior to overwrite. If an out-of-band modification is detected (`current_hash != base_hash`), the backend inspects an in-memory ancestor ring buffer (`lookup_vfs_ancestor`) and runs an automated 3-way merge (`three_way_merge_text`). If concurrent edits affect disjoint lines, the transaction auto-merges, returns `status: "merged"`, and commits cleanly. Only true same-line collisions generate localized `.conflict_<timestamp>` fallback files and return HTTP 409 Conflict. Client buffers preserve `originalContent` and `baseHash` across offline outbox queueing, ensuring offline edits rebase cleanly upon reconnection.
 * **Self-Healing JIT Artifact Resolution (`vfs_resolve_file` & `heal_missing_domain_volume`)**: When logical base context URIs (`ctx://contexts/`, `ctx://workflows/`) or multi-part chunks are requested via VFS read routes, the resolver must transparently map to the first valid chunk or dynamically trigger targeted on-demand recompilation via decoupled `heal_missing_domain_volume` event hooks if cache files are missing or cold. This eliminates read-time 404s while preserving lazy, non-blocking background compilation loops. Domain volume engines (such as `flow`) MUST subscribe to `@*.on('heal_missing_domain_volume')` to trigger targeted recompilation when their specific volume is queried.
 * **Cartographer Hierarchical Path-Scoped Comment Preservation**: Cartographer index mapping (`docs/CODE_INDEX.md`) MUST track comments using relative path hierarchies rather than raw basenames alone, ensuring identically named files in disparate directories (e.g. `__init__.py`, `core.py`) retain distinct comments without collision. Unchanged repository trees MUST bypass re-rendering and VFS saves via in-memory index content hashing (`_CARTOGRAPHER_SIG_CACHE`).
+* **Deferred Chunk Post-Valid Buffer Re-Evaluation & Fast-Tier Auto-Healing**: When a multi-chunk patch contains an anchor mismatch or overlapping replacement, the bridge MUST NOT abort the entire transaction immediately. The engine defers the failing chunk to the end of the file's patch list, commits the preceding valid non-overlapping chunks to the in-memory buffer, and re-evaluates the deferred chunk against the post-valid buffer. When `auto_heal` is active, the engine dispatches only the deferred chunk and the post-valid buffer to the Fast LLM tier to re-anchor the patch cleanly.
 * **The VFS Deletion Mandate**: Deleting physical files or directories must strictly route through `ctx.vfs.delete(filepath)`. Passing leaky abstraction flags such as `ctx.vfs.save(..., data={"action": "delete"})` is permanently deprecated and blocked by AST fitness validation (ADR 0004, ADR 0018).
 * **Module Template Immutability & Virtual Projection Parity**: Built-in module templates packaged within core or extension modules (`.templates/<mod>/`) and projected virtually under `ctx://prompts/.templates/<mod>/` are strictly read-only and immutable. The VFS write path MUST reject mutation attempts (saves, moves, archives, deletes) targeting read-only templates with HTTP 403 Forbidden. Operators customize built-in templates by using the `prompt-fork-template` action to fork them into sovereign workspace prompts (`ctx://prompts/`) or global user templates (`ws://default/prompts/.templates/user/`) (ADR 0064).
 * **Dual-Representation Buffer & Macro Preview Contract (`prompts/resolve`)**: Editable VFS buffers (`vfs://`, `ctx://prompts/`) MUST always fetch raw, unexpanded source text from `/fs/fetch` so `{{include_prompt:...}}` and `{{ macro_* }}` directives are never destructively overwritten on save. On-demand macro-expanded previews (`toggleBufferPreview`) evaluate live unsaved buffer content in memory via `POST /api/<workspace_id>/prompts/resolve` in read-only mode (`previewMode: true`), while read-only templates default directly to macro-expanded preview mode.
@@ -185,6 +187,7 @@ Relying on wall-clock time (`setTimeout`, `time.sleep`, or `Date.now() - ts < wi
     * All `vfs_mutated`save receipts and events MUST carry the SHA-256 `base_hash` of the written content.
     * Native filesystem observers (`watchdog`) MUST suppress internal VFS write echoes by comparing on-disk SHA-256 hashes against the last VFS-written hash for that path rather than muting paths via arbitrary time windows.
     * Client editor buffers (`FsStore.activeBuffers`) MUST lock out inbound server reconciliations while local edits are uncommitted (`isDirty`), an autosave timer is scheduled (`autoSaveTimers`), or a save request is in flight (`savingPaths`), and MUST reject any fetched state whose hash is already present in the buffer's monotonic `ancestorHashes` history.
+* **Relational Watermark Derivation (Deterministic CQRS Staleness)**: The application store MUST derive bucket and repository staleness (`dirtyBuckets`, `dirtyRepos`) purely reactively by comparing physical `vfs` bucket timestamps (`source_ts`) against compiled `ctx` artifact timestamps (`meta.timestamp`). Imperative addition or clearing of dirty sets via event bus callbacks is strictly prohibited. Modifying a file advances `source_ts` on the bucket, and successful context compilation sets `meta.timestamp >= source_ts`, settling the watermark deterministically.
 
 ## 6. The Yomama Patch Protocol (LLM Guardrails)
 When collaborating with LLMs on the inSetu codebase, all file modifications MUST use the strict Genesis/Sync Bridge protocol. JSON patches are banned.
@@ -205,11 +208,71 @@ When collaborating with LLMs on the inSetu codebase, all file modifications MUST
 
 ```
 * **The Patch Sandwich**: Always include 1-2 unchanged lines of code at the top AND bottom of the SEARCH block to anchor the spatial match and prevent duplicate patching.
+* **AST Refactoring Directives (`<<<<<<< RELOCATE` / `<<<<<<< RENAME`)**: In addition to standard search/replace patches, the bridge natively parses structural AST directives terminated by `>>>>>>> EXECUTE`:
+```text
+<<<<<<< FILE: insetu/target_file.py
+<<<<<<< COMMENT
+Relocate helper function to utils
+<<<<<<< RELOCATE
+SYMBOL: compute_metric
+FROM: vfs://repo/source.py
+TO: vfs://repo/utils.py
+>>>>>>> EXECUTE
+
+<<<<<<< FILE: vfs://repo/
+<<<<<<< COMMENT
+Rename legacy identifier across repo
+<<<<<<< RENAME
+TARGET: legacy_name
+REPLACE_WITH: modern_name
+SCOPE: vfs://repo/
+>>>>>>> EXECUTE
+```
 * **No Stealth Directives**: If a feature requires new LLM instructions, do not hardcode the prompt string inside Python. Define it explicitly in `.insetu/profiles/*/prompts/` and map it through the declarative UI workflows.
 * **Chassis Agnosticism**: The OS is blind to the user's specific project. Do not hardcode specific repository names inside `engine_gather.py` or `engine_bridge.py`. Assume dynamic workspaces infinitely.
 
-## 8. Extension Coupling & Boundaries (Pragmatic Coupling)
-While the inSetu architecture highly values decoupled, stateless operations, enforcing dogmatic decoupling for every interaction creates hard-to-trace architecture and breaks static analysis. Extensions must adhere to the "Pragmatic Coupling" model:
-* **Loose Coupling (The Event Bus):** Use this for broadcasts, opportunistic data sharing, or optional enhancements (e.g., "A file was saved, does anyone want to format it?"). This ensures that if the target extension is disabled by the user, the requesting extension gracefully degrades rather than crashing. Use `hooks.emit()` or `hooks.emit_background()`.
-* **Tight Coupling (Standard Python \`import\`):** Use this when one extension fundamentally cannot function without another and needs to share complex data structures, type hints, or classes (e.g., the `research` extension inherently relying on the `ingest` extension to parse web pages). This preserves IDE autocomplete, static analysis, and jump-to-definition capabilities.
-* **The Anti-Pattern:** Do not build "stringly-typed" dynamic SDK RPC macros (e.g., `ctx.invoke('ext_name', 'function')`) just to avoid an `import` statement. If an extension needs direct, synchronous functional access to another, it should explicitly import it natively and declare it in its `__depends__` array to maintain the topological DAG.
+---
+
+## 7. The Three-Tier Bug Diagnostic & Verification Governance
+
+Every defect or architectural regression discovered across the Python backend, JavaScript frontend, or CSS presentation layer must be triaged through a three-tier decision tree before writing a test or fix:
+
+```text
+                                                                BUG DIAGNOSED
+                                                                            │
+                ┌──────────────────────────────┼──────────────────────────────┐
+                ▼                              ▼                              ▼
+1. Structural / Form           2. Behavioral Invariant        3. Isolated Logic
+        (AST syntax, scopes,           (Cross-system contracts,       (Math edge cases,
+        unmanaged listeners,           idempotency, barriers,         anchor backtracking,
+        membrane/transport leaks)      3-tier config cascades)        URI/diff corner cases)
+                │                              │                              │
+                ▼                              ▼                              ▼
+    Fitness Function               Contract / Matrix Unit Test    Local Regression Test
+    (`tests/fitness/`)             (`tests/unit/test_*.py`)       (`tests/unit/test_*.py`)
+
+```
+1. **Structural Anti-Pattern $\rightarrow$ Static Fitness Function (`insetu/tests/fitness/`):**
+* *Criterion:* If the defect is caused by a syntax choice, missing schema scope (`SETTINGS_SCOPE_MANDATE`), direct `akasa.*` import outside the 4-File Membrane (`AKASA_MEMBRANE_ISOLATION`), Flask transport leak (`FLASK_TRANSPORT_LEAK_BAN`), cross-module private symbol import (`CROSS_MODULE_PRIVATE_IMPORT_BAN`), un-prefixed frontend API route (`CANONICAL_API_ROUTE_PREFIX_MANDATE`), coarse Zustand subscription (`COARSE_STORE_SUBSCRIPTION_MANDATE`), imperative dirty set mutation (`IMPERATIVE_DIRTY_SET_MUTATION_BAN`), direct VFS write in agent loops (`YOMAMA_PATCH_GATEWAY_MANDATE`), direct LLM client import (`AGENT_LLM_GATEWAY_MANDATE`), direct CWD mutation (`DIRECT_CWD_MUTATION_BAN`), or topology timestamp clobbering (`TOPOLOGY_GIT_STATUS_TIMESTAMP_CLOBBER_BAN`) that an LLM or developer could repeat in another file tomorrow, codify it in `rules_python.py`, `rules_javascript.py`, or `rules_css.py`.
+* *Mechanism:* AST visitors (`BackendFitnessVisitor` and Tree-sitter queries) sweep the entire repository in milliseconds and are verified by negative synthetic AST tests in `test_sdk_improvements.py` and `test_cartographer_and_bridge_ast.py`.
+
+
+2. **Behavioral Invariant $\rightarrow$ Parameterized Contract Test (`insetu/tests/unit/`):**
+* *Criterion:* If the defect represents a breach of an ecosystem-wide runtime contract (e.g., verifying that every `ctx.settings.get('key')` call across all `engine_*.py` files references a key declared in that module's `settings_schema`, or that every registered `settings_schema` round-trips across `daemon`, `workspace`, `repo`, and `secure` scopes), codify it as an iterable matrix test in `insetu/tests/unit/`.
+
+
+3. **Isolated Logic Flaw $\rightarrow$ Local Regression Test (`insetu/tests/unit/`):**
+* *Criterion:* If the defect is an edge case specific to a single algorithm (e.g., `parse_blocks` preserving leading `<<<<<<< COMMENT` blocks on `RELOCATE` directives, or 3-way OCC Zombie-ACK subsequence merging), add a targeted assertion to the corresponding flat unit test module in `insetu/tests/unit/`.
+
+
+
+---
+
+## 8. Extension Coupling & Boundaries (`ctx.call` RPC vs. `ctx.emit` Pub/Sub)
+
+Interactions across core engines and domain extensions follow a strict separation between **1:1 Typed Capability RPC (`ctx.call`)** and **1:N Lifecycle Pub/Sub (`ctx.emit`)**:
+
+* **1:1 Capability Invocation (`ctx.call("<ext>.<action>", wait=True, **kwargs)`):** Used whenever a module or extension invokes a direct command or query on another module (e.g., `research` invoking `ctx.call("ingest.url", ...)` or `agent` invoking `ctx.call("llm.complete", ...)` and `ctx.call("bridge.sync", ...)`). Every capability is backed by a `TypedDict` schema, enforces workspace enablement (`is_extension_enabled`), and automatically awaits background `202 Accepted` jobs when `wait=True`.
+* **1:N Lifecycle & IoC Aggregation (`ctx.emit`, `ctx.emit_first`, `ctx.emit_merge_list`, `ctx.emit_merge_dict`):** Used strictly for lifecycle broadcasts (`workspace_boot`, `topology_boot_complete`, `vfs_mutated`) and Inversion-of-Control plugin aggregation (`gather_declare_topology`, `register_compilation_steps`, `request_changelog_suggestions`).
+* **Cross-Module Private Import Ban (`CROSS_MODULE_PRIVATE_IMPORT_BAN`):** Importing private underscore-prefixed symbols (`_helper`) across module boundaries is strictly banned by the AST fitness suite. Shared Tier 2 primitives belong in `insetu.core.utils_core` or `insetu.core.sdk`, and cross-extension invocations must route through `ctx.call()` and declare upstream hard dependencies in `__depends__`.
+

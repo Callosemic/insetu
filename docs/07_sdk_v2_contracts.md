@@ -84,6 +84,7 @@ UI elements must inherit from `InSetuElement` (which extends LitElement) rather 
 
 Extensions are strictly forbidden from relative-importing OS chassis functions. They must consume domain getters attached to `this`:
 * **`this.ecosystem`**: Auto-hydrated workspace topology (`this.ecosystem.allRepos`, `this.ecosystem.pinnedRepos`, `this.ecosystem.targetConfigs`).
+* **`this.manifest`**: Accessor reading the live partitioned system manifest dictionary (`{"vfs": {...}, "ctx": {...}}`) from `AppStore`.
 * **`.setStatus(msg, timeout, isError)`**: Base helper to emit global status updates via `this.ui.setGlobalStatus`.
 * **`.compileSystem()`**: Base helper to trigger background system compilations via `this.sys.executeSystemCompile`.
 * **`this.vfs`**: `.viewSourceFile(path)`, `.viewFileGitDiff(path)`, `.isFileGitModified(path)`, `.fetchAndCopy(path)`, `.downloadFile(url)`, `.shareFiles(file, chunks)`, `.normalizeVfsURI(path)`, `.executeBulkMove(items)`, `.executeBulkArchive(items)`, `.executeBulkDelete(items)`
