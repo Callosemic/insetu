@@ -1,0 +1,26 @@
+id: symbol_refactor
+name: "Surgical AST Refactor"
+description: "Packs target context, generates a Yomama v4 patch or AST RELOCATE/RENAME directive, and verifies syntax via the Bridge."
+default_mode: code
+nodes:
+  - id: fetch_context
+    type: exec
+    action: gather.pack_selection
+
+  - id: generate_patch
+    type: llm
+    tier: thinking
+    parents: [fetch_context]
+    use_history: true
+    prompt: |
+      Execute the following surgical refactor using Yomama SEARCH/REPLACE, RELOCATE, or RENAME blocks:
+      $global.user_prompt
+
+      Context:
+      $fetch_context.content
+    output_schema: yomama_patch
+
+  - id: apply_and_verify
+    type: exec
+    action: bridge.sync
+    parents: [generate_patch]

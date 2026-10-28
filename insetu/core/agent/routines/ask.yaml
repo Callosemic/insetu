@@ -1,0 +1,19 @@
+id: ask
+name: "/ask (Read-Only Q&A)"
+slash_command: "/ask"
+description: "Assembles workspace context and answers questions in the standard tier without modifying files."
+nodes:
+  - id: fetch_context
+    type: exec
+    action: gather.pack_selection
+
+  - id: answer_question
+    type: llm
+    tier: standard
+    parents: [fetch_context]
+    use_history: true
+    system: "You are the inSetu AI Developer OS Assistant. Answer the user's question clearly without modifying files."
+    prompt: |
+      Answer the user's question: $global.user_prompt
+      Context:
+      $fetch_context.content

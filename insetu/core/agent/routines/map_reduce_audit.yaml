@@ -1,0 +1,23 @@
+id: map_reduce_audit
+name: "Map-Reduce Multi-File Audit"
+description: "Audits each attached file in parallel using the fast tier and synthesizes a unified architectural report in the thinking tier."
+default_mode: ask
+nodes:
+  - id: map_file_audits
+    type: llm
+    tier: fast
+    map_over: "$global.all_context_files"
+    system: "You are a concise code auditor. Summarize key findings, risks, or anti-patterns for the given file."
+    prompt: |
+      Audit target file '$item' against instruction: $global.user_prompt
+
+  - id: reduce_audit_summary
+    type: llm
+    tier: thinking
+    parents: [map_file_audits]
+    system: "Synthesize individual file audit notes into a single prioritized architectural report."
+    prompt: |
+      User Goal: $global.user_prompt
+
+      Per-File Audit Findings:
+      $map_file_audits.text

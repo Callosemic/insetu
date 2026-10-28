@@ -1,0 +1,57 @@
+id: workspace_turn
+name: "/auto (Smart Router)"
+slash_command: "/auto"
+description: "Classifies user intent (or detects raw Yomama patches) and hands off execution to the matching /code, /plan, /ask, or /yomama DAG routine."
+default_mode: auto
+modes:
+  auto:
+    label: "/auto (Smart Router)"
+    routine: workspace_turn
+    description: "Classifies whether to edit code, draft a plan, answer a question, or heal pasted Yomama patches."
+  code:
+    label: "/code (Edit Code)"
+    routine: code
+    effective_intent: EDIT_CODE
+    description: "Runs the code.yaml DAG to generate and verify Yomama patches."
+  plan:
+    label: "/plan (Draft Plan / Blueprint)"
+    routine: plan
+    effective_intent: EDIT_PLAN
+    description: "Runs the plan.yaml DAG to draft or refine an architectural plan."
+  ask:
+    label: "/ask (Read-Only Q&A)"
+    routine: ask
+    effective_intent: CHAT_ONLY
+    description: "Runs the ask.yaml DAG for read-only codebase Q&A."
+  yomama:
+    label: "/yomama (Apply & Heal Patches)"
+    routine: yomama
+    effective_intent: APPLY_PATCH
+    description: "Runs the yomama.yaml DAG to apply raw patch blocks and self-heal any anchor/syntax errors."
+
+nodes:
+  - id: classify_intent
+    type: llm
+    tier: fast
+    when: "$global.has_raw_patches == False"
+    system: "Classify the user's workspace intent. Return JSON {'intent': 'EDIT_CODE' | 'EDIT_PLAN' | 'CHAT_ONLY'}."
+    prompt: |
+      Analyze the user prompt: $global.user_prompt
+      Determine if the user wishes to:
+      1. EDIT_CODE (modify existing source code files)
+      2. EDIT_PLAN (create or update a markdown blueprint/design doc)
+      3. CHAT_ONLY (answer a question without modifying files)
+      Respond with JSON: {"intent": "EDIT_CODE" | "EDIT_PLAN" | "CHAT_ONLY"}
+    output_schema: intent_classification
+    sets_global:
+      effective_intent: "$classify_intent.intent"
+
+  - id: dispatch_routine
+    type: routine
+    parents: [classify_intent]
+    routine_key: "$global.effective_intent"
+    routine_map:
+      EDIT_CODE: code
+      EDIT_PLAN: plan
+      CHAT_ONLY: ask
+      APPLY_PATCH: yomama

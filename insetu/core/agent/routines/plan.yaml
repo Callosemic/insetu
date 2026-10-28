@@ -1,0 +1,19 @@
+id: plan
+name: "/plan (Draft Plan / Blueprint)"
+slash_command: "/plan"
+description: "Assembles workspace context and drafts or refines an architectural blueprint in the thinking tier without modifying source files."
+nodes:
+  - id: fetch_context
+    type: exec
+    action: gather.pack_selection
+
+  - id: generate_plan
+    type: llm
+    tier: thinking
+    parents: [fetch_context]
+    use_history: true
+    system: "You are the inSetu AI Developer OS Architect. Produce a structured, grounded implementation plan or blueprint."
+    prompt: |
+      Draft or refine the architectural plan for: $global.user_prompt
+      Context:
+      $fetch_context.content

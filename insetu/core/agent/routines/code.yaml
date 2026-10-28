@@ -1,0 +1,24 @@
+id: code
+name: "/code (Edit Code)"
+slash_command: "/code"
+description: "Assembles context, generates Yomama patches in the thinking tier, and commits with AST verification and self-healing."
+nodes:
+  - id: fetch_context
+    type: exec
+    action: gather.pack_selection
+
+  - id: generate_patch
+    type: llm
+    tier: thinking
+    parents: [fetch_context]
+    use_history: true
+    prompt: |
+      Apply the user instruction ($global.user_prompt) to the workspace codebase.
+      Context:
+      $fetch_context.content
+    output_schema: yomama_patch
+
+  - id: apply_and_verify
+    type: exec
+    action: bridge.sync
+    parents: [generate_patch]

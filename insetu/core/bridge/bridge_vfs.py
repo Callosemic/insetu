@@ -16,6 +16,7 @@ from pathlib import Path
 from insetu.core.utils_core import get_workspace_physics, get_sister_repos, parse_blocks, InSetuURI
 from insetu.core.topology.engine_topology import get_omniscient_workspace_files
 from .bridge_fuzzy import apply_block_in_memory, clean_chevron_meltdown, expand_macros, heal_llm_block_artifacts, is_effectively_identical
+from .bridge_ast import apply_ast_relocate_in_memory, apply_ast_rename_to_content, resolve_scope_files
 
 try:
     from tree_sitter import Language as _TSLanguage, Parser as _TSParser
@@ -32,9 +33,7 @@ try:
     import tree_sitter_javascript as _ts_javascript
 except ImportError:
     _ts_javascript = None
-
-
-def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
+def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, return_buffers=False):
     from insetu.core.bridge.engine_bridge import bridge_bp as _bridge_bp
     ctx = _bridge_bp.get_context(workspace_id)
     raw_text = clean_chevron_meltdown(data.get("text", ""))
@@ -59,6 +58,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
     disk_hashes = {}
     omniscient_cache = None
     original_file_keys = {}
+    deferred_failures = []
 
     def get_file_content(filepath):
         if filepath in memory_buffers: return memory_buffers[filepath]
@@ -73,7 +73,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
     for raw_target_file, blocks in parsed_structure.items():
         uri = InSetuURI.from_external_input(raw_target_file)
         target_file = str(uri)
-        if (raw_target_file not in active_uris and target_file not in active_uris) or not blocks:
+        if active_files and (raw_target_file not in active_uris and target_file not in active_uris) or not blocks:
             continue
         norm_target = f"{uri.repo}/{uri.path}".strip('/') if uri.repo else uri.path
         if target_file.startswith("ws://"):
@@ -148,6 +148,99 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             }
             patch_index += 1
             telemetry["summary"]["total_patches"] += 1
+            block_type = b.get("type", "exact")
+            if block_type == "relocate":
+                src_uri = str(InSetuURI.from_external_input(b.get("source_uri") or target_file))
+                dst_uri = str(InSetuURI.from_external_input(b.get("target_uri") or ""))
+                sym_name = b.get("symbol", "")
+                src_content = get_file_content(src_uri)
+                dst_content = get_file_content(dst_uri)
+                ok_rel, new_src, new_dst, rel_status = apply_ast_relocate_in_memory(
+                    src_content, dst_content, src_uri, dst_uri, sym_name
+                )
+                if not ok_rel:
+                    patch_tel.update({
+                        "resolved_file": src_uri,
+                        "status": "failed",
+                        "resolution_type": "ast_relocate",
+                        "error_message": rel_status,
+                        "available_actions": ["deselect_patch"],
+                    })
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["failed"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
+                if rel_status == "idempotent":
+                    patch_tel.update({
+                        "resolved_file": dst_uri,
+                        "status": "auto_skipped",
+                        "resolution_type": "ast_relocate",
+                        "flags": ["already_applied"],
+                        "error_message": f"Already Relocated: '{sym_name}' is already present in '{dst_uri}'.",
+                    })
+                    telemetry["summary"]["auto_skipped"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
+                memory_buffers[src_uri] = new_src
+                memory_buffers[dst_uri] = new_dst
+                original_file_keys[src_uri] = raw_target_file
+                original_file_keys[dst_uri] = raw_target_file
+                patch_tel.update({
+                    "resolved_file": f"{src_uri} -> {dst_uri}",
+                    "status": "resolved",
+                    "resolution_type": "ast_relocate",
+                    "flags": [f"relocate:{sym_name}"],
+                })
+                telemetry["summary"]["resolved"] += 1
+                telemetry["patches"].append(patch_tel)
+                continue
+
+            if block_type == "rename":
+                scope_prefix = b.get("scope_prefix") or raw_target_file
+                target_sym = b.get("target_symbol", "")
+                new_sym = b.get("new_symbol", "")
+                if not target_sym or not new_sym:
+                    patch_tel.update({
+                        "resolved_file": scope_prefix,
+                        "status": "failed",
+                        "resolution_type": "ast_rename",
+                        "error_message": "RENAME requires TARGET and REPLACE_WITH fields.",
+                        "available_actions": ["deselect_patch"],
+                    })
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["failed"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
+                scoped_files = resolve_scope_files(workspace_id, scope_prefix, allowed_repos=allowed_repos)
+                modified_in_rename = []
+                for s_fp in scoped_files:
+                    s_content = get_file_content(s_fp)
+                    if not s_content or target_sym not in s_content:
+                        continue
+                    renamed_content = apply_ast_rename_to_content(s_fp, s_content, target_sym, new_sym)
+                    if renamed_content != s_content:
+                        memory_buffers[s_fp] = renamed_content
+                        original_file_keys.setdefault(s_fp, raw_target_file)
+                        modified_in_rename.append(s_fp)
+                if not modified_in_rename:
+                    patch_tel.update({
+                        "resolved_file": scope_prefix,
+                        "status": "auto_skipped",
+                        "resolution_type": "ast_rename",
+                        "error_message": f"No occurrences of '{target_sym}' found within scope '{scope_prefix}'.",
+                    })
+                    telemetry["summary"]["auto_skipped"] += 1
+                else:
+                    patch_tel.update({
+                        "resolved_file": modified_in_rename[0] if len(modified_in_rename) == 1 else scope_prefix,
+                        "status": "resolved",
+                        "resolution_type": "ast_rename",
+                        "flags": [f"renamed in {len(modified_in_rename)} file(s)"],
+                    })
+                    telemetry["summary"]["resolved"] += 1
+                telemetry["patches"].append(patch_tel)
+                continue
+
             content = get_file_content(target_file)
             search_str = heal_llm_block_artifacts(expand_macros(b["search"]), reference_content=content or "")
             replace_str = heal_llm_block_artifacts(expand_macros(b["replace"]), reference_content=content or "")
@@ -290,6 +383,11 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     pctx.handled = True
             def resolve_anchor_failure():
                 if content is not None and not data.get("allow_deep_search"):
+                    if len(blocks) > 1 and not b.get("_is_deferred_retry"):
+                        pctx.resolved_path = target_file
+                        pctx.resolution_type = "deferred_overlap"
+                        pctx.handled = True
+                        return
                     search_lines = search_str.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
                     file_lines = content.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
                     matcher = difflib.SequenceMatcher(None, file_lines, search_lines)
@@ -302,6 +400,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     anchor_b64 = base64.b64encode(("\n".join(actual_lines)).encode('utf-8')).decode('utf-8')
 
                     patch_tel.update({
+                        "resolved_file": target_file,
                         "status": "needs_confirmation", "resolution_type": "anchor_failed", 
                         "error_message": "Search anchor failed to match existing file exactly.", 
                         "syntax_error": err_b64, "actual_anchor": anchor_b64
@@ -309,6 +408,12 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     patch_tel["available_actions"].extend(["heal_anchor", "deselect_patch", "offer_deep_search"])
                     telemetry["can_commit"] = False
                     telemetry["summary"]["action_required"] += 1
+                    deferred_failures.append({
+                        "filepath": target_file,
+                        "raw_target_file": raw_target_file,
+                        "block": b,
+                        "patch_tel": patch_tel,
+                    })
                     pctx.handled = True
 
             def resolve_deep_search():
@@ -345,6 +450,13 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 resolver()
                 if pctx.handled:
                     break
+            if pctx.resolution_type == "deferred_overlap":
+                b_copy = dict(b)
+                b_copy["_is_deferred_retry"] = True
+                blocks.append(b_copy)
+                telemetry["summary"]["total_patches"] -= 1
+                patch_index -= 1
+                continue
 
             if patch_tel["status"] in ("auto_skipped", "needs_confirmation"):
                 telemetry["patches"].append(patch_tel)
@@ -485,11 +597,16 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     diff = list(difflib.unified_diff(content.splitlines(), new_content.splitlines(), lineterm=""))
                     diff_str = "\n".join(diff)
                     err_b64 = base64.b64encode(diff_str.encode('utf-8')).decode('utf-8')
-
                     patch_tel["syntax_error"] = err_b64
                     patch_tel["available_actions"].extend(["ignore_syntax_error", "deselect_patch"])
                     telemetry["can_commit"] = False
                     telemetry["summary"]["action_required"] += 1
+                    deferred_failures.append({
+                        "filepath": resolved_path,
+                        "raw_target_file": raw_target_file,
+                        "block": b,
+                        "patch_tel": patch_tel,
+                    })
                     telemetry["patches"].append(patch_tel)
                     ctx.emit_background('bridge_error', filepath=resolved_path, error_type='syntax_error', details=err_str, file_content=new_content, patch_payload=json.dumps(b))
                     continue
@@ -585,10 +702,11 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
 
     elif dry_run:
         telemetry["status"] = "dry_run_evaluated"
-
     if not telemetry["can_commit"]:
         telemetry["status"] = "action_required" if telemetry["summary"]["action_required"] > 0 else "failed"
 
+    if return_buffers:
+        return telemetry, memory_buffers, deferred_failures
     return telemetry
 def execute_bridge_sync(workspace_id, data):
     from insetu.core.bridge.engine_bridge import bridge_bp as _bridge_bp

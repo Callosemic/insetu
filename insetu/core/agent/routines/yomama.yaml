@@ -1,0 +1,8 @@
+id: yomama
+name: "/yomama (Apply & Heal Patches)"
+slash_command: "/yomama"
+description: "Applies raw Yomama SEARCH/REPLACE, RELOCATE, or RENAME patch blocks directly to the VFS, automatically healing failed anchors or syntax errors against live disk state."
+nodes:
+  - id: apply_and_verify
+    type: exec
+    action: bridge.sync

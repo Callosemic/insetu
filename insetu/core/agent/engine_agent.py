@@ -1,15 +1,24 @@
 import time
 import uuid
 import json
+import threading
 from typing import TypedDict, List, Dict, Any, Optional
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import parse_blocks
+from .orchestrator import (
+    execute_declarative_routine,
+    list_available_routines,
+    load_routine_definition,
+    resolve_routine_mode,
+)
 
 AGENT_SCHEMA = {
     "chat_sessions": {
         "session_id": "TEXT PRIMARY KEY",
         "title": "TEXT",
-        "updated_at": "REAL"
+        "updated_at": "REAL",
+        "last_transaction_id": "TEXT",
+        "active_job_id": "TEXT"
     },
     "chat_messages": {
         "message_id": "TEXT PRIMARY KEY",
@@ -20,22 +29,58 @@ AGENT_SCHEMA = {
     }
 }
 
+_CANCELLED_SESSIONS = set()
+_CANCEL_LOCK = threading.Lock()
+
 agent_bp = InSetuExtension(
     'agent',
     __name__,
     title="Agent Harness",
-    description="Autonomous LLM agent and chat orchestrator.",
+    description="Autonomous LLM agent and declarative YAML routine orchestrator.",
     core=True,
     schema=AGENT_SCHEMA
 )
 __depends__ = ['llm', 'gather', 'bridge']
+
+
 class ChatSessionPayload(TypedDict):
     title: str
 
-class ChatPromptPayload(TypedDict):
+
+class ChatPromptPayload(TypedDict, total=False):
     session_id: str
     prompt: str
+    mode: str
     attached_files: List[str]
+    read_only_files: List[str]
+    routine_id: str
+
+
+class AgentSessionActionPayload(TypedDict, total=False):
+    session_id: str
+    transaction_id: str
+def _parse_slash_command(raw_prompt: str, explicit_mode: Optional[str] = None, routine: Optional[Dict[str, Any]] = None):
+    """Parses leading slash commands (/code, /plan, /ask, /yomama, /auto, /undo) from the user prompt."""
+    text = (raw_prompt or "").strip()
+    fallback_mode = (explicit_mode or "auto").strip().lower().lstrip("/")
+    if text.startswith("/"):
+        first_token, _, rest = text.partition(" ")
+        cmd = first_token[1:].lower()
+        if cmd == "undo":
+            return "undo", rest.strip()
+        if routine and cmd in (routine.get("modes") or {}):
+            return cmd, rest.strip() or text
+        if cmd in ("code", "plan", "ask", "yomama", "auto"):
+            return cmd, rest.strip() or text
+    if routine:
+        canon_mode, _, _ = resolve_routine_mode(routine, fallback_mode)
+        return canon_mode, text
+    return fallback_mode if fallback_mode in ("code", "plan", "ask", "yomama", "auto") else "auto", text
+
+
+@agent_bp.route('routines', methods=['GET'], docstring="[sync] Lists all available declarative YAML agent routines and their supported slash modes.")
+def get_routines(ctx):
+    return {"routines": list_available_routines(ctx)}
 @agent_bp.route('sessions', methods=['GET'], docstring="[sync] Retrieves all chat sessions for the active workspace.")
 def get_sessions(ctx):
     rows = ctx.db.get_all("chat_sessions", order_by="updated_at DESC")
@@ -59,16 +104,74 @@ def get_messages(ctx, session_id):
     cursor = ctx.db.execute("SELECT * FROM chat_messages WHERE session_id=? ORDER BY timestamp ASC", (session_id,))
     messages = [dict(r) for r in cursor.fetchall()]
     return {"messages": messages}
+@agent_bp.route('cancel', methods=['POST'], request_schema=AgentSessionActionPayload, docstring="[sync] Signals an active agent turn to abort before the next LLM call or VFS mutation.")
+def cancel_agent_turn(ctx):
+    data = ctx.payload or {}
+    session_id = str(data.get("session_id") or "").strip()
+    if not session_id:
+        return {"error": "session_id is required"}, 400
+    with _CANCEL_LOCK:
+        _CANCELLED_SESSIONS.add((ctx.workspace_id, session_id))
+    row = ctx.db.get_by_id("chat_sessions", session_id, id_col="session_id")
+    if row and row.get("active_job_id"):
+        from insetu.core.sdk import get_connection as _get_conn
+        w_conn = _get_conn("workers", workspace_id=ctx.workspace_id)
+        w_conn.execute(
+            "UPDATE immediate_jobs SET status='failed', status_message='Cancelled by user.' WHERE id=?",
+            (row["active_job_id"],),
+        )
+        w_conn.commit()
+    return {"status": "cancelled", "session_id": session_id}
 
-@agent_bp.route('prompt', methods=['POST'], request_schema=ChatPromptPayload, docstring="Dispatches a new user prompt into the background ReAct agent worker chain.")
+
+@agent_bp.route('undo', methods=['POST'], request_schema=AgentSessionActionPayload, docstring="[sync] Reverts the most recent Yomama Bridge transaction for this chat session.")
+def undo_last_agent_turn(ctx):
+    data = ctx.payload or {}
+    session_id = str(data.get("session_id") or "").strip()
+    tx_id = str(data.get("transaction_id") or "").strip()
+    if not tx_id and session_id:
+        row = ctx.db.get_by_id("chat_sessions", session_id, id_col="session_id")
+        if row:
+            tx_id = row.get("last_transaction_id") or ""
+    if not tx_id:
+        return {"error": "No recorded transaction found to undo for this session."}, 404
+
+    rev_res = ctx.call("bridge.revert", transaction_id=tx_id, target_state="initial", wait=True)
+    if session_id:
+        now = time.time()
+        ctx.db.insert_or_replace("chat_messages", {
+            "message_id": f"msg_{uuid.uuid4().hex[:12]}",
+            "session_id": session_id,
+            "role": "assistant",
+            "content": f"⏪ Reverted transaction `{tx_id}`: {rev_res.get('message', 'Files restored.')}",
+            "timestamp": now,
+        })
+        ctx.db.execute("UPDATE chat_sessions SET last_transaction_id=NULL, updated_at=? WHERE session_id=?", (now, session_id))
+        ctx.db.commit()
+    return {"status": "success", "transaction_id": tx_id, "revert": rev_res}
+
+
+@agent_bp.route('prompt', methods=['POST'], request_schema=ChatPromptPayload, docstring="Dispatches a new user prompt into the background declarative agent worker chain.")
 def submit_prompt(ctx):
     data = ctx.payload or {}
     session_id = data.get("session_id")
-    prompt = str(data.get("prompt") or "").strip()
+    raw_prompt = str(data.get("prompt") or "").strip()
     attached_files = data.get("attached_files", [])
+    read_only_files = data.get("read_only_files", [])
+    routine_id = str(data.get("routine_id") or "workspace_turn").strip()
 
-    if not session_id or not prompt:
+    if not session_id or not raw_prompt:
         return {"error": "session_id and prompt are required"}, 400
+    try:
+        routine_def = load_routine_definition(ctx, routine_id)
+    except Exception:
+        routine_def = None
+    resolved_mode, clean_prompt = _parse_slash_command(raw_prompt, data.get("mode"), routine=routine_def)
+    if resolved_mode == "undo":
+        return undo_last_agent_turn(ctx)
+
+    with _CANCEL_LOCK:
+        _CANCELLED_SESSIONS.discard((ctx.workspace_id, session_id))
 
     now = time.time()
     user_msg_id = f"msg_{uuid.uuid4().hex[:12]}"
@@ -76,131 +179,95 @@ def submit_prompt(ctx):
         "message_id": user_msg_id,
         "session_id": session_id,
         "role": "user",
-        "content": prompt,
-        "timestamp": now
+        "content": raw_prompt,
+        "timestamp": now,
     })
-    ctx.db.execute("UPDATE chat_sessions SET updated_at=? WHERE session_id=?", (now, session_id))
-    ctx.db.commit()
     job_id = ctx.jobs.submit(
         "agent_turn_task",
         job_category="ui_blocking",
         session_id=session_id,
-        user_prompt=prompt,
+        user_prompt=clean_prompt,
+        mode=resolved_mode,
         attached_files=attached_files,
-        retry_count=0
+        read_only_files=read_only_files,
+        routine_id=routine_id,
+        retry_count=0,
     )
+    ctx.db.execute(
+        "UPDATE chat_sessions SET updated_at=?, active_job_id=? WHERE session_id=?",
+        (now, job_id, session_id),
+    )
+    ctx.db.commit()
 
-    return {"status": "accepted", "job_id": job_id, "message_id": user_msg_id}, 202
+    return {"status": "accepted", "job_id": job_id, "message_id": user_msg_id, "mode": resolved_mode}, 202
+
+
 @agent_bp.worker("agent_turn_task")
 def _execute_agent_turn(
     ctx,
     job_id: Optional[str] = None,
     session_id: Optional[str] = None,
     user_prompt: str = "",
+    mode: str = "auto",
     attached_files: Optional[List[str]] = None,
+    read_only_files: Optional[List[str]] = None,
+    routine_id: str = "workspace_turn",
     retry_count: int = 0,
 ):
-    attached_files = attached_files or []
-
-    # --- Phase 1: Context Assembly (Gather via Capability Backbone) ---
-    ctx.jobs.update_progress("Phase 1/4: Assembling workspace context...")
-    context_text = ""
-    if attached_files:
-        pack_artifact = ctx.call(
-            "gather.pack_selection",
-            items=[{"filepath": f} for f in attached_files],
-            gather_only=True,
-            wait=True,
-        )
-        base_filename = pack_artifact.get("base_filename") if isinstance(pack_artifact, dict) else None
-        if base_filename:
-            context_text = ctx.read_compiled_context(base_filename) or ""
-
-    # --- Phase 2: Inference (LLM Gateway via Capability Backbone) ---
-    ctx.jobs.update_progress("Phase 2/4: Generating solution with LLM...")
-
-    # Retrieve past messages for session memory
-    cursor = ctx.db.execute("SELECT role, content FROM chat_messages WHERE session_id=? ORDER BY timestamp ASC", (session_id,))
-    history_messages = [{"role": r["role"], "content": r["content"]} for r in cursor.fetchall()]
-
-    system_prompt = (
-        "You are the inSetu AI Developer OS Agent. You assist with codebase modifications.\n"
-        "To modify code, provide structured Yomama patch blocks strictly formatted as:\n\n"
-        "<<<<<<< FILE: relative/path/to/file.ext\n"
-        "<<<<<<< SEARCH\n"
-        "[exact lines to match]\n"
-        "=======\n"
-        "[replacement lines]\n"
-        ">>>>>>> REPLACE\n\n"
-        "Leave SEARCH blank for new files."
+    cursor = ctx.db.execute(
+        "SELECT role, content FROM chat_messages WHERE session_id=? ORDER BY timestamp ASC",
+        (session_id,),
     )
-    if context_text:
-        system_prompt += f"\n\n--- WORKSPACE CONTEXT ---\n{context_text}"
+    history_messages = [{"role": r["role"], "content": r["content"]} for r in cursor.fetchall()]
+    if not history_messages and user_prompt:
+        history_messages = [{"role": "user", "content": user_prompt}]
 
-    try:
-        llm_res = ctx.call(
-            "llm.complete",
-            messages=history_messages,
-            system=system_prompt,
-            wait=True,
-        )
-        full_response = llm_res.get("text", "") if isinstance(llm_res, dict) else str(llm_res)
-        if full_response:
-            ctx.jobs.update_progress(full_response)
-    except Exception as e:
-        raise RuntimeError(f"LLM Generation Error: {str(e)}")
+    def _is_cancelled() -> bool:
+        with _CANCEL_LOCK:
+            return (ctx.workspace_id, session_id) in _CANCELLED_SESSIONS
 
-    # --- Phase 3: Patch Application & Verification (Yomama Bridge via Capability Backbone) ---
-    if "<<<<<<< FILE:" in full_response:
-        ctx.jobs.update_progress("Phase 3/4: Applying patches and validating syntax...")
-        parsed = parse_blocks(full_response)
-        target_files = list(parsed.keys())
+    routine_result = execute_declarative_routine(
+        ctx,
+        session_id=session_id or "default",
+        user_prompt=user_prompt,
+        mode=mode,
+        attached_files=attached_files or [],
+        read_only_files=read_only_files or [],
+        history_messages=history_messages,
+        routine_id=routine_id,
+        is_cancelled_fn=_is_cancelled,
+    )
 
-        bridge_res = ctx.call(
-            "bridge.sync",
-            text=full_response,
-            active_files=target_files,
-            dry_run=False,
-            wait=True,
-        )
-        bridge_raw = json.dumps(bridge_res)
-
-        if not bridge_res.get("can_commit"):
-            # Self-Healing Retry Loop (Up to 3 retries)
-            if retry_count < 3:
-                err_details = "\n".join([p.get("error_message", "") for p in bridge_res.get("patches", []) if p.get("error_message")])
-                ctx.jobs.update_progress(f"Phase 4/4: Patch verification failed. Retrying self-correction ({retry_count + 1}/3)...")
-
-                # Append error feedback into conversation history
-                ctx.db.insert_or_replace("chat_messages", {
-                    "message_id": f"msg_{uuid.uuid4().hex[:12]}",
-                    "session_id": session_id,
-                    "role": "assistant",
-                    "content": full_response,
-                    "timestamp": time.time()
-                })
-                ctx.db.insert_or_replace("chat_messages", {
-                    "message_id": f"msg_{uuid.uuid4().hex[:12]}",
-                    "session_id": session_id,
-                    "role": "user",
-                    "content": f"[SYSTEM ERROR FEEDBACK]: Your previous patch failed with:\n{err_details}\nPlease fix the SEARCH block and re-generate.",
-                    "timestamp": time.time()
-                })
-                ctx.db.commit()
-                # Re-queue turn with incremented retry count
-                return _execute_agent_turn(ctx, job_id=job_id, session_id=session_id, user_prompt=user_prompt, attached_files=attached_files, retry_count=retry_count+1)
-            else:
-                full_response += f"\n\n⚠️ **Patch Verification Failed After 3 Retries:**\n```\n{bridge_raw}\n```"
-
-    # Save Assistant Response to Session
+    full_response = routine_result.get("response") or ""
+    tx_id = routine_result.get("transaction_id")
     asst_msg_id = f"msg_{uuid.uuid4().hex[:12]}"
+    now = time.time()
     ctx.db.insert_or_replace("chat_messages", {
         "message_id": asst_msg_id,
         "session_id": session_id,
         "role": "assistant",
         "content": full_response,
-        "timestamp": time.time()
+        "timestamp": now,
     })
+    if tx_id:
+        ctx.db.execute(
+            "UPDATE chat_sessions SET last_transaction_id=?, active_job_id=NULL, updated_at=? WHERE session_id=?",
+            (tx_id, now, session_id),
+        )
+    else:
+        ctx.db.execute(
+            "UPDATE chat_sessions SET active_job_id=NULL, updated_at=? WHERE session_id=?",
+            (now, session_id),
+        )
     ctx.db.commit()
 
-    return {"message": "Turn complete.", "artifact": {"message_id": asst_msg_id, "response": full_response}}
+    return {
+        "message": "Turn complete.",
+        "artifact": {
+            "message_id": asst_msg_id,
+            "response": full_response,
+            "mode": routine_result.get("mode", mode),
+            "effective_intent": routine_result.get("effective_intent"),
+            "transaction_id": tx_id,
+        },
+    }
