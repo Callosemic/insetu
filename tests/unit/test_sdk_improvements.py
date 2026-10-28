@@ -173,8 +173,7 @@ class TestSdkImprovements(unittest.TestCase):
             encoding="utf-8",
         )
         akasa_utils.load_config.clear_all()
-        from insetu.core.topology.engine_topology import mount_topology_volumes_dynamically as _mount_top
-        _mount_top(load_config(self.workspace_id), workspace_id=self.workspace_id)
+        mount_topology_volumes_dynamically(load_config(self.workspace_id), workspace_id=self.workspace_id)
 
         ctx = flow_bp.get_context(self.workspace_id)
         ctx.store.set("workflows.json", "context_batches", [{

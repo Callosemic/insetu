@@ -149,6 +149,7 @@ def check_javascript_files():
     folder_entity_card_pattern = re.compile(r'\.entityType=\$\{[\'"]folder[\'"]\}[\s\S]{0,200}?\.entityData=\$\{\{([^\}]+)\}\}')
     component_execute_unload_ban_pattern = re.compile(r'\.executeUnload\s*\(')
     direct_manifest_slots_mutation_pattern = re.compile(r'\bmanifest\.layoutSlots\s*(?:=|\.push\b|\.splice\b)')
+    imperative_dirty_set_mutation_pattern = re.compile(r'\.setState\s*\([\s\S]{0,200}?\b(?:dirtyBuckets|dirtyRepos)\s*:')
     store_persistence_schema_pattern = re.compile(
         r'create(?:Extension|Sutram)Store\s*\(\s*[\'"][^\'"]+[\'"]\s*,\s*\{([\s\S]*?)\}\s*,\s*\{([\s\S]*?)\}\s*\)',
         re.MULTILINE
@@ -201,7 +202,7 @@ def check_javascript_files():
     )
     known_api_modules = {
         "bridge", "gather", "cartographer", "config", "editor", "fs", "system",
-        "workers", "auth", "security", "topology", "offline", "llm", "agent", "prompts",
+        "workers", "auth", "security", "topology", "offline", "llm", "agent", "prompts", "mcp",
         "citations", "cronic", "dev", "favorites", "flow", "format", "freshdesk",
         "git", "hooks", "ingest", "notes", "preview", "publish", "research", "skills",
         "tailscale", "term", "tracker", "update"
@@ -388,6 +389,13 @@ def check_javascript_files():
                 filepath,
                 1,
                 "Extension components are forbidden from invoking ExtensionRegistry.executeUnload() directly. Extension unloading is managed exclusively by SessionOrchestrator."
+            )
+        if file != "store.js" and imperative_dirty_set_mutation_pattern.search(full_content):
+            report_violation(
+                "IMPERATIVE_DIRTY_SET_MUTATION_BAN",
+                filepath,
+                1,
+                "Imperative mutation of dirtyBuckets/dirtyRepos outside store.js is banned. AppStore derives staleness reactively from manifest.vfs.source_ts vs manifest.ctx.meta.timestamp watermarks."
             )
         if is_extension and direct_manifest_slots_mutation_pattern.search(full_content):
             report_violation(

@@ -129,6 +129,22 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     node.lineno,
                     "Direct ExtensionContext(...) instantiation detected in core/extension module. Use bp.get_context(workspace_id) instead."
                 )
+        if not self.is_test and self.filename in ("engine_agent.py", "orchestrator.py"):
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("save", "delete", "move", "bulk")
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "vfs"
+            ) or (
+                isinstance(node.func, ast.Name)
+                and node.func.id in ("execute_vfs_save", "execute_vfs_delete", "execute_vfs_move", "execute_vfs_bulk")
+            ):
+                report_violation(
+                    "YOMAMA_PATCH_GATEWAY_MANDATE",
+                    self.filepath,
+                    node.lineno,
+                    "Direct VFS mutation detected in Agent module. All agent code modifications must route through 'bridge.sync' to guarantee AST validation and ledger parity."
+                )
         func_name = None
         if isinstance(node.func, ast.Name):
             func_name = node.func.id
@@ -267,8 +283,8 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'from_any':
             report_violation("BANNED_URI_FROM_ANY_COERCION", self.filepath, node.lineno, "InSetuURI.from_any() is banned. All internal paths must be canonical scheme:// URIs passed to InSetuURI(uri).")
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'from_external_input':
-            if self.filename not in ("utils_core.py", "bridge_vfs.py", "engine_fs.py") and not self.is_test:
-                report_violation("EXTERNAL_URI_COERCION_BOUNDARY_VIOLATION", self.filepath, node.lineno, "InSetuURI.from_external_input() is restricted to external ingress boundaries (bridge_vfs.py, engine_fs.py, utils_core.py). Use strict InSetuURI(uri) internally.")
+            if self.filename not in ("utils_core.py", "bridge_vfs.py", "bridge_ast.py", "engine_fs.py", "cartographer.py", "engine_mcp.py") and not self.is_test:
+                report_violation("EXTERNAL_URI_COERCION_BOUNDARY_VIOLATION", self.filepath, node.lineno, "InSetuURI.from_external_input() is restricted to external ingress boundaries (bridge_vfs.py, bridge_ast.py, engine_fs.py, cartographer.py, engine_mcp.py, utils_core.py). Use strict InSetuURI(uri) internally.")
 
         if self.is_test:
             self.generic_visit(node)
@@ -399,7 +415,15 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             report_violation("TIER_ISOLATION_MANDATE", self.filepath, node.lineno, "Tier 2 Core Substrate modules cannot import from Tier 3 Domain Extensions.")
         if is_tier2 and any(alias.name.startswith('insetu.kernel') for alias in node.names):
             report_violation("AKASA_KERNEL_IMPORT_MANDATE", self.filepath, node.lineno, "Legacy import of 'insetu.kernel'. Core substrate modules must import from 'akasa.*'.")
-
+        if not self.is_test and self.filename in ("engine_agent.py", "orchestrator.py"):
+            for alias in node.names:
+                if alias.name.startswith(("urllib", "anthropic", "openai", "google.generativeai")):
+                    report_violation(
+                        "AGENT_LLM_GATEWAY_MANDATE",
+                        self.filepath,
+                        node.lineno,
+                        f"Direct LLM/HTTP import '{alias.name}' in '{self.filename}' is banned. Route all inference through 'llm.complete' (engine_llm.py)."
+                    )
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         if is_ext and any(alias.name == 'flask' for alias in node.names):
             report_violation("FLASK_BLUEPRINT_BAN", self.filepath, node.lineno, "Raw flask import detected in extension engine. Use InSetuExtension framework instead.")
@@ -545,6 +569,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                                 report_violation("ROUTE_REQUEST_SCHEMA_MANDATE", self.filepath, node.lineno, f"Mutating route '{node.name}' ({', '.join(methods)}) is missing a mandatory 'request_schema' contract.")
         self.generic_visit(node)
     def visit_Attribute(self, node):
+        if isinstance(node.ctx, ast.Store) and node.attr == "_cwd":
+            report_violation(
+                "DIRECT_CWD_MUTATION_BAN",
+                self.filepath,
+                node.lineno,
+                "Direct assignment to '._cwd' detected. Use 'akasa.reset_state(cwd=...)' or 'set_daemon_cwd()' instead."
+            )
         if (
             not self.is_test
             and ("core" in self.filepath.parts or "extensions" in self.filepath.parts or self.filename == "engine_template_py.txt")
@@ -616,6 +647,14 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             )
         if node.module in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth'):
             report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{node.module}'. Import from 'akasa.{node.module.split('.')[-1]}' instead.")
+        if not self.is_test and self.filename in ("engine_agent.py", "orchestrator.py") and node.module:
+            if node.module.startswith(("urllib", "anthropic", "openai", "google.generativeai")):
+                report_violation(
+                    "AGENT_LLM_GATEWAY_MANDATE",
+                    self.filepath,
+                    node.lineno,
+                    f"Direct LLM/HTTP import from '{node.module}' in '{self.filename}' is banned. Route all inference through 'llm.complete' (engine_llm.py)."
+                )
         if node.module == 'os.path' and any(alias.name == 'join' for alias in node.names):
             report_violation("PATHLIB_MANDATE_BYPASS", self.filepath, node.lineno, "from os.path import join detected. Migrate to pathlib.Path.")
         is_ext = 'extensions' in self.filepath.parts
@@ -701,6 +740,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     self.filepath,
                     node.lineno,
                     "Direct SQL manipulation of the 'jobs' table detected. Use submit_job() or submit_one_shot_job() from akasa.workers instead."
+                )
+            if "UPDATE topology_ledger SET git_status" in node.value and "timestamp" in node.value and not self.is_test:
+                report_violation(
+                    "TOPOLOGY_GIT_STATUS_TIMESTAMP_CLOBBER_BAN",
+                    self.filepath,
+                    node.lineno,
+                    "SQL update to topology_ledger.git_status must not overwrite the 'timestamp' column, as doing so clobbers physical file mutation watermarks."
                 )
         self.generic_visit(node)
 
@@ -869,15 +915,17 @@ def check_python_files():
                     )
             except SyntaxError as e:
                 report_violation("UNITTEST_SYNTAX_ERROR", test_fp, e.lineno or 1, f"Syntax error in unit test file: {e}")
-
-    # Validate CODE_INDEX.md has no unresolved Cartographer placeholders
+    # Validate CODE_INDEX.md has no unresolved file/directory Cartographer placeholders
     code_index_path = PROJECT_ROOT / "CODE_INDEX.md"
     if code_index_path.exists():
         for idx, line in enumerate(code_index_path.read_text(encoding="utf-8").splitlines(), start=1):
             if "[comment required]" in line:
+                tree_entry = line.split("#", 1)[0].lstrip(" │├└─\t").strip()
+                if tree_entry.startswith(("def ", "async def ", "class ", "function ")):
+                    continue
                 report_violation(
                     "CARTOGRAPHER_PLACEHOLDER_BAN",
                     code_index_path,
                     idx,
-                    f"Unresolved '# [comment required]' placeholder in CODE_INDEX.md: {line.strip()}"
+                    f"Unresolved file/directory '# [comment required]' placeholder in CODE_INDEX.md: {line.strip()}"
                 )

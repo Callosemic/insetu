@@ -11,10 +11,12 @@ from akasa.utils import load_config
 from akasa.workers import _init_worker_schema
 from insetu.core.topology.engine_topology import (
     TOPOLOGY_SCHEMA,
+    buffer_topology_events,
     force_topology_scan,
     get_topology_files_for_repo,
     hook_request_vfs_manifest,
     mount_topology_volumes_dynamically,
+    resolve_topology_buffer,
 )
 from insetu.core.utils_core import InSetuURI, BucketAddress, heal_sqlite_uri_column
 from insetu.extensions.tracker.engine_tracker import get_tracker_path, TRACKER_SCHEMA
@@ -26,7 +28,13 @@ from akasa.vfs import VFSTransaction
 from flask import Flask
 from insetu.core.fs.engine_fs import fs_bp
 from insetu.core.prompts.engine_prompts import prompts_bp
-from insetu.core.gather.engine_gather import _canonicalize_manifest_entry, gather_bp, VFS_INDEX_SCHEMA
+from insetu.core.gather.engine_gather import (
+    _background_compile,
+    _canonicalize_manifest_entry,
+    gather_bp,
+    hook_request_manifest,
+    VFS_INDEX_SCHEMA,
+)
 from insetu.extensions.flow.engine_flow import flow_bp, _background_compile_workflows
 from akasa.extension import ExtensionContext
 from insetu.core.utils_core import execute_binary
@@ -101,10 +109,50 @@ class TestCanonicalURIs(unittest.TestCase):
         full_uris = get_topology_files_for_repo("default", "alpha")
         self.assertIn("vfs://alpha/main.py", full_uris)
         self.assertTrue(all(u.startswith("vfs://alpha/") for u in full_uris))
-
         vfs_manifest = hook_request_vfs_manifest(workspace_id="default")
         bucket_files = vfs_manifest.get("alpha::main", {}).get("files", [])
         self.assertIn("vfs://alpha/main.py", bucket_files)
+        self.assertGreater(vfs_manifest.get("alpha::main", {}).get("source_ts", 0), 0)
+
+    def test_relational_watermark_lifecycle_from_mutation_to_gather_compile(self):
+        """
+        Verifies the Relational Watermark Contract end-to-end:
+        1. Initial compile sets ctx['ctx://contexts/alpha_context.txt'].meta.timestamp >= vfs['alpha::main'].source_ts.
+        2. Mutating vfs://alpha/main.py and resolving topology advances vfs['alpha::main'].source_ts > ctx.meta.timestamp.
+        3. Running differential _background_compile (even when content_hash is idempotent) advances ctx.meta.timestamp >= vfs.source_ts.
+        """
+        apply_declarative_schema("vfs_index", VFS_INDEX_SCHEMA, "default")
+        force_topology_scan(workspace_id="default")
+        g_ctx = gather_bp.get_context("default")
+
+        # 1. Initial full compile
+        _background_compile(g_ctx, force_full=True)
+        sync_vfs_barrier("default")
+        vfs_m1 = hook_request_vfs_manifest(workspace_id="default")
+        ctx_m1 = hook_request_manifest(workspace_id="default")
+        source_ts_1 = vfs_m1["alpha::main"]["source_ts"]
+        compiled_ts_1 = ctx_m1["ctx://contexts/alpha_context.txt"]["meta"]["timestamp"]
+        self.assertGreaterEqual(compiled_ts_1, source_ts_1)
+
+        # 2. Mutate file on disk and resolve topology buffer -> source_ts must exceed compiled_ts_1
+        (self.repo_dir / "main.py").write_text("print('updated')\n", encoding="utf-8")
+        top_conn = get_connection("topology", workspace_id="default")
+        top_conn.execute(
+            "INSERT INTO topology_event_buffer (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
+            ("vfs://alpha/main.py", "save", compiled_ts_1 + 1.0),
+        )
+        top_conn.commit()
+        events = resolve_topology_buffer("default")
+        vfs_m2 = hook_request_vfs_manifest(workspace_id="default")
+        source_ts_2 = vfs_m2["alpha::main"]["source_ts"]
+        self.assertGreater(source_ts_2, compiled_ts_1, "Mutated bucket source_ts must exceed prior compiled timestamp")
+
+        # 3. Differential compile settles watermark -> compiled_ts_2 >= source_ts_2
+        _background_compile(gather_bp.get_context("default"), force_full=False, ledger_events=events)
+        sync_vfs_barrier("default")
+        ctx_m2 = hook_request_manifest(workspace_id="default")
+        compiled_ts_2 = ctx_m2["ctx://contexts/alpha_context.txt"]["meta"]["timestamp"]
+        self.assertGreaterEqual(compiled_ts_2, source_ts_2, "Compiled artifact timestamp must advance past bucket source_ts")
     def test_insetu_uri_rejects_non_prefixed_paths(self):
         """InSetuURI raises ValueError if given a non-prefixed relative path."""
         with self.assertRaises(ValueError):

@@ -6,7 +6,7 @@ import time
 import unittest
 import urllib.request
 from pathlib import Path
-
+import akasa
 import akasa.utils as akasa_utils
 from akasa.hooks import hooks
 from akasa.vfs import mount_volume
@@ -44,12 +44,10 @@ class TestExtPreviewUnit(unittest.TestCase):
         }
         self.config_file = self.control_dir / "config.json"
         self.config_file.write_text(json.dumps(config_data), encoding="utf-8")
-
-        self.orig_cwd = akasa_utils._cwd
+        self.orig_cwd = akasa_utils.get_daemon_cwd()
         self.orig_akasa_config = os.environ.get("AKASA_CONFIG")
         os.environ["AKASA_CONFIG"] = self.config_file.as_posix()
-        akasa_utils._cwd = self.ws_root.as_posix()
-        akasa_utils.load_config.clear_all()
+        akasa.reset_state(cwd=self.ws_root.as_posix(), control_dir=".insetu")
 
         mount_volume("default", "vfs", "", self.ws_root.as_posix())
         mount_volume("default", "vfs", "demo_app", self.repo_path.as_posix())
@@ -57,12 +55,11 @@ class TestExtPreviewUnit(unittest.TestCase):
 
     def tearDown(self):
         cleanup_all_preview_servers()
-        akasa_utils._cwd = self.orig_cwd
         if self.orig_akasa_config is None:
             os.environ.pop("AKASA_CONFIG", None)
         else:
             os.environ["AKASA_CONFIG"] = self.orig_akasa_config
-        akasa_utils.load_config.clear_all()
+        akasa.reset_state(cwd=self.orig_cwd, control_dir=".insetu")
         try:
             self.temp_dir.cleanup()
         except OSError:
