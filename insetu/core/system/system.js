@@ -1706,8 +1706,13 @@ async function purgeServiceWorkerCaches() {
 
 async function simulatePanic() {
     if (!confirm("This will intentionally crash the server to test the Immutable Recovery Bootloader. The page will reload automatically. Continue?")) return;
+    // Keep the saved token: the session token is durable, and the lifeboat (same origin) accepts it.
+    const savedToken = sessionStorage.getItem('insetu_boot_token') || localStorage.getItem('insetu_boot_token');
     sessionStorage.clear();
-    localStorage.removeItem('insetu_boot_token');
+    if (savedToken) {
+        sessionStorage.setItem('insetu_boot_token', savedToken);
+        localStorage.setItem('insetu_boot_token', savedToken);
+    }
     const btn = document.getElementById('simulate-panic-btn');
     if (btn) btn.innerText = "⏳ Crashing...";
     // Declarative UI State Transition

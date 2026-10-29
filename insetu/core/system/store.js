@@ -193,6 +193,9 @@ AppStore.subscribe(
 
             const normKey = String(bucketKey).toLowerCase();
             const [repoName] = normKey.split('::');
+            const bucketId = normKey.slice(repoName.length + 2);
+            // Files matched by drop_patterns are kept out of every context and diff, so they never make anything stale.
+            if (bucketId === '_dropped') return;
             const sourceTs = Number(bucketObj.source_ts || 0);
             bucketSourceTsMap[normKey] = sourceTs;
             if (repoName) {
@@ -201,6 +204,9 @@ AppStore.subscribe(
 
             const repoCfg = configs.find(c => c && String(c.repo_dir || '').toLowerCase() === repoName);
             if (repoCfg && repoCfg.exclude_from_context) return;
+            // Sub-buckets excluded from context have no gather artifact to compare against, so counting
+            // them would keep the whole repo dirty forever.
+            if (repoCfg && (repoCfg.sub_buckets || []).some(b => b && b.exclude_from_context && String(b.id || '').toLowerCase() === bucketId)) return;
 
             const compiledTs = Number(compiledGatherTs[normKey] || 0);
             if (sourceTs > 0 && (compiledTs === 0 || sourceTs > compiledTs + 0.5)) {
