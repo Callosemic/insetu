@@ -1,4 +1,4 @@
-import { createExtensionStore, InSetuElement, bindStoreInput } from '/static/extensions/system/insetu_sdk.js';
+import { createExtensionStore, InSetuElement, bindStoreInput, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
@@ -286,7 +286,6 @@ function _isRepoActive(activePins, repo) {
 }
 
 import { LitElement, html, css } from 'lit';
-import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 export class InSetuTrackerTicket extends InSetuElement {
     static get extensionName() { return 'tracker'; }
     static properties = {
