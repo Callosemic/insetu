@@ -17,6 +17,7 @@ app = Flask(__name__)
 # (Isolated from engine_bridge.py to ensure zero dependencies during Kernel Panic)
 
 def expand_macros(text):
+    text = re.sub(r'\{\{\s*ymm:(.)[x*](\d+)\s*\}\}', lambda m: m.group(1) * int(m.group(2)), text)
     text = re.sub(r'\{\{\s*(.)\s*\*\s*(\d+)\s*\}\}', lambda m: m.group(1) * int(m.group(2)), text)
     text = re.sub(r'\{\{\s*triple(.)\s*\}\}', lambda m: m.group(1) * 3, text)
     return text
@@ -76,6 +77,76 @@ def apply_block_in_memory(content, block):
         return True, content.replace(search_str, replace_str)
     else:
         return False, content
+
+def _lifeboat_workspace():
+    """Returns (workspace_root, target_repos) from the daemon's control files, using only the standard library."""
+    cwd = Path(os.getcwd()).resolve()
+    control = cwd / ".insetu"
+    config_name = "config.json"
+    try:
+        ws_index = json.loads((control / "workspaces.json").read_text(encoding="utf-8"))
+        active = ws_index.get("active_workspace") or "default"
+        config_name = (ws_index.get("workspaces") or {}).get(active, {}).get("config_path") or config_name
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        cfg = json.loads((control / config_name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    root = Path(cfg.get("workspace_root") or cwd).expanduser().resolve()
+    repos = [r for r in (cfg.get("target_repos") or []) if isinstance(r, dict) and r.get("repo_dir")]
+    return root, repos
+
+def _resolve_patch_target(raw_target):
+    """
+    Maps a patch FILE header to an absolute path, mirroring the main bridge's vfs://<repo>/<path>
+    resolution (longest repo_dir prefix, optional physical_path). Plain relative paths resolve against
+    the daemon directory as before. Because the lifeboat has no login, every write must land inside the
+    workspace root, the daemon directory, or a repository's physical_path.
+    Returns (absolute_path, None) or (None, reason).
+    """
+    raw = raw_target.strip().replace("\\", "/")
+    root, repos = _lifeboat_workspace()
+    allowed = [root, Path(os.getcwd()).resolve()]
+    for repo in repos:
+        if repo.get("physical_path"):
+            allowed.append(Path(repo["physical_path"]).expanduser().resolve())
+
+    if raw.startswith("vfs://"):
+        logical = raw[len("vfs://"):].strip("/")
+        best = None
+        for repo in repos:
+            r_dir = repo["repo_dir"].strip("/")
+            if logical == r_dir or logical.startswith(r_dir + "/"):
+                if best is None or len(r_dir) > len(best["repo_dir"].strip("/")):
+                    best = repo
+        if best is not None:
+            r_dir = best["repo_dir"].strip("/")
+            rel = logical[len(r_dir):].lstrip("/")
+            if best.get("physical_path"):
+                base = Path(best["physical_path"]).expanduser().resolve()
+            elif root.name == r_dir:
+                base = root
+            else:
+                base = root / r_dir
+            candidate = base / rel
+        else:
+            candidate = root / logical
+    elif "://" in raw:
+        return None, f"Unsupported target '{raw_target}': the lifeboat writes vfs:// and plain paths only."
+    else:
+        candidate = Path(raw)
+
+    resolved = Path(os.path.abspath(candidate))
+    for base in allowed:
+        try:
+            resolved.relative_to(base)
+            return resolved.as_posix(), None
+        except ValueError:
+            continue
+    return None, f"Refusing to write outside the workspace: {resolved.as_posix()}"
 
 # --- LIFEBOAT UI ---
 HTML_TEMPLATE = """
@@ -315,8 +386,11 @@ def bridge_sync():
     
     log = []
     for target_file, blocks in parsed.items():
-        abs_path = os.path.abspath(target_file)
-        log.append(f"Targeting: {target_file}")
+        abs_path, reason = _resolve_patch_target(target_file)
+        log.append(f"Targeting: {target_file}" + (f" -> {abs_path}" if abs_path and abs_path != os.path.abspath(target_file) else ""))
+        if not abs_path:
+            log.append(f"  [!] {reason}")
+            continue
         
         if os.path.exists(abs_path):
             with open(abs_path, 'r', encoding='utf-8') as f:
