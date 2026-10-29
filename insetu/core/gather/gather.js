@@ -1,7 +1,6 @@
 import { html, css } from 'lit';
 import { AppStore, SelectionStore } from '/static/extensions/system/store.js';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
-import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 let compilePromise = null;
 let compilePromiseWs = null;
 

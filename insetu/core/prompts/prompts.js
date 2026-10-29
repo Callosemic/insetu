@@ -1,7 +1,6 @@
 // prompts.js - Tier 2 Core Prompt Library & Virtual Module Templates
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
-import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
 const syncPromptsState = window.inSetu.utils.coalescedAsync(async (forceRewarm = false) => {
