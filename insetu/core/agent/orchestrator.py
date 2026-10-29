@@ -1020,7 +1020,14 @@ def execute_declarative_routine(
                 _depth=_depth + 1,
             )
             with context_lock:
-                final_response_text = sub_res.get("response") or final_response_text
+                if sub_res.get("status") == "paused_for_user":
+                    chain_context[nid] = {
+                        "status": "paused_for_user",
+                        "sub_routine": target_sub_routine,
+                        "paused_result": sub_res,
+                    }
+                    return
+                final_response_text = sub_res.get("raw_response") or sub_res.get("response") or final_response_text
                 if sub_res.get("transaction_id"):
                     last_transaction_id = sub_res["transaction_id"]
                     if last_transaction_id not in turn_transaction_ids:
@@ -1368,156 +1375,126 @@ def execute_declarative_routine(
 
         if not active_wave_nodes:
             continue
-        if is_manual_transport:
-            pending_llm_branches = []
-            wf_batch_uri = f"ctx://workflows/workflow_{routine.get('id', routine_id)}_context.txt" if routine_includes else None
-            context_uris = [wf_batch_uri] if (wf_batch_uri and ctx.vfs.read(wf_batch_uri) is not None) else list(all_context_files)
-            for n in active_wave_nodes:
-                if str(n.get("type", "llm")).lower() == "llm" and n["id"] not in handoff_responses:
-                    raw_p = n.get("prompt") or n.get("user_message") or ""
-                    if not raw_p and n.get("prompt_uri"):
-                        p_uri = str(n["prompt_uri"])
-                        try:
-                            raw_p = ctx.call("prompts.resolve", file=p_uri) or ctx.vfs.read(p_uri) or ""
-                        except Exception:
-                            raw_p = ctx.vfs.read(p_uri) or ""
-                    clean_prompt_only = _interpolate_all_syntax(raw_p, chain_context) or user_prompt
-                    t_val, sys_p, usr_p = _prepare_llm_prompt_and_system(n, chain_context)
-                    pending_llm_branches.append({
-                        "node_id": n["id"],
-                        "routine_title": routine.get("title") or routine.get("name") or routine.get("id", routine_id),
-                        "wavefront_index": w_idx,
-                        "tier": t_val,
-                        "system_prompt": sys_p,
-                        "user_message": usr_p,
-                        "prompt_text": clean_prompt_only,
-                        "compiled_prompt": clean_prompt_only or (f"{sys_p}\n\n---\n\n{usr_p}".strip() if sys_p else usr_p),
-                        "context_uris": context_uris,
-                        "workflow_context_uri": wf_batch_uri,
-                        "includes": list(routine_includes),
-                        "output_schema": n.get("output_schema"),
-                    })
-            if pending_llm_branches:
-                clean_chain = {k: v for k, v in chain_context.items() if k != "_ctx"}
-                first_branch = pending_llm_branches[0]
-                return {
-                    "status": "paused_for_user",
-                    "routine_id": routine.get("id", routine_id),
-                    "routine_title": routine.get("title") or routine.get("name") or routine.get("id", routine_id),
-                    "wavefront_index": w_idx,
-                    "wavefronts": [[n["id"] for n in w] for w in wavefronts],
-                    "pending_handoff": {
-                        **first_branch,
-                        "branches": pending_llm_branches,
-                    },
-                    "response": "",
-                    "effective_intent": chain_context["global"].get("effective_intent"),
-                    "mode": clean_mode,
-                    "transaction_id": last_transaction_id,
-                    "transaction_ids": turn_transaction_ids,
-                    "committed_files": committed_files,
-                    "chain_context": clean_chain,
-                    "state": clean_chain,
-                }
+        pending_handoff_branches = []
+        for n in active_wave_nodes:
+            if str(n.get("type", "llm")).lower() != "llm" or n["id"] in handoff_responses:
+                continue
+            t_cand = _interpolate_all_syntax(str(n.get("tier", "standard")), chain_context) or "standard"
+            target_info: Dict[str, Any] = {}
+            if not is_manual_transport:
+                try:
+                    res_target = ctx.call("llm.resolve_target", tier=t_cand, profile_id=active_profile_id)
+                    if isinstance(res_target, dict):
+                        target_info = res_target
+                except Exception:
+                    target_info = {}
+            if not (is_manual_transport or target_info.get("is_web_chat")):
+                continue
 
-        if not is_manual_transport:
-            from insetu.core.llm.engine_llm import _resolve_tier_execution_target as _resolve_llm_target
-            wave_web_chat_branches = []
-            for n in active_wave_nodes:
-                if str(n.get("type", "llm")).lower() == "llm" and n["id"] not in handoff_responses:
-                    t_cand = _interpolate_all_syntax(str(n.get("tier", "standard")), chain_context) or "standard"
-                    target_info = _resolve_llm_target(ctx, tier=t_cand, profile_id=active_profile_id)
-                    if target_info.get("is_web_chat"):
-                        raw_p = n.get("prompt") or n.get("user_message") or ""
-                        if not raw_p and n.get("prompt_uri"):
-                            p_uri = str(n["prompt_uri"])
-                            try:
-                                raw_p = ctx.call("prompts.resolve", file=p_uri) or ctx.vfs.read(p_uri) or ""
-                            except Exception:
-                                raw_p = ctx.vfs.read(p_uri) or ""
-                        clean_prompt_only = _interpolate_all_syntax(raw_p, chain_context) or user_prompt
-                        t_val, sys_p, usr_p = _prepare_llm_prompt_and_system(n, chain_context)
-                        out_schema = str(n.get("output_schema") or "").strip().lower()
-                        directive_block = ""
-                        if out_schema in ("yomama_patch", "conversational_with_patches"):
-                            directive_block = (
-                                "\n\n---\n"
-                                "### File Modification Directives (Yomama Patch Protocol)\n"
-                                "Provide your conversational explanation first, followed by any file modifications formatted as Yomama patch blocks:\n"
-                                "```text\n"
-                                "<<<<<<< FILE: vfs://repo/path/to/file.ext\n"
-                                "<<<<<<< COMMENT\n"
-                                "Brief description of change\n"
-                                "<<<<<<< SEARCH\n"
-                                "[exact lines to find, including 1-2 unchanged lines of top/bottom context]\n"
-                                "=======\n"
-                                "[replacement lines]\n"
-                                ">>>>>>> REPLACE\n"
-                                "```"
-                            )
-                        elif out_schema == "intent_classification":
-                            directive_block = '\n\nRespond ONLY with JSON: {"intent": "EDIT_CODE" | "EDIT_PLAN" | "CHAT_ONLY"}'
-                        wf_batch_uri = (
-                            (chain_context.get("fetch_context") or {}).get("base_filename")
-                            or (f"ctx://workflows/workflow_{routine.get('id', routine_id)}_context.txt" if routine_includes else None)
-                        )
-                        if not wf_batch_uri and all_context_files:
-                            try:
-                                pack_art = ctx.call(
-                                    "gather.pack_selection",
-                                    items=[{"filepath": f} for f in all_context_files],
-                                    gather_only=True,
-                                    wait=True,
-                                )
-                                if isinstance(pack_art, dict) and pack_art.get("base_filename"):
-                                    wf_batch_uri = pack_art["base_filename"]
-                            except Exception:
-                                pass
-                        context_uris = [wf_batch_uri] if wf_batch_uri else list(all_context_files)
-                        full_clipboard_prompt = f"{clean_prompt_only}{directive_block}".strip()
-                        wave_web_chat_branches.append({
-                            "node_id": n["id"],
-                            "routine_title": routine.get("title") or routine.get("name") or routine.get("id", routine_id),
-                            "wavefront_index": w_idx,
-                            "tier": t_val,
-                            "endpoint_id": target_info.get("endpoint_id"),
-                            "model": target_info.get("model"),
-                            "system_prompt": sys_p,
-                            "user_message": usr_p,
-                            "prompt_text": full_clipboard_prompt,
-                            "compiled_prompt": full_clipboard_prompt,
-                            "context_uris": context_uris,
-                            "workflow_context_uri": wf_batch_uri,
-                            "includes": list(all_context_files),
-                            "output_schema": n.get("output_schema"),
-                        })
-            if wave_web_chat_branches:
-                clean_chain = {k: v for k, v in chain_context.items() if k != "_ctx"}
-                first_branch = wave_web_chat_branches[0]
-                return {
-                    "status": "paused_for_user",
-                    "routine_id": routine.get("id", routine_id),
-                    "routine_title": routine.get("title") or routine.get("name") or routine.get("id", routine_id),
-                    "wavefront_index": w_idx,
-                    "wavefronts": [[n["id"] for n in w] for w in wavefronts],
-                    "pending_handoff": {
-                        **first_branch,
-                        "branches": wave_web_chat_branches,
-                    },
-                    "response": "",
-                    "effective_intent": chain_context["global"].get("effective_intent"),
-                    "mode": clean_mode,
-                    "transaction_id": last_transaction_id,
-                    "transaction_ids": turn_transaction_ids,
-                    "committed_files": committed_files,
-                    "chain_context": clean_chain,
-                    "state": clean_chain,
-                }
+            raw_p = n.get("prompt") or n.get("user_message") or ""
+            if not raw_p and n.get("prompt_uri"):
+                p_uri = str(n["prompt_uri"])
+                try:
+                    raw_p = ctx.call("prompts.resolve", file=p_uri) or ctx.vfs.read(p_uri) or ""
+                except Exception:
+                    raw_p = ctx.vfs.read(p_uri) or ""
+            clean_prompt_only = _interpolate_all_syntax(raw_p, chain_context) or user_prompt
+            t_val, sys_p, usr_p = _prepare_llm_prompt_and_system(n, chain_context)
+            out_schema = str(n.get("output_schema") or "").strip().lower()
+            directive_block = ""
+            if not is_manual_transport:
+                if out_schema in ("yomama_patch", "conversational_with_patches"):
+                    directive_block = (
+                        "\n\n---\n"
+                        "### File Modification Directives (Yomama Patch Protocol)\n"
+                        "Provide your conversational explanation first, followed by any file modifications formatted as Yomama patch blocks:\n"
+                        "```text\n"
+                        "<<<<<<< FILE: vfs://repo/path/to/file.ext\n"
+                        "<<<<<<< COMMENT\n"
+                        "Brief description of change\n"
+                        "<<<<<<< SEARCH\n"
+                        "[exact lines to find, including 1-2 unchanged lines of top/bottom context]\n"
+                        "=======\n"
+                        "[replacement lines]\n"
+                        ">>>>>>> REPLACE\n"
+                        "```"
+                    )
+                elif out_schema == "intent_classification":
+                    directive_block = '\n\nRespond ONLY with JSON: {"intent": "EDIT_CODE" | "EDIT_PLAN" | "CHAT_ONLY"}'
+
+            wf_batch_uri = (
+                (chain_context.get("fetch_context") or {}).get("base_filename")
+                or (f"ctx://workflows/workflow_{routine.get('id', routine_id)}_context.txt" if routine_includes else None)
+            )
+            if not is_manual_transport and not wf_batch_uri and all_context_files:
+                try:
+                    pack_art = ctx.call(
+                        "gather.pack_selection",
+                        items=[{"filepath": f} for f in all_context_files],
+                        gather_only=True,
+                        wait=True,
+                    )
+                    if isinstance(pack_art, dict) and pack_art.get("base_filename"):
+                        wf_batch_uri = pack_art["base_filename"]
+                except Exception:
+                    pass
+            has_wf_uri = bool(wf_batch_uri and (not is_manual_transport or ctx.vfs.read(wf_batch_uri) is not None))
+            context_uris = [wf_batch_uri] if has_wf_uri else list(all_context_files)
+            prompt_text = f"{clean_prompt_only}{directive_block}".strip() if directive_block else clean_prompt_only
+            compiled_prompt = prompt_text or (f"{sys_p}\n\n---\n\n{usr_p}".strip() if sys_p else usr_p)
+            branch_entry: Dict[str, Any] = {
+                "node_id": n["id"],
+                "routine_title": routine.get("title") or routine.get("name") or routine.get("id", routine_id),
+                "wavefront_index": w_idx,
+                "tier": t_val,
+                "system_prompt": sys_p,
+                "user_message": usr_p,
+                "prompt_text": prompt_text,
+                "compiled_prompt": compiled_prompt,
+                "context_uris": context_uris,
+                "workflow_context_uri": wf_batch_uri,
+                "includes": list(routine_includes if is_manual_transport else all_context_files),
+                "output_schema": n.get("output_schema"),
+            }
+            if target_info.get("endpoint_id"):
+                branch_entry["endpoint_id"] = target_info.get("endpoint_id")
+            if target_info.get("model"):
+                branch_entry["model"] = target_info.get("model")
+            pending_handoff_branches.append(branch_entry)
+
+        if pending_handoff_branches:
+            clean_chain = {k: v for k, v in chain_context.items() if k != "_ctx"}
+            first_branch = pending_handoff_branches[0]
+            return {
+                "status": "paused_for_user",
+                "routine_id": routine.get("id", routine_id),
+                "routine_title": routine.get("title") or routine.get("name") or routine.get("id", routine_id),
+                "wavefront_index": w_idx,
+                "wavefronts": [[n["id"] for n in w] for w in wavefronts],
+                "pending_handoff": {
+                    **first_branch,
+                    "branches": pending_handoff_branches,
+                },
+                "response": "",
+                "effective_intent": chain_context["global"].get("effective_intent"),
+                "mode": clean_mode,
+                "transaction_id": last_transaction_id,
+                "transaction_ids": turn_transaction_ids,
+                "committed_files": committed_files,
+                "chain_context": clean_chain,
+                "state": clean_chain,
+            }
 
         if len(active_wave_nodes) == 1:
             _run_single_dag_node(active_wave_nodes[0])
         else:
             ctx.jobs.map_parallel(_run_single_dag_node, active_wave_nodes)
+
+        for n in active_wave_nodes:
+            n_state = chain_context.get(n["id"])
+            if isinstance(n_state, dict) and n_state.get("status") == "paused_for_user" and n_state.get("paused_result"):
+                return n_state["paused_result"]
+
     if routine.get("output"):
         declared_out = _interpolate_all_syntax(str(routine["output"]), chain_context).strip()
         if declared_out:
@@ -1527,10 +1504,11 @@ def execute_declarative_routine(
     if resolved_resp_uri and resolved_resp_uri not in committed_files:
         committed_files.append(resolved_resp_uri)
 
-    # Automatic Reply Splitting: Separate conversational prose from raw Yomama patch blocks
+    # Root-Boundary Reply Splitting: Separate conversational prose from raw Yomama patch blocks
+    # strictly at the root egress (_depth == 0) so nested sub-routines always compose raw text.
     unapplied_patches = ""
     display_response_text = final_response_text
-    if final_response_text and "<<<<<<<" in final_response_text and parse_blocks(final_response_text):
+    if _depth == 0 and final_response_text and "<<<<<<<" in final_response_text and parse_blocks(final_response_text):
         prose_only = strip_yomama_blocks_keep_prose(final_response_text)
         if committed_files:
             receipt_summary = f"✅ Applied patches to {len(committed_files)} file(s)."

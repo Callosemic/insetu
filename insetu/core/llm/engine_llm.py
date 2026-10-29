@@ -644,6 +644,30 @@ def _resolve_tier_execution_target(ctx, tier: Optional[str] = None, profile_id: 
     }
 
 
+class LlmResolveTargetPayload(TypedDict, total=False):
+    tier: Optional[str]
+    profile_id: Optional[str]
+
+
+@llm_bp.route('resolve_target', methods=['GET', 'POST'], request_schema=LlmResolveTargetPayload, docstring="[sync] Resolves the execution target metadata for a cognitive tier and profile without exposing plaintext API keys.")
+def api_llm_resolve_target(ctx):
+    data = ctx.payload or {}
+    target = _resolve_tier_execution_target(ctx, tier=data.get("tier"), profile_id=data.get("profile_id"))
+    return {
+        "endpoint_id": target["endpoint_id"],
+        "provider": target["provider"],
+        "raw_driver": target["raw_driver"],
+        "model": target["model"],
+        "base_url": target["base_url"],
+        "max_parallel": target["max_parallel"],
+        "tier": target["tier"],
+        "profile_id": target["profile_id"],
+        "is_decision_model": target["is_decision_model"],
+        "is_web_chat": target["is_web_chat"],
+        "has_api_key": bool(target.get("api_key")),
+    }
+
+
 def _resolve_tier_model(ctx, tier: Optional[str] = None) -> str:
     """Resolves the target model identifier for a semantic cognitive tier (decision, fast/low, standard/medium, thinking/high, frontier/max)."""
     base_model = ctx.settings.get("model", "claude-3-5-sonnet-latest") or "claude-3-5-sonnet-latest"

@@ -43,6 +43,7 @@ AGENT_SCHEMA = {
         "session_id": "TEXT",
         "role": "TEXT",
         "content": "TEXT",
+        "raw_content": "TEXT",
         "timestamp": "REAL"
     }
 }
@@ -794,10 +795,13 @@ def _execute_agent_turn(
     retry_count: int = 0,
 ):
     cursor = ctx.db.execute(
-        "SELECT role, content FROM chat_messages WHERE session_id=? ORDER BY timestamp ASC",
+        "SELECT role, content, raw_content FROM chat_messages WHERE session_id=? ORDER BY timestamp ASC",
         (session_id,),
     )
-    history_messages = [{"role": r["role"], "content": r["content"]} for r in cursor.fetchall()]
+    history_messages = [
+        {"role": r["role"], "content": (r["raw_content"] if r["raw_content"] else r["content"])}
+        for r in cursor.fetchall()
+    ]
     if not history_messages and user_prompt:
         history_messages = [{"role": "user", "content": user_prompt}]
 
@@ -836,6 +840,7 @@ def _execute_agent_turn(
             },
         }
     full_response = routine_result.get("response") or ""
+    raw_full_response = routine_result.get("raw_response") or full_response
     all_tx_ids = routine_result.get("transaction_ids") or ([routine_result["transaction_id"]] if routine_result.get("transaction_id") else [])
     tx_id = ",".join(all_tx_ids) if all_tx_ids else None
     asst_msg_id = f"msg_{uuid.uuid4().hex[:12]}"
@@ -845,6 +850,7 @@ def _execute_agent_turn(
         "session_id": session_id,
         "role": "assistant",
         "content": full_response,
+        "raw_content": raw_full_response,
         "timestamp": now,
     })
     if tx_id:
