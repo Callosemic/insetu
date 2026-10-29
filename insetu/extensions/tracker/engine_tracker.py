@@ -85,9 +85,21 @@ DEFAULT_GLOBAL_VIEWS = [
 TRACKER_SETTINGS_SCHEMA = [
     {
         "id": "parent_tabs",
-        "type": "hidden",
+        "label": "Primary Navigation Parent Tabs",
+        "type": "repeater",
         "scope": "workspace",
-        "default": DEFAULT_PARENT_TABS
+        "min_items": 1,
+        "max_items": 8,
+        "item_label": "Parent Tab",
+        "item_title_key": "label",
+        "item_subtitle_key": "id",
+        "add_label": "Add Parent Tab",
+        "default": DEFAULT_PARENT_TABS,
+        "description": "Define top-level navigation tabs where Tracker sub-views are mounted.",
+        "item_schema": [
+            {"id": "label", "label": "Tab Label", "type": "text", "default": "New Tab"},
+            {"id": "id", "label": "Tab ID (Slug)", "type": "slug", "source_key": "label", "default": "new_tab"}
+        ]
     },
     {
         "id": "hierarchy_labels",
@@ -114,15 +126,98 @@ TRACKER_SETTINGS_SCHEMA = [
     },
     {
         "id": "global_views",
-        "type": "hidden",
+        "label": "Workspace Kanban Sub-Tabs (Views)",
+        "type": "repeater",
         "scope": "workspace",
-        "default": DEFAULT_GLOBAL_VIEWS
+        "min_items": 1,
+        "max_items": 24,
+        "item_label": "View",
+        "item_title_key": "label",
+        "item_subtitle_key": "layout",
+        "add_label": "Add Global View",
+        "default": DEFAULT_GLOBAL_VIEWS,
+        "description": "Define the sub-navigation tabs that filter Kanban boards across your workspace.",
+        "item_schema": [
+            {"id": "label", "label": "Tab Label", "type": "text", "default": "📄 New View"},
+            {"id": "id", "label": "Tab ID (Slug)", "type": "slug", "source_key": "label", "default": "new_view"},
+            {"id": "target_parent", "label": "Parent Tab ID", "type": "text", "default": "tasks"},
+            {
+                "id": "layout",
+                "label": "Layout Type",
+                "type": "select",
+                "default": "columns",
+                "options": [
+                    {"value": "columns", "label": "Board (Columns)"},
+                    {"value": "stacked", "label": "List (Stacked)"},
+                    {"value": "log", "label": "History (Log)"}
+                ]
+            },
+            {
+                "id": "target_tier",
+                "label": "Scope By Tier",
+                "type": "select",
+                "default": "3",
+                "options": [
+                    {"value": "", "label": "Any Tier"},
+                    {"value": "1", "label": "Tier 1 (Top)"},
+                    {"value": "2", "label": "Tier 2 (Middle)"},
+                    {"value": "3", "label": "Tier 3 (Base)"}
+                ]
+            },
+            {
+                "id": "repo_strategy",
+                "label": "Repo Filtering Strategy",
+                "type": "select",
+                "default": "global",
+                "options": [
+                    {"value": "global", "label": "Follow Global Repo Filter"},
+                    {"value": "schema", "label": "Ignore Global (Auto-filter to Schema)"},
+                    {"value": "explicit", "label": "Ignore Global (Explicit Repos)"}
+                ]
+            },
+            {
+                "id": "explicit_repos",
+                "label": "Explicit Repositories (Comma-Separated)",
+                "type": "comma_list",
+                "default": [],
+                "show_if": {"field": "repo_strategy", "equals": "explicit"}
+            },
+            {
+                "id": "filters",
+                "label": "Ticket Type & Status Filters",
+                "type": "record",
+                "show_if": {"field": "layout", "not_equals": "log"},
+                "fields": [
+                    {"id": "ticket_types", "label": "Ticket Types (Comma-Separated)", "type": "text", "placeholder": "todo, bug, queue"},
+                    {"id": "statuses", "label": "Allowed Statuses (Comma-Separated)", "type": "text", "placeholder": "open, active, closed"}
+                ]
+            }
+        ]
     },
     {
         "id": "kanban_profiles",
-        "type": "hidden",
+        "label": "Custom Kanban Schemas",
+        "type": "repeater",
         "scope": "workspace",
-        "default": DEFAULT_KANBAN_PROFILES
+        "min_items": 0,
+        "max_items": 16,
+        "item_label": "Custom Schema",
+        "item_title_key": "name",
+        "item_subtitle_key": "id",
+        "add_label": "New Custom Schema",
+        "empty_text": "No custom schemas defined. Repositories can use built-in Agile Basic or Publish Funnel schemas, or you can add a custom schema here.",
+        "default": DEFAULT_KANBAN_PROFILES,
+        "description": "Define custom 3-tier Kanban vocabularies mapping ticket types to tiers.",
+        "item_schema": [
+            {"id": "name", "label": "Custom Schema Name", "type": "text", "default": "New Custom Schema"},
+            {"id": "id", "label": "Schema ID (Slug)", "type": "slug", "source_key": "name", "default": "custom_schema"},
+            {"id": "t1_label", "label": "Tier 1 Label (Top Level)", "type": "text", "default": "Epics"},
+            {"id": "t1_types", "label": "Tier 1 Types (Comma-Separated)", "type": "text", "default": "epic"},
+            {"id": "t2_label", "label": "Tier 2 Label (Middle Level)", "type": "text", "default": "Sprints"},
+            {"id": "t2_types", "label": "Tier 2 Types (Comma-Separated)", "type": "text", "default": "sprint"},
+            {"id": "t3_label", "label": "Tier 3 Label (Base Tasks)", "type": "text", "default": "Tasks"},
+            {"id": "t3_types", "label": "Tier 3 Types (Comma-Separated)", "type": "text", "default": "todo, bug, queue"}
+        ]
     },
     {
         "id": "kanban_repo_map",

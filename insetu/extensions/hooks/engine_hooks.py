@@ -31,6 +31,13 @@ hooks_bp = InSetuExtension(
     schema=HOOKS_SCHEMA
 )
 __depends__ = ['gather']
+
+
+@hooks_bp.on('register_protected_bridge_paths')
+def _register_hooks_protected_paths(workspace_id=None, **kwargs):
+    return [".insetu/hooks/", ".insetu-data/hooks/", "rules.json"]
+
+
 @hooks_bp.worker("execute_rule_task")
 def _background_execute_rule(
     ctx,

@@ -2316,133 +2316,248 @@ export class InSetuExtTrackerSettings extends InSetuElement {
 
         this._onSelectSchema({ detail: { value: 'agile_basic' }});
     }
-    _onSelectSchema(e) {
-        this.selectedSchemaId = e.detail.value;
-        const schema = this.customSchemas.find(s => s.id === this.selectedSchemaId);
-        this.schemaFormData = schema ? this.utils.clone(schema) : null;
-        this.requestUpdate();
-    }
-
-    _createNewSchema() {
-        const newId = 'custom_' + Date.now();
-        const newSchema = {
-            id: newId,
-            name: 'New Custom Schema',
-            isSystem: false,
-            t1_label: 'Epics', t1_types: 'epic',
-            t2_label: 'Sprints', t2_types: 'sprint',
-            t3_label: 'Tasks', t3_types: 'todo, bug, queue'
+    _getCustomProfilesRepeaterSchema() {
+        return {
+            id: 'kanban_profiles',
+            label: 'Custom Kanban Schemas',
+            scope: 'workspace',
+            min_items: 0,
+            max_items: 16,
+            item_label: 'Schema',
+            item_title_key: 'name',
+            item_subtitle_key: 'id',
+            add_label: 'New Custom Schema',
+            empty_text: 'No custom schemas defined yet. Using built-in System Schemas (Agile Basic & Publish Funnel).',
+            description: 'Create custom 3-tier Kanban vocabularies mapping semantic ticket types to tiers.',
+            item_schema: [
+                { id: 'name', label: 'Custom Schema Name', type: 'text', default: 'New Custom Schema' },
+                { id: 'id', label: 'Schema ID (Slug)', type: 'slug', source_key: 'name', default: 'custom_schema' },
+                { id: 't1_label', label: 'Tier 1 UI Label (Top Level)', type: 'text', default: 'Epics' },
+                { id: 't1_types', label: 'Tier 1 Semantic Types (Comma-Separated)', type: 'text', default: 'epic' },
+                { id: 't2_label', label: 'Tier 2 UI Label (Middle Level)', type: 'text', default: 'Sprints' },
+                { id: 't2_types', label: 'Tier 2 Semantic Types (Comma-Separated)', type: 'text', default: 'sprint' },
+                { id: 't3_label', label: 'Tier 3 UI Label (Base Tasks)', type: 'text', default: 'Tasks' },
+                { id: 't3_types', label: 'Tier 3 Semantic Types (Comma-Separated)', type: 'text', default: 'todo, bug, queue' }
+            ]
         };
-        this.customSchemas.push(newSchema);
-        this.selectedSchemaId = newId;
-        this.schemaFormData = this.utils.clone(newSchema);
-        this.requestUpdate();
-    }
-    _updateSchemaForm(field, value) {
-        if (this.schemaFormData.isSystem) return;
-        this.schemaFormData = { ...this.schemaFormData, [field]: value };
-        const idx = this.customSchemas.findIndex(s => s.id === this.selectedSchemaId);
-        if (idx !== -1) {
-            const updatedSchemas = [...this.customSchemas];
-            updatedSchemas[idx] = { ...updatedSchemas[idx], [field]: value };
-            this.customSchemas = updatedSchemas;
-        }
-        this.requestUpdate();
-    }
-    _deleteSchema() {
-        if (this.schemaFormData.isSystem) return;
-        this.customSchemas = this.customSchemas.filter(s => s.id !== this.selectedSchemaId);
-        const newRepoMap = { ...this.repoMap };
-        Object.keys(newRepoMap).forEach(repo => {
-            if (newRepoMap[repo] === this.selectedSchemaId) {
-                newRepoMap[repo] = 'agile_basic';
-            }
-        });
-        this.repoMap = newRepoMap;
-
-        this.selectedSchemaId = 'agile_basic';
-        this._onSelectSchema({ detail: { value: 'agile_basic' }});
-    }
-    _addParentTab() {
-        this.parentTabs = [...this.parentTabs, {
-            _uuid: crypto.randomUUID(),
-            id: 'new_tab',
-            label: 'New Tab'
-        }];
     }
 
-    _removeParentTab(index) {
-        const updatedTabs = [...this.parentTabs];
-        updatedTabs.splice(index, 1);
-        this.parentTabs = updatedTabs;
+    _getParentTabsRepeaterSchema() {
+        return {
+            id: 'parent_tabs',
+            label: 'Parent Tabs (Top-Level Navigation)',
+            scope: 'workspace',
+            min_items: 1,
+            max_items: 8,
+            item_label: 'Parent Tab',
+            item_title_key: 'label',
+            item_subtitle_key: 'id',
+            add_label: 'Add Parent Tab',
+            description: 'Define the primary navigation tabs where Tracker sub-tabs are mounted.',
+            item_schema: [
+                { id: 'label', label: 'Tab Label', type: 'text', default: 'New Tab' },
+                { id: 'id', label: 'Tab ID (Slug)', type: 'slug', source_key: 'label', default: 'new_tab' }
+            ]
+        };
     }
     _getTypesForScope(schemaId, tier) {
+        const numTier = tier ? parseInt(tier, 10) : null;
         const types = new Set();
-        this.customSchemas.forEach(s => {
+        (this.customSchemas || []).forEach(s => {
             if (schemaId && s.id !== schemaId) return;
-            if (!tier || tier === 1) (s.t1_types || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean).forEach(t => types.add(t));
-            if (!tier || tier === 2) (s.t2_types || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean).forEach(t => types.add(t));
-            if (!tier || tier === 3) (s.t3_types || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean).forEach(t => types.add(t));
+            if (!numTier || numTier === 1) (s.t1_types || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean).forEach(t => types.add(t));
+            if (!numTier || numTier === 2) (s.t2_types || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean).forEach(t => types.add(t));
+            if (!numTier || numTier === 3) (s.t3_types || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean).forEach(t => types.add(t));
         });
         return Array.from(types).sort();
     }
-    _updateParentTab(index, field, value) {
-        const updatedTabs = [...this.parentTabs];
-        const oldId = updatedTabs[index].id;
 
-        updatedTabs[index] = { ...updatedTabs[index], [field]: value };
+    _getGlobalViewsRepeaterSchema() {
+        const parentOptions = (this.parentTabs || []).map(pt => ({ value: pt.id, label: pt.label || pt.id }));
+        const schemaOptions = [
+            { value: '', label: 'Any Schema' },
+            ...(this.customSchemas || []).map(s => ({ value: s.id, label: s.name || s.id }))
+        ];
+        return {
+            id: 'global_views',
+            label: 'Sub-Tabs (Kanban View Filters)',
+            scope: 'workspace',
+            min_items: 1,
+            max_items: 24,
+            item_label: 'View',
+            item_title_key: 'label',
+            item_subtitle_key: 'layout',
+            add_label: 'Add Global View',
+            description: 'Define the sub-navigation tabs that filter Kanban boards across your workspace.',
+            item_schema: [
+                { id: 'label', label: 'Tab Label', type: 'text', default: '📄 New View' },
+                { id: 'id', label: 'Tab ID (Slug)', type: 'slug', source_key: 'label', default: 'new_view' },
+                {
+                    id: 'target_parent',
+                    label: 'Parent Tab',
+                    type: 'select',
+                    default: parentOptions[0]?.value || 'tasks',
+                    options: parentOptions.length > 0 ? parentOptions : [{ value: 'tasks', label: 'Tasks' }]
+                },
+                {
+                    id: 'layout',
+                    label: 'Layout Type',
+                    type: 'select',
+                    default: 'columns',
+                    options: [
+                        { value: 'columns', label: 'Board (Columns)' },
+                        { value: 'stacked', label: 'List (Stacked)' },
+                        { value: 'log', label: 'History (Log)' }
+                    ]
+                },
+                {
+                    id: 'target_schema',
+                    label: 'Scope By Schema',
+                    type: 'select',
+                    default: '',
+                    options: schemaOptions
+                },
+                {
+                    id: 'repo_strategy',
+                    label: 'Repo Filtering Strategy',
+                    type: 'select',
+                    default: 'global',
+                    options: [
+                        { value: 'global', label: 'Follow Global Repo Filter' },
+                        { value: 'schema', label: 'Ignore Global (Auto-filter to Schema)' },
+                        { value: 'explicit', label: 'Ignore Global (Explicit Repos)' }
+                    ]
+                },
+                {
+                    id: 'target_tier',
+                    label: 'Scope By Tier',
+                    type: 'select',
+                    default: '3',
+                    options: (_rootData, item) => {
+                        const activeSchema = (this.customSchemas || []).find(s => s.id === item?.target_schema)
+                            || (this.customSchemas || []).find(s => s.id === 'agile_basic')
+                            || (this.customSchemas || [])[0]
+                            || {};
+                        return [
+                            { value: '', label: 'Any' },
+                            { value: '1', label: `Tier 1 (${activeSchema.t1_label || 'Top'})` },
+                            { value: '2', label: `Tier 2 (${activeSchema.t2_label || 'Middle'})` },
+                            { value: '3', label: `Tier 3 (${activeSchema.t3_label || 'Base'})` }
+                        ];
+                    }
+                },
+                {
+                    id: '_explicit_repos_toggles',
+                    type: 'custom',
+                    show_if: { field: 'repo_strategy', equals: 'explicit' },
+                    custom_render: (v, _idx, patchItem) => {
+                        const currentExplicit = Array.isArray(v.explicit_repos) ? v.explicit_repos : [];
+                        return html`
+                            <div style="display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px dashed var(--border);">
+                                <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Select Explicit Repositories</label>
+                                <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                                    ${(this.allRepos || []).map(repo => html`
+                                        <sutram-toggle
+                                            label=${repo}
+                                            .checked=${currentExplicit.includes(repo)}
+                                            @sutram-input-changed=${(e) => {
+                                                const nextSelected = e.detail.value
+                                                    ? (currentExplicit.includes(repo) ? currentExplicit : [...currentExplicit, repo])
+                                                    : currentExplicit.filter(r => r !== repo);
+                                                patchItem({ explicit_repos: nextSelected });
+                                            }}
+                                            ?flush=${true}>
+                                        </sutram-toggle>
+                                    `)}
+                                </div>
+                            </div>
+                        `;
+                    }
+                },
+                {
+                    id: '_view_filters_custom',
+                    type: 'custom',
+                    custom_render: (v, _idx, patchItem) => {
+                        if (v.layout === 'log') {
+                            return html`
+                                <div style="padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; margin-top: 4px;">
+                                    <span style="font-size: 0.85rem; color: var(--text-muted); font-style: italic;">
+                                        ℹ️ This is a specialized layout. It inherits your schema and tier scope, but status and type filters are managed automatically by the engine.
+                                    </span>
+                                </div>
+                            `;
+                        }
+                        const availableTypes = this._getTypesForScope(v.target_schema, v.target_tier);
+                        const currentTypes = v.filters?.ticket_types === 'NONE'
+                            ? []
+                            : (v.filters?.ticket_types ? v.filters.ticket_types.split(',').map(s => s.trim()).filter(Boolean) : availableTypes);
+                        const allStatuses = ['open', 'active', 'closed', 'logged', 'archived'];
+                        const currentStatuses = v.filters?.statuses === 'NONE'
+                            ? []
+                            : (v.filters?.statuses ? v.filters.statuses.split(',').map(s => s.trim()).filter(Boolean) : allStatuses);
 
-        if (field === 'label') {
-            updatedTabs[index].id = this.utils.slugify(value) || `tab_${Date.now()}`;
-        }
+                        const updateFilterKey = (key, val) => {
+                            patchItem({
+                                filters: { ...(v.filters || {}), [key]: val }
+                            });
+                        };
 
-        const newId = updatedTabs[index].id;
-
-        // Cascade ID updates to linked global views to prevent orphaning
-        if (oldId && newId && oldId !== newId) {
-            this.globalViews = this.globalViews.map(v => {
-                const currentParent = v.target_parent || 'tasks';
-                return currentParent === oldId ? { ...v, target_parent: newId } : v;
-            });
-        }
-
-        this.parentTabs = updatedTabs;
-    }
-    _addGlobalView() {
-        const defaultParent = this.parentTabs.length > 0 ? this.parentTabs[0].id : 'tasks';
-        this.globalViews = [...this.globalViews, {
-            _uuid: crypto.randomUUID(),
-            id: 'new_view',
-            label: '📄 New View',
-            target_parent: defaultParent,
-            target_schema: '',
-            target_tier: 3,
-            layout: 'columns',
-            filters: { ticket_types: '', statuses: '' }
-        }];
-    }
-
-    _removeGlobalView(index) {
-        const updatedViews = [...this.globalViews];
-        updatedViews.splice(index, 1);
-        this.globalViews = updatedViews;
-    }
-    _updateGlobalView(index, field, value) {
-        const updatedViews = [...this.globalViews];
-        updatedViews[index] = { ...updatedViews[index], [field]: value };
-        if (field === 'label') {
-            updatedViews[index].id = this.utils.slugify(value) || `view_${Date.now()}`;
-        }
-        this.globalViews = updatedViews;
-    }
-
-    _updateGlobalViewFilter(index, field, value) {
-        const updatedViews = [...this.globalViews];
-        updatedViews[index] = { 
-            ...updatedViews[index], 
-            filters: { ...(updatedViews[index].filters || {}), [field]: value }
+                        return html`
+                            <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 4px; padding-top: 10px; border-top: 1px dashed var(--border);">
+                                ${availableTypes.length > 1 ? html`
+                                    <div style="display: flex; flex-direction: column; gap: 6px;">
+                                        <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Filter by Type</label>
+                                        <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                                            ${availableTypes.map(type => {
+                                                const isChecked = currentTypes.includes(type);
+                                                return html`
+                                                    <sutram-toggle
+                                                        label=${type}
+                                                        .checked=${isChecked}
+                                                        @sutram-input-changed=${(e) => {
+                                                            const newSelected = e.detail.value
+                                                                ? (currentTypes.includes(type) ? currentTypes : [...currentTypes, type])
+                                                                : currentTypes.filter(t => t !== type);
+                                                            if (newSelected.length === availableTypes.length) updateFilterKey('ticket_types', '');
+                                                            else if (newSelected.length === 0) updateFilterKey('ticket_types', 'NONE');
+                                                            else updateFilterKey('ticket_types', newSelected.join(', '));
+                                                        }}
+                                                        ?flush=${true}>
+                                                    </sutram-toggle>
+                                                `;
+                                            })}
+                                        </div>
+                                    </div>
+                                ` : ''}
+                                <div style="display: flex; flex-direction: column; gap: 6px;">
+                                    <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Filter by Status</label>
+                                    <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                                        ${allStatuses.map(status => {
+                                            const isChecked = currentStatuses.includes(status);
+                                            return html`
+                                                <sutram-toggle
+                                                    label=${status}
+                                                    .checked=${isChecked}
+                                                    @sutram-input-changed=${(e) => {
+                                                        const newSelected = e.detail.value
+                                                            ? (currentStatuses.includes(status) ? currentStatuses : [...currentStatuses, status])
+                                                            : currentStatuses.filter(t => t !== status);
+                                                        if (newSelected.length === allStatuses.length) updateFilterKey('statuses', '');
+                                                        else if (newSelected.length === 0) updateFilterKey('statuses', 'NONE');
+                                                        else updateFilterKey('statuses', newSelected.join(', '));
+                                                    }}
+                                                    ?flush=${true}>
+                                                </sutram-toggle>
+                                            `;
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
+            ]
         };
-        this.globalViews = updatedViews;
     }
 
     async saveSettings() {
@@ -2473,6 +2588,11 @@ export class InSetuExtTrackerSettings extends InSetuElement {
         const cleanViews = this.globalViews.map(v => {
             const clean = { ...v };
             delete clean._uuid;
+            if (clean.target_tier === '' || clean.target_tier === null || clean.target_tier === undefined) {
+                clean.target_tier = null;
+            } else {
+                clean.target_tier = Number(clean.target_tier);
+            }
             return clean;
         });
         const cleanParentTabs = this.parentTabs.map(t => {
@@ -2545,218 +2665,70 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                 `)}
                             </div>
                         </sutram-collapsible>
-
-                        <sutram-collapsible titleText="Define Schemas" intent="neutral" ?open=${true}>
-                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px;">
-                                <sutram-select 
-                                    label="Select Schema to View/Edit"
-                                    .value=${this.selectedSchemaId}
-                                    .options=${allSchemas.map(s => ({value: s.id, label: s.name}))}
-                                    @sutram-input-changed=${this._onSelectSchema}
-                                    ?flush=${true}
-                                    style="flex: 1; max-width: 300px; margin-bottom: 0;">
-                                </sutram-select>
-                                <sutram-async-btn label="➕ New Custom Schema" intent="success" .onClick=${() => this._createNewSchema()} style="margin: 0;"></sutram-async-btn>
-                            </div>
-
-                            ${this.schemaFormData ? html`
-                            <div style="display: flex; flex-direction: column; gap: 15px; background: var(--bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border); margin-top: 5px;">
-                                ${!this.schemaFormData.isSystem ? html`
-                                    <sutram-input label="Custom Schema Name" .value=${this.schemaFormData.name} @sutram-input-changed=${e => this._updateSchemaForm('name', e.detail.value)}></sutram-input>
-                                ` : html`
-                                    <div style="font-size: 0.85rem; color: var(--intent-warning); font-style: italic; font-weight: bold;">⚠️ This is a system default schema. It is read-only. Create a custom schema to modify values.</div>
-                                `}
-
-                                <h4 style="margin: 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 5px;">UI Tier Labels</h4>
-                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
-                                    <sutram-input label="Tier 1 (Top Level)" .value=${this.schemaFormData.t1_label} ?disabled=${this.schemaFormData.isSystem} @sutram-input-changed=${e => this._updateSchemaForm('t1_label', e.detail.value)}></sutram-input>
-                                    <sutram-input label="Tier 2 (Middle Level)" .value=${this.schemaFormData.t2_label} ?disabled=${this.schemaFormData.isSystem} @sutram-input-changed=${e => this._updateSchemaForm('t2_label', e.detail.value)}></sutram-input>
-                                    <sutram-input label="Tier 3 (Base Tasks)" .value=${this.schemaFormData.t3_label} ?disabled=${this.schemaFormData.isSystem} @sutram-input-changed=${e => this._updateSchemaForm('t3_label', e.detail.value)}></sutram-input>
-                                </div>
-
-                                <h4 style="margin: 0; color: var(--intent-primary); border-top: 1px solid var(--border); padding-top: 15px;">Semantic Types</h4>
-                                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Comma separated domains mapping tickets to tiers (e.g. "todo, bug").</p>
-                                <div style="display: flex; flex-direction: column; gap: 10px;">
-                                    <sutram-input label="Tier 1 Types" .value=${this.schemaFormData.t1_types} ?disabled=${this.schemaFormData.isSystem} @sutram-input-changed=${e => this._updateSchemaForm('t1_types', e.detail.value)}></sutram-input>
-                                    <sutram-input label="Tier 2 Types" .value=${this.schemaFormData.t2_types} ?disabled=${this.schemaFormData.isSystem} @sutram-input-changed=${e => this._updateSchemaForm('t2_types', e.detail.value)}></sutram-input>
-                                    <sutram-input label="Tier 3 Types" .value=${this.schemaFormData.t3_types} ?disabled=${this.schemaFormData.isSystem} @sutram-input-changed=${e => this._updateSchemaForm('t3_types', e.detail.value)}></sutram-input>
-                                </div>
-                                ${!this.schemaFormData.isSystem ? html`
-                                    <div style="display: flex; justify-content: flex-end; margin-top: 15px; border-top: 1px solid var(--border); padding-top: 15px;">
-                                        <sutram-async-btn label="🗑️ Delete Custom Schema" intent="danger" .onClick=${() => this._deleteSchema()}></sutram-async-btn>
-                                    </div>
-                                ` : ''}
-                            </div>
-                        ` : ''}
-                        </sutram-collapsible>
-                    </div>
-                    <div slot="views" style="display: flex; flex-direction: column; overflow-y: auto;">
-                        <sutram-collapsible titleText="Parent Tabs" intent="neutral" ?open=${true}>
-                            <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 15px;">Define the parent tabs to be used by Tracker. If existing, Tracker sub-tabs will be appended. Otherwise, tabs will be built as defined.</p>
-                            <div style="display: flex; flex-direction: column; gap: 10px;">
-                                ${this.parentTabs.map((t, i) => html`
-                                    <div style="display: flex; gap: 10px; align-items: center;">
-                                        <sutram-input label="Tab Label" .value=${t.label} @sutram-input-changed=${e => this._updateParentTab(i, 'label', e.detail.value)} style="flex: 1;" ?flush=${true}></sutram-input>
-                                        <sutram-input label="Tab ID" .value=${t.id} @sutram-input-changed=${e => this._updateParentTab(i, 'id', e.detail.value)} style="flex: 1;" ?flush=${true}></sutram-input>
-                                        <sutram-btn size="sm" intent="danger" label="✕" style="margin-top: 18px;" @click=${() => this._removeParentTab(i)}></sutram-btn>
+                        <sutram-collapsible titleText="Built-In System Schemas (Read-Only Reference)" intent="neutral" ?open=${false}>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px;">
+                                ${allSchemas.filter(s => s.isSystem).map(sys => html`
+                                    <div style="padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font-size: 0.82rem;">
+                                        <div style="font-weight: bold; color: var(--intent-primary); margin-bottom: 4px;">${sys.name} (${sys.id})</div>
+                                        <div><b>${sys.t1_label}:</b> <code>${sys.t1_types}</code></div>
+                                        <div><b>${sys.t2_label}:</b> <code>${sys.t2_types}</code></div>
+                                        <div><b>${sys.t3_label}:</b> <code>${sys.t3_types}</code></div>
                                     </div>
                                 `)}
-                                <div style="display: flex; justify-content: flex-start; margin-top: 5px;">
-                                    <sutram-async-btn icon="plus" label="Add Parent Tab" intent="neutral" .onClick=${() => this._addParentTab()}></sutram-async-btn>
-                                </div>
                             </div>
                         </sutram-collapsible>
-                        <sutram-collapsible titleText="Sub-Tabs (View filters)" intent="neutral" ?open=${true}>
-                        <div style="margin-bottom: 15px;">
-                            <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted);">Define the sub-navigation tabs that filter the kanban boards across your entire workspace.</p>
-                        </div>
 
-                        <div style="display: flex; flex-direction: column; gap: 12px;">
-                            ${this.globalViews.map((v, i) => html`
-                                <div style="display: flex; flex-direction: column; gap: 12px; background: var(--input-bg); padding: 15px; border: 1px solid var(--border); border-radius: 6px;">
-                                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px;">
-                                        <sutram-input label="Tab Label" .value=${v.label} @sutram-input-changed=${(e) => this._updateGlobalView(i, 'label', e.detail.value)} ?flush=${true}></sutram-input>
-                                        <sutram-input label="Tab ID" .value=${v.id} ?disabled=${true} ?flush=${true}></sutram-input>
-                                        <sutram-select 
-                                            label="Parent Tab"
-                                            style="margin: 0; --bg-input: var(--bg);"
-                                            .value=${v.target_parent || 'tasks'} 
-                                            .options=${this.parentTabs.map(pt => ({value: pt.id, label: pt.label}))}
-                                            @sutram-input-changed=${(e) => this._updateGlobalView(i, 'target_parent', e.detail.value)}>
-                                        </sutram-select>
-                                        <sutram-select 
-                                            label="Layout Type"
-                                            style="margin: 0;"
-                                            .value=${v.layout} 
-                                            .options=${[
-                                                {value: 'columns', label: 'Board (Columns)'},
-                                                {value: 'stacked', label: 'List (Stacked)'},
-                                                {value: 'log', label: 'History (Log)'}
-                                            ]}
-                                            @sutram-input-changed=${(e) => this._updateGlobalView(i, 'layout', e.detail.value)}>
-                                        </sutram-select>
-                                        <sutram-select 
-                                            label="Scope By Schema"
-                                            style="margin: 0;"
-                                            .value=${v.target_schema || ''} 
-                                            .options=${[
-                                                {value: '', label: 'Any Schema'},
-                                                ...this.customSchemas.map(s => ({value: s.id, label: s.name}))
-                                            ]}
-                                            @sutram-input-changed=${(e) => this._updateGlobalView(i, 'target_schema', e.detail.value)}>
-                                        </sutram-select>
-                                        <sutram-select 
-                                            label="Repo Filtering Strategy"
-                                            style="margin: 0;"
-                                            .value=${v.repo_strategy || 'global'} 
-                                            .options=${[
-                                                {value: 'global', label: 'Follow Global Repo Filter'},
-                                                {value: 'schema', label: 'Ignore Global (Auto-filter to Schema)'},
-                                                {value: 'explicit', label: 'Ignore Global (Explicit Repos)'}
-                                            ]}
-                                            @sutram-input-changed=${(e) => this._updateGlobalView(i, 'repo_strategy', e.detail.value)}>
-                                        </sutram-select>
-                                        ${(() => {
-                                            const activeSchema = this.customSchemas.find(s => s.id === v.target_schema) || this.customSchemas.find(s => s.id === 'agile_basic') || this.customSchemas[0] || {};
-                                            return html`
-                                                <sutram-select 
-                                                    label="Scope By Tier"
-                                                    style="margin: 0;"
-                                                    .value=${String(v.target_tier || '')} 
-                                                    .options=${[
-                                                        {value: '', label: 'Any'},
-                                                        {value: '1', label: 'Tier 1 (' + (activeSchema.t1_label || 'Top') + ')'},
-                                                        {value: '2', label: 'Tier 2 (' + (activeSchema.t2_label || 'Middle') + ')'},
-                                                        {value: '3', label: 'Tier 3 (' + (activeSchema.t3_label || 'Base') + ')'}
-                                                    ]}
-                                                    @sutram-input-changed=${(e) => this._updateGlobalView(i, 'target_tier', e.detail.value ? parseInt(e.detail.value, 10) : null)}>
-                                                </sutram-select>
-                                            `;
-                                        })()}
-                                    </div>
-                                    <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 5px; padding-top: 12px; border-top: 1px dashed var(--border);">
-                                        ${v.repo_strategy === 'explicit' ? html`
-                                            <div style="display: flex; flex-direction: column; gap: 6px;">
-                                                <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Select Explicit Repositories</label>
-                                                <div style="display: flex; flex-wrap: wrap; gap: 10px;">
-                                                    ${this.allRepos.map(repo => {
-                                                        const currentExplicit = v.explicit_repos || [];
-                                                        return html`<sutram-toggle label=${repo} .checked=${currentExplicit.includes(repo)} @sutram-input-changed=${(e) => {
-                                                            const newSelected = e.detail.value 
-                                                                ? (currentExplicit.includes(repo) ? currentExplicit : [...currentExplicit, repo])
-                                                                : currentExplicit.filter(r => r !== repo);
-                                                            this._updateGlobalView(i, 'explicit_repos', newSelected);
-                                                        }} ?flush=${true}></sutram-toggle>`;
-                                                    })}
-                                                </div>
-                                            </div>
-                                        ` : ''}
-                                        ${(() => {
-                                            if (v.layout === 'log') {
-                                                return html`
-                                                    <div style="padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px;">
-                                                        <span style="font-size: 0.85rem; color: var(--text-muted); font-style: italic;">
-                                                            ℹ️ This is a specialized layout. It inherits your schema and tier scope, but status and type filters are managed automatically by the engine.
-                                                        </span>
-                                                    </div>
-                                                `;
-                                            }
-                                            const availableTypes = this._getTypesForScope(v.target_schema, v.target_tier);
-                                            const currentTypes = v.filters?.ticket_types === 'NONE' ? [] : (v.filters?.ticket_types ? v.filters.ticket_types.split(',').map(s=>s.trim()) : availableTypes);
-                                            const allStatuses = ['open', 'active', 'closed', 'logged', 'archived'];
-                                            const currentStatuses = v.filters?.statuses === 'NONE' ? [] : (v.filters?.statuses ? v.filters.statuses.split(',').map(s=>s.trim()) : allStatuses);
+                        <insetu-schema-repeater
+                            .field=${this._getCustomProfilesRepeaterSchema()}
+                            .items=${allSchemas.filter(s => !s.isSystem)}
+                            @insetu-repeater-changed=${(e) => {
+                                const sysList = (KanbanStore.getState().systemSchemas || []).map(s => ({ ...s, isSystem: true }));
+                                const nextCustom = (e.detail.value || []).map(s => ({ ...s, isSystem: false }));
+                                const validIds = new Set([...sysList.map(s => s.id), ...nextCustom.map(s => s.id)]);
+                                const nextRepoMap = { ...this.repoMap };
+                                Object.keys(nextRepoMap).forEach(r => {
+                                    if (!validIds.has(nextRepoMap[r])) nextRepoMap[r] = 'agile_basic';
+                                });
+                                this.repoMap = nextRepoMap;
+                                this.customSchemas = [...sysList, ...nextCustom];
+                                this.requestUpdate();
+                            }}>
+                        </insetu-schema-repeater>
+                    </div>
+                    <div slot="views" style="display: flex; flex-direction: column; gap: 14px; overflow-y: auto;">
+                        <insetu-schema-repeater
+                            .field=${this._getParentTabsRepeaterSchema()}
+                            .items=${this.parentTabs}
+                            @insetu-repeater-changed=${(e) => {
+                                const oldTabs = this.parentTabs || [];
+                                const nextTabs = e.detail.value || [];
+                                if (oldTabs.length === nextTabs.length) {
+                                    oldTabs.forEach((oldT, idx) => {
+                                        const newT = nextTabs[idx];
+                                        if (oldT && newT && oldT.id && newT.id && oldT.id !== newT.id) {
+                                            this.globalViews = (this.globalViews || []).map(v =>
+                                                (v.target_parent || 'tasks') === oldT.id ? { ...v, target_parent: newT.id } : v
+                                            );
+                                        }
+                                    });
+                                }
+                                this.parentTabs = nextTabs;
+                                this.requestUpdate();
+                            }}>
+                        </insetu-schema-repeater>
 
-                                            return html`
-                                                ${availableTypes.length > 1 ? html`
-                                                    <div style="display: flex; flex-direction: column; gap: 6px;">
-                                                        <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Filter by Type</label>
-                                                        <div style="display: flex; flex-wrap: wrap; gap: 10px;">
-                                                            ${availableTypes.map(type => {
-                                                                const isChecked = currentTypes.includes(type);
-                                                                return html`<sutram-toggle label=${type} .checked=${isChecked} @sutram-input-changed=${(e) => {
-                                                                    const newSelected = e.detail.value 
-                                                                        ? (currentTypes.includes(type) ? currentTypes : [...currentTypes, type])
-                                                                        : currentTypes.filter(t => t !== type);
-
-                                                                    if (newSelected.length === availableTypes.length) this._updateGlobalViewFilter(i, 'ticket_types', '');
-                                                                    else if (newSelected.length === 0) this._updateGlobalViewFilter(i, 'ticket_types', 'NONE');
-                                                                    else this._updateGlobalViewFilter(i, 'ticket_types', newSelected.join(', '));
-                                                                }} ?flush=${true}></sutram-toggle>`;
-                                                            })}
-                                                        </div>
-                                                    </div>
-                                                ` : ''}
-                                                <div style="display: flex; flex-direction: column; gap: 6px;">
-                                                    <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Filter by Status</label>
-                                                    <div style="display: flex; flex-wrap: wrap; gap: 10px;">
-                                                        ${allStatuses.map(status => {
-                                                            const isChecked = currentStatuses.includes(status);
-                                                            return html`<sutram-toggle label=${status} .checked=${isChecked} @sutram-input-changed=${(e) => {
-                                                                const newSelected = e.detail.value 
-                                                                    ? (currentStatuses.includes(status) ? currentStatuses : [...currentStatuses, status])
-                                                                    : currentStatuses.filter(t => t !== status);
-
-                                                                if (newSelected.length === allStatuses.length) this._updateGlobalViewFilter(i, 'statuses', '');
-                                                                else if (newSelected.length === 0) this._updateGlobalViewFilter(i, 'statuses', 'NONE');
-                                                                else this._updateGlobalViewFilter(i, 'statuses', newSelected.join(', '));
-                                                            }} ?flush=${true}></sutram-toggle>`;
-                                                        })}
-                                                    </div>
-                                                </div>
-                                            `;
-                                        })()}
-                                    </div>
-                                    <div style="display: flex; justify-content: flex-end; margin-top: 5px;">
-                                        <sutram-async-btn icon="trash-2" label="Remove View" intent="danger" .onClick=${() => this._removeGlobalView(i)}></sutram-async-btn>
-                                    </div>
-                                </div>
-                            `)}
-                        </div>
-                        <div style="display: flex; justify-content: flex-start; margin-top: 15px;">
-                            <sutram-async-btn icon="plus" label="Add Global View" intent="primary" style="margin: 0;" .onClick=${() => this._addGlobalView()}></sutram-async-btn>
-                        </div>
-                    </sutram-collapsible>
-                </div>
+                        <insetu-schema-repeater
+                            .field=${this._getGlobalViewsRepeaterSchema()}
+                            .items=${(this.globalViews || []).map(v => ({
+                                ...v,
+                                target_tier: v.target_tier === null || v.target_tier === undefined ? '' : String(v.target_tier)
+                            }))}
+                            @insetu-repeater-changed=${(e) => {
+                                this.globalViews = e.detail.value || [];
+                                this.requestUpdate();
+                            }}>
+                        </insetu-schema-repeater>
+                    </div>
                 </sutram-tabs>
         </div>
         `;
