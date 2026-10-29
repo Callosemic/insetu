@@ -102,7 +102,7 @@ All Sutram inputs emit the standardized `@sutram-input-changed` event, where `e.
 Sutram provides built-in UI brokers that automatically read from their corresponding global Zustand stores. Host apps only need to interact with the stores.
 
 *   **`ToastStore` & `<sutram-toast-container>`**: Triggers non-blocking alerts. `ToastStore.getState().addToast(message: String, intent: String, durationMs: Number)`.
-*   **`SelectionStore` & `<sutram-selection-tray>`**: Manages multi-item selections and batch actions. `SelectionStore.getState().toggleSelection(id: String, entityType: String, data: Object)`.
+*   **`SelectionStore` & `<sutram-selection-tray>`**: Manages multi-item selections and batch actions. Properties: `.trayTitle` (e.g., `'Quickpack Deck'`), `.itemBadge` (e.g., `'PACK'`). Dispatches through `SelectionStore.getState().toggleSelection(id: String, entityType: String, data: Object)`.
 *   **`StatusStore` & `<sutram-status-bar>`**: Triggers the global bottom status bar. `StatusStore.getState().setStatus(msg: String, timeoutMs: Number, isError: Boolean)`.
 
 ## X. The Base HTML CSS Vacuum

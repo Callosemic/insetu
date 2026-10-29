@@ -8,17 +8,18 @@
 ## 1. The Mother Ship (Core Micro-Kernel)
 The core OS is strictly domain-agnostic. It does not know what a "citation" or a "kanban board" is. Its sole responsibility is orchestration, routing, and physical I/O operations.
 * **`insetu/static/vendor/sutram/` (Sutram Presentation Kernel):** Tier 0 micro-kernel managing UI app shell layout (`sutram-app-shell`), Zustand store factories (`createSutramStore`), background job polling (`createJobPoller`), hierarchical shortcut routing (`initShortcutRouter`), and shared styles.
-* **`insetu/core/topology/engine_topology.py` (The Topology Engine):** Single Source of Truth for physical file existence (`topology_ledger`) and bucket routing, hosting Stage 1 Slew Limiting (`topology_event_buffer`).
+* **`insetu/core/topology/engine_topology.py` (The Topology Engine):** Single Source of Truth for physical file existence (`topology_ledger`) and bucket routing, hosting Stage 1 Slew Limiting (`topology_event_buffer`), workspace overview (`topology/overview`), plan target validation (`topology/verify_plan_targets`), and the deterministic 3-pillar upkeep audit engine (`topology/audit_upkeep`).
 * **`insetu/core/gather/engine_gather.py` (The RAG Compiler):** Blindly compiles virtual contexts and physical directories based on the configuration matrix, hosting background compilation workers and submission endpoints.
 * **`insetu/core/editor/engine_editor.py` (The Editor Engine):** Core extension managing global code and text editor preferences (`EDITOR_SCHEMA`) and per-file preferences (`file_preferences` SQLite schema).
-* **`app.py` / `insetu/core/bridge/engine_bridge.py` (The Sync Bridge):** The Yomama translation layer, physical atomic commit engine, and multi-surface shell (`slots:yomama-surface`, `slots:yomama-drawer`). Features AST refactoring directives (`RELOCATE`, `RENAME`), deferred chunk post-valid buffer auto-healing, commit message synthesis, and the Receipts history tab (`insetu-ext-bridge-history`) backing the Ephemeral Patch Ledger (`bridge_ledger`).
-* **`insetu/core/cartographer/cartographer.py` (The Cartographer):** Generates code indices and maps workspace topology.
+* **`app.py` / `insetu/core/bridge/engine_bridge.py` (The Sync Bridge):** The Yomama translation layer, physical atomic commit engine, and multi-surface shell (`slots:yomama-surface`, `slots:yomama-drawer`). Features AST refactoring directives (`RELOCATE`, `RENAME`), Yomama v4 directives (`TEXTEDIT`, `JSON_PATCH`, `MOVE_FILE`, `ARCHIVE_FILE`, `DELETE_FILE`), Semantic Gatekeeper confirmation, transport macro escaping (`{{ymm:...}}`), deferred chunk post-valid buffer auto-healing, commit message synthesis, and the Receipts history tab (`insetu-ext-bridge-history`) backing the Ephemeral Patch Ledger (`bridge_ledger`).
+* **`insetu/core/cartographer/cartographer.py` (The Cartographer):** Generates code indices, maps workspace topology, and tracks AST symbol implementation drift via `symbol_ledger` and normalized body hashing (`verify_symbols`, `enrich`, and `[stale?]` sentinels).
 * **`insetu/core/offline/engine_offline.py` (The Offline Engine):** Tier 0 core engine managing local caching, IndexedDB state warming, and offline synchronization quotas.
-* **`insetu/core/llm/engine_llm.py` (The LLM Gateway):** Universal inference orchestrator supporting Anthropic, Gemini, OpenAI-compatible local endpoints (Ollama, LM Studio, vLLM), and Claude CLI streaming, providing semantic cognitive tiers, universal output schema bouncers, and push-to-talk audio transcription.
-* **`insetu/core/agent/engine_agent.py` & `agent.js` (The Agent Harness):** Autonomous multi-mode agent engine and multi-turn chat UI orchestrating declarative YAML routine execution DAGs (`orchestrator.py`), 256KB disk scratch vaulting, slash command routing, and transactional rollback (`/undo`).
-* **`insetu/core/prompts/engine_prompts.py` & `prompts.js` (The Prompt Engine):** Tier 2 Core engine managing workspace prompts, virtual `.templates/` projection across active modules and global user templates, and macro resolution.
+* **`insetu/core/llm/engine_llm.py` (The LLM Gateway):** Universal inference orchestrator managing daemon-level Compute Endpoint Pools (`compute_endpoints`), Cognitive Configuration Profiles (`llm_profiles`), admission control semaphores, TypeSafe Jev decision models (`POST llm/decide`), live multi-source model pricing catalog harvesting (`/api/system/llm_catalog.json`), output schema bouncers, and push-to-talk audio transcription.
+* **`insetu/core/agent/engine_agent.py` & `agent.js` (The Agent Harness):** Autonomous multi-mode agent engine and multi-turn chat UI orchestrating sovereign Markdown-as-Code routine execution DAGs (`orchestrator.py`), Ring 0 topological wavefront parallelization, 256KB disk scratch vaulting, colon-scoped slash commands (`/routine:scope:stage`), Web-Chat handoff, test runner triage (`agent.run_test`), and transactional rollback (`/undo`).
+* **`insetu/core/prompts/engine_prompts.py` & `prompts.js` (The Prompt Engine):** Tier 2 Core engine managing workspace prompts, virtual `.templates/` projection via `TemplateOverlayVFSDriver`, 3-Tier Same-Name Override Cascade resolution, and macro resolution.
 * **`insetu/core/system/cli_commands.py` (CLI Command Engine):** Modularized command suite driving onboarding initialization (`insetu init`), service control, and desktop application shortcuts.
 * **`insetu/core/mcp/engine_mcp.py` (The Model Context Protocol Gateway):** JSON-RPC 2.0 server (MCP 2025-03-26 specification) exposing tools (`cartographer.extract`, `fs.fetch`, `bridge.sync`), resources, and prompts over HTTP and stdio transport.
+* **`insetu/core/remote/engine_remote.py` (The Remote Access Gateway):** Tier 2 Core Substrate engine managing remote network access, Tailscale identity peer verification (`classify_peer`), authenticated WHOIS handshakes, proxy header registration, and preview HTTPS proxy routing.
 * **`insetu/kernel/hooks.py` (The Event Bus):** The API substrate allowing extensions to intercept RAG compilation, VFS commits, and OS process lifecycle events.
 * **`akasa.workers` (The Stateless Relay):** The centralized background task manager that sweeps switchboards and manages active SQLite worker threads across workspace swaps. It incorporates an integrated native filesystem watcher (`watchdog`) to automatically record unmanaged non-Git directory mutations into an SQLite fixture ledger for differential context compilation.
 
@@ -35,6 +36,7 @@ These are fully built and compliant extensions currently operating within the sy
     * Spatial Projections: Projects commit message drafting into `InSetuGitPushProjection` (`git:push`) and pull dry-run inspection into `sutram-report-projection` (`git:preview`) with integrated runtime reconciliation controls.
     * Compilation Pipeline: Registers the `git_diffs` step (`anchor: "body"`, `order: 30`) via `@git_bp.on('register_compilation_steps')` to compile diff payloads off-thread.
     * Configuration: Declares dynamic repo-level pull strategy selectors (`rebase`, `merge`, `ff_only`), as well as declarative `repoConfigOptions` (`git-repo-exclude`) and `bucketConfigOptions` (`git-exclude`).
+    * Capabilities & Autonomous Routines: Exposes `git.compile_diffs` and `git.list_dirty_diff_buckets` capabilities, alongside declarative agent routines `/audit` (`diff_audit.md`) and `/closeout` (`close_session.md`) with programmatic commit message pre-seeding in `InSetuGitPushProjection`.
 ### B. Citations (`engine_citations.py`)
 * **Status:** Active Extension (SDK V2 with IoC Topology Compilation, Transport Decoupling & Canonical Routing).
 * **Role:** Manages academic reference libraries, bibliography parsing, citation insertion, and global/repo-scoped context generation.
@@ -83,17 +85,11 @@ These are fully built and compliant extensions currently operating within the sy
     * Middleware: Dispatches `pre_compile_document` to collect citation bibliographies and editor macro patterns (`strip_macros`), stripping standalone and inline wordcount tags before Pandoc invocation.
     * Polymorphic Cards: Registers `publish-doc` entity action on `.md` files.
     * UI Modals: `<insetu-ext-publish-modals>` featuring Substack rich-text paste (`copyRichHtml`) and raw HTML tags copy.
-### F. Workflows (`engine_flow.py`)
-* **Status:** Active Extension (SDK V2 with Declarative Volumes, Flask Transport Decoupling, Typed Workers, JIT Volume Healing & Macro Action Parity).
-* **Role:** Manage LLM execution pipelines, automated context batching, and target URI dependency resolution.
-* **Dependencies (`__depends__`):** `['gather']`
-* **Data Containment:** Declarative cache volume `ctx://workflows/` (`.insetu/cache/workflows/`).
-* **Injection Surfaces:**
-    * Spatial Projections: Decoupled batch execution inspection (`InSetuFlowViewProjection`, `flow:view`) and batch editing (`InSetuFlowEditProjection`, `flow:edit`) into spatial columns with yenVUI `.flow-section` and `<sutram-tag>` styling.
-    * Core Hooks: Blueprint-scoped `@flow_bp.on('mutate_workspace_config')`, `@flow_bp.on('register_compilation_steps')` (`anchor: "body"`, `order: 40`), and `@flow_bp.on('pre_file_save')` for response archiving.
-    * JIT Context Healing: Subscribes to `insetu:ensure-fresh-artifact` for on-demand `ctx://workflows/` compilation.
-    * Polymorphic Cards: Registers `flow-edit` and `flow-duplicate` (`duplicateBatch`) entity actions.
-    * UI Layout: Sub-navigation Tab (`context` -> `flow`) with declarative `menuActions: _buildFlowMenuActions`.
+### F. Workflows [DECOMMISSIONED - ADR 0087]
+* **Status:** Decommissioned / Consolidated into Tier 2 Core Substrate (`agent`).
+* **Role:** Formerly managed LLM execution pipelines and context batching. Fully superseded by sovereign Markdown-as-Code Agent Routines (`ctx://routines/`, `orchestrator.py`) and topological DAG wavefronts.
+* **Dependencies (`__depends__`):** N/A (decommissioned).
+* **Data Containment:** N/A (decommissioned).
 ### G. Favorites (`engine_favorites.py`)
 * **Status:** Active Extension (SDK V2 with Flask Transport Decoupling, Canonical URIs & InSetuURI Adoption).
 * **Role:** Pinning files and folders for quick access, maintaining a localized SQLite cache mirrored to `bookmarks.json`.
@@ -154,14 +150,11 @@ These are fully built and compliant extensions currently operating within the sy
     * UI Layout: Sub-navigation Tab (`edit` -> `notes`) with declarative `menuActions` (`New Note`, `Pre-Cache Notes`).
     * Spatial Projections: Multi-projection note editing in `InSetuExtNotesEditor` pinned to spatial viewports with in-place frontmatter synchronization (`syncFrontmatter`).
     * Custom Editors: Declarative matcher for `ctx://notes/` and `.insetu-data/notes/` paths.
-### N. Tailscale Network Manager (`engine_tailscale.py` & `ext_tailscale.js`)
-* **Status:** Active Extension (SDK V2 / Declarative).
-* **Role:** Automated HTTPS port binding over Tailscale Serve on workspace boot.
-* **Dependencies (`__depends__`):** `None`
-* **Data Containment:** Ephemeral.
-* **Injection Surfaces:**
-    * Core Hooks: Blueprint-scoped `@tailscale_bp.on('topology_boot_complete')` triggering non-blocking background worker tasks.
-    * Settings Schema: Declarative port mode selector and manual bind action trigger.
+### N. Tailscale Network Manager [DECOMMISSIONED - ADR 0086]
+* **Status:** Decommissioned / Consolidated into Tier 2 Core Substrate (`engine_remote.py`).
+* **Role:** Formerly managed Tailscale Serve HTTPS port bindings. Capabilities absorbed into `engine_remote.py` (`set_tailscale_https_serve`, `classify_peer`).
+* **Dependencies (`__depends__`):** N/A
+* **Data Containment:** N/A (decommissioned).
 ### O. Semantic Update (`engine_update.py` & `ext_update.js`)
 * **Status:** Active Extension (SDK V2 with Spatial Projections and DAG Chaining).
 * **Role:** Automated semantic versioning, dry-run release previews, initial PyPI release building/uploading, PyPI publishing verification, baseline tagging, and package distribution.
@@ -227,8 +220,6 @@ These are domain-specific features currently hardcoded into the Micro-Kernel tha
 | `freshdesk` | `<Micro-Kernel>` | None (Currently) |
 | `hooks` | `gather` | None (Currently) |
 | `dev` | `<Micro-Kernel>` | None (Currently) |
-| `flow` | `gather` | None (Currently) |
-| `tailscale` | `<Micro-Kernel>` | None (Currently) |
 | `preview` | `<Micro-Kernel>` | None (Currently) |
 > **Architectural Note: Hard vs. Soft Horizontal Relationships**
 > The table above represents **Hard Dependencies** (where an extension will fail to boot if its upstream requirement is missing). 
@@ -287,4 +278,3 @@ With the deprecation of UI zones (ADR 0041), horizontal communication across the
 | \`insetu:git:generate-diffs\` | \`ext_git.js\` (Push/Sweep actions) | \`ext_git.js\` (\`generateDiffs()\`) | \`{ force: boolean }\` |
 | \`git-diffs-refreshed\` | \`ext_git.js\` (\`generateDiffs()\`) | \`ext_git.js\` (\`_fetchSweepStatusSilent\`) | None |
 | \`insetu:tracker:open-edit-task\` | \`tracker\` (Custom Editors) | \`InSetuExtTrackerModals\` | \`{ filepath }\` |
-| \`insetu:flow:refresh-prompt\` | \`ext_flow.js\` (\`vfs-mutated\` trap) | \`InSetuExtFlow\` | None |
