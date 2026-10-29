@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.29.1 (2026-10-29)
+
+### Bug Fixes
+
+- Pin to specific akasa releases
+  ([`bfa2153`](https://github.com/Callosemic/insetu/commit/bfa2153c439a1bb94d8f8794064e656848c9cbdc))
+
+
 ## v0.29.0 (2026-10-29)
 
 ### Bug Fixes
