@@ -10,11 +10,11 @@ import threading
 from collections import deque
 from typing import TypedDict, Optional, List, Dict, Any
 from insetu.core.sdk import InSetuExtension
+from insetu.core.remote.engine_remote import set_tailscale_https_serve
 from insetu.core.utils_core import (
     is_subpath,
     get_repo_path,
     get_sister_repos,
-    execute_binary,
     is_port_listening as _is_port_listening,
     can_bind_port as _can_bind_port,
     allocate_ephemeral_port as _allocate_ephemeral_port,
@@ -332,26 +332,14 @@ def _build_launch_command(
 
 
 def _bind_tailscale_https(port: int, enable: bool, log_deque: deque):
+    """Delegates Tailscale Serve binding to the core Remote Access module and records the outcome."""
     if not port or port <= 0:
         return
-    try:
-        if enable:
-            res = execute_binary(
-                ["tailscale", "serve", "--bg", f"--https={port}", f"http://127.0.0.1:{port}"],
-                timeout=8
-            )
-            if res.returncode == 0:
-                log_deque.append(f"[Tailscale] Bound HTTPS serve on port {port}")
-            else:
-                err = (res.stderr or res.stdout or "").strip()
-                log_deque.append(f"[Tailscale Warning] Failed to bind HTTPS on {port}: {err}")
-        else:
-            execute_binary(
-                ["tailscale", "serve", f"--https={port}", "off"],
-                timeout=5
-            )
-    except Exception as e:
-        log_deque.append(f"[Tailscale Warning] {str(e)}")
+    ok, message = set_tailscale_https_serve(port, enable)
+    if enable:
+        log_deque.append(f"[Tailscale] {message}" if ok else f"[Tailscale Warning] Failed to bind HTTPS on {port}: {message}")
+    elif not ok:
+        log_deque.append(f"[Tailscale Warning] {message}")
 
 
 def _terminate_server_entry(entry: Dict[str, Any]):

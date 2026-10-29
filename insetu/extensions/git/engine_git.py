@@ -509,6 +509,52 @@ def api_git_sweep_push(ctx):
         job_category="ui_blocking"
     )
     return {"status": "accepted", "job_id": job_id}, 202
+class GitCompileDiffsPayload(TypedDict, total=False):
+    force_full: bool
+    target_repos: Optional[List[str]]
+
+
+@git_bp.route('compile_diffs', methods=['POST'], request_schema=GitCompileDiffsPayload, docstring="[sync] Evaluates and compiles fresh ctx://diffs/*_diffs.txt artifacts across dirty or targeted repositories.")
+def api_git_compile_diffs(ctx):
+    """Evaluates and compiles fresh ctx://diffs/*_diffs.txt artifacts across dirty or targeted repositories."""
+    data = ctx.payload or {}
+    force_full = bool(data.get("force_full", False))
+    target_repos = data.get("target_repos")
+    diff_manifest, manifest_deltas, truly_modified_diffs = generate_diff_context(
+        ctx.workspace_id,
+        target_repos=target_repos,
+    )
+    return {
+        "status": "success",
+        "diffs": diff_manifest,
+        "files": list(manifest_deltas.keys()),
+        "modified_diffs": list(truly_modified_diffs),
+    }
+@git_bp.route('list_dirty_diff_buckets', methods=['GET'], docstring="[sync] Lists all active ctx://diffs/*_diffs.txt artifacts and their corresponding repositories.")
+def api_git_list_dirty_diff_buckets(ctx):
+    """Lists all active ctx://diffs/*_diffs.txt artifacts and their corresponding repositories."""
+    manifest_ctx = ctx.manifest.get("ctx", {}) or {}
+    buckets = []
+    for uri_key, entry in sorted(manifest_ctx.items()):
+        if not uri_key.startswith("ctx://diffs/"):
+            continue
+        meta = (entry.get("meta") if isinstance(entry, dict) else {}) or {}
+        content = ctx.read_compiled_context(uri_key, manifest=manifest_ctx) or ""
+        if content.strip():
+            buckets.append({
+                "diff_file": uri_key,
+                "repo": meta.get("repo") or "",
+                "bucket_id": meta.get("bucket_id") or "main",
+                "title": meta.get("title") or InSetuURI(uri_key).basename,
+                "content": content,
+            })
+    return {
+        "buckets": buckets,
+        "diff_files": [b["diff_file"] for b in buckets],
+        "repos": sorted({b["repo"] for b in buckets if b.get("repo")}),
+    }
+
+
 class GitRepoPayload(TypedDict):
     repo: str
 

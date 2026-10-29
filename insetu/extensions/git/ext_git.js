@@ -238,9 +238,8 @@ disconnectedCallback() {
         const base = new this.utils.InSetuURI(diffFile).basename.replace('_diffs.txt', '');
         return allRepos.find(r => r.replace(/-/g, '_').toLowerCase() === base.toLowerCase() || base.toLowerCase().startsWith(r.replace(/-/g, '_').toLowerCase() + '_')) || '';
     }
-
     async _handleOpenPush(e) {
-        const { diffFile, repo, targets } = e.detail || {};
+        const { diffFile, repo, targets, commitMessage } = e.detail || {};
         let resolvedTargets = [];
         if (Array.isArray(targets) && targets.length > 0) {
             resolvedTargets = targets.map(t => ({
@@ -259,12 +258,11 @@ disconnectedCallback() {
         const winLabel = resolvedTargets.length > 1
             ? `Bulk Commit & Push (${resolvedTargets.length} diffs in ${uniqueRepos.join(', ')})`
             : `Commit & Push: ${resolvedRepo || repo || ''}`;
-
         GitStore.setState({
             currentPushDiffFile: diffFile || (resolvedTargets[0]?.diff_file || ''),
             currentPushRepo: resolvedRepo,
             currentPushTargets: resolvedTargets,
-            gitPushMessage: '',
+            gitPushMessage: commitMessage || '',
             pushChangelogs: []
         });
         if (window.Sutram?.stores?.Layout) {
@@ -293,7 +291,7 @@ disconnectedCallback() {
             if (allChangelogs.length > 0) {
                 GitStore.setState({
                     pushChangelogs: allChangelogs,
-                    gitPushMessage: allChangelogs[0].title
+                    gitPushMessage: commitMessage || allChangelogs[0].title
                 });
             }
         } catch (err) {
