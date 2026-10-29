@@ -67,11 +67,21 @@ def heal_llm_block_artifacts(text, reference_content=""):
         healed = heal_citation_artifacts(healed)
     return healed
 def expand_macros(text, reference_content=""):
-    """Expands intentional Yomama transport escape macros unless the raw token exists in reference_content."""
+    """
+    Expands Yomama transport escape macros.
+
+    The namespaced {{ymm:<char>x<N>}} form is always expanded, in one left-to-right pass, whatever the
+    target file contains. It is explicit by design, so a patch means the same thing against every file,
+    including files that document the macros themselves. To write a macro token literally, escape its
+    opening braces with a brace macro: {{ymm:{x2}}ymm:<x7}} expands to the literal text {{ymm:<x7}}.
+
+    The legacy {{c*N}} and {{triple<c>}} shorthands look like ordinary template syntax, so they still
+    stay literal whenever the raw token already exists in reference_content.
+    """
     ref = reference_content or ""
     text = re.sub(
         r'\{\{\s*ymm:(.)[x*](\d+)\s*\}\}',
-        lambda m: m.group(0) if (ref and m.group(0) in ref) else m.group(1) * int(m.group(2)),
+        lambda m: m.group(1) * int(m.group(2)),
         text,
     )
     text = re.sub(

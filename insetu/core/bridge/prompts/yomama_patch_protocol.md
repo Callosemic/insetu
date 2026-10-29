@@ -1,12 +1,3 @@
-[new lines to insert]
->>>>>>> REPLACE
-```
-
-* **Patch Sandwich:** Always include 1–2 unchanged lines of code at the top AND bottom of your `SEARCH` block to anchor the modification unambiguously.
-* **Indentation:** Ensure relative indentation inside your `REPLACE` block matches the target file; the Bridge calculates baseline indent from the first valid line of the `SEARCH` block.
-* **Strict Block Escaping:** Wrap every individual file patch in its own `text` code block. Combine multiple patches for the same file into a single code block, but never combine multiple files in one block.
-* **Genesis Patches:** To create a brand-new file or overwrite an entire file, leave the `SEARCH` block empty.
-* **Repository Pathing:** Always prefix filenames with the target repository directory (e.g., `repo_name/src/index.js`).
 ## Yomama Patch Protocol
 
 Provide all workspace file modifications exclusively using Yomama Bridge directives inside standard `text` code blocks. Always use canonical `vfs://<repo>/<path>` or `ctx://<volume>/<path>` URIs in `<<<<<<< FILE:` headers.
@@ -18,6 +9,7 @@ Provide all workspace file modifications exclusively using Yomama Bridge directi
 [Brief architectural reasoning or intent for this specific patch. Saved in the Bridge Ledger.]
 <<<<<<< SEARCH
 [exact lines to match, including 1-2 unchanged lines of top and bottom context]
+=======
 [new lines to insert]
 >>>>>>> REPLACE
 ```
@@ -25,8 +17,9 @@ Provide all workspace file modifications exclusively using Yomama Bridge directi
 * **Indentation:** Ensure relative indentation inside your `REPLACE` block matches the target file; the Bridge calculates baseline indent from the first valid line of the `SEARCH` block.
 * **Strict Block Escaping:** Wrap every individual file patch in its own `text` code block. Combine multiple patches for the same file into a single code block, but never combine multiple files in one block.
 * **Transport Escaping (`{{ymm:...}}`):** Whenever a `SEARCH` or `REPLACE` block itself contains triple backticks or literal Yomama 7-chevron markers (for example, when patching markdown documentation, prompt templates, or parser tests), escape them using the `{{ymm:<char>x<N>}}` macro so they never break the outer code block or chunk splitter:
-    * Triple backticks: `{{ymm:{{ymm:`x1}}x3}}`
+    * Triple backticks: `` {{ymm:`x3}} ``
     * Literal 7-chevron markers: `{{ymm:<x7}}`, `{{ymm:=x7}}`, `{{ymm:>x7}}`
+    * To write a macro token literally (for example in this section), escape its opening braces with a brace macro: `{{ymm:{x2}}ymm:<x7}}` becomes the literal text `{{ymm:<x7}}`.
 * **Genesis Patches:** To create a brand-new file, leave the `SEARCH` block empty (`<<<<<<< SEARCH\n=======`).
 
 ### 2. Inline Prose & Comment Edits (`TEXTEDIT`)
@@ -50,18 +43,8 @@ Promote synthesize_step to the thinking tier.
 {"nodes[id=synthesize_step].tier": "thinking", "obsolete_key": null}
 >>>>>>> REPLACE
 ```
-=======
-[new lines to insert]
->>>>>>> REPLACE
-```
 
-* **Patch Sandwich:** Always include 1–2 unchanged lines of code at the top AND bottom of your `SEARCH` block to anchor the modification unambiguously.
-* **Indentation:** Ensure relative indentation inside your `REPLACE` block matches the target file; the Bridge calculates baseline indent from the first valid line of the `SEARCH` block.
-* **Strict Block Escaping:** Wrap every individual file patch in its own `text` code block. Combine multiple patches for the same file into a single code block, but never combine multiple files in one block.
-* **Genesis Patches:** To create a brand-new file or overwrite an entire file, leave the `SEARCH` block empty.
-* **Repository Pathing:** Always prefix filenames with the target repository directory (e.g., `repo_name/src/index.js`).
-
-### Declarative AST Operations (`RELOCATE` & `RENAME`)
+### 4. Declarative AST Operations (`RELOCATE` & `RENAME`)
 
 When moving complete functions/classes between files or renaming identifiers across a codebase, prefer declarative AST blocks over manual `SEARCH/REPLACE` blocks to prevent transcription errors and save output tokens:
 
