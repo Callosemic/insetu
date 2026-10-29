@@ -6,7 +6,6 @@ import sys
 import copy
 import json
 import shutil
-import socket
 import tracemalloc
 import importlib
 import importlib.util
@@ -30,6 +29,7 @@ from insetu.core.utils_core import (
     save_json_config,
     load_json_config,
     get_workspace_physics,
+    get_tenant_control_dir,
     get_daemon_cwd,
     get_system_index_path,
     get_core_modules,
@@ -40,6 +40,9 @@ from insetu.core.utils_core import (
     execute_vfs_delete,
     normalize_repo_domains,
     heal_manifest_entry_domain,
+    encrypt_secret,
+    decrypt_secret,
+    slugify,
 )
 import insetu.core.system.legacy  # Mount one-off migration hooks
 
@@ -131,11 +134,39 @@ SYSTEM_SETTINGS_SCHEMA = [
     },
     {
         "id": "shared_mounts",
-        "label": "Virtual Mounts (Subscriber)",
-        "type": "hidden",
+        "label": "Virtual Mounts (Subscriber ws://)",
+        "type": "repeater",
         "scope": "workspace",
+        "min_items": 0,
+        "max_items": 32,
+        "item_label": "Mount",
+        "item_title_key": "workspace_id",
+        "item_subtitle_key": "domain",
+        "add_label": "Add Virtual Mount",
+        "empty_text": "No external workspace domains mounted in this workspace.",
         "default": [],
-        "description": "Mount external workspace domains."
+        "description": "Mount external workspace domains read-only into this workspace via ws://<workspace_id>/<domain>/ URIs.",
+        "item_schema": [
+            {
+                "id": "workspace_id",
+                "label": "Source Workspace ID",
+                "type": "text",
+                "default": "default",
+                "placeholder": "e.g. default"
+            },
+            {
+                "id": "domain",
+                "label": "Target Domain",
+                "type": "select",
+                "default": "prompts",
+                "options": [
+                    {"value": "prompts", "label": "prompts (.insetu/data/prompts)"},
+                    {"value": "agent", "label": "routines (.insetu/data/agent)"},
+                    {"value": "notes", "label": "notes (.insetu/data/notes)"},
+                    {"value": "*", "label": "* (All Domains)"}
+                ]
+            }
+        ]
     }
 ]
 system_bp = InSetuExtension(
@@ -145,8 +176,77 @@ system_bp = InSetuExtension(
     core=True,
     settings_schema=SYSTEM_SETTINGS_SCHEMA
 )
+def vault_repeater_secrets_for_schema(ext_name: str, workspace_id: Optional[str] = None) -> None:
+    """
+    Universal Repeater Secret Vaulting:
+    Scans any registered settings schema for `type: 'repeater'` fields that contain `secure: True`
+    subfields in `item_schema`. Extracts plaintext secrets into `.insetu/secrets.json` under
+    `secrets[ext_name][f"{repeater_id}__{item_id}__{subfield_id}"]` and masks them as `'********'` in config files.
+    """
+    wid = workspace_id or "default"
+    all_schemas = get_registered_settings_schemas(wid)
+    ext_schema = all_schemas.get(ext_name) or []
+    repeater_fields = [f for f in ext_schema if isinstance(f, dict) and f.get("type") == "repeater"]
+    if not repeater_fields:
+        return
+
+    settings = SettingsManager(ext_name, wid)
+    for rep in repeater_fields:
+        rep_id = rep.get("id")
+        item_schema = rep.get("item_schema") or []
+        secure_subfields = [sf.get("id") for sf in item_schema if isinstance(sf, dict) and sf.get("secure") and sf.get("id")]
+        if not rep_id or not secure_subfields:
+            continue
+
+        items = settings.get(rep_id, [])
+        if not isinstance(items, list) or not items:
+            continue
+
+        target_sec_wid = "default" if rep.get("scope") == "daemon" else wid
+        sec_path = Path(get_tenant_control_dir(target_sec_wid)) / "secrets.json"
+        sec_data = load_json_config(sec_path.as_posix(), {})
+        ext_sec = sec_data.setdefault(ext_name, {})
+
+        mutated = False
+        sec_mutated = False
+        clean_items = []
+        title_key = rep.get("item_title_key") or "title"
+
+        for idx, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            item_copy = dict(item)
+            item_id = slugify(str(item_copy.get("id") or item_copy.get(title_key) or f"item_{idx + 1}"))
+            item_copy["id"] = item_id
+            for sf_id in secure_subfields:
+                vault_key = f"{rep_id}__{item_id}__{sf_id}"
+                legacy_llm_key = f"endpoint_key__{item_id}" if (ext_name == "llm" and sf_id == "api_key") else None
+                raw_val = str(item_copy.get(sf_id) or "").strip()
+                if raw_val and not raw_val.startswith("****"):
+                    enc_str = encrypt_secret(raw_val)
+                    ext_sec[vault_key] = enc_str
+                    if legacy_llm_key:
+                        ext_sec[legacy_llm_key] = enc_str
+                    item_copy[sf_id] = "********"
+                    item_copy[f"has_{sf_id}"] = True
+                    mutated = True
+                    sec_mutated = True
+                elif ext_sec.get(vault_key) or (legacy_llm_key and ext_sec.get(legacy_llm_key)):
+                    if item_copy.get(sf_id) != "********":
+                        item_copy[sf_id] = "********"
+                        mutated = True
+                    item_copy[f"has_{sf_id}"] = True
+            clean_items.append(item_copy)
+
+        if sec_mutated:
+            save_json_config(sec_path.as_posix(), sec_data, workspace_id=target_sec_wid)
+        if mutated:
+            settings.update({rep_id: clean_items})
+
+
 @system_bp.on('system_settings_updated')
 def core_system_settings_updated(workspace_id=None, **kwargs):
+    vault_repeater_secrets_for_schema('system', workspace_id)
     # Core OS settings (ports, titles, watchdogs) mandate an environment refresh
     return {"requires_refresh": True}
 @system_bp.on('mutate_workspace_config', priority=1)
@@ -202,56 +302,6 @@ def hydrate_and_migrate_cascade_settings(cfg, workspace_id=None, **kwargs):
     normalize_repo_domains(cfg.get("target_repos"))
 
 
-@system_bp.on('is_trusted_origin')
-def allow_tailscale_origin(hostname=None, **kwargs):
-    """Permits Tailscale Funnel/Serve origins (.ts.net) during localhost bootstrap handshakes."""
-    return bool(hostname and str(hostname).endswith('.ts.net'))
-
-
-@system_bp.on('execute_identity_handshake')
-def host_identity_handshake(request=None, client_ip=None, config=None, **kwargs):
-    """Tier 2 Core OS: Evaluates daemon-level host identity protocols (e.g., Tailscale WHOIS)."""
-    if not request or not client_ip or not config: return None
-
-    user_email = request.headers.get('Tailscale-User-Login')
-
-    if not user_email:
-        # Fallback to Unix socket WHOIS for direct Tailnet IP connections
-        sock_path = "/var/run/tailscale/tailscaled.sock"
-        if os.path.exists(sock_path):
-            try:
-                payload = f"GET /localapi/v0/whois?ip={client_ip} HTTP/1.1\r\nHost: local-tailscaled.sock\r\n\r\n"
-                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                s.settimeout(0.5)
-                s.connect(sock_path)
-                s.sendall(payload.encode('utf-8'))
-
-                response = b""
-                while True:
-                    chunk = s.recv(4096)
-                    if not chunk: break
-                    response += chunk
-                s.close()
-
-                if b"\r\n\r\n" in response:
-                    body = response.split(b"\r\n\r\n", 1)[1]
-                    profile = json.loads(body.decode('utf-8'))
-                    user_email = profile.get("UserProfile", {}).get("LoginName")
-            except Exception:
-                pass
-    if user_email:
-        allowed_emails = config.get("allowed_dev_emails", [])
-        # Trust On First Use (TOFU)
-        if not allowed_emails:
-            cfg_path, _ = get_workspace_physics()
-            raw_cfg = load_json_config(cfg_path, {})
-            raw_cfg["allowed_dev_emails"] = [user_email]
-            save_json_config(cfg_path, raw_cfg)
-            return {"status": "authenticated", "method": "tailscale_tofu", "user": user_email}
-        elif user_email in allowed_emails:
-            return {"status": "authenticated", "method": "tailscale", "user": user_email}
-
-    return None
 @system_bp.on('request_vfs_ignore_dirs')
 def provide_vfs_ignores(workspace_id=None, **kwargs):
     """Host application declaration of directories the VFS should never traverse natively."""

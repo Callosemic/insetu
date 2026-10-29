@@ -39,28 +39,211 @@ from akasa.types import (
     WorkspacePathsDict,
     VFSStorageEngine,
 )
-from akasa.utils import slugify, thread_safe_cache, register_core_module
-from insetu.core.utils_core import CORE_MODULES_TUPLE
+import akasa as _akasa
+from akasa.auth import (
+    ensure_master_key_on_disk,
+    encrypt_secret,
+    decrypt_secret,
+    rotate_master_key,
+)
+from akasa.process import execute_binary
+from akasa.auth.peer import (
+    PeerInfo,
+    classify_peer,
+    register_proxy_header,
+    register_allowed_host,
+)
+from akasa.uri import AkasaURI
+from akasa.utils import (
+    slugify,
+    thread_safe_cache,
+    register_core_module,
+    load_config,
+    save_json_config,
+    load_json_config,
+    get_workspace_physics,
+    get_all_workspace_ids,
+    get_tenant_control_dir,
+    get_daemon_cwd,
+    set_daemon_cwd,
+    heal_daemon_config_files,
+    get_system_index_path,
+    get_daemon_host_config_path,
+    get_core_modules,
+    is_core_module,
+    is_extension_enabled,
+    get_active_modules,
+    set_tenant_resolver,
+    resolve_active_tenant,
+    sniff_tenant_id,
+    is_subpath,
+    resolve_system_artifact_path,
+    build_tree_dict,
+    generate_ascii_tree,
+    fold_vfs_events,
+    reclaim_process_memory,
+    get_kernel_memory_telemetry,
+    typeddict_to_openapi,
+    parse_uri,
+    is_port_listening,
+    can_bind_port,
+    allocate_ephemeral_port,
+    register_trusted_host_suffix,
+    get_trusted_host_suffixes,
+    atomic_write_bytes,
+    atomic_write_text,
+    CycleError,
+    resolve_dag_wavefronts,
+    extract_template_variables,
+    interpolate_template_variables,
+)
+from akasa.vfs import (
+    VFSTransaction,
+    DefaultVFSDriver,
+    InterWorkspaceVFSDriver,
+    register_driver,
+    mount_volume,
+    set_mount_authorizer,
+    resolve_physical_path,
+    sync_vfs_barrier,
+    execute_vfs_save,
+    execute_vfs_delete,
+    execute_vfs_move,
+    execute_vfs_bulk,
+    evict_vfs_cache,
+    compute_vfs_sha256,
+    record_vfs_ancestor,
+    lookup_vfs_ancestor,
+    three_way_merge_text,
+    has_pending_vfs_write,
+)
+from akasa.workers import ChainStepSchema, ChainStepArtifact, resolve_dag_chain, run_parallel
+
+CORE_MODULES_TUPLE = (
+    "bridge", "gather", "cartographer", "config", "editor", "fs",
+    "system", "workers", "auth", "security", "topology", "offline",
+    "llm", "agent", "prompts", "mcp", "remote"
+)
+
+configure_kernel = _akasa.configure
+init_kernel_app = _akasa.init_app
+boot_kernel = _akasa.boot
+reset_kernel_state = _akasa.reset_state
 
 hooks.register_trusted_namespace("insetu.core.")
 hooks.register_extension_namespace("insetu.extensions.")
 for _core_mod in CORE_MODULES_TUPLE:
     register_core_module(_core_mod)
-from akasa.vfs import mount_volume, register_driver, DefaultVFSDriver, set_mount_authorizer
-from akasa.workers import ChainStepSchema, ChainStepArtifact, resolve_dag_chain, run_parallel
-from insetu.core.utils_core import (
-    InSetuURI,
-    update_frontmatter,
-    get_tenant_control_dir,
-    get_domain_cache_path,
-    get_domain_data_path,
-    heal_sqlite_uri_column,
-    set_tenant_resolver,
-    resolve_active_tenant,
-    sniff_tenant_id,
-)
+
+# Import the module object, not names from it. utils_core imports this SDK at its top, so when
+# utils_core is imported first it is still partially initialized here; a `from ... import name`
+# would fail, while a module reference resolves its attributes when they are used.
+import insetu.core.utils_core as _utils_core
+
+_UTILS_CORE_REEXPORTS = frozenset({
+    "InSetuURI",
+    "update_frontmatter",
+    "dump_yaml_string",
+    "get_domain_cache_path",
+    "get_domain_data_path",
+    "heal_sqlite_uri_column",
+})
+
+
+def __getattr__(name: str):
+    """PEP 562 lazy re-export: keeps `from insetu.core.sdk import InSetuURI` working for user-space extensions."""
+    if name in _UTILS_CORE_REEXPORTS:
+        return getattr(_utils_core, name)
+    raise AttributeError(f"module 'insetu.core.sdk' has no attribute '{name}'")
+
 
 set_workspace_router = hooks.set_workspace_router
+
+
+class TemplateOverlayVFSDriver(DefaultVFSDriver):
+        """
+        Unified Tier 2 Template Overlay VFS Driver for ctx://prompts and ctx://routines:
+        - Routes ctx://<vol>/.templates/user/... via ws://default/<vol>/.templates/user/...
+        - Routes ctx://<vol>/.templates/<mod>/... across active Core and Domain modules (<mod_dir>/<module_subdir>/),
+            evaluating the 3-Tier Same-Name Override Cascade:
+            1. Workspace Override (<workspace_control_dir>/data/<vol>/<rel>)
+            2. Global User Template (ws://default/<vol>/.templates/user/<rel>)
+            3. Built-in Module Template (<mod_dir>/<module_subdir>/<rel>)
+        """
+
+        def __init__(self, module_subdir: str = "prompts"):
+                super().__init__()
+                self.module_subdir = str(module_subdir or "prompts").strip("/")
+
+        def ensure_global_user_templates_dir(self, workspace_id: str = "default") -> Path:
+                ws_uri = f"ws://default/{self.module_subdir}/.templates/user"
+                resolved = resolve_physical_path(ws_uri, workspace_id)
+                user_dir = (
+                        Path(resolved)
+                        if resolved
+                        else Path(get_tenant_control_dir("default")).joinpath("data", self.module_subdir, ".templates", "user").resolve()
+                )
+                os.makedirs(user_dir.as_posix(), exist_ok=True)
+                return user_dir
+
+        def resolve_module_dir(self, mod_name: str, workspace_id: Optional[str] = None) -> Optional[Path]:
+                if mod_name == "user":
+                        return self.ensure_global_user_templates_dir(workspace_id or "default")
+                if not mod_name or not is_extension_enabled(mod_name, workspace_id):
+                        return None
+                insetu_root = Path(__file__).resolve().parent.parent.parent
+                if is_core_module(mod_name):
+                        cand = insetu_root.joinpath("core", mod_name, self.module_subdir)
+                        if cand.exists() and cand.is_dir():
+                                return cand.resolve()
+                cand_ext = insetu_root.joinpath("extensions", mod_name, self.module_subdir)
+                if cand_ext.exists() and cand_ext.is_dir():
+                        return cand_ext.resolve()
+                try:
+                        _, ws_root = get_workspace_physics(workspace_id)
+                        local_cand = Path(ws_root).joinpath(".insetu", "extensions", mod_name, self.module_subdir)
+                        if local_cand.exists() and local_cand.is_dir():
+                                return local_cand.resolve()
+                except Exception:
+                        pass
+                return None
+
+        def resolve(self, uri_obj, workspace_id, physical_target):
+                rel_path = (uri_obj.path or "").lstrip("/")
+                if rel_path == ".templates" or rel_path.startswith(".templates/"):
+                        sub = rel_path[len(".templates"):].lstrip("/")
+                        if not sub:
+                                return None
+                        parts = sub.split("/", 1)
+                        mod_name = parts[0]
+                        mod_rel = parts[1] if len(parts) > 1 else ""
+                        if mod_name == "user":
+                                self.ensure_global_user_templates_dir(workspace_id or "default")
+                                ws_uri = f"ws://default/{self.module_subdir}/.templates/user/{mod_rel}".rstrip("/")
+                                return resolve_physical_path(ws_uri, workspace_id)
+
+                        mod_dir = self.resolve_module_dir(mod_name, workspace_id)
+                        if not mod_dir:
+                                return None
+                        if not mod_rel:
+                                return mod_dir.as_posix()
+
+                        # 3-Tier Same-Name Override Cascade when resolving a specific template file
+                        if physical_target:
+                                ws_override = Path(physical_target).resolve().joinpath(mod_rel).resolve()
+                                if is_subpath(ws_override, Path(physical_target).resolve()) and ws_override.is_file():
+                                        return ws_override.as_posix()
+
+                        user_dir = self.ensure_global_user_templates_dir(workspace_id or "default")
+                        user_override = user_dir.joinpath(mod_rel).resolve()
+                        if is_subpath(user_override, user_dir) and user_override.is_file():
+                                return user_override.as_posix()
+
+                        resolved = mod_dir.joinpath(mod_rel).resolve()
+                        if not is_subpath(resolved, mod_dir):
+                                return None
+                        return resolved.as_posix()
+                return super().resolve(uri_obj, workspace_id, physical_target)
 
 
 class InSetuContext(_BaseExtensionContext):
@@ -70,7 +253,7 @@ class InSetuContext(_BaseExtensionContext):
     def db(self):
         db_wrapper = super().db
         if db_wrapper is not None and not hasattr(db_wrapper, "heal_uri_column"):
-            db_wrapper.heal_uri_column = lambda table, column="filepath", default_prefix="vfs://": heal_sqlite_uri_column(
+            db_wrapper.heal_uri_column = lambda table, column="filepath", default_prefix="vfs://": _utils_core.heal_sqlite_uri_column(
                 db_wrapper, table, column=column, default_prefix=default_prefix
             )
         return db_wrapper
@@ -96,7 +279,7 @@ class InSetuContext(_BaseExtensionContext):
     def resolve_path(self, filepath: str, is_absolute_artifact: bool = False, must_exist: bool = False, allow_heal: bool = False) -> Optional[str]:
         if not filepath:
             return None
-        uri = InSetuURI(filepath)
+        uri = _utils_core.InSetuURI(filepath)
         if must_exist:
             return uri.resolve_if_exists(self.workspace_id, allow_heal=allow_heal)
         return uri.resolve(self.workspace_id, is_absolute_artifact=is_absolute_artifact)
@@ -107,12 +290,12 @@ class InSetuContext(_BaseExtensionContext):
             entry = self.manifest.get("ctx", {}).get(base_uri)
         if not entry or not isinstance(entry, dict):
             return False
-        base_vol = InSetuURI(base_uri).volume
+        base_vol = _utils_core.InSetuURI(base_uri).volume
         chunks = entry.get("chunks") or [base_uri]
         if not chunks:
             return False
         for c in chunks:
-            if InSetuURI(c).volume != base_vol:
+            if _utils_core.InSetuURI(c).volume != base_vol:
                 return False
             if not self.resolve_path(c, must_exist=True, allow_heal=False):
                 return False
@@ -125,7 +308,7 @@ class InSetuContext(_BaseExtensionContext):
         chunks = self.emit_first('resolve_payload_chunks', uri=uri, manifest=manifest, default=[uri])
         parts = []
         for c in (chunks or [uri]):
-            is_sys = InSetuURI(c).scheme == 'ctx'
+            is_sys = _utils_core.InSetuURI(c).scheme == 'ctx'
             c_text = self.vfs.read(c, is_absolute_artifact=is_sys)
             if c_text:
                 parts.append(c_text)
@@ -201,7 +384,7 @@ class InSetuContext(_BaseExtensionContext):
         final_filename = filename or f"{slug}-{entity_id}.md"
         clean_folder = folder.rstrip('/')
         raw_target = f"{clean_folder}/{final_filename}" if clean_folder else final_filename
-        logical_path = str(InSetuURI(raw_target))
+        logical_path = str(_utils_core.InSetuURI(raw_target))
 
         now_iso = datetime.datetime.now().isoformat(timespec='seconds')
         full_yaml = {
@@ -215,13 +398,13 @@ class InSetuContext(_BaseExtensionContext):
             body = body_content.strip()
         else:
             body = f"## {title}\n\n{body_content}".strip()
-        file_content = update_frontmatter(body, full_yaml)
+        file_content = _utils_core.update_frontmatter(body, full_yaml)
 
         self.vfs.save(logical_path, file_content)
         return logical_path, full_yaml
 
     def update_frontmatter(self, content: str, new_data: Dict[str, Any]) -> str:
-        return update_frontmatter(content, new_data)
+        return _utils_core.update_frontmatter(content, new_data)
 # Export ExtensionContext alias pointing to InSetuContext for backward compatibility
 ExtensionContext = InSetuContext
 
@@ -304,9 +487,9 @@ class InSetuExtension(AkasaExtension):
         """SSOT for volume placement: <control>/<tier>/<ext_name>[/<subdir>]."""
         tier = vol_spec.get("tier", "data")
         base = (
-            get_domain_cache_path(workspace_id, self.name)
+            _utils_core.get_domain_cache_path(workspace_id, self.name)
             if tier == "cache"
-            else get_domain_data_path(workspace_id, self.name)
+            else _utils_core.get_domain_data_path(workspace_id, self.name)
         )
         subdir = str(vol_spec.get("subdir") or "").strip("/")
         if not subdir:
@@ -331,11 +514,14 @@ class InSetuExtension(AkasaExtension):
         for vol_name, vol_spec in self.volumes.items():
             scheme = vol_spec.get("scheme", "ctx")
             driver = vol_spec.get("driver")
+            module_subdir = vol_spec.get("module_subdir")
             legacy_dirs = vol_spec.get("legacy_dirs") or []
 
             if driver is not None:
                 drv_instance = driver() if isinstance(driver, type) else driver
                 register_driver(scheme, drv_instance, volume=vol_name)
+            elif module_subdir:
+                register_driver(scheme, TemplateOverlayVFSDriver(module_subdir=module_subdir), volume=vol_name)
             else:
                 register_driver(scheme, DefaultVFSDriver())
             target_dir = Path(self._resolve_volume_dir(wid, vol_name, vol_spec)).resolve()

@@ -1,9 +1,16 @@
 import { LitElement, html, css } from 'lit';
-import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
-import { InSetuElement, createExtensionStore } from '/static/extensions/system/insetu_sdk.js';
+import {
+    InSetuElement,
+    createExtensionStore,
+    sharedStyles,
+    buildFileTree,
+    resolveDirectoryState,
+    downloadFile as sutramDownloadFile,
+    downloadBlob,
+    bindGhostDrag
+} from '/static/extensions/system/insetu_sdk.js';
 import { resolveEditorMode, insertLinkToEditor } from '/static/extensions/system/components/ui_editor.js';
 import { AppStore, SelectionStore } from '/static/extensions/system/store.js';
-import { buildFileTree, resolveDirectoryState, downloadFile as sutramDownloadFile, downloadBlob, bindGhostDrag } from '../../vendor/sutram/js/utils.js';
 export function bindDownloadDrag(e, filename, fetchUrl) {
     const absoluteUrl = window.location.origin + fetchUrl;
     const safeName = filename.split('/').pop();

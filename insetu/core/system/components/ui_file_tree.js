@@ -1,8 +1,5 @@
 import { html, css } from 'lit';
-import { resolveDirectoryState, SutramWorker } from '../../../vendor/sutram/js/utils.js';
-import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
-import { SutramCard } from '../../../vendor/sutram/js/primitives.js';
-import { InSetuElement } from '/static/extensions/system/insetu_sdk.js';
+import { InSetuElement, sharedStyles, resolveDirectoryState, SutramWorker, SutramCard } from '/static/extensions/system/insetu_sdk.js';
 export function buildUriFileTree(uris, rootScope = '') {
     const normScope = (rootScope || 'vfs://').trim();
     const isSchemeOnlyScope = /^[a-zA-Z0-9_-]+:\/\/$/.test(normScope);

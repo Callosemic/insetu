@@ -1,8 +1,6 @@
 import { LitElement, html, css } from 'lit';
-import { InSetuElement } from '/static/extensions/system/insetu_sdk.js';
+import { InSetuElement, sharedStyles, SutramEditor, SutramProjectionWindowControls } from '/static/extensions/system/insetu_sdk.js';
 import { AppStore } from '/static/extensions/system/store.js';
-import { SutramEditor, SutramProjectionWindowControls } from '/static/vendor/sutram/js/primitives.js';
-import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 export function resolveEditorMode(filename) {
     if (!filename) return { ext: '', mode: null, isSupported: false, isMarkdown: false };
@@ -314,12 +312,19 @@ if (window.ExtensionRegistry) {
                 key: 'tab',
                 label: 'Indent (4 Spaces)',
                 action: (e) => {
-                    const el = e.target;
-                    const start = el.selectionStart;
-                    const end = el.selectionEnd;
+                    let el = window.inSetu?.utils?.getEventTarget ? window.inSetu.utils.getEventTarget(e) : e.target;
+                    if (!el || typeof el.value !== 'string') {
+                        el = document.activeElement;
+                        while (el && el.shadowRoot && el.shadowRoot.activeElement) {
+                            el = el.shadowRoot.activeElement;
+                        }
+                    }
+                    if (!el || typeof el.value !== 'string') return;
+                    const start = el.selectionStart ?? el.value.length;
+                    const end = el.selectionEnd ?? start;
                     el.value = el.value.substring(0, start) + "    " + el.value.substring(end);
                     el.selectionStart = el.selectionEnd = start + 4;
-                    el.dispatchEvent(new Event('input'));
+                    el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
                 }
             },
             {

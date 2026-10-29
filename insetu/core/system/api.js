@@ -1,6 +1,6 @@
 // insetu/static/js/api.js
 // ADR 0016: Explicit API Client SDK & Network Gateway
-import { SutramDB, OfflineHttpProvider, NetworkHysteresisManager, OutboxReconciler } from '../../vendor/sutram/js/offline.js';
+import { SutramDB, OfflineHttpProvider, NetworkHysteresisManager, OutboxReconciler } from '/static/extensions/system/insetu_sdk.js';
 import { AppStore } from '/static/extensions/system/store.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };

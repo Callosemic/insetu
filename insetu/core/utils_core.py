@@ -14,75 +14,72 @@ from collections import OrderedDict
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple, Union
-from akasa.auth import (
-    ensure_master_key_on_disk,
-    encrypt_secret,
-    decrypt_secret,
-    rotate_master_key,
-)
-from akasa.hooks import hooks
-CORE_MODULES_TUPLE = (
-    "bridge", "gather", "cartographer", "config", "editor", "fs",
-    "system", "workers", "auth", "security", "topology", "offline",
-    "llm", "agent", "prompts", "mcp"
-)
-
-from akasa.process import execute_binary
-from akasa.uri import AkasaURI
-from akasa.utils import (
-    load_config,
-    save_json_config,
-    load_json_config,
-    get_workspace_physics,
-    get_all_workspace_ids,
-    get_tenant_control_dir,
-    get_daemon_cwd,
-    set_daemon_cwd,
-    heal_daemon_config_files,
-    get_system_index_path,
-    get_daemon_host_config_path,
-    get_core_modules,
-    is_core_module,
-    is_extension_enabled,
-    get_active_modules,
-    set_tenant_resolver,
-    resolve_active_tenant,
-    sniff_tenant_id,
-    slugify,
-    is_subpath,
-    resolve_system_artifact_path,
-    build_tree_dict,
-    generate_ascii_tree,
-    fold_vfs_events,
-    reclaim_process_memory,
-    get_kernel_memory_telemetry,
-    typeddict_to_openapi,
-    parse_uri,
-    is_port_listening,
-    can_bind_port,
+from insetu.core.sdk import (
+    CORE_MODULES_TUPLE,
+    AkasaURI,
+    CycleError,
+    DefaultVFSDriver,
+    SettingsManager,
+    VFSTransaction,
     allocate_ephemeral_port,
     atomic_write_bytes,
     atomic_write_text,
-)
-from akasa.vfs import (
-    VFSTransaction,
-    DefaultVFSDriver,
-    register_driver,
-    mount_volume,
-    set_mount_authorizer,
-    resolve_physical_path as _vfs_resolve_physical_path,
-    resolve_physical_path,
-    sync_vfs_barrier,
-    execute_vfs_save,
+    build_tree_dict,
+    can_bind_port,
+    compute_vfs_sha256,
+    decrypt_secret,
+    encrypt_secret,
+    ensure_master_key_on_disk,
+    evict_vfs_cache,
+    execute_binary,
+    execute_vfs_bulk,
     execute_vfs_delete,
     execute_vfs_move,
-    execute_vfs_bulk,
-    evict_vfs_cache,
-    compute_vfs_sha256,
-    record_vfs_ancestor,
-    lookup_vfs_ancestor,
-    three_way_merge_text,
+    execute_vfs_save,
+    extract_template_variables,
+    fold_vfs_events,
+    generate_ascii_tree,
+    get_active_modules,
+    get_all_workspace_ids,
+    get_connection,
+    get_core_modules,
+    get_daemon_cwd,
+    get_daemon_host_config_path,
+    get_kernel_memory_telemetry,
+    get_system_index_path,
+    get_tenant_control_dir,
+    get_workspace_physics,
     has_pending_vfs_write,
+    heal_daemon_config_files,
+    hooks,
+    interpolate_template_variables,
+    is_core_module,
+    is_extension_enabled,
+    is_port_listening,
+    is_subpath,
+    load_config,
+    load_json_config,
+    lookup_vfs_ancestor,
+    mount_volume,
+    parse_uri,
+    reclaim_process_memory,
+    record_vfs_ancestor,
+    register_driver,
+    resolve_active_tenant,
+    resolve_dag_wavefronts,
+    resolve_physical_path as _vfs_resolve_physical_path,
+    resolve_physical_path,
+    resolve_system_artifact_path,
+    rotate_master_key,
+    save_json_config,
+    set_daemon_cwd,
+    set_mount_authorizer,
+    set_tenant_resolver,
+    slugify,
+    sniff_tenant_id,
+    sync_vfs_barrier,
+    three_way_merge_text,
+    typeddict_to_openapi,
 )
 
 
@@ -418,6 +415,19 @@ def load_yaml_string(raw_yaml: str) -> Any:
         return _fallback_parse_simple_yaml(raw_yaml)
 
 
+def dump_yaml_string(yaml_data: Dict[str, Any]) -> str:
+    """Centralized YAML string serializer using the round-trip ruamel.yaml engine with safe fallback."""
+    if not yaml_data:
+        return ""
+    try:
+        engine = _get_yaml_engine()
+        stream = io.StringIO()
+        engine.dump(yaml_data, stream)
+        return stream.getvalue().strip() + "\n"
+    except ImportError:
+        return _fallback_dump_simple_yaml(yaml_data) + "\n"
+
+
 def parse_frontmatter(content):
     if not content:
         return {}, "", None
@@ -703,6 +713,16 @@ def _parse_kv_directive_lines(lines: List[str]) -> Dict[str, str]:
         k, v = s.split(":", 1)
         directives[k.strip().upper()] = v.strip()
     return directives
+def _project_textedit_search_replace(raw_textedit: str) -> Tuple[str, str]:
+    """
+    Projects a <<<<<<< TEXTEDIT body containing inline {{-delete}} and {{+insert}} spans
+    into (search_str, replace_str) for 100% compatibility with bridge_ledger, /undo, and diff viewers.
+    """
+    search_projected = re.sub(r'\{\{\+([\s\S]*?)\}\}', '', raw_textedit)
+    search_projected = re.sub(r'\{\{-([\s\S]*?)\}\}', lambda m: m.group(1), search_projected)
+    replace_projected = re.sub(r'\{\{-([\s\S]*?)\}\}', '', raw_textedit)
+    replace_projected = re.sub(r'\{\{\+([\s\S]*?)\}\}', lambda m: m.group(1), replace_projected)
+    return search_projected, replace_projected
 
 
 def parse_blocks(text):
@@ -718,6 +738,11 @@ def parse_blocks(text):
             text.find("<<<<<<< COMMENT"),
             text.find("<<<<<<< RELOCATE"),
             text.find("<<<<<<< RENAME"),
+            text.find("<<<<<<< TEXTEDIT"),
+            text.find("<<<<<<< JSON_PATCH"),
+            text.find("<<<<<<< MOVE_FILE"),
+            text.find("<<<<<<< ARCHIVE_FILE"),
+            text.find("<<<<<<< DELETE_FILE"),
         ) if idx != -1
     ]
     if first_markers:
@@ -735,6 +760,112 @@ def parse_blocks(text):
         text,
         flags=re.MULTILINE
     )
+
+    def _flush_directive_block():
+        nonlocal comment_lines, ast_lines, current_id, state
+        if state in ("RELOCATE", "RENAME", "MOVE_FILE", "ARCHIVE_FILE", "DELETE_FILE"):
+            kv = _parse_kv_directive_lines(ast_lines)
+            if state == "RELOCATE":
+                raw_src = kv.get("FROM") or current_file or ""
+                raw_dst = kv.get("TO") or ""
+                src_file = str(InSetuURI.from_external_input(raw_src)) if raw_src else ""
+                dst_file = str(InSetuURI.from_external_input(raw_dst)) if raw_dst else ""
+                sym_name = kv.get("SYMBOL") or ""
+                if src_file:
+                    files.setdefault(src_file, []).append({
+                        "id": current_id,
+                        "type": "relocate",
+                        "comment": "\n".join(comment_lines).strip(),
+                        "symbol": sym_name,
+                        "source_uri": src_file,
+                        "target_uri": dst_file,
+                        "raw_directive": "\n".join(ast_lines),
+                        "search": "",
+                        "replace": "",
+                    })
+            elif state == "RENAME":
+                scope_val = kv.get("SCOPE") or current_file or "vfs://"
+                target_sym = kv.get("TARGET") or ""
+                replace_sym = kv.get("REPLACE_WITH") or ""
+                files.setdefault(scope_val, []).append({
+                    "id": current_id,
+                    "type": "rename",
+                    "comment": "\n".join(comment_lines).strip(),
+                    "target_symbol": target_sym,
+                    "new_symbol": replace_sym,
+                    "scope_prefix": scope_val,
+                    "raw_directive": "\n".join(ast_lines),
+                    "search": "",
+                    "replace": "",
+                })
+            elif state == "MOVE_FILE":
+                raw_src = kv.get("FROM") or kv.get("FILE") or current_file or ""
+                raw_dst = kv.get("TO") or kv.get("DEST") or ""
+                src_file = str(InSetuURI.from_external_input(raw_src)) if raw_src else ""
+                dst_file = str(InSetuURI.from_external_input(raw_dst)) if raw_dst else ""
+                if src_file:
+                    files.setdefault(src_file, []).append({
+                        "id": current_id,
+                        "type": "move_file",
+                        "comment": "\n".join(comment_lines).strip(),
+                        "source_uri": src_file,
+                        "target_uri": dst_file,
+                        "raw_directive": "\n".join(ast_lines),
+                        "search": "",
+                        "replace": "",
+                    })
+            elif state == "ARCHIVE_FILE":
+                raw_target = kv.get("FILE") or kv.get("FROM") or current_file or ""
+                target_uri = str(InSetuURI.from_external_input(raw_target)) if raw_target else ""
+                if target_uri:
+                    files.setdefault(target_uri, []).append({
+                        "id": current_id,
+                        "type": "archive_file",
+                        "comment": "\n".join(comment_lines).strip(),
+                        "source_uri": target_uri,
+                        "raw_directive": "\n".join(ast_lines),
+                        "search": "",
+                        "replace": "",
+                    })
+            elif state == "DELETE_FILE":
+                raw_target = kv.get("FILE") or kv.get("FROM") or current_file or ""
+                target_uri = str(InSetuURI.from_external_input(raw_target)) if raw_target else ""
+                if target_uri:
+                    files.setdefault(target_uri, []).append({
+                        "id": current_id,
+                        "type": "delete_file",
+                        "comment": "\n".join(comment_lines).strip(),
+                        "source_uri": target_uri,
+                        "raw_directive": "\n".join(ast_lines),
+                        "search": "",
+                        "replace": "",
+                    })
+        elif state == "JSON_PATCH" and current_file:
+            raw_json_body = "\n".join(ast_lines).strip()
+            files.setdefault(current_file, []).append({
+                "id": current_id,
+                "type": "json_patch",
+                "comment": "\n".join(comment_lines).strip(),
+                "patch_body": raw_json_body,
+                "raw_directive": raw_json_body,
+                "search": "",
+                "replace": raw_json_body,
+            })
+        elif state == "TEXTEDIT" and current_file:
+            raw_te = "\n".join(ast_lines)
+            s_proj, r_proj = _project_textedit_search_replace(raw_te)
+            files.setdefault(current_file, []).append({
+                "id": current_id,
+                "type": "textedit",
+                "comment": "\n".join(comment_lines).strip(),
+                "raw_textedit": raw_te,
+                "search": s_proj,
+                "replace": r_proj,
+            })
+        comment_lines = []
+        ast_lines = []
+        current_id = None
+        state = "OUTSIDE"
 
     lines = text.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
     for line in lines:
@@ -757,6 +888,21 @@ def parse_blocks(text):
         elif stripped.startswith("<<<<<<< RENAME"):
             state = "RENAME"
             ast_lines = []
+        elif stripped.startswith("<<<<<<< MOVE_FILE"):
+            state = "MOVE_FILE"
+            ast_lines = []
+        elif stripped.startswith("<<<<<<< ARCHIVE_FILE"):
+            state = "ARCHIVE_FILE"
+            ast_lines = []
+        elif stripped.startswith("<<<<<<< DELETE_FILE"):
+            state = "DELETE_FILE"
+            ast_lines = []
+        elif stripped.startswith("<<<<<<< TEXTEDIT"):
+            state = "TEXTEDIT"
+            ast_lines = []
+        elif stripped.startswith("<<<<<<< JSON_PATCH"):
+            state = "JSON_PATCH"
+            ast_lines = []
         elif line.startswith("<<<<<<< SEARCH"):
             state = "SEARCH"
             search_lines = []
@@ -771,47 +917,11 @@ def parse_blocks(text):
                 search_lines = []
                 replace_lines = []
         elif stripped == ">>>>>>> EXECUTE":
-            if state in ("RELOCATE", "RENAME"):
-                kv = _parse_kv_directive_lines(ast_lines)
-                if state == "RELOCATE":
-                    raw_src = kv.get("FROM") or current_file or ""
-                    raw_dst = kv.get("TO") or ""
-                    src_file = str(InSetuURI.from_external_input(raw_src)) if raw_src else ""
-                    dst_file = str(InSetuURI.from_external_input(raw_dst)) if raw_dst else ""
-                    sym_name = kv.get("SYMBOL") or ""
-                    if src_file:
-                        files.setdefault(src_file, []).append({
-                            "id": current_id,
-                            "type": "relocate",
-                            "comment": "\n".join(comment_lines).strip(),
-                            "symbol": sym_name,
-                            "source_uri": src_file,
-                            "target_uri": dst_file,
-                            "raw_directive": "\n".join(ast_lines),
-                            "search": "",
-                            "replace": "",
-                        })
-                elif state == "RENAME":
-                    scope_val = kv.get("SCOPE") or current_file or "vfs://"
-                    target_sym = kv.get("TARGET") or ""
-                    replace_sym = kv.get("REPLACE_WITH") or ""
-                    files.setdefault(scope_val, []).append({
-                        "id": current_id,
-                        "type": "rename",
-                        "comment": "\n".join(comment_lines).strip(),
-                        "target_symbol": target_sym,
-                        "new_symbol": replace_sym,
-                        "scope_prefix": scope_val,
-                        "raw_directive": "\n".join(ast_lines),
-                        "search": "",
-                        "replace": "",
-                    })
-                comment_lines = []
-                ast_lines = []
-                current_id = None
-            state = "OUTSIDE"
+            _flush_directive_block()
         elif line.startswith(">>>>>>> REPLACE"):
-            if state == "REPLACE" and current_file:
+            if state in ("TEXTEDIT", "JSON_PATCH", "RELOCATE", "RENAME", "MOVE_FILE", "ARCHIVE_FILE", "DELETE_FILE"):
+                _flush_directive_block()
+            elif state == "REPLACE" and current_file:
                 files[current_file].append({
                     "id": current_id,
                     "type": current_type,
@@ -821,11 +931,13 @@ def parse_blocks(text):
                 })
                 comment_lines = []
                 current_id = None
-            state = "OUTSIDE"
+                state = "OUTSIDE"
+            else:
+                state = "OUTSIDE"
         else:
             if state == "COMMENT":
                 comment_lines.append(line)
-            elif state in ("RELOCATE", "RENAME"):
+            elif state in ("RELOCATE", "RENAME", "MOVE_FILE", "ARCHIVE_FILE", "DELETE_FILE", "TEXTEDIT", "JSON_PATCH"):
                 ast_lines.append(line)
             elif state == "SEARCH":
                 search_lines.append(line)
@@ -911,10 +1023,7 @@ def _is_watchdog_vfs_echo(abs_key: str, src_path: str, op: str) -> Tuple[bool, O
         return False, disk_hash
     except Exception:
         return False, None
-
-
 def _watchdog_debouncer_loop():
-    from akasa.db import get_connection as _get_connection
     while True:
         time.sleep(2.0)
         now = time.time()
@@ -941,7 +1050,7 @@ def _watchdog_debouncer_loop():
                     mut_entry["base_hash"] = disk_hash
                 ws_groups[ws_id].append(mut_entry)
                 try:
-                    w_conn = _get_connection("workers", workspace_id=ws_id)
+                    w_conn = get_connection("workers", workspace_id=ws_id)
                     w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (logical_path, data['op'], now))
                     w_conn.commit()
                 except Exception: pass
@@ -975,9 +1084,8 @@ def start_filesystem_observer(**kwargs):
     global _WATCHDOG_OBSERVER
     if _WATCHDOG_OBSERVER is not None:
         stop_filesystem_observer()
-    from akasa.extension import SettingsManager as _SettingsManager
     workspace_ids = get_all_workspace_ids()
-    if not _SettingsManager('system', 'default').get("enable_watchdog", True):
+    if not SettingsManager('system', 'default').get("enable_watchdog", True):
         return None
 
     active_configs = []
@@ -1473,8 +1581,7 @@ def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kw
                         gather_files = repo_files_cache[repo_dir]
                     else:
                         if all_ledger_files_cache is None:
-                            from akasa.db import get_connection as _get_connection
-                            conn = _get_connection("topology", workspace_id=workspace_id)
+                            conn = get_connection("topology", workspace_id=workspace_id)
                             rows = conn.execute("SELECT filepath FROM topology_ledger").fetchall()
                             all_ledger_files_cache = [r['filepath'] for r in rows]
                         gather_files = all_ledger_files_cache

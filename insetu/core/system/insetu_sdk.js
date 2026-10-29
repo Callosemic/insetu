@@ -1,11 +1,182 @@
 // insetu/insetu/static/js/core/sdk.js
-// Tier 1A: inSetu Local OS SDK Wrapper
-import { SutramElement, createSutramStore, StoreRegistry, ExtensionRegistry as SutramRegistry, bindStoreInput } from '/static/vendor/sutram/js/sutram_sdk.js';
-import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, coalescedAsync, formatDate, timeAgo, nativeShareFiles, cleanCodeArtifacts, shallowEqual, copyRichHtml, threeWayMergeText, HostPath, truncateFilename, clone } from '/static/vendor/sutram/js/utils.js';
-import { getEventPath, getEventTarget } from '/static/vendor/yenvui/js/physics.js';
+// Tier 1A: inSetu Local OS SDK Wrapper (Single-File Frontend Membrane)
+import {
+    SutramElement,
+    SutramContextMixin,
+    createSutramStore,
+    StoreRegistry,
+    ExtensionRegistry as SutramRegistry,
+    bindStoreInput,
+    StatusStore,
+    ToastStore,
+    SelectionStore,
+    EnvironmentStore,
+    LayoutStore,
+    canUseMultiWindowPopout,
+    SutramDB,
+    OfflineHttpProvider,
+    NetworkHysteresisManager,
+    OutboxReconciler,
+    bootSutramServiceWorker,
+    purgeSutramCaches,
+    createJobPoller,
+    initShortcutRouter,
+    SutramProjectionCompiler,
+    SutramProjectionPool,
+    sharedStyles,
+    REQUIRED_CHASSIS_PRIMITIVES,
+    validateChassisContract,
+    SutramUIAdapter,
+    SutramAppShell,
+    SutramCard,
+    SutramEditor,
+    SutramProjectionWindowControls,
+    SutramModal,
+    SutramAsyncBtn,
+    SutramBtn,
+    SutramInput,
+    SutramSelect,
+    SutramTextarea,
+    SutramToggle,
+    fuzzyFilterObjects,
+    normalizeAccentText,
+    slugify,
+    debounce,
+    coalescedAsync,
+    formatDate,
+    timeAgo,
+    nativeShareFiles,
+    shallowEqual,
+    copyRichHtml,
+    copyToClipboard,
+    copyRawText,
+    threeWayMergeText,
+    HostPath,
+    truncateFilename,
+    clone,
+    compileDagWavefronts,
+    extractTemplateVariables as _sutramExtractTemplateVariables,
+    interpolateTemplateVariables as _sutramInterpolateTemplateVariables,
+    buildFileTree,
+    resolveDirectoryState,
+    downloadFile,
+    downloadBlob,
+    bindGhostDrag,
+    SutramWorker,
+    getEventPath,
+    getEventTarget,
+    getDeepElementFromPoint
+} from 'sutram';
 import * as jsYaml from '/static/vendor/js-yaml/js-yaml.min.js';
+const INSETU_RESERVED_MACROS = Object.freeze([
+    'UNTIL', 'triple', 'inputs', 'nodes', 'item', 'loop', 'global',
+    'system_prompt', 'user_message', 'user_prompt', 'context_block', 'history_summary', 'plan_uri'
+]);
+const INSETU_RESERVED_PREFIXES = Object.freeze([
+    'wordcount_', 'nodes.', 'inputs.', 'global.', 'item.', 'loop.', 'include_prompt:', 'ymm:'
+]);
 
-export { bindStoreInput, truncateFilename };
+export function extractTemplateVariables(text, options = {}) {
+    return _sutramExtractTemplateVariables(text, {
+        reservedMacros: INSETU_RESERVED_MACROS,
+        reservedPrefixes: INSETU_RESERVED_PREFIXES,
+        ...options
+    });
+}
+
+export function interpolateTemplateVariables(text, values = {}, options = {}) {
+    return _sutramInterpolateTemplateVariables(text, values, {
+        reservedMacros: INSETU_RESERVED_MACROS,
+        reservedPrefixes: INSETU_RESERVED_PREFIXES,
+        ...options
+    });
+}
+
+export function cleanCodeArtifacts(text) {
+    if (!text || typeof text !== 'string') return '';
+    let result = text;
+    const firstDollar = result.indexOf('$');
+    const lastDollar = result.lastIndexOf('$');
+    if (firstDollar !== -1 && lastDollar > firstDollar && result.includes('\\vert{}')) {
+        result = result.slice(0, firstDollar + 1)
+            + result.slice(firstDollar + 1, lastDollar).replace(/\\vert\{\}/g, '|')
+            + result.slice(lastDollar);
+    }
+    result = result.replace(/\{\{\s*ymm:(.)[x*](\d+)\s*\}\}/g, (_, char, count) => char.repeat(parseInt(count, 10)));
+    result = result.replace(/\{\{\s*(.)\s*\*\s*(\d+)\s*\}\}/g, (_, char, count) => char.repeat(parseInt(count, 10)));
+    result = result.replace(/\{\{\s*triple(.)\s*\}\}/g, (_, char) => char.repeat(3));
+    result = result.replace(/_(?:[^_\n]_){3,}/g, (match) => match.replace(/_/g, ''));
+    result = result.replace(/\x5b\x73\x6f\x75\x72\x63\x65:\s*\d+\x5d/gi, '');
+    result = result.replace(/\x5b\x63\x69\x74\x65:\s*[\d\s,]+\x5d/gi, '');
+    result = result.replace(/\x5b\x63\x69\x74\x65_start\x5d/gi, '');
+    result = result.replace(/\x5b\x63\x69\x74\x65_end\x5d/gi, '');
+    result = result.replace(/\x5b\x63\x69\x74\x65\x5d/gi, '');
+    result = result.replace(/<\/?(?:span|cite)[^>]*>/gi, '');
+    return result;
+}
+
+export {
+    SutramRegistry as ExtensionRegistry,
+    StoreRegistry,
+    bindStoreInput,
+    StatusStore,
+    ToastStore,
+    SelectionStore,
+    EnvironmentStore,
+    LayoutStore,
+    canUseMultiWindowPopout,
+    SutramDB,
+    OfflineHttpProvider,
+    NetworkHysteresisManager,
+    OutboxReconciler,
+    bootSutramServiceWorker,
+    purgeSutramCaches,
+    createJobPoller,
+    initShortcutRouter,
+    SutramProjectionCompiler,
+    SutramProjectionPool,
+    sharedStyles,
+    REQUIRED_CHASSIS_PRIMITIVES,
+    validateChassisContract,
+    SutramUIAdapter,
+    SutramAppShell,
+    SutramCard,
+    SutramEditor,
+    SutramProjectionWindowControls,
+    SutramModal,
+    SutramAsyncBtn,
+    SutramBtn,
+    SutramInput,
+    SutramSelect,
+    SutramTextarea,
+    SutramToggle,
+    fuzzyFilterObjects,
+    normalizeAccentText,
+    slugify,
+    debounce,
+    coalescedAsync,
+    formatDate,
+    timeAgo,
+    nativeShareFiles,
+    shallowEqual,
+    copyRichHtml,
+    copyToClipboard,
+    copyRawText,
+    threeWayMergeText,
+    HostPath,
+    truncateFilename,
+    clone,
+    compileDagWavefronts,
+    buildFileTree,
+    resolveDirectoryState,
+    downloadFile,
+    downloadBlob,
+    bindGhostDrag,
+    SutramWorker,
+    getEventPath,
+    getEventTarget,
+    getDeepElementFromPoint
+};
 
 export function createExtensionStore(name, initialState, persistenceSchema = {}) {
     const getWs = () => window.inSetu.utils.getActiveWorkspace();
@@ -401,6 +572,9 @@ export class InSetuElement extends SutramElement {
             cleanCodeArtifacts: window.inSetu.utils.cleanCodeArtifacts,
             shallowEqual: window.inSetu.utils.shallowEqual,
             threeWayMergeText: window.inSetu.utils.threeWayMergeText,
+            compileDagWavefronts: window.inSetu.utils.compileDagWavefronts,
+            extractTemplateVariables: window.inSetu.utils.extractTemplateVariables,
+            interpolateTemplateVariables: window.inSetu.utils.interpolateTemplateVariables,
             getActiveWorkspace: window.inSetu.utils.getActiveWorkspace
         };
     }
@@ -833,6 +1007,9 @@ window.inSetu.utils.nativeShareFiles = nativeShareFiles;
 window.inSetu.utils.cleanCodeArtifacts = cleanCodeArtifacts;
 window.inSetu.utils.shallowEqual = shallowEqual;
 window.inSetu.utils.threeWayMergeText = threeWayMergeText;
+window.inSetu.utils.compileDagWavefronts = compileDagWavefronts;
+window.inSetu.utils.extractTemplateVariables = extractTemplateVariables;
+window.inSetu.utils.interpolateTemplateVariables = interpolateTemplateVariables;
 window.inSetu.utils.HostPath = HostPath;
 window.inSetu.utils.truncateFilename = truncateFilename;
 window.inSetu.utils.formatArtifactSize = function(meta) {

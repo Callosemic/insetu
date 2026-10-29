@@ -1,7 +1,6 @@
 // insetu/static/js/store.js
 // Strict Unidirectional Data Flow (UDF) State Manager
-import { createExtensionStore } from '/static/extensions/system/insetu_sdk.js';
-import { StatusStore, ToastStore, SelectionStore } from '../../vendor/sutram/js/sutram_sdk.js';
+import { createExtensionStore, StatusStore, ToastStore, SelectionStore } from '/static/extensions/system/insetu_sdk.js';
 
 export { StatusStore, ToastStore, SelectionStore };
 

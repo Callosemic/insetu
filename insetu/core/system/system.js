@@ -1,6 +1,12 @@
 import { AppStore, StatusStore } from '/static/extensions/system/store.js';
-import { SutramDB, bootSutramServiceWorker, purgeSutramCaches } from '/static/vendor/sutram/js/offline.js';
-import '/static/vendor/sutram/js/app_shell.js';
+import {
+    CORE_UI_SCRIPTS,
+    SutramDB,
+    bootSutramServiceWorker,
+    purgeSutramCaches,
+    initShortcutRouter,
+    createJobPoller
+} from '/static/extensions/system/insetu_sdk.js';
 export function bootServiceWorker() {
     bootSutramServiceWorker({
         swUrl: '/sw.js',
@@ -44,10 +50,6 @@ window.addEventListener('beforeunload', (e) => {
         e.returnValue = '';
     }
 });
-import { CORE_UI_SCRIPTS } from '/static/extensions/system/insetu_sdk.js';
-import { initShortcutRouter } from '/static/vendor/sutram/js/shortcuts.js';
-import '/static/vendor/sutram/js/primitives.js';
-import '/static/vendor/sutram/js/inputs.js';
 // --- CENTRALIZED SHORTCUT ROUTER ---
 initShortcutRouter(window.ExtensionRegistry, () => {
     const contexts = ['global'];
@@ -436,7 +438,6 @@ if (!new URLSearchParams(window.location.search).get('popout')) {
     );
 }
 import './api.js'; // Mount explicit API client and network interceptors
-import { createJobPoller } from '/static/vendor/sutram/js/poller.js';
 // ADR 0017: Wrap the global poller to statelessly swallow callbacks and pin requests to the originating workspace
 window.inSetu.utils.pollJob = (jobId, options = {}) => {
     const initWs = window.inSetu.utils.getActiveWorkspace();

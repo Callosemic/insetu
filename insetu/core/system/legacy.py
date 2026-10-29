@@ -122,9 +122,8 @@ def migrate_physical_sandboxes(**kwargs):
                 except Exception: pass
         # 3. Self-Healing DB Recovery inside .insetu/cache/db/
         recover_corrupt_databases(ws_id)
-
         # 4. Migrate legacy extension store definitions into .insetu/data/<ext>/ via StoreManager SSOT
-        for ext_name, filenames in [("flow", ["workflows.json"]), ("editor", ["preferences.json"])]:
+        for ext_name, filenames in [("editor", ["preferences.json"])]:
             store_mgr = StoreManager(ws_id, ext_name=ext_name)
             for fname in filenames:
                 store_mgr._resolve_store_path(fname)
