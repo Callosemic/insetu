@@ -22,6 +22,8 @@ function _buildDefaultItemFromSchema(itemSchema = [], index = 1) {
             obj[f.id] = Array.isArray(f.default) ? JSON.parse(JSON.stringify(f.default)) : [];
         } else if (f.default !== undefined) {
             obj[f.id] = typeof f.default === 'function' ? f.default(index) : JSON.parse(JSON.stringify(f.default));
+        } else if (f.type === 'target_binding') {
+            obj[f.id] = { endpoint: '', model: '' };
         } else if (f.type === 'number') {
             obj[f.id] = 0;
         } else if (f.type === 'boolean') {
@@ -39,6 +41,7 @@ export class InSetuSchemaRepeater extends InSetuElement {
         items: { type: Array },
         rootFormData: { type: Object },
         datalistOptions: { type: Array },
+        optionResolver: { attribute: false },
         _expandedMap: { type: Object }
     };
     static styles = [sharedStyles, css`
@@ -61,8 +64,15 @@ export class InSetuSchemaRepeater extends InSetuElement {
         }
         .record-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-            gap: 10px;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 12px;
+            width: 100%;
+        }
+        .record-grid > * {
+            min-width: 0;
+        }
+        .record-grid > .full-span {
+            grid-column: 1 / -1;
         }
     `];
 
@@ -72,7 +82,24 @@ export class InSetuSchemaRepeater extends InSetuElement {
         this.items = [];
         this.rootFormData = {};
         this.datalistOptions = [];
+        this.optionResolver = null;
         this._expandedMap = { 0: true };
+    }
+
+    _deriveUniqueSlug(baseStr, excludeIdx = -1, currentItems = []) {
+        const idKey = this.field?.id_key || 'id';
+        const rawSlug = this.utils.slugify(String(baseStr || '')) || `item_${excludeIdx >= 0 ? excludeIdx + 1 : currentItems.length + 1}`;
+        const existingIds = new Set(
+            (currentItems || [])
+                .map((it, i) => (i !== excludeIdx && it && typeof it === 'object') ? it[idKey] : null)
+                .filter(Boolean)
+        );
+        if (!existingIds.has(rawSlug)) return rawSlug;
+        let suffix = 2;
+        while (existingIds.has(`${rawSlug}_${suffix}`)) {
+            suffix++;
+        }
+        return `${rawSlug}_${suffix}`;
     }
 
     _emitChange(nextItems) {
@@ -93,6 +120,11 @@ export class InSetuSchemaRepeater extends InSetuElement {
         const titleKey = this.field.item_title_key;
         if (titleKey && !newItem[titleKey]) {
             newItem[titleKey] = `${this.field.item_label || 'Item'} ${nextIdx}`;
+        }
+        const implicitIdKey = this.field.id_key;
+        const implicitSlugSource = this.field.slug_source || titleKey;
+        if (implicitIdKey && implicitSlugSource) {
+            newItem[implicitIdKey] = this._deriveUniqueSlug(newItem[implicitSlugSource] || `item_${nextIdx}`, -1, current);
         }
         const slugField = (this.field.item_schema || []).find(s => s.type === 'slug');
         if (slugField && !newItem[slugField.id]) {
@@ -125,6 +157,7 @@ export class InSetuSchemaRepeater extends InSetuElement {
     _updateItemField(idx, subField, rawVal) {
         const current = Array.isArray(this.items) ? [...this.items] : [];
         const item = { ...(current[idx] || {}) };
+        const prevSourceVal = item[subField.id];
         let val = rawVal;
         if (subField.type === 'number') {
             val = rawVal === '' ? '' : Number(rawVal);
@@ -132,6 +165,17 @@ export class InSetuSchemaRepeater extends InSetuElement {
             val = String(rawVal || '').split(',').map(s => s.trim()).filter(Boolean);
         }
         item[subField.id] = val;
+
+        // Implicit Repeater Identity Synchronization (id_key & slug_source)
+        const implicitIdKey = this.field.id_key;
+        const implicitSlugSource = this.field.slug_source;
+        if (implicitIdKey && implicitSlugSource === subField.id) {
+            const prevSlug = this.utils.slugify(String(prevSourceVal || ''));
+            const curId = item[implicitIdKey] || '';
+            if (!curId || curId === prevSlug || curId.startsWith(`${prevSlug}_`)) {
+                item[implicitIdKey] = this._deriveUniqueSlug(val, idx, current);
+            }
+        }
 
         // Auto-populate any dependent slug field if it hasn't been manually customized
         (this.field.item_schema || []).forEach(sf => {
@@ -165,10 +209,43 @@ export class InSetuSchemaRepeater extends InSetuElement {
                 </sutram-toggle>
             `;
         }
+        if (fType === 'target_binding') {
+            const epSourceKey = subField.endpoint_source || 'compute_endpoints';
+            const epList = Array.isArray(this.rootFormData?.[epSourceKey]) ? this.rootFormData[epSourceKey] : [];
+            const resolveModels = (epId) => {
+                if (typeof this.optionResolver === 'function') {
+                    return this.optionResolver(subField, epId, this.rootFormData, itemData);
+                }
+                return this.datalistOptions || [];
+            };
+            return html`
+                <sutram-target-binding
+                    ?flush=${true}
+                    ?allowEmptyEndpoint=${Boolean(subField.allow_empty)}
+                    .label=${subField.label || subField.id}
+                    .value=${value || subField.default || { endpoint: '', model: '' }}
+                    .endpoints=${epList}
+                    .models=${resolveModels}
+                    .endpointPlaceholder=${subField.endpoint_placeholder || 'Select endpoint...'}
+                    .modelPlaceholder=${subField.placeholder || 'Select or type model...'}
+                    @sutram-input-changed=${e => onChange(e.detail.value)}>
+                </sutram-target-binding>
+            `;
+        }
         if (fType === 'select') {
-            const opts = typeof subField.options === 'function'
+            let opts = typeof subField.options === 'function'
                 ? subField.options(this.rootFormData, itemData)
                 : (subField.options || []);
+            if (subField.options_from && typeof subField.options_from === 'object') {
+                const srcArr = Array.isArray(this.rootFormData?.[subField.options_from.field])
+                    ? this.rootFormData[subField.options_from.field]
+                    : [];
+                const vKey = subField.options_from.value_key || 'id';
+                const lKey = subField.options_from.label_key || 'title';
+                opts = srcArr
+                    .filter(it => it && typeof it === 'object' && (it[vKey] || it[lKey]))
+                    .map(it => ({ value: String(it[vKey] || it[lKey]), label: String(it[lKey] || it[vKey]) }));
+            }
             return html`
                 <sutram-select
                     ?flush=${true}
@@ -259,7 +336,7 @@ export class InSetuSchemaRepeater extends InSetuElement {
                     <div style="display: flex; flex-direction: column; gap: 8px;">
                         ${list.map((item, idx) => {
                             const titleKey = f.item_title_key || 'title';
-                            const subKey = f.item_subtitle_key || 'id';
+                            const subKey = f.item_subtitle_key !== undefined ? f.item_subtitle_key : 'id';
                             const cardTitle = item?.[titleKey] || item?.label || item?.id || `${f.item_label || 'Item'} #${idx + 1}`;
                             const cardSub = subKey && item?.[subKey] && item?.[subKey] !== cardTitle ? ` (${item[subKey]})` : '';
                             const isOpen = Boolean(this._expandedMap[idx]);
@@ -296,7 +373,7 @@ export class InSetuSchemaRepeater extends InSetuElement {
 
                                     <div style="display: flex; flex-direction: column; gap: 12px; padding-top: 6px;">
                                         <div class="record-grid">
-                                            ${itemSchema.filter(sf => sf.type !== 'record' && sf.type !== 'repeater' && sf.type !== 'custom' && _evaluateFieldCondition(sf.show_if, item, this.rootFormData)).map(sf => html`
+                                            ${itemSchema.filter(sf => sf.type !== 'hidden' && sf.type !== 'record' && sf.type !== 'repeater' && sf.type !== 'custom' && _evaluateFieldCondition(sf.show_if, item, this.rootFormData)).map(sf => html`
                                                 <div style="display: flex; flex-direction: column; gap: 4px;">
                                                     ${this._renderLeafInput(
                                                         sf,
@@ -321,11 +398,11 @@ export class InSetuSchemaRepeater extends InSetuElement {
                                         `)}
 
                                         ${itemSchema.filter(sf => sf.type === 'record' && _evaluateFieldCondition(sf.show_if, item, this.rootFormData)).map(recField => html`
-                                            <div style="padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; gap: 8px;">
+                                            <div style="padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; gap: 10px;">
                                                 <span style="font-size: 0.8rem; font-weight: bold; color: var(--intent-primary);">${recField.label || recField.id}</span>
                                                 <div class="record-grid">
                                                     ${(recField.fields || []).filter(cf => _evaluateFieldCondition(cf.show_if, item?.[recField.id] || {}, item)).map(cf => html`
-                                                        <div style="display: flex; flex-direction: column; gap: 4px;">
+                                                        <div class="${cf.type === 'target_binding' || cf.type === 'textarea' ? 'full-span' : ''}" style="display: flex; flex-direction: column; gap: 4px; min-width: 0;">
                                                             ${this._renderLeafInput(
                                                                 cf,
                                                                 (item?.[recField.id] || {})[cf.id],
@@ -434,6 +511,14 @@ export class InSetuSystemSettings extends InSetuElement {
         this._exportSharedDomains = {};
         this._exportRepeaterItems = [];
         this._llmCatalogMap = {};
+        this._driverTierDefaults = {
+            anthropic: { decision: 'claude-3-5-haiku-latest', fast: 'claude-3-5-haiku-latest', standard: 'claude-3-5-sonnet-latest', thinking: 'claude-3-7-sonnet-latest', frontier: 'claude-3-7-sonnet-latest' },
+            gemini: { decision: 'gemini-2.5-flash-lite', fast: 'gemini-2.5-flash-lite', standard: 'gemini-2.5-flash', thinking: 'gemini-2.5-pro', frontier: 'gemini-2.5-pro' },
+            openrouter: { decision: 'typesafe/jev-binary-v1', fast: 'google/gemini-2.5-flash-lite', standard: 'anthropic/claude-3.5-sonnet', thinking: 'anthropic/claude-3.7-sonnet', frontier: 'anthropic/claude-3.7-sonnet:thinking' },
+            decisions: { decision: 'typesafe/jev-binary-v1', fast: 'typesafe/jev-binary-v1', standard: 'nace-ai/drex-1', thinking: 'nace-ai/drex-1', frontier: 'nace-ai/drex-1' },
+            claude_cli: { decision: 'claude-3-5-haiku-latest', fast: 'claude-3-5-haiku-latest', standard: 'claude-3-5-sonnet-latest', thinking: 'claude-3-7-sonnet-latest', frontier: 'claude-3-7-sonnet-latest' },
+            web_chat: { decision: 'web-chat-fast', fast: 'web-chat-fast', standard: 'web-chat-standard', thinking: 'web-chat-thinking', frontier: 'web-chat-frontier' }
+        };
         this._topologyEditingRepo = false;
         this._topologyRepoTitle = '';
         this._topologyIsNewRepo = false;
@@ -548,14 +633,121 @@ export class InSetuSystemSettings extends InSetuElement {
                 const catRes = await this.api.workspace.get('llm/catalog');
                 if (catRes.ok) {
                     const catData = await catRes.json();
-                    const map = {};
-                    (catData.models || []).forEach(m => {
-                        if (m && m.id) map[m.id] = m;
-                    });
-                    this._llmCatalogMap = map;
-                    this.requestUpdate();
+                    this._ingestLlmCatalogPayload(catData);
                 }
             } catch (_) {}
+        }
+    }
+
+    _ingestLlmCatalogPayload(catData) {
+        if (!catData || typeof catData !== 'object') return;
+        const map = {};
+        (catData.models || []).forEach(m => {
+            if (m && m.id) {
+                const key = m.source && m.category === 'local' ? `${m.source}::${m.id}` : m.id;
+                map[key] = m;
+                if (!map[m.id]) map[m.id] = m;
+            }
+        });
+        this._llmCatalogMap = map;
+        if (catData.driver_tier_defaults && typeof catData.driver_tier_defaults === 'object') {
+            this._driverTierDefaults = { ...this._driverTierDefaults, ...catData.driver_tier_defaults };
+        }
+        this._healProfileTiersForEndpoints();
+        this.requestUpdate();
+    }
+
+    _isModelForeignToDriver(modelId, driver) {
+        const m = String(modelId || '').trim().toLowerCase();
+        if (!m) return true;
+        if (driver === 'web_chat') return !m.startsWith('web-chat');
+        if (m.startsWith('web-chat') && driver !== 'web_chat') return true;
+        if (driver === 'gemini') return m.startsWith('claude-') || m.startsWith('anthropic/');
+        if (driver === 'anthropic' || driver === 'claude_cli') return m.startsWith('gemini-') || m.startsWith('google/');
+        if (driver === 'decisions') return !m.includes('jev') && !m.includes('drex') && !m.includes('liquid');
+        return false;
+    }
+
+    _getDefaultModelForEndpointTier(ep, tierId) {
+        if (!ep) return '';
+        const driver = String(ep.driver || 'openai_compatible').toLowerCase();
+        const custom = Array.isArray(ep.custom_models) ? ep.custom_models : [];
+        if (custom.length > 0) return custom[0];
+        if (driver === 'openai_compatible') {
+            const localMatch = Object.values(this._llmCatalogMap || {}).find(
+                e => e && (String(e.source || '').toLowerCase() === String(ep.id || '').toLowerCase())
+            );
+            return localMatch ? localMatch.id : '';
+        }
+        const driverMap = (this._driverTierDefaults || {})[driver] || {};
+        return driverMap[tierId] || driverMap.standard || '';
+    }
+
+    _healProfileTiersForEndpoints() {
+        const llmForm = this._extForms?.llm;
+        if (!llmForm) return;
+        const endpoints = Array.isArray(llmForm.compute_endpoints) ? llmForm.compute_endpoints : [];
+        const profiles = Array.isArray(llmForm.llm_profiles) ? llmForm.llm_profiles : [];
+        if (endpoints.length === 0 || profiles.length === 0) return;
+
+        const epById = {};
+        endpoints.forEach(e => { if (e && e.id) epById[e.id] = e; });
+        const fallbackEp = endpoints[0];
+        let mutated = false;
+
+        const nextProfiles = profiles.map(prof => {
+            if (!prof || typeof prof !== 'object') return prof;
+            const rawTiers = (prof.tiers && typeof prof.tiers === 'object') ? { ...prof.tiers } : {};
+            let profMutated = false;
+
+            ['decision', 'fast', 'standard', 'thinking', 'frontier'].forEach(tKey => {
+                let tVal = rawTiers[tKey];
+                if (typeof tVal === 'string') {
+                    if (tVal.includes('::')) {
+                        const [ePart, mPart] = tVal.split('::');
+                        tVal = { endpoint: ePart.trim(), model: mPart.trim() };
+                    } else {
+                        tVal = { endpoint: tVal ? fallbackEp.id : '', model: tVal.trim() };
+                    }
+                    profMutated = true;
+                } else if (!tVal || typeof tVal !== 'object') {
+                    tVal = { endpoint: tKey === 'decision' ? '' : fallbackEp.id, model: '' };
+                    profMutated = true;
+                } else {
+                    tVal = { ...tVal };
+                }
+
+                if (tKey !== 'decision' && (!tVal.endpoint || !epById[tVal.endpoint])) {
+                    tVal.endpoint = fallbackEp.id;
+                    profMutated = true;
+                }
+
+                const targetEp = epById[tVal.endpoint];
+                if (targetEp) {
+                    const drv = String(targetEp.driver || '').toLowerCase();
+                    if (!tVal.model || this._isModelForeignToDriver(tVal.model, drv)) {
+                        const suggested = this._getDefaultModelForEndpointTier(targetEp, tKey);
+                        if (suggested && suggested !== tVal.model) {
+                            tVal.model = suggested;
+                            profMutated = true;
+                        }
+                    }
+                }
+                rawTiers[tKey] = tVal;
+            });
+
+            if (profMutated) {
+                mutated = true;
+                return { ...prof, tiers: rawTiers };
+            }
+            return prof;
+        });
+
+        if (mutated) {
+            this._extForms = {
+                ...this._extForms,
+                llm: { ...llmForm, llm_profiles: nextProfiles }
+            };
         }
     }
     _renderCustomActionComponent(tagName) {
@@ -681,6 +873,11 @@ export class InSetuSystemSettings extends InSetuElement {
             this._extForms = {};
             this._selectedRepo = '';
             this._activeView = null;
+        });
+        this.registerGlobalListener('insetu:llm-catalog-updated', window, (e) => {
+            if (e.detail) {
+                this._ingestLlmCatalogPayload(e.detail);
+            }
         });
         this.registerGlobalListener('sutram-settings-repo-changed', this, (e) => {
             const { extName, repo } = e.detail || {};
@@ -1074,63 +1271,162 @@ export class InSetuSystemSettings extends InSetuElement {
         return this._renderGenericExtensionDrillDown(activeExtModule, allRepos);
     }
 
+    _resolveTargetBindingModels(subField, endpointId, rootFormData = {}) {
+        const endpoints = Array.isArray(rootFormData?.compute_endpoints) ? rootFormData.compute_endpoints : [];
+        const ep = endpoints.find(e => e && e.id === endpointId);
+        if (!ep) return [];
+
+        const driver = String(ep.driver || 'openai_compatible').toLowerCase();
+        const customModels = Array.isArray(ep.custom_models)
+            ? ep.custom_models
+            : (Array.isArray(ep.models)
+                ? ep.models
+                : String(ep.custom_models || ep.models || '').split(',').map(s => s.trim()).filter(Boolean));
+
+        const DRIVER_CURATED_DEFAULTS = {
+            anthropic: ['claude-3-7-sonnet-latest', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'],
+            gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
+            claude_cli: ['claude-3-7-sonnet-latest', 'claude-3-5-sonnet-latest'],
+            decisions: ['typesafe/jev-binary-v1', 'nace-ai/drex-1'],
+            web_chat: ['web-chat-frontier', 'web-chat-thinking', 'web-chat-standard', 'web-chat-fast']
+        };
+
+        const targetTier = String(subField?.id || 'standard').toLowerCase();
+        const driverTierMap = (this._driverTierDefaults || {})[driver] || {};
+        const recommendedDefaultForTier = driverTierMap[targetTier] || '';
+
+        const seen = new Set();
+        const tierMatchedOptions = [];
+        const otherOptions = [];
+
+        const formatBadge = (catEntry, recTier = '') => {
+            const parts = [];
+            const effectiveTier = recTier || catEntry?.recommended_tier || '';
+            if (effectiveTier) {
+                parts.push(effectiveTier.toUpperCase());
+            }
+            if (catEntry?.context_length) {
+                parts.push(`${Math.round(catEntry.context_length / 1000)}k`);
+            }
+            if (catEntry?.category === 'local') {
+                parts.push('Local $0');
+            } else if (catEntry && (catEntry.input_cost_per_1m || catEntry.output_cost_per_1m)) {
+                parts.push(`$${catEntry.input_cost_per_1m}/$${catEntry.output_cost_per_1m}`);
+            }
+            return parts.join(' • ');
+        };
+
+        const addModelOption = (modelId, catEntry = null, badgeOverride = '', isTierMatch = false) => {
+            const cleanId = String(modelId || '').trim();
+            if (!cleanId || seen.has(cleanId)) return;
+            seen.add(cleanId);
+            const entry = catEntry || (this._llmCatalogMap || {})[cleanId] || (this._llmCatalogMap || {})[`${endpointId}::${cleanId}`];
+            const matchesTier = isTierMatch || cleanId === recommendedDefaultForTier || (entry?.recommended_tier === targetTier);
+            const item = {
+                value: cleanId,
+                label: cleanId,
+                badge: badgeOverride || formatBadge(entry, cleanId === recommendedDefaultForTier ? targetTier : '')
+            };
+            if (matchesTier) {
+                tierMatchedOptions.push(item);
+            } else {
+                otherOptions.push(item);
+            }
+        };
+
+        customModels.forEach(m => addModelOption(m, null, 'CUSTOM', true));
+        if (recommendedDefaultForTier) {
+            addModelOption(recommendedDefaultForTier, null, '', true);
+        }
+        (DRIVER_CURATED_DEFAULTS[driver] || []).forEach(m => addModelOption(m));
+
+        Object.values(this._llmCatalogMap || {}).forEach(entry => {
+            if (!entry || !entry.id) return;
+            const prov = String(entry.provider || '').toLowerCase();
+            const src = String(entry.source || '').toLowerCase();
+            if (driver === 'anthropic' && (prov === 'anthropic' || entry.id.startsWith('claude-'))) {
+                const bareId = entry.id.startsWith('anthropic/') ? entry.id.slice('anthropic/'.length) : entry.id;
+                addModelOption(bareId, entry);
+            } else if (driver === 'gemini' && (prov === 'google' || prov === 'gemini' || entry.id.includes('gemini'))) {
+                const bareId = entry.id.includes('/') ? entry.id.split('/').pop() : entry.id;
+                addModelOption(bareId, entry);
+            } else if (driver === 'openrouter' && src === 'openrouter') {
+                addModelOption(entry.id, entry);
+            } else if (driver === 'decisions' && entry.category === 'decision') {
+                addModelOption(entry.id, entry);
+            } else if (driver === 'openai_compatible' && (src === endpointId.toLowerCase() || prov === endpointId.toLowerCase())) {
+                addModelOption(entry.id, entry);
+            }
+        });
+
+        return [...tierMatchedOptions, ...otherOptions];
+    }
+
     _renderGenericExtensionDrillDown(activeExtModule, allRepos) {
         const fullSchema = activeExtModule?.schema || [];
         const scalarSchema = fullSchema.filter(s => s && s.type !== 'repeater');
         const repeaterSchema = fullSchema.filter(s => s && s.type === 'repeater');
         const extForm = this._extForms[activeExtModule.id] || {};
-        const endpointModelShortcuts = [];
-        if (Array.isArray(extForm.compute_endpoints)) {
-            extForm.compute_endpoints.forEach(ep => {
-                const epId = ep?.id || '';
-                const models = Array.isArray(ep?.models)
-                    ? ep.models
-                    : String(ep?.models || '').split(',').map(s => s.trim()).filter(Boolean);
-                models.forEach(m => {
-                    if (epId && m) {
-                        const catEntry = (this._llmCatalogMap || {})[m] || (this._llmCatalogMap || {})[`${epId}::${m}`];
-                        const priceBadge = catEntry && (catEntry.input_cost_per_1m || catEntry.output_cost_per_1m)
-                            ? ` ($${catEntry.input_cost_per_1m}/$${catEntry.output_cost_per_1m})`
-                            : (catEntry?.category === 'local' ? ' (Local $0)' : '');
-                        endpointModelShortcuts.push({
-                            value: `${epId}::${m}`,
-                            label: `${epId}::${m}${priceBadge}`,
-                            detail: catEntry ? `${catEntry.name} • Context: ${catEntry.context_length || 'N/A'} tokens` : `${epId}::${m}`
-                        });
-                    }
-                });
-            });
-        }
+        const boundResolver = (subField, epId, rootData) => this._resolveTargetBindingModels(subField, epId, rootData || extForm);
+
+        const hydratedScalarSchema = scalarSchema.map(f => {
+            if (f && f.type === 'select' && f.options_from && typeof f.options_from === 'object') {
+                const srcArr = Array.isArray(extForm[f.options_from.field])
+                    ? extForm[f.options_from.field]
+                    : (Array.isArray((repeaterSchema.find(r => r.id === f.options_from.field) || {}).default)
+                        ? repeaterSchema.find(r => r.id === f.options_from.field).default
+                        : []);
+                const vKey = f.options_from.value_key || 'id';
+                const lKey = f.options_from.label_key || 'title';
+                const resolvedOptions = srcArr
+                    .filter(it => it && typeof it === 'object' && (it[vKey] || it[lKey]))
+                    .map(it => ({ value: String(it[vKey] || it[lKey]), label: String(it[lKey] || it[vKey]) }));
+                return { ...f, options: resolvedOptions.length > 0 ? resolvedOptions : [{ value: 'default', label: 'Default Configuration' }] };
+            }
+            return f;
+        });
+
         return html`
+            <sutram-settings-form
+                id="hub-active-settings-form"
+                .extName=${activeExtModule.id}
+                .schema=${hydratedScalarSchema}
+                .formData=${extForm}
+                .repos=${allRepos}
+                .selectedRepo=${this._selectedRepo}
+                .optionResolver=${boundResolver}
+                ?hideSaveButton=${true}
+                @sutram-settings-form-changed=${(e) => {
+                    const merged = { ...(this._extForms[activeExtModule.id] || {}), ...(e.detail.formData || {}) };
+                    this._extForms = { ...this._extForms, [activeExtModule.id]: merged };
+                    this.requestUpdate();
+                }}>
+            </sutram-settings-form>
             ${repeaterSchema.map(repField => html`
                 <insetu-schema-repeater
                     .field=${repField}
                     .items=${Array.isArray(extForm[repField.id]) ? extForm[repField.id] : (Array.isArray(repField.default) ? repField.default : [])}
                     .rootFormData=${extForm}
-                    .datalistOptions=${endpointModelShortcuts}
+                    .optionResolver=${boundResolver}
                     @insetu-repeater-changed=${(e) => {
                         const nextExtForm = {
                             ...(this._extForms[activeExtModule.id] || {}),
                             [e.detail.id]: e.detail.value
                         };
+                        if (activeExtModule.id === 'llm' && e.detail.id === 'llm_profiles') {
+                            const profiles = Array.isArray(e.detail.value) ? e.detail.value : [];
+                            if (profiles.length > 0 && !profiles.some(p => p && p.id === nextExtForm.active_profile_id)) {
+                                nextExtForm.active_profile_id = profiles[0].id;
+                            }
+                        }
                         this._extForms = { ...this._extForms, [activeExtModule.id]: nextExtForm };
+                        if (activeExtModule.id === 'llm' && e.detail.id === 'compute_endpoints') {
+                            this._healProfileTiersForEndpoints();
+                        }
                         this.requestUpdate();
                     }}>
                 </insetu-schema-repeater>
             `)}
-            <sutram-settings-form
-                id="hub-active-settings-form"
-                .extName=${activeExtModule.id}
-                .schema=${scalarSchema}
-                .formData=${extForm}
-                .repos=${allRepos}
-                .selectedRepo=${this._selectedRepo}
-                ?hideSaveButton=${true}
-                @sutram-settings-form-changed=${(e) => {
-                    const merged = { ...(this._extForms[activeExtModule.id] || {}), ...(e.detail.formData || {}) };
-                    this._extForms = { ...this._extForms, [activeExtModule.id]: merged };
-                }}>
-            </sutram-settings-form>
         `;
     }
 
@@ -1687,7 +1983,12 @@ window.addEventListener('sutram-settings-action', async (e) => {
                 }
             });
         } else {
-            if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message || "✅ Action Completed!", 2000);
+            if (cleanEndpoint === 'llm/catalog' && data && Array.isArray(data.models)) {
+                window.dispatchEvent(new CustomEvent('insetu:llm-catalog-updated', { detail: data }));
+                if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`✅ Synced ${data.count || data.models.length} models & tier defaults!`, 2500);
+            } else if (window.inSetu.ui.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus(data.message || "✅ Action Completed!", 2000);
+            }
             resolve(data);
         }
     } catch (err) {
