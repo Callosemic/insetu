@@ -243,6 +243,7 @@ insetu/
 │   │   ├── cartographer/           # Autonomous topology mapping and CODE_INDEX generation.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   └── cartographer.py     # [VFS Topology Mapper]
+│   │   │       ├── def describe_source_file(rel_path, content) # Derives a one-sentence file description for CODE_INDEX.md from the file itself, so a file that has no description in the index gets one inste...
 │   │   │       ├── def extract_file_symbols(filepath, content) # Stage 2 Shallow Static AST Extractor: Extracts public top-level symbols for .py and .js/.ts/.mjs/.tsx files.
 │   │   │       ├── def extract_symbol_source_slice(filepath, content, symbol_query) # Locates a top-level class, method (Class.method or method), or function in `content` and returns its exact source slice (including leading d...
 │   │   │       ├── def extract_existing_comments(index_path, repo_path, vfs_content) # Pass 1: Extracts path-scoped and basename comments from VFS content, falling back to Git history only if empty.
@@ -253,7 +254,7 @@ insetu/
 │   │   │       ├── def api_cartographer_verify_symbols(ctx) # Marks specified symbols as verified at their current AST body_hash, clearing [stale?] flags.
 │   │   │       ├── class CartographerEnrichPayload(TypedDict) # Request schema for fast-tier LLM symbol comment enrichment.
 │   │   │       ├── def api_cartographer_enrich(ctx) # Batches undocumented or stale symbol snippets into a fast-tier LLM call and updates CODE_INDEX.md.
-│   │   │       └── def map_repositories(workspace_id, silent, target_repos, extra_comments) # Maps tracked repository file trees and AST symbols into CODE_INDEX.md.
+│   │   │       └── def map_repositories(workspace_id, silent, target_repos, extra_comments) # [stale?] Maps tracked repository file trees and AST symbols into CODE_INDEX.md.
 │   │   ├── config/                 # Repository and bucket topology configuration UI.
 │   │   │   └── config.js           # UI for managing repository topologies and tracked buckets.
 │   │   │       └── class InSetuExtConfig # [comment required]
@@ -1021,6 +1022,9 @@ insetu/
         │   └── class TestCanonicalURIs(unittest.TestCase) # [comment required]
         ├── test_cartographer_and_bridge_ast.py # Unit tests for Cartographer AST symbol extraction, 3-tier waterfall indexing, and Yomama RELOCATE/RENAME.
         │   └── class TestCartographerAndBridgeAst(unittest.TestCase) # [comment required]
+        ├── test_cartographer_file_descriptions.py # [comment required]
+        │   ├── class TestDescribeSourceFile(unittest.TestCase) # describe_source_file reads module docstrings and leading file comments, never symbol docs.
+        │   └── class TestMapRepositoriesFileFallback(unittest.TestCase) # map_repositories describes a new file from its docstring when the index has no line for it.
         ├── test_config_cascade.py  # Unit tests for the 3-tier configuration cascade, secret encryption, and lazy migration.
         │   └── class TestConfigurationCascade(unittest.TestCase) # [comment required]
         ├── test_ext_preview_unit.py # Unittest suite for passive framework detection and preview server lifecycle.
