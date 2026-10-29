@@ -89,7 +89,11 @@ EOF
 
 node build-virtualizer.mjs "$TARGET_DIR/lit-virtualizer.min.js"
 
-# 6. Clean up
+# 6. Ship the upstream license with the bundles (BSD-3-Clause requires its text in every copy;
+#    lit and @lit-labs/virtualizer share the same license from the lit monorepo)
+cp node_modules/lit/LICENSE "$TARGET_DIR/LICENSE.txt"
+
+# 7. Clean up
 cd "$SCRIPT_DIR"
 rm -rf "$BUILD_DIR"
 

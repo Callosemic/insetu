@@ -4,6 +4,34 @@ import json
 from pathlib import Path
 from .core import FRONTEND_DIR, BACKEND_DIR, SUTRAM_DIR, report_violation, collect_unique_files
 
+def strip_lit_expressions(line):
+    """
+    Replaces every Lit ${...} expression on a line with an empty '${}' (brace-balanced, so arrow
+    functions and object literals inside bindings are removed whole). Tag-content regexes can then
+    reason about markup without '=>' or '>' inside bindings ending a tag early. An expression left
+    open at the end of the line is stripped to the end of the line.
+    """
+    out = []
+    i = 0
+    n = len(line)
+    while i < n:
+        if line.startswith("${", i):
+            depth = 1
+            j = i + 2
+            while j < n and depth:
+                if line[j] == "{":
+                    depth += 1
+                elif line[j] == "}":
+                    depth -= 1
+                j += 1
+            out.append("${}")
+            i = j
+        else:
+            out.append(line[i])
+            i += 1
+    return "".join(out)
+
+
 def check_vendor_manifest_paths():
     print("🔍 Sweeping Vendor Manifest Paths (Existence Analysis)...")
     for vendor_file in collect_unique_files([BACKEND_DIR], ["vendor.json"]):
@@ -40,8 +68,10 @@ def check_vendor_manifest_paths():
         except Exception as e:
             report_violation("VENDOR_MANIFEST_READ_ERROR", vendor_file, 1, f"Failed to parse vendor.json: {e}")
 def check_tier0_domain_purity():
-    print("🔍 Sweeping Tier 0 Sutram/yenVUI Substrate for Domain & Scheme Leaks...")
-    leak_pattern = re.compile(r'\b(?:inSetu|insetu)\b|yomama://|vfs:(?:diff|pairdiff):')
+    print("🔍 Sweeping Tier 0 Sutram/yenVUI Substrate for Domain & Ring Leaks...")
+    leak_pattern = re.compile(r'\b(?:inSetu|insetu|Quickpack|cleanCodeArtifacts|cite_start|include_prompt|plan_uri|map_over|output_schema|slash_command)\b|yomama://|vfs:(?:diff|pairdiff):')
+    yenvui_upward_leak_pattern = re.compile(r'\b(?:Sutram|ExtensionRegistry)\b|SUTRAM-|(?<!var\(--)sutram-|\bsutram:')
+    sutram_relative_yenvui_pattern = re.compile(r'from\s+[\'"][^\'"]*yenvui/[^\'"]*[\'"]|import\s+[\'"][^\'"]*yenvui/[^\'"]*[\'"]')
     vendor_dirs = [
         BACKEND_DIR / "static" / "vendor" / "sutram",
         BACKEND_DIR / "static" / "vendor" / "yenvui",
@@ -54,6 +84,8 @@ def check_tier0_domain_purity():
     for v_dir in vendor_dirs:
         if not v_dir.exists():
             continue
+        is_yenvui_dir = v_dir.name == "yenvui"
+        is_sutram_dir = v_dir.name == "sutram"
         for js_fp in sorted(v_dir.rglob("*.js")):
             try:
                 content = js_fp.read_text(encoding="utf-8")
@@ -63,6 +95,21 @@ def check_tier0_domain_purity():
                         js_fp,
                         1,
                         "Tier 0 Sutram/yenVUI source or bundle contains upward reference to Tier 2 ('inSetu', 'yomama://', or 'vfs:diff:'). Keep Tier 0 strictly domain-agnostic and run vendor_sutram.sh."
+                    )
+                code_only = re.sub(r'//[^\n]*|/\*[\s\S]*?\*/', '', content)
+                if is_yenvui_dir and yenvui_upward_leak_pattern.search(code_only):
+                    report_violation(
+                        "CHASSIS_PROVIDER_ISOLATION",
+                        js_fp,
+                        1,
+                        "Layer 1 yenVUI chassis file contains upward reference to Layer 2 Sutram ('Sutram', 'ExtensionRegistry', or 'SUTRAM-*'). Keep yenVUI 100% stateless and kernel-agnostic."
+                    )
+                if is_sutram_dir and sutram_relative_yenvui_pattern.search(content):
+                    report_violation(
+                        "SUTRAM_CHASSIS_IMPORT_ISOLATION",
+                        js_fp,
+                        1,
+                        "Layer 2 Sutram file contains a hardcoded relative 'yenvui/' import. Import the active chassis strictly via the bare specifier 'sutram-chassis'."
                     )
             except Exception:
                 pass
@@ -113,6 +160,7 @@ def check_javascript_files():
     banned_cdn_import_pattern = re.compile(r'(?:from\s+|import\(\s*)[\'"]https?://(esm\.sh|cdn\.jsdelivr\.net|unpkg\.com)')
     banned_yenvui_tag_pattern = re.compile(r'<\/?yenvui-')
     sutram_subdir_pattern = re.compile(r'from\s+[\'"][^\'"]*vendor/sutram/(?!js/)[^\'"]*[\'"]')
+    sutram_membrane_leak_pattern = re.compile(r'(?:from\s+|import\s+)[\'"](?:[^\'"]*vendor/(?:sutram|yenvui)/(?!js/shared_styles\.js)[^\'"]*|sutram(?:-chassis)?)[\'"]')
     raw_dialog_pattern = re.compile(r'<dialog\b')
     inline_date_formatting_pattern = re.compile(r'new\s+Date\([^)]*\)\.toLocale(?:Date|Time)?String\(\)')
     raw_poll_job_pattern = re.compile(r'\bthis\.api\.pollJob\s*\(')
@@ -150,6 +198,7 @@ def check_javascript_files():
     component_execute_unload_ban_pattern = re.compile(r'\.executeUnload\s*\(')
     direct_manifest_slots_mutation_pattern = re.compile(r'\bmanifest\.layoutSlots\s*(?:=|\.push\b|\.splice\b)')
     imperative_dirty_set_mutation_pattern = re.compile(r'\.setState\s*\([\s\S]{0,200}?\b(?:dirtyBuckets|dirtyRepos)\s*:')
+    dangling_bridge_bypass_prop_pattern = re.compile(r'\bthis\.(?:_globalBypassSandwich|_confirmedCandidates|_allowDeepSearch)\b')
     store_persistence_schema_pattern = re.compile(
         r'create(?:Extension|Sutram)Store\s*\(\s*[\'"][^\'"]+[\'"]\s*,\s*\{([\s\S]*?)\}\s*,\s*\{([\s\S]*?)\}\s*\)',
         re.MULTILINE
@@ -187,7 +236,7 @@ def check_javascript_files():
         r'getAggregatableActions\s*\([\s\S]{0,400}?<sutram-dropdown\b'
     )
     entity_action_obj_pattern = re.compile(r'\{\s*targetEntit(?:y|ies)\s*:[\s\S]*?\n\s*\}', re.MULTILINE)
-    quickpack_share_allowed_files = {"gather.js", "fs.js", "agent.js", "ext_flow.js", "prompts.js"}
+    quickpack_share_allowed_files = {"gather.js", "fs.js", "agent.js", "prompts.js"}
     fs_domain_coupling_pattern = re.compile(
         r'\b(?:GatherStore|FlowStore|GitStore|executeCompile|flow_workflows|git_diffs|gather_base)\b|stores\.(?:Gather|Flow|Git)\b'
     )
@@ -202,10 +251,10 @@ def check_javascript_files():
     )
     known_api_modules = {
         "bridge", "gather", "cartographer", "config", "editor", "fs", "system",
-        "workers", "auth", "security", "topology", "offline", "llm", "agent", "prompts", "mcp",
-        "citations", "cronic", "dev", "favorites", "flow", "format", "freshdesk",
+        "workers", "auth", "security", "topology", "offline", "llm", "agent", "prompts", "mcp", "remote",
+        "citations", "cronic", "dev", "favorites", "format", "freshdesk",
         "git", "hooks", "ingest", "notes", "preview", "publish", "research", "skills",
-        "tailscale", "term", "tracker", "update"
+        "term", "tracker", "update"
     }
 
     # Initialize Tree-sitter for Hybrid Parsing
@@ -285,7 +334,7 @@ def check_javascript_files():
                     line_n = node.start_point[0] + 1
                     if verb_name not in allowed_verbs and file not in ["api.js", "sdk.js", "insetu_sdk.js"]:
                         report_violation("APPROVED_API_VERB_MANDATE", filepath, line_n, f"Unapproved method '.{verb_name}' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).")
-                    if verb_name == "pollJob" and is_extension and file not in ("ext_tracker.js", "ext_flow.js"):
+                    if verb_name == "pollJob" and is_extension and file != "ext_tracker.js":
                         print(f"⚠️ [WARNING: BIND_JOB_ACTION_PREFERENCE] {file}:{line_n}\n   ↳ Imperative this.api.pollJob detected. Prefer declarative this.api.bindJobAction when possible.")
             # Debounce Mandate (clearTimeout)
             debounce_query = _Query(JS_LANG, '(call_expression function: (identifier) @func (#eq? @func "clearTimeout")) @call')
@@ -396,6 +445,14 @@ def check_javascript_files():
                 filepath,
                 1,
                 "Imperative mutation of dirtyBuckets/dirtyRepos outside store.js is banned. AppStore derives staleness reactively from manifest.vfs.source_ts vs manifest.ctx.meta.timestamp watermarks."
+            )
+        for m in dangling_bridge_bypass_prop_pattern.finditer(full_content):
+            line_num = full_content[:m.start()].count('\n') + 1
+            report_violation(
+                "DANGLING_BRIDGE_BYPASS_PROP_BAN",
+                filepath,
+                line_num,
+                f"Legacy imperative Bridge property '{m.group(0)}' is banned. Use BridgeStore.resolutions instead."
             )
         if is_extension and direct_manifest_slots_mutation_pattern.search(full_content):
             report_violation(
@@ -561,8 +618,7 @@ def check_javascript_files():
                     report_violation("UDF_STATE_BLEED", filepath, line_num, "Floating global state detected. Migrate variable into the centralized Zustand AppStore.")
                 if file not in ["api.js", "sdk.js"] and re.search(r'\bthis\.api\.(?!(?:get|post|delete|getJson|postJson|deleteJson|fetchImmutableText|bindJobAction|pollJob|request|workspace|system)\b)\w+', line):
                     report_violation("APPROVED_API_VERB_MANDATE", filepath, line_num, "Unapproved method called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).")
-
-                if is_extension and raw_poll_job_pattern.search(line) and file not in ("ext_tracker.js", "ext_flow.js"):
+                if is_extension and raw_poll_job_pattern.search(line) and file != "ext_tracker.js":
                     print(f"⚠️ [WARNING: BIND_JOB_ACTION_PREFERENCE] {file}:{line_num}\n   ↳ Imperative this.api.pollJob detected. Prefer declarative this.api.bindJobAction when possible.")
 
                 if is_extension and is_lit_component and global_dispatch_pattern.search(line):
@@ -681,7 +737,7 @@ def check_javascript_files():
             if is_extension and is_lit_component and re.search(r'<button\b', line):
                 report_violation("SUTRAM_BUTTON_MANDATE", filepath, line_num, "Raw <button> detected in Lit extension template. Use <sutram-btn> or <sutram-async-btn> primitives instead.")
 
-            if is_lit_component and re.search(r'<sutram-btn\b(?!.*label=)[^>]*>[^<]+\S', line) and 'slot=' not in line:
+            if is_lit_component and re.search(r'<sutram-btn\b(?!.*label=)[^>]*>[^<]+\S', strip_lit_expressions(line)) and 'slot=' not in line:
                 report_violation("SUTRAM_BUTTON_DECLARATIVE_LABEL_MANDATE", filepath, line_num, "Raw text child node detected in <sutram-btn>. Use declarative label=\"...\" property attribute instead.")
 
             if legacy_routing_ban_pattern.search(line):
@@ -718,10 +774,17 @@ def check_javascript_files():
                 report_violation("LEGACY_DOMAIN_ACCESSOR_VIOLATION", filepath, line_num, "Direct invocation of executeSystemCompile detected. Route through the Store (e.g. GatherStore.getState().executeCompile) or this.compileSystem() (ADR 0024).")
             if file not in ["store.js", "sdk.js"] and direct_execute_ui_hook_pattern.search(line):
                 report_violation("BANNED_DIRECT_EXECUTE_UI_HOOK", filepath, line_num, "Direct ExtensionRegistry.executeUIHook calls are deprecated. Use window.inSetu.events.emitHook(zone, payload).")
-            if shared_styles_pattern.search(line) and 'vendor/sutram/js/shared_styles.js' not in line:
-                report_violation("VENDOR_SHARED_STYLES_MANDATE", filepath, line_num, "Legacy or un-vendorized sharedStyles import detected. Reference vendor/sutram/js/shared_styles.js instead.")
+            if shared_styles_pattern.search(line) and 'vendor/sutram/js/shared_styles.js' not in line and '/static/extensions/system/insetu_sdk.js' not in line:
+                report_violation("VENDOR_SHARED_STYLES_MANDATE", filepath, line_num, "Legacy or un-vendorized sharedStyles import detected. Import sharedStyles from '/static/extensions/system/insetu_sdk.js' or 'vendor/sutram/js/shared_styles.js'.")
             if sutram_subdir_pattern.search(line):
                 report_violation("VENDOR_SUTRAM_JS_SUBDIR_MANDATE", filepath, line_num, "Sutram vendor imports must explicitly target the 'vendor/sutram/js/' subfolder.")
+            if file != "insetu_sdk.js" and sutram_membrane_leak_pattern.search(line):
+                report_violation(
+                    "SUTRAM_MEMBRANE_ISOLATION",
+                    filepath,
+                    line_num,
+                    "Direct import from 'vendor/sutram', 'vendor/yenvui', or 'sutram' outside the Single-File Frontend Membrane ('insetu/core/system/insetu_sdk.js'). Import from '/static/extensions/system/insetu_sdk.js' instead."
+                )
             if raw_dialog_pattern.search(line) and '@cancel' not in line:
                 report_violation("RAW_DIALOG_OVERLAY_BAN", filepath, line_num, "Unwrapped <dialog> element detected without an explicit @cancel handler. Wrap in <sutram-modal> or supply an @cancel listener to prevent unhandled backdrop escape loops.")
             if is_extension and inline_date_formatting_pattern.search(line):

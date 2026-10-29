@@ -1,0 +1,26 @@
+# Runs the shared Callosemic stack battery (akasa -> sutram -> insetu) on every push to main.
+# The battery itself lives in insetu/.github/workflows/battery.yml.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, to catch drift in unpinned upstream packages (PyPI and npm) between pushes.
+    - cron: "17 13 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  battery:
+    uses: ./.github/workflows/battery.yml
+    with:
+      trigger_repo: insetu
+      trigger_sha: ${{ github.sha }}
+    secrets: inherit

@@ -21,6 +21,7 @@ from insetu.core.bridge.bridge_ast import (
 )
 from insetu.core.bridge.engine_bridge import BRIDGE_SCHEMA, bridge_bp
 from insetu.core.cartographer.cartographer import (
+    CARTOGRAPHER_SCHEMA,
     cartographer_bp,
     extract_file_symbols,
     extract_symbol_source_slice,
@@ -68,6 +69,7 @@ class TestCartographerAndBridgeAst(unittest.TestCase):
         )
         _init_worker_schema("default")
         apply_declarative_schema("topology", TOPOLOGY_SCHEMA, "default")
+        apply_declarative_schema("cartographer", CARTOGRAPHER_SCHEMA, "default")
         apply_declarative_schema("bridge", BRIDGE_SCHEMA, "default")
         mount_topology_volumes_dynamically(load_config("default"), workspace_id="default")
 

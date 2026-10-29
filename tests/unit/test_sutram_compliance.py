@@ -115,13 +115,67 @@ class TestSutramCompliance(unittest.TestCase):
 
         tracker_js = (BACKEND_DIR / "extensions" / "tracker" / "ext_tracker.js").read_text(encoding="utf-8")
         self.assertIn("component: 'insetu-ext-tracker-settings'", tracker_js)
-
         if (SUTRAM_DIR / "yenvui" / "js" / "collapsible.js").exists():
             yenvui_col = (SUTRAM_DIR / "yenvui" / "js" / "collapsible.js").read_text(encoding="utf-8")
             sutram_prim = (SUTRAM_DIR / "sutram" / "js" / "primitives.js").read_text(encoding="utf-8")
             self.assertIn("bubbles: false", yenvui_col)
             self.assertIn("bubbles: false", sutram_prim)
             self.assertIn("customElements.define('sutram-field-card'", sutram_prim)
+
+    def test_three_layer_chassis_provider_contract_and_single_file_membrane(self):
+        """
+        Verifies the 2026-10-28 Three-Layer Frontend Ring & Chassis Provider Blueprint:
+        1. vendor.json maps 'sutram' -> 'vendor/sutram/js/index.js' and 'sutram-chassis' -> 'vendor/yenvui/js/index.js'.
+        2. yenvui/js/index.js exports CHASSIS_PROVIDER_META, sharedStyles, physics, and all 29 REQUIRED_CHASSIS_PRIMITIVES.
+        3. validateChassisContract passes for a compliant provider and throws [Sutram Boot Error] when any required primitive is missing.
+        4. insetu_sdk.js is the sole file in inSetu core/extensions importing from 'sutram'.
+        """
+        import json as _json
+        from insetu.core.utils_core import execute_binary as _execute_binary
+
+        vendor_json = _json.loads((BACKEND_DIR / "static" / "vendor.json").read_text(encoding="utf-8"))
+        imports_map = vendor_json.get("imports", {})
+        self.assertEqual(imports_map.get("sutram", {}).get("path"), "vendor/sutram/js/index.js")
+        self.assertEqual(imports_map.get("sutram-chassis", {}).get("path"), "vendor/yenvui/js/index.js")
+
+        yenvui_index = SUTRAM_DIR / "yenvui" / "js" / "index.js"
+        sutram_index = SUTRAM_DIR / "sutram" / "js" / "index.js"
+        sutram_prim = SUTRAM_DIR / "sutram" / "js" / "primitives.js"
+        if yenvui_index.exists() and sutram_index.exists():
+            yenvui_src = yenvui_index.read_text(encoding="utf-8")
+            self.assertIn("CHASSIS_PROVIDER_META", yenvui_src)
+            self.assertIn("sharedStyles", yenvui_src)
+            self.assertIn("physics", yenvui_src)
+
+            prim_src = sutram_prim.read_text(encoding="utf-8")
+            self.assertIn("export const REQUIRED_CHASSIS_PRIMITIVES", prim_src)
+            self.assertIn("export function validateChassisContract", prim_src)
+            self.assertNotIn("../../yenvui/", prim_src)
+            # Execute validateChassisContract in Node against both a complete DummyChassis and an incomplete provider
+            start_idx = prim_src.index("export const REQUIRED_CHASSIS_PRIMITIVES")
+            end_idx = prim_src.index("SutramUIAdapter.registerChassis(Chassis);")
+            contract_fn_code = prim_src[start_idx:end_idx]
+
+            node_test = f"""
+import assert from 'node:assert/strict';
+{contract_fn_code}
+
+const DummyChassis = {{ CHASSIS_PROVIDER_META: {{ name: 'dummy-chassis', version: '1.0.0' }} }};
+for (const name of REQUIRED_CHASSIS_PRIMITIVES) {{
+    DummyChassis[name] = class {{}};
+}}
+assert.equal(validateChassisContract(DummyChassis), true);
+
+const IncompleteChassis = {{ ...DummyChassis }};
+delete IncompleteChassis.Modal;
+delete IncompleteChassis.Card;
+assert.throws(
+    () => validateChassisContract(IncompleteChassis),
+    /\\[Sutram Boot Error\\] Chassis 'dummy-chassis' fails contract\\. Missing primitives: Card, Modal/
+);
+"""
+            res = _execute_binary(["node", "--input-type=module", "-e", node_test], timeout=10.0)
+            self.assertEqual(res.returncode, 0, f"Chassis contract gatekeeper Node test failed:\n{res.stderr}")
 
     def test_rfc_0108_tab_scoped_navigation_isolation(self):
         """
@@ -186,7 +240,6 @@ class TestSutramCompliance(unittest.TestCase):
         management_files = {
             "cronic": ext_dir / "cronic" / "ext_cronic.js",
             "favorites": ext_dir / "favorites" / "ext_favorites.js",
-            "flow": ext_dir / "flow" / "ext_flow.js",
             "hooks": ext_dir / "hooks" / "ext_hooks.js",
             "tracker": ext_dir / "tracker" / "ext_tracker.js",
         }
@@ -196,10 +249,10 @@ class TestSutramCompliance(unittest.TestCase):
         )
         known_modules = {
             "bridge", "gather", "cartographer", "config", "editor", "fs", "system",
-            "workers", "auth", "security", "topology", "offline", "llm", "agent", "prompts",
-            "citations", "cronic", "dev", "favorites", "flow", "format", "freshdesk",
+            "workers", "auth", "security", "topology", "offline", "llm", "agent", "prompts", "mcp", "remote",
+            "citations", "cronic", "dev", "favorites", "format", "freshdesk",
             "git", "hooks", "ingest", "notes", "preview", "publish", "research", "skills",
-            "tailscale", "term", "tracker", "update"
+            "term", "tracker", "update"
         }
         banned_unprefixed_routes = {
             "toggle", "delete", "list", "status", "logs", "schedule", "run_now", "kill",

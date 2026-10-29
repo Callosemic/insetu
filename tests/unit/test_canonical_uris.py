@@ -22,7 +22,12 @@ from insetu.core.utils_core import InSetuURI, BucketAddress, heal_sqlite_uri_col
 from insetu.extensions.tracker.engine_tracker import get_tracker_path, TRACKER_SCHEMA
 from insetu.extensions.notes.engine_notes import _resolve_intended_note_uri
 from insetu.extensions.skills.engine_skills import _canonical_skill_uri
-from insetu.extensions.flow.engine_flow import _migrate_batch_uris, handle_flow_pre_save
+from insetu.core.agent.engine_agent import (
+    agent_bp,
+    _background_compile_routine_workflows,
+    _handle_routine_response_pre_save,
+)
+from insetu.core.agent.orchestrator import parse_routine_content, load_routine_definition
 from akasa.vfs import sync_vfs_barrier
 from akasa.vfs import VFSTransaction
 from flask import Flask
@@ -35,7 +40,6 @@ from insetu.core.gather.engine_gather import (
     hook_request_manifest,
     VFS_INDEX_SCHEMA,
 )
-from insetu.extensions.flow.engine_flow import flow_bp, _background_compile_workflows
 from akasa.extension import ExtensionContext
 from insetu.core.utils_core import execute_binary
 
@@ -83,7 +87,7 @@ class TestCanonicalURIs(unittest.TestCase):
         )
         (self.control_dir / "config.json").write_text(
             json.dumps({
-                "extensions": ["config", "flow"],
+                "extensions": ["config"],
                 "ignore_dirs": ["node_modules", ".git", ".insetu"],
                 "include_extensions": [".py", ".md"],
                 "target_repos": [{"repo_dir": "alpha", "title": "Alpha", "exts": [".py", ".md"]}],
@@ -181,8 +185,7 @@ class TestCanonicalURIs(unittest.TestCase):
         sotu_dir.mkdir(parents=True, exist_ok=True)
         old_file = sotu_dir / "sotu_20261001.md"
         old_file.write_text("Old SOTU content", encoding="utf-8")
-
-        handle_flow_pre_save(
+        _handle_routine_response_pre_save(
             workspace_id="default",
             filepath="vfs://alpha/sotu/sotu_20261021.md",
             content="New SOTU content",
@@ -262,26 +265,26 @@ class TestCanonicalURIs(unittest.TestCase):
         addr = BucketAddress("alpha", "docs")
         self.assertEqual(addr.context_uri, "ctx://contexts/alpha_docs_context.txt")
         self.assertEqual(addr.diff_uri, "ctx://diffs/alpha_docs_diffs.txt")
-
-    def test_flow_batch_boot_migration_upgrades_legacy_paths(self):
-        """_migrate_batch_uris upgrades legacy scheme-less paths in workflows.json to ctx:// and vfs:// URIs."""
-        legacy_batch = {
-            "id": "review",
-            "title": "Review",
-            "includes": [
-                "alpha_context.txt",
-                "alpha_diffs.txt",
-                "workflow_prep_context.txt",
-                "prompts/system_review.md",
-                "alpha/main.py",
-            ],
-            "show_if_exists": ["alpha_diffs.txt"],
-            "include_prompt": "review_guide.md",
-        }
-        changed = _migrate_batch_uris(legacy_batch)
-        self.assertTrue(changed)
+    def test_routine_content_parser_canonicalizes_uri_fields(self):
+        """parse_routine_content upgrades bare paths in includes, show_if_exists, include_prompt, and nodes[].prompt_uri to canonical URIs."""
+        raw_md = (
+            "---\n"
+            "id: review\n"
+            "title: Review\n"
+            "includes:\n"
+            "  - alpha_context.txt\n"
+            "  - alpha_diffs.txt\n"
+            "  - workflow_prep_context.txt\n"
+            "  - prompts/system_review.md\n"
+            "  - alpha/main.py\n"
+            "show_if_exists:\n"
+            "  - alpha_diffs.txt\n"
+            "include_prompt: review_guide.md\n"
+            "---\n"
+        )
+        loaded = parse_routine_content(raw_md, fallback_id="review", is_markdown=True)
         self.assertEqual(
-            legacy_batch["includes"],
+            loaded["includes"],
             [
                 "ctx://contexts/alpha_context.txt",
                 "ctx://diffs/alpha_diffs.txt",
@@ -290,11 +293,9 @@ class TestCanonicalURIs(unittest.TestCase):
                 "vfs://alpha/main.py",
             ],
         )
-        self.assertEqual(legacy_batch["show_if_exists"], ["ctx://diffs/alpha_diffs.txt"])
-        self.assertEqual(legacy_batch["include_prompt"], "ctx://prompts/review_guide.md")
-
-        # Second pass should be idempotent
-        self.assertFalse(_migrate_batch_uris(legacy_batch))
+        self.assertEqual(loaded["show_if_exists"], ["ctx://diffs/alpha_diffs.txt"])
+        self.assertEqual(loaded["include_prompt"], "ctx://prompts/review_guide.md")
+        self.assertEqual(loaded["nodes"][0]["prompt_uri"], "ctx://prompts/review_guide.md")
     def test_vfs_transaction_rejects_non_canonical_paths(self):
         """VFSTransaction.read, .save, and .delete reject scheme-less paths unless is_absolute_artifact is True."""
         vfs = VFSTransaction("default")
@@ -415,7 +416,7 @@ assert.equal(repoRoot.isRootVolume, true);
         """
         apply_declarative_schema("vfs_index", VFS_INDEX_SCHEMA, "default")
         _ = gather_bp.get_context("default")
-        wf_ctx = flow_bp.get_context("default")
+        wf_ctx = agent_bp.get_context("default")
 
         # Create two large files (~260 KB each) so the workflow exceeds the 400 KB chunk limit and splits into 2 parts
         part_a = "A" * 260000
@@ -423,15 +424,13 @@ assert.equal(repoRoot.isRootVolume, true);
         (self.repo_dir / "part_a.py").write_text(part_a, encoding="utf-8")
         (self.repo_dir / "part_b.py").write_text(part_b, encoding="utf-8")
 
-        wf_ctx.store.set("workflows.json", "context_batches", [{
-            "id": "core_system_wrap",
-            "title": "Core System Wrap",
-            "domain": "Workflows",
-            "includes": ["vfs://alpha/part_a.py", "vfs://alpha/part_b.py"],
-        }])
+        wf_ctx.vfs.save(
+            "ctx://routines/core_system_wrap.md",
+            "---\nid: core_system_wrap\ntitle: Core System Wrap\ndomain: Workflows\nincludes:\n  - vfs://alpha/part_a.py\n  - vfs://alpha/part_b.py\n---\n",
+        )
         sync_vfs_barrier("default")
 
-        _background_compile_workflows(wf_ctx, force_full=True)
+        _background_compile_routine_workflows(wf_ctx, force_full=True)
         sync_vfs_barrier("default")
 
         base_uri = "ctx://workflows/workflow_core_system_wrap_context.txt"

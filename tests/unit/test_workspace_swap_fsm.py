@@ -111,7 +111,12 @@ export const subscribeWithSelector = (fn) => (set, get, api) => {
             sdk_src = sdk_src.replace('from"lit"', 'from"./lit_stub.mjs"').replace("from 'lit'", "from './lit_stub.mjs'")
             sdk_src = sdk_src.replace('from"zustand/vanilla"', 'from"./vanilla.mjs"').replace("from 'zustand/vanilla'", "from './vanilla.mjs'")
             sdk_src = sdk_src.replace('from"zustand/middleware"', 'from"./middleware.mjs"').replace("from 'zustand/middleware'", "from './middleware.mjs'")
+            (tmp_path / "chassis_stub.mjs").write_text(
+                "export const physics = { getEventPath: () => [], getEventTarget: () => null };\n",
+                encoding="utf-8",
+            )
             sdk_src = sdk_src.replace('from"../../yenvui/js/physics.js"', 'from"./physics_stub.mjs"').replace("from '../../yenvui/js/physics.js'", "from './physics_stub.mjs'")
+            sdk_src = sdk_src.replace('from"sutram-chassis"', 'from"./chassis_stub.mjs"').replace("from 'sutram-chassis'", "from './chassis_stub.mjs'")
             sdk_src = sdk_src.replace('from"./utils.js"', 'from"./utils.mjs"').replace("from './utils.js'", "from './utils.mjs'")
             (tmp_path / "sutram_sdk.mjs").write_text(sdk_src, encoding="utf-8")
 

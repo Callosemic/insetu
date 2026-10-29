@@ -30,7 +30,10 @@ npx esbuild entry_vanilla.js --bundle --format=esm --outfile="$TARGET_DIR/vanill
 echo "🔨 Bundling middleware.js..."
 npx esbuild entry_middleware.js --bundle --format=esm --outfile="$TARGET_DIR/middleware.js"
 
-# 6. Clean up
+# 6. Ship the upstream license with the bundles (MIT requires its text in every copy)
+cp node_modules/zustand/LICENSE "$TARGET_DIR/LICENSE"
+
+# 7. Clean up
 cd "$SCRIPT_DIR"
 rm -rf "$BUILD_DIR"
 

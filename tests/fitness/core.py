@@ -21,15 +21,12 @@ SUTRAM_DIR = PROJECT_ROOT.parent / "sutram"
 FRONTEND_DIR = BACKEND_DIR / "static" / "js"
 # Whitelists for legitimate use-cases to prevent false positives
 AKASA_MEMBRANE_WHITELIST = (
-    "insetu/app.py",
-    "insetu/cli.py",
     "insetu/core/sdk/__init__.py",
-    "insetu/core/utils_core.py",
 )
 VFS_WRITE_WHITELIST = ["routes_fs.py", "engine_fs.py", "fallback_bridge.py", "utils_core.py", "engine_format.py", "engine_git.py", "engine_gather.py", "cli.py", "cli_commands.py", "workers.py", "engine_tracker.py", "engine_research.py", "vfs.py", "app.py", "auth.py", "engine_update.py", "engine_publish.py", "engine_cronic.py", "__init__.py", "legacy.py", "engine_notes.py", "engine_editor.py", "db.py", "extension.py"]
 SQLITE_WHITELIST = ["db.py", "workers.py", "__init__.py"]
-SUBPROCESS_WHITELIST = ["engine_git.py", "engine_format.py", "cartographer.py", "cli.py", "cli_commands.py", "engine_bridge.py", "bridge_vfs.py", "utils_core.py", "engine_term.py", "engine_hooks.py", "engine_topology.py", "engine_tailscale.py", "engine_update.py", "engine_publish.py", "engine_cronic.py", "engine_preview.py", "process.py"]
-EXECUTE_BINARY_WHITELIST = ["utils_core.py", "cli.py", "cli_commands.py", "engine_tailscale.py", "engine_preview.py", "fallback_bridge.py", "process.py"]
+SUBPROCESS_WHITELIST = ["engine_git.py", "engine_format.py", "cartographer.py", "cli.py", "cli_commands.py", "engine_bridge.py", "bridge_vfs.py", "utils_core.py", "engine_term.py", "engine_hooks.py", "engine_topology.py", "engine_remote.py", "engine_update.py", "engine_publish.py", "engine_cronic.py", "engine_preview.py", "process.py"]
+EXECUTE_BINARY_WHITELIST = ["utils_core.py", "cli.py", "cli_commands.py", "engine_remote.py", "engine_preview.py", "fallback_bridge.py", "process.py"]
 HEX_COLOR_WHITELIST = ["style.css"]
 
 class FitnessState:

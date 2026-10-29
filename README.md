@@ -8,35 +8,63 @@ DEMO: https://youtu.be/FDgL6jveMHo?si=h35FuW_WC0VO1Wox
 *(Watch the 3-minute demo: Using inSetu to edit code on an inSetu extension - Yomama patcher, Gather context compilation, Virtual File System, Prompt templates, and more)*
 ## ✨ Core Substrate Engines & Extensions
 ### ⚙️ Core Substrate Modules (Tier 2)
-* **The Yomama Sync Bridge:** A strict patching engine utilizing an in-memory Virtual File System. It parses `<<<<<<< SEARCH` and `>>>>>>> REPLACE` blocks, safely applies diffs, runs native pre-flight syntax validation (Python/JS/JSON), and commits to disk atomically.
+* **The Yomama Sync Bridge:** A strict patching engine utilizing an in-memory Virtual File System. It parses `SEARCH`/`REPLACE`, inline `TEXTEDIT`, `JSON_PATCH`, and file lifecycle blocks, anchors them with two-tier fuzzy matching, runs native pre-flight syntax validation (Python/JS/JSON), and commits to disk atomically with an undo ledger. See [the patch specification](#-yomama-patch-specification).
 * **Context Gatherer:** Scrapes mapped repositories to compile massive `.txt` context payloads (RAG) for Large Language Models.
 * **Virtual File System (VFS):** Asynchronous commit pipeline, POSIX path sandbox resolution, and event ledger logging for zero-lock writes.
 * **Cartographer:** Automatically maps repository topologies and generates a deterministic `CODE_INDEX.md` architectural blueprint to prevent logic drift.
+* **LLM Gateway:** One streaming interface over Anthropic, Gemini, OpenRouter, any OpenAI-compatible server (Ollama, LM Studio, llama.cpp), and the Claude CLI. Compute endpoint pools and profiles map the semantic tiers (`fast`, `standard`, `thinking`, `frontier`) to concrete models.
+* **Agent Harness & Routines:** A ReAct agent with chat sessions, cancel and undo, plus declarative Markdown-as-Code routines (`ctx://routines/`) that chain prompts, tiers, and test runs.
+* **MCP Server:** Exposes workspace capabilities, resources, and prompts over the Model Context Protocol (2025-03-26), both over HTTP (`/api/<workspace_id>/mcp`) and over stdio (`insetu mcp`). *New and still settling.*
+* **Prompt Library:** Global prompt templates with macro inclusions and variable interpolation.
 * **Offline Engine & Outbox Sync:** Stale-While-Revalidate GET request mirroring, IndexedDB VFS blob storage, and asynchronous mutation outbox queueing for offline execution.
+* **Remote Access:** Tailscale identity verification (`tailscale whois`), Tailscale Serve binding, and trusted-hostname registration for reaching the Workbench from phones, tablets, and e-ink devices. See [Remote Access & Security](#-remote-access--security).
 
 ### 🔌 Domain Extensions (Tier 3)
-* **Modular Extensions & Integrations:** Pluggable tools including Markdown Kanban Tracker, Integrated Git Operations, Embedded Terminal, Workflows (Flow), Prompt Library, Notes, CSL-JSON Reference Library & Research Inbox, Skills Spaced-Repetition Tracker, Freshdesk Helpdesk Integration, Tailscale Zero-Trust Networking, and Semantic Release Automation.
+Opt-in per workspace:
+
+| Extension | What it does |
+| :--- | :--- |
+| `tracker` | Local offline Kanban board using Markdown-as-Code tickets. |
+| `notes` | Markdown note-taking with frontmatter management. |
+| `git` | Version control, branch management, and workspace sweeping. |
+| `term` | Embedded terminal multiplexer over a PTY WebSocket stream. |
+| `hooks` | IFTTT-style automation hooks on VFS and topology events. |
+| `cronic` | Scheduled cron task management. |
+| `preview` | Managed dev server supervisor and live web application previewer. |
+| `ingest` | URL to Markdown extraction via Jina or BeautifulSoup. |
+| `research` | Map-reduce web scraping, SERP indexing, and AI triage. |
+| `citations` | CSL-JSON academic reference library. |
+| `publish` | Pandoc/LaTeX document publishing. |
+| `format` | Code formatting (jsbeautifier, autopep8). |
+| `skills` | Spaced-repetition tracking for discrete musical/technical skills. |
+| `favorites` | Pinned file and folder quick-access tray. |
+| `freshdesk` | Helpdesk integration for threaded B2B support tickets. |
+| `update` | Automated semantic versioning and PyPI distribution. |
+| `dev` | Developer dashboard for bridge telemetry and thrashing. |
 
 ## 🏗️ System Architecture
-`inSetu` is built on a modular three-tier architecture:
+`inSetu` is built on a modular tiered architecture spread across three repositories:
 
 ```text
 ┌─────────────────────────────────────────────────────────┐
 │              Tier 3: Domain Extensions                  │
-│   (Kanban Tracker, Citations, Git, Flow, Prompts, etc.) │
+│      (Tracker, Notes, Git, Terminal, Hooks, etc.)       │
 └────────────────────────────┬────────────────────────────┘
-                            │
+                             │
 ┌────────────────────────────▼────────────────────────────┐
-│            Tier 2: Core Substrate Engines               │
-│   (Gather Compiler, Yomama Bridge, Cartographer, VFS)   │
-└────────────────────────────┬────────────────────────────┘
-                            │
-┌────────────────────────────▼────────────────────────────┐
-│             Tier 1: Kernel & Micro-Kernel               │
-│   (inSetu Event Bus / VFS Queue + Sutram / yenVUI UI)   │
-└─────────────────────────────────────────────────────────┘
-
+│          Tier 2: Core Substrate Engines (insetu)        │
+│  (Yomama Bridge, Gather, Cartographer, LLM, Agent, MCP) │
+└──────────────┬──────────────────────────────┬───────────┘
+               │                              │
+┌──────────────▼──────────────┐ ┌─────────────▼───────────┐
+│  Tier 1: Python Kernel      │ │  Tier 0: Presentation   │
+│  (akasa: Event Bus, VFS,    │ │  (sutram / yenVUI: Web  │
+│   Workers, Auth, Settings)  │ │   Component chassis)    │
+└─────────────────────────────┘ └─────────────────────────┘
 ```
+
+* **[akasa](https://github.com/Callosemic/akasa)** is the domain-agnostic Python micro-kernel. inSetu reaches it only through `insetu/core/sdk`, a boundary enforced by the fitness suite.
+* **[sutram](https://github.com/Callosemic/sutram)** is the zero-bundler Web Component chassis, vendored into `insetu/static/vendor/`.
 
 ## 📋 Prerequisites
 
@@ -46,7 +74,7 @@ DEMO: https://youtu.be/FDgL6jveMHo?si=h35FuW_WC0VO1Wox
 * **Git** (*Required* for repository topology mapping, code indexing, diff generation, and release management)
 ### Optional System Binaries
 
-* **Node.js** (Optional: Enables pre-flight JavaScript/TypeScript AST syntax validation in the Yomama Sync Bridge)
+* **Node.js** (Optional: Fallback pre-flight JavaScript syntax validation in the Yomama Sync Bridge when the `syntax` extra is not installed)
 * **Pandoc & LaTeX** (Optional: Enables document compilation to PDF/DOCX via the `publish` extension)
 * **Tailscale** (Optional: Enables zero-trust HTTPS network binding over private Tailnets)
 ## 🚀 Installation
@@ -67,12 +95,15 @@ You can install targeted dependencies for specific domain extensions:
 
 | Extra | Feature Domain | Dependencies |
 | :--- | :--- | :--- |
+| `pip install insetu[syntax]` | Bridge AST Validation | `tree-sitter`, `tree-sitter-python`, `tree-sitter-javascript` |
 | `pip install insetu[term]` | Embedded Terminal | `flask-sock` (WebSocket PTY streaming) |
 | `pip install insetu[research]` | Web Scraping & AI Triage | `beautifulsoup4`, `markdownify`, `playwright` |
 | `pip install insetu[format]` | Source Code Formatting | `jsbeautifier`, `autopep8` |
 | `pip install insetu[update]` | Semantic Versioning & PyPI | `python-semantic-release`, `build`, `twine` |
 | `pip install insetu[freshdesk]` | B2B Helpdesk Integration | `mistune` |
-| `pip install insetu[all]` | Full Extension Suite | All optional dependencies |
+| `pip install insetu[preview]` | Dev Server Previews | `uvicorn` |
+| `pip install insetu[gui]` | Desktop Window (`insetu gui`) | `pywebview` (not included in `all`) |
+| `pip install insetu[all]` | Full Extension Suite | All optional dependencies except `gui` |
 
 ```bash
 # If using the Research/Scraping extension, install required headless browsers:
@@ -127,6 +158,16 @@ pipx inject insetu -e ~/projects/akasa
 
 Once installed, the `insetu` command is available anywhere on your system.
 
+| Command | What it does |
+| :--- | :--- |
+| `insetu init [dir] [-y] [-f]` | Interactive (or headless with `-y`) workspace setup: title, port, and repositories to track. |
+| `insetu serve` | Boots the Workbench daemon in the current directory. |
+| `insetu gui` | Opens the Workbench in a native desktop window (requires the `gui` extra). |
+| `insetu shortcut` | Creates a desktop application shortcut. |
+| `insetu service <action>` | Manages a `systemd` user service (Linux). |
+| `insetu create-extension <name>` | Scaffolds a new Tier 3 extension. |
+| `insetu mcp [--workspace <id>]` | Runs the MCP stdio bridge for MCP clients. |
+
 ### 1. Boot the Workbench (`serve`)
 
 ```bash
@@ -134,7 +175,7 @@ insetu serve
 
 ```
 
-Executing `insetu serve` treats your current working directory (`cwd`) as the active workspace root, reading configuration from `cwd/.insetu/config.json` (and automatically scaffolding local `.insetu/` configuration files if initialized in a fresh directory for the first time). The web daemon boots on `http://127.0.0.1:5005`.
+Executing `insetu serve` treats your current working directory (`cwd`) as the active workspace root, reading configuration from `cwd/.insetu/config.json` (and automatically scaffolding local `.insetu/` configuration files if initialized in a fresh directory for the first time). The web daemon boots on `http://127.0.0.1:5005`. If the kernel fails to boot, inSetu falls back to the [Lifeboat recovery console](#-resiliency--recovery-lifeboat-fs).
 
 ### 2. Background Daemon Management (`service`)
 
@@ -165,18 +206,42 @@ insetu create-extension <extension_name>
 
 This automatically generates the extension directory, Python engine (`engine_<name>.py`), Lit Web Component (`ext_<name>.js`), and vendor manifest (`vendor.json`).
 
-### 🧩 Yomama Patch Sandwich Specification
+### 4. Connect an MCP Client (`mcp`)
 
-The Yomama Sync Bridge expects LLM patch outputs formatted as structured text blocks:
+Point any MCP client that speaks stdio at the `insetu mcp` command. It proxies to the running daemon, or runs headlessly in-process when the daemon is offline:
+
+```json
+{
+    "mcpServers": {
+        "insetu": { "command": "insetu", "args": ["mcp", "--workspace", "default"] }
+    }
+}
+```
+
+### 🧩 Yomama Patch Specification
+
+The Yomama Sync Bridge applies LLM patch outputs formatted as structured text blocks. Each block targets a canonical URI (`vfs://<repo>/<path>` or `ctx://<volume>/<path>`) and can carry a `COMMENT` that is saved in the bridge ledger:
 
 ```text
-<<<<<<< FILE: relative/path/to/file.ext
+<<<<<<< FILE: vfs://my_repo/path/to/file.py
+<<<<<<< COMMENT
+Why this change is being made.
 <<<<<<< SEARCH
-[exact lines from target file]
+[exact lines from target file, with 1-2 unchanged lines of context]
 =======
 [replacement lines]
 >>>>>>> REPLACE
 ```
+
+| Directive | Use it for |
+| :--- | :--- |
+| `SEARCH` / `REPLACE` | Code changes. An empty `SEARCH` creates a new file. |
+| `TEXTEDIT` | Inline prose edits with `{{-delete}}` and `{{+insert}}` markers, without repeating whole paragraphs. |
+| `JSON_PATCH` | `.json`, `.yaml`, and Markdown frontmatter, by dotted key path, `[field=value]` selector, or RFC 6902. |
+| `RELOCATE` / `RENAME` | AST-aware moves of functions and classes, and token-aware renames that skip comments and strings. |
+| `MOVE_FILE` / `ARCHIVE_FILE` / `DELETE_FILE` | File lifecycle. Deleted files are snapshotted in the ledger for undo. |
+
+Blocks that themselves contain triple backticks or seven-character markers use the bridge's transport-escape macros, so patches to Markdown and to the parser's own tests stay unambiguous.
 ## ⚙️ Configuration & Ports
 
 Upon first boot in a workspace, inSetu silently scaffolds your local configuration into `.insetu/` inside your current working directory. 
@@ -199,17 +264,18 @@ Edit the scaffolded config file (`.insetu/config.json` inside your working direc
 
 ### System Configuration & Multi-Workspace Isolation
 
-In addition to `.insetu/config.json`, the daemon manages a global system topology manifest at `.insetu/system.json`:
-* **Global Options:** `port`, `enable_watchdog`, `preload_all_extensions`.
-* **Multi-Workspace Isolation:** Maps workspace IDs to distinct `config_path` locations, enabling isolated multi-tenant environments accessible via the UI or `X-Workspace-ID` header.
+In addition to `.insetu/config.json`, the daemon keeps two daemon-wide files in `.insetu/` (older installs with a single `system.json` are split into these automatically):
+* **`host.json` (Global Options):** `port`, `enable_watchdog`, `preload_all_extensions`.
+* **`workspaces.json` (Multi-Workspace Isolation):** Maps workspace IDs to distinct `config_path` locations, enabling isolated multi-tenant environments. Every API route is scoped by workspace (`/api/<workspace_id>/...`).
 
 ### Environment Variable Reference
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `INSETU_PORT` | `5005` | Overrides the web daemon HTTP port. |
-| `INSETU_CONFIG` | `.insetu/config.json` | Path override for workspace configuration JSON. |
-| `INSETU_BOOT_TOKEN` | *Generated* | Custom static authentication token override. |
+| `AKASA_BOOT_TOKEN` | *Generated* | Fixes the per-process session token instead of generating one at boot. |
+| `INSETU_DEBUG` | `0` | Enables Flask debug mode and verbose topology logging. |
+| `INSETU_RELOADER` | `0` | Enables the auto-reloader (implies debug mode) for development. |
 | `INSETU_SIMULATE_PANIC` | `0` | Triggers a simulated kernel panic to boot Lifeboat FS. |
 
 ---
@@ -223,25 +289,68 @@ In the event of a fatal kernel panic or syntax corruption in core modules, inSet
 * **Core Context Dump:** Generates an emergency single-file context payload of the inSetu kernel for AI debugging.
 
 ---
-## 🌍 Remote Access & Proxies
+## 🌍 Remote Access & Security
 
-inSetu is designed to be a local-first tool, natively binding to `127.0.0.1:5005` to protect your filesystem. If you want to access your Workbench remotely (e.g., from an iPad or a different workstation), we recommend using a secure tunneling service rather than opening router ports.
+inSetu is a local-first tool. The daemon binds to `127.0.0.1:5005` and is never reachable from another machine unless you put a proxy or tunnel in front of it. Use a tunnel rather than opening router ports.
 
-**Using Tailscale (Recommended):**
-Tailscale provides a zero-config VPN. You can securely serve the inSetu port over your private Tailnet using Tailscale Serve:
-```bash
-# Expose inSetu securely over your Tailnet
-sudo tailscale serve --bg --https=443 http://127.0.0.1:5005
+### Security model (read this before exposing the Workbench)
 
+An authenticated session can read and write your files, run shell commands, and push to your Git remotes. **Treat the session token like a shell login.** inSetu is built for a single user, and remote access is only as safe as the way you authenticate it.
+
+A browser gets its session token from `/auth/bootstrap` in one of three ways:
+
+| Route | Who it serves | How it is verified |
+| :--- | :--- | :--- |
+| Localhost | A browser or CLI on this machine | The connection comes from loopback, carries **no** proxy headers (`Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Tailscale-*`), and names `localhost`, `127.0.0.1`, or `[::1]` as its Host. Anything arriving through a proxy never qualifies, whatever its headers claim. |
+| Tailscale identity | Your phone, tablet, or laptop on your tailnet | inSetu asks the local `tailscaled` (`tailscale whois`) who owns the connecting tailnet address. The machine's own Tailscale login is always allowed; other logins must be listed in `allowed_dev_emails` in your workspace `config.json`. Tagged (non-human) devices are always rejected. |
+| Static token | Anything else (ngrok, nginx, Caddy) | You enter the `auth_token` from your workspace `config.json`. |
+
+Every request is also checked against an allowed Host list (loopback, `*.ts.net`, and anything you add) to block DNS-rebinding attacks. Requests for other hostnames get `421 Misdirected Request`.
+
+Before enabling remote access, set an `auth_token` in `.insetu/config.json` so you always have a fallback way in:
+
+```json
+{
+    "auth_token": "a-long-random-string"
+}
 ```
-**Using Ngrok:**
-If you need temporary public access, you can use Ngrok to forward the port:
+
+### Using Tailscale (recommended)
+
+Tailscale gives each of your devices a private, authenticated address. Enable **Remote Access → Auto-Bind Tailscale Serve on Boot** in Settings, or bind manually:
+
+```bash
+# Expose inSetu over HTTPS on your tailnet only
+sudo tailscale serve --bg --https=443 http://127.0.0.1:5005
+```
+
+Open `https://<machine>.<tailnet>.ts.net` from any device logged in to your tailnet as the same Tailscale user and it authenticates automatically. Related settings under **Remote Access**:
+
+* **Tailscale Identity Verification:** `whois` (default, recommended), `header` (trusts the identity headers Tailscale Serve adds, accepted only from a local proxy), or `off` (static token only).
+* Do **not** use `tailscale funnel` for inSetu. Funnel publishes the port to the public internet.
+* Use Tailscale ACLs to limit which devices can reach this machine's Serve port.
+
+### Using ngrok or a reverse proxy
+
+Proxied requests never receive localhost trust, so these setups authenticate with your `auth_token`. Add the public hostname under **Remote Access → Additional Allowed Hostnames** (comma-separated, restart required), or requests will be rejected by Host validation.
 
 ```bash
 ngrok http 5005
-
 ```
-*(Note: If using Ngrok, ensure you trust the network or use Ngrok's basic auth features, as inSetu has direct write access to your local filesystem).*
+
+For any internet-reachable tunnel, also enable the tunnel's own authentication (for example ngrok's basic auth or OAuth), and prefer a private network such as Tailscale whenever possible.
+
+---
+## 🧪 Development & Testing
+
+inSetu holds itself to the same architectural rules it enforces on extensions. From the repository root (with `akasa` and `sutram` cloned as siblings, see above):
+
+```bash
+python tests/run_unit_tests.py      # unit suite
+python tests/fitness_functions.py   # AST fitness rules (membranes, scopes, canonical routes, Lit templates, ...)
+```
+
+The fitness suite statically rejects architectural drift: direct `akasa` imports outside the SDK membrane, settings without a declared scope, workspace writes that bypass the Yomama bridge, reads of forwarding headers outside akasa's peer classifier, and more. CI runs the akasa, sutram, and inSetu suites together on every push to any of the three repositories, against both their latest `main` branches and their latest releases.
 
 ---
 ## 📚 Architectural Essays & Articles

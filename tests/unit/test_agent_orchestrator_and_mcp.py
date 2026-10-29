@@ -19,15 +19,23 @@ from insetu.core.agent.engine_agent import (
     _parse_slash_command,
     agent_bp,
 )
+from insetu.core.agent import orchestrator as _orch_mod
 from insetu.core.agent.orchestrator import (
     SCRATCH_VAULT_THRESHOLD_BYTES,
+    _interpolate_all_syntax,
     evaluate_when_condition,
     execute_declarative_routine,
-    interpolate_template,
+    list_available_routines,
     load_routine_definition,
 )
+from insetu.core.sdk import (
+    CycleError,
+    extract_template_variables,
+    interpolate_template_variables,
+    resolve_dag_wavefronts,
+)
 from insetu.core.bridge.engine_bridge import BRIDGE_SCHEMA, bridge_bp
-from insetu.core.cartographer.cartographer import cartographer_bp
+from insetu.core.cartographer.cartographer import CARTOGRAPHER_SCHEMA, cartographer_bp
 from insetu.core.fs.engine_fs import fs_bp
 from insetu.core.gather.engine_gather import VFS_INDEX_SCHEMA, gather_bp
 from insetu.core.llm.engine_llm import (
@@ -76,6 +84,7 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         )
         _init_worker_schema("default")
         apply_declarative_schema("topology", TOPOLOGY_SCHEMA, "default")
+        apply_declarative_schema("cartographer", CARTOGRAPHER_SCHEMA, "default")
         apply_declarative_schema("vfs_index", VFS_INDEX_SCHEMA, "default")
         apply_declarative_schema("bridge", BRIDGE_SCHEMA, "default")
         apply_declarative_schema("agent", AGENT_SCHEMA, "default")
@@ -98,11 +107,13 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
             "tier_thinking_model": "claude-3-7-sonnet-thinking",
             "api_key": "sk-test-key",
         })
-
         self.assertEqual(_resolve_tier_model(llm_ctx, "fast"), "claude-3-5-haiku-latest")
+        self.assertEqual(_resolve_tier_model(llm_ctx, "low"), "claude-3-5-haiku-latest")
         self.assertEqual(_resolve_tier_model(llm_ctx, "thinking"), "claude-3-7-sonnet-thinking")
+        self.assertEqual(_resolve_tier_model(llm_ctx, "high"), "claude-3-7-sonnet-thinking")
         self.assertEqual(_resolve_tier_model(llm_ctx, "standard"), "claude-3-5-sonnet-latest")
-        self.assertEqual(_resolve_tier_model(llm_ctx, "frontier"), "claude-3-5-sonnet-latest")
+        self.assertEqual(_resolve_tier_model(llm_ctx, "medium"), "claude-3-5-sonnet-latest")
+        self.assertEqual(_resolve_tier_model(llm_ctx, "frontier"), "claude-3-7-sonnet-thinking")
 
         # Validate output_schema bouncer directly
         ok_intent, parsed_intent, _ = validate_output_schema('```json\n{"intent": "EDIT_CODE"}\n```', "intent_classification")
@@ -137,19 +148,29 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         self.assertEqual(res["attempts"], 2)
         self.assertEqual(res["model"], "claude-3-7-sonnet-thinking")
         self.assertIn("vfs://alpha/app.py", res["parsed"])
-
     def test_orchestrator_when_evaluator_and_256kb_scratch_vaulting(self):
-        """evaluate_when_condition safely evaluates boolean/comparison expressions andexecute_declarative_routine vaults >=256KB outputs."""
+        """evaluate_when_condition safely evaluates {{ ... }} boolean/comparison expressions and _interpolate_all_syntax resolves nested/pipe-chained fallbacks."""
         chain_ctx = {
-            "global": {"mode": "auto", "effective_intent": "EDIT_CODE"},
+            "global": {"mode": "auto", "effective_intent": "EDIT_CODE", "user_message": "Fallback Msg"},
             "classify_intent": {"intent": "EDIT_CODE"},
+            "initial_answer": {"text": "Initial Answer Text"},
         }
-        self.assertTrue(evaluate_when_condition("$global.mode == 'auto'", chain_ctx))
-        self.assertFalse(evaluate_when_condition("$global.mode == 'ask'", chain_ctx))
-        self.assertTrue(evaluate_when_condition("$global.effective_intent != 'CHAT_ONLY'", chain_ctx))
+        self.assertTrue(evaluate_when_condition("{{ global.mode }} == 'auto'", chain_ctx))
+        self.assertFalse(evaluate_when_condition("{{ global.mode }} == 'ask'", chain_ctx))
+        self.assertTrue(evaluate_when_condition("{{ global.effective_intent }} != 'CHAT_ONLY'", chain_ctx))
         self.assertEqual(
-            interpolate_template("Mode=$global.mode, Intent=${classify_intent.intent}", chain_ctx),
+            _interpolate_all_syntax("Mode={{ global.mode }}, Intent={{ nodes.classify_intent.intent }}", chain_ctx),
             "Mode=auto, Intent=EDIT_CODE",
+        )
+        # Verify inside-out nested mustache fallback ({{ nodes.final_answer.text | {{ nodes.initial_answer.text }} }})
+        self.assertEqual(
+            _interpolate_all_syntax("{{ nodes.final_answer.text | {{ nodes.initial_answer.text }} }}", chain_ctx),
+            "Initial Answer Text",
+        )
+        # Verify pipe-chained variable fallback ({{ inputs.patch_text | {{ inputs.user_message }} }})
+        self.assertEqual(
+            _interpolate_all_syntax("{{ inputs.patch_text | {{ inputs.user_message }} }}", chain_ctx),
+            "Fallback Msg",
         )
         # Verify workspace_turn.yaml router and standalone sub-routines (code, plan, ask, yomama) load cleanly
         agent_ctx = agent_bp.get_context("default")
@@ -158,11 +179,10 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         self.assertEqual(set(routine_def["modes"].keys()), {"auto", "code", "plan", "ask", "yomama"})
         self.assertEqual(len(routine_def["nodes"]), 2)
         self.assertEqual(routine_def["nodes"][1]["type"], "routine")
-
         sys_ctx = system_bp.get_context("default")
         routines_res = sys_ctx.call("agent.routines")
         routine_ids = {r["id"] for r in routines_res["routines"]}
-        for expected_id in ("workspace_turn", "code", "plan", "ask", "yomama", "map_reduce_audit", "symbol_refactor"):
+        for expected_id in ("workspace_turn", "code", "plan", "ask", "yomama", "implement", "bugfix", "refactor", "test", "upkeep", "debt_ratchet"):
             self.assertIn(expected_id, routine_ids)
 
     def test_declarative_agent_modes_and_one_click_undo_rollback(self):
@@ -423,7 +443,8 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         self.assertNotIn("error", tools_resp)
         tools = tools_resp["result"]["tools"]
         self.assertGreater(len(tools), 0)
-
+        from insetu.core.sdk import get_registered_capabilities as _get_caps
+        caps = _get_caps()
         for tool in tools:
             tool_name = tool.get("name")
             self.assertTrue(tool_name, "Every MCP tool must define a non-empty name")
@@ -432,7 +453,9 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
             self.assertEqual(schema.get("type"), "object", f"Tool '{tool_name}' inputSchema type must be 'object'")
             props = schema.get("properties")
             self.assertIsInstance(props, dict, f"Tool '{tool_name}' must define properties dictionary")
-            self.assertGreater(len(props), 0, f"Tool '{tool_name}' must specify at least one property")
+            cap_spec = caps.get(tool_name) or {}
+            if cap_spec.get("request_schema") or cap_spec.get("path_params") or tool_name.startswith("routine."):
+                self.assertGreater(len(props), 0, f"Parameterized tool '{tool_name}' must specify at least one property")
 
     def test_scratch_vaulting_boundary_for_large_outputs(self):
         """Agent routine steps producing outputs exceeding SCRATCH_VAULT_THRESHOLD_BYTES (256KB) spill to disk scratch files."""
@@ -455,6 +478,539 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         vault_file.write_text(large_content, encoding="utf-8")
         self.assertTrue(vault_file.exists())
         self.assertGreaterEqual(vault_file.stat().st_size, SCRATCH_VAULT_THRESHOLD_BYTES)
+    def test_resolve_dag_wavefronts_and_reentrant_map_parallel(self):
+        """Ring 0 resolve_dag_wavefronts groups parallel generations deterministically, raises CycleError on cycles, and nested run_parallel calls execute without thread starvation."""
+        # Diamond DAG: root -> (branch_b, branch_a) -> sink
+        diamond_nodes = [
+            {"id": "root", "depends_on": [], "order": 10},
+            {"id": "branch_b", "depends_on": ["root"], "order": 30},
+            {"id": "branch_a", "depends_on": ["root"], "order": 20},
+            {"id": "sink", "depends_on": ["branch_a", "branch_b"], "order": 40},
+        ]
+        waves = resolve_dag_wavefronts(diamond_nodes)
+        wave_ids = [[n["id"] for n in w] for w in waves]
+        self.assertEqual(wave_ids, [["root"], ["branch_a", "branch_b"], ["sink"]])
+
+        # Cycle detection raises CycleError
+        cyclic_nodes = [
+            {"id": "a", "depends_on": ["b"]},
+            {"id": "b", "depends_on": ["a"]},
+        ]
+        with self.assertRaises(CycleError):
+            resolve_dag_wavefronts(cyclic_nodes)
+
+        # Template variable extraction & interpolation
+        tpl_text = "Audit {{ target_repo }} with focus on {{ focus_area | security }} and {{ macro_style | concise }}."
+        vars_found = extract_template_variables(tpl_text)
+        self.assertEqual(
+            [(v["name"], v["default"], v["required"]) for v in vars_found],
+            [("target_repo", None, True), ("focus_area", "security", False), ("style", "concise", False)],
+        )
+        rendered = interpolate_template_variables(tpl_text, {"target_repo": "insetu", "macro_style": "strict"})
+        self.assertEqual(rendered, "Audit insetu with focus on security and strict.")
+
+        # Verify nested reentrant map_parallel inside an outer map_parallel completes without deadlock
+        sys_ctx = system_bp.get_context("default")
+        outer_res = sys_ctx.jobs.map_parallel(
+            lambda x: sys_ctx.jobs.map_parallel(lambda y: x * 10 + y, [1, 2, 3]),
+            [1, 2, 3, 4, 5],
+        )
+        self.assertEqual(len(outer_res), 5)
+        self.assertEqual(outer_res[0], [11, 12, 13])
+
+    def test_wavefront_diamond_and_repeat_execution(self):
+        """Executes a 4-branch task-parallel diamond DAG (fetch -> [b1, b2, b3, b4] -> reduce) and a repeat: 3 ensemble node."""
+        agent_ctx = agent_bp.get_context("default")
+        llm_ctx = llm_bp.get_context("default")
+        llm_ctx.settings.update({"provider": "anthropic", "api_key": "sk-test", "max_parallel_requests": 4})
+
+        diamond_routine_md = (
+            "---\n"
+            "id: diamond_ensemble\n"
+            "title: Diamond & Repeat Test\n"
+            "nodes:\n"
+            "  - id: b1\n"
+            "    type: llm\n"
+            "    tier: fast\n"
+            "    parents: []\n"
+            "  - id: b2\n"
+            "    type: llm\n"
+            "    tier: fast\n"
+            "    parents: []\n"
+            "  - id: b3\n"
+            "    type: llm\n"
+            "    tier: fast\n"
+            "    parents: []\n"
+            "  - id: b4\n"
+            "    type: llm\n"
+            "    tier: fast\n"
+            "    parents: []\n"
+            "  - id: reduce_step\n"
+            "    type: llm\n"
+            "    tier: thinking\n"
+            "    repeat: 3\n"
+            "    parents: [b1, b2, b3, b4]\n"
+            "---\n\n"
+            "## b1\nBranch 1\n\n"
+            "## b2\nBranch 2\n\n"
+            "## b3\nBranch 3\n\n"
+            "## b4\nBranch 4\n\n"
+            "## reduce_step\nSynthesize: {{ nodes.b1.text }} | {{ nodes.b2.text }} | {{ nodes.b3.text }} | {{ nodes.b4.text }}\n"
+        )
+        sys_ctx = system_bp.get_context("default")
+        save_res = sys_ctx.call("agent.routines.save", id="diamond_ensemble", raw_content=diamond_routine_md)
+        sync_vfs_barrier("default")
+        self.assertEqual(save_res["routine"]["wavefronts"], [["b1", "b2", "b3", "b4"], ["reduce_step"]])
+
+        def fake_infer(provider, api_key, model, messages, system_prompt, base_url="", **kwargs):
+            content = messages[-1]["content"]
+            return f"OUT({content.splitlines()[0]})", None
+
+        with patch("insetu.core.llm.engine_llm._run_single_inference", side_effect=fake_infer):
+            out = execute_declarative_routine(agent_ctx, routine_id="diamond_ensemble", user_prompt="Go")
+        self.assertEqual(out["status"], "completed")
+        self.assertEqual(len(out["state"]["reduce_step"]["items"]), 3)
+        self.assertIn("OUT(Branch 1)", out["state"]["reduce_step"]["text"])
+        self.assertIn("OUT(Branch 4)", out["state"]["reduce_step"]["text"])
+
+    def test_routines_vfs_volume_fork_save_and_yomama_patch(self):
+        """Verifies reading ctx://routines/.templates/agent/code.md, saving a custom routine, patching it via bridge.sync, and rejecting cyclic routines with HTTP 422."""
+        agent_ctx = agent_bp.get_context("default")
+        sys_ctx = system_bp.get_context("default")
+        # 1. Built-in routines live exclusively as read-only .md files and can be hijacked by a workspace override
+        self.assertFalse(hasattr(_orch_mod, "_BUILTIN_ROUTINES"), "Built-in routines must not be hardcoded in Python")
+        builtin_code = agent_ctx.vfs.read("ctx://routines/.templates/agent/code.md")
+        self.assertIsNotNone(builtin_code)
+        self.assertIn("id: code", builtin_code)
+
+        default_ask = load_routine_definition(agent_ctx, "ask")
+        self.assertEqual(default_ask["source"], "builtin")
+        self.assertEqual(default_ask["filepath"], "ctx://routines/.templates/agent/ask.md")
+
+        # Hijack /ask with a workspace routine override -> load_routine_definition and execute_declarative_routine use the override
+        hijacked_ask_md = (
+            "---\n"
+            "id: ask\n"
+            "title: Hijacked Ask Routine\n"
+            "slash_command: /ask\n"
+            "output: \"{{ nodes.custom_step.text }}\"\n"
+            "nodes:\n"
+            "  - id: custom_step\n"
+            "    type: llm\n"
+            "    tier: fast\n"
+            "    parents: []\n"
+            "---\n\n"
+            "## custom_step\nHijacked prompt: {{ inputs.user_message }}\n"
+        )
+        sys_ctx.call("agent.routines.save", id="ask", raw_content=hijacked_ask_md)
+        sync_vfs_barrier("default")
+        overridden_ask = load_routine_definition(agent_ctx, "ask")
+        self.assertEqual(overridden_ask["source"], "workspace")
+        self.assertEqual(overridden_ask["title"], "Hijacked Ask Routine")
+
+        # Delete override -> reverts cleanly to built-in read-only .md template
+        sys_ctx.call("agent.routines.delete", id="ask")
+        sync_vfs_barrier("default")
+        restored_ask = load_routine_definition(agent_ctx, "ask")
+        self.assertEqual(restored_ask["source"], "builtin")
+
+        # 2. Save custom routine via agent.routines.save
+        custom_md = (
+            "---\n"
+            "id: custom_audit\n"
+            "title: Custom Audit\n"
+            "nodes:\n"
+            "  - id: step_one\n"
+            "    type: llm\n"
+            "    tier: fast\n"
+            "    parents: []\n"
+            "---\n\n"
+            "## step_one\nInitial audit prompt.\n"
+        )
+        saved = sys_ctx.call("agent.routines.save", id="custom_audit", raw_content=custom_md)
+        sync_vfs_barrier("default")
+        self.assertEqual(saved["filepath"], "ctx://routines/custom_audit.md")
+
+        # 3. Patch ctx://routines/custom_audit.md via Yomama bridge.sync (JSON_PATCH)
+        patch_payload = (
+            "<<<<<<< FILE: ctx://routines/custom_audit.md\n"
+            "<<<<<<< JSON_PATCH\n"
+            '{"nodes[id=step_one].tier": "thinking"}\n'
+            ">>>>>>> REPLACE"
+        )
+        b_res = sys_ctx.call("bridge.sync", text=patch_payload, active_files=["ctx://routines/custom_audit.md"], wait=True)
+        sync_vfs_barrier("default")
+        self.assertTrue(b_res.get("can_commit"))
+        loaded_after = load_routine_definition(agent_ctx, "custom_audit")
+        self.assertEqual(loaded_after["nodes"][0]["tier"], "thinking")
+
+        # 4. Reject cyclic routine definition with 422
+        cyclic_md = (
+            "---\n"
+            "id: cyclic_bad\n"
+            "title: Cyclic Bad\n"
+            "nodes:\n"
+            "  - id: a\n"
+            "    type: llm\n"
+            "    parents: [b]\n"
+            "  - id: b\n"
+            "    type: llm\n"
+            "    parents: [a]\n"
+            "---\n"
+        )
+        app = Flask(__name__)
+        app.register_blueprint(agent_bp.bp)
+        client = app.test_client()
+        resp_422 = client.post("/api/default/agent/routines/save", json={"id": "cyclic_bad", "raw_content": cyclic_md})
+        self.assertEqual(resp_422.status_code, 422)
+
+    def test_yomama_textedit_json_patch_and_file_lifecycle_directives(self):
+        """Yomama Bridge applies TEXTEDIT inline diffs, JSON_PATCH key-path selector mutations, and MOVE_FILE/DELETE_FILE with snapshot revert."""
+        md_file = self.repo_dir / "essay.md"
+        md_file.write_text(
+            "---\ntitle: Old Title\nstatus: open\ntags:\n  - draft\n---\n\nThe quick brown fox\njumps over the lazy dog.\n",
+            encoding="utf-8",
+        )
+        json_file = self.repo_dir / "config_sample.json"
+        json_file.write_text(
+            json.dumps({
+                "version": 1,
+                "obsolete": "remove_me",
+                "nodes": [{"id": "step_a", "tier": "fast"}, {"id": "step_b", "tier": "standard"}],
+            }, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        force_topology_scan(workspace_id="default")
+        sys_ctx = system_bp.get_context("default")
+
+        # 1. TEXTEDIT (across soft-wrapped newline) + JSON_PATCH on .md frontmatter + JSON_PATCH on .json selector
+        combined_patch = (
+            "<<<<<<< FILE: vfs://alpha/essay.md\n"
+            "<<<<<<< JSON_PATCH\n"
+            '{"title": "Updated Essay", "status": "active"}\n'
+            ">>>>>>> REPLACE\n\n"
+            "<<<<<<< FILE: vfs://alpha/essay.md\n"
+            "<<<<<<< TEXTEDIT\n"
+            "The quick {{-brown }}fox {{+gracefully }}jumps over the lazy dog.\n"
+            ">>>>>>> REPLACE\n\n"
+            "<<<<<<< FILE: vfs://alpha/config_sample.json\n"
+            "<<<<<<< JSON_PATCH\n"
+            '{"version": 2, "obsolete": null, "nodes[id=step_a].tier": "thinking"}\n'
+            ">>>>>>> REPLACE"
+        )
+        res = sys_ctx.call(
+            "bridge.sync",
+            text=combined_patch,
+            active_files=["vfs://alpha/essay.md", "vfs://alpha/config_sample.json"],
+            dry_run=False,
+            wait=True,
+        )
+        sync_vfs_barrier("default")
+        self.assertTrue(res.get("can_commit"), f"Combined TEXTEDIT/JSON_PATCH failed: {res}")
+
+        md_disk = md_file.read_text(encoding="utf-8")
+        self.assertIn("title: Updated Essay", md_disk)
+        self.assertIn("status: active", md_disk)
+        self.assertIn("The quick fox gracefully jumps over the lazy dog.", md_disk)
+
+        json_disk = json.loads(json_file.read_text(encoding="utf-8"))
+        self.assertEqual(json_disk["version"], 2)
+        self.assertNotIn("obsolete", json_disk)
+        self.assertEqual(json_disk["nodes"][0]["tier"], "thinking")
+        # 2. DELETE_FILE in unattended mode emits a semantic DESTRUCTIVE_DELETE gate, and commits when approved via resolutions or interactive mode
+        del_patch = (
+            "<<<<<<< FILE: vfs://alpha/config_sample.json\n"
+            "<<<<<<< ID: cell_del_1\n"
+            "<<<<<<< DELETE_FILE\n"
+            "FILE: vfs://alpha/config_sample.json\n"
+            ">>>>>>> EXECUTE"
+        )
+        unconfirmed_del = sys_ctx.call(
+            "bridge.sync",
+            text=del_patch,
+            active_files=["vfs://alpha/config_sample.json"],
+            unattended=True,
+            wait=True,
+        )
+        self.assertFalse(unconfirmed_del.get("can_commit"))
+        self.assertEqual(unconfirmed_del["patches"][0]["gate"]["code"], "DESTRUCTIVE_DELETE")
+        self.assertTrue(json_file.exists())
+
+        confirmed_del = sys_ctx.call(
+            "bridge.sync",
+            text=del_patch,
+            active_files=["vfs://alpha/config_sample.json"],
+            unattended=True,
+            resolutions={"cell_del_1": {"approved_gate": "DESTRUCTIVE_DELETE"}},
+            wait=True,
+        )
+        sync_vfs_barrier("default")
+        self.assertTrue(confirmed_del.get("can_commit"))
+        self.assertFalse(json_file.exists())
+
+        # Revert deletion -> restores config_sample.json from compressed snapshot!
+        sys_ctx.call("bridge.revert", transaction_id=confirmed_del["transaction_id"], target_state="initial")
+        sync_vfs_barrier("default")
+        self.assertTrue(json_file.exists())
+        restored_json = json.loads(json_file.read_text(encoding="utf-8"))
+        self.assertEqual(restored_json["version"], 2)
+        # 3. Genesis patch targeting an existing file in an allowed repo halts with OVERWRITE_EXISTING gate until approved
+        genesis_overwrite_patch = (
+            "<<<<<<< FILE: vfs://alpha/essay.md\n"
+            "<<<<<<< ID: cell_overwrite_1\n"
+            "<<<<<<< SEARCH\n"
+            "=======\n"
+            "# Completely Overwritten Essay\n"
+            ">>>>>>> REPLACE"
+        )
+        unconfirmed_ow = sys_ctx.call(
+            "bridge.sync",
+            text=genesis_overwrite_patch,
+            active_files=["vfs://alpha/essay.md"],
+            wait=True,
+        )
+        self.assertFalse(unconfirmed_ow.get("can_commit"))
+        self.assertEqual(unconfirmed_ow["patches"][0]["gate"]["code"], "OVERWRITE_EXISTING")
+
+        confirmed_ow = sys_ctx.call(
+            "bridge.sync",
+            text=genesis_overwrite_patch,
+            active_files=["vfs://alpha/essay.md"],
+            resolutions={"cell_overwrite_1": {"approved_gate": "OVERWRITE_EXISTING"}},
+            wait=True,
+        )
+        sync_vfs_barrier("default")
+        self.assertTrue(confirmed_ow.get("can_commit"))
+        self.assertEqual(md_file.read_text(encoding="utf-8"), "# Completely Overwritten Essay\n")
+
+        # Verify bridge.turn_diff accurately replays prior JSON_PATCH/TEXTEDIT chunks when computing turn diffs
+        turn_diff_res = sys_ctx.call("bridge.turn_diff", transaction_ids=[confirmed_ow["transaction_id"]])
+        self.assertIn("vfs://alpha/essay.md", turn_diff_res["files"])
+        self.assertIn("+# Completely Overwritten Essay", turn_diff_res["diff_text"])
+
+        # 4. Control-plane write ban rejects .insetu/secrets.json
+        banned_patch = (
+            "<<<<<<< FILE: vfs://.insetu/secrets.json\n"
+            "<<<<<<< SEARCH\n=======\n{}\n>>>>>>> REPLACE"
+        )
+        banned_res = sys_ctx.call("bridge.sync", text=banned_patch, active_files=["vfs://.insetu/secrets.json"], wait=True)
+        self.assertFalse(banned_res.get("can_commit"))
+        self.assertEqual(banned_res["patches"][0]["flags"], ["banned_target"])
+    def test_manual_web_chat_wavefront_pause_and_resume(self):
+        """Workspace routines in ctx://routines/*.md are discovered cleanly, and manual Web-Chat wavefront execution pauses across parallel branches and resumes downstream reducer nodes."""
+        sys_ctx = system_bp.get_context("default")
+        agent_ctx = agent_bp.get_context("default")
+
+        # 1. Save a workspace routine batch in ctx://routines/ and verify discovery
+        standup_md = (
+            "---\n"
+            "id: morning_standup\n"
+            "title: Morning Standup Batch\n"
+            "domain: Routines\n"
+            "includes:\n"
+            "  - vfs://alpha/README.md\n"
+            "---\n"
+        )
+        sys_ctx.call("agent.routines.save", id="morning_standup", raw_content=standup_md)
+        sync_vfs_barrier("default")
+
+        all_routines = list_available_routines(agent_ctx)
+        by_id = {r["id"]: r for r in all_routines}
+        self.assertIn("morning_standup", by_id)
+        self.assertEqual(by_id["morning_standup"]["source"], "workspace")
+
+        # 2. Save a custom Markdown-as-Code routine with a banned capability -> must raise PermissionError on execution
+        bad_routine_md = (
+            "---\n"
+            "id: forbidden_exec\n"
+            "title: Forbidden Exec\n"
+            "nodes:\n"
+            "  - id: run_shell\n"
+            "    type: exec\n"
+            "    capability: dev.exec\n"
+            "    payload:\n"
+            "      command: echo pwned\n"
+            "---\n"
+        )
+        sys_ctx.call("agent.routines.save", id="forbidden_exec", raw_content=bad_routine_md)
+        sync_vfs_barrier("default")
+
+        with self.assertRaises(PermissionError):
+            execute_declarative_routine(agent_ctx, routine_id="forbidden_exec", user_prompt="test")
+        # 3. Verify multi-branch Web-Chat Handoff Pause & Resume on a 2-branch wavefront -> reducer routine
+        fanout_md = (
+            "---\n"
+            "id: manual_fanout\n"
+            "title: Manual Fanout\n"
+            "transport: manual\n"
+            "nodes:\n"
+            "  - id: sec_scan\n"
+            "    type: llm\n"
+            "    tier: fast\n"
+            "    parents: []\n"
+            "  - id: perf_scan\n"
+            "    type: llm\n"
+            "    tier: fast\n"
+            "    parents: []\n"
+            "  - id: final_report\n"
+            "    type: llm\n"
+            "    tier: thinking\n"
+            "    parents: [sec_scan, perf_scan]\n"
+            "---\n\n"
+            "## sec_scan\nAudit security: {{ inputs.user_message }}\n\n"
+            "## perf_scan\nAudit performance: {{ inputs.user_message }}\n\n"
+            "## final_report\nCombine: {{ nodes.sec_scan.text }} AND {{ nodes.perf_scan.text }}\n"
+        )
+        sys_ctx.call("agent.routines.save", id="manual_fanout", raw_content=fanout_md)
+        sync_vfs_barrier("default")
+
+        # Wavefront 0 pauses and returns BOTH branches upfront in pending_handoff.branches
+        paused_w0 = execute_declarative_routine(
+            agent_ctx,
+            routine_id="manual_fanout",
+            user_prompt="Check alpha",
+        )
+        self.assertEqual(paused_w0["status"], "paused_for_user")
+        branches_w0 = paused_w0["pending_handoff"]["branches"]
+        self.assertEqual([b["node_id"] for b in branches_w0], ["sec_scan", "perf_scan"])
+
+        # Supply Wavefront 0 responses -> advances to Wavefront 1 (final_report) and populates $sec_scan.text and $perf_scan.text!
+        paused_w1 = execute_declarative_routine(
+            agent_ctx,
+            routine_id="manual_fanout",
+            user_prompt="Check alpha",
+            inputs={
+                "prior_chain_context": paused_w0["chain_context"],
+                "handoff_responses": {
+                    "sec_scan": "SEC_OK",
+                    "perf_scan": "PERF_OK",
+                },
+            },
+        )
+        self.assertEqual(paused_w1["status"], "paused_for_user")
+        self.assertEqual(paused_w1["pending_handoff"]["node_id"], "final_report")
+        self.assertIn("Combine: SEC_OK AND PERF_OK", paused_w1["pending_handoff"]["compiled_prompt"])
+
+        # Supply Wavefront 1 response -> completes routine!
+        done_res = execute_declarative_routine(
+            agent_ctx,
+            routine_id="manual_fanout",
+            user_prompt="Check alpha",
+            inputs={
+                "prior_chain_context": paused_w1["chain_context"],
+                "handoff_responses": {
+                    "sec_scan": "SEC_OK",
+                    "perf_scan": "PERF_OK",
+                    "final_report": "ALL_SYSTEMS_GO",
+                },
+            },
+        )
+        self.assertEqual(done_res["status"], "completed")
+        self.assertEqual(done_res["response"], "ALL_SYSTEMS_GO")
+
+        # 4. Verify agent/run_test blocks unapproved custom commands (403) and allows them once approved
+        app = Flask(__name__)
+        app.register_blueprint(agent_bp.bp)
+        client = app.test_client()
+        unapproved_resp = client.post("/api/default/agent/run_test", json={
+            "repo": "alpha",
+            "command": "python3 -c \"print('custom test ok')\"",
+        })
+        self.assertEqual(unapproved_resp.status_code, 403)
+        self.assertEqual(unapproved_resp.get_json()["status"], "needs_approval")
+
+        approved_resp = client.post("/api/default/agent/run_test", json={
+            "repo": "alpha",
+            "command": "python3 -c \"print('custom test ok')\"",
+            "approve": True,
+        })
+        self.assertEqual(approved_resp.status_code, 200)
+        self.assertEqual(approved_resp.get_json()["status"], "passed")
+        self.assertIn("custom test ok", approved_resp.get_json()["stdout"])
+
+        # Subsequent call without approve=True now succeeds because the signature is persisted in host.json
+        cached_approval_resp = client.post("/api/default/agent/run_test", json={
+            "repo": "alpha",
+            "command": "python3 -c \"print('custom test ok')\"",
+        })
+        self.assertEqual(cached_approval_resp.status_code, 200)
+        self.assertEqual(cached_approval_resp.get_json()["status"], "passed")
+    def test_cartographer_symbol_drift_watermark_and_topology_audit_upkeep(self):
+        """Cartographer flags modified functions with [stale?] when their CODE_INDEX.md comment is unchanged, and topology.audit_upkeep + colon-scoped /upkeep:docs resolve cleanly."""
+        from insetu.core.cartographer.cartographer import map_repositories as _map_repositories
+        from insetu.core.agent.engine_agent import _parse_colon_command_tokens as __parse_colon_command_tokens
+
+        sys_ctx = system_bp.get_context("default")
+
+        # 1. Verify universal colon-scoped command grammar
+        parsed_1 = __parse_colon_command_tokens("/upkeep:docs focus on alpha")
+        self.assertEqual(parsed_1["target"], "upkeep")
+        self.assertEqual(parsed_1["scope"], "docs")
+        self.assertEqual(parsed_1["rest"], "focus on alpha")
+
+        parsed_2 = __parse_colon_command_tokens("/user:upkeep:modularize:apply")
+        self.assertEqual(parsed_2["namespace"], "user")
+        self.assertEqual(parsed_2["target"], "upkeep")
+        self.assertEqual(parsed_2["scope"], "modularize")
+        self.assertEqual(parsed_2["stage"], "apply")
+
+        # 2. Seed a documented function in vfs://alpha/service.py and map CODE_INDEX.md
+        service_py = self.repo_dir / "service.py"
+        service_py.write_text(
+            'def calculate_tax(amount):\n'
+            '    """Computes standard 10 percent sales tax."""\n'
+            '    return amount * 0.10\n',
+            encoding="utf-8",
+        )
+        force_topology_scan("default")
+        _map_repositories("default", silent=True, target_repos=["alpha"])
+        sync_vfs_barrier("default")
+
+        idx_file = self.repo_dir / "CODE_INDEX.md"
+        idx_text_v1 = idx_file.read_text(encoding="utf-8")
+        self.assertIn("def calculate_tax(amount)", idx_text_v1)
+        self.assertIn("# Computes standard 10 percent sales tax.", idx_text_v1)
+        self.assertNotIn("[stale?]", idx_text_v1)
+        # 3. Mutate the implementation body of calculate_tax without updating the docstring/comment
+        service_py.write_text(
+            'def calculate_tax(amount):\n'
+            '    """Computes standard 10 percent sales tax."""\n'
+            '    base = amount * 0.25\n'
+            '    surcharge = 15.0\n'
+            '    return base + surcharge\n',
+            encoding="utf-8",
+        )
+        _map_repositories("default", silent=True, target_repos=["alpha"])
+        sync_vfs_barrier("default")
+
+        idx_text_v2 = idx_file.read_text(encoding="utf-8")
+        self.assertIn("[stale?] Computes standard 10 percent sales tax.", idx_text_v2)
+
+        # 4. Run topology.audit_upkeep and verify stale_comments and god_objects detection
+        audit_res = sys_ctx.call("topology.audit_upkeep", repo="alpha", scope="all", god_object_min_lines=3, god_object_min_symbols=1)
+        self.assertEqual(audit_res["status"], "success")
+        stale_list = audit_res["docs_drift"]["stale_comments"]
+        self.assertTrue(any(s["symbol_name"] == "calculate_tax" for s in stale_list))
+        self.assertTrue(any(g["filepath"] == "vfs://alpha/service.py" for g in audit_res["god_objects"]))
+        # 5. Verify cartographer.verify_symbols clears the [stale?] flag once reviewed
+        ver_res = sys_ctx.call("cartographer.verify_symbols", repo="alpha", symbols=["calculate_tax"])
+        self.assertGreaterEqual(ver_res["verified_count"], 1)
+        idx_text_v3 = idx_file.read_text(encoding="utf-8")
+        self.assertNotIn("[stale?]", idx_text_v3)
+        # 6. Verify {{ymm:<char>x<N>}} transport escape macros expand cleanly in expand_macros and apply_block_in_memory
+        from insetu.core.bridge.bridge_fuzzy import expand_macros as _expand_macros, apply_block_in_memory as _apply_block_in_memory
+        escaped_sample = "{{ymm:`x3}}text\n{{ymm:<x7}} SEARCH\n{{ymm:=x7}}\n{{ymm:>x7}} REPLACE\n{{ymm:`x3}}"
+        self.assertEqual(
+            _expand_macros(escaped_sample),
+            "```text\n<<<<<<< SEARCH\n=======\n>>>>>>> REPLACE\n```",
+        )
+        ok_blk, patched_doc, _ = _apply_block_in_memory(
+            "# Doc\nOld line\n",
+            {"search": "Old line", "replace": "Fence: {{ymm:`x3}} and {{ymm:<x7}} FILE:"},
+            silent=True,
+        )
+        self.assertTrue(ok_blk)
+        self.assertIn("Fence: ``` and <<<<<<< FILE:", patched_doc)
 
 
 if __name__ == "__main__":

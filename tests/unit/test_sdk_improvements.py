@@ -29,10 +29,14 @@ from insetu.core.system.engine_system import (
 from insetu.core.system.legacy import move_tree_contents
 from insetu.core.utils_core import parse_frontmatter, get_domain_cache_path, get_domain_data_path
 from insetu.core.gather.engine_gather import gather_bp, VFS_INDEX_SCHEMA
-from insetu.extensions.flow.engine_flow import flow_bp, _background_compile_workflows
 from akasa.db import apply_declarative_schema
 from akasa.vfs import sync_vfs_barrier
-from insetu.core.agent.engine_agent import agent_bp, AGENT_SCHEMA, _execute_agent_turn
+from insetu.core.agent.engine_agent import (
+    agent_bp,
+    AGENT_SCHEMA,
+    _execute_agent_turn,
+    _background_compile_routine_workflows,
+)
 from insetu.core.bridge.engine_bridge import bridge_bp, BRIDGE_SCHEMA
 from insetu.core.llm.engine_llm import llm_bp
 from insetu.core.topology.engine_topology import TOPOLOGY_SCHEMA, mount_topology_volumes_dynamically
@@ -130,7 +134,7 @@ class TestSdkImprovements(unittest.TestCase):
         self.assertIn("Initial architectural review notes.", body)
     def test_move_tree_contents_self_move_immunity_and_volume_disjointness(self):
         """move_tree_contents never deletes files when src_dir == dst_dir, and mount_volumes is idempotent."""
-        target_dir = Path(flow_bp._resolve_volume_dir(self.workspace_id, "workflows", flow_bp.volumes["workflows"]))
+        target_dir = Path(agent_bp._resolve_volume_dir(self.workspace_id, "workflows", agent_bp.volumes["workflows"]))
         target_dir.mkdir(parents=True, exist_ok=True)
         sentinel = target_dir / "workflow_morning_briefing_context.txt"
         sentinel.write_text("Morning briefing payload", encoding="utf-8")
@@ -139,14 +143,14 @@ class TestSdkImprovements(unittest.TestCase):
         move_tree_contents(target_dir, target_dir)
         self.assertTrue(sentinel.exists(), "move_tree_contents must never delete files when src_dir == dst_dir")
 
-        # 2. Repeated mount_volumes and get_context calls must preserve files in .insetu/cache/flow
-        flow_bp.mount_volumes(self.workspace_id, force=True)
-        flow_bp.mount_volumes(self.workspace_id)
-        _ = flow_bp.get_context(self.workspace_id)
-        self.assertTrue(sentinel.exists(), "flow_bp.mount_volumes must preserve compiled workflow cache files")
+        # 2. Repeated mount_volumes and get_context calls must preserve files in .insetu/cache/agent
+        agent_bp.mount_volumes(self.workspace_id, force=True)
+        agent_bp.mount_volumes(self.workspace_id)
+        _ = agent_bp.get_context(self.workspace_id)
+        self.assertTrue(sentinel.exists(), "agent_bp.mount_volumes must preserve compiled workflow cache files")
 
         # 3. Verify no extension declares a legacy_dir that resolves to its own target cache/data directory
-        for ext_bp in (gather_bp, flow_bp):
+        for ext_bp in (gather_bp, agent_bp):
             for vol_name, vol_spec in (ext_bp.volumes or {}).items():
                 t_dir = Path(ext_bp._resolve_volume_dir(self.workspace_id, vol_name, vol_spec)).resolve()
                 for rel_legacy in (vol_spec.get("legacy_dirs") or []):
@@ -158,7 +162,7 @@ class TestSdkImprovements(unittest.TestCase):
                     )
 
     def test_flow_two_phase_incremental_skip_zero_vfs_reads(self):
-        """_background_compile_workflows short-circuits untouched batches on disk before calling ctx.vfs.read."""
+        """_background_compile_routine_workflows short-circuits untouched routine batches on disk before calling ctx.vfs.read."""
         apply_declarative_schema("vfs_index", VFS_INDEX_SCHEMA, self.workspace_id)
         repo_dir = self.root_path / "alpha"
         repo_dir.mkdir(parents=True, exist_ok=True)
@@ -167,7 +171,7 @@ class TestSdkImprovements(unittest.TestCase):
         (self.control_dir / "config.json").write_text(
             json.dumps({
                 "workspace_root": self.root_path.as_posix(),
-                "extensions": ["config", "flow"],
+                "extensions": ["config"],
                 "target_repos": [{"repo_dir": "alpha", "title": "Alpha", "exts": [".md"]}],
             }),
             encoding="utf-8",
@@ -175,40 +179,38 @@ class TestSdkImprovements(unittest.TestCase):
         akasa_utils.load_config.clear_all()
         mount_topology_volumes_dynamically(load_config(self.workspace_id), workspace_id=self.workspace_id)
 
-        ctx = flow_bp.get_context(self.workspace_id)
-        ctx.store.set("workflows.json", "context_batches", [{
-            "id": "morning_briefing",
-            "title": "Morning Briefing",
-            "domain": "Workflows",
-            "includes": ["vfs://alpha/note.md"],
-        }])
+        ctx = agent_bp.get_context(self.workspace_id)
+        ctx.vfs.save(
+            "ctx://routines/morning_briefing.md",
+            "---\nid: morning_briefing\ntitle: Morning Briefing\ndomain: Workflows\nincludes:\n  - vfs://alpha/note.md\n---\n",
+        )
         sync_vfs_barrier(self.workspace_id)
 
         # 1. Initial compile writes workflow_morning_briefing_context.txt to disk and manifest
-        res1 = _background_compile_workflows(ctx, force_full=True)
+        res1 = _background_compile_routine_workflows(ctx, force_full=True)
         sync_vfs_barrier(self.workspace_id)
         base_uri = "ctx://workflows/workflow_morning_briefing_context.txt"
         self.assertIn(base_uri, res1["artifact"]["files"])
         self.assertTrue(ctx.is_context_on_disk(base_uri))
 
         # 2. Second incremental run with empty touched_buckets / touched_diffs must perform ZERO vfs.read calls on chunks
-        fresh_ctx = flow_bp.get_context(self.workspace_id)
+        fresh_ctx = agent_bp.get_context(self.workspace_id)
         with patch.object(fresh_ctx.vfs, "read", wraps=fresh_ctx.vfs.read) as spy_read:
-            _background_compile_workflows(
+            _background_compile_routine_workflows(
                 fresh_ctx,
                 force_full=False,
                 chain_state={"touched_buckets": [], "touched_diffs": []},
                 ledger_events=[],
             )
             chunk_reads = [c for c in spy_read.call_args_list if c.args and c.args[0] == "vfs://alpha/note.md"]
-            self.assertEqual(len(chunk_reads), 0, "Untouched workflow batch on disk must skip VFS file reads")
+            self.assertEqual(len(chunk_reads), 0, "Untouched routine workflow batch on disk must skip VFS file reads")
 
         # 3. If physical workflow file is wiped from cache, has_missing_domain_artifacts self-heals it
         phys_wf = Path(fresh_ctx.resolve_path(base_uri))
         phys_wf.unlink()
         self.assertFalse(fresh_ctx.is_context_on_disk(base_uri))
-        _background_compile_workflows(
-            flow_bp.get_context(self.workspace_id),
+        _background_compile_routine_workflows(
+            agent_bp.get_context(self.workspace_id),
             force_full=False,
             chain_state={"touched_buckets": [], "touched_diffs": []},
             ledger_events=[],
@@ -241,6 +243,9 @@ class TestSdkImprovements(unittest.TestCase):
                 "def bad_route(ctx):\n"
                 "    _ = ctx.req.args.get('q')\n"
                 "    return jsonify({'ok': True})\n"
+                "@demo_bp.route('caller', methods=['POST'])\n"
+                "def caller_route(ctx):\n"
+                "    return bad_route(ctx)\n"
                 "@demo_bp.on('compile_contexts')\n"
                 "def dead_hook(manifest, **kwargs):\n"
                 "    pass\n"
@@ -262,6 +267,7 @@ class TestSdkImprovements(unittest.TestCase):
             self.assertIn("WORKER_PARAMETER_OVERLOAD_BAN", out_bad)
             self.assertIn("FLASK_TRANSPORT_LEAK_BAN", out_bad)
             self.assertIn("CROSS_MODULE_PRIVATE_IMPORT_BAN", out_bad)
+            self.assertIn("DIRECT_ROUTE_FUNCTION_CALL_BAN", out_bad)
         finally:
             FitnessState.violations_found = prev
     def test_capability_registry_and_in_process_ctx_call(self):

@@ -18,7 +18,8 @@ dist/
 data/
 contexts/
 diffs/
-workflows/
+# Root only: an unanchored 'workflows/' also ignored .github/workflows/ (the CI battery)
+/workflows/
 sotu/
 *.db
 *.db-journal

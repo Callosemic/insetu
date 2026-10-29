@@ -46,6 +46,14 @@ TARGET_JS="$SCRIPT_DIR/../insetu/static/vendor/lucide/icons.js"
 mkdir -p "$(dirname "$TARGET_JS")"
 mv icons.js "$TARGET_JS"
 
+# Ship the upstream license with the dictionary (ISC requires its text in every copy).
+# Some lucide-static releases omit the file; then the committed vendor/lucide/LICENSE is kept.
+if [ -f node_modules/lucide-static/LICENSE ]; then
+    cp node_modules/lucide-static/LICENSE "$(dirname "$TARGET_JS")/LICENSE"
+else
+    echo "⚠️  lucide-static ships no LICENSE file; keeping the committed copy."
+fi
+
 # Clean up
 cd "$SCRIPT_DIR"
 rm -rf "$BUILD_DIR"

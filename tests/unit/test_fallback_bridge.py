@@ -129,15 +129,14 @@ class TestFallbackBridge(unittest.TestCase):
             self.assertEqual(rec_res.status_code, 200)
             self.assertIn(b"KERNEL PANIC", rec_res.data)
             self.assertIn(b"TestTraceback: simulated failure", rec_res.data)
-
     def test_recovery_reboot_token_sync_contract(self):
         """Recovery template script synchronizes insetu_boot_token to client storage upon successful bootstrap response."""
-        from insetu.fallback_bridge import HTML_TEMPLATE
+        from insetu.fallback_bridge import HTML_TEMPLATE as _HTML_TEMPLATE
 
         # 1. Assert HTML template includes sessionStorage and localStorage token persistence
-        self.assertIn("sessionStorage.setItem('insetu_boot_token', data.token)", HTML_TEMPLATE)
-        self.assertIn("localStorage.setItem('insetu_boot_token', data.token)", HTML_TEMPLATE)
-        self.assertIn("window.location.href = '/'", HTML_TEMPLATE)
+        self.assertIn("sessionStorage.setItem('insetu_boot_token', data.token)", _HTML_TEMPLATE)
+        self.assertIn("localStorage.setItem('insetu_boot_token', data.token)", _HTML_TEMPLATE)
+        self.assertIn("window.location.href = '/'", _HTML_TEMPLATE)
 
         # 2. Verify /api/system/reboot returns 200 with success status
         with patch("threading.Thread.start"):

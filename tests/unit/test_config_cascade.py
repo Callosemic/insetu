@@ -295,7 +295,7 @@ class TestConfigurationCascade(unittest.TestCase):
             "insetu.extensions.freshdesk.engine_freshdesk",
             "insetu.extensions.research.engine_research",
             "insetu.extensions.skills.engine_skills",
-            "insetu.extensions.tailscale.engine_tailscale",
+            "insetu.core.remote.engine_remote",
         ]
         for mod_name in extension_modules:
             importlib.import_module(mod_name)

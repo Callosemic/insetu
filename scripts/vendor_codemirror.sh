@@ -61,7 +61,10 @@ EOF
 echo "🔨 Bundling codemirror-core.js..."
 npx esbuild entry.js --bundle --minify --format=esm --outfile="$TARGET_DIR/codemirror-core.js"
 
-# 7. Clean up
+# 7. Ship the upstream license with the bundle (MIT requires its text in every copy)
+cp node_modules/codemirror/LICENSE "$TARGET_DIR/LICENSE"
+
+# 8. Clean up
 cd "$SCRIPT_DIR"
 rm -rf "$BUILD_DIR"
 

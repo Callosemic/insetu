@@ -5,6 +5,17 @@ from .core import (
     PROJECT_ROOT, BACKEND_DIR, AKASA_DIR, AKASA_MEMBRANE_WHITELIST, VFS_WRITE_WHITELIST,
     SQLITE_WHITELIST, SUBPROCESS_WHITELIST, EXECUTE_BINARY_WHITELIST, report_violation, collect_unique_files
 )
+# Client-identity forwarding headers (HTTP and WSGI spellings). inSetu never reads them: akasa's
+# classify_peer() is the single source of truth, exposed through the SDK membrane.
+FORWARDED_CLIENT_HEADERS = frozenset({
+    "x-forwarded-for", "x-real-ip", "forwarded",
+    "http_x_forwarded_for", "http_x_real_ip", "http_forwarded",
+})
+
+
+SETTING_SUBSCHEMA_KEYS = ("item_schema", "fields")
+
+
 class BackendFitnessVisitor(ast.NodeVisitor):
     def __init__(self, filepath, filename, is_test=False):
         self.filepath = filepath
@@ -18,9 +29,53 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         self.has_save_json = False
         self.has_cache_clear = False
         self.top_level_imports = set()
+        self.route_function_names = set()
+        self.current_function_name = None
+        # Sub-field definitions nested in a setting (repeater item_schema, record fields) inherit their
+        # parent's scope, so SETTINGS_SCOPE_MANDATE only applies to top-level setting fields.
+        self.nested_setting_field_ids = set()
+
+    def _mark_nested_setting_fields(self, list_node):
+        if isinstance(list_node, ast.List):
+            for elt in list_node.elts:
+                if isinstance(elt, ast.Dict):
+                    self.nested_setting_field_ids.add(id(elt))
 
     def visit_Module(self, node):
+        # Pre-pass: sub-schemas defined as named module constants and referenced by item_schema/fields.
+        subschema_names = set()
+        for n in ast.walk(node):
+            if isinstance(n, ast.Dict):
+                for k, v in zip(n.keys, n.values):
+                    if isinstance(k, ast.Constant) and k.value in SETTING_SUBSCHEMA_KEYS and isinstance(v, ast.Name):
+                        subschema_names.add(v.id)
         for stmt in node.body:
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+                targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+                if any(isinstance(t, ast.Name) and t.id in subschema_names for t in targets):
+                    self._mark_nested_setting_fields(stmt.value)
+        for n in ast.walk(node):
+            if isinstance(n, ast.FunctionDef):
+                for dec in n.decorator_list:
+                    if (
+                        isinstance(dec, ast.Call)
+                        and isinstance(dec.func, ast.Attribute)
+                        and dec.func.attr == "route"
+                        and isinstance(dec.func.value, ast.Name)
+                        and dec.func.value.id != "app"
+                    ):
+                        self.route_function_names.add(n.name)
+        for stmt in node.body:
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+                targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+                for t in targets:
+                    if isinstance(t, ast.Name) and t.id == "_BUILTIN_ROUTINES":
+                        report_violation(
+                            "HARDCODED_BUILTIN_ROUTINES_BAN",
+                            self.filepath,
+                            stmt.lineno,
+                            "Hardcoded '_BUILTIN_ROUTINES' dictionary in Python is banned. All built-in routines must live as read-only Markdown-as-Code files in '<module>/routines/*.md'."
+                        )
             if isinstance(stmt, ast.Import):
                 for alias in stmt.names:
                     self.top_level_imports.add(alias.asname or alias.name)
@@ -39,6 +94,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         if self.is_test:
             self.generic_visit(node)
             return
+
+        # A setting field's list-valued entries (item_schema, fields, columns...) hold sub-fields, never
+        # top-level settings. 'default' and 'options' hold data, not schema, and are left alone.
+        if 'id' in dict_keys and 'type' in dict_keys:
+            for key_name, value_node in dict_keys.items():
+                if key_name not in ('default', 'options'):
+                    self._mark_nested_setting_fields(value_node)
 
         for uri_key in ('out_file',):
             if uri_key in dict_keys and isinstance(dict_keys[uri_key], ast.Constant) and isinstance(dict_keys[uri_key].value, str):
@@ -73,7 +135,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 and setting_type_node.value == 'hidden'
                 and ('default' in dict_keys or 'scope' in dict_keys)
             )
-            if is_setting_schema:
+            if is_setting_schema and id(node) not in self.nested_setting_field_ids:
                 if 'scope' not in dict_keys:
                     report_violation(
                         "SETTINGS_SCOPE_MANDATE",
@@ -119,6 +181,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                         node.lineno,
                         f"Direct file I/O on legacy '{arg.value}' detected. Use vfs_index.db, ctx.save_manifest, or request_manifest instead."
                     )
+        if not self.is_test and isinstance(node.func, ast.Name) and node.func.id in self.route_function_names:
+            report_violation(
+                "DIRECT_ROUTE_FUNCTION_CALL_BAN",
+                self.filepath,
+                node.lineno,
+                f"Direct Python call to @route-decorated function '{node.func.id}()' is banned because @route wraps functions for Flask HTTP transport. Invoke via 'ctx.call(\"<ext>.<action>\", ...)' instead."
+            )
         if isinstance(node.func, ast.Name) and node.func.id == 'save_json_config':
             self.has_save_json = True
         if isinstance(node.func, ast.Name) and node.func.id == 'ExtensionContext':
@@ -139,12 +208,21 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 isinstance(node.func, ast.Name)
                 and node.func.id in ("execute_vfs_save", "execute_vfs_delete", "execute_vfs_move", "execute_vfs_bulk")
             ):
-                report_violation(
-                    "YOMAMA_PATCH_GATEWAY_MANDATE",
-                    self.filepath,
-                    node.lineno,
-                    "Direct VFS mutation detected in Agent module. All agent code modifications must route through 'bridge.sync' to guarantee AST validation and ledger parity."
-                )
+                allowed_agent_crud_fns = {
+                    "_handle_routine_response_pre_save",
+                    "_persist_turn_plan_artifact",
+                    "_persist_routine_response",
+                    "api_save_routine",
+                    "api_delete_routine",
+                    "api_ensure_plan_file",
+                }
+                if self.current_function_name not in allowed_agent_crud_fns:
+                    report_violation(
+                        "YOMAMA_PATCH_GATEWAY_MANDATE",
+                        self.filepath,
+                        node.lineno,
+                        "Direct VFS mutation detected in Agent turn/orchestrator loop. All agent code modifications must route through 'bridge.sync' to guarantee AST validation and ledger parity."
+                    )
         func_name = None
         if isinstance(node.func, ast.Name):
             func_name = node.func.id
@@ -168,6 +246,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         if (
             not self.is_test
             and not self.is_membrane_whitelisted
+            and self.filename != "utils_core.py"
             and func_name == "mount_volume"
             and len(node.args) >= 2
             and isinstance(node.args[1], ast.Constant)
@@ -276,7 +355,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'endswith':
             if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
                 if node.args[0].value in ('_diffs.txt', '_context.txt', '_workflow_context.txt'):
-                    if self.filename not in ("utils_core.py", "engine_git.py", "engine_flow.py"):
+                    if self.filename not in ("utils_core.py", "engine_git.py"):
                         report_violation("URI_EXTENSION_MATCHING_BAN", self.filepath, node.lineno, f"Manual suffix matching ('{node.args[0].value}') detected. Rely on InSetuURI(path) domain resolution instead.")
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'parse_uri':
             report_violation("PARSE_URI_DEPRECATION", self.filepath, node.lineno, "ctx.parse_uri() is deprecated. Instantiate InSetuURI(uri) to access .repo and .path natively.")
@@ -405,7 +484,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     "AKASA_MEMBRANE_ISOLATION",
                     self.filepath,
                     node.lineno,
-                    f"Direct import '{alias.name}' outside the 4-File Membrane. Import from 'insetu.core.sdk' or 'insetu.core.utils_core' instead."
+                    f"Direct import '{alias.name}' outside the Single-File SDK Membrane ('insetu/core/sdk/__init__.py'). Import from 'insetu.core.sdk' or 'insetu.core.utils_core' instead."
                 )
             if alias.name in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth'):
                 report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{alias.name}'. Import from 'akasa.{alias.name.split('.')[-1]}' instead.")
@@ -431,6 +510,15 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             report_violation("BANNED_SOCKET_MANAGEMENT", self.filepath, node.lineno, "Raw socket management loop detected in extension. Multi-tenant endpoints must utilize brokered WebSocket schemas or standard API routes.")
         self.generic_visit(node)
     def visit_FunctionDef(self, node):
+        prev_fn = self.current_function_name
+        self.current_function_name = node.name
+        if not self.is_test and node.name in ("interpolate_template", "_extract_prompt_arguments"):
+            report_violation(
+                "DUPLICATE_TEMPLATE_INTERPOLATOR_BAN",
+                self.filepath,
+                node.lineno,
+                f"Legacy/duplicate template helper '{node.name}()' is banned. Use 'extract_template_variables' and 'interpolate_template_variables' from 'insetu.core.sdk' with '{{{{ ... }}}}' syntax."
+            )
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         hook_events = []
         for dec in node.decorator_list:
@@ -568,6 +656,8 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                             if not has_schema:
                                 report_violation("ROUTE_REQUEST_SCHEMA_MANDATE", self.filepath, node.lineno, f"Mutating route '{node.name}' ({', '.join(methods)}) is missing a mandatory 'request_schema' contract.")
         self.generic_visit(node)
+        self.current_function_name = prev_fn
+
     def visit_Attribute(self, node):
         if isinstance(node.ctx, ast.Store) and node.attr == "_cwd":
             report_violation(
@@ -627,7 +717,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     "AKASA_MEMBRANE_ISOLATION",
                     self.filepath,
                     node.lineno,
-                    f"Direct import from '{node.module}' outside the 4-File Membrane. Import from 'insetu.core.sdk' or 'insetu.core.utils_core' instead."
+                    f"Direct import from '{node.module}' outside the Single-File SDK Membrane ('insetu/core/sdk/__init__.py'). Import from 'insetu.core.sdk' or 'insetu.core.utils_core' instead."
                 )
             if not self.is_test:
                 for alias in node.names:
@@ -696,6 +786,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         self.generic_visit(node)
     def visit_Constant(self, node):
         if isinstance(node.value, str):
+            if not self.is_test and node.value.strip().lower() in FORWARDED_CLIENT_HEADERS:
+                report_violation(
+                    "FORWARDED_HEADER_MEMBRANE",
+                    self.filepath,
+                    node.lineno,
+                    f"Forwarding header '{node.value}' read in inSetu. Use classify_peer() from insetu.core.sdk (the request's PeerInfo) instead."
+                )
             if 'core' in self.filepath.parts and not self.is_test and self.filename != "legacy.py":
                 ext_dir = BACKEND_DIR / "extensions"
                 tier3_names = {

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "insetu"
@@ -8,6 +8,7 @@ description = "A local-first AI Workbench, Context Gatherer, and Kanban Tracker.
 readme = "README.md"
 authors = [{ name = "inSetu Contributors", email = "hello@insetu.dev" }]
 license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -62,6 +63,9 @@ publish = [
 ]
 preview = [
     "uvicorn>=0.30.0",                # engine_preview: ASGI dev server supervisor
+]
+gui = [
+    "pywebview>=5.0",                 # cli `insetu gui`: native desktop window (not in `all`: needs GTK/Qt on Linux)
 ]
 update = [
     "python-semantic-release>=9.0.0", # engine_update: Automated versioning

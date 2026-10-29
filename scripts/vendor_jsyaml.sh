@@ -17,5 +17,8 @@ npx esbuild node_modules/js-yaml/dist/js-yaml.mjs \
   --minify \
   --outfile="$TARGET_DIR/js-yaml.min.js"
 
+# Ship the upstream license with the bundle (MIT requires its text in every copy)
+cp node_modules/js-yaml/LICENSE "$TARGET_DIR/LICENSE"
+
 cd "$SCRIPT_DIR"
 rm -rf "$BUILD_DIR"
