@@ -1022,7 +1022,7 @@ insetu/
         │   └── class TestCanonicalURIs(unittest.TestCase) # [comment required]
         ├── test_cartographer_and_bridge_ast.py # Unit tests for Cartographer AST symbol extraction, 3-tier waterfall indexing, and Yomama RELOCATE/RENAME.
         │   └── class TestCartographerAndBridgeAst(unittest.TestCase) # [comment required]
-        ├── test_cartographer_file_descriptions.py # [comment required]
+        ├── test_cartographer_file_descriptions.py # Tests that the Cartographer derives file descriptions from docstrings instead of leaving placeholders.
         │   ├── class TestDescribeSourceFile(unittest.TestCase) # describe_source_file reads module docstrings and leading file comments, never symbol docs.
         │   └── class TestMapRepositoriesFileFallback(unittest.TestCase) # map_repositories describes a new file from its docstring when the index has no line for it.
         ├── test_config_cascade.py  # Unit tests for the 3-tier configuration cascade, secret encryption, and lazy migration.
@@ -1035,7 +1035,7 @@ insetu/
         │   └── class TestForwardedHeaderMembraneRule(unittest.TestCase) # S1: inSetu never reads client-identity forwarding headers; akasa's classify_peer() is the single source of truth.
         ├── test_import_order.py    # Ensures every core entry point imports first in a fresh interpreter (sdk/utils_core cycle).
         │   └── class TestImportOrder(unittest.TestCase) # Every core entry point must import cleanly as the FIRST insetu import of a fresh interpreter (sdk <-> utils_core cycle).
-        ├── test_lifeboat_targets.py # [comment required]
+        ├── test_lifeboat_targets.py # The lifeboat resolves vfs:// patch targets like the main bridge and never writes outside the workspace.
         │   └── class TestLifeboatTargets(unittest.TestCase) # The lifeboat resolves vfs:// patch targets like the main bridge and never writes outside the workspace.
         ├── test_lit_template_rules.py # Tests that Lit ${...} bindings are stripped before sutram-btn label matching.
         │   └── class TestLitTemplateRuleHelpers(unittest.TestCase) # The sutram-btn label rule must not mistake '=>' inside a Lit binding for the end of the tag.
