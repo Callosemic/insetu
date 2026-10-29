@@ -89,6 +89,8 @@ All Sutram inputs emit the standardized `@sutram-input-changed` event, where `e.
 *   **`<sutram-textarea>`:** Auto-resizing multi-line text block. Properties: `.label`, `.value`, `.placeholder`, `.rows`, `?monospace`, `?disabled`, `?readOnly`, `?inline`, `?autoSize`, `?borderless`.
 *   **`<sutram-select>`:** Dropdown menu. Properties: `.label`, `.value`, `.options` (Array of `{value, label}`), `?disabled`, `?inline`.
 *   **`<sutram-toggle>`:** Boolean switch. Properties: `.label`, `.checked`, `?disabled`.
+*   **`<sutram-combobox>`:** Searchable text input with filterable dropdown menu. Properties: `.label`, `.value`, `.placeholder`, `.options` (Array of strings or `{value, label, badge}`), `?disabled`, `?inline`, `?flush`.
+*   **`<sutram-target-binding>`:** Composite endpoint and model selector pairing an endpoint `<sutram-select>` with a model `<sutram-combobox>`. Properties: `.label`, `.value` (`{endpoint, model}`), `.endpoints` (Array of `{value, label}`), `.models` (Array or resolver Function `(endpointId) => options`), `.endpointPlaceholder`, `.modelPlaceholder`, `?allowEmptyEndpoint`, `?disabled`, `?flush`.
 
 ## VIII. Toolbars & Filtering
 

@@ -120,7 +120,7 @@ Network synchronization must route through the client API abstraction to inherit
 * `this.onForceRefresh()`: Class lifecycle hook invoked reactively when the active tab/sub-tab is re-selected or force-refreshed by the user.
 * `buildUriFileTree(uris, rootScope)`: Hierarchical virtual file tree constructor. Operates natively on canonical URIs (`vfs://`, `ctx://`, `ws://`), preserving `node.canonicalUri` across directories and files.
 * `<insetu-projection-window-controls>`: Reusable projection toolbar control rendering Pop Out and Dock In actions with automated pre-action save hooks.
-* `<insetu-schema-repeater>`: Declarative repeater component for dynamic array-of-objects settings. Supports bounds checking (`min_items`, `max_items`), reordering (`chevron-up`, `chevron-down`), item deletion, custom item renders (`custom_render`), nested `record` field layouts, and conditional sub-field evaluation (`show_if`).
+* `<insetu-schema-repeater>`: Declarative repeater component for dynamic array-of-objects settings. Supports bounds checking (`min_items`, `max_items`), reordering (`chevron-up`, `chevron-down`), item deletion, custom item renders (`custom_render`), nested `record` field layouts, conditional sub-field evaluation (`show_if`), automatic unique slug derivation (`id_key`, `slug_source`), dynamic select option derivation (`options_from`), and composite `<sutram-target-binding>` controls with external option resolvers.
 
 ---
 
