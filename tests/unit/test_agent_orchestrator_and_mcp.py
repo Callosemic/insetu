@@ -1012,6 +1012,58 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         self.assertTrue(ok_blk)
         self.assertIn("Fence: ``` and <<<<<<< FILE:", patched_doc)
 
+    def test_llm_resolve_target_and_raw_content_message_history(self):
+        """llm.resolve_target resolves execution target metadata without leaking plaintext keys, and chat_messages retains raw_content across turns."""
+        sys_ctx = system_bp.get_context("default")
+        agent_ctx = agent_bp.get_context("default")
+
+        # 1. Verify llm.resolve_target capability returns driver metadata
+        target_res = sys_ctx.call("llm.resolve_target", tier="standard")
+        self.assertEqual(target_res["tier"], "standard")
+        self.assertIn("provider", target_res)
+        self.assertIn("model", target_res)
+        self.assertIn("is_web_chat", target_res)
+        self.assertIn("has_api_key", target_res)
+        self.assertNotIn("api_key", target_res, "api_key plaintext must not be exposed by resolve_target")
+
+        # 2. Verify chat_messages preserves raw_content alongside clean prose content
+        ses_id = "ses_raw_content_test"
+        agent_ctx.db.insert_or_replace("chat_sessions", {
+            "session_id": ses_id,
+            "title": "Raw Content Test",
+            "updated_at": time.time(),
+        })
+        msg_id = "msg_raw_test_1"
+        c_open = "<" * 7
+        c_sep = "=" * 7
+        c_close = ">" * 7
+        raw_reply = (
+            f"Here is the explanation.\n\n"
+            f"{c_open} FILE: vfs://alpha/sample.py\n"
+            f"{c_open} SEARCH\nx = 1\n{c_sep}\nx = 2\n{c_close} REPLACE"
+        )
+        agent_ctx.db.insert_or_replace("chat_messages", {
+            "message_id": msg_id,
+            "session_id": ses_id,
+            "role": "assistant",
+            "content": "Here is the explanation.\n\n✅ Applied patches to 1 file(s).",
+            "raw_content": raw_reply,
+            "timestamp": time.time(),
+        })
+        agent_ctx.db.commit()
+
+        # Query back and verify history rehydration prefers raw_content
+        cursor = agent_ctx.db.execute(
+            "SELECT role, content, raw_content FROM chat_messages WHERE session_id=? ORDER BY timestamp ASC",
+            (ses_id,),
+        )
+        history = [
+            {"role": r["role"], "content": (r["raw_content"] if r["raw_content"] else r["content"])}
+            for r in cursor.fetchall()
+        ]
+        self.assertEqual(len(history), 1)
+        self.assertIn(f"{c_open} FILE: vfs://alpha/sample.py", history[0]["content"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -160,7 +160,7 @@ def check_javascript_files():
     banned_cdn_import_pattern = re.compile(r'(?:from\s+|import\(\s*)[\'"]https?://(esm\.sh|cdn\.jsdelivr\.net|unpkg\.com)')
     banned_yenvui_tag_pattern = re.compile(r'<\/?yenvui-')
     sutram_subdir_pattern = re.compile(r'from\s+[\'"][^\'"]*vendor/sutram/(?!js/)[^\'"]*[\'"]')
-    sutram_membrane_leak_pattern = re.compile(r'(?:from\s+|import\s+)[\'"](?:[^\'"]*vendor/(?:sutram|yenvui)/(?!js/shared_styles\.js)[^\'"]*|sutram(?:-chassis)?)[\'"]')
+    sutram_membrane_leak_pattern = re.compile(r'(?:from\s+|import\s+)[\'"](?:[^\'"]*vendor/(?:sutram|yenvui)/[^\'"]*|sutram(?:-chassis)?)[\'"]')
     raw_dialog_pattern = re.compile(r'<dialog\b')
     inline_date_formatting_pattern = re.compile(r'new\s+Date\([^)]*\)\.toLocale(?:Date|Time)?String\(\)')
     raw_poll_job_pattern = re.compile(r'\bthis\.api\.pollJob\s*\(')
@@ -774,8 +774,8 @@ def check_javascript_files():
                 report_violation("LEGACY_DOMAIN_ACCESSOR_VIOLATION", filepath, line_num, "Direct invocation of executeSystemCompile detected. Route through the Store (e.g. GatherStore.getState().executeCompile) or this.compileSystem() (ADR 0024).")
             if file not in ["store.js", "sdk.js"] and direct_execute_ui_hook_pattern.search(line):
                 report_violation("BANNED_DIRECT_EXECUTE_UI_HOOK", filepath, line_num, "Direct ExtensionRegistry.executeUIHook calls are deprecated. Use window.inSetu.events.emitHook(zone, payload).")
-            if shared_styles_pattern.search(line) and 'vendor/sutram/js/shared_styles.js' not in line and '/static/extensions/system/insetu_sdk.js' not in line:
-                report_violation("VENDOR_SHARED_STYLES_MANDATE", filepath, line_num, "Legacy or un-vendorized sharedStyles import detected. Import sharedStyles from '/static/extensions/system/insetu_sdk.js' or 'vendor/sutram/js/shared_styles.js'.")
+            if shared_styles_pattern.search(line) and '/static/extensions/system/insetu_sdk.js' not in line:
+                report_violation("VENDOR_SHARED_STYLES_MANDATE", filepath, line_num, "Legacy or un-vendorized sharedStyles import detected. Import sharedStyles strictly from '/static/extensions/system/insetu_sdk.js'.")
             if sutram_subdir_pattern.search(line):
                 report_violation("VENDOR_SUTRAM_JS_SUBDIR_MANDATE", filepath, line_num, "Sutram vendor imports must explicitly target the 'vendor/sutram/js/' subfolder.")
             if file != "insetu_sdk.js" and sutram_membrane_leak_pattern.search(line):

@@ -9,6 +9,7 @@ from unittest.mock import patch
 from cryptography.fernet import Fernet
 import akasa
 import akasa.db as akasa_db
+from akasa.hooks import hooks as akasa_hooks
 import akasa.utils as akasa_utils
 from akasa.auth import rotate_master_key, _on_security_settings_updated
 from akasa.extension import SettingsManager, _REGISTERED_SETTINGS_SCHEMAS, MASKED_SECRET_SENTINEL
@@ -134,7 +135,9 @@ class TestConfigurationCascade(unittest.TestCase):
             secrets_path.write_text(json.dumps({"test_ext": {"api_token": "legacy-plaintext-key"}}), encoding="utf-8")
             akasa_utils._JSON_CACHE.clear()
             akasa_utils._JSON_MTIME.clear()
-            with patch("akasa.hooks.hooks.emit") as mock_emit:
+            # patch.object: akasa/__init__.py binds the registry as `hooks`, shadowing the akasa.hooks
+            # submodule, so the dotted string target only resolves on Python 3.11+.
+            with patch.object(akasa_hooks, "emit") as mock_emit:
                 migrated_val = mgr.get("api_token")
                 self.assertEqual(migrated_val, "legacy-plaintext-key")
                 mock_emit.assert_not_called()

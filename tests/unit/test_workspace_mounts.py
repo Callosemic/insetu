@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from akasa.hooks import hooks as akasa_hooks
 from akasa.uri import AkasaURI
 from akasa.vfs import (
     InterWorkspaceVFSDriver,
@@ -155,7 +156,7 @@ class TestWorkspaceMounts(unittest.TestCase):
         ])
         self.assertEqual(len(res_bulk.get("operations", [])), 1)
         self.assertEqual(res_bulk["operations"][0]["filepath"], "vfs://app/notes.md")
-    @patch("akasa.hooks.hooks.emit_background")
+    @patch.object(akasa_hooks, "emit_background")
     @patch("insetu.core.topology.engine_topology.get_all_workspace_ids")
     @patch("insetu.core.topology.engine_topology.SettingsManager")
     def test_cross_workspace_event_broadcasting(self, mock_settings_mgr, mock_all_ws, mock_emit_bg):
@@ -180,7 +181,7 @@ class TestWorkspaceMounts(unittest.TestCase):
         self.assertEqual(len(emitted_mutations), 1)
         self.assertEqual(emitted_mutations[0]["filepath"], "ws://hub/prompts/architect.md")
 
-    @patch("akasa.hooks.hooks.emit_background")
+    @patch.object(akasa_hooks, "emit_background")
     def test_reentrancy_guard_blocks_ws_echoes(self, mock_emit_bg):
         """Synthetic ws:// mutations are not re-broadcast to prevent recursive event loops."""
         mutations = [{"filepath": "ws://hub/prompts/architect.md", "operation": "save"}]

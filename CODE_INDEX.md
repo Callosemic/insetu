@@ -48,6 +48,8 @@ insetu/
 │       ├── 0086-git-diff-capabilities-autonomous-routines-and-tailscale-extension-retirement.md # ADR 0086: Git Diff Capabilities, Autonomous Routines, Tailscale Extension Retirement, and Single-File Membrane Compliance
 │       ├── 0087-flow-extension-decommissioning-tracker-schema-repeaters-and-hooks-bridge-protection.md # ADR 0087: Flow Extension Decommissioning, Tracker Settings Repeater Migration, and Hooks Bridge Path Protection
 │       ├── 0088-stack-ci-battery-single-file-sdk-membrane-vendor-locking-and-whois-remote-identity.md # ADR 0088: Callosemic Stack CI Battery, Single-File SDK Membrane, Vendored Substrate Provenance Locking, and Whois Remote Identity Verificati...
+│       ├── 0089-dynamic-code-context-scouting-web-chat-handoff-composer-and-cognitive-target-bindings.md # ADR 0089: Dynamic /code Context Scouting, Interactive Web-Chat Handoff Composer, Yomama Patch Splitting, and Cognitive Profile Target Bindin...
+│       ├── 0090-decoupled-llm-target-resolution-reentrant-routine-handoff-and-raw-transcript-preservation.md # ADR 0090: Decoupled LLM Target Resolution, Reentrant Routine Handoff Propagation, and Raw Transcript History Preservation
 │       ├── archived/               # Superseded and historical ADR documents.
 │       │   ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │       │   ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -399,6 +401,8 @@ insetu/
 │   │   │       ├── class ChatCompletionPayload(TypedDict) # [comment required]
 │   │   │       ├── class LlmDecidePayload(TypedDict) # [comment required]
 │   │   │       ├── def get_compute_pool_and_profiles(ctx) # [stale?] Returns the normalized compute endpoint pool, configuration profiles, and active_profile_id.
+│   │   │       ├── class LlmResolveTargetPayload(TypedDict) # [comment required]
+│   │   │       ├── def api_llm_resolve_target(ctx) # [comment required]
 │   │   │       ├── def validate_output_schema(raw_text, output_schema) # Universal Output Schema Bouncer: Validates LLM text against named built-in contracts ('yomama_patch', 'intent_classification', 'json') or a...
 │   │   │       ├── def api_llm_complete(ctx) # [comment required]
 │   │   │       ├── class AudioTranscribePayload(TypedDict) # [comment required]
@@ -986,8 +990,8 @@ insetu/
 │   │   ├── def read_sutram_version(sutram_root) # Reads [project].version from sutram's pyproject.toml without tomllib (Python 3.10 has none).
 │   │   ├── def read_git_state(sutram_root) # Returns (HEAD commit, dirty) for the vendored paths, or (None, False) when sutram_root is not a git checkout.
 │   │   ├── def sync(sutram_root, vendor_root, source) # Vendors sutram into vendor_root, deletes files sutram no longer has, and writes the lock.
-│   │   ├── def check(vendor_root)  # Returns a list of problems with the vendored files against the lock (empty when they match).
-│   │   └── def main(argv)          # CLI entry point: 'sync <sutram_root> <vendor_root> [source]' or 'check <vendor_root>'.
+│   │   ├── def check(vendor_root, strict) # Returns a list of problems with the vendored files against the lock (empty when they match).
+│   │   └── def main(argv)          # [stale?] CLI entry point: 'sync <sutram_root> <vendor_root> [source]' or 'check <vendor_root>'.
 │   ├── vendor_lucide.sh            # Generates the local Lucide SVG icon sprite dictionary.
 │   ├── vendor_sutram.sh            # Resolves a sutram checkout (sibling or fresh clone) and runs vendor_lock.py sync.
 │   ├── vendor_zustand.sh           # Local esbuild vendorization script for Zustand modules.
@@ -1040,7 +1044,7 @@ insetu/
         ├── test_lit_template_rules.py # Tests that Lit ${...} bindings are stripped before sutram-btn label matching.
         │   └── class TestLitTemplateRuleHelpers(unittest.TestCase) # The sutram-btn label rule must not mistake '=>' inside a Lit binding for the end of the tag.
         ├── test_llm_pool_precedence.py # Tests LLM routing precedence: saved pool, then explicit legacy settings, then the default pool.
-        │   └── class TestLlmPoolPrecedence(unittest.TestCase) # Routing precedence: saved pool/profiles, then explicitly saved legacy settings, then the schema's default pool.
+        │   └── class TestLlmPoolPrecedence(unittest.TestCase) # [stale?] Routing precedence: saved pool/profiles, then explicitly saved legacy settings, then the schema's default pool.
         ├── test_macro_escapes.py   # Tests that transport macros expand in files documenting them, literal tokens via brace macros, and lifeboat parity.
         │   └── class TestMacroEscapes(unittest.TestCase) # The namespaced transport macro always expands, even in files that document it, and both bridges agree.
         ├── test_publish_extension.py # Unit tests for document publishing compilation and ephemeral wordcount macro stripping.

@@ -158,7 +158,7 @@ def sync(sutram_root: Path, vendor_root: Path, source: str = "sibling") -> Dict[
     return lock
 
 
-def check(vendor_root: Path) -> List[str]:
+def check(vendor_root: Path, strict: bool = False) -> List[str]:
     """Returns a list of problems with the vendored files against the lock (empty when they match)."""
     lock_path = vendor_root / LOCK_FILENAME
     if not lock_path.is_file():
@@ -172,6 +172,12 @@ def check(vendor_root: Path) -> List[str]:
         problems.append("vendored file contents do not match the lock (hand edit, partial vendor run, or stale file)")
     if not entry.get("commit"):
         problems.append("lock has no sutram commit; vendor from a git checkout of sutram")
+    if entry.get("dirty"):
+        dirty_msg = "sutram.lock.json was built from a dirty sutram working tree (uncommitted changes)"
+        if strict:
+            problems.append(dirty_msg)
+        else:
+            print(f"⚠️  [vendor_lock] Warning: {dirty_msg}. Allowed for local dev/testing.")
     return problems
 
 
@@ -180,8 +186,9 @@ def main(argv: List[str]) -> int:
         source = argv[3] if len(argv) > 3 else "sibling"
         sync(Path(argv[1]), Path(argv[2]), source=source)
         return 0
-    if len(argv) == 2 and argv[0] == "check":
-        problems = check(Path(argv[1]))
+    if len(argv) >= 2 and argv[0] == "check":
+        strict = "--strict" in argv[2:]
+        problems = check(Path(argv[1]), strict=strict)
         for problem in problems:
             print(f"❌ {problem}")
         if not problems:

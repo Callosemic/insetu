@@ -70,7 +70,14 @@ class TestLlmPoolPrecedence(unittest.TestCase):
         self._save({"model": "legacy-standard", "tier_thinking_model": "legacy-thinking"})
         self._save({
             "compute_endpoints": [{"id": "local_box", "label": "Local", "driver": "openai_compatible", "base_url": "http://127.0.0.1:1234/v1", "models": ["pool-model"]}],
-            "llm_profiles": [{"id": "default", "title": "Default", "tiers": {"standard": "local_box::pool-model", "thinking": "local_box::pool-model"}}],
+            "llm_profiles": [{
+                "id": "default",
+                "title": "Default",
+                "tiers": {
+                    "standard": {"endpoint": "local_box", "model": "pool-model"},
+                    "thinking": {"endpoint": "local_box", "model": "pool-model"},
+                },
+            }],
         })
         thinking = _resolve_tier_execution_target(self.ctx, "thinking")
         self.assertEqual(thinking["endpoint_id"], "local_box")

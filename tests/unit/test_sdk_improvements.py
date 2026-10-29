@@ -389,11 +389,14 @@ class TestSdkImprovements(unittest.TestCase):
             )
 
         self.assertEqual(result["message"], "Turn complete.")
+        self.assertEqual(result["artifact"]["committed_files"], ["vfs://alpha/calc.py"])
         cursor = agent_ctx.db.execute("SELECT * FROM chat_messages WHERE session_id=?", ("ses_test",))
         messages = [dict(r) for r in cursor.fetchall()]
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0]["role"], "assistant")
-        self.assertIn("def add(a, b):", messages[0]["content"])
+        self.assertIn("I will fix the subtraction operator.", messages[0]["content"])
+        self.assertIn("Applied patches to 1 file(s).", messages[0]["content"])
+        self.assertIn("def add(a, b):", messages[0]["raw_content"])
 
     def test_extension_dependency_resolution_and_whitelist_installer(self):
         """resolve_external_dependency_spec maps import names to PyPI names and _background_install_extension_deps enforces the extension whitelist."""
