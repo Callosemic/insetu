@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.29.2 (2026-10-29)
+
+### Bug Fixes
+
+- **core**: Enforce gitignore parity on incremental topology events and re-invalidate manifest
+  caches post-commit
+  ([`95875b8`](https://github.com/Callosemic/insetu/commit/95875b8daa373620b88211707817a62f5a66fdca))
+
+- **security**: Enforce bottom-layer authentication, host gatehouse, and workspace confinement in
+  lifeboat
+  ([`83c5bde`](https://github.com/Callosemic/insetu/commit/83c5bded6a7cad27dfa9d3db7537dc76848db396))
+
+- **system**: Exclude dropped buckets from watermark staleness and preserve panic auth token
+  ([`e8755b6`](https://github.com/Callosemic/insetu/commit/e8755b6880fefbafa3299540bf6c5a92bd7ee5ec))
+
+
 ## v0.29.1 (2026-10-29)
 
 ### Bug Fixes
