@@ -964,6 +964,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
         now_ts = time.time()
         ttl_48h = now_ts + 172800.0  # 48-hour TTL for metronome housekeeping
         mutations = []
+        created_file_comments: Dict[str, str] = {}
 
         for filepath, final_content in memory_buffers.items():
             orig_content = original_buffers.get(filepath, "")
@@ -991,6 +992,10 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             is_genesis = any(not b["search"].strip() for b in file_blocks)
             if (is_genesis and orig_content.strip()) or filepath in deleted_targets:
                 is_snapshot = True
+            if is_genesis and not orig_content.strip() and filepath not in deleted_targets:
+                genesis_comment = next((b.get("comment", "").strip() for b in file_blocks if not b["search"].strip() and b.get("comment", "").strip()), "")
+                if genesis_comment:
+                    created_file_comments[filepath] = genesis_comment
 
             # 3. The 5-Turn Keyframe Routine
             if not is_snapshot:
@@ -1031,6 +1036,12 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
 
         db_conn.commit()
         telemetry["status"] = "committed"
+        if created_file_comments:
+            # New files carry their genesis COMMENT so the Cartographer can describe them in CODE_INDEX.md
+            try:
+                ctx.emit('bridge_files_created', descriptions=created_file_comments)
+            except Exception as e:
+                print(f"⚠️ [Bridge] Could not publish new-file descriptions: {e}")
 
     elif dry_run:
         telemetry["status"] = "dry_run_evaluated"

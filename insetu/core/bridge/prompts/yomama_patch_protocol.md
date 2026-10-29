@@ -20,7 +20,7 @@ Provide all workspace file modifications exclusively using Yomama Bridge directi
     * Triple backticks: `` {{ymm:`x3}} ``
     * Literal 7-chevron markers: `{{ymm:<x7}}`, `{{ymm:=x7}}`, `{{ymm:>x7}}`
     * To write a macro token literally (for example in this section), escape its opening braces with a brace macro: `{{ymm:{x2}}ymm:<x7}}` becomes the literal text `{{ymm:<x7}}`.
-* **Genesis Patches:** To create a brand-new file, leave the `SEARCH` block empty (`<<<<<<< SEARCH\n=======`).
+* **Genesis Patches:** To create a brand-new file, leave the `SEARCH` block empty and make the first sentence of its `COMMENT` a one-line description of the new file, which the Cartographer uses as the file's `CODE_INDEX.md` entry (`<<<<<<< SEARCH\n=======`).
 
 ### 2. Inline Prose & Comment Edits (`TEXTEDIT`)
 When updating Markdown prose, `CODE_INDEX.md` comments (`# [comment required]` or `# [stale?]`), or single-line text without repeating large multi-line blocks, use `<<<<<<< TEXTEDIT` with inline `{{-delete}}` and `{{+insert}}` markers:
