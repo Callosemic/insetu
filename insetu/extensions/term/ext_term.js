@@ -1,7 +1,6 @@
 // ext_term.js - Terminal Extension
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
-import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 

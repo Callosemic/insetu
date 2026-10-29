@@ -1,6 +1,5 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
-import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 
 const SERVER_MODE_OPTIONS = [
     { value: 'auto', label: 'Auto-Detect' },

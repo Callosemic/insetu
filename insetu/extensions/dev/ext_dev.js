@@ -1,6 +1,5 @@
 import { html, css } from 'lit';
-import { InSetuElement, createExtensionStore } from '/static/extensions/system/insetu_sdk.js';
-import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+import { InSetuElement, createExtensionStore, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 export const DevStore = createExtensionStore('Dev', {
     thrashingFiles: [],
     bridgeErrors: [],
