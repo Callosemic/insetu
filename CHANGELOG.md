@@ -2,6 +2,46 @@
 
 <!-- version list -->
 
+## v0.29.0 (2026-10-29)
+
+### Bug Fixes
+
+- **template**: Route sharedStyles through insetu_sdk membrane in starter template
+  ([`963ff2f`](https://github.com/Callosemic/insetu/commit/963ff2f7e4975d569cac6c958d786180505ad342))
+
+- **tests**: Resolve python 3.10 hook mock shadowing and tighten frontend membrane rules
+  ([`2a5a879`](https://github.com/Callosemic/insetu/commit/2a5a8793911987ccd8c064ee73041c05501cecd4))
+
+### Features
+
+- **agent**: Decouple llm target resolution, propagate reentrant routine handoffs, and preserve raw
+  transcript history
+  ([`1d140dd`](https://github.com/Callosemic/insetu/commit/1d140dd8c5a1f53017f07b764308802eb668e910))
+
+- **agent**: Dynamic /code context scouting, interactive web-chat handoff composer, and cognitive
+  profile target bindings
+  ([`490dac3`](https://github.com/Callosemic/insetu/commit/490dac334f8a580b3969c9d36b907766c79481c2))
+
+- **settings**: Add target-binding repeater controls, combobox primitives, and cognitive tier
+  healing
+  ([`023e859`](https://github.com/Callosemic/insetu/commit/023e8593f11e09f8344bdae9d202a308fff978a9))
+
+### Refactoring
+
+- **core**: Align gather and prompts with single-file frontend membrane
+  ([`0f8301b`](https://github.com/Callosemic/insetu/commit/0f8301b84c687e6895decaebbddc22cdb6730500))
+
+- **devops**: Consolidate sharedStyles imports to insetu_sdk membrane across devops suite
+  ([`61ba4ab`](https://github.com/Callosemic/insetu/commit/61ba4ab837af06518b2a9eb0c3136139046b106d))
+
+- **extensions**: Consolidate sharedStyles imports to insetu_sdk membrane
+  ([`3c00cb2`](https://github.com/Callosemic/insetu/commit/3c00cb2273ac5af7c44cdaea9f9f406dbe4bbc55))
+
+- **membrane**: Align workflow automation and task management suite with single-file frontend
+  membrane
+  ([`7db58e4`](https://github.com/Callosemic/insetu/commit/7db58e4ba9fb9c227d23ec55c174ce8d69bf7e06))
+
+
 ## v0.28.0 (2026-10-29)
 
 ### Bug Fixes
