@@ -31,6 +31,79 @@ PUBLIC_CATALOG_SOURCES = {
     "litellm": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
 }
 
+DRIVER_TIER_DEFAULTS: Dict[str, Dict[str, str]] = {
+    "anthropic": {
+        "decision": "claude-3-5-haiku-latest",
+        "fast": "claude-3-5-haiku-latest",
+        "standard": "claude-3-5-sonnet-latest",
+        "thinking": "claude-3-7-sonnet-latest",
+        "frontier": "claude-3-7-sonnet-latest",
+    },
+    "gemini": {
+        "decision": "gemini-2.5-flash-lite",
+        "fast": "gemini-2.5-flash-lite",
+        "standard": "gemini-2.5-flash",
+        "thinking": "gemini-2.5-pro",
+        "frontier": "gemini-2.5-pro",
+    },
+    "openrouter": {
+        "decision": "typesafe/jev-binary-v1",
+        "fast": "google/gemini-2.5-flash-lite",
+        "standard": "anthropic/claude-3.5-sonnet",
+        "thinking": "anthropic/claude-3.7-sonnet",
+        "frontier": "anthropic/claude-3.7-sonnet:thinking",
+    },
+    "decisions": {
+        "decision": "typesafe/jev-binary-v1",
+        "fast": "typesafe/jev-binary-v1",
+        "standard": "nace-ai/drex-1",
+        "thinking": "nace-ai/drex-1",
+        "frontier": "nace-ai/drex-1",
+    },
+    "claude_cli": {
+        "decision": "claude-3-5-haiku-latest",
+        "fast": "claude-3-5-haiku-latest",
+        "standard": "claude-3-5-sonnet-latest",
+        "thinking": "claude-3-7-sonnet-latest",
+        "frontier": "claude-3-7-sonnet-latest",
+    },
+    "openai_compatible": {
+        "decision": "",
+        "fast": "",
+        "standard": "",
+        "thinking": "",
+        "frontier": "",
+    },
+    "web_chat": {
+        "decision": "web-chat-fast",
+        "fast": "web-chat-fast",
+        "standard": "web-chat-standard",
+        "thinking": "web-chat-thinking",
+        "frontier": "web-chat-frontier",
+    },
+}
+
+
+def _infer_model_cognitive_tier(model_id: str, input_cost_per_1m: float = 0.0, category: str = "generative") -> str:
+    """Heuristically classifies a catalog model ID into a semantic cognitive tier (decision, fast, standard, thinking, frontier)."""
+    if category == "decision":
+        return "decision"
+    mid = str(model_id or "").lower()
+    if any(tok in mid for tok in ("jev", "drex", "liquid/d1", "Guard", "moderation")):
+        return "decision"
+    if any(tok in mid for tok in ("haiku", "flash-lite", "mini", "nano", "8b", "7b", "3b", "1b", "small", "instant")):
+        return "fast"
+    if any(tok in mid for tok in ("opus", "gpt-4.5", "o1-pro", "o3-pro", "ultra", "frontier", "405b")):
+        return "frontier"
+    if any(tok in mid for tok in ("thinking", "3-7-sonnet", "3.7-sonnet", "2.5-pro", "r1", "qwq", "o1", "o3", "reasoner", "70b", "72b")):
+        return "thinking"
+    if input_cost_per_1m > 0:
+        if input_cost_per_1m <= 0.4:
+            return "fast"
+        if input_cost_per_1m >= 10.0:
+            return "frontier"
+    return "standard"
+
 
 def _get_provider_semaphore(provider: str, max_parallel: int = 4, endpoint_id: str = "") -> threading.BoundedSemaphore:
     """
@@ -61,17 +134,24 @@ def _get_provider_semaphore(provider: str, max_parallel: int = 4, endpoint_id: s
 LLM_SETTINGS_SCHEMA = [
     {
         "id": "active_profile_id",
-        "label": "Active Configuration Profile ID",
-        "type": "text",
+        "label": "Active Configuration Profile",
+        "type": "select",
         "scope": "workspace",
         "default": "default",
-        "description": "Slug ID of the active LLM Configuration Profile for this workspace (can also be switched live from the Chat Composer)."
+        "options_from": {
+            "field": "llm_profiles",
+            "value_key": "id",
+            "label_key": "title"
+        },
+        "description": "Select the active LLM Configuration Profile for this workspace (can also be switched live from the Chat Composer)."
     },
     {
         "id": "compute_endpoints",
         "label": "1. Compute Endpoint Pool",
         "type": "repeater",
         "scope": "daemon",
+        "id_key": "id",
+        "slug_source": "label",
         "min_items": 1,
         "max_items": 24,
         "item_label": "Endpoint",
@@ -86,13 +166,12 @@ LLM_SETTINGS_SCHEMA = [
                 "driver": "anthropic",
                 "base_url": "",
                 "api_key": "",
-                "models": ["claude-3-5-haiku-latest", "claude-3-5-sonnet-latest"],
+                "custom_models": [],
                 "max_parallel": 4
             }
         ],
         "item_schema": [
             {"id": "label", "label": "Endpoint Label", "type": "text", "default": "New Compute Endpoint"},
-            {"id": "id", "label": "Endpoint ID (Slug)", "type": "slug", "source_key": "label"},
             {
                 "id": "driver",
                 "label": "Protocol Driver",
@@ -104,7 +183,8 @@ LLM_SETTINGS_SCHEMA = [
                     {"value": "openrouter", "label": "OpenRouter (REST + Decisions)"},
                     {"value": "decisions", "label": "TypeSafe / Native Decisions API (/alpha/decisions)"},
                     {"value": "openai_compatible", "label": "Local / OpenAI-Compatible (Ollama, LM Studio, vLLM)"},
-                    {"value": "claude_cli", "label": "Claude CLI (Local Subscription Binary)"}
+                    {"value": "claude_cli", "label": "Claude CLI (Local Subscription Binary)"},
+                    {"value": "web_chat", "label": "External Web Chatbot (Copy Context + Prompt Handoff)"}
                 ]
             },
             {
@@ -122,14 +202,14 @@ LLM_SETTINGS_SCHEMA = [
                 "secure": True,
                 "default": "",
                 "placeholder": "Leave blank for local Ollama, or enter key...",
-                "show_if": {"field": "driver", "not_in": ["claude_cli"]}
+                "show_if": {"field": "driver", "not_in": ["claude_cli", "web_chat"]}
             },
             {
-                "id": "models",
-                "label": "Available / Pinned Models (Comma-Separated)",
+                "id": "custom_models",
+                "label": "Custom Model Overrides (Optional, Comma-Separated)",
                 "type": "comma_list",
                 "default": [],
-                "placeholder": "gemini-2.5-flash-lite, gemini-2.5-flash, gemini-4-argon"
+                "placeholder": "Optional unlisted fine-tunes or custom model IDs..."
             },
             {
                 "id": "max_parallel",
@@ -144,41 +224,74 @@ LLM_SETTINGS_SCHEMA = [
         "label": "2. Cognitive Configuration Profiles",
         "type": "repeater",
         "scope": "daemon",
+        "id_key": "id",
+        "slug_source": "title",
         "min_items": 1,
         "max_items": 16,
         "item_label": "Profile",
         "item_title_key": "title",
-        "item_subtitle_key": "id",
+        "item_subtitle_key": "",
         "add_label": "Add Configuration Profile",
-        "description": "Map semantic cognitive tiers to '<endpoint_id>::<model_name>' targets from your Compute Endpoint Pool.",
+        "description": "Bind each semantic cognitive tier to an endpoint and model from your Compute Endpoint Pool.",
         "default": [
             {
                 "id": "default",
                 "title": "Default Configuration",
                 "description": "Balanced configuration across cognitive tiers.",
                 "tiers": {
-                    "decision": "",
-                    "fast": "anthropic_main::claude-3-5-haiku-latest",
-                    "standard": "anthropic_main::claude-3-5-sonnet-latest",
-                    "thinking": "anthropic_main::claude-3-5-sonnet-latest",
-                    "frontier": "anthropic_main::claude-3-5-sonnet-latest"
+                    "decision": {"endpoint": "", "model": ""},
+                    "fast": {"endpoint": "anthropic_main", "model": "claude-3-5-haiku-latest"},
+                    "standard": {"endpoint": "anthropic_main", "model": "claude-3-5-sonnet-latest"},
+                    "thinking": {"endpoint": "anthropic_main", "model": "claude-3-5-sonnet-latest"},
+                    "frontier": {"endpoint": "anthropic_main", "model": "claude-3-5-sonnet-latest"}
                 }
             }
         ],
         "item_schema": [
             {"id": "title", "label": "Profile Title", "type": "text", "default": "New Profile"},
-            {"id": "id", "label": "Profile ID (Slug)", "type": "slug", "source_key": "title"},
             {"id": "description", "label": "Description", "type": "text", "default": ""},
             {
                 "id": "tiers",
-                "label": "Tier Model Bindings (<endpoint_id>::<model_name> — click a chip below any field to quick-bind)",
+                "label": "Cognitive Tier Bindings",
                 "type": "record",
                 "fields": [
-                    {"id": "decision", "label": "Decision Tier (Jev / Fast Router)", "type": "text", "options_source": "endpoints", "placeholder": "Optional (falls back to Fast Tier)"},
-                    {"id": "fast", "label": "Fast Tier (Context Scout & Patch Healer)", "type": "text", "options_source": "endpoints", "placeholder": "endpoint_id::model_name"},
-                    {"id": "standard", "label": "Standard Tier (Chat & Q&A)", "type": "text", "options_source": "endpoints", "placeholder": "endpoint_id::model_name"},
-                    {"id": "thinking", "label": "Thinking Tier (/code & /upkeep)", "type": "text", "options_source": "endpoints", "placeholder": "endpoint_id::model_name"},
-                    {"id": "frontier", "label": "Frontier Tier (/plan & Deep Architecture)", "type": "text", "options_source": "endpoints", "placeholder": "endpoint_id::model_name"}
+                    {
+                        "id": "decision",
+                        "label": "Decision Tier (Jev / Fast Router)",
+                        "type": "target_binding",
+                        "endpoint_source": "compute_endpoints",
+                        "allow_empty": True,
+                        "endpoint_placeholder": "Fallback to Fast Tier",
+                        "placeholder": "Optional decision model..."
+                    },
+                    {
+                        "id": "fast",
+                        "label": "Fast Tier (Context Scout & Patch Healer)",
+                        "type": "target_binding",
+                        "endpoint_source": "compute_endpoints",
+                        "placeholder": "Select or type fast model..."
+                    },
+                    {
+                        "id": "standard",
+                        "label": "Standard Tier (Chat & Q&A)",
+                        "type": "target_binding",
+                        "endpoint_source": "compute_endpoints",
+                        "placeholder": "Select or type standard model..."
+                    },
+                    {
+                        "id": "thinking",
+                        "label": "Thinking Tier (/code & /upkeep)",
+                        "type": "target_binding",
+                        "endpoint_source": "compute_endpoints",
+                        "placeholder": "Select or type thinking model..."
+                    },
+                    {
+                        "id": "frontier",
+                        "label": "Frontier Tier (/plan & Deep Architecture)",
+                        "type": "target_binding",
+                        "endpoint_source": "compute_endpoints",
+                        "placeholder": "Select or type frontier model..."
+                    }
                 ]
             }
         ]
@@ -270,9 +383,12 @@ def _vault_repeater_endpoint_secrets(workspace_id=None, updated_keys=None, **kwa
     if isinstance(raw_eps, list) and raw_eps:
         mutated = False
         for ep in raw_eps:
-            if isinstance(ep, dict) and isinstance(ep.get("models"), str):
-                ep["models"] = [m.strip() for m in ep["models"].split(",") if m.strip()]
-                mutated = True
+            if not isinstance(ep, dict):
+                continue
+            for list_key in ("custom_models", "models"):
+                if isinstance(ep.get(list_key), str):
+                    ep[list_key] = [m.strip() for m in ep[list_key].split(",") if m.strip()]
+                    mutated = True
         if mutated:
             settings.update({"compute_endpoints": raw_eps})
 
@@ -344,6 +460,7 @@ def _synthesize_legacy_pool_and_profile(ctx) -> Tuple[List[Dict[str, Any]], List
     has_key = bool(ctx.settings.get("api_key", ""))
 
     ep_id = f"default_{prov}"
+    unique_models = list(dict.fromkeys([m for m in (fast_model, std_model, think_model, front_model) if m]))
     endpoints = [{
         "id": ep_id,
         "label": f"Default ({prov.replace('_', ' ').title()})",
@@ -351,7 +468,8 @@ def _synthesize_legacy_pool_and_profile(ctx) -> Tuple[List[Dict[str, Any]], List
         "base_url": base_url,
         "max_parallel": max_p,
         "has_api_key": has_key,
-        "models": list(dict.fromkeys([m for m in (fast_model, std_model, think_model, front_model) if m])),
+        "custom_models": unique_models,
+        "models": unique_models,
         "enabled": True,
         "is_legacy_bridge": True,
     }]
@@ -360,11 +478,11 @@ def _synthesize_legacy_pool_and_profile(ctx) -> Tuple[List[Dict[str, Any]], List
         "title": "Default Configuration",
         "description": "Synthesized from workspace LLM settings.",
         "tiers": {
-            "decision": f"{ep_id}::{fast_model}",
-            "fast": f"{ep_id}::{fast_model}",
-            "standard": f"{ep_id}::{std_model}",
-            "thinking": f"{ep_id}::{think_model}",
-            "frontier": f"{ep_id}::{front_model}",
+            "decision": {"endpoint": ep_id, "model": fast_model},
+            "fast": {"endpoint": ep_id, "model": fast_model},
+            "standard": {"endpoint": ep_id, "model": std_model},
+            "thinking": {"endpoint": ep_id, "model": think_model},
+            "frontier": {"endpoint": ep_id, "model": front_model},
         },
     }]
     return endpoints, profiles
@@ -463,20 +581,27 @@ def _resolve_tier_execution_target(ctx, tier: Optional[str] = None, profile_id: 
         "frontier": ("frontier", "thinking", "standard"),
     }.get(norm_tier, ("standard",))
 
-    target_spec = ""
+    ep_id = ""
+    model_name = ""
     for cand_t in fallback_order:
-        val = str(tiers_map.get(cand_t) or "").strip()
-        if val:
-            target_spec = val
+        raw_val = tiers_map.get(cand_t)
+        if isinstance(raw_val, dict):
+            cand_ep = str(raw_val.get("endpoint") or raw_val.get("endpoint_id") or "").strip()
+            cand_mod = str(raw_val.get("model") or "").strip()
+            if cand_ep or cand_mod:
+                ep_id = cand_ep or next(iter(endpoints_by_id.keys()), "")
+                model_name = cand_mod
+                break
+        elif isinstance(raw_val, str) and raw_val.strip():
+            target_spec = raw_val.strip()
+            if "::" in target_spec:
+                ep_id, model_name = target_spec.split("::", 1)
+                ep_id = ep_id.strip()
+                model_name = model_name.strip()
+            else:
+                ep_id = next(iter(endpoints_by_id.keys()), "")
+                model_name = target_spec
             break
-
-    if "::" in target_spec:
-        ep_id, model_name = target_spec.split("::", 1)
-        ep_id = ep_id.strip()
-        model_name = model_name.strip()
-    else:
-        ep_id = next(iter(endpoints_by_id.keys()), "")
-        model_name = target_spec.strip()
 
     ep = endpoints_by_id.get(ep_id)
     if not ep:
@@ -489,7 +614,8 @@ def _resolve_tier_execution_target(ctx, tier: Optional[str] = None, profile_id: 
         ep_id = f"default_{prov}"
     else:
         prov = str(ep.get("driver") or "anthropic").strip().lower()
-        model_resolved = model_name or (ep.get("models")[0] if ep.get("models") else _resolve_tier_model(ctx, norm_tier))
+        ep_models = ep.get("custom_models") or ep.get("models") or []
+        model_resolved = model_name or (ep_models[0] if ep_models else _resolve_tier_model(ctx, norm_tier))
         if ep.get("is_legacy_bridge"):
             api_key = ctx.settings.get("api_key", "")
         else:
@@ -514,6 +640,7 @@ def _resolve_tier_execution_target(ctx, tier: Optional[str] = None, profile_id: 
         "tier": norm_tier,
         "profile_id": profile.get("id") or req_profile_id,
         "is_decision_model": is_decision_model,
+        "is_web_chat": (prov == "web_chat"),
     }
 
 
@@ -1198,13 +1325,18 @@ def api_llm_profiles(ctx):
                 continue
             if isinstance(ep.get("api_key"), str) and ep["api_key"].strip() and not ep["api_key"].startswith("****"):
                 _set_endpoint_secret_key(ctx.workspace_id, eid, ep["api_key"])
+            raw_custom = ep.get("custom_models") if ep.get("custom_models") is not None else (ep.get("models") or [])
+            if isinstance(raw_custom, str):
+                raw_custom = [m.strip() for m in raw_custom.split(",") if m.strip()]
+            clean_models = [str(m).strip() for m in raw_custom if str(m).strip()]
             clean_eps.append({
                 "id": eid,
                 "label": str(ep.get("label") or eid),
                 "driver": str(ep.get("driver") or "openai_compatible"),
                 "base_url": str(ep.get("base_url") or "").strip(),
                 "max_parallel": max(1, int(ep.get("max_parallel") or 4)),
-                "models": [str(m).strip() for m in (ep.get("models") or []) if str(m).strip()],
+                "custom_models": clean_models,
+                "models": clean_models,
                 "enabled": bool(ep.get("enabled", True)),
             })
         updates["compute_endpoints"] = clean_eps
@@ -1218,11 +1350,27 @@ def api_llm_profiles(ctx):
             if not pid:
                 continue
             raw_tiers = p.get("tiers") if isinstance(p.get("tiers"), dict) else {}
+            norm_tiers: Dict[str, Dict[str, str]] = {}
+            for t in COGNITIVE_TIERS:
+                t_val = raw_tiers.get(t)
+                if isinstance(t_val, dict):
+                    norm_tiers[t] = {
+                        "endpoint": str(t_val.get("endpoint") or t_val.get("endpoint_id") or "").strip(),
+                        "model": str(t_val.get("model") or "").strip(),
+                    }
+                elif isinstance(t_val, str) and t_val.strip():
+                    if "::" in t_val:
+                        ep_part, mod_part = t_val.split("::", 1)
+                        norm_tiers[t] = {"endpoint": ep_part.strip(), "model": mod_part.strip()}
+                    else:
+                        norm_tiers[t] = {"endpoint": "", "model": t_val.strip()}
+                else:
+                    norm_tiers[t] = {"endpoint": "", "model": ""}
             clean_profs.append({
                 "id": pid,
                 "title": str(p.get("title") or pid),
                 "description": str(p.get("description") or ""),
-                "tiers": {t: str(raw_tiers.get(t) or "").strip() for t in COGNITIVE_TIERS},
+                "tiers": norm_tiers,
             })
         updates["llm_profiles"] = clean_profs
 
@@ -1262,14 +1410,17 @@ def _harvest_external_model_catalog(ctx) -> Dict[str, Any]:
                 comp_per_tok = float(pricing.get("completion") or 0.0)
                 lower_id = mid.lower()
                 is_dec = lower_id.startswith(("typesafe/jev", "nace-ai/drex", "liquid/d1"))
+                in_cost_1m = round(prompt_per_tok * 1_000_000, 4)
+                cat_str = "decision" if is_dec else "generative"
                 catalog_by_id[mid] = {
                     "id": mid,
                     "name": item.get("name") or mid,
                     "provider": _model_provider_prefix(mid, "openrouter"),
                     "context_length": int(item.get("context_length") or 0),
-                    "input_cost_per_1m": round(prompt_per_tok * 1_000_000, 4),
+                    "input_cost_per_1m": in_cost_1m,
                     "output_cost_per_1m": round(comp_per_tok * 1_000_000, 4),
-                    "category": "decision" if is_dec else "generative",
+                    "category": cat_str,
+                    "recommended_tier": _infer_model_cognitive_tier(mid, in_cost_1m, cat_str),
                     "source": "openrouter",
                 }
     except Exception:
@@ -1300,14 +1451,17 @@ def _harvest_external_model_catalog(ctx) -> Dict[str, Any]:
                         ctx_len = int(limit_obj.get("context") or 0)
                         lower_id = full_id.lower()
                         is_dec = lower_id.startswith(("typesafe/jev", "nace-ai/drex", "liquid/d1"))
+                        in_cost_round = round(in_cost, 4)
+                        cat_str = "decision" if is_dec else "generative"
                         catalog_by_id[full_id] = {
                             "id": full_id,
                             "name": m_info.get("name") or full_id,
                             "provider": prov_key,
                             "context_length": ctx_len,
-                            "input_cost_per_1m": round(in_cost, 4),
+                            "input_cost_per_1m": in_cost_round,
                             "output_cost_per_1m": round(out_cost, 4),
-                            "category": "decision" if is_dec else "generative",
+                            "category": cat_str,
+                            "recommended_tier": _infer_model_cognitive_tier(full_id, in_cost_round, cat_str),
                             "source": "models.dev",
                         }
     except Exception:
@@ -1328,14 +1482,16 @@ def _harvest_external_model_catalog(ctx) -> Dict[str, Any]:
                     in_tok = float(m_info.get("input_cost_per_token") or 0.0)
                     out_tok = float(m_info.get("output_cost_per_token") or 0.0)
                     prov_name = str(m_info.get("litellm_provider") or _model_provider_prefix(m_key, "cloud"))
+                    in_cost_1m = round(in_tok * 1_000_000, 4)
                     catalog_by_id[m_key] = {
                         "id": m_key,
                         "name": m_key,
                         "provider": prov_name,
                         "context_length": int(m_info.get("max_input_tokens") or m_info.get("max_tokens") or 0),
-                        "input_cost_per_1m": round(in_tok * 1_000_000, 4),
+                        "input_cost_per_1m": in_cost_1m,
                         "output_cost_per_1m": round(out_tok * 1_000_000, 4),
                         "category": "generative",
+                        "recommended_tier": _infer_model_cognitive_tier(m_key, in_cost_1m, "generative"),
                         "source": "litellm",
                     }
     except Exception:
@@ -1368,6 +1524,7 @@ def _harvest_external_model_catalog(ctx) -> Dict[str, Any]:
                             "input_cost_per_1m": 0.0,
                             "output_cost_per_1m": 0.0,
                             "category": "local",
+                            "recommended_tier": _infer_model_cognitive_tier(m_id, 0.0, "local"),
                             "source": ep["id"],
                         }
         except Exception:
@@ -1378,6 +1535,7 @@ def _harvest_external_model_catalog(ctx) -> Dict[str, Any]:
     result_payload = {
         "updated_at": time.time(),
         "count": len(catalog_by_id),
+        "driver_tier_defaults": DRIVER_TIER_DEFAULTS,
         "models": sorted(catalog_by_id.values(), key=lambda x: (x.get("provider", ""), x.get("id", ""))),
     }
     save_json_config(cache_file.as_posix(), result_payload, workspace_id=ctx.workspace_id)

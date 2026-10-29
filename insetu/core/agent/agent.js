@@ -1102,6 +1102,11 @@ export class InSetuCoreAgent extends InSetuElement {
             flex-direction: column;
             gap: 8px;
             flex-shrink: 0;
+            transition: background 0.2s ease, border-color 0.2s ease;
+        }
+        .input-panel.handoff-mode {
+            border-top: 2px solid var(--intent-warning);
+            background: color-mix(in srgb, var(--intent-warning) 10%, var(--input-bg));
         }
         .attachment-pills {
             display: flex;
@@ -1238,6 +1243,9 @@ export class InSetuCoreAgent extends InSetuElement {
                         if (art?.status === 'paused_for_user' && art.pending_handoff) {
                             AgentStore.setState({ pendingHandoff: art, handoffBranchIdx: 0, handoffBranchResponses: {}, handoffPasteText: '' });
                         } else {
+                            if (art?.unapplied_patches && window.inSetu?.stores?.Bridge?.getState()?.parseAndAppendCells) {
+                                window.inSetu.stores.Bridge.getState().parseAndAppendCells(art.unapplied_patches);
+                            }
                             AgentStore.setState({ lastTurnCommittedFiles: art?.committed_files || [] });
                             await AgentStore.getState().fetchSessions();
                             await AgentStore.getState().selectSession(sesId);
@@ -1309,6 +1317,9 @@ export class InSetuCoreAgent extends InSetuElement {
                             handoffPasteText: ''
                         });
                         return;
+                    }
+                    if (art?.unapplied_patches && window.inSetu?.stores?.Bridge?.getState()?.parseAndAppendCells) {
+                        window.inSetu.stores.Bridge.getState().parseAndAppendCells(art.unapplied_patches);
                     }
                     AgentStore.setState({
                         pendingHandoff: null,
@@ -1386,57 +1397,42 @@ export class InSetuCoreAgent extends InSetuElement {
                             `)}
                         </div>
                     ` : ''}
-                    ${this.pendingHandoff && this.pendingHandoff.pending_handoff ? (() => {
-                        const ph = this.pendingHandoff.pending_handoff;
-                        const branches = Array.isArray(ph.branches) && ph.branches.length > 0 ? ph.branches : [ph];
-                        const safeIdx = Math.min(this._handoffBranchIdx || 0, branches.length - 1);
-                        const activeBranch = branches[safeIdx] || ph;
-                        const routineObj = (this.routines || []).find(r => r.id === (this.pendingHandoff.routine_id || this.agentRoutineId));
-                        const displayTitle = this.pendingHandoff.routine_title || activeBranch.routine_title || routineObj?.title || routineObj?.name || this.pendingHandoff.routine_id || 'Routine';
-                        const wfCtxUri = activeBranch.workflow_context_uri || (routineObj?.includes?.length ? `ctx://workflows/workflow_${routineObj.id}_context.txt` : '');
-                        const incFiles = Array.isArray(activeBranch.includes) && activeBranch.includes.length > 0
-                            ? activeBranch.includes
-                            : (routineObj?.includes || []);
-                        const promptToCopy = activeBranch.prompt_text || activeBranch.compiled_prompt || '';
-                        return html`
-                            <div class="msg-bubble assistant" style="max-width: 96%; border: 2px solid var(--intent-warning); display: flex; flex-direction: column; gap: 10px;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
-                                    <span style="font-weight: bold; color: var(--intent-warning); display: inline-flex; align-items: center; gap: 6px; font-size: 0.95rem;">
-                                        <yv-icon name="workflow" style="width: 16px; height: 16px;"></yv-icon>
-                                        <span>${displayTitle}</span>
+                    ${this.activeJobMessage ? html`
+                        <div class="msg-bubble assistant" style="border: 1px dashed var(--intent-primary);">
+                            <sutram-spinner .text=${this.activeJobMessage}></sutram-spinner>
+                        </div>
+                    ` : ''}
+                </div>
+                ${this.pendingHandoff && this.pendingHandoff.pending_handoff ? (() => {
+                    const ph = this.pendingHandoff.pending_handoff;
+                    const branches = Array.isArray(ph.branches) && ph.branches.length > 0 ? ph.branches : [ph];
+                    const safeIdx = Math.min(this._handoffBranchIdx || 0, branches.length - 1);
+                    const activeBranch = branches[safeIdx] || ph;
+                    const routineObj = (this.routines || []).find(r => r.id === (this.pendingHandoff.routine_id || this.agentRoutineId));
+                    const displayTitle = this.pendingHandoff.routine_title || activeBranch.routine_title || routineObj?.title || routineObj?.name || this.pendingHandoff.routine_id || 'Routine';
+                    const wfCtxUri = activeBranch.workflow_context_uri || (routineObj?.includes?.length ? `ctx://workflows/workflow_${routineObj.id}_context.txt` : '');
+                    const incFiles = Array.isArray(activeBranch.includes) && activeBranch.includes.length > 0
+                        ? activeBranch.includes
+                        : (routineObj?.includes || []);
+                    const promptToCopy = activeBranch.prompt_text || activeBranch.compiled_prompt || '';
+                    return html`
+                        <div class="input-panel handoff-mode" style="padding: 12px 16px; gap: 10px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
+                                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                                    <yv-icon name="zap" style="width: 15px; height: 15px; color: var(--intent-warning);"></yv-icon>
+                                    <span style="font-family: var(--font-mono); font-size: 0.78rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--intent-warning);">
+                                        External LLM Handoff • ${displayTitle} (${activeBranch.node_id})
                                     </span>
-                                    <sutram-btn size="sm" intent="neutral" icon="x" label="Dismiss" @click=${() => {
-                                        AgentStore.setState({
-                                            pendingHandoff: null,
-                                            handoffBranchIdx: 0,
-                                            handoffBranchResponses: {},
-                                            handoffPasteText: ''
-                                        });
-                                    }}></sutram-btn>
+                                    ${activeBranch.tier ? html`<sutram-tag text=${activeBranch.tier} intent="warning"></sutram-tag>` : ''}
                                 </div>
-                                ${branches.length > 1 ? html`
-                                    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-                                        ${branches.map((b, bIdx) => {
-                                            const isDone = Boolean((this._handoffBranchResponses[b.node_id] || '').trim());
-                                            return html`
-                                                <sutram-btn
-                                                    size="sm"
-                                                    intent=${bIdx === safeIdx ? 'warning' : (isDone ? 'success' : 'neutral')}
-                                                    ?active=${bIdx === safeIdx}
-                                                    label="${isDone ? '●' : '○'} Step ${bIdx + 1}: ${b.node_id}"
-                                                    @click=${() => { AgentStore.setState({ handoffBranchIdx: bIdx }); }}>
-                                                </sutram-btn>
-                                            `;
-                                        })}
-                                    </div>
-                                ` : ''}
-                                <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                                <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
                                     ${incFiles.length > 0 && wfCtxUri ? html`
                                         <sutram-async-btn
                                             size="sm"
                                             intent="highlight"
                                             icon="package"
-                                            label="Copy Context (${incFiles.length} file${incFiles.length === 1 ? '' : 's'})"
+                                            label="Copy Context (${incFiles.length})"
+                                            style="margin: 0;"
                                             .onClick=${async () => {
                                                 if (this.vfs?.fetchAndCopy) {
                                                     await this.vfs.fetchAndCopy(wfCtxUri);
@@ -1447,7 +1443,8 @@ export class InSetuCoreAgent extends InSetuElement {
                                             size="sm"
                                             intent="neutral"
                                             icon="share-2"
-                                            label="Share Context"
+                                            label="Share"
+                                            style="margin: 0;"
                                             .onClick=${async () => {
                                                 if (this.vfs?.shareFiles) {
                                                     await this.vfs.shareFiles(wfCtxUri);
@@ -1459,22 +1456,62 @@ export class InSetuCoreAgent extends InSetuElement {
                                         size="sm"
                                         intent="primary"
                                         icon="copy"
-                                        label="Copy Prompt"
-                                        @click=${() => this.utils.copyRawText(promptToCopy, () => this.setStatus("📋 Prompt copied!", 2000))}>
+                                        label="Copy Prompt + Directives"
+                                        style="margin: 0;"
+                                        @click=${() => this.utils.copyRawText(promptToCopy, () => this.setStatus("📋 Prompt & directives copied!", 2000))}>
                                     </sutram-btn>
                                 </div>
-                                <div style="font-size: 0.8rem; color: var(--text-muted);">
-                                    Copy the context and prompt above into your external chatbot, then paste the response into the chat input box below and press <b>Send</b>.
-                                </div>
                             </div>
-                        `;
-                    })() : ''}
-                    ${this.activeJobMessage ? html`
-                        <div class="msg-bubble assistant" style="border: 1px dashed var(--intent-primary);">
-                            <sutram-spinner .text=${this.activeJobMessage}></sutram-spinner>
+                            ${branches.length > 1 ? html`
+                                <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                                    ${branches.map((b, bIdx) => {
+                                        const isDone = Boolean((this._handoffBranchResponses[b.node_id] || '').trim());
+                                        return html`
+                                            <sutram-btn
+                                                size="sm"
+                                                intent=${bIdx === safeIdx ? 'warning' : (isDone ? 'success' : 'neutral')}
+                                                ?active=${bIdx === safeIdx}
+                                                label="${isDone ? '●' : '○'} Step ${bIdx + 1}: ${b.node_id}"
+                                                @click=${() => { AgentStore.setState({ handoffBranchIdx: bIdx }); }}>
+                                            </sutram-btn>
+                                        `;
+                                    })}
+                                </div>
+                            ` : ''}
+                            <sutram-textarea
+                                placeholder=${`Paste the external LLM's response for "${activeBranch.node_id}" here (prose & Yomama patches will split automatically)...`}
+                                .value=${this.promptInput}
+                                ?flush=${true}
+                                style="width: 100%; margin: 0; --bg-input: var(--bg);"
+                                @sutram-input-changed=${e => AgentStore.setState({ promptInput: e.detail.value })}>
+                            </sutram-textarea>
+                            <div style="display: flex; align-items: stretch; justify-content: space-between; gap: 10px; width: 100%;">
+                                <sutram-btn
+                                    intent="neutral"
+                                    icon="x"
+                                    label="Cancel Handoff"
+                                    style="margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem;"
+                                    @click=${() => {
+                                        AgentStore.setState({
+                                            promptInput: '',
+                                            pendingHandoff: null,
+                                            handoffBranchIdx: 0,
+                                            handoffBranchResponses: {},
+                                            handoffPasteText: ''
+                                        });
+                                    }}>
+                                </sutram-btn>
+                                <sutram-async-btn
+                                    label="Ingest Reply & Continue"
+                                    icon="corner-down-left"
+                                    intent="warning"
+                                    style="flex: 1; margin: 0; --btn-padding: 10px 16px; --btn-font-size: 0.9rem;"
+                                    .onClick=${() => this._sendPrompt()}>
+                                </sutram-async-btn>
+                            </div>
                         </div>
-                    ` : ''}
-                </div>
+                    `;
+                })() : html`
                 <!-- Gemini-Style Two-Tier Bottom Composer -->
                 <div class="input-panel" style="padding: 12px 16px; gap: 10px;">
                     ${(() => {
@@ -1819,6 +1856,7 @@ export class InSetuCoreAgent extends InSetuElement {
                         </div>
                     </div>
                 </div>
+                `}
             </div>
         `;
     }

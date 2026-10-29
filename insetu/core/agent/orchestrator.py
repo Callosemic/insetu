@@ -900,6 +900,7 @@ def execute_declarative_routine(
             "mode": clean_mode,
             "effective_intent": initial_intent,
             "has_raw_patches": has_raw_patches,
+            "has_attached_files": bool(all_context_files),
             "attached_files": editable_list,
             "read_only_files": readonly_list,
             "selected_files": list(editable_list),
@@ -1047,6 +1048,14 @@ def execute_declarative_routine(
                     f"Security Guardrail: Mutating capability '{action}' in node '{nid}' is not permitted in read-only '{clean_mode}' mode."
                 )
             if action == "gather.pack_selection":
+                scouted_files = (chain_context.get("scout_targets") or {}).get("requested_files") or []
+                for sf in scouted_files:
+                    if sf and sf not in all_context_files:
+                        all_context_files.append(sf)
+                    if sf and sf not in editable_list and sf not in readonly_list:
+                        editable_list.append(sf)
+                chain_context["global"]["all_context_files"] = list(all_context_files)
+                chain_context["global"]["attached_files"] = list(editable_list)
                 if not all_context_files:
                     with context_lock:
                         chain_context[nid] = {"status": "completed", "content": "", "base_filename": None}
@@ -1411,6 +1420,100 @@ def execute_declarative_routine(
                     "state": clean_chain,
                 }
 
+        if not is_manual_transport:
+            from insetu.core.llm.engine_llm import _resolve_tier_execution_target as _resolve_llm_target
+            wave_web_chat_branches = []
+            for n in active_wave_nodes:
+                if str(n.get("type", "llm")).lower() == "llm" and n["id"] not in handoff_responses:
+                    t_cand = _interpolate_all_syntax(str(n.get("tier", "standard")), chain_context) or "standard"
+                    target_info = _resolve_llm_target(ctx, tier=t_cand, profile_id=active_profile_id)
+                    if target_info.get("is_web_chat"):
+                        raw_p = n.get("prompt") or n.get("user_message") or ""
+                        if not raw_p and n.get("prompt_uri"):
+                            p_uri = str(n["prompt_uri"])
+                            try:
+                                raw_p = ctx.call("prompts.resolve", file=p_uri) or ctx.vfs.read(p_uri) or ""
+                            except Exception:
+                                raw_p = ctx.vfs.read(p_uri) or ""
+                        clean_prompt_only = _interpolate_all_syntax(raw_p, chain_context) or user_prompt
+                        t_val, sys_p, usr_p = _prepare_llm_prompt_and_system(n, chain_context)
+                        out_schema = str(n.get("output_schema") or "").strip().lower()
+                        directive_block = ""
+                        if out_schema in ("yomama_patch", "conversational_with_patches"):
+                            directive_block = (
+                                "\n\n---\n"
+                                "### File Modification Directives (Yomama Patch Protocol)\n"
+                                "Provide your conversational explanation first, followed by any file modifications formatted as Yomama patch blocks:\n"
+                                "```text\n"
+                                "<<<<<<< FILE: vfs://repo/path/to/file.ext\n"
+                                "<<<<<<< COMMENT\n"
+                                "Brief description of change\n"
+                                "<<<<<<< SEARCH\n"
+                                "[exact lines to find, including 1-2 unchanged lines of top/bottom context]\n"
+                                "=======\n"
+                                "[replacement lines]\n"
+                                ">>>>>>> REPLACE\n"
+                                "```"
+                            )
+                        elif out_schema == "intent_classification":
+                            directive_block = '\n\nRespond ONLY with JSON: {"intent": "EDIT_CODE" | "EDIT_PLAN" | "CHAT_ONLY"}'
+                        wf_batch_uri = (
+                            (chain_context.get("fetch_context") or {}).get("base_filename")
+                            or (f"ctx://workflows/workflow_{routine.get('id', routine_id)}_context.txt" if routine_includes else None)
+                        )
+                        if not wf_batch_uri and all_context_files:
+                            try:
+                                pack_art = ctx.call(
+                                    "gather.pack_selection",
+                                    items=[{"filepath": f} for f in all_context_files],
+                                    gather_only=True,
+                                    wait=True,
+                                )
+                                if isinstance(pack_art, dict) and pack_art.get("base_filename"):
+                                    wf_batch_uri = pack_art["base_filename"]
+                            except Exception:
+                                pass
+                        context_uris = [wf_batch_uri] if wf_batch_uri else list(all_context_files)
+                        full_clipboard_prompt = f"{clean_prompt_only}{directive_block}".strip()
+                        wave_web_chat_branches.append({
+                            "node_id": n["id"],
+                            "routine_title": routine.get("title") or routine.get("name") or routine.get("id", routine_id),
+                            "wavefront_index": w_idx,
+                            "tier": t_val,
+                            "endpoint_id": target_info.get("endpoint_id"),
+                            "model": target_info.get("model"),
+                            "system_prompt": sys_p,
+                            "user_message": usr_p,
+                            "prompt_text": full_clipboard_prompt,
+                            "compiled_prompt": full_clipboard_prompt,
+                            "context_uris": context_uris,
+                            "workflow_context_uri": wf_batch_uri,
+                            "includes": list(all_context_files),
+                            "output_schema": n.get("output_schema"),
+                        })
+            if wave_web_chat_branches:
+                clean_chain = {k: v for k, v in chain_context.items() if k != "_ctx"}
+                first_branch = wave_web_chat_branches[0]
+                return {
+                    "status": "paused_for_user",
+                    "routine_id": routine.get("id", routine_id),
+                    "routine_title": routine.get("title") or routine.get("name") or routine.get("id", routine_id),
+                    "wavefront_index": w_idx,
+                    "wavefronts": [[n["id"] for n in w] for w in wavefronts],
+                    "pending_handoff": {
+                        **first_branch,
+                        "branches": wave_web_chat_branches,
+                    },
+                    "response": "",
+                    "effective_intent": chain_context["global"].get("effective_intent"),
+                    "mode": clean_mode,
+                    "transaction_id": last_transaction_id,
+                    "transaction_ids": turn_transaction_ids,
+                    "committed_files": committed_files,
+                    "chain_context": clean_chain,
+                    "state": clean_chain,
+                }
+
         if len(active_wave_nodes) == 1:
             _run_single_dag_node(active_wave_nodes[0])
         else:
@@ -1424,13 +1527,28 @@ def execute_declarative_routine(
     if resolved_resp_uri and resolved_resp_uri not in committed_files:
         committed_files.append(resolved_resp_uri)
 
+    # Automatic Reply Splitting: Separate conversational prose from raw Yomama patch blocks
+    unapplied_patches = ""
+    display_response_text = final_response_text
+    if final_response_text and "<<<<<<<" in final_response_text and parse_blocks(final_response_text):
+        prose_only = strip_yomama_blocks_keep_prose(final_response_text)
+        if committed_files:
+            receipt_summary = f"✅ Applied patches to {len(committed_files)} file(s)."
+            display_response_text = f"{prose_only}\n\n{receipt_summary}".strip() if prose_only else receipt_summary
+        else:
+            unapplied_patches = final_response_text
+            if prose_only:
+                display_response_text = prose_only
+
     clean_chain = {k: v for k, v in chain_context.items() if k != "_ctx"}
     return {
         "status": "completed",
         "routine_id": routine.get("id", routine_id),
         "wavefronts": [[n["id"] for n in w] for w in wavefronts],
-        "response": final_response_text,
-        "output": final_response_text,
+        "response": display_response_text,
+        "raw_response": final_response_text,
+        "unapplied_patches": unapplied_patches,
+        "output": display_response_text,
         "effective_intent": chain_context["global"].get("effective_intent"),
         "mode": clean_mode,
         "transaction_id": last_transaction_id,

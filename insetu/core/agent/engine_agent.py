@@ -732,14 +732,16 @@ def submit_prompt(ctx):
         _CANCELLED_SESSIONS.discard((ctx.workspace_id, session_id))
 
     now = time.time()
+    is_handoff_resume = isinstance(data.get("handoff_responses"), dict) and len(data["handoff_responses"]) > 0
     user_msg_id = f"msg_{uuid.uuid4().hex[:12]}"
-    ctx.db.insert_or_replace("chat_messages", {
-        "message_id": user_msg_id,
-        "session_id": session_id,
-        "role": "user",
-        "content": raw_prompt,
-        "timestamp": now,
-    })
+    if not is_handoff_resume:
+        ctx.db.insert_or_replace("chat_messages", {
+            "message_id": user_msg_id,
+            "session_id": session_id,
+            "role": "user",
+            "content": raw_prompt,
+            "timestamp": now,
+        })
     extra_turn_inputs: Dict[str, Any] = {}
     if parsed_colon["scope"]:
         extra_turn_inputs["scope"] = parsed_colon["scope"]
@@ -862,6 +864,7 @@ def _execute_agent_turn(
         "artifact": {
             "message_id": asst_msg_id,
             "response": full_response,
+            "unapplied_patches": routine_result.get("unapplied_patches", ""),
             "mode": routine_result.get("mode", mode),
             "effective_intent": routine_result.get("effective_intent"),
             "transaction_id": routine_result.get("transaction_id"),
