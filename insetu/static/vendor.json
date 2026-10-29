@@ -89,6 +89,16 @@
             "path": "vendor/lucide/icons.js",
             "version": "1.0.0",
             "range": ">=0.0.0"
+        },
+        "sutram": {
+            "path": "vendor/sutram/js/index.js",
+            "version": "2.0.0",
+            "range": ">=2.0.0"
+        },
+        "sutram-chassis": {
+            "path": "vendor/yenvui/js/index.js",
+            "version": "2.0.0",
+            "range": ">=2.0.0"
         }
     }
 }

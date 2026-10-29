@@ -67,7 +67,7 @@ padding: 0; border: none; overflow-x: auto; height: 100%; align-items: center; s
 .screen { display: none; background: transparent; padding: 0; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
 box-sizing: border-box; border-radius: 0; box-shadow: none; flex-direction: column; container-type: inline-size; }
 /* Full-Bleed Chassis: Component roots naturally command bounds now */
-.screen:has(#sub-term.active), .screen:has(#sub-bridge.active), .screen:has(.sub-tab-content[data-ext="tracker"].active), .screen:has(.sub-tab-content[data-ext="gather"].active), .screen:has(.sub-tab-content[data-ext="git"].active), .screen:has(.sub-tab-content[data-ext="flow"].active), .screen:has(.sub-tab-content[data-ext="prompts"].active), .screen:has(.sub-tab-content[data-ext="files"].active) { overflow: hidden; }
+.screen:has(#sub-term.active), .screen:has(#sub-bridge.active), .screen:has(.sub-tab-content[data-ext="tracker"].active), .screen:has(.sub-tab-content[data-ext="gather"].active), .screen:has(.sub-tab-content[data-ext="git"].active), .screen:has(.sub-tab-content[data-ext="prompts"].active), .screen:has(.sub-tab-content[data-ext="files"].active) { overflow: hidden; }
 .sticky-header { flex-shrink: 0; padding: 15px 20px; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); }
 .screen.active { display: flex; }
 pre, #status-box { font-family: var(--font-mono); line-height: 1.5; letter-spacing: 0.3px; }

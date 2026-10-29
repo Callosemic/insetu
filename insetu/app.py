@@ -42,26 +42,26 @@ if _sibling_akasa.exists() and (_sibling_akasa / "akasa").is_dir():
     _akasa_posix = _sibling_akasa.as_posix()
     if _akasa_posix not in sys.path:
         sys.path.insert(0, _akasa_posix)
-import akasa
-from akasa.extension import SettingsManager
-from akasa.hooks import hooks
-import akasa.utils as _akasa_utils
-from akasa.utils import (
-    load_config,
-    get_workspace_physics,
+from insetu.core.sdk import (
+    CORE_MODULES_TUPLE,
+    SettingsManager,
+    boot_kernel,
+    configure_kernel,
     get_system_index_path,
+    get_workspace_physics,
+    hooks,
+    init_kernel_app,
     is_core_module,
+    load_config,
 )
-from insetu.core.utils_core import CORE_MODULES_TUPLE
 
 # Phase A: Configure Akasa Kernel Physics & Host Namespaces
-akasa.configure(
+configure_kernel(
     control_dir=".insetu",
     trusted_namespaces=["insetu.core."],
     extension_namespaces=["insetu.extensions."],
     core_modules=CORE_MODULES_TUPLE,
     sse_passthrough=["topology_resolved"],
-    trusted_host_suffixes=(".ts.net",),
     tune_os_resources=True,
 )
 
@@ -76,15 +76,14 @@ if os.environ.get("INSETU_SIMULATE_PANIC") == "1" or os.path.exists(".panic_lock
 from flask import Flask, render_template, request, jsonify, send_file, Response
 
 app = Flask(__name__)
-
 # Phase B: Wire Kernel Transport, Token Gate, DB Teardown, and SSE Stream
-akasa.init_app(
+init_kernel_app(
     app,
     token_header="X-InSetu-Token",
     public_routes={
         "/", "/manifest.json", "/sw.js", "/favicon.ico",
         "/auth/bootstrap", "/api/system/panic",
-        "/api/system/openapi.json", "/recovery"
+        "/api/system/openapi.json", "/api/system/llm_catalog.json", "/recovery"
     },
     public_prefixes=("/static/", "/sm/"),
     public_suffixes=(".map",),
@@ -531,7 +530,7 @@ def inject_bypassed_extensions(cfg, workspace_id=None, **kwargs):
 # Phase B Completion: Ignite the worker pools, declarative schemas, and VFS queues globally
 use_reloader = os.environ.get("INSETU_RELOADER", "0") == "1"
 is_cli_serve = "serve" in sys.argv
-akasa.boot(skip_if_reloader_parent=(is_cli_serve and use_reloader))
+boot_kernel(skip_if_reloader_parent=(is_cli_serve and use_reloader))
 def run_app():
     class QuietPollingFilter(logging.Filter):
         def filter(self, record):

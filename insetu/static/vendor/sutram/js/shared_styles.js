@@ -1,5 +1,5 @@
-import{css as t}from"lit";import{sharedStyles as r}from"../../yenvui/js/shared_styles.js";export const sharedStyles=t`
-    ${r}
+import{css as e}from"lit";import{sharedStyles as n,Btn as r}from"sutram-chassis";export{r as YenvuiBtn};export const sharedStyles=e`
+    ${n}
 
     /* Global Reset for Components & iOS WebKit Text-Inflation Guard */
     :host {
@@ -10,6 +10,24 @@ import{css as t}from"lit";import{sharedStyles as r}from"../../yenvui/js/shared_s
         box-sizing: border-box;
         -webkit-text-size-adjust: 100%;
         text-size-adjust: 100%;
+    }
+    sutram-btn, sutram-async-btn {
+        display: inline-flex;
+        vertical-align: middle;
+        min-width: max-content;
+        flex-shrink: 0;
+    }
+    sutram-pill { display: inline-flex; }
+    sutram-tag { display: inline-flex; align-items: center; }
+    sutram-label { display: inline-block; margin-bottom: 4px; }
+    sutram-input, sutram-select, sutram-textarea, sutram-toggle {
+        display: block;
+        margin-bottom: 15px;
+        font-family: inherit;
+    }
+    sutram-input[flush], sutram-select[flush], sutram-textarea[flush], sutram-toggle[flush],
+    sutram-input[inline], sutram-select[inline], sutram-textarea[inline], sutram-toggle[inline] {
+        margin-bottom: 0 !important;
     }
     yenvui-dropdown, sutram-dropdown { display: inline-flex; align-items: stretch; height: 100%; }
 
@@ -24,4 +42,4 @@ import{css as t}from"lit";import{sharedStyles as r}from"../../yenvui/js/shared_s
         background: var(--rail-hover, rgba(99, 102, 241, 0.22)) !important; color: var(--text) !important;
     }
     .system-action-btn i { color: currentColor !important; }
-`;
+`;if(typeof document<"u"&&!document.getElementById("sutram-shared-styles")){const t=document.createElement("style");t.id="sutram-shared-styles",t.textContent=sharedStyles.cssText,document.head.appendChild(t)}

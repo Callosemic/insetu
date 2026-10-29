@@ -1,5 +1,4 @@
 import { executeBootSequence, bootServiceWorker } from '/static/extensions/system/system.js';
-import '../vendor/sutram/js/app_shell.js';
 
 const isPopout = new URLSearchParams(window.location.search).get('popout') === 'true';
 

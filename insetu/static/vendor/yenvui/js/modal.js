@@ -1,4 +1,4 @@
-import{LitElement as i,html as a,css as n}from"lit";export class YenvuiModal extends i{static properties={titleText:{type:String},open:{type:Boolean,reflect:!0},maxWidth:{type:String},fullscreen:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0},transparent:{type:Boolean,reflect:!0},_hasFooter:{type:Boolean,state:!0}};static styles=n`
+import{LitElement as i,html as a,css as r}from"lit";export class YenvuiModal extends i{static properties={titleText:{type:String},open:{type:Boolean,reflect:!0},maxWidth:{type:String},fullscreen:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0},transparent:{type:Boolean,reflect:!0},_hasFooter:{type:Boolean,state:!0}};static styles=r`
         :host { display: contents; } /* Native dialog handles its own visibility. Host must remain permeable. */
         dialog {
             background: var(--pane-bg, #1e1e1e);
@@ -140,13 +140,12 @@ import{LitElement as i,html as a,css as n}from"lit";export class YenvuiModal ext
             border: none !important; 
             cursor: pointer; 
         }
-        ::slotted(yenvui-async-btn[slot="footer"]),
-        ::slotted(sutram-async-btn[slot="footer"]) {
+        ::slotted(:not(button)[slot="footer"]) {
             flex: 1;
             margin: 0 !important;
             padding: 0 !important;
             border: none !important;
-            display: block;
+            display: flex;
             --btn-padding: 12px;
             --btn-font-size: 1.05rem;
             --btn-border-radius: 6px;

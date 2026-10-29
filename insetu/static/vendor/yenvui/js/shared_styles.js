@@ -8,22 +8,22 @@ import{css as e}from"lit";export const sharedStyles=e`
         touch-action: pan-y;
     }
     /* --- CUSTOM ELEMENT HOST STRUCTURAL REPAIRS --- */
-    yenvui-btn, sutram-btn, yenvui-async-btn, sutram-async-btn {
+    yenvui-btn, yenvui-async-btn {
         display: inline-flex;
         vertical-align: middle;
         min-width: max-content;
         flex-shrink: 0;
     }
-    yenvui-pill, sutram-pill { display: inline-flex; }
-    yenvui-tag, sutram-tag { display: inline-flex; align-items: center; }
-    yenvui-label, sutram-label { display: inline-block; margin-bottom: 4px; }
-    sutram-input, sutram-select, sutram-textarea, sutram-toggle {
+    yenvui-pill { display: inline-flex; }
+    yenvui-tag { display: inline-flex; align-items: center; }
+    yenvui-label { display: inline-block; margin-bottom: 4px; }
+    yenvui-input, yenvui-select, yenvui-textarea, yenvui-toggle {
         display: block;
         margin-bottom: 15px;
         font-family: inherit;
     }
-    sutram-input[flush], sutram-select[flush], sutram-textarea[flush], sutram-toggle[flush],
-    sutram-input[inline], sutram-select[inline], sutram-textarea[inline], sutram-toggle[inline] {
+    yenvui-input[flush], yenvui-select[flush], yenvui-textarea[flush], yenvui-toggle[flush],
+    yenvui-input[inline], yenvui-select[inline], yenvui-textarea[inline], yenvui-toggle[inline] {
         margin-bottom: 0 !important;
     }
 
@@ -31,7 +31,7 @@ import{css as e}from"lit";export const sharedStyles=e`
     .yv-btn {
         display: inline-flex;
         align-items: center;
-        justify-content: center;
+        justify-content: var(--btn-justify, center);
         margin: 0;
         padding: var(--btn-padding, 8px 14px);
         font-size: var(--btn-font-size, 0.85rem);
