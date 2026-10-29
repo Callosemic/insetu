@@ -2,6 +2,75 @@
 
 <!-- version list -->
 
+## v0.28.0 (2026-10-29)
+
+### Bug Fixes
+
+- **bridge**: Broadcast new file description so cartographer can use it
+  ([`246d2e6`](https://github.com/Callosemic/insetu/commit/246d2e696eb004ff0ae97144b3f2ebdc0b7eae7e))
+
+- **bridge**: Macro fix, vfs:// support
+  ([`9995b2e`](https://github.com/Callosemic/insetu/commit/9995b2ecf1a4cb150f4c4177d4b515ed8bf2c2a7))
+
+- **cartographer**: Capture new file description
+  ([`8ab6fce`](https://github.com/Callosemic/insetu/commit/8ab6fcefc52dda9ac1ce8682ffcc8d05caa351bd))
+
+- **flow**: Resolve relational watermark dirty status with case-insensitive bucket matching
+  ([`504570c`](https://github.com/Callosemic/insetu/commit/504570c3859900988cb48d2f86891462967070fd))
+
+- **git**: Harden diff card dirty watermark resolution and direct uri matching
+  ([`1e073cb`](https://github.com/Callosemic/insetu/commit/1e073cbd7b8db982297061cf8434830594b2bd44))
+
+### Features
+
+- Decommission flow extension, migrate tracker settings to repeaters, and protect hooks in bridge
+  ([`ca48b6e`](https://github.com/Callosemic/insetu/commit/ca48b6e27a23265d9ad1a1ad417b88d7eeda6cea))
+
+- Remote Access WHOIS identity gateway, Callosemic stack CI battery, vendor lockfile substrate, and
+  Single-File SDK membrane hardening
+  ([`2d6619f`](https://github.com/Callosemic/insetu/commit/2d6619f4bc736bc37e2113b9e2e89e7921d76b88))
+
+- Single-file frontend membrane isolation, declarative schema repeaters, and universal repeater
+  secret vaulting
+  ([`7365e50`](https://github.com/Callosemic/insetu/commit/7365e5061bffc22e4b01ff0cc72de7d81fa05b01))
+
+- Universal Compute Pools, Cognitive Profiles, Markdown-as-Code Routines, and Yomama v4 Directives
+  ([`34e6051`](https://github.com/Callosemic/insetu/commit/34e60514e74108e5161e26e20cb192ff9d8bc9c1))
+
+- **cartographer**: AST symbol extraction, 3-tier docstring waterfall, and relational watermark
+  settling
+  ([`1dbd067`](https://github.com/Callosemic/insetu/commit/1dbd067236b0b76374a5f8cbb47345c814bdb6e8))
+
+- **cli**: Add mcp stdio gateway and harden recovery bootloader token sync
+  ([`9309a68`](https://github.com/Callosemic/insetu/commit/9309a6864b810b02982e3217aa24cd07652ee592))
+
+- **core**: Implement AST symbol drift tracking, template overlay driver delegation, and topology
+  upkeep audit substrate
+  ([`544f172`](https://github.com/Callosemic/insetu/commit/544f17271ae6201f03eed15c6c706fbc888c9a99))
+
+- **core**: Implement Yomama multi-surface shell, declarative agent routines, deferred chunk
+  auto-healing, and OpenAI-compatible inference gateway
+  ([`261cea1`](https://github.com/Callosemic/insetu/commit/261cea1a1c8acc3519da9b11fe6ca183d1abfa6b))
+
+- **core**: Relational watermark derivation, MCP stdio bridge, AST refactoring directives, and
+  reboot resilience
+  ([`6d50f5d`](https://github.com/Callosemic/insetu/commit/6d50f5dbaacda44ee2b61cb21283b454bcb9d591))
+
+- **devops**: Add git diff capabilities and autonomous routines, decommission tailscale extension to
+  core remote gateway, and harden membrane imports
+  ([`6bc0c36`](https://github.com/Callosemic/insetu/commit/6bc0c369fa1d630fbde2132475b88d5fb2104fcb))
+
+- **mcp**: Introduce Model Context Protocol 2025-03-26 server substrate, agent orchestrator
+  routines, and AST refactoring guards
+  ([`cc9e17a`](https://github.com/Callosemic/insetu/commit/cc9e17a12a5b91189fff101b9e82a65ed67694d2))
+
+### Refactoring
+
+- **shell**: Align app chassis with sdk membrane, register sutram vendor importmaps, and brand
+  selection deck
+  ([`b48ad82`](https://github.com/Callosemic/insetu/commit/b48ad82127ab1c499ad5c71f7cc701e6c107051d))
+
+
 ## v0.27.0 (2026-10-26)
 
 ### Bug Fixes
