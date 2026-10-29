@@ -49,6 +49,12 @@ CARTOGRAPHER_SCHEMA = {
         "comment": "TEXT",
         "status": "TEXT",
         "updated_at": "REAL"
+    },
+    "file_descriptions": {
+        "file_uri": "TEXT PRIMARY KEY",
+        "description": "TEXT",
+        "source": "TEXT",
+        "updated_at": "REAL"
     }
 }
 
@@ -87,6 +93,78 @@ def _first_sentence(text: Optional[str]) -> str:
     sentence_match = re.match(r'^(.+?\.)(?:\s|$)', joined)
     summary = sentence_match.group(1) if sentence_match else joined
     return summary[:140].rstrip() + ("..." if len(summary) > 140 else "")
+
+
+_JS_PATH_COMMENT_RE = re.compile(r'^//\s*[\w./@-]+\.(?:js|mjs|ts|tsx)\s*$')
+
+
+def describe_source_file(rel_path: str, content: str) -> str:
+    """
+    Derives a one-sentence file description for CODE_INDEX.md from the file itself, so a file that
+    has no description in the index gets one instead of a '[comment required]' placeholder.
+    Python: the module docstring, or for test_*.py modules the first class docstring.
+    JavaScript/TypeScript: a leading /** ... */ or // comment block that is separated from the first
+    declaration (followed by a blank line or an import), skipping bare file-path comments.
+    """
+    if not content or not content.strip():
+        return ""
+    suffix = Path(rel_path).suffix.lower()
+    if suffix == ".py":
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            return ""
+        module_doc = _first_sentence(ast.get_docstring(tree))
+        if module_doc:
+            return module_doc
+        if Path(rel_path).name.startswith("test_"):
+            for node in tree.body:
+                if isinstance(node, ast.ClassDef):
+                    class_doc = _first_sentence(ast.get_docstring(node))
+                    if class_doc:
+                        return class_doc
+        return ""
+    if suffix not in (".js", ".mjs", ".ts", ".tsx"):
+        return ""
+
+    lines = content.splitlines()
+    idx = 0
+    if lines and lines[0].startswith("#!"):
+        idx = 1
+    while idx < len(lines) and (not lines[idx].strip() or _JS_PATH_COMMENT_RE.match(lines[idx].strip())):
+        idx += 1
+    if idx >= len(lines):
+        return ""
+
+    block_text = ""
+    end_idx = idx
+    first = lines[idx].strip()
+    if first.startswith("/**"):
+        while end_idx < len(lines) and "*/" not in lines[end_idx]:
+            end_idx += 1
+        if end_idx >= len(lines):
+            return ""
+        block = "\n".join(lines[idx:end_idx + 1]).strip()
+        block_text = re.sub(r'^/\*+|\*+/$', '', block).strip()
+    elif first.startswith("//"):
+        comment_lines = []
+        while end_idx < len(lines) and lines[end_idx].strip().startswith("//"):
+            stripped = lines[end_idx].strip()
+            if not _JS_PATH_COMMENT_RE.match(stripped):
+                comment_lines.append(stripped.lstrip("/").strip())
+            end_idx += 1
+        end_idx -= 1
+        block_text = "\n".join(comment_lines)
+    else:
+        return ""
+
+    # A comment attached directly to a declaration documents that symbol, not the file.
+    next_idx = end_idx + 1
+    if next_idx < len(lines):
+        next_line = lines[next_idx].strip()
+        if next_line and not next_line.startswith(("import ", "import{", "'use strict'", '"use strict"')):
+            return ""
+    return _first_sentence(block_text)
 
 
 def _format_py_signature(node: ast.AST) -> str:
@@ -410,6 +488,24 @@ def extract_symbol_source_slice(filepath: str, content: str, symbol_query: str) 
             "source": "\n".join(lines[s_line - 1:e_line]),
         }
     return None
+
+@cartographer_bp.on('bridge_files_created')
+def _record_genesis_descriptions(ctx, descriptions: Optional[Dict[str, str]] = None, workspace_id=None, **kwargs):
+    """Stores the first sentence of each genesis patch COMMENT as the new file's pending CODE_INDEX.md description."""
+    rows = []
+    now_ts = time.time()
+    for raw_uri, raw_comment in (descriptions or {}).items():
+        summary = _first_sentence(str(raw_comment or ""))
+        if raw_uri and summary:
+            rows.append((str(InSetuURI(raw_uri)), summary, "genesis_comment", now_ts))
+    if not rows:
+        return
+    ctx.db.executemany(
+        "INSERT OR REPLACE INTO file_descriptions (file_uri, description, source, updated_at) VALUES (?, ?, ?, ?)",
+        rows,
+    )
+    ctx.db.commit()
+
 
 @cartographer_bp.on('register_compilation_steps')
 def _register_cartographer_compilation_step(workspace_id=None, **kwargs):
@@ -795,6 +891,30 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
                     md_desc = f"ADR: {stem[:1].upper() + stem[1:]}."
             if md_desc:
                 comments[rel_f] = md_desc
+
+        # Tier 2 fallbacks for files the index does not describe yet (hand-written index text always wins):
+        # 2a. the first sentence of the Yomama genesis patch COMMENT that created the file;
+        # 2b. for .py/.js/.ts files, the module docstring or leading file comment.
+        try:
+            genesis_rows = ctx.db.execute(
+                "SELECT file_uri, description FROM file_descriptions WHERE file_uri LIKE ?",
+                (f"vfs://{repo_dir}/%",),
+            ).fetchall()
+            genesis_descriptions = {r["file_uri"]: r["description"] for r in genesis_rows}
+        except Exception:
+            genesis_descriptions = {}
+        for rel_f in filtered_files:
+            if rel_f in comments or _is_path_managed(rel_f, managed_dirs):
+                continue
+            genesis_desc = genesis_descriptions.get(f"vfs://{repo_dir}/{rel_f}")
+            if genesis_desc:
+                comments[rel_f] = genesis_desc
+                continue
+            if Path(rel_f).suffix.lower() not in (".py", ".js", ".mjs", ".ts", ".tsx"):
+                continue
+            src_desc = describe_source_file(rel_f, ctx.vfs.read(f"vfs://{repo_dir}/{rel_f}") or "")
+            if src_desc:
+                comments[rel_f] = src_desc
 
         symbol_map: Dict[str, List[Dict[str, Any]]] = {}
         symbol_sig_parts = []
