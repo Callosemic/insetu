@@ -1323,6 +1323,11 @@ def hook_save_manifest(manifest_data=None, is_full_compile=False, workspace_id=N
         conn.commit()
     except Exception as e:
         print(f"Warning: hook_save_manifest failed: {e}")
+    finally:
+        # Invalidate again once the write is committed: a reader that ran between the
+        # 'manifest_mutated' invalidation above and the commit saw the old rows and cached them,
+        # which left gather cards showing as dirty until the next unrelated change.
+        hook_request_manifest.invalidate(workspace_id=workspace_id)
 @gather_bp.route('manifest/version', methods=['GET'], docstring="[sync] Returns the latest modification timestamp across the context manifest ledger.")
 def api_manifest_version(ctx):
     try:

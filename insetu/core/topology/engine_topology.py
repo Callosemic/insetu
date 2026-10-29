@@ -221,6 +221,8 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
                     "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp, git_status) VALUES (?, ?, ?, ?, ?)",
                     rows_to_insert
                 )
+    # Re-invalidate after the transaction commits so no reader keeps the pre-scan ledger cached.
+    hook_request_vfs_manifest.invalidate(workspace_id=workspace_id)
     return True
 
 @topology_bp.on('vfs_manifest_mutated')
@@ -410,6 +412,38 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
 
         op = m.get("operation", "save")
         _TOPOLOGY_RAM_QUEUE.put_nowait((workspace_id, {"filepath": norm_path, "operation": op}))
+def _git_ignored_paths(repo_path, rel_paths, repo_cfg, live_cfg):
+    """
+    Returns the subset of repo-relative paths that git ignores (.gitignore, .git/info/exclude,
+    core.excludesFile), so incremental events agree with the full scan, which lists files with
+    `git ls-files --cached --others --exclude-standard`. Tracked files are never reported, and
+    force_include and managed directories are exempt, matching get_valid_workspace_files.
+    Fails open (returns nothing) outside a git work tree or when git is unavailable.
+    """
+    if not rel_paths or not repo_path or (repo_cfg or {}).get("archive_type", "repo") != "repo":
+        return set()
+    forced = set((repo_cfg or {}).get("force_include") or [])
+    managed = (repo_cfg or {}).get("repo_managed_dirs")
+    managed_dirs = set(managed if managed is not None else ((live_cfg or {}).get("managed_dirs") or [])) | {".insetu-data"}
+    candidates = sorted({
+        p for p in rel_paths
+        if p and p not in forced and not any(p == m or p.startswith(m.rstrip("/") + "/") for m in managed_dirs)
+    })
+    if not candidates:
+        return set()
+    try:
+        res = execute_binary(
+            ["git", "-c", "core.quotepath=false", "check-ignore", "--stdin", "-z"],
+            cwd=repo_path, capture_output=True, text=True, input="\0".join(candidates) + "\0",
+        )
+    except Exception:
+        return set()
+    # Exit 0: some paths ignored, 1: none ignored, anything else: not a git repo or an error.
+    if res.returncode != 0:
+        return set()
+    return {p for p in (res.stdout or "").split("\0") if p}
+
+
 def resolve_topology_buffer(workspace_id):
     """Processes any pending events in topology_event_buffer, updates topology_ledger, and emits topology_resolved."""
     ctx = topology_bp.get_context(workspace_id)
@@ -468,6 +502,26 @@ def resolve_topology_buffer(workspace_id):
         else:
             final_events.append({"filepath": raw_fp, "mutation_type": op})
 
+    # Batch one `git check-ignore` per repo so a write storm (pip writing *.egg-info, a build
+    # dropping dist/) cannot slip ignored files into the ledger that the full scan would skip.
+    ignore_candidates = {}
+    for e in final_events:
+        if e["mutation_type"] in ("delete", "deleted", "remove", "removed"):
+            continue
+        c_uri = InSetuURI(e["filepath"])
+        c_fp = f"{c_uri.repo}/{c_uri.path}".strip('/')
+        c_repo, c_rel, c_len = None, None, -1
+        for r_dir in target_repos_map.keys():
+            if (c_fp == r_dir or c_fp.startswith(r_dir + '/')) and len(r_dir) > c_len:
+                c_repo, c_rel, c_len = r_dir, c_fp[len(r_dir):].lstrip('/'), len(r_dir)
+        if c_repo and c_rel:
+            ignore_candidates.setdefault(c_repo, set()).add(c_rel)
+    live_cfg = ctx.config
+    git_ignored = {
+        r_dir: _git_ignored_paths(get_repo_path(r_dir, workspace_id), rels, target_repos_map.get(r_dir), live_cfg)
+        for r_dir, rels in ignore_candidates.items()
+    }
+
     for e in final_events:
         raw_fp = e["filepath"]
 
@@ -509,6 +563,15 @@ def resolve_topology_buffer(workspace_id):
             repo_cfg = target_repos_map.get(repo_dir)
             rel_to_repo = rel_path
             if repo_cfg and not is_file_tracked_by_sieve(rel_to_repo, repo_cfg, ctx.config, repo_dir=repo_dir):
+                continue
+            if rel_to_repo in git_ignored.get(repo_dir, ()):
+                # Ignored by git: never ledger it, and evict a row an older build may have added.
+                affected = conn.execute("SELECT bucket_id FROM topology_ledger WHERE filepath = ?", (filepath,)).fetchall()
+                if affected:
+                    conn.execute("DELETE FROM topology_ledger WHERE filepath = ?", (filepath,))
+                    dirty_repos.add(repo_dir)
+                    for row in affected:
+                        dirty_buckets.add(f"{repo_dir}::{row['bucket_id']}")
                 continue
 
             sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []
@@ -554,6 +617,8 @@ def resolve_topology_buffer(workspace_id):
     if status_updates:
         conn.executemany("UPDATE topology_ledger SET git_status = ? WHERE filepath = ?", status_updates)
     conn.commit()
+    # Re-invalidate after the commit: a reader between the invalidation at the top and this commit cached the old ledger.
+    hook_request_vfs_manifest.invalidate(workspace_id=workspace_id)
 
     hooks.emit(
         'topology_resolved', 
