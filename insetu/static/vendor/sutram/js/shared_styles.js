@@ -1,4 +1,4 @@
-import{css as e}from"lit";import{sharedStyles as n,Btn as r}from"sutram-chassis";export{r as YenvuiBtn};export const sharedStyles=e`
+import{css as e}from"lit";import{sharedStyles as n,Btn as i}from"sutram-chassis";export{i as YenvuiBtn};export const sharedStyles=e`
     ${n}
 
     /* Global Reset for Components & iOS WebKit Text-Inflation Guard */
@@ -20,13 +20,13 @@ import{css as e}from"lit";import{sharedStyles as n,Btn as r}from"sutram-chassis"
     sutram-pill { display: inline-flex; }
     sutram-tag { display: inline-flex; align-items: center; }
     sutram-label { display: inline-block; margin-bottom: 4px; }
-    sutram-input, sutram-select, sutram-textarea, sutram-toggle {
+    sutram-input, sutram-select, sutram-textarea, sutram-toggle, sutram-combobox, sutram-target-binding {
         display: block;
         margin-bottom: 15px;
         font-family: inherit;
     }
-    sutram-input[flush], sutram-select[flush], sutram-textarea[flush], sutram-toggle[flush],
-    sutram-input[inline], sutram-select[inline], sutram-textarea[inline], sutram-toggle[inline] {
+    sutram-input[flush], sutram-select[flush], sutram-textarea[flush], sutram-toggle[flush], sutram-combobox[flush], sutram-target-binding[flush],
+    sutram-input[inline], sutram-select[inline], sutram-textarea[inline], sutram-toggle[inline], sutram-combobox[inline], sutram-target-binding[inline] {
         margin-bottom: 0 !important;
     }
     yenvui-dropdown, sutram-dropdown { display: inline-flex; align-items: stretch; height: 100%; }
