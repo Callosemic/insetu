@@ -1,9 +1,9 @@
 {
   "sutram": {
     "repo": "https://github.com/Callosemic/sutram",
-    "version": "2.4.0",
-    "commit": "0ffde1f62b704bf9cac3161fe982b0c69b751af8",
-    "dirty": true,
+    "version": "2.5.0",
+    "commit": "8fe90e313cfc75f6abf88df6df9c97845c23c3db",
+    "dirty": false,
     "source": "sibling",
     "minified": true,
     "paths": [
