@@ -7,7 +7,7 @@ import threading
 import traceback
 import queue
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Union, Literal
+from typing import TypedDict, Optional, List, Dict, Any, Union, Literal
 from insetu.core.sdk import (
     InSetuExtension,
     ExtensionContext,
@@ -985,6 +985,308 @@ def resolve_owning_workspaces(event_name, **kwargs):
                 continue
 
     return owning_workspaces
-
 # Dependency Injection: Register the Tier 2 router with the Tier 1 kernel
 set_workspace_router(resolve_owning_workspaces)
+class VerifyPlanTargetsPayload(TypedDict, total=False):
+    plan_text: str
+    plan_file: Optional[str]
+
+
+@topology_bp.route('overview', methods=['GET'], docstring="[sync] Compiles a lightweight structural overview of tracked repositories, sub-buckets, and CODE_INDEX.md headers.")
+def api_topology_overview(ctx):
+    """Compiles a lightweight structural overview of tracked repositories, sub-buckets, and CODE_INDEX.md headers."""
+    cfg = ctx.config
+    repos_summary = []
+    overview_lines = ["=== WORKSPACE TOPOLOGY OVERVIEW ==="]
+    for r_cfg in cfg.get("target_repos", []):
+        r_dir = r_cfg.get("repo_dir")
+        if not r_dir:
+            continue
+        buckets = [b.get("id") for b in r_cfg.get("sub_buckets", []) if b.get("id") and not b.get("is_system")]
+        code_idx = ctx.vfs.read(f"vfs://{r_dir}/CODE_INDEX.md") or ""
+        idx_preview = "\n".join(code_idx.splitlines()[:80]) if code_idx else "[No CODE_INDEX.md generated]"
+        repos_summary.append({
+            "repo": r_dir,
+            "domain": r_cfg.get("domain", "Workspaces"),
+            "buckets": buckets,
+        })
+        overview_lines.append(f"\n## Repository: {r_dir} (Buckets: {', '.join(buckets) if buckets else 'main'})\n{idx_preview}")
+
+    return {
+        "repos": repos_summary,
+        "overview_text": "\n".join(overview_lines),
+    }
+@topology_bp.route('verify_plan_targets', methods=['POST'], request_schema=VerifyPlanTargetsPayload, docstring="[sync] Verifies that vfs:// file targets referenced in an architectural plan exist or are marked as new files.")
+def api_topology_verify_plan_targets(ctx):
+    """Verifies that vfs:// file targets referenced in an architectural plan exist or are marked as new files."""
+    data = ctx.payload or {}
+    plan_text = str(data.get("plan_text") or "")
+    plan_file = str(data.get("plan_file") or "").strip()
+    if not plan_text and plan_file:
+        plan_text = ctx.vfs.read(plan_file) or ""
+
+    found_uris = sorted(set(re.findall(r'(?:vfs|ctx)://[a-zA-Z0-9_./-]+', plan_text)))
+    verified: List[str] = []
+    missing: List[str] = []
+
+    for raw_uri in found_uris:
+        clean_uri = raw_uri.rstrip(".,;:)`'\"")
+        uri_obj = InSetuURI(clean_uri)
+        if uri_obj.scheme == "vfs":
+            phys = ctx.resolve_path(str(uri_obj), must_exist=True, allow_heal=False)
+            if phys:
+                verified.append(str(uri_obj))
+            else:
+                missing.append(str(uri_obj))
+        else:
+            verified.append(str(uri_obj))
+    return {
+        "status": "success",
+        "verified_targets": verified,
+        "missing_or_new_targets": missing,
+        "total_referenced": len(found_uris),
+    }
+
+
+class AuditUpkeepPayload(TypedDict, total=False):
+    repo: Optional[str]
+    scope: Optional[str]
+    stage: Optional[str]
+    god_object_min_lines: Optional[int]
+    god_object_min_symbols: Optional[int]
+
+
+@topology_bp.route('audit_upkeep', methods=['GET', 'POST'], request_schema=AuditUpkeepPayload, docstring="[sync] Deterministically audits workspace documentation/symbol drift, oversized God-object decomposition candidates, and test suite relevance.")
+def api_topology_audit_upkeep(ctx):
+    """Deterministically audits workspace documentation/symbol drift, God-object candidates, and test relevance."""
+    from insetu.core.cartographer.cartographer import (
+        extract_file_symbols as _extract_file_symbols,
+        extract_symbol_source_slice as _extract_symbol_source_slice,
+        map_repositories as _map_repositories,
+    )
+    data = ctx.payload or {}
+    raw_scope = str(data.get("scope") or "all").strip().lower()
+    if raw_scope in ("doc", "docs", "documentation", "index"):
+        scope = "docs"
+    elif raw_scope in ("mod", "modularize", "refactor", "god", "split"):
+        scope = "modularize"
+    elif raw_scope in ("test", "tests", "testing"):
+        scope = "tests"
+    else:
+        scope = "all"
+
+    min_lines = int(data.get("god_object_min_lines") or 550)
+    min_symbols = int(data.get("god_object_min_symbols") or 15)
+    target_configs = ctx.config.get("target_repos", [])
+    requested_repo = str(data.get("repo") or "").strip()
+    active_repos = [
+        c.get("repo_dir")
+        for c in target_configs
+        if c.get("repo_dir") and (not requested_repo or c.get("repo_dir") == requested_repo)
+    ]
+
+    # Ensure Cartographer symbol_ledger is fresh before reading drift state
+    try:
+        _map_repositories(ctx.workspace_id, silent=True, target_repos=active_repos or None)
+        ctx.sync_vfs_barrier()
+    except Exception:
+        pass
+
+    missing_comments: List[Dict[str, Any]] = []
+    stale_comments: List[Dict[str, Any]] = []
+    broken_doc_targets: List[Dict[str, str]] = []
+    god_objects: List[Dict[str, Any]] = []
+    stale_test_imports: List[Dict[str, Any]] = []
+    untested_capabilities: List[Dict[str, str]] = []
+    target_files: List[str] = []
+
+    def _add_target(uri_str: str):
+        if uri_str and uri_str not in target_files and len(target_files) < 12:
+            target_files.append(uri_str)
+
+    # --- PILLAR 1: DOCUMENTATION & MUTATED SYMBOL DRIFT ---
+    if scope in ("all", "docs"):
+        for r_cfg in target_configs:
+            r_dir = r_cfg.get("repo_dir")
+            if not r_dir or (active_repos and r_dir not in active_repos):
+                continue
+            idx_uri = f"vfs://{r_dir}/docs/CODE_INDEX.md" if r_cfg.get("is_core_chassis") else f"vfs://{r_dir}/CODE_INDEX.md"
+            idx_text = ctx.vfs.read(idx_uri) or ""
+            if idx_text:
+                for line_no, line in enumerate(idx_text.splitlines(), start=1):
+                    if "[comment required]" in line:
+                        clean_item = line.split("#", 1)[0].lstrip(" │├└─\t").strip()
+                        missing_comments.append({
+                            "index_uri": idx_uri,
+                            "line": line_no,
+                            "entry": clean_item,
+                        })
+                if any(m["index_uri"] == idx_uri for m in missing_comments):
+                    _add_target(idx_uri)
+
+        try:
+            cart_db = ctx.get_db("cartographer")
+            q = "SELECT filepath, symbol_name, signature, body_hash, verified_hash, comment, status FROM symbol_ledger WHERE status IN ('stale', 'missing')"
+            params: tuple = ()
+            if active_repos:
+                placeholders = ",".join(["?"] * len(active_repos))
+                q += f" AND repo IN ({placeholders})"
+                params = tuple(active_repos)
+            rows = cart_db.execute(q, params).fetchall()
+            for r in rows:
+                fp = r["filepath"]
+                if r["status"] == "stale" and len(stale_comments) < 20:
+                    f_content = ctx.vfs.read(fp) or ""
+                    slice_info = _extract_symbol_source_slice(fp, f_content, r["symbol_name"]) if f_content else None
+                    stale_comments.append({
+                        "filepath": fp,
+                        "symbol_name": r["symbol_name"],
+                        "signature": r["signature"],
+                        "current_comment": r["comment"],
+                        "body_hash": r["body_hash"],
+                        "verified_hash": r["verified_hash"],
+                        "source_slice": (slice_info or {}).get("source", "")[:1500],
+                    })
+                    _add_target(fp)
+        except Exception:
+            pass
+
+        # Scan README.md and docs/*.md for broken vfs:// file references
+        for r_dir in active_repos:
+            for f_uri in get_topology_files_for_repo(ctx.workspace_id, r_dir):
+                if not f_uri.lower().endswith(".md") or f_uri.endswith("CODE_INDEX.md") or "/archived/" in f_uri or "/superseded/" in f_uri:
+                    continue
+                md_text = ctx.vfs.read(f_uri) or ""
+                for raw_ref in set(re.findall(r'vfs://[a-zA-Z0-9_./-]+', md_text)):
+                    clean_ref = raw_ref.rstrip(".,;:)`'\"")
+                    ref_uri = InSetuURI(clean_ref)
+                    # Skip placeholder template examples in documentation
+                    if any(tok in clean_ref for tok in ("repo/", "path/to/", "<", "{", "example", "source.py", "target_file.py", "my_")):
+                        continue
+                    if ref_uri.repo in active_repos and not ctx.resolve_path(str(ref_uri), must_exist=True, allow_heal=False):
+                        broken_doc_targets.append({"doc_file": f_uri, "broken_ref": str(ref_uri)})
+                        _add_target(f_uri)
+
+    # --- PILLAR 2: ZERO-LOGIC GOD-OBJECT DECOMPOSITION CANDIDATES ---
+    all_defined_py_symbols = set()
+    for r_dir in active_repos:
+        for f_uri in get_topology_files_for_repo(ctx.workspace_id, r_dir):
+            rel_p = InSetuURI(f_uri).path
+            ext = Path(rel_p).suffix.lower()
+            if ext not in (".py", ".js", ".mjs", ".ts", ".tsx"):
+                continue
+            content = ctx.vfs.read(f_uri)
+            if not content:
+                continue
+            syms = _extract_file_symbols(rel_p, content) or []
+            for s in syms:
+                all_defined_py_symbols.add(s["name"])
+
+            if scope in ("all", "modularize"):
+                if "/tests/" in f_uri or rel_p.startswith("tests/") or "/vendor/" in f_uri:
+                    continue
+                line_count = len(content.splitlines())
+                if line_count >= min_lines or len(syms) >= min_symbols:
+                    god_objects.append({
+                        "filepath": f_uri,
+                        "line_count": line_count,
+                        "symbol_count": len(syms),
+                        "symbols": [
+                            {
+                                "name": s["name"],
+                                "signature": s["signature"],
+                                "lines": f"{s['start_line']}-{s['end_line']}",
+                                "span_lines": max(1, int(s["end_line"]) - int(s["start_line"]) + 1),
+                                "docstring": s.get("docstring") or "",
+                            }
+                            for s in syms
+                        ],
+                    })
+
+    god_objects.sort(key=lambda x: (x["line_count"], x["symbol_count"]), reverse=True)
+    god_objects = god_objects[:5]
+    if scope in ("all", "modularize"):
+        for go in god_objects[:2]:
+            _add_target(go["filepath"])
+
+    # --- PILLAR 3: TEST SUITE RELEVANCE ---
+    if scope in ("all", "tests"):
+        import ast as _ast
+        test_files_content: List[Tuple[str, str]] = []
+        for r_dir in active_repos:
+            for f_uri in get_topology_files_for_repo(ctx.workspace_id, r_dir):
+                rel_p = InSetuURI(f_uri).path
+                if (rel_p.startswith("tests/") or "/tests/" in f_uri) and f_uri.endswith(".py"):
+                    t_text = ctx.vfs.read(f_uri) or ""
+                    if t_text:
+                        test_files_content.append((f_uri, t_text))
+                        try:
+                            t_tree = _ast.parse(t_text)
+                            for node in _ast.walk(t_tree):
+                                if isinstance(node, _ast.ImportFrom) and node.module and node.module.startswith("insetu."):
+                                    mod_rel = node.module.replace(".", "/")
+                                    cand_py = f"vfs://{r_dir}/{mod_rel}.py"
+                                    cand_init = f"vfs://{r_dir}/{mod_rel}/__init__.py"
+                                    cand_nested = f"vfs://{r_dir}/insetu/{mod_rel}.py"
+                                    cand_nested_init = f"vfs://{r_dir}/insetu/{mod_rel}/__init__.py"
+                                    resolved_mod_uri = next(
+                                        (
+                                            c for c in (cand_py, cand_init, cand_nested, cand_nested_init)
+                                            if ctx.resolve_path(c, must_exist=True, allow_heal=False)
+                                        ),
+                                        None,
+                                    )
+                                    if resolved_mod_uri and resolved_mod_uri.endswith(".py"):
+                                        mod_src = ctx.vfs.read(resolved_mod_uri) or ""
+                                        for alias in node.names:
+                                            imp_name = alias.name
+                                            if imp_name != "*" and not re.search(rf'\b{re.escape(imp_name)}\b', mod_src):
+                                                stale_test_imports.append({
+                                                    "test_file": f_uri,
+                                                    "line": node.lineno,
+                                                    "module": node.module,
+                                                    "missing_symbol": imp_name,
+                                                })
+                                                _add_target(f_uri)
+                        except Exception:
+                            pass
+
+        combined_tests = "\n".join(t_text for _, t_text in test_files_content)
+        if combined_tests:
+            for cap_id, spec in sorted(ctx.get_registered_capabilities().items()):
+                action = spec.get("action") or ""
+                if action in ("settings", "settings.schema"):
+                    continue
+                slash_form = cap_id.replace(".", "/")
+                if cap_id not in combined_tests and slash_form not in combined_tests and action not in combined_tests:
+                    untested_capabilities.append({
+                        "capability": cap_id,
+                        "ext_name": spec.get("ext_name", ""),
+                        "rule": spec.get("rule", ""),
+                    })
+
+    summary_counts = {
+        "missing_comments": len(missing_comments),
+        "stale_comments": len(stale_comments),
+        "broken_doc_targets": len(broken_doc_targets),
+        "god_objects": len(god_objects),
+        "stale_test_imports": len(stale_test_imports),
+        "untested_capabilities": len(untested_capabilities),
+    }
+
+    return {
+        "status": "success",
+        "scope": scope,
+        "summary": summary_counts,
+        "docs_drift": {
+            "missing_comments": missing_comments[:30],
+            "stale_comments": stale_comments[:15],
+            "broken_doc_targets": broken_doc_targets[:20],
+        },
+        "god_objects": god_objects,
+        "test_relevance": {
+            "stale_test_imports": stale_test_imports[:20],
+            "untested_capabilities": untested_capabilities[:20],
+        },
+        "target_files": target_files,
+    }

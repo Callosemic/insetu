@@ -3,6 +3,8 @@ import re
 import ast
 import json
 import threading
+import hashlib
+import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, TypedDict
 from insetu.core.sdk import InSetuExtension
@@ -12,6 +14,7 @@ from insetu.core.utils_core import (
     build_tree_dict,
     execute_binary,
     InSetuURI,
+    parse_frontmatter,
 )
 from insetu.core.topology.engine_topology import get_valid_workspace_files, get_topology_files_for_repo
 CARTOGRAPHER_SETTINGS_SCHEMA = [
@@ -34,6 +37,20 @@ CARTOGRAPHER_SETTINGS_SCHEMA = [
         "description": "Batches undocumented symbol snippets in CODE_INDEX.md into a single fast-tier LLM prompt and writes 1-sentence summaries directly into the index."
     }
 ]
+CARTOGRAPHER_SCHEMA = {
+    "symbol_ledger": {
+        "symbol_key": "TEXT PRIMARY KEY",
+        "repo": "TEXT",
+        "filepath": "TEXT",
+        "symbol_name": "TEXT",
+        "signature": "TEXT",
+        "body_hash": "TEXT",
+        "verified_hash": "TEXT",
+        "comment": "TEXT",
+        "status": "TEXT",
+        "updated_at": "REAL"
+    }
+}
 
 cartographer_bp = InSetuExtension(
     'cartographer',
@@ -41,6 +58,7 @@ cartographer_bp = InSetuExtension(
     title="Cartographer",
     description="AST symbol index mapping and on-demand source span extraction.",
     core=True,
+    schema=CARTOGRAPHER_SCHEMA,
     settings_schema=CARTOGRAPHER_SETTINGS_SCHEMA,
 )
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
@@ -93,6 +111,30 @@ def _format_py_signature(node: ast.AST) -> str:
             args_str = f"{args_str}, **{node.args.kwarg.arg}" if args_str else f"**{node.args.kwarg.arg}"
         return f"{prefix} {node.name}({args_str})"
     return ""
+def _compute_normalized_py_body_hash(node: ast.AST, fallback_slice: str) -> str:
+    """Computes an 8-char SHA-256 hash of a Python AST node's body (excluding leading docstring) so comment/whitespace tweaks do not trigger false drift."""
+    try:
+        body_stmts = list(getattr(node, "body", []) or [])
+        if (
+            body_stmts
+            and isinstance(body_stmts[0], ast.Expr)
+            and isinstance(getattr(body_stmts[0], "value", None), ast.Constant)
+            and isinstance(body_stmts[0].value.value, str)
+        ):
+            body_stmts = body_stmts[1:]
+        norm_parts = [ast.unparse(stmt).strip() for stmt in body_stmts]
+        norm_text = "\n".join(p for p in norm_parts if p)
+    except Exception:
+        norm_text = re.sub(r'\s+', ' ', fallback_slice).strip()
+    return hashlib.sha256(norm_text.encode("utf-8")).hexdigest()[:8]
+
+
+def _compute_normalized_js_body_hash(source_slice: str) -> str:
+    """Computes an 8-char SHA-256 hash of a JS/TS symbol body with comments and whitespace normalized."""
+    no_block = re.sub(r'/\*[\s\S]*?\*/', '', source_slice)
+    no_line = re.sub(r'//[^\n]*', '', no_block)
+    norm = re.sub(r'\s+', ' ', no_line).strip()
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:8]
 
 
 def _extract_python_symbols(content: str) -> Optional[List[Dict[str, Any]]]:
@@ -118,6 +160,7 @@ def _extract_python_symbols(content: str) -> Optional[List[Dict[str, Any]]]:
                 [node.lineno] + [getattr(d, "lineno", node.lineno) for d in getattr(node, "decorator_list", [])]
             )
             end_line = getattr(node, "end_lineno", node.lineno) or node.lineno
+            full_slice = "\n".join(lines[max(0, start_line - 1):min(len(lines), end_line)])
             snippet = "\n".join(lines[max(0, start_line - 1):min(len(lines), start_line - 1 + 30)])
             symbols.append({
                 "name": node.name,
@@ -126,6 +169,7 @@ def _extract_python_symbols(content: str) -> Optional[List[Dict[str, Any]]]:
                 "start_line": start_line,
                 "end_line": end_line,
                 "snippet": snippet,
+                "body_hash": _compute_normalized_py_body_hash(node, full_slice),
             })
     return symbols
 
@@ -242,6 +286,7 @@ def _extract_js_symbols(content: str) -> List[Dict[str, Any]]:
             sig = f"function {name}{clean_params}"
         doc, start_line = _extract_preceding_jsdoc(lines, line_idx)
         end_line = _find_brace_balanced_end(lines, line_idx)
+        full_slice = "\n".join(lines[max(0, line_idx):min(len(lines), end_line)])
         snippet = "\n".join(lines[max(0, start_line - 1):min(len(lines), start_line - 1 + 30)])
         symbols.append({
             "name": name,
@@ -250,6 +295,7 @@ def _extract_js_symbols(content: str) -> List[Dict[str, Any]]:
             "start_line": start_line,
             "end_line": end_line,
             "snippet": snippet,
+            "body_hash": _compute_normalized_js_body_hash(full_slice),
         })
     return symbols
 
@@ -518,7 +564,14 @@ def render_ascii_tree(node, comment_map, managed_dirs, prefix="", current_path="
                     or comment_map.get(sig)
                     or sym.get("docstring")
                 )
-                sym_comment_str = f" # {sym_comment}" if sym_comment else " # [comment required]"
+                if sym_comment:
+                    clean_sym_comment = re.sub(r'^\[stale\?\]\s*', '', str(sym_comment)).strip()
+                    if sym.get("is_stale"):
+                        sym_comment_str = f" # [stale?] {clean_sym_comment}"
+                    else:
+                        sym_comment_str = f" # {clean_sym_comment}"
+                else:
+                    sym_comment_str = " # [comment required]"
                 sym_raw_line = f"{prefix + extension}{s_conn}{sig}"
                 lines.append(f"{sym_raw_line.ljust(35)}{sym_comment_str}")
 
@@ -552,6 +605,53 @@ def api_cartographer_extract(ctx):
         "filepath": str(uri),
         **extracted,
     }
+class CartographerVerifySymbolsPayload(TypedDict, total=False):
+    repo: Optional[str]
+    symbols: Optional[List[str]]
+    verify_all_documented: Optional[bool]
+
+
+@cartographer_bp.route('verify_symbols', methods=['POST'], request_schema=CartographerVerifySymbolsPayload, docstring="[sync] Marks specified symbol_keys (or all documented symbols in a repo) as verified at their current AST body_hash, clearing [stale?] flags.")
+def api_cartographer_verify_symbols(ctx):
+    data = ctx.payload or {}
+    repo = str(data.get("repo") or "").strip()
+    symbols = data.get("symbols") or []
+    verify_all = bool(data.get("verify_all_documented", not symbols))
+    now_ts = time.time()
+    updated = 0
+    if symbols and isinstance(symbols, list):
+        for s_key in symbols:
+            clean_k = str(s_key or "").strip()
+            if not clean_k:
+                continue
+            cur = ctx.db.execute(
+                "UPDATE symbol_ledger SET verified_hash = body_hash, status = 'verified', updated_at = ? "
+                "WHERE (symbol_key = ? OR filepath || '/' || signature = ? OR symbol_name = ?) AND comment != ''",
+                (now_ts, clean_k, clean_k, clean_k),
+            )
+            updated += cur.rowcount
+    elif verify_all:
+        if repo:
+            cur = ctx.db.execute(
+                "UPDATE symbol_ledger SET verified_hash = body_hash, status = 'verified', updated_at = ? "
+                "WHERE repo = ? AND comment != '' AND status = 'stale'",
+                (now_ts, repo),
+            )
+        else:
+            cur = ctx.db.execute(
+                "UPDATE symbol_ledger SET verified_hash = body_hash, status = 'verified', updated_at = ? "
+                "WHERE comment != '' AND status = 'stale'",
+                (now_ts,),
+            )
+        updated += cur.rowcount
+    ctx.db.commit()
+    with _CARTOGRAPHER_CACHE_LOCK:
+        _CARTOGRAPHER_SIG_CACHE.clear()
+        _CARTOGRAPHER_SYMBOL_CACHE.clear()
+    target_repos = [repo] if repo else None
+    map_repositories(ctx.workspace_id, target_repos=target_repos)
+    ctx.sync_vfs_barrier()
+    return {"status": "success", "verified_count": updated}
 
 
 class CartographerEnrichPayload(TypedDict, total=False):
@@ -591,7 +691,8 @@ def _background_enrich(ctx, repo: Optional[str] = None, job_id: Optional[str] = 
             for s in syms:
                 sig = s["signature"]
                 key = f"{rel_p}/{sig}"
-                if not (comments.get(key) or comments.get(sig) or s.get("docstring")):
+                existing_c = comments.get(key) or comments.get(sig) or s.get("docstring") or ""
+                if not existing_c or str(existing_c).strip().startswith("[stale?]"):
                     pending_prompts[key] = s["snippet"]
                 if len(pending_prompts) >= 25:
                     break
@@ -667,6 +768,34 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
         if isinstance(extra_comments, dict) and isinstance(extra_comments.get(repo_dir), dict):
             comments.update(extra_comments[repo_dir])
 
+        # Tier 2 Markdown Frontmatter & Heading Fallback for undocumented .md files (Routines, Prompts, ADRs)
+        for rel_f in filtered_files:
+            if _is_path_managed(rel_f, managed_dirs):
+                continue
+            if Path(rel_f).suffix.lower() != ".md":
+                continue
+            if rel_f in comments or Path(rel_f).name in comments:
+                continue
+            f_text = ctx.vfs.read(f"vfs://{repo_dir}/{rel_f}") or ""
+            md_desc = ""
+            if f_text.strip():
+                fm_data, body_text, _ = parse_frontmatter(f_text)
+                if isinstance(fm_data, dict):
+                    md_desc = _first_sentence(str(fm_data.get("description") or fm_data.get("title") or ""))
+                if not md_desc and body_text:
+                    for raw_l in body_text.splitlines():
+                        clean_l = raw_l.strip()
+                        if clean_l.startswith("#"):
+                            md_desc = _first_sentence(clean_l.lstrip("#").strip())
+                            if md_desc:
+                                break
+            if not md_desc and "adrs/" in rel_f:
+                stem = re.sub(r'^\d+-', '', Path(rel_f).stem).replace('-', ' ').strip()
+                if stem:
+                    md_desc = f"ADR: {stem[:1].upper() + stem[1:]}."
+            if md_desc:
+                comments[rel_f] = md_desc
+
         symbol_map: Dict[str, List[Dict[str, Any]]] = {}
         symbol_sig_parts = []
         if include_symbols:
@@ -693,8 +822,115 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
                     else:
                         _CARTOGRAPHER_SYMBOL_CACHE[sym_cache_key] = (f_hash, extracted_syms)
                 if extracted_syms:
-                    symbol_map[rel_f] = extracted_syms
-                    symbol_sig_parts.append((rel_f, tuple(s["signature"] for s in extracted_syms)))
+                    symbol_map[rel_f] = [dict(s) for s in extracted_syms]
+
+        # Reconcile extracted AST symbols with symbol_ledger to detect silent implementation drift ([stale?])
+        if include_symbols and symbol_map:
+            try:
+                existing_rows = ctx.db.execute(
+                    "SELECT symbol_key, body_hash, verified_hash, comment, status FROM symbol_ledger WHERE repo = ?",
+                    (repo_dir,),
+                ).fetchall()
+                ledger_map = {r["symbol_key"]: dict(r) for r in existing_rows}
+            except Exception:
+                ledger_map = {}
+
+            now_ts = time.time()
+            upserts = []
+            seen_keys = set()
+            for rel_f, syms in symbol_map.items():
+                f_uri = f"vfs://{repo_dir}/{rel_f}"
+                for sym in syms:
+                    sig = sym["signature"]
+                    sym_rel_key = f"{rel_f}/{sig}"
+                    sym_key = f"{f_uri}::{sig}"
+                    seen_keys.add(sym_key)
+                    b_hash = sym.get("body_hash") or ""
+                    raw_comment = (
+                        comments.get(sym_rel_key)
+                        or comments.get(f"{rel_f}::{sig}")
+                        or comments.get(sig)
+                        or sym.get("docstring")
+                        or ""
+                    ).strip()
+                    has_stale_tag_in_index = raw_comment.startswith("[stale?]")
+                    clean_comment = re.sub(r'^\[stale\?\]\s*', '', raw_comment).strip()
+                    prev = ledger_map.get(sym_key)
+
+                    if not clean_comment:
+                        status = "missing"
+                        v_hash = ""
+                        is_stale = False
+                    elif prev is None:
+                        if has_stale_tag_in_index:
+                            status = "stale"
+                            v_hash = ""
+                            is_stale = True
+                        else:
+                            status = "verified"
+                            v_hash = b_hash
+                            is_stale = False
+                    else:
+                        prev_comment = (prev.get("comment") or "").strip()
+                        prev_v_hash = (prev.get("verified_hash") or "").strip()
+                        prev_status = (prev.get("status") or "verified").strip()
+                        # If the comment text in CODE_INDEX.md was updated (or [stale?] was explicitly removed by the user/agent)
+                        if clean_comment != prev_comment and not has_stale_tag_in_index:
+                            status = "verified"
+                            v_hash = b_hash
+                            is_stale = False
+                        elif prev_status == "stale" and not has_stale_tag_in_index and prev.get("body_hash") == b_hash:
+                            # Operator stripped [stale?] in CODE_INDEX.md to confirm existing comment is still accurate
+                            status = "verified"
+                            v_hash = b_hash
+                            is_stale = False
+                        elif prev_v_hash and b_hash != prev_v_hash:
+                            status = "stale"
+                            v_hash = prev_v_hash
+                            is_stale = True
+                        elif prev_status == "stale":
+                            status = "stale"
+                            v_hash = prev_v_hash
+                            is_stale = True
+                        else:
+                            status = "verified"
+                            v_hash = b_hash
+                            is_stale = False
+
+                    sym["is_stale"] = is_stale
+                    comments[sym_rel_key] = f"[stale?] {clean_comment}" if (is_stale and clean_comment) else clean_comment
+                    upserts.append((
+                        sym_key,
+                        repo_dir,
+                        f_uri,
+                        sym["name"],
+                        sig,
+                        b_hash,
+                        v_hash,
+                        clean_comment,
+                        status,
+                        now_ts,
+                    ))
+                symbol_sig_parts.append((
+                    rel_f,
+                    tuple((s["signature"], s.get("body_hash", ""), bool(s.get("is_stale"))) for s in syms),
+                ))
+
+            try:
+                if upserts:
+                    ctx.db.executemany(
+                        "INSERT OR REPLACE INTO symbol_ledger "
+                        "(symbol_key, repo, filepath, symbol_name, signature, body_hash, verified_hash, comment, status, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        upserts,
+                    )
+                stale_keys = [k for k in ledger_map.keys() if k not in seen_keys]
+                if stale_keys:
+                    placeholders = ",".join(["?"] * len(stale_keys))
+                    ctx.db.execute(f"DELETE FROM symbol_ledger WHERE symbol_key IN ({placeholders})", tuple(stale_keys))
+                ctx.db.commit()
+            except Exception:
+                pass
 
         cache_key = (workspace_id or "default", repo_dir)
         pre_sig = (tuple(filtered_files), hash(live_vfs_index), tuple(managed_dirs), tuple(symbol_sig_parts), bool(extra_comments))

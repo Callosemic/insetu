@@ -2,76 +2,30 @@ from pathlib import Path
 import os
 import re
 from typing import TypedDict, List
-from insetu.core.sdk import InSetuExtension, ExtensionContext
+from insetu.core.sdk import InSetuExtension, ExtensionContext, TemplateOverlayVFSDriver
 from insetu.core.utils_core import (
     resolve_macro_includes,
     parse_frontmatter,
     InSetuURI,
-    get_workspace_physics,
-    get_tenant_control_dir,
-    is_extension_enabled,
-    is_core_module,
-    is_subpath,
-    DefaultVFSDriver,
-    resolve_physical_path,
 )
 
 
+class PromptsVFSDriver(TemplateOverlayVFSDriver):
+    """VFS Driver routing ctx://prompts/.templates/user via ws://default and .templates/<mod> to active module prompt directories."""
+
+    def __init__(self):
+        super().__init__(module_subdir="prompts")
+
+
+_PROMPTS_DRIVER = PromptsVFSDriver()
+
+
 def _ensure_global_user_templates_dir(workspace_id: str = "default") -> Path:
-    """Resolves the global user templates directory via the ws://default/prompts/.templates/user VFS driver."""
-    resolved = resolve_physical_path("ws://default/prompts/.templates/user", workspace_id)
-    user_dir = Path(resolved) if resolved else Path(get_tenant_control_dir("default")).joinpath("data", "prompts", ".templates", "user").resolve()
-    os.makedirs(user_dir.as_posix(), exist_ok=True)
-    return user_dir
+    return _PROMPTS_DRIVER.ensure_global_user_templates_dir(workspace_id)
 
 
 def _resolve_module_prompts_dir(mod_name: str, workspace_id: str = None):
-    """Resolves the physical prompts/ directory for 'user' (via ws://default) or an enabled Core/Domain module."""
-    if mod_name == "user":
-        return _ensure_global_user_templates_dir(workspace_id)
-    if not mod_name or not is_extension_enabled(mod_name, workspace_id):
-        return None
-    insetu_root = Path(__file__).resolve().parent.parent.parent
-    if is_core_module(mod_name):
-        cand = insetu_root.joinpath("core", mod_name, "prompts")
-        if cand.exists() and cand.is_dir():
-            return cand.resolve()
-    cand_ext = insetu_root.joinpath("extensions", mod_name, "prompts")
-    if cand_ext.exists() and cand_ext.is_dir():
-        return cand_ext.resolve()
-    try:
-        _, ws_root = get_workspace_physics(workspace_id)
-        local_cand = Path(ws_root).joinpath(".insetu", "extensions", mod_name, "prompts")
-        if local_cand.exists() and local_cand.is_dir():
-            return local_cand.resolve()
-    except Exception:
-        pass
-    return None
-class PromptsVFSDriver(DefaultVFSDriver):
-    """Custom VFS Driver routing ctx://prompts/.templates/user via ws://default and .templates/<mod> to active module prompt directories."""
-    def resolve(self, uri_obj, workspace_id, physical_target):
-        rel_path = (uri_obj.path or "").lstrip('/')
-        if rel_path == ".templates" or rel_path.startswith(".templates/"):
-            sub = rel_path[len(".templates"):].lstrip('/')
-            if not sub:
-                return None
-            parts = sub.split('/', 1)
-            mod_name = parts[0]
-            mod_rel = parts[1] if len(parts) > 1 else ""
-            if mod_name == "user":
-                _ensure_global_user_templates_dir(workspace_id)
-                ws_uri = f"ws://default/prompts/.templates/user/{mod_rel}".rstrip('/')
-                return resolve_physical_path(ws_uri, workspace_id)
-            mod_prompts_dir = _resolve_module_prompts_dir(mod_name, workspace_id)
-            if not mod_prompts_dir:
-                return None
-            if not mod_rel:
-                return mod_prompts_dir.as_posix()
-            resolved = mod_prompts_dir.joinpath(mod_rel).resolve()
-            if not is_subpath(resolved, mod_prompts_dir):
-                return None
-            return resolved.as_posix()
-        return super().resolve(uri_obj, workspace_id, physical_target)
+    return _PROMPTS_DRIVER.resolve_module_dir(mod_name, workspace_id)
 prompts_bp = InSetuExtension(
     'prompts',
     __name__,
@@ -202,14 +156,30 @@ def api_prompts_resolve(ctx):
 
     if not filename and live_content is None:
         return {"error": "File required"}, 400
+    def _read_with_cascade(uri_str: str):
+        u_obj = InSetuURI(uri_str)
+        rel_p = (u_obj.path or "").lstrip("/")
+        if u_obj.scheme == "ctx" and u_obj.volume == "prompts" and not rel_p.startswith(".templates/"):
+            val = ctx.vfs.read(f"ctx://prompts/{rel_p}")
+            if val is not None:
+                return val
+            val = ctx.vfs.read(f"ctx://prompts/.templates/user/{rel_p}")
+            if val is not None:
+                return val
+            for mod_name in ctx.get_active_modules():
+                val = ctx.vfs.read(f"ctx://prompts/.templates/{mod_name}/{rel_p}")
+                if val is not None:
+                    return val
+            return None
+        return ctx.vfs.read(str(u_obj))
 
     target_uri = str(InSetuURI(filename)) if filename else "ctx://prompts/preview.md"
-    content = live_content if live_content is not None else ctx.vfs.read(target_uri)
+    content = live_content if live_content is not None else _read_with_cascade(target_uri)
     if content is not None:
         _, main_body, _ = parse_frontmatter(content)
 
         def read_prompt(target_req):
-            raw_inc = ctx.vfs.read(str(InSetuURI(target_req)))
+            raw_inc = _read_with_cascade(str(InSetuURI(target_req)))
             if raw_inc is None:
                 return None
             _, inc_body, _ = parse_frontmatter(raw_inc)
