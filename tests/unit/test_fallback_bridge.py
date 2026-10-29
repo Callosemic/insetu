@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import insetu.fallback_bridge as lifeboat
 from insetu.fallback_bridge import (
     app as recovery_app,
     parse_blocks,
@@ -12,9 +13,20 @@ from insetu.fallback_bridge import (
 )
 
 
+TEST_TOKEN = "lifeboat-test-token"
+
+
 class TestFallbackBridge(unittest.TestCase):
     def setUp(self):
+        self.env_patch = patch.dict(os.environ, {"AKASA_BOOT_TOKEN": TEST_TOKEN})
+        self.env_patch.start()
+        lifeboat._LIFEBOAT_TOKEN = None
         self.client = recovery_app.test_client()
+        self.auth = {"X-InSetu-Token": TEST_TOKEN}
+
+    def tearDown(self):
+        lifeboat._LIFEBOAT_TOKEN = None
+        self.env_patch.stop()
 
     def test_parse_blocks_skips_id_headers_and_captures_comments(self):
         """parse_blocks ignores <<<<<<< ID: headers and cleanly separates comments from search/replace blocks."""
@@ -120,7 +132,7 @@ class TestFallbackBridge(unittest.TestCase):
         self.assertEqual(post_data.get("mode"), "lifeboat")
 
     def test_recovery_ui_and_root_redirect(self):
-        """Root route redirects to /recovery and /recovery renders panic details."""
+        """Root redirects to /recovery; the public page never contains the traceback, which needs the token."""
         root_res = self.client.get("/")
         self.assertEqual(root_res.status_code, 302)
         self.assertEqual(root_res.headers.get("Location"), "/recovery")
@@ -128,7 +140,11 @@ class TestFallbackBridge(unittest.TestCase):
             rec_res = self.client.get("/recovery")
             self.assertEqual(rec_res.status_code, 200)
             self.assertIn(b"KERNEL PANIC", rec_res.data)
-            self.assertIn(b"TestTraceback: simulated failure", rec_res.data)
+            self.assertNotIn(b"TestTraceback: simulated failure", rec_res.data)
+            self.assertEqual(self.client.get("/api/system/panic_details").status_code, 401)
+            details = self.client.get("/api/system/panic_details", headers=self.auth).get_json()
+            self.assertEqual(details["details"], "TestTraceback: simulated failure")
+
     def test_recovery_reboot_token_sync_contract(self):
         """Recovery template script synchronizes insetu_boot_token to client storage upon successful bootstrap response."""
         from insetu.fallback_bridge import HTML_TEMPLATE as _HTML_TEMPLATE
@@ -140,7 +156,8 @@ class TestFallbackBridge(unittest.TestCase):
 
         # 2. Verify /api/system/reboot returns 200 with success status
         with patch("threading.Thread.start"):
-            reboot_res = self.client.post("/api/system/reboot")
+            self.assertEqual(self.client.post("/api/system/reboot").status_code, 401)
+            reboot_res = self.client.post("/api/system/reboot", headers=self.auth)
             self.assertEqual(reboot_res.status_code, 200)
             reboot_data = reboot_res.get_json()
             self.assertEqual(reboot_data.get("status"), "success")

@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import insetu.fallback_bridge as lifeboat
 
@@ -36,15 +37,22 @@ class TestLifeboatTargets(unittest.TestCase):
         )
         self.orig_cwd = os.getcwd()
         os.chdir(self.root)
+        self.env_patch = patch.dict(os.environ, {"AKASA_BOOT_TOKEN": "lifeboat-targets-token"})
+        self.env_patch.start()
+        lifeboat._LIFEBOAT_TOKEN = None
         self.client = lifeboat.app.test_client()
 
     def tearDown(self):
+        lifeboat._LIFEBOAT_TOKEN = None
+        self.env_patch.stop()
         os.chdir(self.orig_cwd)
         self.temp_dir.cleanup()
 
     def _sync(self, header, search, replace):
         text = f"<<<<<<< FILE: {header}\n<<<<<<< SEARCH\n{search}\n=======\n{replace}\n>>>>>>> REPLACE"
-        return self.client.post("/api/bridge/sync", json={"text": text}).get_data(as_text=True)
+        return self.client.post(
+            "/api/bridge/sync", json={"text": text}, headers={"X-InSetu-Token": "lifeboat-targets-token"}
+        ).get_data(as_text=True)
 
     def test_vfs_target_resolves_through_repo_dir(self):
         log = self._sync("vfs://alpha/pkg/mod.py", "VALUE = 1", "VALUE = 2")

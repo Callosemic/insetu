@@ -20,16 +20,6 @@ insetu/
 │   ├── 08_sutram_contracts.md      # Sutram Platform API & Interface Contracts.
 │   ├── ADR_INDEX.md                # Ledger of Logic for inSetu ADRs.
 │   └── adrs/                       # Architectural Decision Records.
-│       ├── 0061-polymorphic-bulk-entity-actions-subsumption-pruning-and-recursive-vfs-eviction.md # Polymorphic bulk entity actions, subsumption pruning, and recursive VFS eviction.
-│       ├── 0062-projection-popouts-occ-concurrency-and-memoized-manifest-cqrs.md # Ephemeral pop-out windows, SHA-256 OCC conflict detection, and memoized manifest derivations.
-│       ├── 0063-atomic-vfs-bulk-mutations-popout-presence-and-sw-consolidation.md # Atomic VFS bulk mutations, popout presence heartbeat, and Service Worker consolidation.
-│       ├── 0064-core-prompt-engine-virtual-module-templates-and-job-api-unification.md # Core prompt engine graduation, virtual module template projection, and Akasa job API unification.
-│       ├── 0065-repository-data-containment-extension-state-hydration-and-security-hardening.md # Repository data containment (.insetu-data/), dual-scope notes migration, and cryptographic hook gating.
-│       ├── 0066-canonical-uris-inter-workspace-mounts-and-config-cascade-hardening.md # Canonical scheme:// URIs, inter-workspace ws:// mounts, and 3-tier configuration cascade hardening.
-│       ├── 0067-universal-extension-suite-modernization-and-domain-mounts.md # Universal extension suite modernization, declarative domain mounts, and SDK standardization.
-│       ├── 0068-hierarchical-vfs-sieve-sub-bucket-filtering-and-settings-hub.md # Hierarchical VFS sieve, .gitignore sub-bucket filtering, and unified OS Settings Hub.
-│       ├── 0069-managed-app-server-preview-bulk-vcs-and-memory-telemetry.md # Managed dev server preview supervisor, bulk Git VCS actions, and kernel memory telemetry.
-│       ├── 0070-akasa-kernel-lifecycle-encapsulation-and-lifeboat-resilience.md # Akasa kernel lifecycle encapsulation, 4-file membrane isolation, and Lifeboat FS resilience.
 │       ├── 0071-synchronous-workspace-swap-fsm-three-way-occ-and-declarative-volumes.md # Synchronous workspace swap FSM, 3-way OCC text merging, and declarative volume mounts.
 │       ├── 0072-core-pipeline-akasa-membrane-declarative-volumes-and-jit-healing.md # Core pipeline Akasa membrane decoupling, declarative volumes, and JIT artifact healing.
 │       ├── 0073-devops-extension-suite-membrane-decoupling-and-declarative-diff-volumes.md # DevOps extension suite membrane decoupling and declarative diff volume mounts.
@@ -50,6 +40,8 @@ insetu/
 │       ├── 0088-stack-ci-battery-single-file-sdk-membrane-vendor-locking-and-whois-remote-identity.md # ADR 0088: Callosemic Stack CI Battery, Single-File SDK Membrane, Vendored Substrate Provenance Locking, and Whois Remote Identity Verificati...
 │       ├── 0089-dynamic-code-context-scouting-web-chat-handoff-composer-and-cognitive-target-bindings.md # ADR 0089: Dynamic /code Context Scouting, Interactive Web-Chat Handoff Composer, Yomama Patch Splitting, and Cognitive Profile Target Bindin...
 │       ├── 0090-decoupled-llm-target-resolution-reentrant-routine-handoff-and-raw-transcript-preservation.md # ADR 0090: Decoupled LLM Target Resolution, Reentrant Routine Handoff Propagation, and Raw Transcript History Preservation
+│       ├── 0091-lifeboat-bottom-layer-auth-host-gatehouse-and-workspace-confinement.md # ADR 0091: Lifeboat Bottom-Layer Authentication, Host Gatehouse Verification, Panic Token Gating, and Workspace Confinement
+│       ├── 0092-incremental-topology-gitignore-parity-and-post-commit-cache-invalidation.md # ADR 0092: Incremental Topology Gitignore Parity via Batched Check-Ignore and Post-Commit Manifest Cache Re-Invalidation
 │       ├── archived/               # Superseded and historical ADR documents.
 │       │   ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │       │   ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -106,7 +98,17 @@ insetu/
 │       │   ├── 0057-workspace-swap-layout-eviction-and-yv-icon-migration.md # Pre-swap layout eviction, yv-icon migration, and primitive alias purge.
 │       │   ├── 0058-universal-llm-gateway-react-agent-harness-and-vfs-modal-projection-decoupling.md # Universal LLM gateway, autonomous ReAct agent harness, and spatial VFS projections.
 │       │   ├── 0059-extension-modal-annihilation-spatial-projection-migration-and-store-eviction.md # Extension modal annihilation, spatial viewport projections, and store eviction governance.
-│       │   └── 0060-git-aware-topology-manifest-sync-and-spatial-diff-projections.md # Git-aware topology CQRS ledger, real-time manifest delta sync, and spatial diff projections.
+│       │   ├── 0060-git-aware-topology-manifest-sync-and-spatial-diff-projections.md # Git-aware topology CQRS ledger, real-time manifest delta sync, and spatial diff projections.
+│       │   ├── 0061-polymorphic-bulk-entity-actions-subsumption-pruning-and-recursive-vfs-eviction.md # Polymorphic bulk entity actions, subsumption pruning, and recursive VFS eviction.
+│       │   ├── 0062-projection-popouts-occ-concurrency-and-memoized-manifest-cqrs.md # Ephemeral pop-out windows, SHA-256 OCC conflict detection, and memoized manifest derivations.
+│       │   ├── 0063-atomic-vfs-bulk-mutations-popout-presence-and-sw-consolidation.md # Atomic VFS bulk mutations, popout presence heartbeat, and Service Worker consolidation.
+│       │   ├── 0064-core-prompt-engine-virtual-module-templates-and-job-api-unification.md # Core prompt engine graduation, virtual module template projection, and Akasa job API unification.
+│       │   ├── 0065-repository-data-containment-extension-state-hydration-and-security-hardening.md # Repository data containment (.insetu-data/), dual-scope notes migration, and cryptographic hook gating.
+│       │   ├── 0066-canonical-uris-inter-workspace-mounts-and-config-cascade-hardening.md # Canonical scheme:// URIs, inter-workspace ws:// mounts, and 3-tier configuration cascade hardening.
+│       │   ├── 0067-universal-extension-suite-modernization-and-domain-mounts.md # Universal extension suite modernization, declarative domain mounts, and SDK standardization.
+│       │   ├── 0068-hierarchical-vfs-sieve-sub-bucket-filtering-and-settings-hub.md # Hierarchical VFS sieve, .gitignore sub-bucket filtering, and unified OS Settings Hub.
+│       │   ├── 0069-managed-app-server-preview-bulk-vcs-and-memory-telemetry.md # Managed dev server preview supervisor, bulk Git VCS actions, and kernel memory telemetry.
+│       │   └── 0070-akasa-kernel-lifecycle-encapsulation-and-lifeboat-resilience.md # Akasa kernel lifecycle encapsulation, 4-file membrane isolation, and Lifeboat FS resilience.
 │       └── superseded/             # Archived and superseded architectural decision records.
 │           ├── .gitkeep            # Git folder retention.
 │           ├── 0033-kernel-package-encapsulation-and-root-wrapper-cleanup.md # Moving kernel dependencies to isolated packages (akasa).
@@ -128,7 +130,7 @@ insetu/
 │   │   ├── def intercept_local_static_assets() # Intercepts standard static asset routing routes before Flask's native static file engine serves them, checking the local environment first.
 │   │   ├── def favicon()           # [comment required]
 │   │   ├── def api_system_panic()  # Hard reboot of the OS process, setting the simulated panic flag.
-│   │   ├── def recovery_ui()       # Zero-JS escape hatch in case the frontend bundle is completely bricked.
+│   │   ├── def recovery_ui()       # [stale?] Zero-JS escape hatch in case the frontend bundle is completely bricked.
 │   │   ├── def index()             # [comment required]
 │   │   ├── def inject_bypassed_extensions(cfg, workspace_id, **kwargs) # [comment required]
 │   │   └── def run_app()           # [comment required]
@@ -579,13 +581,13 @@ insetu/
 │   │   │   └── engine_topology.py  # Tracks the active layout of repositories and buckets.
 │   │   │       ├── def hook_topology_manifest_signatures(workspace_id, since_ts, **kwargs) # Yields lightweight repository signatures for the vfs domain, incorporating git_status counts.
 │   │   │       ├── def api_topology_vfs_repo(ctx) # Surgically fetches the VFS bucket structure and git modification state for a specific repository.
-│   │   │       ├── def force_topology_scan(workspace_id, target_repos, **kwargs) # Synchronously forces a full physical disk walk to rebuild the Topology Ledger.
+│   │   │       ├── def force_topology_scan(workspace_id, target_repos, **kwargs) # [stale?] Synchronously forces a full physical disk walk to rebuild the Topology Ledger.
 │   │   │       ├── def hook_request_vfs_manifest(workspace_id, **kwargs) # Returns the vfs manifest derived directly from the topology ledger via raw tuple queries.
 │   │   │       ├── def get_omniscient_workspace_files(workspace_id, allowed_repos) # Fast SQL replacement for the old os.walk bridge optimization.
 │   │   │       ├── def get_topology_files_for_repo(workspace_id, repo_dir) # SSOT accessor returning canonical vfs://<repo>/<path> URIs from topology_ledger.
 │   │   │       ├── def broadcast_cross_workspace_mutations(mutations, workspace_id, **kwargs) # Phase 4 Event Bus Synchronization: Propagates mutations on shared domains to subscriber workspaces as virtual 'ws://' mutations for reactive...
 │   │   │       ├── def buffer_topology_events(mutations, workspace_id, **kwargs) # Stage 1 Slew Limiter: Catches high-velocity disk/watchdog mutations and buffers them in RAM to absorb the I/O storm before hitting SQLite.
-│   │   │       ├── def resolve_topology_buffer(workspace_id) # Processes any pending events in topology_event_buffer, updates topology_ledger, and emits topology_resolved.
+│   │   │       ├── def resolve_topology_buffer(workspace_id) # [stale?] Processes any pending events in topology_event_buffer, updates topology_ledger, and emits topology_resolved.
 │   │   │       ├── def mount_topology_volumes_dynamically(cfg, workspace_id, **kwargs) # Dynamically remounts VFS volumes whenever the configuration changes.
 │   │   │       ├── def init_topology_on_boot(workspace_id, **kwargs) # Topology owns the boot sequence.
 │   │   │       ├── def matches_gitignore_patterns(rel_path, patterns) # Evaluates a relative POSIX path against a list of .gitignore-style patterns.
@@ -955,13 +957,15 @@ insetu/
 │   │       ├── ext_update.js       # Release preview and publish UI.
 │   │       │   └── class InSetuExtUpdate # [comment required]
 │   │       └── vendor.json         # Map of core third-party UI dependencies (Lit, CodeMirror).
-│   ├── fallback_bridge.py          # Immutable Recovery OS and Zero-JS Lifeboat UI.
+│   ├── fallback_bridge.py          # Immutable Recovery OS and Lifeboat UI, behind the same token gate and Host check as the app.
+│   │   ├── def current_token()     # The token this lifeboat accepts: the app's durable session token, or a lifeboat-only one as a last resort.
 │   │   ├── def expand_macros(text) # [stale?] Expands intentional Yomama semantic multiplier macros ({{ c * N }}, ccc).
 │   │   ├── def parse_blocks(text)  # [comment required]
 │   │   ├── def apply_block_in_memory(content, block) # [comment required]
 │   │   ├── def index_redirect()    # [comment required]
 │   │   ├── def recovery_auth_bootstrap() # Allows reboot polling loops (from both main OS and recovery UI) to detect when the server is in recovery mode.
 │   │   ├── def index()             # [comment required]
+│   │   ├── def panic_details()     # [comment required]
 │   │   ├── def bridge_sync()       # [comment required]
 │   │   ├── def fs_list()           # [comment required]
 │   │   ├── def download(filepath)  # [comment required]
@@ -979,12 +983,6 @@ insetu/
 │   │   └── vendor.json             # Map of core third-party UI dependencies (Lit, CodeMirror).
 │   └── templates/                  # Jinja2 HTML templates.
 │       └── index.html              # The master SPA entry point containing the OS crash shell.
-├── insetu.egg-info/                # [comment required]
-│   ├── SOURCES.txt                 # [comment required]
-│   ├── dependency_links.txt        # [comment required]
-│   ├── entry_points.txt            # [comment required]
-│   ├── requires.txt                # [comment required]
-│   └── top_level.txt               # [comment required]
 ├── pyproject.toml                  # Python package definition and semantic-release configurations.
 ├── scripts/                        # Build, vendorization, and utility shell scripts.
 │   ├── .gitkeep                    # Git folder retention.
@@ -1024,6 +1022,8 @@ insetu/
     ├── run_unit_tests.py           # Master CLI runner for behavioral unit and integration test suite.
     └── unit/                       # Dynamic behavioral unit and integration test suite.
         ├── __init__.py             # Module initialization.
+        ├── route_auth_probe.py     # Probe helper for test_route_auth_inventory.py: boots inSetu (or the lifeboat) in a throwaway workspace and reports which routes answer without a valid token.
+        │   └── def main(mode, out_path) # [comment required]
         ├── test_agent_orchestrator_and_mcp.py # Unit tests for LLM semantic tier routing, declarative YAML routines, /undo rollback, and MCP JSON-RPC.
         │   └── class TestAgentOrchestratorAndMcp(unittest.TestCase) # [comment required]
         ├── test_bridge_anchor_invariants.py # Regression and fitness tests for patch anchor matching, blank-line fidelity, no-op detection, chunk blame isolation, and the single patch engine.
@@ -1045,8 +1045,12 @@ insetu/
         │   └── class TestForwardedHeaderMembraneRule(unittest.TestCase) # S1: inSetu never reads client-identity forwarding headers; akasa's classify_peer() is the single source of truth.
         ├── test_import_order.py    # Ensures every core entry point imports first in a fresh interpreter (sdk/utils_core cycle).
         │   └── class TestImportOrder(unittest.TestCase) # Every core entry point must import cleanly as the FIRST insetu import of a fresh interpreter (sdk <-> utils_core cycle).
+        ├── test_lifeboat_auth.py   # S8: the lifeboat shares the app's durable token, checks Host, and keeps reads and writes inside the workspace.
+        │   ├── class TestLifeboatCredentials(_LifeboatCase) # The lifeboat accepts the app's durable session token, so a signed-in phone keeps working after a crash.
+        │   ├── class TestLifeboatHostCheck(_LifeboatCase) # DNS-rebinding guard: loopback, *.ts.net and configured hosts only.
+        │   └── class TestLifeboatReadContainment(_LifeboatCase) # /download and /api/fs/list stay inside the workspace, follow symlinks, and never expose the credential store.
         ├── test_lifeboat_targets.py # The lifeboat resolves vfs:// patch targets like the main bridge and never writes outside the workspace.
-        │   └── class TestLifeboatTargets(unittest.TestCase) # The lifeboat resolves vfs:// patch targets like the main bridge and never writes outside the workspace.
+        │   └── class TestLifeboatTargets(unittest.TestCase) # [stale?] The lifeboat resolves vfs:// patch targets like the main bridge and never writes outside the workspace.
         ├── test_lit_template_rules.py # Tests that Lit ${...} bindings are stripped before sutram-btn label matching.
         │   └── class TestLitTemplateRuleHelpers(unittest.TestCase) # The sutram-btn label rule must not mistake '=>' inside a Lit binding for the end of the tag.
         ├── test_llm_pool_precedence.py # Tests LLM routing precedence: saved pool, then explicit legacy settings, then the default pool.
@@ -1059,6 +1063,9 @@ insetu/
         │   ├── class TestTailscaleIdentityProvider(unittest.TestCase) # S1: Route B authenticates Tailscale devices only after whois verification of the trusted client IP.
         │   ├── class TestRemoteBootstrapIntegration(unittest.TestCase) # S1 end to end: akasa's /auth/bootstrap plus the insetu Tailscale provider and Host gate.
         │   └── class TestRemoteSettingsLifecycle(unittest.TestCase) # Settings migration from the retired 'tailscale' extension, configured hosts, and the preview helper.
+        ├── test_route_auth_inventory.py # V4: every HTTP route needs the token unless it is on a reviewed public list, in the app and in the lifeboat.
+        │   ├── class TestAppRouteAuthInventory(_InventoryCase) # The main app: one token gate in front of every route, with a short reviewed public list.
+        │   └── class TestLifeboatRouteAuthInventory(_InventoryCase) # The lifeboat: the same rules, because it listens on the port Tailscale exposes.
         ├── test_routine_response_path.py # Tests that routine response_path writes only document files and refuses code targets.
         │   └── class TestRoutineResponsePath(unittest.TestCase) # A routine's response_path writes documents directly; code targets must go through bridge.sync.
         ├── test_sdk_improvements.py # Unit tests for ctx.create_entity_file, declarative volume migrations, and worker contract fitness rules.
@@ -1067,6 +1074,9 @@ insetu/
         │   └── class TestSettingsScopeRule(unittest.TestCase) # SETTINGS_SCOPE_MANDATE applies to top-level setting fields only; nested sub-fields inherit their parent's scope.
         ├── test_sutram_compliance.py # Unit tests verifying Sutram consumer linter and JavaScript fitness compliance across core and extensions.
         │   └── class TestSutramCompliance(unittest.TestCase) # [stale?] Executes Sutram's official consumer linter and inSetu's JavaScript fitness rules against inSetu core UI components and domain extensions to...
+        ├── test_topology_manifest_freshness.py # Tests that incremental topology events honor .gitignore and that manifest caches never keep pre-commit state.
+        │   ├── class TestIncrementalEventsHonorGitignore(_WorkspaceCase) # [stale?] Watcher events for git-ignored files stay out of the ledger, as they do in a full scan.
+        │   └── class TestManifestCachesSeeCommittedState(_WorkspaceCase) # A read that lands between a writer's invalidation and its commit must not pin stale data in the 2 s cache.
         ├── test_vendor_lock.py     # Tests sutram.lock.json provenance, stale-file pruning, drift detection, and the committed vendor tree.
         │   └── class TestVendorLock(unittest.TestCase) # sutram.lock.json records the vendored sutram build and catches drift between the lock and the committed files.
         ├── test_vfs_three_way_merge.py # Unit tests for 3-way OCC text merging, ancestor ring buffers, and conflict fallback files.
