@@ -3,15 +3,15 @@ import json
 import time
 import hashlib
 import zlib
+import difflib
 import traceback
-from typing import TypedDict, Literal, List, Dict, Optional, Any
+from typing import TypedDict, Literal, List, Dict, Optional, Any, Union
 from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import InSetuURI
+from insetu.core.utils_core import InSetuURI, get_sister_repos, get_workspace_physics, parse_blocks
 # Import the extracted math & validation logic
-from .bridge_fuzzy import apply_block_in_memory
+from .bridge_fuzzy import apply_block_in_memory, apply_textedit_in_memory, apply_json_patch_in_memory
 from .bridge_vfs import execute_bridge_sync, _process_sync_transaction
 from .bridge_ast import generate_commit_message_from_ledger
-from insetu.core.utils_core import get_sister_repos, get_workspace_physics, parse_blocks
 # 1. Initialize the Single Source of Truth Blueprint
 BRIDGE_SCHEMA = {
     "bridge_ledger": {
@@ -64,6 +64,40 @@ def bridge_history(ctx):
     # Explicitly exclude the 'compressed_state' BLOB to prevent JSON serialization crashes
     records = ctx.db.execute("SELECT patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, timestamp, ttl_expires_at, patch_count, chunks_json FROM bridge_ledger ORDER BY timestamp DESC LIMIT 100").fetchall()
     return {"history": [dict(r) for r in records]}
+def _replay_ledger_chunks_in_memory(filepath: str, base_content: str, patch_rows: List[Any]) -> str:
+    """
+    Single Source of Truth forward-replay engine for bridge_ledger records.
+    Replays exact, regex, textedit, json_patch, and delete_file chunks deterministically.
+    """
+    content = base_content or ""
+    for p in (patch_rows or []):
+        chunks = []
+        raw_chunks_json = p["chunks_json"] if isinstance(p, dict) or hasattr(p, "__getitem__") else None
+        if raw_chunks_json:
+            try:
+                chunks = json.loads(raw_chunks_json)
+            except Exception:
+                pass
+        if not chunks:
+            chunks = [{"search": p["search_block"], "replace": p["replace_block"]}]
+        for block in chunks:
+            b_type = block.get("type", "exact")
+            if b_type == "delete_file":
+                content = "__DELETED_FILE__"
+            elif b_type == "textedit":
+                ok, new_content, _ = apply_textedit_in_memory(content, block, silent=True)
+                if ok:
+                    content = new_content
+            elif b_type == "json_patch":
+                ok, new_content, _ = apply_json_patch_in_memory(filepath, content, block, silent=True)
+                if ok:
+                    content = new_content
+            else:
+                ok, new_content, _ = apply_block_in_memory(content, block, silent=True)
+                if ok:
+                    content = new_content
+    return content
+
 
 class BridgeRevertPayload(TypedDict, total=False):
     patch_id: str
@@ -111,27 +145,31 @@ def bridge_revert(ctx):
             else:
                 content = ""
                 start_ts = 0
-            # 2. Replay patches forward in memory
+            # 2. Replay patches forward in memory via unified SSOT helper
             patch_op = "<" if is_initial else "<="
             patches = ctx.db.execute(f"SELECT search_block, replace_block, chunks_json FROM bridge_ledger WHERE filepath=? AND timestamp >= ? AND timestamp {patch_op} ? ORDER BY timestamp ASC", (filepath, start_ts, target_ts)).fetchall()
-
-            for p in patches:
-                chunks = []
-                if p["chunks_json"]:
-                    try:
-                        chunks = json.loads(p["chunks_json"])
-                    except Exception:
-                        pass
-                if not chunks:
-                    chunks = [{"search": p["search_block"], "replace": p["replace_block"]}]
-
-                for block in chunks:
-                    ok, new_content, _ = apply_block_in_memory(content, block, silent=True)
-                    if ok: content = new_content
+            content = _replay_ledger_chunks_in_memory(filepath, content, patches)
 
             # 3. Snapshot current state and save reconstructed state as a new transaction
-            current_on_disk = vfs.read(filepath) or ""
-            if current_on_disk == content: continue
+            raw_on_disk = vfs.read(filepath)
+            current_on_disk = raw_on_disk or ""
+            if content == "__DELETED_FILE__" or (not snap and is_initial and raw_on_disk is not None):
+                if raw_on_disk is None:
+                    continue
+                compressed_state = zlib.compress(current_on_disk.encode('utf-8'))
+                new_patch_id = f"ptc_{uuid.uuid4().hex[:12]}"
+                uri = InSetuURI(filepath)
+                repo = uri.repo if uri.repo else (uri.path.partition('/')[0] if '/' in uri.path else "")
+                ctx.db.execute('''
+                    INSERT INTO bridge_ledger (patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, compressed_state, timestamp, ttl_expires_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (new_patch_id, new_tx_id, repo, filepath, f"<<<<<<< REVERT DELETE {target['transaction_id']}", "", "", 1, compressed_state, time.time(), time.time() + 172800.0))
+                vfs.delete(filepath)
+                reverted_count += 1
+                continue
+
+            if raw_on_disk is not None and current_on_disk == content:
+                continue
             compressed_state = zlib.compress(current_on_disk.encode('utf-8'))
             post_patch_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
             new_patch_id = f"ptc_{uuid.uuid4().hex[:12]}"
@@ -148,6 +186,10 @@ def bridge_revert(ctx):
             reverted_count += 1
         ctx.db.commit()
     return {"status": "success", "message": f"Atomic revert complete. Reverted {reverted_count} file(s)."}
+class PatchResolution(TypedDict, total=False):
+    selected_uri: str
+    approved_gate: str
+    allow_deep_search: bool
 class BridgeSyncPayload(TypedDict, total=False):
     text: str
     active_files: List[str]
@@ -156,8 +198,11 @@ class BridgeSyncPayload(TypedDict, total=False):
     allow_deep_search: bool
     ignore_syntax: bool
     confirmed_candidates: Dict[str, str]
+    resolutions: Dict[str, PatchResolution]
+    unattended: bool
     force: bool
     auto_heal: bool
+    profile_id: str
 @bridge_bp.route('sync', methods=['POST'], request_schema=BridgeSyncPayload, docstring=(
     "Applies modifications to the VFS using the 'Yomama' Patch Protocol.\n\n"
     "The 'text' parameter MUST strictly follow this exact format:\n"
@@ -259,8 +304,6 @@ class BridgeCommitMessageQuery(TypedDict, total=False):
     repo: str
     transaction_id: str
     limit: int
-
-
 @bridge_bp.route('commit_message', methods=['GET'], request_schema=BridgeCommitMessageQuery, docstring="[sync] Generates a Conventional Commit message and Transaction-ID trailers from bridge_ledger intent comments.")
 def bridge_commit_message(ctx):
     data = ctx.payload or {}
@@ -268,6 +311,120 @@ def bridge_commit_message(ctx):
     tx_id = str(data.get("transaction_id") or "").strip() or None
     limit = int(data.get("limit") or 10)
     return generate_commit_message_from_ledger(ctx, repo=repo, transaction_id=tx_id, limit=limit)
+
+
+class BridgeMergeBlocksPayload(TypedDict, total=False):
+    original_text: str
+    healed_blocks: Union[str, List[str]]
+    failed_cell_ids: Optional[List[str]]
+
+
+@bridge_bp.route('merge_blocks', methods=['POST'], request_schema=BridgeMergeBlocksPayload, docstring="[sync] Merges healed Yomama patch blocks into the tail of each file's valid patch list for iterative self-healing.")
+def bridge_merge_blocks(ctx):
+    data = ctx.payload or {}
+    original_text = str(data.get("original_text") or "")
+    raw_healed = data.get("healed_blocks") or ""
+    if isinstance(raw_healed, list):
+        healed_text = "\n\n".join(str(x) for x in raw_healed if x)
+    else:
+        healed_text = str(raw_healed)
+    failed_ids = set(data.get("failed_cell_ids") or [])
+
+    parsed_orig = parse_blocks(original_text)
+    parsed_healed = parse_blocks(healed_text)
+    merged_by_file: Dict[str, List[Dict[str, Any]]] = {}
+    for raw_fp, blks in parsed_orig.items():
+        canon_fp = str(InSetuURI(raw_fp))
+        for b in blks:
+            if b.get("id") and b.get("id") in failed_ids:
+                continue
+            merged_by_file.setdefault(canon_fp, []).append(b)
+
+    for raw_h_fp, h_blks in parsed_healed.items():
+        canon_h_fp = str(InSetuURI(raw_h_fp))
+        merged_by_file.setdefault(canon_h_fp, []).extend(h_blks)
+
+    merged_text = _serialize_blocks_to_yomama(merged_by_file)
+    return {
+        "status": "success",
+        "text": merged_text,
+        "active_files": list(merged_by_file.keys()),
+    }
+
+
+class BridgeTurnDiffPayload(TypedDict, total=False):
+    transaction_ids: Union[str, List[str]]
+
+
+@bridge_bp.route('turn_diff', methods=['GET', 'POST'], request_schema=BridgeTurnDiffPayload, docstring="[sync] Collects unified diffs and current file contents for all files modified across one or more bridge_ledger transaction_ids.")
+def bridge_turn_diff(ctx):
+    data = ctx.payload or {}
+    raw_txs = data.get("transaction_ids") or data.get("transaction_id") or []
+    if isinstance(raw_txs, str):
+        tx_ids = [t.strip() for t in raw_txs.split(",") if t.strip()]
+    elif isinstance(raw_txs, list):
+        tx_ids = [str(t).strip() for t in raw_txs if str(t).strip()]
+    else:
+        tx_ids = []
+
+    if not tx_ids:
+        latest = ctx.db.execute("SELECT transaction_id FROM bridge_ledger ORDER BY timestamp DESC LIMIT 1").fetchone()
+        if latest and latest["transaction_id"]:
+            tx_ids = [latest["transaction_id"]]
+
+    if not tx_ids:
+        return {"files": [], "diff_text": "", "transaction_ids": []}
+
+    placeholders = ",".join(["?"] * len(tx_ids))
+    rows = ctx.db.execute(
+        f"SELECT filepath, timestamp FROM bridge_ledger WHERE transaction_id IN ({placeholders}) ORDER BY timestamp ASC",
+        tuple(tx_ids),
+    ).fetchall()
+
+    earliest_ts_by_file: Dict[str, float] = {}
+    for r in rows:
+        fp = r["filepath"]
+        ts = float(r["timestamp"] or 0.0)
+        if fp and (fp not in earliest_ts_by_file or ts < earliest_ts_by_file[fp]):
+            earliest_ts_by_file[fp] = ts
+
+    diff_blocks: List[str] = []
+    touched_files: List[str] = []
+    for fp, first_ts in earliest_ts_by_file.items():
+        touched_files.append(fp)
+        snap = ctx.db.execute(
+            "SELECT timestamp, compressed_state FROM bridge_ledger WHERE filepath=? AND is_snapshot=1 AND timestamp <= ? ORDER BY timestamp DESC LIMIT 1",
+            (fp, first_ts),
+        ).fetchone()
+        if snap and snap["compressed_state"]:
+            base_content = zlib.decompress(snap["compressed_state"]).decode("utf-8")
+            prior_patches = ctx.db.execute(
+                "SELECT search_block, replace_block, chunks_json FROM bridge_ledger WHERE filepath=? AND timestamp >= ? AND timestamp < ? ORDER BY timestamp ASC",
+                (fp, snap["timestamp"], first_ts),
+            ).fetchall()
+            base_content = _replay_ledger_chunks_in_memory(fp, base_content, prior_patches)
+            if base_content == "__DELETED_FILE__":
+                base_content = ""
+        else:
+            base_content = ""
+
+        current_content = ctx.vfs.read(fp) or ""
+        udiff = "\n".join(
+            difflib.unified_diff(
+                base_content.splitlines(),
+                current_content.splitlines(),
+                fromfile=f"a/{fp}",
+                tofile=f"b/{fp}",
+                lineterm="",
+            )
+        )
+        diff_blocks.append(f"=== FILE: {fp} ===\n{udiff}\n\n--- CURRENT FILE CONTENT: {fp} ---\n{current_content}")
+
+    return {
+        "transaction_ids": tx_ids,
+        "files": touched_files,
+        "diff_text": "\n\n".join(diff_blocks),
+    }
 def _serialize_blocks_to_yomama(file_to_blocks: Dict[str, List[Dict[str, Any]]]) -> str:
     """Serializes a mapping of filepath -> block dicts back into canonical Yomama patch text."""
     chunks: List[str] = []
@@ -280,7 +437,30 @@ def _serialize_blocks_to_yomama(file_to_blocks: Dict[str, List[Dict[str, Any]]])
                 file_lines.append(f"<<<<<<< ID: {b['id']}")
             if b.get("comment"):
                 file_lines.append(f"<<<<<<< COMMENT\n{b['comment']}")
-            file_lines.append(f"<<<<<<< SEARCH\n{b.get('search', '')}\n=======\n{b.get('replace', '')}\n>>>>>>> REPLACE")
+            b_type = b.get("type", "exact")
+            if b_type in ("relocate", "rename", "move_file", "archive_file", "delete_file"):
+                header_map = {
+                    "relocate": "<<<<<<< RELOCATE",
+                    "rename": "<<<<<<< RENAME",
+                    "move_file": "<<<<<<< MOVE_FILE",
+                    "archive_file": "<<<<<<< ARCHIVE_FILE",
+                    "delete_file": "<<<<<<< DELETE_FILE",
+                }
+                raw_dir = b.get("raw_directive", "")
+                if not raw_dir:
+                    if b_type == "move_file":
+                        raw_dir = f"FROM: {b.get('source_uri') or fp}\nTO: {b.get('target_uri') or ''}"
+                    elif b_type in ("archive_file", "delete_file"):
+                        raw_dir = f"FILE: {b.get('source_uri') or fp}"
+                file_lines.append(f"{header_map[b_type]}\n{raw_dir}\n>>>>>>> EXECUTE")
+            elif b_type == "json_patch":
+                body_str = b.get("patch_body") or b.get("raw_directive") or b.get("replace", "")
+                file_lines.append(f"<<<<<<< JSON_PATCH\n{body_str}\n>>>>>>> REPLACE")
+            elif b_type == "textedit" and b.get("raw_textedit"):
+                file_lines.append(f"<<<<<<< TEXTEDIT\n{b['raw_textedit']}\n>>>>>>> REPLACE")
+            else:
+                search_header = "<<<<<<< SEARCH REGEX" if b_type == "regex" else "<<<<<<< SEARCH"
+                file_lines.append(f"{search_header}\n{b.get('search', '')}\n=======\n{b.get('replace', '')}\n>>>>>>> REPLACE")
         chunks.append("\n".join(file_lines))
     return "\n\n".join(chunks)
 
@@ -294,11 +474,14 @@ def _background_bridge_sync(
     dry_run: bool = False,
     pinned_repos: Optional[List[str]] = None,
     confirmed_candidates: Optional[Dict[str, str]] = None,
+    resolutions: Optional[Dict[str, Dict[str, Any]]] = None,
+    unattended: bool = False,
     allow_deep_search: bool = False,
     force: bool = False,
     ignore_syntax: bool = False,
     ignore_syntax_errors: bool = False,
     auto_heal: bool = False,
+    profile_id: Optional[str] = None,
     job_id: Optional[str] = None,
 ):
     """
@@ -315,6 +498,8 @@ def _background_bridge_sync(
         "dry_run": dry_run,
         "pinned_repos": pinned_repos or ["ALL"],
         "confirmed_candidates": confirmed_candidates or {},
+        "resolutions": resolutions or {},
+        "unattended": unattended,
         "allow_deep_search": allow_deep_search,
         "force": force,
         "ignore_syntax": ignore_syntax,
@@ -384,7 +569,6 @@ def _background_bridge_sync(
                 + "\n\n".join(buffer_snippets)
                 + "\n\nRewrite ONLY the failed Yomama patch block(s) above so their SEARCH blocks match the exact lines in the 'FILE STATE AFTER APPLYING VALID PATCHES' buffer while preserving their intended changes."
             )
-
             try:
                 heal_res = ctx.call(
                     "llm.complete",
@@ -395,6 +579,7 @@ def _background_bridge_sync(
                         "Output ONLY the repaired Yomama patch block(s) ('<<<<<<< FILE:' / '<<<<<<< SEARCH' / '=======' / '>>>>>>> REPLACE') that apply cleanly on top of the provided buffer."
                     ),
                     tier="fast",
+                    profile_id=profile_id,
                     output_schema="yomama_patch",
                     wait=True,
                 )

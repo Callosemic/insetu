@@ -1,6 +1,5 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '/static/extensions/system/insetu_sdk.js';
-import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 import { AppStore } from '/static/extensions/system/store.js';
 // --- VFS BRIDGE STATE STORE (UDF LAYER) ---
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
@@ -18,8 +17,17 @@ window.addEventListener('insetu:bridge:cell-swap', (e) => {
         BridgeStore.getState().swapCell(e.detail.id);
     }
 });
+const BRIDGE_GATE_UI_MAP = {
+    DESTRUCTIVE_DELETE: { label: 'Confirm Delete', intent: 'danger', icon: 'trash-2' },
+    OVERWRITE_EXISTING: { label: 'Confirm Overwrite', intent: 'warning', icon: 'file-warning' },
+    EXPANSION_RISK: { label: 'Confirm Expansion', intent: 'warning', icon: 'maximize-2' },
+    SYNTAX_ERROR: { label: 'Ignore Syntax & Commit', intent: 'danger', icon: 'alert-triangle' },
+    OUT_OF_SCOPE_TARGET: { label: 'Authorize File Edit', intent: 'warning', icon: 'shield-alert' }
+};
+
 export const BridgeStore = createExtensionStore('Bridge', {
     cells: [],
+    resolutions: {},
     activeSurface: 'bridge',
     autoHeal: false,
     drawerOpen: false,
@@ -32,6 +40,15 @@ export const BridgeStore = createExtensionStore('Bridge', {
     historyViewMode: 'transaction',
     editCellId: null,
     editCellOriginalFile: '',
+    setResolution: (key, patch) => {
+        if (!key) return;
+        BridgeStore.setState(state => ({
+            resolutions: {
+                ...(state.resolutions || {}),
+                [key]: { ...((state.resolutions || {})[key] || {}), ...patch }
+            }
+        }));
+    },
     setActiveSurface: (surface) => {
         const target = surface || 'bridge';
         BridgeStore.setState({ activeSurface: target, drawerOpen: false });
@@ -116,7 +133,17 @@ export const BridgeStore = createExtensionStore('Bridge', {
             if (currentFile && !isInsideChunk) {
                 fileRawLines.push(line);
             }
-            if (trimmed === '<<<<<<< COMMENT' || trimmed === '<<<<<<< SEARCH' || trimmed === '<<<<<<< RELOCATE' || trimmed === '<<<<<<< RENAME') {
+            if (
+                trimmed === '<<<<<<< COMMENT' ||
+                trimmed === '<<<<<<< SEARCH' ||
+                trimmed === '<<<<<<< TEXTEDIT' ||
+                trimmed === '<<<<<<< JSON_PATCH' ||
+                trimmed === '<<<<<<< RELOCATE' ||
+                trimmed === '<<<<<<< RENAME' ||
+                trimmed === '<<<<<<< MOVE_FILE' ||
+                trimmed === '<<<<<<< ARCHIVE_FILE' ||
+                trimmed === '<<<<<<< DELETE_FILE'
+            ) {
                 if (!isInsideChunk) {
                     isInsideChunk = true;
                     chunkLines = [line];
@@ -151,8 +178,9 @@ export const BridgeStore = createExtensionStore('Bridge', {
                     let resolvedFile = currentFile;
                     if (isExecute && !resolvedFile) {
                         const fromMatch = chunkText.match(/^\s*FROM:\s*(.+)$/im);
+                        const fileMatch = chunkText.match(/^\s*FILE:\s*(.+)$/im);
                         const scopeMatch = chunkText.match(/^\s*SCOPE:\s*(.+)$/im);
-                        const rawTarget = (fromMatch ? fromMatch[1] : (scopeMatch ? scopeMatch[1] : 'vfs://')).trim();
+                        const rawTarget = (fromMatch ? fromMatch[1] : (fileMatch ? fileMatch[1] : (scopeMatch ? scopeMatch[1] : 'vfs://'))).trim();
                         resolvedFile = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(rawTarget) : rawTarget;
                     }
                     if (resolvedFile) {
@@ -249,6 +277,7 @@ export const BridgeStore = createExtensionStore('Bridge', {
         }
         BridgeStore.setState({ 
             cells: [], 
+            resolutions: {},
             activeBridgeJobId: null,
             viewMode: 'input',
             consoleOutput: 'Ready...',
@@ -475,11 +504,8 @@ export class InSetuExtBridge extends InSetuElement {
         this.consoleOutput = 'Ready...';
         this.viewMode = 'input';
         this._fileVerificationCache = {};
-        this._globalBypassSandwich = false;
         this._autoSwaps = {};
         this._rejectedAutoSwaps = new Set();
-        this._allowDeepSearch = false;
-        this._confirmedCandidates = {};
         this._surfaceNodes = new Map();
         this._drawerNodes = new Map();
     }
@@ -520,6 +546,9 @@ export class InSetuExtBridge extends InSetuElement {
 
         let swapped = false;
         files.forEach(file => {
+            const fileCells = cells.filter(c => c.file === file);
+            const isAllGenesis = fileCells.length > 0 && fileCells.every(c => /<<<<<<< SEARCH\s*=======/.test(c.content));
+            if (isAllGenesis) return;
             if (this._fileVerificationCache[file] === false && !this._rejectedAutoSwaps.has(file)) {
                 const cleanFile = file.replace(/\s*\(\d+\)(?=\.[^.\/]+$|$)/, '').trim();
                 const cleanFileLower = cleanFile.toLowerCase();
@@ -529,7 +558,7 @@ export class InSetuExtBridge extends InSetuElement {
                 if (cands.length === 0) {
                     cands = mFiles.filter(f => f.toLowerCase().endsWith('/' + basename) || f.toLowerCase() === basename);
                 }
-
+                cands = cands.filter(f => f !== file);
                 if (cands.length === 1) {
                     const newPath = cands[0];
                     this._autoSwaps = { ...this._autoSwaps, [newPath]: file };
@@ -547,8 +576,6 @@ export class InSetuExtBridge extends InSetuElement {
     onWorkspaceLoad(workspaceId) {
         BridgeStore.getState().clearPayload();
         window.inSetu.stores.Fs?.setState({ fileVerificationCache: {} });
-        this._allowDeepSearch = false;
-        this._confirmedCandidates = {};
         BridgeStore.getState().fetchHistory();
         this.requestUpdate();
     }
@@ -717,19 +744,21 @@ export class InSetuExtBridge extends InSetuElement {
     }
     _getSyncAction(dryRunActive, bypassSandwich = false, overridePayload = {}) {
         return async (e) => {
-            if (bypassSandwich) this._globalBypassSandwich = true;
             this._lastDryRun = dryRunActive;
-            const textVal = BridgeStore.getState().getCompiledPayload();
+            const bState = BridgeStore.getState();
+            const textVal = bState.getCompiledPayload();
             BridgeStore.setState({ viewMode: 'console', consoleOutput: "Dispatching transaction to the Bridge...", telemetry: null });
-            const activeFiles = BridgeStore.getState().getActiveFiles();
+            const activeFiles = bState.getActiveFiles();
+            const activeProfileId = window.inSetu?.stores?.Agent?.getState()?.activeProfileId || undefined;
             const action = this.api.bindJobAction('bridge/sync', {
                 text: textVal,
                 active_files: activeFiles,
                 dry_run: dryRunActive,
-                auto_heal: Boolean(BridgeStore.getState().autoHeal),
+                auto_heal: Boolean(bState.autoHeal),
+                profile_id: activeProfileId,
                 pinned_repos: Array.from(this.ecosystem.pinnedRepos),
-                confirmed_candidates: this._confirmedCandidates || {},
-                allow_deep_search: this._allowDeepSearch || false,
+                resolutions: bState.resolutions || {},
+                ignore_syntax: bypassSandwich,
                 ...overridePayload
             }, {
                 interval: 250,
@@ -760,7 +789,7 @@ export class InSetuExtBridge extends InSetuElement {
                                 window.inSetu?.stores?.Fs?.getState()?.closeBuffer(`yomama://${curEditId}`);
                             }
                             // Retain console view and telemetry to show the success receipt, but clear the staging cells
-                            BridgeStore.setState({ cells: [], editCellId: null, editCellOriginalFile: '' });
+                            BridgeStore.setState({ cells: [], resolutions: {}, editCellId: null, editCellOriginalFile: '' });
                             if (window.Sutram?.stores?.Layout) {
                                 const layout = window.Sutram.stores.Layout.getState();
                                 layout.closeWindow('bridge:edit-cell');
@@ -791,10 +820,20 @@ export class InSetuExtBridge extends InSetuElement {
         const btn = path.find(el => el && el.dataset && el.dataset.action);
         if (!btn) return;
         const action = btn.dataset.action;
-        if (action === 'update-path' || action === 'confirm-candidate') {
+        if (action === 'approve-gate') {
+            const cellId = btn.dataset.cellId || btn.dataset.old;
+            const gateCode = btn.dataset.gate || '*';
+            const targetUri = btn.dataset.target || btn.dataset.old;
+            BridgeStore.getState().setResolution(cellId, { approved_gate: gateCode, selected_uri: targetUri });
+            if (btn.dataset.old) {
+                BridgeStore.getState().setResolution(btn.dataset.old, { approved_gate: gateCode, selected_uri: targetUri });
+            }
+            this._getSyncAction(this._lastDryRun || false)();
+        } else if (action === 'update-path' || action === 'confirm-candidate') {
             const oldPath = btn.dataset.old;
             const newPath = btn.dataset.new;
             const cellId = btn.dataset.cellId;
+            const gateCode = btn.dataset.gate || '*';
             const cells = BridgeStore.getState().cells;
 
             if (cellId) {
@@ -802,22 +841,15 @@ export class InSetuExtBridge extends InSetuElement {
                 if (targetCell && oldPath !== newPath) {
                     BridgeStore.getState().updateCellFile(targetCell.id, newPath);
                 }
+                BridgeStore.getState().setResolution(cellId, { selected_uri: newPath, approved_gate: gateCode });
             } else {
                 const target = cells.find(c => c.file === oldPath || c.file.endsWith(oldPath) || oldPath.endsWith(c.file));
                 if (target && oldPath !== newPath) BridgeStore.getState().updateGroupFile(target.file, newPath);
             }
-
-            this._confirmedCandidates = this._confirmedCandidates || {};
-
-            // If the path is identical, the UI state update skips. We MUST populate confirmed_candidates 
-            // so the backend knows the user explicitly bypassed the anchor failure natively.
-            if (oldPath === newPath) {
-                this._confirmedCandidates[oldPath] = newPath;
+            if (oldPath) {
+                BridgeStore.getState().setResolution(oldPath, { selected_uri: newPath, approved_gate: gateCode });
             }
-
-            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich, {
-                confirmed_candidates: this._confirmedCandidates
-            })();
+            this._getSyncAction(this._lastDryRun || false)();
         } else if (action === 'view-syntax-error') {
             const errText = btn.dataset.err || 'Syntax error detected.';
             const fileTarget = btn.dataset.file || 'file';
@@ -877,27 +909,29 @@ export class InSetuExtBridge extends InSetuElement {
 
             const cells = BridgeStore.getState().cells || [];
             const targetCell = cells.find(c => c.id === cellId);
-
             if (targetCell) {
                 const blockRegex = /^(<<<<<<< SEARCH)[ \t]*\r?\n([\s\S]*?)^(=======)/m;
                 const newContent = targetCell.content.replace(blockRegex, "$1\n" + actualAnchor + "\n$3");
                 BridgeStore.getState().updateCellContent(targetCell.id, newContent);
-                this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
+                this._getSyncAction(this._lastDryRun || false)();
             }
         } else if (action === 'deselect-this-patch') {
             const cellId = btn.dataset.cellId;
             BridgeStore.getState().toggleCellActive(cellId);
-            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
+            this._getSyncAction(this._lastDryRun || false)();
         } else if (action === 'deselect-all-file-patches' || action === 'deselect-patch') {
             const oldPath = btn.dataset.old;
             const resolvedPath = btn.dataset.resolved;
             this._deselectAllFilePatches(oldPath, resolvedPath);
-            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
+            this._getSyncAction(this._lastDryRun || false)();
         } else if (action === 'deep-search') {
-            this._allowDeepSearch = true;
-            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich, { allow_deep_search: true })();
+            const cellId = btn.dataset.cellId || btn.dataset.old;
+            if (cellId) {
+                BridgeStore.getState().setResolution(cellId, { allow_deep_search: true });
+            }
+            this._getSyncAction(this._lastDryRun || false, false, { allow_deep_search: true })();
         } else if (action === 'ai-heal-sync') {
-            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich, { auto_heal: true })();
+            this._getSyncAction(this._lastDryRun || false, false, { auto_heal: true })();
         }
     }
     _renderTelemetry() {
@@ -981,33 +1015,44 @@ export class InSetuExtBridge extends InSetuElement {
                                                         <sutram-btn data-action="view-syntax-error" data-err="${p.error_message || 'Syntax error'}" data-file="${file}" intent="danger" icon="file-text" label="View Syntax Error" style="--btn-padding: 4px 10px;"></sutram-btn>
                                                     </div>
                                                 ` : '')}
-                                                ${p.candidates && p.candidates.length > 0 ? html`
+                                                ${p.gate ? (() => {
+                                                    const gateUi = BRIDGE_GATE_UI_MAP[p.gate.code] || { label: 'Confirm Action', intent: 'warning', icon: 'check' };
+                                                    return html`
+                                                        <div style="margin-top: 10px; display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px;">
+                                                            <span style="font-family: var(--font-mono); font-size: 0.8rem;">${p.gate.target_uri || p.original_file}</span>
+                                                            <sutram-btn
+                                                                data-action="approve-gate"
+                                                                data-gate="${p.gate.code}"
+                                                                data-old="${p.original_file}"
+                                                                data-target="${p.gate.target_uri || p.original_file}"
+                                                                data-cell-id="${p.cell_id || ''}"
+                                                                intent="${gateUi.intent}"
+                                                                icon="${gateUi.icon}"
+                                                                label="${gateUi.label}"
+                                                                style="--btn-padding: 4px 10px;">
+                                                            </sutram-btn>
+                                                        </div>
+                                                    `;
+                                                })() : ''}
+                                                ${p.candidates && p.candidates.length > 0 && !p.gate ? html`
                                                     <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 5px;">
-                                                        ${p.candidates.map(c => {
-                                                            const btnLabel = (p.flags?.includes('confirm-to-overwrite') || c.match_type === 'overwrite')
-                                                                ? 'Confirm Overwrite'
-                                                                : (c.match_type === 'expansion_override' || p.flags?.includes('expansion_risk') ? 'Confirm Expansion' : 'Confirm Match');
-                                                            return html`
-                                                                <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 8px; border: 1px solid var(--border); border-radius: 4px;">
-                                                                    <span style="font-family: monospace;">${c.filepath}${c.score ? `(Score: ${c.score})` : ''}</span>
-                                                                    <sutram-btn data-action="confirm-candidate" data-old="${p.original_file}" data-new="${c.filepath}" data-cell-id="${p.cell_id}" intent="primary" label="${btnLabel}" style="--btn-padding: 4px 10px;"></sutram-btn>
-                                                                </div>
-                                                            `;
-                                                        })}
+                                                        ${p.candidates.map(c => html`
+                                                            <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 8px; border: 1px solid var(--border); border-radius: 4px;">
+                                                                <span style="font-family: monospace;">${c.filepath}${c.score ? ` (Score: ${c.score})` : ''}</span>
+                                                                <sutram-btn data-action="confirm-candidate" data-old="${p.original_file}" data-new="${c.filepath}" data-cell-id="${p.cell_id || ''}" intent="primary" icon="check" label="Confirm Match" style="--btn-padding: 4px 10px;"></sutram-btn>
+                                                            </div>
+                                                        `)}
                                                     </div>
                                                 ` : ''}
                                                 <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; align-items: center;">
                                                     ${p.available_actions?.includes('offer_deep_search') ? html`
-                                                        <sutram-btn data-action="deep-search" intent="highlight" label="Run Deep Search" style="--btn-padding: 4px 10px;"></sutram-btn>
+                                                        <sutram-btn data-action="deep-search" data-old="${p.original_file}" data-cell-id="${p.cell_id || ''}" intent="highlight" label="Run Deep Search" style="--btn-padding: 4px 10px;"></sutram-btn>
                                                     ` : ''}
                                                     ${p.available_actions?.includes('heal_anchor') ? html`
-                                                        <sutram-btn data-action="heal-anchor" data-old="${p.original_file}" data-cell-id="${p.cell_id}" data-anchor="${p.actual_anchor}" intent="success" label="Auto-Heal Anchor" style="--btn-padding: 4px 10px;"></sutram-btn>
+                                                        <sutram-btn data-action="heal-anchor" data-old="${p.original_file}" data-cell-id="${p.cell_id || ''}" data-anchor="${p.actual_anchor}" intent="success" label="Auto-Heal Anchor" style="--btn-padding: 4px 10px;"></sutram-btn>
                                                     ` : ''}
-                                                    ${(p.status === 'needs_confirmation' || p.status === 'failed' || p.status === 'syntax_error') ? html`
+                                                    ${(p.status === 'needs_confirmation' || p.status === 'failed' || p.status === 'syntax_error') && !p.gate ? html`
                                                         <sutram-btn data-action="ai-heal-sync" icon="sparkles" intent="highlight" label="AI Heal & Retry (Fast Tier)" style="--btn-padding: 4px 10px;"></sutram-btn>
-                                                    ` : ''}
-                                                    ${p.available_actions?.includes('ignore_syntax_error') ? html`
-                                                        <sutram-btn data-action="ignore-syntax" intent="danger" label="Ignore Syntax & Commit" style="--btn-padding: 4px 10px;"></sutram-btn>
                                                     ` : ''}
                                                     ${p.available_actions?.includes('deselect_patch') ? html`
                                                         <div style="display: flex; align-items: center; gap: 6px;">
@@ -1087,27 +1132,28 @@ export class InSetuExtBridge extends InSetuElement {
                                                 BridgeStore.getState().updateGroupFile(file, e.detail.value);
                                                 window.inSetu.stores.Fs?.getState()?.verifyFiles([e.detail.value], true);
                                             }}></sutram-input>
-
-                                            <div style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--intent-highlight);">
-                                                ${selectedCount} of ${totalCount} patches selected
+                                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+                                                <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--intent-highlight);">
+                                                    ${selectedCount} of ${totalCount} patches selected
+                                                </span>
+                                                ${this._autoSwaps[file] && this._autoSwaps[file] !== file ? html`
+                                                    <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--intent-success); font-weight: bold;">
+                                                        <span>✨ Auto-mapped</span>
+                                                        <sutram-btn size="sm" intent="neutral" label="Undo" style="--btn-padding: 1px 6px; --btn-font-size: 0.7rem; margin: 0;" @click=${(e) => {
+                                                            e.stopPropagation();
+                                                            const original = this._autoSwaps[file];
+                                                            this._rejectedAutoSwaps.add(original);
+                                                            const newSwaps = { ...this._autoSwaps };
+                                                            delete newSwaps[file];
+                                                            this._autoSwaps = newSwaps;
+                                                            BridgeStore.getState().updateGroupFile(file, original);
+                                                            window.inSetu.stores.Fs?.getState()?.verifyFiles([original], true);
+                                                        }}></sutram-btn>
+                                                    </span>
+                                                ` : ''}
                                             </div>
                                         </div>
-                                        ${this._autoSwaps[file] ? html`
-                                            <div style="font-size: 0.8rem; color: var(--intent-success); margin-top: 10px; font-weight: bold; display: flex; align-items: center; justify-content: space-between; padding-top: 8px; border-top: 1px dashed var(--border);">
-                                                <span>✨ Auto-mapped from: <span style="font-family: monospace; opacity: 0.8;">${this._autoSwaps[file]}</span></span>
-                                                <sutram-btn intent="neutral" label="Undo" style="--btn-padding: 2px 8px; margin: 0;" @click=${(e) => {
-                                                    e.stopPropagation();
-                                                    const original = this._autoSwaps[file];
-                                                    this._rejectedAutoSwaps.add(original);
-                                                    const newSwaps = { ...this._autoSwaps };
-                                                    delete newSwaps[file];
-                                                    this._autoSwaps = newSwaps;
-                                                    BridgeStore.getState().updateGroupFile(file, original);
-                                                    window.inSetu.stores.Fs?.getState()?.verifyFiles([original], true);
-                                                }}></sutram-btn>
-                                            </div>
-                                        ` : ''}
-                                        ${this._fileVerificationCache[file] === false ? (() => {
+                                        ${this._fileVerificationCache[file] === false && !this._autoSwaps[file] ? (() => {
                                             let cands = [];
                                             if (this.vfs && this.vfs.getGlobalManifest) {
                                                 const mFiles = this.vfs.getGlobalManifest().filter(f => !f.endsWith('.gitkeep'));
@@ -1123,6 +1169,7 @@ export class InSetuExtBridge extends InSetuElement {
                                                 if (cands.length === 0) {
                                                     cands = mFiles.filter(f => f.toLowerCase().endsWith('/' + basename) || f.toLowerCase() === basename);
                                                 }
+                                                cands = cands.filter(f => f !== file);
                                             }
                                             if (cands.length > 0) {
                                                 return html`
@@ -1148,8 +1195,21 @@ export class InSetuExtBridge extends InSetuElement {
                                     ${groupCells.map((c, i) => {
                                         const isRelocate = c.content.includes('<<<<<<< RELOCATE');
                                         const isRename = c.content.includes('<<<<<<< RENAME');
-                                        const isGenesis = !isRelocate && !isRename && !!c.content.match(/<<<<<<< SEARCH\s*=======/);
-                                        const typeStr = isRelocate ? "Type: AST Relocate" : (isRename ? "Type: AST Rename" : (isGenesis ? "Type: Create File" : "Type: Search & Replace"));
+                                        const isTextEdit = c.content.includes('<<<<<<< TEXTEDIT');
+                                        const isJsonPatch = c.content.includes('<<<<<<< JSON_PATCH');
+                                        const isMoveFile = c.content.includes('<<<<<<< MOVE_FILE');
+                                        const isArchiveFile = c.content.includes('<<<<<<< ARCHIVE_FILE');
+                                        const isDeleteFile = c.content.includes('<<<<<<< DELETE_FILE');
+                                        const isGenesis = !isRelocate && !isRename && !isTextEdit && !isJsonPatch && !isMoveFile && !isArchiveFile && !isDeleteFile && !!c.content.match(/<<<<<<< SEARCH\s*=======/);
+                                        const typeStr = isRelocate ? "Type: AST Relocate"
+                                            : isRename ? "Type: AST Rename"
+                                            : isTextEdit ? "Type: Inline Text Edit"
+                                            : isJsonPatch ? "Type: JSON Object Patch"
+                                            : isMoveFile ? "Type: Move File"
+                                            : isArchiveFile ? "Type: Archive File"
+                                            : isDeleteFile ? "Type: Delete File"
+                                            : isGenesis ? "Type: Create File"
+                                            : "Type: Search & Replace";
                                         let commentText = "";
                                         const commentMatch = c.content.match(/<<<<<<< COMMENT\r?\n([\s\S]*?)\r?\n<<<<<<< SEARCH/);
                                         if (commentMatch && commentMatch[1]) {
@@ -1215,11 +1275,11 @@ export class InSetuExtBridge extends InSetuElement {
                                 }
                             }}></sutram-btn>
                         ` : this.viewMode === 'input' ? html`
-                            <sutram-btn intent="danger" icon="trash-2" label="Clear" style="flex: 1; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem; width: 100%;" @click=${() => { BridgeStore.getState().clearPayload(); this._allowDeepSearch = false; this._confirmedCandidates = {}; }}></sutram-btn>
+                            <sutram-btn intent="danger" icon="trash-2" label="Clear" style="flex: 1; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem; width: 100%;" @click=${() => { BridgeStore.getState().clearPayload(); }}></sutram-btn>
                             <sutram-async-btn icon="flask-conical" label="Test" intent="warning" style="flex: 1; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem; width: 100%;" .onClick=${this._getSyncAction(true)}></sutram-async-btn>
                             <sutram-async-btn icon="zap" label="Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem; width: 100%;" .onClick=${this._getSyncAction(false)}></sutram-async-btn>
                         ` : html`
-                            <sutram-btn intent="neutral" icon="arrow-left" label="Back to Edit" style="flex: 1; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem; width: 100%;" @click=${() => { BridgeStore.setState({ viewMode: 'input' }); this._allowDeepSearch = false; this._confirmedCandidates = {}; }}></sutram-btn>${this.telemetry && this.telemetry.can_commit && this.telemetry.mode !== 'live' ? html`
+                            <sutram-btn intent="neutral" icon="arrow-left" label="Back to Edit" style="flex: 1; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem; width: 100%;" @click=${() => { BridgeStore.setState({ viewMode: 'input' }); }}></sutram-btn>${this.telemetry && this.telemetry.can_commit && this.telemetry.mode !== 'live' ? html`
                                 <sutram-async-btn icon="check-circle-2" label="Apply Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem; width: 100%;" .onClick=${this._getSyncAction(false, true, { force: true, ignore_syntax: true, ignore_syntax_errors: true, confirmed_candidates: Object.fromEntries(BridgeStore.getState().getActiveFiles().map(f => [f, f])) })}></sutram-async-btn>
                             ` : ''}
                         `}
@@ -1244,7 +1304,14 @@ export class InSetuExtBridge extends InSetuElement {
         return html`
             <div class="yomama-shell" style="--surface-accent: var(--intent-${activeIntent});" @paste=${e => {
                 const text = e.clipboardData?.getData('text') || '';
-                if (text && (text.includes('<<<<<<< FILE:') || text.includes('<<<<<<< RELOCATE') || text.includes('<<<<<<< RENAME'))) {
+                if (text && (
+                    text.includes('<<<<<<< FILE:') ||
+                    text.includes('<<<<<<< RELOCATE') ||
+                    text.includes('<<<<<<< RENAME') ||
+                    text.includes('<<<<<<< MOVE_FILE') ||
+                    text.includes('<<<<<<< ARCHIVE_FILE') ||
+                    text.includes('<<<<<<< DELETE_FILE')
+                )) {
                     e.preventDefault();
                     e.stopPropagation();
                     BridgeStore.getState().parseAndAppendCells(text);
@@ -1483,7 +1550,7 @@ export class InSetuBridgeEditProjection extends InSetuElement {
                         this._previewDiff = !this._previewDiff;
                     }}></sutram-btn>
                     <sutram-btn intent="warning" icon="refresh-cw" label="Swap S/R" style="margin: 0;" @click=${() => {
-                        window.dispatchEvent(new CustomEvent('insetu:bridge:cell-swap', { detail: { id: this.editCellId } }));
+                        this.dispatch('insetu:bridge:cell-swap', { id: this.editCellId });
                     }}></sutram-btn>
                 </div>
                 ${total > 1 ? html`
@@ -1868,7 +1935,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             onClick: (data) => {
                 if (confirm("Remove this patch?")) {
                     window.inSetu.stores.Bridge.getState().removeCell(data.id);
-                    window.dispatchEvent(new CustomEvent('insetu:bridge:cell-deleted', { detail: { id: data.id } }));
+                    window.inSetu.events.emit('insetu:bridge:cell-deleted', { id: data.id });
                 }
             }
         },
@@ -1881,9 +1948,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             group: 'edit',
             vfsBound: false,
             order: 40,
-            onClick: (data) => {
-                window.dispatchEvent(new CustomEvent('insetu:bridge:cell-swap', { detail: { id: data.id } }));
-            }
+            emitEvent: (data) => ({ name: 'insetu:bridge:cell-swap', detail: { id: data.id } })
         },
         {
             targetEntity: 'patch-receipt',

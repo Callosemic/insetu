@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional, TypedDict, Union
 from insetu.core.sdk import (
     InSetuExtension,
     get_registered_capabilities,
+    extract_template_variables,
+    interpolate_template_variables,
 )
 from insetu.core.utils_core import (
     InSetuURI,
@@ -14,6 +16,7 @@ from insetu.core.utils_core import (
     typeddict_to_openapi,
 )
 from insetu.core.prompts.engine_prompts import provide_available_prompts
+from insetu.core.agent.orchestrator import list_available_routines, execute_declarative_routine
 
 MCP_PROTOCOL_VERSION = "2025-03-26"
 
@@ -69,7 +72,6 @@ def _build_mcp_tools_list(ctx) -> List[Dict[str, Any]]:
             input_schema = typeddict_to_openapi(req_schema)
         else:
             input_schema = {"type": "object", "properties": {}, "additionalProperties": True}
-
         for p_var in (spec.get("path_params") or []):
             props = input_schema.setdefault("properties", {})
             if p_var not in props:
@@ -84,6 +86,41 @@ def _build_mcp_tools_list(ctx) -> List[Dict[str, Any]]:
             "description": raw_doc,
             "inputSchema": input_schema,
         })
+
+    # Expose declarative routines with mcp_expose: true as routine.<id> MCP tools
+    try:
+        for r in list_available_routines(ctx):
+            if not isinstance(r, dict) or not r.get("id"):
+                continue
+            if not r.get("mcp_expose", False):
+                continue
+            props: Dict[str, Any] = {
+                "user_message": {"type": "string", "description": "Primary instruction or prompt for the routine."}
+            }
+            req_vars: List[str] = []
+            for v in (r.get("variables") or []):
+                v_name = v.get("name")
+                if not v_name:
+                    continue
+                props[v_name] = {
+                    "type": "string",
+                    "description": v.get("description") or f"Template variable '{v_name}'",
+                }
+                if v.get("default") is not None:
+                    props[v_name]["default"] = v["default"]
+                elif v.get("required"):
+                    req_vars.append(v_name)
+            tools.append({
+                "name": f"routine.{r['id']}",
+                "description": r.get("description") or f"Declarative DAG routine '{r.get('title') or r['id']}'",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": props,
+                    "required": req_vars,
+                },
+            })
+    except Exception:
+        pass
     return tools
 
 
@@ -121,27 +158,6 @@ def _build_mcp_resources_list(ctx) -> List[Dict[str, Any]]:
         })
 
     return resources
-
-
-def _extract_prompt_arguments(content: str) -> List[Dict[str, Any]]:
-    """Discovers {{ macro_<arg> }} or {{ <arg> | default }} placeholders inside a prompt template."""
-    args_map: Dict[str, Dict[str, Any]] = {}
-    if not content:
-        return []
-    for m in re.finditer(r'\{\{\s*(?:macro_)?([a-zA-Z0-9_]+)(?:\s*\|\s*([^{}]*?))?\s*\}\}', content):
-        name = m.group(1).strip()
-        if name.startswith("wordcount_") or name in ("UNTIL", "triple"):
-            continue
-        default_val = m.group(2).strip() if m.group(2) is not None else None
-        if name not in args_map:
-            args_map[name] = {
-                "name": name,
-                "description": f"Template parameter '{name}'" + (f" (default: {default_val})" if default_val else ""),
-                "required": default_val is None,
-            }
-    return list(args_map.values())
-
-
 def _build_mcp_prompts_list(ctx) -> List[Dict[str, Any]]:
     prompt_uris = provide_available_prompts(workspace_id=ctx.workspace_id)
     prompts_out: List[Dict[str, Any]] = []
@@ -155,7 +171,10 @@ def _build_mcp_prompts_list(ctx) -> List[Dict[str, Any]]:
         prompts_out.append({
             "name": p_uri,
             "description": f"{title} — {desc}",
-            "arguments": _extract_prompt_arguments(body),
+            "arguments": [
+                {"name": v["name"], "description": v["description"], "required": v["required"]}
+                for v in extract_template_variables(body)
+            ],
         })
     return prompts_out
 
@@ -181,20 +200,9 @@ def _render_mcp_prompt(ctx, prompt_name: str, arguments: Optional[Dict[str, Any]
             return None
         _, inc_body, _ = parse_frontmatter(raw_inc)
         return inc_body
-
     pattern = r'\{\{\s*include_prompt\s*:\s*([^\s{}]+)\s*(?:\{([\s\S]*?)\})?\s*\}\}'
     expanded = resolve_macro_includes(main_body, target_uri, pattern, _read_prompt)
-
-    for raw_k, raw_v in (arguments or {}).items():
-        clean_k = raw_k[len("macro_"):] if raw_k.startswith("macro_") else raw_k
-        macro_pat = r'\{\{\s*(?:macro_)?' + re.escape(clean_k) + r'(?:\s*\|[^{}]*)?\s*\}\}'
-        expanded = re.sub(macro_pat, lambda _, v=str(raw_v): v, expanded)
-
-    expanded = re.sub(
-        r'\{\{\s*(?:macro_)?[a-zA-Z0-9_]+\s*\|\s*([^{}]*?)\s*\}\}',
-        lambda m: m.group(1).strip(),
-        expanded,
-    )
+    expanded = interpolate_template_variables(expanded, arguments or {})
     return {
         "description": (yaml_meta.get("description") if isinstance(yaml_meta, dict) else None) or f"Resolved prompt {target_uri}",
         "messages": [
@@ -247,10 +255,37 @@ def handle_mcp_jsonrpc(ctx, rpc_payload: Dict[str, Any]) -> Optional[Dict[str, A
                 "id": req_id,
                 "result": {"tools": _build_mcp_tools_list(ctx)},
             }
-
         if method == "tools/call":
-            raw_name = params.get("name") or ""
-            tool_args = params.get("arguments") or {}
+            raw_name = str(params.get("name") or "").strip()
+            tool_args = dict(params.get("arguments") or {})
+            if raw_name.startswith(("routine.", "routine__")):
+                r_id = raw_name.split(".", 1)[1] if "." in raw_name else raw_name.split("__", 1)[1]
+                try:
+                    user_msg = str(tool_args.pop("user_message", "") or tool_args.pop("prompt", "") or "")
+                    r_out = execute_declarative_routine(
+                        ctx,
+                        session_id="mcp_session",
+                        user_prompt=user_msg,
+                        routine_id=r_id,
+                        inputs=tool_args,
+                    )
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": {
+                            "content": [{"type": "text", "text": json.dumps(r_out, indent=2)}],
+                            "isError": False,
+                        },
+                    }
+                except Exception as r_err:
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": {
+                            "content": [{"type": "text", "text": str(r_err)}],
+                            "isError": True,
+                        },
+                    }
             capabilities = get_registered_capabilities()
             cap_id = _resolve_capability_id(raw_name, capabilities)
             if not cap_id:

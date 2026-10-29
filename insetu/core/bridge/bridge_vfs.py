@@ -13,10 +13,39 @@ import uuid
 import difflib
 import traceback
 from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 from insetu.core.utils_core import get_workspace_physics, get_sister_repos, parse_blocks, InSetuURI
 from insetu.core.topology.engine_topology import get_omniscient_workspace_files
-from .bridge_fuzzy import apply_block_in_memory, clean_chevron_meltdown, expand_macros, heal_llm_block_artifacts, is_effectively_identical
+from .bridge_fuzzy import (
+    apply_block_in_memory,
+    apply_textedit_in_memory,
+    apply_json_patch_in_memory,
+    clean_chevron_meltdown,
+    expand_macros,
+    heal_llm_block_artifacts,
+    is_effectively_identical,
+    normalize_patch_payload,
+)
 from .bridge_ast import apply_ast_relocate_in_memory, apply_ast_rename_to_content, resolve_scope_files
+
+_BANNED_CONTROL_PLANE_FILENAMES = frozenset({
+    "host.json",
+    "workspaces.json",
+    "secrets.json",
+    "master_key.txt",
+})
+def _is_banned_bridge_target(uri: InSetuURI, norm_target: str, extra_protected_Substrings: Optional[ list ] = None) -> Optional[str]:
+    base_lower = (uri.basename or "").lower()
+    norm_lower = norm_target.replace("\\", "/").lower()
+    parts_lower = [p.lower() for p in norm_lower.split("/") if p]
+    if base_lower in ("cli.py", "fallback_bridge.py") and "insetu/" in norm_lower:
+        return "Kernel Guardrail: Core CLI and Fallback Bridge files cannot be patched dynamically over the air."
+    if base_lower in _BANNED_CONTROL_PLANE_FILENAMES or ".git" in parts_lower or base_lower == ".env" or base_lower.startswith(".env."):
+        return f"Security Guardrail: Control-plane and credential file '{uri}' cannot be modified via the Yomama Bridge."
+    for prot in (extra_protected_Substrings or []):
+        if prot and str(prot).lower() in norm_lower:
+            return f"Security Guardrail: Protected extension path '{uri}' cannot be modified via the Yomama Bridge."
+    return None
 
 try:
     from tree_sitter import Language as _TSLanguage, Parser as _TSParser
@@ -28,11 +57,74 @@ try:
     import tree_sitter_python as _ts_python
 except ImportError:
     _ts_python = None
-
 try:
     import tree_sitter_javascript as _ts_javascript
 except ImportError:
     _ts_javascript = None
+
+
+def _validate_buffer_syntax(ctx, resolved_path: str, new_content: str) -> Tuple[bool, str]:
+    """
+    Validates full-buffer syntax for .json, .py, and .js/.ts/.mjs files using
+    Tree-sitter (with ast.parse / node --input-type=module -c verification).
+    Returns (has_syntax_error, error_message).
+    """
+    ext = Path(resolved_path).suffix.lower()
+    try:
+        if ext == '.json':
+            json.loads(new_content)
+            return False, ""
+        if not _TSLanguage or not _TSParser:
+            raise ImportError("Tree-sitter core bindings unavailable.")
+
+        lang_mod = None
+        if ext == '.py':
+            lang_mod = _ts_python
+        elif ext in ('.js', '.mjs', '.cjs', '.ts', '.tsx'):
+            lang_mod = _ts_javascript
+
+        if lang_mod:
+            parser = _TSParser(_TSLanguage(lang_mod.language()))
+            tree = parser.parse(bytes(new_content, "utf8"))
+            if tree.root_node.has_error:
+                if ext == '.py':
+                    try:
+                        ast.parse(new_content)
+                    except SyntaxError as py_err:
+                        return True, f"Line {py_err.lineno}: {py_err.msg}"
+                elif ext in ('.js', '.ts', '.mjs'):
+                    try:
+                        res = ctx.exec.run(['node', '--input-type=module', '-c'], input=new_content, encoding='utf-8', timeout=5.0)
+                        if res.returncode != 0:
+                            return True, res.stderr.strip()
+                    except Exception:
+                        return True, "Tree-sitter detected a syntax error, and node fallback verification failed."
+                else:
+                    return True, "Tree-sitter detected a syntax error in the modified AST."
+            return False, ""
+        raise ImportError("Language not mapped for Tree-sitter.")
+    except ImportError:
+        if ext == '.py':
+            try:
+                ast.parse(new_content)
+            except SyntaxError as e:
+                return True, f"Line {e.lineno}: {e.msg}"
+        elif ext in ('.js', '.ts', '.mjs'):
+            try:
+                res = ctx.exec.run(['node', '--input-type=module', '-c'], input=new_content, encoding='utf-8', timeout=5.0)
+                if res.returncode != 0:
+                    return True, res.stderr.strip()
+            except Exception:
+                pass
+        return False, ""
+    except SyntaxError as e:
+        return True, f"Line {e.lineno}: {e.msg}"
+    except ValueError as e:
+        return True, str(e)
+    except Exception as e:
+        return True, str(e)
+
+
 def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, return_buffers=False):
     from insetu.core.bridge.engine_bridge import bridge_bp as _bridge_bp
     ctx = _bridge_bp.get_context(workspace_id)
@@ -56,6 +148,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
     memory_buffers = {}
     original_buffers = {}
     disk_hashes = {}
+    deleted_targets = set()
+    relocated_pairs = []
     omniscient_cache = None
     original_file_keys = {}
     deferred_failures = []
@@ -68,6 +162,36 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             original_buffers[filepath] = content
             memory_buffers[filepath] = content
         return content
+    protected_substrings = []
+    try:
+        protected_substrings = ctx.emit_merge_list('register_protected_bridge_paths')
+    except Exception:
+        pass
+    resolutions_map = data.get("resolutions") or {}
+    confirmed_map = data.get("confirmed_candidates") or {}
+    unattended = bool(data.get("unattended", False))
+
+    def _get_cell_resolution(cell_id: Optional[str], file_key: str) -> Dict[str, Any]:
+        if cell_id and cell_id in resolutions_map and isinstance(resolutions_map[cell_id], dict):
+            return resolutions_map[cell_id]
+        if file_key in resolutions_map and isinstance(resolutions_map[file_key], dict):
+            return resolutions_map[file_key]
+        return {}
+
+    def _is_gate_approved(cell_id: Optional[str], gate_code: str, *file_keys: str) -> bool:
+        if data.get("force"):
+            return True
+        if gate_code == "SYNTAX_ERROR" and (data.get("ignore_syntax") or data.get("ignore_syntax_errors")):
+            return True
+        res_entry = _get_cell_resolution(cell_id, file_keys[0] if file_keys else "")
+        approved = res_entry.get("approved_gate")
+        if approved in (gate_code, "*"):
+            return True
+        for fk in file_keys:
+            if fk and fk in confirmed_map:
+                return True
+        return False
+
     active_uris = {str(InSetuURI.from_external_input(af)) for af in active_files} | set(active_files)
     patch_index = 0
     for raw_target_file, blocks in parsed_structure.items():
@@ -93,15 +217,15 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             telemetry["summary"]["failed"] += 1
             telemetry["patches"].append(patch_tel)
             continue
-
-        if uri.basename in ('cli.py', 'fallback_bridge.py') and 'insetu/' in norm_target:
+        ban_reason = _is_banned_bridge_target(uri, norm_target, protected_substrings)
+        if ban_reason:
             telemetry["can_commit"] = False
             patch_tel = {
                 "patch_index": patch_index,
                 "original_file": target_file,
                 "resolved_file": target_file,
                 "status": "failed",
-                "error_message": "Kernel Guardrail: Core CLI and Fallback Bridge files cannot be patched dynamically over the air.",
+                "error_message": ban_reason,
                 "flags": ["banned_target"],
                 "candidates": [],
                 "available_actions": []
@@ -130,23 +254,29 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             telemetry["summary"]["failed"] += 1
             telemetry["patches"].append(patch_tel)
             continue
-
-        for b in blocks:
+        for b_idx, b in enumerate(blocks):
+            cell_id = b.get("id")
+            cell_res = _get_cell_resolution(cell_id, target_file)
+            if "_orig_patch_index" in b:
+                assigned_patch_index = b["_orig_patch_index"]
+            else:
+                assigned_patch_index = patch_index
+                patch_index += 1
             patch_tel = {
-                "cell_id": b.get("id"),
-                "patch_index": patch_index,
+                "cell_id": cell_id,
+                "patch_index": assigned_patch_index,
                 "original_file": target_file,
                 "resolved_file": None,
                 "disk_hash": None,
                 "status": "pending",
                 "resolution_type": None,
                 "flags": [],
+                "gate": None,
                 "candidates": [],
                 "syntax_error": None,
                 "error_message": None,
                 "available_actions": []
             }
-            patch_index += 1
             telemetry["summary"]["total_patches"] += 1
             block_type = b.get("type", "exact")
             if block_type == "relocate":
@@ -241,9 +371,179 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 telemetry["patches"].append(patch_tel)
                 continue
 
+            if block_type in ("move_file", "archive_file", "delete_file"):
+                src_uri_obj = InSetuURI.from_external_input(b.get("source_uri") or target_file)
+                src_uri = str(src_uri_obj)
+                src_ban = _is_banned_bridge_target(src_uri_obj, f"{src_uri_obj.repo}/{src_uri_obj.path}".strip("/"), protected_substrings)
+                if src_ban:
+                    patch_tel.update({
+                        "resolved_file": src_uri,
+                        "status": "failed",
+                        "resolution_type": block_type,
+                        "error_message": src_ban,
+                        "flags": ["banned_target"],
+                    })
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["failed"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
+
+                src_content = get_file_content(src_uri)
+                if src_content is None:
+                    patch_tel.update({
+                        "resolved_file": src_uri,
+                        "status": "failed",
+                        "resolution_type": block_type,
+                        "error_message": f"Source file '{src_uri}' not found on disk.",
+                        "available_actions": ["deselect_patch"],
+                    })
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["failed"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
+                if block_type == "delete_file":
+                    # Interactive UI commits (unattended=False) where the operator explicitly staged and clicked Patch
+                    # are pre-authorized; unattended agent turns or dry-run previews surface the DESTRUCTIVE_DELETE gate.
+                    is_confirmed_del = (not unattended and not dry_run and not data.get("require_delete_confirmation", False)) or _is_gate_approved(
+                        cell_id, "DESTRUCTIVE_DELETE", target_file, src_uri
+                    )
+                    if not is_confirmed_del:
+                        patch_tel.update({
+                            "resolved_file": src_uri,
+                            "status": "needs_confirmation",
+                            "resolution_type": "confirm_delete",
+                            "error_message": f"High-Consequence Action: Confirm permanent deletion of '{src_uri}' (snapshot will be saved in bridge_ledger for /undo).",
+                            "flags": ["confirm_delete"],
+                            "gate": {
+                                "code": "DESTRUCTIVE_DELETE",
+                                "target_uri": src_uri,
+                                "reason": f"Confirm permanent deletion of '{src_uri}'.",
+                            },
+                            "available_actions": ["approve_gate", "deselect_patch"],
+                        })
+                        telemetry["can_commit"] = False
+                        telemetry["summary"]["action_required"] += 1
+                        telemetry["patches"].append(patch_tel)
+                        continue
+                    memory_buffers[src_uri] = ""
+                    deleted_targets.add(src_uri)
+                    original_file_keys[src_uri] = raw_target_file
+                    patch_tel.update({
+                        "resolved_file": src_uri,
+                        "status": "resolved",
+                        "resolution_type": "delete_file",
+                        "flags": ["delete_file"],
+                    })
+                    telemetry["summary"]["resolved"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
+
+                if block_type == "archive_file":
+                    parent_path = src_uri_obj.path.rpartition('/')[0] if '/' in src_uri_obj.path else ''
+                    new_rel = f"archived/{src_uri_obj.basename}" if not parent_path or parent_path == '.' else f"{parent_path}/archived/{src_uri_obj.basename}"
+                    scheme = src_uri_obj.scheme or "vfs"
+                    dst_uri = f"{scheme}://{src_uri_obj.repo}/{new_rel}" if src_uri_obj.repo else f"{scheme}://{new_rel}"
+                else:
+                    dst_uri_obj = InSetuURI.from_external_input(b.get("target_uri") or "")
+                    dst_uri = str(dst_uri_obj)
+                    dst_ban = _is_banned_bridge_target(dst_uri_obj, f"{dst_uri_obj.repo}/{dst_uri_obj.path}".strip("/"), protected_substrings)
+                    if dst_ban:
+                        patch_tel.update({
+                            "resolved_file": dst_uri,
+                            "status": "failed",
+                            "resolution_type": block_type,
+                            "error_message": dst_ban,
+                            "flags": ["banned_target"],
+                        })
+                        telemetry["can_commit"] = False
+                        telemetry["summary"]["failed"] += 1
+                        telemetry["patches"].append(patch_tel)
+                        continue
+
+                if not dst_uri or dst_uri == src_uri:
+                    patch_tel.update({
+                        "resolved_file": src_uri,
+                        "status": "failed",
+                        "resolution_type": block_type,
+                        "error_message": f"{block_type.upper()} requires a valid destination URI.",
+                        "available_actions": ["deselect_patch"],
+                    })
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["failed"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
+
+                get_file_content(dst_uri)
+                memory_buffers[src_uri] = ""
+                memory_buffers[dst_uri] = src_content
+                deleted_targets.add(src_uri)
+                relocated_pairs.append((src_uri, dst_uri))
+                original_file_keys[src_uri] = raw_target_file
+                original_file_keys[dst_uri] = raw_target_file
+                patch_tel.update({
+                    "resolved_file": f"{src_uri} -> {dst_uri}",
+                    "status": "resolved",
+                    "resolution_type": block_type,
+                    "flags": [f"{block_type}:{InSetuURI(dst_uri).basename}"],
+                })
+                telemetry["summary"]["resolved"] += 1
+                telemetry["patches"].append(patch_tel)
+                continue
+
+            if block_type == "json_patch":
+                content = get_file_content(target_file)
+                if content is None:
+                    patch_tel.update({
+                        "resolved_file": target_file,
+                        "status": "failed",
+                        "resolution_type": "json_patch",
+                        "error_message": f"Target file '{target_file}' not found for JSON_PATCH.",
+                        "available_actions": ["deselect_patch"],
+                    })
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["failed"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
+                ok_jp, new_jp_content, jp_status = apply_json_patch_in_memory(target_file, content, b, silent=True)
+                if not ok_jp:
+                    patch_tel.update({
+                        "resolved_file": target_file,
+                        "status": "failed",
+                        "resolution_type": "json_patch",
+                        "error_message": jp_status,
+                        "available_actions": ["deselect_patch"],
+                    })
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["failed"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
+                if jp_status == "idempotent":
+                    patch_tel.update({
+                        "resolved_file": target_file,
+                        "status": "auto_skipped",
+                        "resolution_type": "json_patch",
+                        "flags": ["already_applied"],
+                        "error_message": "Already Applied: Target object tree already matches JSON_PATCH state.",
+                    })
+                    telemetry["summary"]["auto_skipped"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
+                b["search"] = content
+                b["replace"] = new_jp_content
+                memory_buffers[target_file] = new_jp_content
+                original_file_keys[target_file] = raw_target_file
+                patch_tel.update({
+                    "resolved_file": target_file,
+                    "status": "resolved",
+                    "resolution_type": "json_patch",
+                    "flags": ["json_patch"],
+                })
+                telemetry["summary"]["resolved"] += 1
+                telemetry["patches"].append(patch_tel)
+                continue
             content = get_file_content(target_file)
-            search_str = heal_llm_block_artifacts(expand_macros(b["search"]), reference_content=content or "")
-            replace_str = heal_llm_block_artifacts(expand_macros(b["replace"]), reference_content=content or "")
+            search_str = normalize_patch_payload(b["search"], reference_content=content or "")
+            replace_str = normalize_patch_payload(b["replace"], reference_content=content or "")
             is_genesis = not search_str.strip()
 
             # --- Chain of Responsibility Pipeline ---
@@ -255,17 +555,70 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
 
             pctx = ResolutionContext()
             def resolve_confirmed():
-                confirmed = (data.get("confirmed_candidates") or {}).get(target_file)
+                confirmed = cell_res.get("selected_uri") or confirmed_map.get(target_file)
                 if confirmed:
-                    pctx.resolved_path = confirmed
-                    pctx.resolution_type = "confirmed_candidate"
-                    pctx.handled = True
+                    cand_uri = str(InSetuURI.from_external_input(confirmed))
+                    if is_genesis:
+                        pctx.resolved_path = cand_uri
+                        pctx.resolution_type = "confirmed_candidate"
+                        pctx.handled = True
+                        return
+                    cand_content = get_file_content(cand_uri)
+                    if cand_content is not None:
+                        apply_fn = apply_textedit_in_memory if block_type == "textedit" else apply_block_in_memory
+                        ok_s, _, s_stat = apply_fn(cand_content, b, silent=True)
+                        if ok_s:
+                            if s_stat == "idempotent":
+                                patch_tel.update({
+                                    "resolved_file": cand_uri,
+                                    "status": "auto_skipped",
+                                    "error_message": "Already Applied: The target file natively matches the desired state.",
+                                })
+                                patch_tel["flags"].append("already_applied")
+                                telemetry["summary"]["auto_skipped"] += 1
+                            else:
+                                pctx.resolved_path = cand_uri
+                                pctx.resolution_type = "confirmed_candidate"
+                            pctx.handled = True
+                        elif len(blocks) > 1 and not b.get("_is_deferred_retry"):
+                            pctx.resolved_path = cand_uri
+                            pctx.resolution_type = "deferred_overlap"
+                            pctx.handled = True
+                        else:
+                            pctx.resolved_path = cand_uri
+                            pctx.resolution_type = "confirmed_candidate"
+                            pctx.handled = True
 
             def resolve_noop():
                 if is_effectively_identical(search_str.split('\n'), replace_str.split('\n')):
                     patch_tel.update({"status": "auto_skipped", "error_message": "No-Op: The SEARCH and REPLACE blocks are perfectly identical."})
                     telemetry["summary"]["auto_skipped"] += 1
                     pctx.handled = True
+            def _enforce_genesis_overwrite_gate(resolved_uri: str) -> bool:
+                if not resolved_uri:
+                    return False
+                if get_file_content(resolved_uri) is not None and not _is_gate_approved(
+                    cell_id, "OVERWRITE_EXISTING", target_file, resolved_uri
+                ):
+                    patch_tel.update({
+                        "resolved_file": resolved_uri,
+                        "status": "needs_confirmation",
+                        "resolution_type": "genesis_overwrite",
+                        "error_message": f"File '{resolved_uri}' already exists on disk. Confirm to overwrite.",
+                        "gate": {
+                            "code": "OVERWRITE_EXISTING",
+                            "target_uri": resolved_uri,
+                            "reason": f"File '{resolved_uri}' already exists on disk.",
+                        },
+                        "candidates": [{"filepath": resolved_uri, "score": 1.0, "match_type": "overwrite"}],
+                    })
+                    patch_tel["flags"].append("confirm-to-overwrite")
+                    patch_tel["available_actions"].extend(["approve_gate", "confirm_candidate", "deselect_patch"])
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["action_required"] += 1
+                    return True
+                return False
+
             def resolve_genesis():
                 nonlocal omniscient_cache
                 if not is_genesis: return
@@ -274,6 +627,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                     pctx.resolved_path = target_file
                     pctx.resolution_type = "genesis"
                     pctx.handled = True
+                    _enforce_genesis_overwrite_gate(target_file)
                     return
 
                 if omniscient_cache is None:
@@ -310,19 +664,10 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                     telemetry["summary"]["failed"] += 1
                     telemetry["can_commit"] = False
                     pctx.handled = True
-                    return
-                if get_file_content(pctx.resolved_path) is not None:
-                    patch_tel.update({
-                        "status": "needs_confirmation", "error_message": f"File '{pctx.resolved_path}' already exists on disk. Confirm to overwrite.",
-                        "candidates": [{"filepath": pctx.resolved_path, "score": 1.0, "match_type": "overwrite"}]
-                    })
-                    patch_tel["flags"].append("confirm-to-overwrite")
-                    patch_tel["available_actions"].append("confirm_candidate")
-                    telemetry["can_commit"] = False
-
             def resolve_direct_match():
                 if content is not None:
-                    ok_search, _, s_status = apply_block_in_memory(content, b, silent=True)
+                    apply_fn = apply_textedit_in_memory if block_type == "textedit" else apply_block_in_memory
+                    ok_search, _, s_status = apply_fn(content, b, silent=True)
                     if ok_search:
                         if s_status == "idempotent":
                             patch_tel.update({"resolved_file": target_file, "status": "auto_skipped", "error_message": "Already Applied: The target file natively matches the desired state."})
@@ -381,8 +726,31 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                     telemetry["can_commit"] = False
                     telemetry["summary"]["action_required"] += 1
                     pctx.handled = True
+            effective_deep_search = bool(data.get("allow_deep_search") or cell_res.get("allow_deep_search"))
             def resolve_anchor_failure():
-                if content is not None and not data.get("allow_deep_search"):
+                if content is not None and not effective_deep_search:
+                    apply_fn_probe = apply_textedit_in_memory if block_type == "textedit" else apply_block_in_memory
+                    _, _, probe_status = apply_fn_probe(content, b, silent=True)
+                    if isinstance(probe_status, str) and probe_status.startswith("ambiguous:"):
+                        amb_lines = probe_status.split(":", 1)[1]
+                        patch_tel.update({
+                            "resolved_file": target_file,
+                            "status": "needs_confirmation",
+                            "resolution_type": "ambiguous_anchor",
+                            "error_message": f"Ambiguous Search Anchor: SEARCH block matched multiple locations in '{target_file}' (lines {amb_lines}). Add 1-2 lines of surrounding context to disambiguate.",
+                            "flags": ["ambiguous_anchor"],
+                            "available_actions": ["deselect_patch"],
+                        })
+                        telemetry["can_commit"] = False
+                        telemetry["summary"]["action_required"] += 1
+                        deferred_failures.append({
+                            "filepath": target_file,
+                            "raw_target_file": raw_target_file,
+                            "block": b,
+                            "patch_tel": patch_tel,
+                        })
+                        pctx.handled = True
+                        return
                     if len(blocks) > 1 and not b.get("_is_deferred_retry"):
                         pctx.resolved_path = target_file
                         pctx.resolution_type = "deferred_overlap"
@@ -415,10 +783,9 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                         "patch_tel": patch_tel,
                     })
                     pctx.handled = True
-
             def resolve_deep_search():
                 nonlocal omniscient_cache
-                if not data.get("allow_deep_search"):
+                if not effective_deep_search:
                     patch_tel.update({"status": "offer_deep_search"})
                     patch_tel["available_actions"].extend(["offer_deep_search", "deselect_patch"])
                     telemetry["can_commit"] = False
@@ -453,9 +820,9 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             if pctx.resolution_type == "deferred_overlap":
                 b_copy = dict(b)
                 b_copy["_is_deferred_retry"] = True
+                b_copy["_orig_patch_index"] = assigned_patch_index
                 blocks.append(b_copy)
                 telemetry["summary"]["total_patches"] -= 1
-                patch_index -= 1
                 continue
 
             if patch_tel["status"] in ("auto_skipped", "needs_confirmation"):
@@ -479,18 +846,19 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             
             content = get_file_content(resolved_path) or ""
             # Step h: Phase 2 - Patch Safety & Recursion
-            is_confirmed_override = bool(
-                data.get("force")
-                or (data.get("confirmed_candidates") or {}).get(target_file)
-                or (data.get("confirmed_candidates") or {}).get(resolved_path)
-            )
+            is_confirmed_override = _is_gate_approved(cell_id, "EXPANSION_RISK", target_file, resolved_path)
             if search_str and search_str != replace_str and search_str in replace_str:
                 if replace_str in content and not is_confirmed_override:
                     patch_tel["status"] = "needs_confirmation"
                     patch_tel["error_message"] = "Expansion Risk: The replacement block already exists in this file and contains the search block. Confirm to apply anyway."
                     patch_tel["flags"].append("expansion_risk")
+                    patch_tel["gate"] = {
+                        "code": "EXPANSION_RISK",
+                        "target_uri": resolved_path,
+                        "reason": "Replacement block already exists in target file.",
+                    }
                     patch_tel["candidates"] = [{"filepath": resolved_path, "score": 1.0, "match_type": "expansion_override"}]
-                    patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
+                    patch_tel["available_actions"].extend(["approve_gate", "confirm_candidate", "deselect_patch"])
                     telemetry["can_commit"] = False
             elif replace_str and replace_str != search_str and replace_str in search_str:
                 patch_tel["flags"].append("code_removal")
@@ -500,7 +868,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 telemetry["patches"].append(patch_tel)
                 continue
             # Apply patch to memory buffer
-            ok, new_content, _ = apply_block_in_memory(content, b, silent=True)
+            apply_fn = apply_textedit_in_memory if block_type == "textedit" else apply_block_in_memory
+            ok, new_content, _ = apply_fn(content, b, silent=True)
             if not ok:
                 search_lines = search_str.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
                 file_lines = content.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
@@ -521,84 +890,34 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 telemetry["patches"].append(patch_tel)
                 ctx.emit_background('bridge_error', filepath=resolved_path, error_type='patch_failed', details="Failed to anchor patch block in memory.", file_content=content, patch_payload=json.dumps(b))
                 continue
-            # Step i: Phase 3 - Full-File AST Syntax Gate (Scoped to last chunk)
-            ext = Path(resolved_path).suffix.lower()
-            syntax_error = False
-            err_str = ""
-            is_last_block = (b == blocks[-1])
-            if is_last_block and not (data.get("ignore_syntax") or data.get("ignore_syntax_errors")):
-                try:
-                    if ext == '.json':
-                        json.loads(new_content)
-                    else:
-                        try:
-                            # Attempt high-performance, native Tree-sitter validation first
-                            if not _TSLanguage or not _TSParser:
-                                raise ImportError("Tree-sitter core bindings unavailable.")
-
-                            lang_mod = None
-                            if ext == '.py':
-                                lang_mod = _ts_python
-                            elif ext in ['.js', '.mjs', '.cjs', '.ts', '.tsx']:
-                                lang_mod = _ts_javascript
-
-                            if lang_mod:
-                                # Tree-sitter >=0.22.0 bindings
-                                parser = _TSParser(_TSLanguage(lang_mod.language()))
-                                tree = parser.parse(bytes(new_content, "utf8"))
-                                if tree.root_node.has_error:
-                                    # Fallback verification: Tree-sitter language injections can false-positive on valid Lit templates or raw regex strings.
-                                    if ext == '.py':
-                                        try:
-                                            ast.parse(new_content)
-                                        except SyntaxError as py_err:
-                                            syntax_error = True
-                                            err_str = f"Line {py_err.lineno}: {py_err.msg}"
-                                    elif ext in ['.js', '.ts', '.mjs']:
-                                        try:
-                                            res = ctx.exec.run(['node', '--input-type=module', '-c'], input=new_content, encoding='utf-8', timeout=5.0)
-                                            if res.returncode != 0:
-                                                syntax_error = True
-                                                err_str = res.stderr.strip()
-                                        except Exception:
-                                            syntax_error = True
-                                            err_str = "Tree-sitter detected a syntax error, and node fallback verification failed."
-                                    else:
-                                        syntax_error = True
-                                        err_str = "Tree-sitter detected a syntax error in the modified AST."
-                            else:
-                                raise ImportError("Language not mapped for Tree-sitter.")
-                        except ImportError:
-                            # Graceful Fallback if Tree-sitter C-extensions are missing
-                            if ext == '.py':
-                                ast.parse(new_content)
-                            elif ext in ['.js', '.ts', '.mjs']:
-                                try:
-                                    res = ctx.exec.run(['node', '--input-type=module', '-c'], input=new_content, encoding='utf-8', timeout=5.0)
-                                    if res.returncode != 0:
-                                        syntax_error = True
-                                        err_str = res.stderr.strip()
-                                except Exception:
-                                    pass
-                except SyntaxError as e:
-                    syntax_error = True
-                    err_str = f"Line {e.lineno}: {e.msg}"
-                except ValueError as e:
-                    syntax_error = True
-                    err_str = str(e)
-                except Exception as e:
-                    syntax_error = True
-                    err_str = str(e)
+            # Step i: Phase 3 - Incremental Per-Chunk AST Syntax Gate (With Lookahead Forgiveness)
+            if not _is_gate_approved(cell_id, "SYNTAX_ERROR", target_file, resolved_path):
+                syntax_error, err_str = _validate_buffer_syntax(ctx, resolved_path, new_content)
+                if syntax_error and b_idx < len(blocks) - 1:
+                    # Lookahead check: if subsequent chunks in the same file heal a split syntactic construct, allow this chunk
+                    lookahead_buf = new_content
+                    for rem_b in blocks[b_idx + 1:]:
+                        rem_fn = apply_textedit_in_memory if rem_b.get("type") == "textedit" else apply_block_in_memory
+                        ok_rem, next_buf, _ = rem_fn(lookahead_buf, rem_b, silent=True)
+                        if ok_rem:
+                            lookahead_buf = next_buf
+                    healed_later_err, _ = _validate_buffer_syntax(ctx, resolved_path, lookahead_buf)
+                    if not healed_later_err:
+                        syntax_error = False
 
                 if syntax_error:
                     patch_tel["status"] = "syntax_error"
                     patch_tel["error_message"] = err_str
-                    # Generate a clean unified diff of the failed AST block for the UI modal
                     diff = list(difflib.unified_diff(content.splitlines(), new_content.splitlines(), lineterm=""))
                     diff_str = "\n".join(diff)
                     err_b64 = base64.b64encode(diff_str.encode('utf-8')).decode('utf-8')
                     patch_tel["syntax_error"] = err_b64
-                    patch_tel["available_actions"].extend(["ignore_syntax_error", "deselect_patch"])
+                    patch_tel["gate"] = {
+                        "code": "SYNTAX_ERROR",
+                        "target_uri": resolved_path,
+                        "reason": err_str,
+                    }
+                    patch_tel["available_actions"].extend(["approve_gate", "ignore_syntax_error", "deselect_patch"])
                     telemetry["can_commit"] = False
                     telemetry["summary"]["action_required"] += 1
                     deferred_failures.append({
@@ -617,6 +936,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             patch_tel["status"] = "resolved"
             telemetry["summary"]["resolved"] += 1
             telemetry["patches"].append(patch_tel)
+    telemetry["patches"].sort(key=lambda p: p.get("patch_index", 0))
+
     # Zero-Patch Validation
     if telemetry["summary"]["total_patches"] == 0:
         telemetry["can_commit"] = False
@@ -666,10 +987,9 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             # 1. The Human Intercept Rule (Manual edits detected)
             if disk_hash != last_known_hash:
                 is_snapshot = True
-
-            # 2. Genesis Overwrite Guardrail
+            # 2. Genesis Overwrite Guardrail & Deletion Snapshot Guarantee
             is_genesis = any(not b["search"].strip() for b in file_blocks)
-            if is_genesis and orig_content.strip():
+            if (is_genesis and orig_content.strip()) or filepath in deleted_targets:
                 is_snapshot = True
 
             # 3. The 5-Turn Keyframe Routine
@@ -682,20 +1002,32 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             file_uri = InSetuURI(filepath)
             current_repo = file_uri.repo if file_uri.repo else (file_uri.path.partition('/')[0] if '/' in file_uri.path else "")
             patch_id = f"ptc_{uuid.uuid4().hex[:12]}"
-            patch_count = len(file_blocks)
-            chunks_json = json.dumps([{
-                "comment": b.get("comment", ""),
-                "search": b["search"], 
-                "replace": b["replace"]
-            } for b in file_blocks])
+            patch_count = max(1, len(file_blocks))
+            if filepath in deleted_targets:
+                chunks_json = json.dumps([{
+                    "comment": (file_blocks[0].get("comment", "") if file_blocks else "File deleted/relocated"),
+                    "type": "delete_file",
+                    "search": orig_content,
+                    "replace": "",
+                }])
+            else:
+                chunks_json = json.dumps([{
+                    "comment": b.get("comment", ""),
+                    "type": b.get("type", "exact"),
+                    "search": b["search"], 
+                    "replace": b["replace"]
+                } for b in file_blocks])
             db_conn.execute('''
                 INSERT INTO bridge_ledger (patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, compressed_state, timestamp, ttl_expires_at, patch_count, chunks_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (patch_id, pid, current_repo, filepath, s_block, r_block, post_patch_hash, 1 if is_snapshot else 0, compressed_state, now_ts, ttl_48h, patch_count, chunks_json))
-            # Phase 4: Restore target file EOL format (CRLF drift prevention)
-            if '\r\n' in orig_content and '\r\n' not in final_content:
-                final_content = final_content.replace('\n', '\r\n')
-            vfs.save(filepath, final_content)
+            if filepath in deleted_targets:
+                vfs.delete(filepath)
+            else:
+                # Phase 4: Restore target file EOL format (CRLF drift prevention)
+                if '\r\n' in orig_content and '\r\n' not in final_content:
+                    final_content = final_content.replace('\n', '\r\n')
+                vfs.save(filepath, final_content)
 
         db_conn.commit()
         telemetry["status"] = "committed"
