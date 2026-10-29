@@ -80,13 +80,15 @@ app = Flask(__name__)
 init_kernel_app(
     app,
     token_header="X-InSetu-Token",
+    # Every public route is listed with its reason in tests/unit/test_route_auth_inventory.py (V4).
+    # Source maps live under /static/, so no suffix exemption is needed: a public suffix would open
+    # every route whose last path segment comes from the caller.
     public_routes={
         "/", "/manifest.json", "/sw.js", "/favicon.ico",
-        "/auth/bootstrap", "/api/system/panic",
+        "/auth/bootstrap",
         "/api/system/openapi.json", "/api/system/llm_catalog.json", "/recovery"
     },
-    public_prefixes=("/static/", "/sm/"),
-    public_suffixes=(".map",),
+    public_prefixes=("/static/",),
     sse_route="/api/system/stream",
 )
 
@@ -502,7 +504,7 @@ def recovery_ui():
     <body style="font-family: monospace; background: #0f172a; color: #f8fafc; text-align: center; padding-top: 100px;">
         <h2 style="color: #ef4444;">🆘 Manual Recovery Console</h2>
         <p>Use this page to manually trigger a kernel panic and boot into the Lifeboat FS.</p>
-        <button onclick="if('caches' in window){caches.keys().then(k=>k.forEach(c=>caches.delete(c)))}; if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(r=>r.forEach(x=>x.unregister()))}; fetch('/api/system/panic', {method: 'POST'}); this.innerText='Crashing...'; setTimeout(()=>window.location.href='/recovery', 3000);" style="background: #ef4444; color: white; border: none; padding: 15px 30px; font-weight: bold; font-size: 1.2rem; cursor: pointer; border-radius: 4px; margin-top: 20px;">
+        <button onclick="var t=''; try{t=localStorage.getItem('insetu_boot_token')||sessionStorage.getItem('insetu_boot_token')||'';}catch(e){} if(!t){alert('No saved token in this browser. Sign in to inSetu first, or run the daemon from a terminal.'); return;} if('caches' in window){caches.keys().then(k=>k.forEach(c=>caches.delete(c)))}; if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(r=>r.forEach(x=>x.unregister()))}; var b=this; fetch('/api/system/panic', {method: 'POST', headers: {'X-InSetu-Token': t}}).then(function(r){ if(r.status===401){ b.innerText='Token rejected'; return; } b.innerText='Crashing...'; setTimeout(function(){window.location.href='/recovery';}, 3000); });" style="background: #ef4444; color: white; border: none; padding: 15px 30px; font-weight: bold; font-size: 1.2rem; cursor: pointer; border-radius: 4px; margin-top: 20px;">
             Boot Immutable Recovery OS
         </button>
     </body>

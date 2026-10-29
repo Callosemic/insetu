@@ -3,8 +3,11 @@ from pathlib import Path
 
 import os
 import sys
+import hmac
 import json
 import re
+import secrets
+import importlib.util
 import time
 import zipfile
 import threading
@@ -12,6 +15,170 @@ from datetime import datetime
 from flask import Flask, request, jsonify, send_file, render_template_string, redirect
 
 app = Flask(__name__)
+
+# --- BOTTOM-LAYER AUTH (V4, S8) ---
+# The lifeboat listens on the port `tailscale serve` exposes, so it needs the same token as the app.
+# Credentials come from akasa/auth/credentials.py, loaded by file path so a broken akasa package
+# cannot lock you out. A phone that was signed in keeps working: the lifeboat is the same origin,
+# and the session token is durable.
+CONTROL_DIRNAME = os.environ.get("AKASA_CONTROL_DIR", ".insetu")
+TOKEN_HEADERS = ("X-InSetu-Token", "X-Akasa-Token")
+PUBLIC_PATHS = frozenset({"/", "/recovery", "/auth/bootstrap"})
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+TRUSTED_HOST_SUFFIXES = (".ts.net",)
+LIFEBOAT_TOKEN_FILENAME = "lifeboat_token"
+_LIFEBOAT_TOKEN = None
+_CREDENTIALS_MODULE = False  # False: not looked up yet; None: unavailable.
+
+
+def _control_dir():
+    return Path(os.getcwd()).resolve() / CONTROL_DIRNAME
+
+
+def _credentials_module():
+    """Loads akasa's stdlib-only credential store by path, without running akasa's package __init__."""
+    global _CREDENTIALS_MODULE
+    if _CREDENTIALS_MODULE is not False:
+        return _CREDENTIALS_MODULE
+    locations = []
+    try:
+        spec = importlib.util.find_spec("akasa")  # Locates the package; does not import it.
+        if spec and spec.submodule_search_locations:
+            locations.extend(spec.submodule_search_locations)
+    except (ImportError, ValueError):
+        pass
+    locations.append(Path(__file__).resolve().parent.parent.parent.joinpath("akasa", "akasa").as_posix())
+    _CREDENTIALS_MODULE = None
+    for loc in locations:
+        candidate = Path(loc) / "auth" / "credentials.py"
+        if not candidate.is_file():
+            continue
+        try:
+            c_spec = importlib.util.spec_from_file_location("insetu_lifeboat_credentials", candidate.as_posix())
+            module = importlib.util.module_from_spec(c_spec)
+            c_spec.loader.exec_module(module)
+            _CREDENTIALS_MODULE = module
+            break
+        except Exception as e:
+            print(f"⚠️ [Lifeboat] Could not load {candidate}: {e}")
+    return _CREDENTIALS_MODULE
+
+
+def current_token():
+    """The token this lifeboat accepts: the app's durable session token, or a lifeboat-only one as a last resort."""
+    global _LIFEBOAT_TOKEN
+    if _LIFEBOAT_TOKEN:
+        return _LIFEBOAT_TOKEN
+    token = os.environ.get("AKASA_BOOT_TOKEN")  # Set when the app crashed in this same process, or as an override.
+    creds = _credentials_module()
+    if not token and creds is not None:
+        try:
+            token = creds.load_or_create_token(_control_dir())
+        except OSError as e:
+            print(f"⚠️ [Lifeboat] Could not read the session token: {e}")
+    if not token and creds is None:
+        try:  # Older akasa without credentials.py: the file format is one line of text.
+            token = (_control_dir() / "auth" / "session_token").read_text(encoding="utf-8").strip() or None
+        except (OSError, UnicodeDecodeError):
+            token = None
+    if not token:
+        token = secrets.token_hex(32)
+        token_file = _control_dir() / LIFEBOAT_TOKEN_FILENAME
+        try:
+            token_file.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(token_file.as_posix(), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(token + "\n")
+        except OSError:
+            pass
+        print(f"🔑 No saved inSetu token was readable, so the lifeboat made its own: {token}")
+        print(f"   (also written to {token_file.as_posix()}; paste it into the recovery page)")
+    _LIFEBOAT_TOKEN = token
+    return token
+
+
+def _token_matches(presented):
+    expected = current_token()
+    creds = _credentials_module()
+    if creds is not None:
+        return creds.verify_token(presented, expected)
+    if not expected or not isinstance(presented, str) or not presented:
+        return False
+    return hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
+
+
+def _configured_hosts():
+    """Hostnames from Remote Access's 'allowed_hosts' setting in host.json (comma-separated)."""
+    try:
+        data = json.loads((_control_dir() / "host.json").read_text(encoding="utf-8"))
+        raw = (data.get("remote") or {}).get("allowed_hosts") or ""
+    except (OSError, ValueError, AttributeError):
+        return set()
+    return {h.strip().lower().rstrip(".") for h in str(raw).split(",") if h.strip()}
+
+
+def _normalize_host(raw):
+    host = str(raw or "").strip().lower()
+    if host.startswith("["):
+        host = host[1:].split("]", 1)[0]
+    elif host.count(":") == 1:
+        host = host.split(":", 1)[0]
+    return host.rstrip(".")
+
+
+def _host_allowed(raw):
+    """DNS-rebinding guard, matching the app's rules: loopback, *.ts.net, and configured hosts."""
+    host = _normalize_host(raw)
+    if not host:
+        return False
+    if host in LOOPBACK_HOSTS:
+        return True
+    if any(host.endswith(sfx) and len(host) > len(sfx) for sfx in TRUSTED_HOST_SUFFIXES):
+        return True
+    return host in _configured_hosts()
+
+
+@app.before_request
+def _lifeboat_gate():
+    if not _host_allowed(request.host):
+        return jsonify({"error": "421 Misdirected Request: Host not allowed."}), 421
+    if request.path in PUBLIC_PATHS or request.path.startswith("/static/"):
+        return None
+    presented = next((request.headers.get(h) for h in TOKEN_HEADERS if request.headers.get(h)), None)
+    if not presented and request.path.startswith("/download/"):
+        presented = request.args.get("token")  # Plain navigation fallback when a blob download fails.
+    if not _token_matches(presented):
+        return jsonify({"error": "401 Unauthorized: the lifeboat needs your inSetu token."}), 401
+    return None
+
+
+def _readable_roots():
+    root, repos = _lifeboat_workspace()
+    roots = [root, Path(os.getcwd()).resolve()]
+    for repo in repos:
+        if repo.get("physical_path"):
+            roots.append(Path(repo["physical_path"]).expanduser().resolve())
+    return roots
+
+
+def _confine(raw_path):
+    """Resolves a caller path (relative to the daemon directory) with symlinks followed; None outside the workspace or inside the credential store."""
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = Path(os.getcwd()) / candidate
+    resolved = Path(os.path.realpath(candidate))
+    try:
+        resolved.relative_to(Path(os.path.realpath(_control_dir() / "auth")))
+        return None
+    except ValueError:
+        pass
+    for base in _readable_roots():
+        try:
+            resolved.relative_to(Path(os.path.realpath(base)))
+            return resolved
+        except ValueError:
+            continue
+    return None
 
 # --- STANDALONE PATCH ENGINE ---
 # (Isolated from engine_bridge.py to ensure zero dependencies during Kernel Panic)
@@ -103,16 +270,13 @@ def _resolve_patch_target(raw_target):
     """
     Maps a patch FILE header to an absolute path, mirroring the main bridge's vfs://<repo>/<path>
     resolution (longest repo_dir prefix, optional physical_path). Plain relative paths resolve against
-    the daemon directory as before. Because the lifeboat has no login, every write must land inside the
+    the daemon directory as before. Every write must land inside the
     workspace root, the daemon directory, or a repository's physical_path.
     Returns (absolute_path, None) or (None, reason).
     """
     raw = raw_target.strip().replace("\\", "/")
     root, repos = _lifeboat_workspace()
-    allowed = [root, Path(os.getcwd()).resolve()]
-    for repo in repos:
-        if repo.get("physical_path"):
-            allowed.append(Path(repo["physical_path"]).expanduser().resolve())
+    allowed = [Path(os.path.realpath(b)) for b in _readable_roots()]
 
     if raw.startswith("vfs://"):
         logical = raw[len("vfs://"):].strip("/")
@@ -139,7 +303,12 @@ def _resolve_patch_target(raw_target):
     else:
         candidate = Path(raw)
 
-    resolved = Path(os.path.abspath(candidate))
+    resolved = Path(os.path.realpath(candidate))  # Follow symlinks so a link inside the workspace cannot point a write outside it.
+    try:
+        resolved.relative_to(Path(os.path.realpath(_control_dir() / "auth")))
+        return None, "Refusing to write into the credential store."
+    except ValueError:
+        pass
     for base in allowed:
         try:
             resolved.relative_to(base)
@@ -170,9 +339,14 @@ HTML_TEMPLATE = """
     <div class="banner">
         ⚠️ KERNEL PANIC: INSETU RECOVERY OS (LIFEBOAT FS) ⚠️<br><br>
         The primary Developer OS failed to boot. You are running on the zero-dependency fallback bridge.
-        {% if panic_details %}
-        <div class="panic-trace">{{ panic_details }}</div>
-        {% endif %}
+        <div class="panic-trace" id="panic-trace" style="display: none;"></div>
+    </div>
+
+    <div id="token-box" style="display: none; background: #f59e0b20; border: 1px solid #f59e0b; padding: 15px; border-radius: 4px; margin-bottom: 20px;">
+        <h4 style="margin-top: 0; color: #fbbf24;">🔑 Token required</h4>
+        <p style="font-size: 0.9rem; color: #94a3b8;">This browser has no saved inSetu token, or the lifeboat rejected it. Paste the token from <code>.insetu/auth/session_token</code> on the machine (or the one the lifeboat printed in its terminal).</p>
+        <input id="token-input" type="password" autocomplete="off" style="width: 100%; box-sizing: border-box; padding: 8px; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; font-family: monospace; margin-bottom: 10px;">
+        <button onclick="saveToken(document.getElementById('token-input').value.trim()); bootPage();">Save token</button>
     </div>
     
     <h3>1. Emergency Sync Bridge</h3>
@@ -207,9 +381,24 @@ HTML_TEMPLATE = """
     <div class="fs-container" id="fs-list">Loading...</div>
 
     <script>
+        function getToken() {
+            try { return localStorage.getItem('insetu_boot_token') || sessionStorage.getItem('insetu_boot_token') || ''; } catch (e) { return ''; }
+        }
+        function saveToken(token) {
+            if (!token) return;
+            try { localStorage.setItem('insetu_boot_token', token); sessionStorage.setItem('insetu_boot_token', token); } catch (e) {}
+        }
+        // Every lifeboat API call carries the token; a 401 asks for it instead of failing silently.
+        async function api(url, options = {}) {
+            options.headers = Object.assign({}, options.headers || {}, { 'X-InSetu-Token': getToken() });
+            const res = await fetch(url, options);
+            document.getElementById('token-box').style.display = res.status === 401 ? 'block' : 'none';
+            return res;
+        }
+
         async function downloadFileResilient(fetchUrl, filename) {
             try {
-                const res = await fetch(fetchUrl);
+                const res = await api(fetchUrl);
                 if (!res.ok) throw new Error("Download failed");
                 const blob = await res.blob();
 
@@ -223,7 +412,7 @@ HTML_TEMPLATE = """
                 window.URL.revokeObjectURL(url);
                 a.remove();
             } catch (e) {
-                window.location.href = fetchUrl;
+                window.location.href = fetchUrl + (fetchUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(getToken());
             }
         }
 
@@ -233,7 +422,7 @@ HTML_TEMPLATE = """
             log.style.display = 'block';
             log.innerText = "Applying patch...";
             try {
-                const res = await fetch('/api/bridge/sync', {
+                const res = await api('/api/bridge/sync', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ text: text })
@@ -246,8 +435,7 @@ HTML_TEMPLATE = """
 
         async function rebootOS() {
             if (!confirm("Attempt to reboot into the primary Developer OS?")) return;
-            sessionStorage.clear();
-            localStorage.removeItem('insetu_boot_token');
+            // Keep the token: it is durable, and the app and the lifeboat both accept it.
             if ('caches' in window) {
                 try {
                     const keys = await caches.keys();
@@ -262,7 +450,8 @@ HTML_TEMPLATE = """
             }
             document.body.innerHTML = "<h2 style='color: #10b981; text-align: center; margin-top: 20%;'>Rebooting Engine...<br><span style='font-size: 0.8rem; color: #888;'>Waiting for OS to come back online...</span></h2>";
             try {
-                await fetch('/api/system/reboot', { method: 'POST' });
+                const rebootRes = await api('/api/system/reboot', { method: 'POST' });
+                if (rebootRes.status === 401) { window.location.reload(); return; }
                 setTimeout(() => {
                     setInterval(async () => {
                         try {
@@ -297,7 +486,7 @@ HTML_TEMPLATE = """
             const orig = btn.innerText;
             btn.innerText = "⏳ Compiling...";
             try {
-                const res = await fetch('/api/system/emergency_dump', { method: 'POST' });
+                const res = await api('/api/system/emergency_dump', { method: 'POST' });
                 const data = await res.json();
                 if (res.ok) {
                     btn.innerText = "✅ Compiled successfully";
@@ -324,8 +513,13 @@ HTML_TEMPLATE = """
             }
 
             document.getElementById('cwd-display').innerText = currentPath === '.' ? '[Workspace Root]' : currentPath;
-            const res = await fetch('/api/fs/list?dir=' + encodeURIComponent(currentPath));
-            const data = await res.json();
+            const res = await api('/api/fs/list?dir=' + encodeURIComponent(currentPath));
+            const data = await res.json().catch(() => ({ dirs: [], files: [] }));
+            if (!res.ok) {
+                document.getElementById('fs-list').innerHTML = '<span style="color: #64748b;">' + (res.status === 401 ? 'Save your token above to browse files.' : 'That folder is outside the workspace.') + '</span>';
+                if (res.status === 403) { currentPath = '.'; }
+                return;
+            }
             
             const list = document.getElementById('fs-list');
             list.innerHTML = '';
@@ -357,8 +551,19 @@ HTML_TEMPLATE = """
             });
         }
         
-        // Boot the explorer
-        loadFS('.');
+        async function loadPanicDetails() {
+            const res = await api('/api/system/panic_details');
+            if (!res.ok) return;
+            const data = await res.json().catch(() => ({}));
+            const trace = document.getElementById('panic-trace');
+            if (data.details) { trace.innerText = data.details; trace.style.display = 'block'; }
+        }
+
+        function bootPage() {
+            loadPanicDetails();
+            loadFS('.');
+        }
+        bootPage();
     </script>
 </body>
 </html>
@@ -375,8 +580,12 @@ def recovery_auth_bootstrap():
 
 @app.route('/recovery')
 def index():
-    details = os.environ.get("INSETU_PANIC_DETAILS", "")
-    return render_template_string(HTML_TEMPLATE, panic_details=details)
+    # Public page: the traceback is fetched separately with the token, because it can contain paths and secrets.
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/api/system/panic_details')
+def panic_details():
+    return jsonify({"details": os.environ.get("INSETU_PANIC_DETAILS", "")})
 
 @app.route('/api/bridge/sync', methods=['POST'])
 def bridge_sync():
@@ -421,7 +630,10 @@ def bridge_sync():
 @app.route('/api/fs/list')
 def fs_list():
     target_dir = request.args.get('dir', '.')
-    abs_dir = os.path.abspath(target_dir)
+    confined = _confine(target_dir)
+    if confined is None:
+        return jsonify({"dirs": [], "files": [], "error": "Outside the workspace."}), 403
+    abs_dir = confined.as_posix()
     if not os.path.exists(abs_dir) or not os.path.isdir(abs_dir):
         return jsonify({"dirs": [], "files": []})
         
@@ -441,14 +653,12 @@ def fs_list():
 
 @app.route('/download/<path:filepath>')
 def download(filepath):
-    # Werkzeug normalizes double slashes in URLs, stripping the leading slash off absolute paths.
-    # If the stripped path doesn't exist but the absolute one does, repair it.
-    if not os.path.exists(filepath) and os.path.exists('/' + filepath):
-        filepath = '/' + filepath
-        
-    abs_path = os.path.abspath(filepath)
-    if os.path.exists(abs_path):
-        return send_file(abs_path, as_attachment=True)
+    # Paths are relative to the daemon directory and must stay inside the workspace (symlinks followed).
+    confined = _confine(filepath)
+    if confined is None:
+        return "Refusing to read outside the workspace.", 403
+    if confined.is_file():
+        return send_file(confined.as_posix(), as_attachment=True)
     return "File not found", 404
 
 @app.route('/api/system/emergency_dump', methods=['POST'])
