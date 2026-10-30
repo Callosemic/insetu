@@ -27,12 +27,25 @@ from insetu.core.utils_core import (
     load_json_config,
 )
 from insetu.core.topology.engine_topology import get_omniscient_workspace_files
+from insetu.core.gather.context_assemble import (
+    assemble_context_payload,
+    collect_workspace_secrets as _collect_secret_values_for_scrubbing,
+    resolve_query_context,
+    scrub_outbound_secrets as _scrub_outbound_secrets,
+)
+from insetu.core.agent.schemas import extract_query_context_directives, get_schema_directive
+
 SCRATCH_VAULT_THRESHOLD_BYTES = 256 * 1024
 MAX_RAG_FILES_PER_HOP = 15
+DEFAULT_STEP_BUDGET = 25
+DEFAULT_TOKEN_BUDGET = 120000
 _ROUTINES_DRIVER = TemplateOverlayVFSDriver(module_subdir="routines")
 
 ROUTINE_BANNED_CAPABILITIES = frozenset({
     "dev.exec",
+    "bridge.test.approve",  # P5: only a person approves commands; a routine must never approve its own.
+    "preview.approve_command",  # P5: same for custom preview launch commands.
+    "preview.open_lan",  # S2: LAN exposure is a person's grant, never a routine's.
     "dev.sql.query",
     "system.reboot",
     "system.panic",
@@ -53,6 +66,9 @@ READ_ONLY_MODE_ALLOWED_CAPABILITIES = frozenset({
     "topology.overview",
     "topology.verify_plan_targets",
     "topology.audit_upkeep",
+    "context.assemble",
+    "gather.context.assemble",
+    "gather.context.query",
     "gather.pack_selection",
     "cartographer.extract",
     "cartographer.verify_plan_targets",
@@ -612,6 +628,12 @@ def evaluate_when_condition(when_expr: Optional[str], chain_context: Dict[str, A
         return key
 
     sanitized_expr = re.sub(r'\{\{\s*([a-zA-Z0-9_.\[\]-]+)\s*\}\}', _sub_mustache, str(when_expr).strip())
+    if " contains " in sanitized_expr:
+        sanitized_expr = re.sub(
+            r'(\S+)\s+contains\s+(\S+)',
+            r'\2 in \1',
+            sanitized_expr,
+        )
     try:
         tree = ast.parse(sanitized_expr, mode="eval")
     except SyntaxError:
@@ -651,6 +673,30 @@ def evaluate_when_condition(when_expr: Optional[str], chain_context: Dict[str, A
                     return False
                 elif isinstance(op, ast.NotEq) and not (left != right):
                     return False
+                elif isinstance(op, ast.Gt):
+                    try:
+                        if not (float(left) > float(right)):
+                            return False
+                    except (TypeError, ValueError):
+                        return False
+                elif isinstance(op, ast.GtE):
+                    try:
+                        if not (float(left) >= float(right)):
+                            return False
+                    except (TypeError, ValueError):
+                        return False
+                elif isinstance(op, ast.Lt):
+                    try:
+                        if not (float(left) < float(right)):
+                            return False
+                    except (TypeError, ValueError):
+                        return False
+                elif isinstance(op, ast.LtE):
+                    try:
+                        if not (float(left) <= float(right)):
+                            return False
+                    except (TypeError, ValueError):
+                        return False
                 elif isinstance(op, ast.In) and not (right is not None and left in right):
                     return False
                 elif isinstance(op, ast.NotIn) and not (right is None or left not in right):
@@ -698,12 +744,6 @@ def _compile_node_wavefronts(nodes: List[Dict[str, Any]]) -> List[List[Dict[str,
     return resolve_dag_wavefronts(valid_nodes, id_key="id", parents_key="parents", order_key="order")
 
 
-def _topological_sort_nodes(nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    try:
-        waves = _compile_node_wavefronts(nodes)
-        return [n for wave in waves for n in wave]
-    except Exception:
-        return [n for n in (nodes or []) if isinstance(n, dict) and n.get("id")]
 def _collect_live_files_for_patch_healing(ctx, parsed_blocks: Dict[str, Any], readonly_list: List[str]) -> str:
     """Reads current disk contents of files targeted by a failed Yomama patch so the healing LLM has exact anchors."""
     snippets: List[str] = []
@@ -723,39 +763,6 @@ def _collect_live_files_for_patch_healing(ctx, parsed_blocks: Dict[str, Any], re
         if disk_text is not None:
             snippets.append(f"=== CURRENT FILE ON DISK: {canon_uri} ===\n{disk_text}")
     return "\n\n".join(snippets)
-def _collect_secret_values_for_scrubbing(ctx) -> List[str]:
-    if ctx is None:
-        return []
-    secrets_list: List[str] = []
-    try:
-        sec_path = Path(get_tenant_control_dir(ctx.workspace_id)) / "secrets.json"
-        if sec_path.exists():
-            raw_sec = load_json_config(sec_path.as_posix(), {})
-            for ext_vals in (raw_sec or {}).values():
-                if isinstance(ext_vals, dict):
-                    for v in ext_vals.values():
-                        if isinstance(v, str) and len(v.strip()) >= 8:
-                            secrets_list.append(v.strip())
-    except Exception:
-        pass
-    return secrets_list
-_FERNET_CIPHERTEXT_RE = re.compile(r'\bv1:[A-Za-z0-9_-]{32,}\b')
-
-
-def _scrub_outbound_secrets(text: str, secret_values: List[str]) -> str:
-    if not text:
-        return ""
-    scrubbed = _FERNET_CIPHERTEXT_RE.sub("[REDACTED_FERNET_CIPHERTEXT]", text)
-    for env_key in ("AKASA_BOOT_TOKEN", "INSETU_BOOT_TOKEN"):
-        env_tok = os.environ.get(env_key, "").strip()
-        if env_tok and len(env_tok) >= 8 and env_tok in scrubbed:
-            scrubbed = scrubbed.replace(env_tok, "[REDACTED_BOOT_TOKEN]")
-    for sec in (secret_values or []):
-        if sec and sec in scrubbed:
-            scrubbed = scrubbed.replace(sec, "[REDACTED_WORKSPACE_SECRET]")
-    return scrubbed
-
-
 _YOMAMA_BLOCK_STRIP_RE = re.compile(
     r'(?:^|\n)<<<<<<< FILE:[^\n]*\n[\s\S]*?>>>>>>> (?:REPLACE|EXECUTE)[ \t]*',
     re.MULTILINE,
@@ -888,9 +895,31 @@ def execute_declarative_routine(
         or (hasattr(ctx, "settings") and str(ctx.settings.get("provider", "anthropic")) == "web_chat")
     )
 
+    repos_cfg = ctx.config.get("target_repos") or []
+    primary_repo_cfg = repos_cfg[0] if repos_cfg else {}
+    primary_repo_name = primary_repo_cfg.get("repo_dir") or "workspace"
+    primary_repo_desc = primary_repo_cfg.get("description") or ""
+    rag_strategy_val = str(ctx.settings.get("rag_strategy", "blast_radius") if hasattr(ctx, "settings") else "blast_radius")
+    strict_test_val = bool(ctx.settings.get("strict_test_enforcement", False) if hasattr(ctx, "settings") else False)
+    run_tests_val = bool(ctx.settings.get("run_tests_on_code", False) if hasattr(ctx, "settings") else False)
+
     chain_context: Dict[str, Any] = {
         **prior_chain,
         "_ctx": ctx,
+        "sys": {
+            **(prior_chain.get("sys") or {}),
+            "repo_name": primary_repo_name,
+            "repo_description": primary_repo_desc,
+            "active_bucket": f"{primary_repo_name}::main",
+            "routine_name": routine.get("id", routine_id),
+            "rag_strategy": rag_strategy_val,
+            "strict_test_enforcement": False if is_manual_transport else strict_test_val,
+            "run_tests_on_code": run_tests_val,
+            "affected_test_files": [],
+            "junit_report_path": "",
+            "last_exit_code": 0,
+            "test_failure_count": 0,
+        },
         "global": {
             **(prior_chain.get("global") or {}),
             **extra_inputs,
@@ -956,7 +985,7 @@ def execute_declarative_routine(
             wf_uri = f"ctx://workflows/workflow_{routine.get('id', routine_id)}_context.txt"
             ctx_text = ctx.read_compiled_context(wf_uri) or ctx.vfs.read(wf_uri) or ""
         if ctx_text:
-            clean_ctx_text = ctx_text.replace(context_nonce, "")
+            clean_ctx_text = re.sub(r'</?workspace_context_[0-9a-fA-F]+>\n?', '', ctx_text).replace(context_nonce, "").strip()
             if f"<workspace_context_{context_nonce}>" not in node_system and "fetch_context.content" not in raw_prompt:
                 node_system += (
                     f"\n\n<workspace_context_{context_nonce}>\n"
@@ -1054,8 +1083,14 @@ def execute_declarative_routine(
                 raise PermissionError(
                     f"Security Guardrail: Mutating capability '{action}' in node '{nid}' is not permitted in read-only '{clean_mode}' mode."
                 )
-            if action == "gather.pack_selection":
-                scouted_files = (chain_context.get("scout_targets") or {}).get("requested_files") or []
+            if action in ("context.assemble", "gather.context.assemble", "gather.pack_selection"):
+                scout_node = chain_context.get("scout_targets") or {}
+                scouted_files = (
+                    scout_node.get("requested_files")
+                    or scout_node.get("candidate_files")
+                    or scout_node.get("edit_targets")
+                    or []
+                )
                 for sf in scouted_files:
                     if sf and sf not in all_context_files:
                         all_context_files.append(sf)
@@ -1063,6 +1098,26 @@ def execute_declarative_routine(
                         editable_list.append(sf)
                 chain_context["global"]["all_context_files"] = list(all_context_files)
                 chain_context["global"]["attached_files"] = list(editable_list)
+
+            if action in ("context.assemble", "gather.context.assemble"):
+                assembled = assemble_context_payload(
+                    ctx,
+                    edit_targets=editable_list,
+                    reference_files=readonly_list,
+                    user_message=user_prompt,
+                    strategy=rag_strategy_val,
+                    session_id=session_id,
+                )
+                with context_lock:
+                    chain_context["fetch_context"] = _vault_if_oversized(ctx, "fetch_context", {
+                        "status": "completed",
+                        "base_filename": assembled.get("context_uri"),
+                        "content": assembled.get("content", ""),
+                        **assembled,
+                    })
+                    chain_context[nid] = chain_context["fetch_context"]
+                return
+            if action == "gather.pack_selection":
                 if not all_context_files:
                     with context_lock:
                         chain_context[nid] = {"status": "completed", "content": "", "base_filename": None}
@@ -1110,9 +1165,83 @@ def execute_declarative_routine(
                         wait=True,
                     )
                     if isinstance(bridge_res, dict) and bridge_res.get("can_commit"):
+                        committed_tx_id = bridge_res.get("transaction_id") if not is_validate_only else None
+                        test_diag_res = None
+                        if not is_validate_only and (run_tests_val or strict_test_val):
+                            ctx.jobs.update_progress(f"Step {cur_step}/{total_nodes} [{nid}]: Running post-commit test gate...")
+                            try:
+                                test_diag_res = ctx.call(
+                                    "bridge.test",
+                                    repo=primary_repo_name,
+                                    target_files=target_files,
+                                    wait=True,
+                                )
+                            except Exception as test_err:
+                                test_diag_res = {"status": "ERROR", "exit_code": -1, "raw_tail": str(test_err), "failures": []}
+
+                            if isinstance(test_diag_res, dict):
+                                with context_lock:
+                                    chain_context["sys"]["last_exit_code"] = int(test_diag_res.get("exit_code", 0) or 0)
+                                    chain_context["sys"]["test_failure_count"] = int(test_diag_res.get("failed_count", 0) or 0)
+
+                            if isinstance(test_diag_res, dict) and test_diag_res.get("status") not in ("PASSED", "passed"):
+                                fail_tail = test_diag_res.get("raw_tail") or json.dumps(test_diag_res.get("failures") or [])
+                                if strict_test_val and heal_attempt + 1 < max_self_heal:
+                                    ctx.jobs.update_progress(
+                                        f"Step {cur_step}/{total_nodes} [{nid}]: Test gate failed; self-healing ({heal_attempt + 1}/{max_self_heal})..."
+                                    )
+                                    if committed_tx_id and committed_tx_id not in turn_transaction_ids:
+                                        turn_transaction_ids.append(committed_tx_id)
+                                    live_disk_context = _collect_live_files_for_patch_healing(ctx, parsed_blocks, readonly_list)
+                                    feedback_body = (
+                                        f"[TEST GATE FAILURE FEEDBACK]: Your patch applied cleanly, but the test suite failed:\n{fail_tail}\n\n"
+                                        f"{live_disk_context}\n\n"
+                                        "Please fix the regression and output a Yomama patch block against the current file on disk."
+                                    )
+                                    heal_messages = list(history_messages or []) + [
+                                        {"role": "assistant", "content": patch_text},
+                                        {"role": "user", "content": feedback_body},
+                                    ]
+                                    heal_llm = ctx.call(
+                                        "llm.complete",
+                                        messages=heal_messages,
+                                        system="You are the inSetu Yomama Patch Healer. Repair the test regression against the exact disk content provided.",
+                                        tier="fast",
+                                        profile_id=active_profile_id,
+                                        output_schema="yomama_patch",
+                                        wait=True,
+                                    )
+                                    patch_text = heal_llm.get("text", "") if isinstance(heal_llm, dict) else str(heal_llm)
+                                    final_response_text = patch_text
+                                    chain_context["generate_patch"] = {"status": "completed", "text": patch_text}
+                                    continue
+                                elif strict_test_val:
+                                    txs_to_revert = list(turn_transaction_ids) + ([committed_tx_id] if committed_tx_id and committed_tx_id not in turn_transaction_ids else [])
+                                    for rev_tx in reversed(txs_to_revert):
+                                        try:
+                                            ctx.call("bridge.revert", transaction_id=rev_tx, target_state="initial", wait=True)
+                                        except Exception:
+                                            pass
+                                    turn_transaction_ids.clear()
+                                    committed_files.clear()
+                                    last_transaction_id = None
+                                    final_response_text = (
+                                        (final_response_text or patch_text)
+                                        + f"\n\n⏪ **Strict Test Gate Failed — Rolled Back Transaction (`{committed_tx_id}`):**\n```\n{fail_tail[:1500]}\n```"
+                                    )
+                                    with context_lock:
+                                        chain_context[nid] = {
+                                            "status": "failed",
+                                            "can_commit": False,
+                                            "rolled_back": True,
+                                            "test_diagnostics": test_diag_res,
+                                            "error": f"Strict test gate failed: {fail_tail[:500]}",
+                                        }
+                                    break
+
                         with context_lock:
                             if not is_validate_only:
-                                last_transaction_id = bridge_res.get("transaction_id")
+                                last_transaction_id = committed_tx_id
                                 if last_transaction_id and last_transaction_id not in turn_transaction_ids:
                                     turn_transaction_ids.append(last_transaction_id)
                                 for tf in target_files:
@@ -1130,6 +1259,7 @@ def execute_declarative_routine(
                                 "transaction_id": last_transaction_id,
                                 "committed_files": list(target_files),
                                 "bridge_telemetry": bridge_res,
+                                "test_diagnostics": test_diag_res,
                             }
                         break
 
@@ -1329,6 +1459,32 @@ def execute_declarative_routine(
                 reply_text = llm_res.get("text", "") if isinstance(llm_res, dict) else str(llm_res)
                 parsed_payload = llm_res.get("parsed") if isinstance(llm_res, dict) else None
 
+                # Bounded Single-Hop Symbolic Read Directives (<<<<<<< QUERY_CONTEXT, max_query_hops = 1)
+                query_directives = extract_query_context_directives(reply_text)
+                if query_directives:
+                    resolved_reads = [resolve_query_context(ctx, q_dir) for q_dir in query_directives[:3]]
+                    read_expansion_msg = (
+                        "[SYSTEM CONTEXT EXPANSION (Hop 1/1)]:\n"
+                        + json.dumps(resolved_reads, indent=2)
+                        + "\n\nPlease complete your response using the expanded symbol/file slices above."
+                    )
+                    hop_msgs = list(msgs) + [
+                        {"role": "assistant", "content": reply_text},
+                        {"role": "user", "content": read_expansion_msg},
+                    ]
+                    hop_res = ctx.call(
+                        "llm.complete",
+                        messages=hop_msgs,
+                        system=node_system,
+                        tier=tier,
+                        profile_id=active_profile_id,
+                        output_schema=output_schema,
+                        decision_questions=decision_questions,
+                        wait=True,
+                    )
+                    reply_text = hop_res.get("text", "") if isinstance(hop_res, dict) else str(hop_res)
+                    parsed_payload = hop_res.get("parsed") if isinstance(hop_res, dict) else None
+
             node_record: Dict[str, Any] = {"status": "completed", "text": reply_text}
             if isinstance(parsed_payload, dict):
                 node_record.update(parsed_payload)
@@ -1357,11 +1513,27 @@ def execute_declarative_routine(
                         if prose_candidate:
                             conversational_prose_text = prose_candidate
 
-    # Execute wavefront-by-wavefront:
-    # 1. If manual/web_chat transport is active, check if any active LLM node in the current wavefront lacks a handoff response.
-    #    If so, compile ALL pending LLM branches in this wavefront into a multi-branch queue and return status='paused_for_user'.
-    # 2. Otherwise, execute single-node wavefronts inline and multi-node wavefronts concurrently via ctx.jobs.map_parallel!
+    # Execute wavefront-by-wavefront with P1 budget tracking:
+    # 1. Decrement remaining step and token budgets. If exhausted, pause with a resumable checkpoint.
+    # 2. If manual/web_chat transport is active, compile pending LLM branches and return status='paused_for_user'.
+    # 3. Otherwise execute single-node wavefronts inline and multi-node wavefronts concurrently.
+    accumulated_tokens = 0
+    total_steps_executed = 0
+
     for w_idx, wave in enumerate(wavefronts):
+        if total_steps_executed >= DEFAULT_STEP_BUDGET or accumulated_tokens >= DEFAULT_TOKEN_BUDGET:
+            clean_chain = {k: v for k, v in chain_context.items() if k != "_ctx"}
+            return {
+                "status": "paused_for_budget",
+                "routine_id": routine.get("id", routine_id),
+                "wavefront_index": w_idx,
+                "message": f"Execution budget reached ({total_steps_executed} steps, ~{accumulated_tokens} tokens). Checkpoint saved.",
+                "checkpoint": {
+                    "wavefront_index": w_idx,
+                    "chain_context": clean_chain,
+                },
+                "chain_context": clean_chain,
+            }
         active_wave_nodes = []
         for n in wave:
             nid = n["id"]
@@ -1426,16 +1598,18 @@ def execute_declarative_routine(
                 (chain_context.get("fetch_context") or {}).get("base_filename")
                 or (f"ctx://workflows/workflow_{routine.get('id', routine_id)}_context.txt" if routine_includes else None)
             )
-            if not is_manual_transport and not wf_batch_uri and all_context_files:
+            if not wf_batch_uri and (editable_list or readonly_list or all_context_files):
                 try:
-                    pack_art = ctx.call(
-                        "gather.pack_selection",
-                        items=[{"filepath": f} for f in all_context_files],
-                        gather_only=True,
-                        wait=True,
+                    assembled_handoff = assemble_context_payload(
+                        ctx,
+                        edit_targets=editable_list or all_context_files,
+                        reference_files=readonly_list,
+                        user_message=user_prompt,
+                        strategy=rag_strategy_val,
+                        session_id=session_id,
                     )
-                    if isinstance(pack_art, dict) and pack_art.get("base_filename"):
-                        wf_batch_uri = pack_art["base_filename"]
+                    if isinstance(assembled_handoff, dict) and assembled_handoff.get("context_uri"):
+                        wf_batch_uri = assembled_handoff["context_uri"]
                 except Exception:
                     pass
             has_wf_uri = bool(wf_batch_uri and (not is_manual_transport or ctx.vfs.read(wf_batch_uri) is not None))
@@ -1485,6 +1659,7 @@ def execute_declarative_routine(
                 "state": clean_chain,
             }
 
+        total_steps_executed += len(active_wave_nodes)
         if len(active_wave_nodes) == 1:
             _run_single_dag_node(active_wave_nodes[0])
         else:
@@ -1492,8 +1667,13 @@ def execute_declarative_routine(
 
         for n in active_wave_nodes:
             n_state = chain_context.get(n["id"])
-            if isinstance(n_state, dict) and n_state.get("status") == "paused_for_user" and n_state.get("paused_result"):
-                return n_state["paused_result"]
+            if isinstance(n_state, dict):
+                if n_state.get("status") == "paused_for_user" and n_state.get("paused_result"):
+                    return n_state["paused_result"]
+                if isinstance(n_state.get("total_tokens_estimated"), int):
+                    accumulated_tokens += n_state["total_tokens_estimated"]
+                elif isinstance(n_state.get("text"), str):
+                    accumulated_tokens += len(n_state["text"]) // 4
 
     if routine.get("output"):
         declared_out = _interpolate_all_syntax(str(routine["output"]), chain_context).strip()

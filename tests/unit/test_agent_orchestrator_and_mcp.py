@@ -908,33 +908,32 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         self.assertEqual(done_res["status"], "completed")
         self.assertEqual(done_res["response"], "ALL_SYSTEMS_GO")
 
-        # 4. Verify agent/run_test blocks unapproved custom commands (403) and allows them once approved
+        # 4. agent/run_test refuses an unapproved custom command (403), and the caller cannot approve it.
+        #    Only the human-only bridge/test/approve route records an approval (P5).
         app = Flask(__name__)
         app.register_blueprint(agent_bp.bp)
+        app.register_blueprint(bridge_bp.bp)
         client = app.test_client()
-        unapproved_resp = client.post("/api/default/agent/run_test", json={
-            "repo": "alpha",
-            "command": "python3 -c \"print('custom test ok')\"",
-        })
+        command = "python3 -c \"print('custom test ok')\""
+        unapproved_resp = client.post("/api/default/agent/run_test", json={"repo": "alpha", "command": command})
         self.assertEqual(unapproved_resp.status_code, 403)
         self.assertEqual(unapproved_resp.get_json()["status"], "needs_approval")
 
-        approved_resp = client.post("/api/default/agent/run_test", json={
-            "repo": "alpha",
-            "command": "python3 -c \"print('custom test ok')\"",
-            "approve": True,
-        })
+        # A stale 'approve' flag from before P5 must not approve anything.
+        self_approve_resp = client.post("/api/default/agent/run_test", json={"repo": "alpha", "command": command, "approve": True})
+        self.assertEqual(self_approve_resp.status_code, 403)
+        self.assertEqual(self_approve_resp.get_json()["status"], "needs_approval")
+
+        approval_resp = client.post("/api/default/bridge/test/approve", json={"repo": "alpha", "command": command})
+        self.assertEqual(approval_resp.status_code, 200)
+        self.assertEqual(approval_resp.get_json()["status"], "approved")
+
+        # Once a person approved it, the same command runs, and the approval persists in host.json.
+        approved_resp = client.post("/api/default/agent/run_test", json={"repo": "alpha", "command": command})
         self.assertEqual(approved_resp.status_code, 200)
         self.assertEqual(approved_resp.get_json()["status"], "passed")
         self.assertIn("custom test ok", approved_resp.get_json()["stdout"])
 
-        # Subsequent call without approve=True now succeeds because the signature is persisted in host.json
-        cached_approval_resp = client.post("/api/default/agent/run_test", json={
-            "repo": "alpha",
-            "command": "python3 -c \"print('custom test ok')\"",
-        })
-        self.assertEqual(cached_approval_resp.status_code, 200)
-        self.assertEqual(cached_approval_resp.get_json()["status"], "passed")
     def test_cartographer_symbol_drift_watermark_and_topology_audit_upkeep(self):
         """Cartographer flags modified functions with [stale?] when their CODE_INDEX.md comment is unchanged, and topology.audit_upkeep + colon-scoped /upkeep:docs resolve cleanly."""
         from insetu.core.cartographer.cartographer import map_repositories as _map_repositories

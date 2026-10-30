@@ -28,7 +28,7 @@ dependencies = [
     "cryptography>=41.0.0",  # Tier 1 Kernel: Fernet encryption for secrets.json
     "watchdog>=3.0.0",      # Tier 1 VFS: Native filesystem event observer
     "ruamel.yaml>=0.18.0",   # Tier 2 Core: Round-trip YAML frontmatter parser
-    "akasa>=0.5.0,<0.6",    # Tier 1 Kernel: pinned to the 0.5 API (durable credential store); bump the upper bound when akasa breaks it
+    "akasa>=0.6.0,<0.7",    # Tier 1 Kernel: pinned to the 0.6 API (protected VFS targets); bump the upper bound when akasa breaks it
 ]
 
 [project.urls]

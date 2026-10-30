@@ -15,6 +15,32 @@ FORWARDED_CLIENT_HEADERS = frozenset({
 
 SETTING_SUBSCHEMA_KEYS = ("item_schema", "fields")
 
+_CROSS_MODULE_PRIVATE_REFS = None
+
+
+def _cross_module_private_refs() -> set:
+    """
+    Underscore names that some module imports by name (`from x import _helper`) or reaches as an
+    attribute (`mod._helper`) anywhere in the backend or tests. DEAD_PRIVATE_HELPER_BAN only sees one
+    file at a time, so without this a helper used from another module looks dead.
+    """
+    global _CROSS_MODULE_PRIVATE_REFS
+    if _CROSS_MODULE_PRIVATE_REFS is None:
+        refs = set()
+        for root in (BACKEND_DIR, PROJECT_ROOT / "tests"):
+            for py_path in collect_unique_files([root], [".py"]):
+                try:
+                    tree = ast.parse(Path(py_path).read_text(encoding="utf-8"))
+                except (OSError, SyntaxError, UnicodeDecodeError):
+                    continue
+                for n in ast.walk(tree):
+                    if isinstance(n, ast.ImportFrom):
+                        refs.update(a.name for a in n.names if a.name.startswith("_"))
+                    elif isinstance(n, ast.Attribute) and n.attr.startswith("_"):
+                        refs.add(n.attr)
+        _CROSS_MODULE_PRIVATE_REFS = refs
+    return _CROSS_MODULE_PRIVATE_REFS
+
 
 class BackendFitnessVisitor(ast.NodeVisitor):
     def __init__(self, filepath, filename, is_test=False):
@@ -31,9 +57,38 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         self.top_level_imports = set()
         self.route_function_names = set()
         self.current_function_name = None
+        self.selection_item_vars = set()
         # Sub-field definitions nested in a setting (repeater item_schema, record fields) inherit their
         # parent's scope, so SETTINGS_SCOPE_MANDATE only applies to top-level setting fields.
         self.nested_setting_field_ids = set()
+
+    @staticmethod
+    def _is_selection_iterable(iter_node) -> bool:
+        """True when a loop/comprehension iterable represents a raw UI selection list (items, selection, selected_items)."""
+        selection_names = ("items", "selection", "selected_items")
+        if isinstance(iter_node, ast.Name):
+            return iter_node.id in selection_names
+        if isinstance(iter_node, ast.BoolOp):
+            return any(BackendFitnessVisitor._is_selection_iterable(v) for v in iter_node.values)
+        if isinstance(iter_node, ast.Call) and isinstance(iter_node.func, ast.Attribute):
+            if iter_node.func.attr == "get" and iter_node.args and isinstance(iter_node.args[0], ast.Constant):
+                return iter_node.args[0].value in selection_names
+        if isinstance(iter_node, ast.Subscript) and isinstance(iter_node.slice, ast.Constant):
+            return iter_node.slice.value in selection_names
+        return False
+
+    def _collect_selection_loop_vars(self, scope_node) -> set:
+        """Collects loop target variable names bound to selection iterables within scope_node."""
+        vars_found = set()
+        for child in ast.walk(scope_node):
+            if isinstance(child, (ast.For, ast.AsyncFor)) and isinstance(child.target, ast.Name):
+                if self._is_selection_iterable(child.iter):
+                    vars_found.add(child.target.id)
+            elif isinstance(child, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+                for gen in child.generators:
+                    if isinstance(gen.target, ast.Name) and self._is_selection_iterable(gen.iter):
+                        vars_found.add(gen.target.id)
+        return vars_found
 
     def _mark_nested_setting_fields(self, list_node):
         if isinstance(list_node, ast.List):
@@ -65,6 +120,26 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                         and dec.func.value.id != "app"
                     ):
                         self.route_function_names.add(n.name)
+        if not self.is_test:
+            referenced_names = {
+                n.id for n in ast.walk(node)
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+            }
+            for stmt in node.body:
+                if (
+                    isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and stmt.name.startswith("_")
+                    and not stmt.name.startswith("__")
+                    and not stmt.decorator_list
+                    and stmt.name not in referenced_names
+                    and stmt.name not in _cross_module_private_refs()
+                ):
+                    report_violation(
+                        "DEAD_PRIVATE_HELPER_BAN",
+                        self.filepath,
+                        stmt.lineno,
+                        f"Unused private helper function '{stmt.name}()' is referenced nowhere in the backend or tests. Remove dead code or export it publicly."
+                    )
         for stmt in node.body:
             if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
                 targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
@@ -75,6 +150,19 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                             self.filepath,
                             stmt.lineno,
                             "Hardcoded '_BUILTIN_ROUTINES' dictionary in Python is banned. All built-in routines must live as read-only Markdown-as-Code files in '<module>/routines/*.md'."
+                        )
+                    # Legacy Pattern Detector: Catch and remove duplicate JS symbol regexes outside insetu/core/languages/
+                    if (
+                        not self.is_test
+                        and "languages" not in self.filepath.parts
+                        and isinstance(t, ast.Name)
+                        and t.id in ("_JS_SYMBOL_RE", "_RUST_FN_RE", "_RUST_TYPE_RE")
+                    ):
+                        report_violation(
+                            "DUPLICATE_LANGUAGE_AST_HELPER_BAN",
+                            self.filepath,
+                            stmt.lineno,
+                            f"Legacy duplicate language regex '{t.id}' detected outside 'insetu/core/languages/'. Remove it and delegate to 'insetu.core.languages'."
                         )
             if isinstance(stmt, ast.Import):
                 for alias in stmt.names:
@@ -156,7 +244,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         self.generic_visit(node)
     def visit_Subscript(self, node):
         if self.filename not in ('extension.py', 'engine_hooks.py', 'engine_gather.py', 'utils_core.py', 'engine_fs.py'):
-            if isinstance(node.value, ast.Name) and node.value.id == 'item':
+            if isinstance(node.value, ast.Name) and node.value.id in self.selection_item_vars:
                 if isinstance(node.slice, ast.Constant) and node.slice.value in ('filepath', 'folderpath'):
                     report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
         # AkasaURI Migration Guardrails
@@ -334,7 +422,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'hooks' and node.func.attr == 'emit':
                 report_violation("BACKEND_EXTENSION_EVENT_EMIT_MANDATE", self.filepath, node.lineno, "Global hooks.emit() call detected in extension module. Use ctx.emit() instead.")
         if self.filename not in ('extension.py', 'engine_hooks.py', 'engine_gather.py', 'utils_core.py', 'engine_fs.py'):
-            if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'item' and node.func.attr == 'get':
+            if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') in self.selection_item_vars and node.func.attr == 'get':
                 if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value in ('filepath', 'folderpath'):
                     report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
 
@@ -488,6 +576,14 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 )
             if alias.name in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth'):
                 report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{alias.name}'. Import from 'akasa.{alias.name.split('.')[-1]}' instead.")
+            # Legacy Pattern Detector: Find and remove any remaining imports from the retired insetu.core.gather.languages shim
+            if alias.name == "insetu.core.gather.languages" or alias.name.startswith("insetu.core.gather.languages."):
+                report_violation(
+                    "LEGACY_GATHER_LANGUAGES_IMPORT_BAN",
+                    self.filepath,
+                    node.lineno,
+                    f"Legacy import '{alias.name}' detected. Remove the shim reference and import from 'insetu.core.languages' instead."
+                )
         is_ext = 'extensions' in self.filepath.parts
         is_tier2 = not is_ext and self.filename not in ('cli.py', 'app.py') and not self.is_test
         if is_tier2 and any(alias.name.startswith('insetu.extensions') or alias.name.startswith('extensions') for alias in node.names):
@@ -511,13 +607,26 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         self.generic_visit(node)
     def visit_FunctionDef(self, node):
         prev_fn = self.current_function_name
+        prev_sel_vars = self.selection_item_vars
         self.current_function_name = node.name
+        self.selection_item_vars = self._collect_selection_loop_vars(node)
         if not self.is_test and node.name in ("interpolate_template", "_extract_prompt_arguments"):
             report_violation(
                 "DUPLICATE_TEMPLATE_INTERPOLATOR_BAN",
                 self.filepath,
                 node.lineno,
                 f"Legacy/duplicate template helper '{node.name}()' is banned. Use 'extract_template_variables' and 'interpolate_template_variables' from 'insetu.core.sdk' with '{{{{ ... }}}}' syntax."
+            )
+        if (
+            not self.is_test
+            and "languages" not in self.filepath.parts
+            and node.name in ("find_brace_balanced_end", "_find_brace_balanced_end", "_extract_python_symbols", "_extract_js_symbols")
+        ):
+            report_violation(
+                "DUPLICATE_LANGUAGE_AST_HELPER_BAN",
+                self.filepath,
+                node.lineno,
+                f"Duplicate AST/language helper '{node.name}()' outside 'insetu/core/languages/'. Delegate to 'insetu.core.languages' instead."
             )
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         hook_events = []
@@ -657,6 +766,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                                 report_violation("ROUTE_REQUEST_SCHEMA_MANDATE", self.filepath, node.lineno, f"Mutating route '{node.name}' ({', '.join(methods)}) is missing a mandatory 'request_schema' contract.")
         self.generic_visit(node)
         self.current_function_name = prev_fn
+        self.selection_item_vars = prev_sel_vars
 
     def visit_Attribute(self, node):
         if isinstance(node.ctx, ast.Store) and node.attr == "_cwd":
@@ -737,6 +847,18 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             )
         if node.module in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth'):
             report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{node.module}'. Import from 'akasa.{node.module.split('.')[-1]}' instead.")
+        # Legacy Pattern Detector: Find and remove any remaining imports from the retired insetu.core.gather.languages shim
+        if (
+            node.module == "insetu.core.gather.languages"
+            or (node.module and node.module.startswith("insetu.core.gather.languages."))
+            or ("gather" in self.filepath.parts and node.level >= 1 and node.module in ("languages", "languages.base", "languages.python", "languages.javascript", "languages.rust"))
+        ):
+            report_violation(
+                "LEGACY_GATHER_LANGUAGES_IMPORT_BAN",
+                self.filepath,
+                node.lineno,
+                f"Legacy import from '{node.module}' detected. Remove the shim reference and import from 'insetu.core.languages' instead."
+            )
         if not self.is_test and self.filename in ("engine_agent.py", "orchestrator.py") and node.module:
             if node.module.startswith(("urllib", "anthropic", "openai", "google.generativeai")):
                 report_violation(
@@ -1012,6 +1134,17 @@ def check_python_files():
                     )
             except SyntaxError as e:
                 report_violation("UNITTEST_SYNTAX_ERROR", test_fp, e.lineno or 1, f"Syntax error in unit test file: {e}")
+    # Legacy Directory Detector: Ensure the retired insetu/core/gather/languages/ shim directory does not exist on disk
+    legacy_gather_langs_dir = BACKEND_DIR / "core" / "gather" / "languages"
+    if legacy_gather_langs_dir.exists():
+        leftover_py = list(legacy_gather_langs_dir.glob("*.py"))
+        if leftover_py:
+            report_violation(
+                "LEGACY_GATHER_LANGUAGES_SHIM_DIR_BAN",
+                leftover_py[0],
+                1,
+                "Retired compatibility shim directory 'insetu/core/gather/languages/' still contains Python files. Delete them and use 'insetu/core/languages/' exclusively."
+            )
     # Validate CODE_INDEX.md has no unresolved file/directory Cartographer placeholders
     code_index_path = PROJECT_ROOT / "CODE_INDEX.md"
     if code_index_path.exists():

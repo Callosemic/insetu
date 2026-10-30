@@ -10,6 +10,7 @@ import akasa
 import akasa.utils as akasa_utils
 from akasa.hooks import hooks
 from akasa.vfs import mount_volume
+from insetu.core.utils_core import approve_command
 from insetu.extensions.preview.engine_preview import (
     preview_bp,
     _detect_repo_mode,
@@ -107,7 +108,7 @@ class TestExtPreviewUnit(unittest.TestCase):
         with urllib.request.urlopen(url, timeout=3) as resp:
             body = resp.read().decode("utf-8")
             self.assertIn("InSetu Test", body)
-            self.assertEqual(resp.headers.get("Access-Control-Allow-Origin"), "*")
+            self.assertIsNone(resp.headers.get("Access-Control-Allow-Origin"), "CORS is off unless static_cors is set (S2).")
             self.assertIn("no-store", resp.headers.get("Cache-Control") or "")
 
         stopped = stop_repo_server(self.ctx, "demo_app")
@@ -115,6 +116,7 @@ class TestExtPreviewUnit(unittest.TestCase):
 
     def test_startup_crash_probe_captures_logs(self):
         crash_cmd = "python3 -c \"import sys; print('FATAL_BOOT_CRASH_MARKER', flush=True); sys.exit(1)\""
+        approve_command("default", "preview", "demo_app", crash_cmd)
         snapshot = start_repo_server(
             self.ctx,
             "demo_app",

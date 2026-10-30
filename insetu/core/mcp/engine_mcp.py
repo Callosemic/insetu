@@ -64,6 +64,8 @@ def _build_mcp_tools_list(ctx) -> List[Dict[str, Any]]:
             continue
         if ext_name == "mcp" or cap_id.endswith((".settings", ".settings.schema")):
             continue
+        if spec.get("mcp_expose") is False:
+            continue  # Routes declared with mcp_expose=False (for example human-only approvals) are not MCP tools.
 
         req_schema = spec.get("request_schema")
         if isinstance(req_schema, dict):
@@ -288,6 +290,8 @@ def handle_mcp_jsonrpc(ctx, rpc_payload: Dict[str, Any]) -> Optional[Dict[str, A
                     }
             capabilities = get_registered_capabilities()
             cap_id = _resolve_capability_id(raw_name, capabilities)
+            if cap_id and capabilities[cap_id].get("mcp_expose") is False:
+                cap_id = None  # Same answer as an unknown tool: hidden capabilities are not callable over MCP either.
             if not cap_id:
                 return {
                     "jsonrpc": "2.0",

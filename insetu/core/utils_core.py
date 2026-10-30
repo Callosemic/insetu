@@ -6,6 +6,7 @@ import re
 import sys
 import time
 import json
+import hashlib
 import shutil
 import socket
 import threading
@@ -1472,6 +1473,66 @@ def get_repo_path(repo_dir, workspace_id=None):
 def get_sister_repos(workspace_id=None):
     cfg = load_config(workspace_id)
     return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir")]
+
+
+def _command_signature(kind: str, repo: str, command: str) -> str:
+    """Approval key for one exact command. Test-runner keys keep their original 'repo:hash' form."""
+    digest = hashlib.sha256((command or "").strip().encode("utf-8")).hexdigest()[:16]
+    return f"{repo}:{digest}" if kind == "test" else f"{kind}:{repo}:{digest}"
+
+
+def get_approved_commands(workspace_id: str) -> set:
+    """Returns the approved command signatures for workspace_id from host.json (P5)."""
+    host_path = get_daemon_host_config_path()
+    host_data = load_json_config(host_path, {})
+    return set(host_data.get("approved_test_commands", {}).get(workspace_id, []))
+
+
+def approve_command(workspace_id: str, kind: str, repo: str, command: str) -> str:
+    """Records a person's approval of one exact command of a kind ('test', 'preview') for a repository. Call only from human-only routes."""
+    sig = _command_signature(kind, repo, command)
+    host_path = get_daemon_host_config_path()
+    host_data = load_json_config(host_path, {})
+    approved = set(host_data.setdefault("approved_test_commands", {}).get(workspace_id, []))
+    approved.add(sig)
+    host_data["approved_test_commands"][workspace_id] = sorted(approved)
+    save_json_config(host_path, host_data, workspace_id="default")
+    return sig
+
+
+def is_command_approved(workspace_id: str, kind: str, repo: str, command: str) -> bool:
+    """True only when a person approved this exact command of this kind for this repository. Never approves anything itself."""
+    clean_cmd = (command or "").strip()
+    if not clean_cmd:
+        return False
+    return _command_signature(kind, repo, clean_cmd) in get_approved_commands(workspace_id)
+
+
+def get_approved_test_commands(workspace_id: str) -> set:
+    """Returns the set of approved command signatures for workspace_id (kept for existing callers)."""
+    return get_approved_commands(workspace_id)
+
+
+def approve_test_command(workspace_id: str, repo: str, command: str) -> str:
+    """Persists approval for a custom repository test command and returns its signature."""
+    return approve_command(workspace_id, "test", repo, command)
+
+
+def is_test_command_approved(
+    workspace_id: str,
+    repo: str,
+    command: str,
+    default_command: str,
+) -> bool:
+    """
+    True when `command` may run in `workspace_id` for `repo`: the repository's default test command,
+    or a custom command a person approved earlier through bridge.test.approve. Never approves anything itself.
+    """
+    clean_cmd = (command or "").strip()
+    clean_default = (default_command or "").strip()
+    if not clean_cmd or clean_cmd == clean_default:
+        return True
+    return is_command_approved(workspace_id, "test", repo, clean_cmd)
 def resolve_logical_path(path, workspace_id=None):
     if not path:
         return ""

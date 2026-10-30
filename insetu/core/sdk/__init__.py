@@ -102,6 +102,7 @@ from akasa.vfs import (
     DefaultVFSDriver,
     InterWorkspaceVFSDriver,
     register_driver,
+    register_protected_vfs_targets,
     mount_volume,
     set_mount_authorizer,
     resolve_physical_path,
@@ -130,8 +131,18 @@ init_kernel_app = _akasa.init_app
 boot_kernel = _akasa.boot
 reset_kernel_state = _akasa.reset_state
 
+# The recovery path (S8): the CLI that boots the lifeboat, the lifeboat itself, and the stdlib-only
+# credential store the lifeboat loads by path. The kernel also refuses anything that would shadow
+# them at import time (a same-named package directory, compiled variants, __pycache__ entries).
+INSETU_PROTECTED_VFS_TARGETS = (
+    ("insetu", "cli.py"),
+    ("insetu", "fallback_bridge.py"),
+    ("akasa/auth", "credentials.py"),
+)
+
 hooks.register_trusted_namespace("insetu.core.")
 hooks.register_extension_namespace("insetu.extensions.")
+register_protected_vfs_targets(*INSETU_PROTECTED_VFS_TARGETS)
 for _core_mod in CORE_MODULES_TUPLE:
     register_core_module(_core_mod)
 

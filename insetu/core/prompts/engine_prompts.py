@@ -24,8 +24,6 @@ def _ensure_global_user_templates_dir(workspace_id: str = "default") -> Path:
     return _PROMPTS_DRIVER.ensure_global_user_templates_dir(workspace_id)
 
 
-def _resolve_module_prompts_dir(mod_name: str, workspace_id: str = None):
-    return _PROMPTS_DRIVER.resolve_module_dir(mod_name, workspace_id)
 prompts_bp = InSetuExtension(
     'prompts',
     __name__,

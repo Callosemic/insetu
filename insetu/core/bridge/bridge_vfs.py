@@ -37,9 +37,11 @@ _BANNED_CONTROL_PLANE_FILENAMES = frozenset({
 def _is_banned_bridge_target(uri: InSetuURI, norm_target: str, extra_protected_Substrings: Optional[ list ] = None) -> Optional[str]:
     base_lower = (uri.basename or "").lower()
     norm_lower = norm_target.replace("\\", "/").lower()
+    raw_uri_lower = str(uri).replace("\\", "/").lower()
     parts_lower = [p.lower() for p in norm_lower.split("/") if p]
-    if base_lower in ("cli.py", "fallback_bridge.py") and "insetu/" in norm_lower:
-        return "Kernel Guardrail: Core CLI and Fallback Bridge files cannot be patched dynamically over the air."
+    # S8 Guarded Write: Refuse agent-originated writes targeting cli.py or fallback_bridge.py
+    if base_lower in ("cli.py", "fallback_bridge.py") and ("insetu" in norm_lower or "insetu" in raw_uri_lower):
+        return "Kernel Guardrail (S8 Guarded Write): Core CLI and Fallback Bridge files cannot be patched dynamically by agent turns."
     if base_lower in _BANNED_CONTROL_PLANE_FILENAMES or ".git" in parts_lower or base_lower == ".env" or base_lower.startswith(".env."):
         return f"Security Guardrail: Control-plane and credential file '{uri}' cannot be modified via the Yomama Bridge."
     for prot in (extra_protected_Substrings or []):

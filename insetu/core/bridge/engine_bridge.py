@@ -7,11 +7,12 @@ import difflib
 import traceback
 from typing import TypedDict, Literal, List, Dict, Optional, Any, Union
 from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import InSetuURI, get_sister_repos, get_workspace_physics, parse_blocks
+from insetu.core.utils_core import approve_test_command, InSetuURI, get_sister_repos, get_workspace_physics, parse_blocks
 # Import the extracted math & validation logic
 from .bridge_fuzzy import apply_block_in_memory, apply_textedit_in_memory, apply_json_patch_in_memory
 from .bridge_vfs import execute_bridge_sync, _process_sync_transaction
 from .bridge_ast import generate_commit_message_from_ledger
+from .bridge_test import run_repo_test_diagnostics
 # 1. Initialize the Single Source of Truth Blueprint
 BRIDGE_SCHEMA = {
     "bridge_ledger": {
@@ -304,6 +305,50 @@ class BridgeCommitMessageQuery(TypedDict, total=False):
     repo: str
     transaction_id: str
     limit: int
+class BridgeTestPayload(TypedDict, total=False):
+    repo: Optional[str]
+    command: Optional[str]
+    target_files: Optional[List[str]]
+    timeout: Optional[int]
+
+
+class BridgeTestApprovePayload(TypedDict):
+    repo: str
+    command: str
+
+
+MAX_TEST_TIMEOUT_SECONDS = 600
+
+
+@bridge_bp.route('test', methods=['POST'], request_schema=BridgeTestPayload, docstring="[sync] Executes the post-syntax test diagnostic gate (JUnit XML primary + exit-code tail fallback) and returns a unified test_diagnostic schema.")
+def bridge_run_test_gate(ctx):
+    data = ctx.payload or {}
+    repos = get_sister_repos(ctx.workspace_id)
+    repo = str(data.get("repo") or (repos[0] if repos else "")).strip()
+    res = run_repo_test_diagnostics(
+        ctx,
+        repo=repo,
+        command_override=data.get("command"),
+        target_files=data.get("target_files"),
+        timeout=max(1, min(int(data.get("timeout") or 120), MAX_TEST_TIMEOUT_SECONDS)),
+    )
+    if res.get("status") == "needs_approval":
+        return res, 403
+    return res
+
+
+@bridge_bp.route('test/approve', methods=['POST'], request_schema=BridgeTestApprovePayload, mcp_expose=False, docstring="[sync] Records a person's approval of a custom repository test command. Not exposed over MCP and banned in routines, so agents cannot approve their own commands (P5).")
+def bridge_approve_test_command(ctx):
+    data = ctx.payload or {}
+    repo = str(data.get("repo") or "").strip()
+    command = str(data.get("command") or "").strip()
+    if not repo or not command:
+        return {"status": "error", "error": "Both 'repo' and 'command' are required."}, 400
+    if repo not in get_sister_repos(ctx.workspace_id):
+        return {"status": "error", "error": f"Unknown repository '{repo}'."}, 400
+    return {"status": "approved", "repo": repo, "command": command, "signature": approve_test_command(ctx.workspace_id, repo, command)}
+
+
 @bridge_bp.route('commit_message', methods=['GET'], request_schema=BridgeCommitMessageQuery, docstring="[sync] Generates a Conventional Commit message and Transaction-ID trailers from bridge_ledger intent comments.")
 def bridge_commit_message(ctx):
     data = ctx.payload or {}

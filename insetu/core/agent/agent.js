@@ -12,10 +12,24 @@ export const AgentStore = createExtensionStore('Agent', {
     loading: false,
     editingRoutine: null,
     routineForm: {},
+    constitutionFiles: [],
+    referenceFiles: [],
+    pinnedFiles: [],
     attachedFiles: [],
     readOnlyFiles: [],
+    tokenLedger: { prompt_tokens: 0, completion_tokens: 0, saved_by_slicing: 0 },
+    activePlan: null,
+    activePlanPath: '',
+    pendingCheckpoint: null,
     agentRoutineId: 'workspace_turn',
     agentMode: 'auto',
+    agentScope: '',
+    agentSettings: {
+        rag_strategy: 'blast_radius',
+        compaction_strategy: 'deterministic',
+        run_tests_on_code: false,
+        strict_test_enforcement: false
+    },
     promptInput: '',
     pendingHandoff: null,
     handoffBranchIdx: 0,
@@ -31,12 +45,14 @@ export const AgentStore = createExtensionStore('Agent', {
             code: 'code',
             plan: 'plan',
             ask: 'ask',
-            yomama: 'yomama'
+            yomama: 'yomama',
+            undo: 'workspace_turn'
         };
         if (modeId === 'auto') {
             AgentStore.setState({
                 agentRoutineId: 'workspace_turn',
                 agentMode: 'auto',
+                agentScope: '',
                 promptInput: stripped
             });
             return;
@@ -45,25 +61,28 @@ export const AgentStore = createExtensionStore('Agent', {
             AgentStore.setState({
                 agentRoutineId: CORE_MODE_ROUTINES[modeId],
                 agentMode: modeId,
-                promptInput: `/${modeId} ${stripped}`
+                agentScope: '',
+                promptInput: stripped
             });
             return;
         }
         if (modeId === 'user') {
-            if (explicitRoutineId) {
-                const scopeSuffix = explicitScope ? `:${explicitScope}` : '';
-                AgentStore.setState({
-                    agentRoutineId: explicitRoutineId,
-                    agentMode: 'user',
-                    promptInput: `/user:${explicitRoutineId}${scopeSuffix} ${stripped}`
-                });
-            } else {
-                AgentStore.setState({
-                    agentRoutineId: 'workspace_turn',
-                    agentMode: 'user',
-                    promptInput: `/user:${stripped ? ' ' + stripped : ''}`
-                });
-            }
+            AgentStore.setState({
+                agentRoutineId: explicitRoutineId || 'workspace_turn',
+                agentMode: 'user',
+                agentScope: explicitScope || '',
+                promptInput: stripped
+            });
+        }
+    },
+    updateAgentSetting: async (key, value) => {
+        const cur = AgentStore.getState().agentSettings || {};
+        const next = { ...cur, [key]: value };
+        AgentStore.setState({ agentSettings: next });
+        try {
+            await window.inSetu.api.workspace.post('agent/settings', { [key]: value });
+        } catch (e) {
+            console.warn("Failed to persist agent setting:", e);
         }
     },
     selectRoutine: ({ routineId, mode } = {}) => {
@@ -86,7 +105,22 @@ export const AgentStore = createExtensionStore('Agent', {
             const res = await window.inSetu.api.get(`agent/messages/${id}`);
             if (res.ok) {
                 const data = await res.json();
-                AgentStore.setState({ messages: data.messages || [] });
+                const wsList = data.working_set || [];
+                const pinned = wsList.filter(x => x.tier === 'pinned').map(x => x.filepath).filter(Boolean);
+                const ref = wsList.filter(x => x.tier === 'reference').map(x => x.filepath).filter(Boolean);
+                AgentStore.setState({
+                    messages: data.messages || [],
+                    workingSetRaw: wsList,
+                    pinnedFiles: pinned,
+                    attachedFiles: pinned,
+                    referenceFiles: ref,
+                    readOnlyFiles: ref,
+                    constitutionFiles: data.constitution_files || [],
+                    tokenLedger: data.token_ledger || { prompt_tokens: 0, completion_tokens: 0, saved_by_slicing: 0 },
+                    activePlanPath: data.active_plan_path || '',
+                    pendingCheckpoint: data.checkpoint || null,
+                    sessionSummary: data.summary || '',
+                });
             }
         } catch (e) {
             console.error("Failed to fetch messages:", e);
@@ -104,17 +138,18 @@ export const AgentStore = createExtensionStore('Agent', {
     fetchSessions: async () => {
         AgentStore.setState({ loading: true });
         try {
-            const [sesRes, routRes, profRes] = await Promise.all([
+            const [sesRes, routRes, profRes, setRes] = await Promise.all([
                 window.inSetu.api.get('agent/sessions'),
                 window.inSetu.api.get('agent/routines'),
-                window.inSetu.api.workspace.get('llm/profiles')
+                window.inSetu.api.workspace.get('llm/profiles'),
+                window.inSetu.api.workspace.get('agent/settings').catch(() => null)
             ]);
             const patch = {};
-            if (sesRes.ok) {
+            if (sesRes && sesRes.ok) {
                 const data = await sesRes.json();
                 patch.sessions = data.sessions || [];
             }
-            if (routRes.ok) {
+            if (routRes && routRes.ok) {
                 const rData = await routRes.json();
                 patch.routines = rData.routines || [];
                 patch.availableOptions = {
@@ -128,6 +163,17 @@ export const AgentStore = createExtensionStore('Agent', {
                 patch.llmProfiles = pData.profiles || [];
                 patch.llmEndpoints = pData.endpoints || [];
                 patch.activeProfileId = pData.active_profile_id || 'default';
+            }
+            if (setRes && setRes.ok) {
+                const sData = await setRes.json();
+                if (sData && sData.settings) {
+                    patch.agentSettings = {
+                        rag_strategy: sData.settings.rag_strategy || 'blast_radius',
+                        compaction_strategy: sData.settings.compaction_strategy || 'deterministic',
+                        run_tests_on_code: Boolean(sData.settings.run_tests_on_code),
+                        strict_test_enforcement: Boolean(sData.settings.strict_test_enforcement)
+                    };
+                }
             }
             AgentStore.setState(patch);
             const curActive = AgentStore.getState().activeSessionId;
@@ -1037,14 +1083,27 @@ export class InSetuCoreAgent extends InSetuElement {
         activeSessionId: { type: String },
         messages: { type: Array },
         loading: { type: Boolean },
+        constitutionFiles: { type: Array },
+        referenceFiles: { type: Array },
+        pinnedFiles: { type: Array },
         attachedFiles: { type: Array },
         readOnlyFiles: { type: Array },
+        tokenLedger: { type: Object },
+        activePlanPath: { type: String },
+        pendingCheckpoint: { type: Object },
         agentRoutineId: { type: String },
         agentMode: { type: String },
+        agentScope: { type: String },
+        agentSettings: { type: Object },
         promptInput: { type: String },
         activeJobMessage: { type: String },
         pendingHandoff: { type: Object },
-        _handoffPasteText: { type: String }
+        _handoffPasteText: { type: String },
+        _hudExpanded: { type: Boolean, state: true },
+        _cmdMenuOpen: { type: Boolean, state: true },
+        _cmdSearchQuery: { type: String, state: true },
+        _settingsMenuOpen: { type: Boolean, state: true },
+        _isWideStream: { type: Boolean, state: true }
     };
 
     static styles = [sharedStyles, css`
@@ -1056,6 +1115,7 @@ export class InSetuCoreAgent extends InSetuElement {
             overflow: hidden;
             background: var(--bg);
             box-sizing: border-box;
+            container-type: inline-size;
         }
         .chat-main {
             flex: 1;
@@ -1064,6 +1124,7 @@ export class InSetuCoreAgent extends InSetuElement {
             min-height: 0;
             width: 100%;
             background: var(--bg);
+            position: relative;
         }
         .messages-scroll {
             flex: 1;
@@ -1112,6 +1173,107 @@ export class InSetuCoreAgent extends InSetuElement {
             display: flex;
             gap: 6px;
             flex-wrap: wrap;
+            align-items: center;
+        }
+        .hud-floating-trigger {
+            position: absolute;
+            top: 10px;
+            right: 14px;
+            z-index: 30;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 9999px;
+            background: color-mix(in srgb, var(--pane-bg) 90%, transparent);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid var(--border);
+            box-shadow: var(--overlay-shadow);
+            font-family: var(--font-mono, monospace);
+            font-size: 0.74rem;
+            font-weight: 700;
+            color: var(--text);
+            cursor: pointer;
+            user-select: none;
+        }
+        .hud-top-drawer {
+            background: color-mix(in srgb, var(--pane-bg) 96%, transparent);
+            border-bottom: 1px solid var(--border);
+            padding: 10px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 25;
+            flex-shrink: 0;
+        }
+        .composer-shell {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 6px 10px;
+            min-height: 40px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .composer-shell.multiline {
+            align-items: flex-start;
+        }
+        .composer-shell:focus-within {
+            border-color: var(--intent-primary);
+        }
+        .composer-shell sutram-pill .yv-pill {
+            display: inline-flex;
+            align-items: center;
+            height: 26px;
+            padding: 0 8px;
+            line-height: 1;
+            font-family: var(--font-mono, monospace);
+        }
+        .composer-shell sutram-textarea .yv-form-wrapper {
+            margin: 0 !important;
+            display: flex;
+            align-items: center;
+        }
+        .composer-shell sutram-textarea textarea.yv-textarea--borderless {
+            min-height: 26px !important;
+            line-height: 20px !important;
+            padding: 3px 0 !important;
+            margin: 0 !important;
+            font-size: 0.92rem;
+            box-sizing: border-box;
+        }
+        .upward-popover {
+            position: absolute;
+            bottom: calc(100% + 6px);
+            left: 14px;
+            right: 14px;
+            max-width: 420px;
+            max-height: 310px;
+            overflow-y: auto;
+            background: var(--pane-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: var(--overlay-shadow);
+            padding: 8px;
+            z-index: 200;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            box-sizing: border-box;
+        }
+        .checkpoint-card {
+            background: color-mix(in srgb, var(--intent-warning) 12%, var(--input-bg));
+            border: 1px solid var(--intent-warning);
+            border-radius: 6px;
+            padding: 10px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
         }
     `];
     constructor() {
@@ -1123,10 +1285,23 @@ export class InSetuCoreAgent extends InSetuElement {
         this.activeSessionId = null;
         this.messages = [];
         this.loading = false;
+        this.constitutionFiles = [];
+        this.referenceFiles = [];
+        this.pinnedFiles = [];
         this.attachedFiles = [];
         this.readOnlyFiles = [];
+        this.tokenLedger = { prompt_tokens: 0, completion_tokens: 0, saved_by_slicing: 0 };
+        this.activePlanPath = '';
+        this.pendingCheckpoint = null;
         this.agentRoutineId = 'workspace_turn';
         this.agentMode = 'auto';
+        this.agentScope = '';
+        this.agentSettings = {
+            rag_strategy: 'blast_radius',
+            compaction_strategy: 'deterministic',
+            run_tests_on_code: false,
+            strict_test_enforcement: false
+        };
         this.promptInput = '';
         this.activeJobMessage = '';
         this.pendingHandoff = null;
@@ -1134,6 +1309,11 @@ export class InSetuCoreAgent extends InSetuElement {
         this._handoffBranchIdx = 0;
         this._handoffBranchResponses = {};
         this._lastTurnCommittedFiles = [];
+        this._hudExpanded = false;
+        this._cmdMenuOpen = false;
+        this._cmdSearchQuery = '';
+        this._settingsMenuOpen = false;
+        this._isWideStream = false;
     }
 
     connectedCallback() {
@@ -1148,10 +1328,18 @@ export class InSetuCoreAgent extends InSetuElement {
                 activeSessionId: state.activeSessionId,
                 messages: state.messages || [],
                 loading: !!state.loading,
-                attachedFiles: state.attachedFiles || [],
-                readOnlyFiles: state.readOnlyFiles || [],
+                constitutionFiles: state.constitutionFiles || [],
+                referenceFiles: state.referenceFiles || state.readOnlyFiles || [],
+                pinnedFiles: state.pinnedFiles || state.attachedFiles || [],
+                attachedFiles: state.pinnedFiles || state.attachedFiles || [],
+                readOnlyFiles: state.referenceFiles || state.readOnlyFiles || [],
+                tokenLedger: state.tokenLedger || { prompt_tokens: 0, completion_tokens: 0, saved_by_slicing: 0 },
+                activePlanPath: state.activePlanPath || '',
+                pendingCheckpoint: state.pendingCheckpoint || null,
                 agentRoutineId: state.agentRoutineId || 'workspace_turn',
                 agentMode: state.agentMode || 'auto',
+                agentScope: state.agentScope || '',
+                agentSettings: state.agentSettings || { rag_strategy: 'blast_radius', compaction_strategy: 'deterministic', run_tests_on_code: false, strict_test_enforcement: false },
                 promptInput: state.promptInput || '',
                 pendingHandoff: state.pendingHandoff || null,
                 _handoffBranchIdx: state.handoffBranchIdx || 0,
@@ -1161,6 +1349,25 @@ export class InSetuCoreAgent extends InSetuElement {
             }),
             { autoFetch: 'fetchSessions' }
         );
+
+        this.registerOutsideClick(() => {
+            if (this._cmdMenuOpen || this._settingsMenuOpen) {
+                this._cmdMenuOpen = false;
+                this._settingsMenuOpen = false;
+            }
+        });
+
+        if (typeof ResizeObserver !== 'undefined') {
+            this._streamResizeObserver = new ResizeObserver((entries) => {
+                for (const entry of entries) {
+                    const isWide = entry.contentRect.width >= 720;
+                    if (this._isWideStream !== isWide) {
+                        this._isWideStream = isWide;
+                    }
+                }
+            });
+            this._streamResizeObserver.observe(this);
+        }
 
         this.registerGlobalListener('sutram-compile-progress', window, (e) => {
             if (e.detail && e.detail.ext_name === 'agent') {
@@ -1173,6 +1380,124 @@ export class InSetuCoreAgent extends InSetuElement {
                 AgentStore.getState().selectRoutine(e.detail);
             }
         });
+    }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        if (this._streamResizeObserver) {
+            this._streamResizeObserver.disconnect();
+            this._streamResizeObserver = null;
+        }
+    }
+
+    _getActiveCommandPillText() {
+        if (this.agentMode === 'user' && this.agentRoutineId && this.agentRoutineId !== 'workspace_turn') {
+            return `/${this.agentRoutineId}${this.agentScope ? ':' + this.agentScope : ''}`;
+        }
+        return `/${this.agentMode || 'auto'}`;
+    }
+
+    _getAllCommandOptions() {
+        const baseCommands = [
+            { id: 'auto', slash: '/auto', mode: 'auto', routineId: 'workspace_turn', scope: '', label: 'Smart Router', icon: 'sparkles', intent: 'primary' },
+            { id: 'code', slash: '/code', mode: 'code', routineId: 'code', scope: '', label: 'Edit Code (Yomama Bridge)', icon: 'code', intent: 'highlight' },
+            { id: 'plan', slash: '/plan', mode: 'plan', routineId: 'plan', scope: '', label: 'Draft Architectural Plan', icon: 'file-text', intent: 'highlight' },
+            { id: 'ask', slash: '/ask', mode: 'ask', routineId: 'ask', scope: '', label: 'Read-Only Codebase Q&A', icon: 'help-circle', intent: 'neutral' },
+            { id: 'yomama', slash: '/yomama', mode: 'yomama', routineId: 'yomama', scope: '', label: 'Apply & Heal Patch Blocks', icon: 'zap', intent: 'warning' },
+            { id: 'undo', slash: '/undo', mode: 'undo', routineId: 'workspace_turn', scope: '', label: 'Revert Last Patch Transaction', icon: 'rotate-ccw', intent: 'danger' }
+        ];
+        const baseIds = new Set(['workspace_turn', 'code', 'plan', 'ask', 'yomama']);
+        const customCommands = [];
+        (this.routines || []).forEach(r => {
+            if (!r || !r.id || baseIds.has(r.id)) return;
+            customCommands.push({
+                id: `user:${r.id}`,
+                slash: `/${r.id}`,
+                altSlash: `/user:${r.id}`,
+                mode: 'user',
+                routineId: r.id,
+                scope: '',
+                label: r.title || r.name || r.id,
+                icon: 'workflow',
+                intent: 'warning',
+                ctxCount: Array.isArray(r.includes) ? r.includes.length : 0
+            });
+            (r.scopes || []).forEach(sc => {
+                customCommands.push({
+                    id: `user:${r.id}:${sc}`,
+                    slash: `/${r.id}:${sc}`,
+                    altSlash: `/user:${r.id}:${sc}`,
+                    mode: 'user',
+                    routineId: r.id,
+                    scope: sc,
+                    label: `${r.title || r.id} (${sc})`,
+                    icon: 'workflow',
+                    intent: 'warning',
+                    ctxCount: Array.isArray(r.includes) ? r.includes.length : 0
+                });
+            });
+        });
+        return [...baseCommands, ...customCommands];
+    }
+
+    _selectCommandOption(opt, remainingPrompt = null) {
+        if (!opt) return;
+        if (opt.mode === 'undo' && remainingPrompt === null) {
+            this._cmdMenuOpen = false;
+            this._cmdSearchQuery = '';
+            this._undoLastTurn();
+            return;
+        }
+        const currentRaw = remainingPrompt !== null
+            ? remainingPrompt
+            : (this.promptInput || '').replace(/^\/[a-zA-Z0-9_:-]*\s*/, '');
+        AgentStore.setState({
+            agentMode: opt.mode,
+            agentRoutineId: opt.routineId || 'workspace_turn',
+            agentScope: opt.scope || '',
+            promptInput: currentRaw
+        });
+        this._cmdMenuOpen = false;
+        this._cmdSearchQuery = '';
+    }
+
+    _tryAbsorbLeadingSlashCommand(val) {
+        if (!val || !val.startsWith('/')) {
+            if (this._cmdMenuOpen && !this._cmdSearchQuery) {
+                this._cmdMenuOpen = false;
+            }
+            AgentStore.setState({ promptInput: val });
+            return;
+        }
+        // Check if user completed a slash token with a trailing space (e.g. "/code " or "/upkeep:docs ")
+        const completedMatch = val.match(/^\/([a-zA-Z0-9_:-]+)\s+([\s\S]*)$/);
+        if (completedMatch) {
+            const token = completedMatch[1].toLowerCase();
+            const rest = completedMatch[2] || '';
+            const allOpts = this._getAllCommandOptions();
+            const exact = allOpts.find(o =>
+                o.slash.slice(1).toLowerCase() === token ||
+                (o.altSlash && o.altSlash.slice(1).toLowerCase() === token)
+            );
+            if (exact) {
+                if (exact.mode === 'undo' && !rest.trim()) {
+                    AgentStore.setState({ promptInput: '' });
+                    this._cmdMenuOpen = false;
+                    this._undoLastTurn();
+                    return;
+                }
+                this._selectCommandOption(exact, rest);
+                return;
+            }
+        }
+        // While typing "/something" without a space yet, open the searchable command menu and filter live
+        const partialMatch = val.match(/^\/([a-zA-Z0-9_:-]*)$/);
+        if (partialMatch) {
+            this._cmdSearchQuery = partialMatch[1];
+            this._cmdMenuOpen = true;
+            this._settingsMenuOpen = false;
+        }
+        AgentStore.setState({ promptInput: val });
     }
 
     async _ensureActiveSession() {
@@ -1265,10 +1590,25 @@ export class InSetuCoreAgent extends InSetuElement {
             return;
         }
 
+        if (this.agentMode === 'undo') {
+            AgentStore.getState().setModePrefix('auto');
+            await this._undoLastTurn();
+            return;
+        }
         const isCustomRoutine = this.agentRoutineId && this.agentRoutineId !== 'workspace_turn';
         if (!rawInput && !isCustomRoutine) return;
-        const activeR = (this.routines || []).find(r => r.id === this.agentRoutineId);
-        const userText = rawInput || (activeR?.slash_command || `/${this.agentRoutineId}`);
+        const activePill = this._getActiveCommandPillText();
+        const displayUserBubble = rawInput
+            ? (this.agentMode !== 'auto' ? `${activePill} ${rawInput}` : rawInput)
+            : activePill;
+        const userText = rawInput || activePill;
+
+        // If a budget checkpoint is pending and user confirms resume:
+        let priorContext = null;
+        if (this.pendingCheckpoint && (rawInput.toLowerCase().includes('resume') || rawInput.toLowerCase().includes('continue'))) {
+            priorContext = this.pendingCheckpoint.chain_context || null;
+            AgentStore.setState({ pendingCheckpoint: null });
+        }
 
         // If user pasted raw Yomama patch blocks without an explicit /yomama prefix, hand off to the Bridge staging surface immediately
         if (
@@ -1286,7 +1626,7 @@ export class InSetuCoreAgent extends InSetuElement {
 
         AgentStore.setState(s => ({
             promptInput: '',
-            messages: [...(s.messages || []), { role: 'user', content: userText, timestamp: Date.now() / 1000 }]
+            messages: [...(s.messages || []), { role: 'user', content: displayUserBubble, timestamp: Date.now() / 1000 }]
         }));
         this.activeJobMessage = "Submitting prompt...";
         this.requestUpdate();
@@ -1296,10 +1636,12 @@ export class InSetuCoreAgent extends InSetuElement {
                 session_id: sesId,
                 prompt: userText,
                 mode: this.agentMode,
+                scope: this.agentScope || undefined,
                 profile_id: this.activeProfileId,
                 routine_id: this.agentRoutineId,
-                attached_files: this.attachedFiles,
-                read_only_files: this.readOnlyFiles
+                attached_files: this.pinnedFiles,
+                read_only_files: this.referenceFiles,
+                prior_chain_context: priorContext
             },
             {
                 onProgress: (msg) => {
@@ -1315,6 +1657,12 @@ export class InSetuCoreAgent extends InSetuElement {
                             handoffBranchIdx: 0,
                             handoffBranchResponses: {},
                             handoffPasteText: ''
+                        });
+                        return;
+                    }
+                    if (art?.status === 'paused_for_budget') {
+                        AgentStore.setState({
+                            pendingCheckpoint: art.checkpoint || art,
                         });
                         return;
                     }
@@ -1361,10 +1709,148 @@ export class InSetuCoreAgent extends InSetuElement {
         }
     }
 
+    _estimateWorkingSetTokens() {
+        const charPerTok = 4;
+        let cTokens = (this.constitutionFiles || []).length * 450;
+        let rTokens = (this.referenceFiles || []).length * 200; // AST Sliced
+        let pTokens = (this.pinnedFiles || []).length * 1500; // Full Source
+        let promptTokens = Math.round((this.promptInput || '').length / charPerTok);
+        return {
+            constitution: cTokens,
+            references: rTokens,
+            pinned: pTokens,
+            prompt: promptTokens,
+            total: cTokens + rTokens + pTokens + promptTokens
+        };
+    }
+
     render() {
+        const tokenEst = this._estimateWorkingSetTokens();
+        const softCeiling = 12000;
+        const ceilingRatio = tokenEst.total / softCeiling;
+        const tokenIntent = ceilingRatio > 1.0 ? 'danger' : (ceilingRatio > 0.75 ? 'warning' : 'success');
+
+        const totalContextFiles = (this.constitutionFiles?.length || 0) + (this.referenceFiles?.length || 0) + (this.pinnedFiles?.length || 0);
+        const compactTokStr = tokenEst.total >= 1000 ? `${(tokenEst.total / 1000).toFixed(1)}k` : `${tokenEst.total}`;
+
         return html`
             <div class="chat-main">
+                <!-- Top-Right Collapsible Context Budget HUD -->
+                ${!this._hudExpanded ? html`
+                    <div
+                        class="hud-floating-trigger"
+                        title="Context Budget: ~${tokenEst.total.toLocaleString()} / ${softCeiling.toLocaleString()} tok (${totalContextFiles} files in working set). Click to expand."
+                        style="border-color: var(--intent-${tokenIntent});"
+                        @click=${(e) => { e.stopPropagation(); this._hudExpanded = true; }}>
+                        <yv-icon name="database" style="width: 13px; height: 13px; color: var(--intent-${tokenIntent});"></yv-icon>
+                        <span>~${compactTokStr}</span>
+                        ${totalContextFiles > 0 ? html`<sutram-tag text="${totalContextFiles}" intent=${tokenIntent}></sutram-tag>` : ''}
+                    </div>
+                ` : html`
+                    <div class="hud-top-drawer">
+                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; font-family: var(--font-mono); font-size: 0.74rem;">
+                            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                                <yv-icon name="database" style="width: 14px; height: 14px; color: var(--intent-${tokenIntent});"></yv-icon>
+                                <span style="font-weight: bold; color: var(--text);">Context Budget: ~${tokenEst.total.toLocaleString()} / ${softCeiling.toLocaleString()} tok</span>
+                                <sutram-tag text=${tokenIntent === 'danger' ? 'Over Soft Budget' : (tokenIntent === 'warning' ? 'Near Ceiling' : 'Optimal')} intent=${tokenIntent}></sutram-tag>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="color: var(--text-muted);">
+                                    Session: ${(this.tokenLedger?.prompt_tokens || 0).toLocaleString()} in / ${(this.tokenLedger?.completion_tokens || 0).toLocaleString()} out / <strong style="color: var(--intent-success);">~${(this.tokenLedger?.saved_by_slicing || 0).toLocaleString()} saved</strong>
+                                </span>
+                                <sutram-btn
+                                    size="sm"
+                                    intent="neutral"
+                                    icon="chevron-up"
+                                    title="Collapse Context HUD"
+                                    style="margin: 0; --btn-padding: 2px 6px;"
+                                    @click=${() => { this._hudExpanded = false; }}>
+                                </sutram-btn>
+                            </div>
+                        </div>
+                        <div style="font-size: 0.7rem; font-family: var(--font-mono); color: var(--text-muted);">
+                            Breakdown: Constitution ${tokenEst.constitution} tok · Reference Slices ${tokenEst.references} tok · Pinned Targets ${tokenEst.pinned} tok · Prompt ${tokenEst.prompt} tok
+                        </div>
+                        ${totalContextFiles > 0 ? html`
+                            <div class="attachment-pills">
+                                ${(this.constitutionFiles || []).map(f => html`
+                                    <sutram-pill
+                                        labelText=${`📜 ${new this.utils.InSetuURI(f).basename} [Auto]`}
+                                        pillId=${f}
+                                        title="Tier 0 Constitution File (Auto-Pinned Architectural Standards)"
+                                        ?active=${true}>
+                                    </sutram-pill>
+                                `)}
+                                ${(this.referenceFiles || []).map(f => html`
+                                    <sutram-pill
+                                        labelText=${`🔒 ${new this.utils.InSetuURI(f).basename} [Slice]`}
+                                        pillId=${f}
+                                        title="Tier 1 Reference Interface (Click to promote to Full Source, Shift+Click to dismiss)"
+                                        ?active=${false}
+                                        @sutram-pill-toggled=${(e) => {
+                                            if (e.detail?.originalEvent?.shiftKey) {
+                                                AgentStore.setState({
+                                                    referenceFiles: this.referenceFiles.filter(x => x !== f),
+                                                    readOnlyFiles: this.referenceFiles.filter(x => x !== f)
+                                                });
+                                            } else {
+                                                AgentStore.setState({
+                                                    referenceFiles: this.referenceFiles.filter(x => x !== f),
+                                                    readOnlyFiles: this.referenceFiles.filter(x => x !== f),
+                                                    pinnedFiles: [...this.pinnedFiles, f],
+                                                    attachedFiles: [...this.pinnedFiles, f]
+                                                });
+                                            }
+                                        }}>
+                                    </sutram-pill>
+                                `)}
+                                ${(this.pinnedFiles || []).map(f => html`
+                                    <sutram-pill
+                                        labelText=${`✏️ ${new this.utils.InSetuURI(f).basename} [Full]`}
+                                        pillId=${f}
+                                        title="Tier 2 Pinned Edit Target (Click to demote to AST Slice, Shift+Click to dismiss)"
+                                        ?active=${true}
+                                        @sutram-pill-toggled=${(e) => {
+                                            if (e.detail?.originalEvent?.shiftKey) {
+                                                AgentStore.setState({
+                                                    pinnedFiles: this.pinnedFiles.filter(x => x !== f),
+                                                    attachedFiles: this.pinnedFiles.filter(x => x !== f)
+                                                });
+                                            } else {
+                                                AgentStore.setState({
+                                                    pinnedFiles: this.pinnedFiles.filter(x => x !== f),
+                                                    attachedFiles: this.pinnedFiles.filter(x => x !== f),
+                                                    referenceFiles: [...this.referenceFiles, f],
+                                                    readOnlyFiles: [...this.referenceFiles, f]
+                                                });
+                                            }
+                                        }}>
+                                    </sutram-pill>
+                                `)}
+                            </div>
+                        ` : html`<span style="font-size: 0.72rem; color: var(--text-muted); font-style: italic;">Working set empty. Use [+] below to attach files or run a turn to auto-populate.</span>`}
+                    </div>
+                `}
+
                 <div class="messages-scroll">
+                    ${this.activePlanPath ? html`
+                        <div style="background: color-mix(in srgb, var(--intent-highlight) 10%, var(--bg)); border: 1px solid var(--intent-highlight); border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+                            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: bold; color: var(--intent-highlight);">
+                                <yv-icon name="list-checks" style="width: 15px; height: 15px;"></yv-icon>
+                                <span>Active Plan: ${new this.utils.InSetuURI(this.activePlanPath).basename}</span>
+                            </div>
+                            <sutram-btn
+                                size="sm"
+                                intent="highlight"
+                                icon="external-link"
+                                label="Open Plan"
+                                style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.75rem;"
+                                @click=${() => {
+                                    if (this.vfs?.viewSourceFile) this.vfs.viewSourceFile(this.activePlanPath, true);
+                                }}>
+                            </sutram-btn>
+                        </div>
+                    ` : ''}
                     ${this.messages.length === 0 && !this.activeJobMessage ? html`
                         <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px dashed color-mix(in srgb, var(--intent-primary) 40%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--intent-primary) 4%, var(--input-bg)); color: var(--text-muted); text-align: center; padding: 20px; margin: 4px;">
                             <yv-icon name="message-square" style="width: 42px; height: 42px; margin-bottom: 10px; color: var(--intent-primary);"></yv-icon>
@@ -1379,6 +1865,39 @@ export class InSetuCoreAgent extends InSetuElement {
                             <div style="white-space: pre-wrap;">${m.content}</div>
                         </div>
                     `)}
+                    ${this.pendingCheckpoint ? html`
+                        <div class="checkpoint-card">
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+                                <div style="display: flex; align-items: center; gap: 8px; font-weight: bold; font-size: 0.85rem; color: var(--intent-warning);">
+                                    <yv-icon name="alert-circle" style="width: 16px; height: 16px;"></yv-icon>
+                                    <span>P1 Execution Budget Checkpoint Reached</span>
+                                </div>
+                                <sutram-tag text="Wavefront ${this.pendingCheckpoint.wavefront_index ?? 0}" intent="warning"></sutram-tag>
+                            </div>
+                            <span style="font-size: 0.8rem; color: var(--text-muted);">Turn paused at step budget limit to prevent unbounded execution. Resume to continue the next wavefront:</span>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <sutram-btn
+                                    size="sm"
+                                    intent="warning"
+                                    icon="play"
+                                    label="Resume Turn"
+                                    style="margin: 0;"
+                                    @click=${() => {
+                                        AgentStore.setState({ promptInput: 'Resume from budget checkpoint' });
+                                        this._sendPrompt();
+                                    }}>
+                                </sutram-btn>
+                                <sutram-btn
+                                    size="sm"
+                                    intent="neutral"
+                                    icon="x"
+                                    label="Dismiss"
+                                    style="margin: 0;"
+                                    @click=${() => AgentStore.setState({ pendingCheckpoint: null })}>
+                                </sutram-btn>
+                            </div>
+                        </div>
+                    ` : ''}
                     ${this._lastTurnCommittedFiles && this._lastTurnCommittedFiles.length > 0 ? html`
                         <div style="display: flex; flex-direction: column; gap: 6px; max-width: 88%;">
                             ${this._lastTurnCommittedFiles.map(fp => html`
@@ -1512,345 +2031,276 @@ export class InSetuCoreAgent extends InSetuElement {
                         </div>
                     `;
                 })() : html`
-                <!-- Gemini-Style Two-Tier Bottom Composer -->
-                <div class="input-panel" style="padding: 12px 16px; gap: 10px;">
-                    ${(() => {
-                        const raw = this.promptInput || '';
-                        const userMatch = raw.match(/^\/user:([a-zA-Z0-9_-]*)(?::([a-zA-Z0-9_:-]*))?(?:\s|$)/);
-                        const directScopeMatch = !userMatch ? raw.match(/^\/([a-zA-Z0-9_-]+):([a-zA-Z0-9_:-]*)(?:\s|$)/) : null;
-                        const isUserMode = this.agentMode === 'user' || Boolean(userMatch) || Boolean(directScopeMatch);
-                        if (!isUserMode) return '';
-
-                        const queryToken = userMatch ? (userMatch[1] || '').trim() : (directScopeMatch ? directScopeMatch[1].trim() : '');
-                        const scopeToken = userMatch ? (userMatch[2] ?? null) : (directScopeMatch ? (directScopeMatch[2] ?? '') : null);
-                        const baseIds = new Set(['workspace_turn', 'code', 'plan', 'ask', 'yomama']);
-                        const userRoutines = (this.routines || []).filter(r => r && r.id && !baseIds.has(r.id));
-                        const matchedRoutine = userRoutines.find(r => r.id.toLowerCase() === queryToken.toLowerCase());
-                        const routineScopes = Array.isArray(matchedRoutine?.scopes) ? matchedRoutine.scopes : [];
-                        const isTypingScope = Boolean(matchedRoutine && scopeToken !== null && !raw.match(/^\/(?:user:)?[a-zA-Z0-9_-]+(?::[a-zA-Z0-9_:-]+)?\s/));
-
-                        if (isTypingScope && routineScopes.length > 0) {
-                            const filteredScopes = scopeToken
-                                ? routineScopes.filter(s => s.toLowerCase().includes(scopeToken.toLowerCase()))
-                                : routineScopes;
-                            return html`
-                                <div style="display: flex; flex-direction: column; gap: 4px; max-height: 150px; overflow-y: auto; background: var(--bg); border: 1px solid color-mix(in srgb, var(--intent-warning) 50%, var(--border)); border-radius: 6px; padding: 6px;">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 6px; font-size: 0.72rem; font-family: var(--font-mono); color: var(--intent-warning); font-weight: bold;">
-                                        <span>Select Scope for ${matchedRoutine.title || matchedRoutine.id}</span>
-                                        <span style="cursor: pointer; color: var(--text-muted);" @click=${() => AgentStore.getState().setModePrefix('user', matchedRoutine.id)}>✕ Clear Scope</span>
-                                    </div>
-                                    ${filteredScopes.map(sc => html`
+                <!-- Bottom Composer with Embedded /command Pill & 2-Column Responsive Action Bar -->
+                <div class="input-panel" style="padding: 10px 14px; gap: 8px; position: relative;">
+                    ${this._cmdMenuOpen ? (() => {
+                        const allOpts = this._getAllCommandOptions();
+                        const q = (this._cmdSearchQuery || '').trim().replace(/^\//, '').toLowerCase();
+                        const filtered = q
+                            ? this.utils.fuzzyFilterObjects(allOpts, q, o => `${o.slash} ${o.altSlash || ''} ${o.label}`)
+                            : allOpts;
+                        return html`
+                            <div class="upward-popover" @click=${e => e.stopPropagation()}>
+                                <sutram-input
+                                    placeholder="Search commands & routines..."
+                                    .value=${this._cmdSearchQuery}
+                                    ?flush=${true}
+                                    @sutram-input-changed=${e => { this._cmdSearchQuery = e.detail.value; }}
+                                    @keydown=${e => {
+                                        if (e.key === 'Enter' && filtered.length > 0) {
+                                            e.preventDefault();
+                                            this._selectCommandOption(filtered[0]);
+                                        } else if (e.key === 'Escape') {
+                                            this._cmdMenuOpen = false;
+                                        }
+                                    }}>
+                                </sutram-input>
+                                <div style="display: flex; flex-direction: column; gap: 2px; max-height: 210px; overflow-y: auto;">
+                                    ${filtered.length === 0 ? html`
+                                        <span style="padding: 6px 8px; font-size: 0.78rem; color: var(--text-muted); font-style: italic;">No matching commands.</span>
+                                    ` : filtered.map(opt => html`
                                         <div
                                             class="yv-interactive-row"
-                                            style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; border-radius: 4px; cursor: pointer;"
-                                            @click=${() => AgentStore.getState().setModePrefix('user', matchedRoutine.id, sc)}>
-                                            <span style="font-family: var(--font-mono); font-size: 0.8rem; font-weight: bold; color: var(--intent-warning);">/user:${matchedRoutine.id}:${sc}</span>
+                                            style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; border-radius: 6px; cursor: pointer;"
+                                            @click=${() => this._selectCommandOption(opt)}>
+                                            <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+                                                <yv-icon name=${opt.icon || 'terminal'} style="width: 14px; height: 14px; color: var(--intent-${opt.intent || 'primary'}); flex-shrink: 0;"></yv-icon>
+                                                <span style="font-family: var(--font-mono); font-size: 0.8rem; font-weight: bold; color: var(--intent-${opt.intent || 'primary'}); min-width: 78px; flex-shrink: 0;">${opt.slash}</span>
+                                                <span style="font-size: 0.82rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${opt.label}</span>
+                                            </div>
+                                            ${opt.ctxCount ? html`<sutram-tag text="${opt.ctxCount} ctx" intent="neutral"></sutram-tag>` : ''}
                                         </div>
                                     `)}
                                 </div>
-                            `;
-                        }
-
-                        const isSettledSelection = Boolean(matchedRoutine && raw.match(/^\/(?:user:)?[a-zA-Z0-9_-]+(?::[a-zA-Z0-9_:-]+)?\s/));
-                        if (isSettledSelection) {
-                            const incList = Array.isArray(matchedRoutine.includes) ? matchedRoutine.includes : [];
-                            const activeScopeTag = scopeToken ? `/user:${matchedRoutine.id}:${scopeToken}` : `/user:${matchedRoutine.id}`;
-                            return html`
-                                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; background: color-mix(in srgb, var(--intent-warning) 14%, var(--bg)); border: 1px solid color-mix(in srgb, var(--intent-warning) 45%, var(--border)); border-radius: 6px; flex-wrap: wrap;">
-                                    <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap;">
-                                        <yv-icon name="workflow" style="width: 14px; height: 14px; color: var(--intent-warning); flex-shrink: 0;"></yv-icon>
-                                        <span style="font-size: 0.8rem; font-weight: bold; color: var(--text);">${matchedRoutine.title || matchedRoutine.name || matchedRoutine.id}</span>
-                                        <sutram-tag text=${activeScopeTag} intent="warning"></sutram-tag>
-                                        ${routineScopes.length > 0 ? html`
-                                            <div style="display: flex; gap: 4px; align-items: center; flex-wrap: wrap;">
-                                                ${routineScopes.map(sc => html`
-                                                    <sutram-btn
-                                                        size="sm"
-                                                        intent=${scopeToken === sc ? 'warning' : 'neutral'}
-                                                        label=":${sc}"
-                                                        style="margin: 0; --btn-padding: 1px 6px; --btn-font-size: 0.7rem; font-family: var(--font-mono);"
-                                                        @click=${() => AgentStore.getState().setModePrefix('user', matchedRoutine.id, sc)}>
-                                                    </sutram-btn>
-                                                `)}
-                                            </div>
-                                        ` : ''}
-                                        ${incList.length > 0 ? html`
-                                            <span style="font-size: 0.75rem; font-family: var(--font-mono); color: var(--text-muted);">
-                                                (${incList.length} context include${incList.length === 1 ? '' : 's'} staged)
-                                            </span>
-                                        ` : ''}
-                                    </div>
-                                    <div style="display: flex; gap: 6px; align-items: center;">
-                                        <sutram-btn
-                                            size="sm"
-                                            intent="warning"
-                                            icon="list"
-                                            label="Change Routine"
-                                            style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.75rem;"
-                                            @click=${() => AgentStore.getState().setModePrefix('user', null)}>
-                                        </sutram-btn>
-                                        <sutram-btn
-                                            size="sm"
-                                            intent="neutral"
-                                            icon="x"
-                                            label="/auto"
-                                            style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.75rem;"
-                                            @click=${() => AgentStore.getState().setModePrefix('auto')}>
-                                        </sutram-btn>
-                                    </div>
-                                </div>
-                            `;
-                        }
-
-                        const filteredRoutines = queryToken
-                            ? this.utils.fuzzyFilterObjects(
-                                userRoutines,
-                                queryToken,
-                                r => `${r.id} ${r.title || r.name || ''} ${r.domain || ''} ${r.description || ''}`
-                            )
-                            : userRoutines;
-
-                        return html`
-                            <div style="display: flex; flex-direction: column; gap: 4px; max-height: 165px; overflow-y: auto; background: var(--bg); border: 1px solid color-mix(in srgb, var(--intent-warning) 50%, var(--border)); border-radius: 6px; padding: 6px;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 6px; font-size: 0.72rem; font-family: var(--font-mono); color: var(--intent-warning); font-weight: bold;">
-                                    <span>Select Routine (${filteredRoutines.length} matching${queryToken ? ` "${queryToken}"` : ''})</span>
-                                    <span style="cursor: pointer; color: var(--text-muted);" @click=${() => AgentStore.getState().setModePrefix('auto')}>✕ Reset to /auto</span>
-                                </div>
-                                ${filteredRoutines.length === 0 ? html`
-                                    <div style="padding: 6px 8px; font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No routines match "/user:${queryToken}".</div>
-                                ` : filteredRoutines.map(r => {
-                                    const incCount = Array.isArray(r.includes) ? r.includes.length : 0;
-                                    return html`
-                                        <div
-                                            class="yv-interactive-row"
-                                            style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 4px; cursor: pointer;"
-                                            @click=${() => AgentStore.getState().setModePrefix('user', r.id)}>
-                                            <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
-                                                <yv-icon name="workflow" style="width: 14px; height: 14px; color: var(--intent-warning); flex-shrink: 0;"></yv-icon>
-                                                <span style="font-family: var(--font-mono); font-size: 0.8rem; font-weight: bold; color: var(--intent-warning); flex-shrink: 0;">/user:${r.id}</span>
-                                                <span style="font-size: 0.82rem; font-weight: bold; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${r.title || r.name || r.id}</span>
-                                            </div>
-                                            ${incCount > 0 ? html`
-                                                <sutram-tag text="${incCount} ctx" intent="neutral"></sutram-tag>
-                                            ` : ''}
-                                        </div>
-                                    `;
-                                })}
                             </div>
                         `;
-                    })()}
-                    ${(this.attachedFiles.length > 0 || this.readOnlyFiles.length > 0) ? html`
-                        <div class="attachment-pills">
-                            ${this.attachedFiles.map(f => html`
-                                <sutram-pill 
-                                    labelText=${`✏️ ${new this.utils.InSetuURI(f).basename}`} 
-                                    pillId=${f} 
-                                    title="Editable Target (Click to switch to Read-Only, Shift+Click to remove)"
-                                    ?active=${true}
-                                    @sutram-pill-toggled=${(e) => {
-                                        const nextAttached = this.attachedFiles.filter(x => x !== f);
-                                        if (e.detail?.originalEvent?.shiftKey) {
-                                            AgentStore.setState({ attachedFiles: nextAttached });
-                                        } else {
-                                            const nextRo = this.readOnlyFiles.includes(f) ? this.readOnlyFiles : [...this.readOnlyFiles, f];
-                                            AgentStore.setState({ attachedFiles: nextAttached, readOnlyFiles: nextRo });
-                                        }
-                                    }}>
-                                </sutram-pill>
-                            `)}
-                            ${this.readOnlyFiles.map(f => html`
-                                <sutram-pill 
-                                    labelText=${`🔒 ${new this.utils.InSetuURI(f).basename}`} 
-                                    pillId=${f} 
-                                    title="Read-Only Reference (Click to remove)"
-                                    ?active=${false}
-                                    @sutram-pill-toggled=${() => {
-                                        AgentStore.setState({ readOnlyFiles: this.readOnlyFiles.filter(x => x !== f) });
-                                    }}>
-                                </sutram-pill>
-                            `)}
-                        </div>
-                    ` : ''}
-                    <!-- Row 1: Full-Width Input Box -->
-                    <sutram-textarea 
-                        placeholder=${this.pendingHandoff?.pending_handoff
-                            ? `Paste the external response for "${this.pendingHandoff.routine_title || this.pendingHandoff.routine_id}" here and press Send...`
-                            : "Ask Yomama or paste patches (/code, /plan, /ask, /yomama, /user:<routine>, /undo)..."}
-                        .value=${this.promptInput} 
-                        ?flush=${true}
-                        style="width: 100%; margin: 0;"
-                        @keydown=${e => {
-                            if (e.key === 'Tab') {
-                                const raw = this.promptInput || '';
-                                const baseIds = new Set(['workspace_turn', 'code', 'plan', 'ask', 'yomama']);
-                                const userRoutines = (this.routines || []).filter(r => r && r.id && !baseIds.has(r.id));
-                                const scopeMatch = raw.match(/^\/(?:user:)?([a-zA-Z0-9_-]+):([a-zA-Z0-9_-]*)$/);
-                                if (scopeMatch) {
-                                    const rId = scopeMatch[1];
-                                    const sQuery = (scopeMatch[2] || '').toLowerCase();
-                                    const foundR = userRoutines.find(r => r.id.toLowerCase() === rId.toLowerCase());
-                                    const scopes = Array.isArray(foundR?.scopes) ? foundR.scopes : [];
-                                    const matchingScopes = sQuery ? scopes.filter(s => s.toLowerCase().startsWith(sQuery) || s.toLowerCase().includes(sQuery)) : scopes;
-                                    if (foundR && matchingScopes.length > 0) {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        AgentStore.getState().setModePrefix('user', foundR.id, matchingScopes[0]);
-                                        return;
-                                    }
+                    })() : ''}
+
+                    ${this._settingsMenuOpen ? (() => {
+                        const profs = (this.llmProfiles && this.llmProfiles.length > 0)
+                            ? this.llmProfiles
+                            : [{ id: 'default', title: 'Default Configuration' }];
+                        const curSettings = this.agentSettings || {};
+                        return html`
+                            <div class="upward-popover" style="max-width: 360px; gap: 10px; padding: 12px;" @click=${e => e.stopPropagation()}>
+                                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 6px;">
+                                    <span style="font-family: var(--font-mono); font-size: 0.76rem; font-weight: bold; text-transform: uppercase; color: var(--intent-primary);">Agent Quick Settings</span>
+                                    <sutram-btn size="sm" intent="neutral" icon="x" style="margin: 0; --btn-padding: 2px 6px;" @click=${() => { this._settingsMenuOpen = false; }}></sutram-btn>
+                                </div>
+                                <sutram-select
+                                    label="Compute Profile"
+                                    ?flush=${true}
+                                    .value=${this.activeProfileId || 'default'}
+                                    .options=${profs.map(p => ({ value: p.id, label: p.title || p.id }))}
+                                    @sutram-input-changed=${e => AgentStore.getState().selectProfile(e.detail.value)}>
+                                </sutram-select>
+                                <sutram-select
+                                    label="RAG Retrieval Strategy"
+                                    ?flush=${true}
+                                    .value=${curSettings.rag_strategy || 'blast_radius'}
+                                    .options=${[
+                                        { value: 'blast_radius', label: 'Blast Radius (0 tok AST + Affinity)' },
+                                        { value: 'llm_scout', label: 'LLM Scout (Fast-Tier Discovery)' }
+                                    ]}
+                                    @sutram-input-changed=${e => AgentStore.getState().updateAgentSetting('rag_strategy', e.detail.value)}>
+                                </sutram-select>
+                                <sutram-select
+                                    label="History Compaction"
+                                    ?flush=${true}
+                                    .value=${curSettings.compaction_strategy || 'deterministic'}
+                                    .options=${[
+                                        { value: 'deterministic', label: 'Deterministic Receipts (0 tok)' },
+                                        { value: 'llm_compactor', label: 'Fast-Tier LLM Summarizer' }
+                                    ]}
+                                    @sutram-input-changed=${e => AgentStore.getState().updateAgentSetting('compaction_strategy', e.detail.value)}>
+                                </sutram-select>
+                                <sutram-toggle
+                                    label="Run Test Gate After /code"
+                                    ?flush=${true}
+                                    .checked=${Boolean(curSettings.run_tests_on_code)}
+                                    @sutram-input-changed=${e => AgentStore.getState().updateAgentSetting('run_tests_on_code', e.detail.value)}>
+                                </sutram-toggle>
+                                <div style="display: flex; gap: 6px; padding-top: 4px; border-top: 1px solid var(--border);">
+                                    <sutram-btn
+                                        size="sm"
+                                        intent="neutral"
+                                        icon="cpu"
+                                        label="Compute Pool..."
+                                        style="flex: 1; margin: 0;"
+                                        @click=${() => {
+                                            this._settingsMenuOpen = false;
+                                            window.inSetu?.events?.emit('insetu:system:open-settings-view', { view: 'ext:llm' });
+                                        }}>
+                                    </sutram-btn>
+                                    <sutram-btn
+                                        size="sm"
+                                        intent="neutral"
+                                        icon="sliders"
+                                        label="All Settings..."
+                                        style="flex: 1; margin: 0;"
+                                        @click=${() => {
+                                            this._settingsMenuOpen = false;
+                                            window.inSetu?.events?.emit('insetu:system:open-settings-view', { view: 'ext:agent' });
+                                        }}>
+                                    </sutram-btn>
+                                </div>
+                            </div>
+                        `;
+                    })() : ''}
+
+                    <!-- Row 1: Unified Input Box with Leading /command Pill -->
+                    <div class="composer-shell ${(this.promptInput || '').includes('\n') ? 'multiline' : ''}">
+                        <sutram-pill
+                            labelText=${`${this._getActiveCommandPillText()} ▾`}
+                            pillId="active-command-pill"
+                            title="Click to search & switch /command (or type / in the input)"
+                            ?active=${this.agentMode !== 'auto'}
+                            style="flex-shrink: 0; font-family: var(--font-mono); margin: 0;"
+                            @click=${(e) => {
+                                e.stopPropagation();
+                                this._settingsMenuOpen = false;
+                                this._cmdMenuOpen = !this._cmdMenuOpen;
+                                if (this._cmdMenuOpen) this._cmdSearchQuery = '';
+                            }}>
+                        </sutram-pill>
+                        <sutram-textarea
+                            placeholder="Ask Yomama."
+                            .value=${this.promptInput}
+                            .autoSize=${Boolean((this.promptInput || '').includes('\n') || (this.promptInput || '').length > 60)}
+                            ?flush=${true}
+                            ?borderless=${true}
+                            style="flex: 1; min-width: 0; margin: 0;"
+                            @keydown=${e => {
+                                if (e.key === 'Backspace' && !this.promptInput && this.agentMode !== 'auto') {
+                                    e.preventDefault();
+                                    AgentStore.getState().setModePrefix('auto');
+                                    return;
                                 }
-                                const userMatch = raw.match(/^\/user:([a-zA-Z0-9_-]*)$/);
-                                if (userMatch) {
-                                    const qTok = (userMatch[1] || '').trim();
-                                    const matches = qTok
-                                        ? this.utils.fuzzyFilterObjects(
-                                            userRoutines,
-                                            qTok,
-                                            r => `${r.id} ${r.title || r.name || ''} ${r.domain || ''} ${r.description || ''}`
-                                        )
-                                        : userRoutines;
+                                if ((e.key === 'Tab' || e.key === 'Enter') && this._cmdMenuOpen && (this.promptInput || '').startsWith('/')) {
+                                    const allOpts = this._getAllCommandOptions();
+                                    const q = (this._cmdSearchQuery || '').trim().replace(/^\//, '').toLowerCase();
+                                    const matches = q
+                                        ? this.utils.fuzzyFilterObjects(allOpts, q, o => `${o.slash} ${o.altSlash || ''} ${o.label}`)
+                                        : allOpts;
                                     if (matches.length > 0) {
                                         e.preventDefault();
                                         e.stopPropagation();
-                                        AgentStore.getState().setModePrefix('user', matches[0].id);
+                                        this._selectCommandOption(matches[0], '');
                                     }
                                 }
-                            }
-                        }}
-                        @sutram-input-changed=${e => {
-                            const val = e.detail.value;
-                            const patch = { promptInput: val };
-                            const coreMatch = val.match(/^\/(auto|code|plan|ask|yomama)(?:\s|$)/);
-                            const userMatch = val.match(/^\/user:([a-zA-Z0-9_-]*)/);
-                            const directRoutineMatch = !coreMatch && !userMatch ? val.match(/^\/([a-zA-Z0-9_-]+)(?::[a-zA-Z0-9_:-]*)?(?:\s|$)/) : null;
-                            if (coreMatch) {
-                                const mId = coreMatch[1];
-                                patch.agentMode = mId;
-                                patch.agentRoutineId = mId === 'auto' ? 'workspace_turn' : mId;
-                            } else if (userMatch) {
-                                patch.agentMode = 'user';
-                                const rCand = userMatch[1];
-                                const matchedR = (this.routines || []).find(r => r.id.toLowerCase() === rCand.toLowerCase());
-                                patch.agentRoutineId = matchedR ? matchedR.id : 'workspace_turn';
-                            } else if (directRoutineMatch) {
-                                const rCand = directRoutineMatch[1];
-                                const matchedR = (this.routines || []).find(r => r.id.toLowerCase() === rCand.toLowerCase());
-                                if (matchedR) {
-                                    patch.agentMode = 'user';
-                                    patch.agentRoutineId = matchedR.id;
-                                }
-                            } else if (!val.startsWith('/') && this.agentMode !== 'auto') {
-                                patch.agentMode = 'auto';
-                                patch.agentRoutineId = 'workspace_turn';
-                            }
-                            AgentStore.setState(patch);
-                        }}>
-                    </sutram-textarea>
-                    <!-- Row 2: Bottom Action Bar ([💬] | [/mode ▾] | [+] ... [Send]) -->
+                            }}
+                            @sutram-input-changed=${e => this._tryAbsorbLeadingSlashCommand(e.detail.value)}>
+                        </sutram-textarea>
+                    </div>
+
+                    <!-- Row 2: Responsive Bottom Action Bar (Icon-only < 720px; Icon + Label >= 720px) -->
                     <div style="display: flex; align-items: stretch; justify-content: space-between; gap: 8px; width: 100%;">
                         <div style="display: flex; align-items: stretch; gap: 8px; min-width: 0;">
                             <sutram-btn
                                 intent="primary"
                                 icon="message-square"
-                                title="Toggle Yomama Menu (Active: Chat)"
-                                style="margin: 0; flex-shrink: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem;"
+                                .label=${this._isWideStream ? 'Conversations' : ''}
+                                title="Toggle Yomama Conversations Drawer"
+                                style="margin: 0; flex-shrink: 0; --btn-padding: 8px 12px;"
                                 @click=${() => this.dispatch('insetu:yomama:toggle-drawer')}>
                             </sutram-btn>
-                            <sutram-dropdown
-                                align="left"
-                                direction="up"
-                                .items=${(() => {
-                                    const baseModes = [
-                                        { id: 'auto', label: '/auto (Smart Router)', icon: 'sparkles' },
-                                        { id: 'code', label: '/code (Edit Code)', icon: 'code' },
-                                        { id: 'plan', label: '/plan (Draft Plan)', icon: 'file-text' },
-                                        { id: 'ask', label: '/ask (Read-Only Q&A)', icon: 'help-circle' },
-                                        { id: 'yomama', label: '/yomama (Heal Patches)', icon: 'bridge' },
-                                        { id: 'user', label: '/user (Custom & Extended Routines)', icon: 'workflow' }
-                                    ];
-                                    return baseModes.map(m => ({
-                                        label: m.label,
-                                        icon: this.agentMode === m.id ? 'check' : m.icon,
-                                        onClick: () => AgentStore.getState().setModePrefix(m.id)
-                                    }));
-                                })()}>
-                                <sutram-btn
-                                    slot="trigger"
-                                    intent=${this.agentMode === 'user' ? 'warning' : (this.agentMode && this.agentMode !== 'auto' ? 'highlight' : 'neutral')}
-                                    icon="chevron-up"
-                                    label=${`/${this.agentMode || 'auto'}`}
-                                    title="Select Slash Mode"
-                                    style="margin: 0; flex-shrink: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem; font-family: var(--font-mono);">
-                                </sutram-btn>
-                            </sutram-dropdown>
-                            <sutram-dropdown
-                                align="left"
-                                direction="up"
-                                .items=${(() => {
-                                    const profs = (this.llmProfiles && this.llmProfiles.length > 0)
-                                        ? this.llmProfiles
-                                        : [{ id: 'default', title: 'Default Configuration' }];
-                                    const items = profs.map(p => ({
-                                        label: p.title || p.id,
-                                        icon: this.activeProfileId === p.id ? 'check' : 'cpu',
-                                        onClick: () => AgentStore.getState().selectProfile(p.id)
-                                    }));
-                                    items.push({ divider: true });
-                                    items.push({
-                                        label: 'Configure Compute Pool & Profiles...',
-                                        icon: 'sliders',
-                                        onClick: () => window.inSetu?.events?.emit('insetu:system:open-settings-view', { view: 'ext:llm' })
-                                    });
-                                    return items;
-                                })()}>
-                                <sutram-btn
-                                    slot="trigger"
-                                    intent="neutral"
-                                    icon="cpu"
-                                    label=${(() => {
-                                        const found = (this.llmProfiles || []).find(p => p.id === this.activeProfileId);
-                                        return found ? (found.title || found.id) : (this.activeProfileId || 'Default');
-                                    })()}
-                                    title="Switch Active LLM Configuration Profile"
-                                    style="margin: 0; flex-shrink: 0; --btn-padding: 10px 12px; --btn-font-size: 0.82rem; font-family: var(--font-mono);">
-                                </sutram-btn>
-                            </sutram-dropdown>
 
-                            <sutram-btn 
-                                icon="plus" 
-                                intent="neutral" 
-                                title="Add Context File"
-                                style="margin: 0; flex-shrink: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem;"
-                                @click=${() => {
-                                    if (window.inSetu.ui.openWorkspaceBrowser) {
-                                        window.inSetu.ui.openWorkspaceBrowser({
-                                            mode: 'file',
-                                            title: 'Add Context File',
-                                            callback: (filepath) => {
-                                                if (!this.attachedFiles.includes(filepath)) {
-                                                    AgentStore.setState({ attachedFiles: [...this.attachedFiles, filepath] });
-                                                }
-                                            }
-                                        });
-                                    }
+                            <sutram-btn
+                                intent=${this._settingsMenuOpen ? 'highlight' : 'neutral'}
+                                icon="settings"
+                                .label=${this._isWideStream ? 'Settings' : ''}
+                                title="Agent & Compute Profile Settings"
+                                style="margin: 0; flex-shrink: 0; --btn-padding: 8px 12px;"
+                                @click=${(e) => {
+                                    e.stopPropagation();
+                                    this._cmdMenuOpen = false;
+                                    this._settingsMenuOpen = !this._settingsMenuOpen;
                                 }}>
                             </sutram-btn>
+
+                            <sutram-dropdown
+                                align="left"
+                                direction="up"
+                                .items=${(() => {
+                                    const basketItems = Array.from(window.inSetu?.stores?.Selection?.getState?.()?.selectedItems?.values?.() || []);
+                                    const basketCount = basketItems.length;
+                                    const activeEditorFile = window.inSetu?.editor?.getActiveEditorPath ? window.inSetu.editor.getActiveEditorPath() : null;
+                                    const activeEditorName = activeEditorFile ? new this.utils.InSetuURI(activeEditorFile).basename : 'None';
+
+                                    return [
+                                        {
+                                            label: "📄 Choose Files... (Workspace Explorer)",
+                                            icon: "folder",
+                                            onClick: () => {
+                                                if (window.inSetu.ui.openWorkspaceBrowser) {
+                                                    window.inSetu.ui.openWorkspaceBrowser({
+                                                        mode: 'file',
+                                                        title: 'Add Context File',
+                                                        callback: (filepath) => {
+                                                            if (!this.pinnedFiles.includes(filepath)) {
+                                                                AgentStore.setState({
+                                                                    pinnedFiles: [...this.pinnedFiles, filepath],
+                                                                    attachedFiles: [...this.pinnedFiles, filepath]
+                                                                });
+                                                            }
+                                                        }
+                                                    });
+                                                }
+                                            }
+                                        },
+                                        {
+                                            label: `🧺 Add from Selection Basket (${basketCount})`,
+                                            icon: "package",
+                                            disabled: basketCount === 0,
+                                            onClick: () => {
+                                                const uris = basketItems.map(i => i.data?.filepath || i.filepath).filter(Boolean);
+                                                const combined = Array.from(new Set([...this.pinnedFiles, ...uris]));
+                                                AgentStore.setState({ pinnedFiles: combined, attachedFiles: combined });
+                                            }
+                                        },
+                                        {
+                                            label: `✏️ Add Active Editor File (${activeEditorName})`,
+                                            icon: "edit-3",
+                                            disabled: !activeEditorFile,
+                                            onClick: () => {
+                                                if (activeEditorFile && !this.pinnedFiles.includes(activeEditorFile)) {
+                                                    AgentStore.setState({
+                                                        pinnedFiles: [...this.pinnedFiles, activeEditorFile],
+                                                        attachedFiles: [...this.pinnedFiles, activeEditorFile]
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    ];
+                                })()}>
+                                <sutram-btn
+                                    slot="trigger"
+                                    icon="plus"
+                                    .label=${this._isWideStream ? 'Add Context' : ''}
+                                    intent="neutral"
+                                    title="Add Working Set Context (+)"
+                                    style="margin: 0; flex-shrink: 0; --btn-padding: 8px 12px;">
+                                </sutram-btn>
+                            </sutram-dropdown>
                         </div>
 
                         <div style="display: flex; align-items: stretch; gap: 8px; flex-shrink: 0;">
                             ${this.activeJobMessage ? html`
                                 <sutram-async-btn
                                     icon="square"
-                                    label="Stop"
+                                    .label=${this._isWideStream ? 'Stop' : ''}
                                     intent="danger"
-                                    style="margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem;"
+                                    title="Stop Active Turn"
+                                    style="margin: 0; --btn-padding: 8px 12px;"
                                     .onClick=${() => this._cancelTurn()}>
                                 </sutram-async-btn>
                             ` : ''}
-                            <sutram-async-btn 
-                                label="Send" 
-                                icon="send" 
-                                intent="primary" 
-                                style="margin: 0; flex-shrink: 0; --btn-padding: 10px 16px; --btn-font-size: 0.9rem;"
+                            <sutram-async-btn
+                                .label=${this._isWideStream ? 'Send' : ''}
+                                icon="send"
+                                intent="primary"
+                                title="Send Prompt"
+                                style="margin: 0; flex-shrink: 0; --btn-padding: 8px 14px;"
                                 .onClick=${() => this._sendPrompt()}>
                             </sutram-async-btn>
                         </div>

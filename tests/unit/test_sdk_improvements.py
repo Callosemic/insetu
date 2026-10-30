@@ -231,10 +231,13 @@ class TestSdkImprovements(unittest.TestCase):
                 0,
                 f"Existing Python codebase had fitness violations:\n{buf.getvalue()}",
             )
+            # Note: Includes legacy patterns (insetu.core.gather.languages shim imports, duplicate AST helpers,
+            # and unused private helpers) specifically to ensure our fitness suite finds and forces their removal.
             bad_code = (
                 "from flask import jsonify\n"
                 "from insetu.core.sdk import InSetuExtension\n"
                 "from insetu.core.gather.engine_gather import _pack_selection_worker\n"
+                "from insetu.core.gather.languages import get_language_provider\n"
                 "demo_bp = InSetuExtension('demo', __name__)\n"
                 "__depends__ = []\n"
                 "def bad_init():\n"
@@ -253,6 +256,15 @@ class TestSdkImprovements(unittest.TestCase):
                 "def untyped_worker(ctx, force_full=False):\n"
                 "    if isinstance(force_full, list):\n"
                 "        pass\n"
+                "def bad_selection_loop(ctx, items):\n"
+                "    for entry in items:\n"
+                "        _ = entry.get('filepath')\n"
+                "def good_internal_dict_loop(working_set):\n"
+                "    return {item['filepath']: item for item in working_set if item.get('filepath')}\n"
+                "def _unused_private_helper(x):\n"
+                "    return x + 1\n"
+                "def _find_brace_balanced_end(lines, start_idx):\n"
+                "    return _unused_private_helper(start_idx)\n"
             )
             fake_path = Path(__file__).resolve().parent.parent.parent / "insetu" / "extensions" / "demo" / "engine_demo.py"
             tree = ast.parse(bad_code, filename=str(fake_path))
@@ -268,6 +280,10 @@ class TestSdkImprovements(unittest.TestCase):
             self.assertIn("FLASK_TRANSPORT_LEAK_BAN", out_bad)
             self.assertIn("CROSS_MODULE_PRIVATE_IMPORT_BAN", out_bad)
             self.assertIn("DIRECT_ROUTE_FUNCTION_CALL_BAN", out_bad)
+            self.assertIn("DEAD_PRIVATE_HELPER_BAN", out_bad)
+            self.assertIn("LEGACY_GATHER_LANGUAGES_IMPORT_BAN", out_bad)
+            self.assertIn("DUPLICATE_LANGUAGE_AST_HELPER_BAN", out_bad)
+            self.assertEqual(out_bad.count("SELECTION_EXPANSION_MANDATE"), 1, out_bad)
         finally:
             FitnessState.violations_found = prev
     def test_capability_registry_and_in_process_ctx_call(self):

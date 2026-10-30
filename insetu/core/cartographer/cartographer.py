@@ -17,6 +17,13 @@ from insetu.core.utils_core import (
     parse_frontmatter,
 )
 from insetu.core.topology.engine_topology import get_valid_workspace_files, get_topology_files_for_repo
+from insetu.core.languages import (
+    SUPPORTED_SYMBOL_EXTENSIONS,
+    describe_source_file,
+    extract_file_symbols,
+    extract_symbol_source_slice,
+    first_sentence as _first_sentence,
+)
 CARTOGRAPHER_SETTINGS_SCHEMA = [
     {
         "id": "include_symbols_in_index",
@@ -73,421 +80,7 @@ _CARTOGRAPHER_CACHE_LOCK = threading.Lock()
 _CARTOGRAPHER_SYMBOL_CACHE: Dict[Tuple[str, str], Tuple[str, List[Dict[str, Any]]]] = {}
 
 
-def _first_sentence(text: Optional[str]) -> str:
-    """Normalizes the first sentence of a docstring or JSDoc comment for single-line index display."""
-    if not text:
-        return ""
-    cleaned_lines = []
-    for raw_line in text.strip().splitlines():
-        line = re.sub(r'^\s*\*+\s?', '', raw_line).strip()
-        if not line or line.startswith('@'):
-            if cleaned_lines:
-                break
-            continue
-        cleaned_lines.append(line)
-        if line.endswith('.'):
-            break
-    joined = " ".join(cleaned_lines).strip()
-    if not joined:
-        return ""
-    sentence_match = re.match(r'^(.+?\.)(?:\s|$)', joined)
-    summary = sentence_match.group(1) if sentence_match else joined
-    return summary[:140].rstrip() + ("..." if len(summary) > 140 else "")
 
-
-_JS_PATH_COMMENT_RE = re.compile(r'^//\s*[\w./@-]+\.(?:js|mjs|ts|tsx)\s*$')
-
-
-def describe_source_file(rel_path: str, content: str) -> str:
-    """
-    Derives a one-sentence file description for CODE_INDEX.md from the file itself, so a file that
-    has no description in the index gets one instead of a '[comment required]' placeholder.
-    Python: the module docstring, or for test_*.py modules the first class docstring.
-    JavaScript/TypeScript: a leading /** ... */ or // comment block that is separated from the first
-    declaration (followed by a blank line or an import), skipping bare file-path comments.
-    """
-    if not content or not content.strip():
-        return ""
-    suffix = Path(rel_path).suffix.lower()
-    if suffix == ".py":
-        try:
-            tree = ast.parse(content)
-        except SyntaxError:
-            return ""
-        module_doc = _first_sentence(ast.get_docstring(tree))
-        if module_doc:
-            return module_doc
-        if Path(rel_path).name.startswith("test_"):
-            for node in tree.body:
-                if isinstance(node, ast.ClassDef):
-                    class_doc = _first_sentence(ast.get_docstring(node))
-                    if class_doc:
-                        return class_doc
-        return ""
-    if suffix not in (".js", ".mjs", ".ts", ".tsx"):
-        return ""
-
-    lines = content.splitlines()
-    idx = 0
-    if lines and lines[0].startswith("#!"):
-        idx = 1
-    while idx < len(lines) and (not lines[idx].strip() or _JS_PATH_COMMENT_RE.match(lines[idx].strip())):
-        idx += 1
-    if idx >= len(lines):
-        return ""
-
-    block_text = ""
-    end_idx = idx
-    first = lines[idx].strip()
-    if first.startswith("/**"):
-        while end_idx < len(lines) and "*/" not in lines[end_idx]:
-            end_idx += 1
-        if end_idx >= len(lines):
-            return ""
-        block = "\n".join(lines[idx:end_idx + 1]).strip()
-        block_text = re.sub(r'^/\*+|\*+/$', '', block).strip()
-    elif first.startswith("//"):
-        comment_lines = []
-        while end_idx < len(lines) and lines[end_idx].strip().startswith("//"):
-            stripped = lines[end_idx].strip()
-            if not _JS_PATH_COMMENT_RE.match(stripped):
-                comment_lines.append(stripped.lstrip("/").strip())
-            end_idx += 1
-        end_idx -= 1
-        block_text = "\n".join(comment_lines)
-    else:
-        return ""
-
-    # A comment attached directly to a declaration documents that symbol, not the file.
-    next_idx = end_idx + 1
-    if next_idx < len(lines):
-        next_line = lines[next_idx].strip()
-        if next_line and not next_line.startswith(("import ", "import{", "'use strict'", '"use strict"')):
-            return ""
-    return _first_sentence(block_text)
-
-
-def _format_py_signature(node: ast.AST) -> str:
-    """Formats a canonical, coordinate-free Python class or function signature."""
-    if isinstance(node, ast.ClassDef):
-        bases = []
-        for b in node.bases[:2]:
-            try:
-                bases.append(ast.unparse(b))
-            except Exception:
-                pass
-        base_str = f"({', '.join(bases)})" if bases else ""
-        return f"class {node.name}{base_str}"
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
-        arg_names = [a.arg for a in node.args.args if a.arg not in ("self", "cls")]
-        if len(arg_names) > 4:
-            args_str = ", ".join(arg_names[:4]) + ", ..."
-        else:
-            args_str = ", ".join(arg_names)
-        if node.args.kwarg and len(arg_names) <= 4:
-            args_str = f"{args_str}, **{node.args.kwarg.arg}" if args_str else f"**{node.args.kwarg.arg}"
-        return f"{prefix} {node.name}({args_str})"
-    return ""
-def _compute_normalized_py_body_hash(node: ast.AST, fallback_slice: str) -> str:
-    """Computes an 8-char SHA-256 hash of a Python AST node's body (excluding leading docstring) so comment/whitespace tweaks do not trigger false drift."""
-    try:
-        body_stmts = list(getattr(node, "body", []) or [])
-        if (
-            body_stmts
-            and isinstance(body_stmts[0], ast.Expr)
-            and isinstance(getattr(body_stmts[0], "value", None), ast.Constant)
-            and isinstance(body_stmts[0].value.value, str)
-        ):
-            body_stmts = body_stmts[1:]
-        norm_parts = [ast.unparse(stmt).strip() for stmt in body_stmts]
-        norm_text = "\n".join(p for p in norm_parts if p)
-    except Exception:
-        norm_text = re.sub(r'\s+', ' ', fallback_slice).strip()
-    return hashlib.sha256(norm_text.encode("utf-8")).hexdigest()[:8]
-
-
-def _compute_normalized_js_body_hash(source_slice: str) -> str:
-    """Computes an 8-char SHA-256 hash of a JS/TS symbol body with comments and whitespace normalized."""
-    no_block = re.sub(r'/\*[\s\S]*?\*/', '', source_slice)
-    no_line = re.sub(r'//[^\n]*', '', no_block)
-    norm = re.sub(r'\s+', ' ', no_line).strip()
-    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:8]
-
-
-def _extract_python_symbols(content: str) -> Optional[List[Dict[str, Any]]]:
-    """
-    Extracts public top-level classes and functions from Python source code via stdlib ast.
-    Returns None if the file has a SyntaxError so callers can preserve prior index entries.
-    """
-    try:
-        tree = ast.parse(content)
-    except SyntaxError:
-        return None
-    lines = content.splitlines()
-    symbols: List[Dict[str, Any]] = []
-    for node in tree.body:
-        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name.startswith("_"):
-                continue
-            sig = _format_py_signature(node)
-            if not sig:
-                continue
-            doc = _first_sentence(ast.get_docstring(node))
-            start_line = min(
-                [node.lineno] + [getattr(d, "lineno", node.lineno) for d in getattr(node, "decorator_list", [])]
-            )
-            end_line = getattr(node, "end_lineno", node.lineno) or node.lineno
-            full_slice = "\n".join(lines[max(0, start_line - 1):min(len(lines), end_line)])
-            snippet = "\n".join(lines[max(0, start_line - 1):min(len(lines), start_line - 1 + 30)])
-            symbols.append({
-                "name": node.name,
-                "signature": sig,
-                "docstring": doc,
-                "start_line": start_line,
-                "end_line": end_line,
-                "snippet": snippet,
-                "body_hash": _compute_normalized_py_body_hash(node, full_slice),
-            })
-    return symbols
-
-
-_JS_SYMBOL_RE = re.compile(
-    r'^(?P<indent>[ \t]*)'
-    r'(?:export\s+(?:default\s+)?)?'
-    r'(?:(?P<async>async)\s+)?'
-    r'(?:(?P<kind>class|function)\s+(?P<name>[A-Za-z][A-Za-z0-9_]*)\s*(?P<params>\([^;{]*\))?'
-    r'|const\s+(?P<cname>[A-Za-z][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?(?P<cparams>\([^=;]*\)|[A-Za-z0-9_]+)\s*=>)',
-    re.MULTILINE
-)
-
-
-def _find_brace_balanced_end(lines: List[str], start_idx: int) -> int:
-    """Scans forward from start_idx (0-based) to find the closing line of a brace-delimited JS/TS block."""
-    depth = 0
-    opened = False
-    in_str = None
-    in_block_comment = False
-    for idx in range(start_idx, len(lines)):
-        line = lines[idx]
-        i = 0
-        n = len(line)
-        while i < n:
-            ch = line[i]
-            nxt = line[i + 1] if i + 1 < n else ""
-            if in_block_comment:
-                if ch == "*" and nxt == "/":
-                    in_block_comment = False
-                    i += 2
-                    continue
-                i += 1
-                continue
-            if in_str:
-                if ch == "\\":
-                    i += 2
-                    continue
-                if ch == in_str:
-                    in_str = None
-                i += 1
-                continue
-            if ch == "/" and nxt == "/":
-                break
-            if ch == "/" and nxt == "*":
-                in_block_comment = True
-                i += 2
-                continue
-            if ch in ('"', "'", "`"):
-                in_str = ch
-                i += 1
-                continue
-            if ch == "{":
-                depth += 1
-                opened = True
-            elif ch == "}":
-                depth -= 1
-                if opened and depth <= 0:
-                    return idx + 1
-            i += 1
-        if not opened and line.rstrip().endswith(";"):
-            return idx + 1
-    return min(len(lines), start_idx + 1)
-
-
-def _extract_preceding_jsdoc(lines: List[str], target_line_idx: int) -> Tuple[str, int]:
-    """Returns (first_sentence_jsdoc, earliest_start_line_1based) preceding target_line_idx (0-based)."""
-    idx = target_line_idx - 1
-    while idx >= 0 and not lines[idx].strip():
-        idx -= 1
-    if idx < 0:
-        return "", target_line_idx + 1
-    if lines[idx].strip().endswith("*/"):
-        end_comment = idx
-        while idx >= 0 and "/*" not in lines[idx]:
-            idx -= 1
-        if idx >= 0:
-            block = "\n".join(lines[idx:end_comment + 1])
-            block = re.sub(r'^/\*+|\*+/$', '', block.strip())
-            return _first_sentence(block), idx + 1
-    elif lines[idx].strip().startswith("//"):
-        comment_lines = []
-        while idx >= 0 and lines[idx].strip().startswith("//"):
-            comment_lines.insert(0, lines[idx].strip().lstrip("/").strip())
-            idx -= 1
-        return _first_sentence("\n".join(comment_lines)), idx + 2
-    return "", target_line_idx + 1
-
-
-def _extract_js_symbols(content: str) -> List[Dict[str, Any]]:
-    """Extracts top-level exported/public classes and functions from JS/TS source code."""
-    lines = content.splitlines()
-    symbols: List[Dict[str, Any]] = []
-    seen_names = set()
-    for m in _JS_SYMBOL_RE.finditer(content):
-        indent = m.group("indent") or ""
-        if len(indent) > 0:
-            continue
-        name = m.group("name") or m.group("cname") or ""
-        if not name or name.startswith("_") or name in seen_names:
-            continue
-        seen_names.add(name)
-        line_idx = content.count("\n", 0, m.start())
-        kind = m.group("kind")
-        if kind == "class":
-            sig = f"class {name}"
-        else:
-            raw_params = (m.group("params") or m.group("cparams") or "()").strip()
-            if not raw_params.startswith("("):
-                raw_params = f"({raw_params})"
-            clean_params = re.sub(r'\s+', ' ', raw_params)
-            if len(clean_params) > 36:
-                clean_params = clean_params[:33].rstrip() + "...)"
-            sig = f"function {name}{clean_params}"
-        doc, start_line = _extract_preceding_jsdoc(lines, line_idx)
-        end_line = _find_brace_balanced_end(lines, line_idx)
-        full_slice = "\n".join(lines[max(0, line_idx):min(len(lines), end_line)])
-        snippet = "\n".join(lines[max(0, start_line - 1):min(len(lines), start_line - 1 + 30)])
-        symbols.append({
-            "name": name,
-            "signature": sig,
-            "docstring": doc,
-            "start_line": start_line,
-            "end_line": end_line,
-            "snippet": snippet,
-            "body_hash": _compute_normalized_js_body_hash(full_slice),
-        })
-    return symbols
-
-
-def extract_file_symbols(filepath: str, content: str) -> Optional[List[Dict[str, Any]]]:
-    """
-    Stage 2 Shallow Static AST Extractor:
-    Extracts public top-level symbols for .py and .js/.ts/.mjs/.tsx files.
-    Returns None if a syntax error prevented parsing.
-    """
-    if not content:
-        return []
-    ext = Path(filepath).suffix.lower()
-    if ext == ".py":
-        return _extract_python_symbols(content)
-    if ext in (".js", ".mjs", ".ts", ".tsx"):
-        return _extract_js_symbols(content)
-    return []
-
-
-def extract_symbol_source_slice(filepath: str, content: str, symbol_query: str) -> Optional[Dict[str, Any]]:
-    """
-    Locates a top-level class, method (Class.method or method), or function in `content`
-    and returns its exact source slice (including leading decorators and JSDoc/comments).
-    """
-    if not content or not symbol_query:
-        return None
-    clean_query = symbol_query.strip()
-    if clean_query.startswith(("def ", "async def ", "class ", "function ")):
-        clean_query = clean_query.split("(")[0].split()[-1].strip()
-    elif "(" in clean_query:
-        clean_query = clean_query.split("(", 1)[0].strip()
-
-    lines = content.splitlines()
-    ext = Path(filepath).suffix.lower()
-
-    if ext == ".py":
-        try:
-            tree = ast.parse(content)
-        except SyntaxError as e:
-            raise ValueError(f"SyntaxError in '{filepath}' at line {e.lineno}: {e.msg}") from e
-
-        target_class, _, target_member = clean_query.partition(".")
-        for node in tree.body:
-            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-                if not target_member and node.name == target_class:
-                    start_line = min(
-                        [node.lineno] + [getattr(d, "lineno", node.lineno) for d in getattr(node, "decorator_list", [])]
-                    )
-                    end_line = getattr(node, "end_lineno", node.lineno) or node.lineno
-                    while start_line > 1 and lines[start_line - 2].strip().startswith("#"):
-                        start_line -= 1
-                    slice_text = "\n".join(lines[start_line - 1:end_line])
-                    return {
-                        "symbol": node.name,
-                        "signature": _format_py_signature(node),
-                        "start_line": start_line,
-                        "end_line": end_line,
-                        "source": slice_text,
-                    }
-                if isinstance(node, ast.ClassDef) and (node.name == target_class or not target_member):
-                    method_name = target_member if target_member else target_class
-                    for child in node.body:
-                        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == method_name:
-                            if target_member and node.name != target_class:
-                                continue
-                            start_line = min(
-                                [child.lineno] + [getattr(d, "lineno", child.lineno) for d in getattr(child, "decorator_list", [])]
-                            )
-                            end_line = getattr(child, "end_lineno", child.lineno) or child.lineno
-                            slice_text = "\n".join(lines[start_line - 1:end_line])
-                            return {
-                                "symbol": f"{node.name}.{child.name}",
-                                "signature": _format_py_signature(child),
-                                "start_line": start_line,
-                                "end_line": end_line,
-                                "source": slice_text,
-                            }
-        return None
-
-    # JS / TS / Generic brace-balanced extraction
-    target_class, _, target_member = clean_query.partition(".")
-    search_name = target_member or target_class
-    for sym in _extract_js_symbols(content):
-        if sym["name"] == search_name:
-            s_line = sym["start_line"]
-            e_line = sym["end_line"]
-            return {
-                "symbol": sym["name"],
-                "signature": sym["signature"],
-                "start_line": s_line,
-                "end_line": e_line,
-                "source": "\n".join(lines[s_line - 1:e_line]),
-            }
-
-    method_pat = re.compile(
-        r'^[ \t]*(?:export\s+)?(?:static\s+)?(?:async\s+)?(?:function\s+|class\s+)?'
-        + re.escape(search_name)
-        + r'\s*(?:\([^;{]*\))?\s*\{',
-        re.MULTILINE
-    )
-    m = method_pat.search(content)
-    if m:
-        line_idx = content.count("\n", 0, m.start())
-        _, s_line = _extract_preceding_jsdoc(lines, line_idx)
-        e_line = _find_brace_balanced_end(lines, line_idx)
-        return {
-            "symbol": clean_query,
-            "signature": clean_query,
-            "start_line": s_line,
-            "end_line": e_line,
-            "source": "\n".join(lines[s_line - 1:e_line]),
-        }
-    return None
 
 @cartographer_bp.on('bridge_files_created')
 def _record_genesis_descriptions(ctx, descriptions: Optional[Dict[str, str]] = None, workspace_id=None, **kwargs):
@@ -549,13 +142,16 @@ def extract_existing_comments(index_path, repo_path=None, vfs_content=None):
                 bare_name = clean_name.rstrip('/')
                 path_stack.append(bare_name)
                 rel_path = "/".join(path_stack)
-                # Ignore system placeholders and synthetic tautologies to prevent placeholder lock-in
-                is_synthetic_tautology = comment.startswith((
-                    "Function ",
-                    "Class definition for ",
-                    "TypedDict contract for ",
-                    "Async handler ",
-                )) and comment.endswith(".")
+                # Ignore system placeholders, reST underline artifacts, and synthetic tautologies to prevent placeholder lock-in
+                is_synthetic_tautology = (
+                    (comment.startswith((
+                        "Function ",
+                        "Class definition for ",
+                        "TypedDict contract for ",
+                        "Async handler ",
+                    )) and comment.endswith("."))
+                    or "~~~~" in comment
+                )
                 if comment not in ("[comment required]", "[managed file]") and not is_synthetic_tautology:
                     cmap[rel_path] = comment
                     cmap[f"{rel_path}/"] = comment
@@ -910,7 +506,7 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
             if genesis_desc:
                 comments[rel_f] = genesis_desc
                 continue
-            if Path(rel_f).suffix.lower() not in (".py", ".js", ".mjs", ".ts", ".tsx"):
+            if Path(rel_f).suffix.lower() not in SUPPORTED_SYMBOL_EXTENSIONS:
                 continue
             src_desc = describe_source_file(rel_f, ctx.vfs.read(f"vfs://{repo_dir}/{rel_f}") or "")
             if src_desc:
@@ -923,7 +519,7 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
                 if _is_path_managed(rel_f, managed_dirs):
                     continue
                 ext = Path(rel_f).suffix.lower()
-                if ext not in (".py", ".js", ".mjs", ".ts", ".tsx"):
+                if ext not in SUPPORTED_SYMBOL_EXTENSIONS:
                     continue
                 f_uri = f"vfs://{repo_dir}/{rel_f}"
                 f_text = ctx.vfs.read(f_uri)

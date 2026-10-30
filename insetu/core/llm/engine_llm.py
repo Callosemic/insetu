@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TypedDict, List, Dict, Any, Generator, Optional, Union, Tuple
 from flask import Response, stream_with_context
 from insetu.core.sdk import InSetuExtension, SettingsManager, slugify, atomic_write_text
+from insetu.core.agent.schemas import validate_schema_response as _registry_validate_schema
 from insetu.core.utils_core import (
     execute_binary,
     parse_blocks,
@@ -681,140 +682,15 @@ def _resolve_tier_model(ctx, tier: Optional[str] = None) -> str:
     return base_model
 
 
-def _strip_json_fences(raw_text: str) -> str:
-    text = (raw_text or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r'^```(?:json)?[ \t]*\r?\n?', '', text, count=1)
-        text = re.sub(r'\r?\n?```\s*$', '', text, count=1)
-    return text.strip()
-
-
 def validate_output_schema(raw_text: str, output_schema: Union[str, Dict[str, Any]]) -> Tuple[bool, Any, str]:
     """
     Universal Output Schema Bouncer:
-    Validates LLM text against named built-in contracts ('yomama_patch', 'intent_classification', 'json')
-    or a declarative JSON Schema object.
+    Delegates validation to the formal schema registry in insetu.core.agent.schemas.
     Returns (is_valid, parsed_or_normalized_value, error_message).
     """
     if not output_schema:
         return True, raw_text, ""
-
-    if isinstance(output_schema, str):
-        schema_name = output_schema.strip().lower()
-        if schema_name == "yomama_patch":
-            blocks = parse_blocks(raw_text or "")
-            if not blocks:
-                return (
-                    False,
-                    None,
-                    "Response did not contain any valid Yomama patch blocks ('<<<<<<< FILE:' + '<<<<<<< SEARCH' / '>>>>>>> REPLACE', '<<<<<<< TEXTEDIT', '<<<<<<< JSON_PATCH', '<<<<<<< RELOCATE', or '<<<<<<< RENAME').",
-                )
-            return True, blocks, ""
-
-        if schema_name == "conversational_with_patches":
-            text_val = raw_text or ""
-            has_chevron = any(
-                marker in text_val
-                for marker in (
-                    "<<<<<<< FILE:",
-                    "<<<<<<< SEARCH",
-                    "<<<<<<< TEXTEDIT",
-                    "<<<<<<< JSON_PATCH",
-                    "<<<<<<< RELOCATE",
-                    "<<<<<<< RENAME",
-                    "<<<<<<< MOVE_FILE",
-                    "<<<<<<< ARCHIVE_FILE",
-                    "<<<<<<< DELETE_FILE",
-                )
-            )
-            if not has_chevron:
-                return True, {"has_patches": False, "blocks": {}}, ""
-            blocks = parse_blocks(text_val)
-            if not blocks:
-                return (
-                    False,
-                    None,
-                    "Response contained '<<<<<<<' patch markers, but no complete Yomama block could be parsed. Ensure every block has a target file and closing '>>>>>>> REPLACE' or '>>>>>>> EXECUTE' delimiter.",
-                )
-            return True, {"has_patches": True, "blocks": blocks}, ""
-
-        if schema_name == "ask_response_or_need_files":
-            cleaned = _strip_json_fences(raw_text)
-            if cleaned.startswith("{") and "NEED_MORE_FILES" in cleaned:
-                try:
-                    parsed = json.loads(cleaned)
-                    if isinstance(parsed, dict) and parsed.get("status") == "NEED_MORE_FILES":
-                        req_files = parsed.get("requested_files") or []
-                        return True, {"status": "NEED_MORE_FILES", "requested_files": list(req_files)}, ""
-                except Exception:
-                    pass
-            return True, {"status": "ANSWER_READY", "requested_files": []}, ""
-
-        if schema_name == "debt_ratchet_verdict":
-            cleaned = _strip_json_fences(raw_text)
-            try:
-                parsed = json.loads(cleaned)
-                if isinstance(parsed, dict) and parsed.get("verdict") in ("CLEAN", "REFACTOR"):
-                    return True, parsed, ""
-            except Exception:
-                pass
-            blocks = parse_blocks(raw_text or "")
-            if blocks:
-                return True, {"verdict": "REFACTOR", "patch": raw_text, "has_patches": True}, ""
-            return True, {"verdict": "CLEAN", "summary": (raw_text or "").strip()}, ""
-
-        if schema_name == "intent_classification":
-            valid_intents = (
-                "EDIT_CODE",
-                "SURGICAL_CODE",
-                "IMPLEMENT_PLAN",
-                "EDIT_PLAN",
-                "CHAT_ONLY",
-                "BUGFIX",
-                "REFACTOR",
-                "RUN_TESTS",
-                "AUDIT_DIFFS",
-                "CLOSE_SESSION",
-                "APPLY_PATCH",
-            )
-            cleaned = _strip_json_fences(raw_text)
-            try:
-                parsed = json.loads(cleaned)
-                if isinstance(parsed, dict) and parsed.get("intent") in valid_intents:
-                    return True, parsed, ""
-            except Exception:
-                pass
-            upper = (raw_text or "").upper()
-            for token in valid_intents:
-                if token in upper:
-                    return True, {"intent": token}, ""
-            return (
-                False,
-                None,
-                f"Response must specify a valid intent ({', '.join(valid_intents)}) as JSON {{'intent': '...'}} or token.",
-            )
-
-        if schema_name == "json":
-            cleaned = _strip_json_fences(raw_text)
-            try:
-                return True, json.loads(cleaned), ""
-            except Exception as e:
-                return False, None, f"Invalid JSON output: {e}"
-
-    if isinstance(output_schema, dict):
-        cleaned = _strip_json_fences(raw_text)
-        try:
-            parsed = json.loads(cleaned)
-        except Exception as e:
-            return False, None, f"Output is not valid JSON: {e}"
-        req_keys = output_schema.get("required") or []
-        if isinstance(parsed, dict):
-            missing = [k for k in req_keys if k not in parsed]
-            if missing:
-                return False, None, f"JSON object is missing required keys: {', '.join(missing)}"
-        return True, parsed, ""
-
-    return True, raw_text, ""
+    return _registry_validate_schema(output_schema, raw_text or "")
 def _stream_anthropic(api_key: str, model: str, messages: list, system_prompt: str) -> Generator[str, None, None]:
     url = "https://api.anthropic.com/v1/messages"
     headers = {

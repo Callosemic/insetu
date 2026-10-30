@@ -1,25 +1,21 @@
 from pathlib import Path
 from datetime import datetime
-import hashlib
 import os
 import re
-import shlex
 import time
 import uuid
 import json
 import threading
-from typing import TypedDict, List, Dict, Any, Optional, Union, Literal
+from typing import TypedDict, List, Dict, Any, Optional, Union, Literal, Tuple
 from insetu.core.sdk import InSetuExtension, slugify
 from insetu.core.utils_core import (
     InSetuURI,
     parse_blocks,
     generate_ascii_tree,
     get_available_contexts,
-    get_repo_path,
-    get_daemon_host_config_path,
-    load_json_config,
-    save_json_config,
 )
+from insetu.core.bridge.bridge_test import run_repo_test_diagnostics
+from insetu.core.gather.context_assemble import record_affinity_interaction
 from .orchestrator import (
     execute_declarative_routine,
     list_available_routines,
@@ -30,13 +26,61 @@ from .orchestrator import (
     validate_routine_definition,
 )
 
+AGENT_SETTINGS_SCHEMA = [
+    {
+        "id": "rag_strategy",
+        "label": "RAG Context Retrieval Strategy",
+        "type": "select",
+        "scope": "workspace",
+        "default": "blast_radius",
+        "options": [
+            {"value": "blast_radius", "label": "Blast Radius (Deterministic AST + Bucket + Affinity Slicer, 0 Tokens)"},
+            {"value": "llm_scout", "label": "LLM Scout (Fast-Tier 1-Hop / 2-Hop Semantic Discovery)"}
+        ],
+        "description": "Governs how context.assemble resolves edit targets and interface slices on each turn."
+    },
+    {
+        "id": "compaction_strategy",
+        "label": "Rolling History Compaction Strategy",
+        "type": "select",
+        "scope": "workspace",
+        "default": "deterministic",
+        "options": [
+            {"value": "deterministic", "label": "Deterministic Micro-Receipts & Summary (0 Tokens, <1ms)"},
+            {"value": "llm_compactor", "label": "Fast-Tier LLM History Summarizer"}
+        ],
+        "description": "Controls how conversation turns older than Turn N-5 are compacted into session.summary."
+    },
+    {
+        "id": "run_tests_on_code",
+        "label": "Run Diagnostic Test Gate After /code Commits",
+        "type": "boolean",
+        "scope": "workspace",
+        "default": False,
+        "description": "Automatically runs bridge.test (JUnit XML + fallback) after syntax-valid /code commits."
+    },
+    {
+        "id": "strict_test_enforcement",
+        "label": "Strict Test Gate Enforcement (Rollback on Test Failure)",
+        "type": "boolean",
+        "scope": "workspace",
+        "default": False,
+        "description": "When enabled, failing unit tests trigger up to 2 self-heal retries before rolling back to the zlib snapshot."
+    }
+]
+
 AGENT_SCHEMA = {
     "chat_sessions": {
         "session_id": "TEXT PRIMARY KEY",
         "title": "TEXT",
         "updated_at": "REAL",
         "last_transaction_id": "TEXT",
-        "active_job_id": "TEXT"
+        "active_job_id": "TEXT",
+        "summary": "TEXT DEFAULT ''",
+        "working_set_json": "TEXT DEFAULT '[]'",
+        "token_ledger_json": "TEXT DEFAULT '{}'",
+        "active_plan_path": "TEXT DEFAULT ''",
+        "checkpoint_json": "TEXT DEFAULT '{}'"
     },
     "chat_messages": {
         "message_id": "TEXT PRIMARY KEY",
@@ -44,7 +88,8 @@ AGENT_SCHEMA = {
         "role": "TEXT",
         "content": "TEXT",
         "raw_content": "TEXT",
-        "timestamp": "REAL"
+        "timestamp": "REAL",
+        "turn_index": "INTEGER DEFAULT 0"
     }
 }
 
@@ -57,6 +102,7 @@ agent_bp = InSetuExtension(
     description="Autonomous LLM agent and declarative Markdown-as-Code / YAML routine orchestrator.",
     core=True,
     schema=AGENT_SCHEMA,
+    settings_schema=AGENT_SETTINGS_SCHEMA,
     volumes={
         "routines": {
             "scheme": "ctx",
@@ -544,91 +590,34 @@ def api_resolve_test_command(ctx):
     if ctx.vfs.read(f"vfs://{repo}/go.mod"):
         return {"repo": repo, "command": "go test ./...", "runner": "go"}
     return {"repo": repo, "command": f"pytest {target}".strip() or "pytest -q", "runner": "pytest"}
-def _get_approved_test_commands(workspace_id: str) -> set:
-    host_path = get_daemon_host_config_path()
-    host_data = load_json_config(host_path, {})
-    return set(host_data.get("approved_test_commands", {}).get(workspace_id, []))
-
-
-def _approve_test_command(workspace_id: str, repo: str, command: str) -> str:
-    sig = f"{repo}:{hashlib.sha256(command.strip().encode('utf-8')).hexdigest()[:16]}"
-    host_path = get_daemon_host_config_path()
-    host_data = load_json_config(host_path, {})
-    approved = set(host_data.setdefault("approved_test_commands", {}).get(workspace_id, []))
-    approved.add(sig)
-    host_data["approved_test_commands"][workspace_id] = sorted(approved)
-    save_json_config(host_path, host_data, workspace_id="default")
-    return sig
-
-
 class AgentRunTestPayload(TypedDict, total=False):
     repo: Optional[str]
     command: Optional[str]
     target: Optional[str]
     timeout: Optional[int]
-    approve: Optional[bool]
-@agent_bp.route('run_test', methods=['POST'], request_schema=AgentRunTestPayload, docstring="[sync] Executes an approved repository test command with shell=False and slices up to 35 failures for triage.")
+
+
+@agent_bp.route('run_test', methods=['POST'], request_schema=AgentRunTestPayload, docstring="[sync] Executes an approved repository test command via the unified bridge test runner and slices failures for triage.")
 def api_agent_run_test(ctx):
     data = ctx.payload or {}
     repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
     repo = str(data.get("repo") or (repos[0] if repos else "")).strip()
-    default_cmd = ctx.call("agent.resolve_test_command", repo=repo, target=data.get("target") or "").get("command", "pytest -q")
-    cmd = str(data.get("command") or "").strip() or default_cmd
-
-    if data.get("approve"):
-        _approve_test_command(ctx.workspace_id, repo, cmd)
-    elif cmd != default_cmd:
-        cmd_sig = f"{repo}:{hashlib.sha256(cmd.strip().encode('utf-8')).hexdigest()[:16]}"
-        if cmd_sig not in _get_approved_test_commands(ctx.workspace_id):
-            return {
-                "status": "needs_approval",
-                "error": f"Custom test command '{cmd}' requires approval before execution. Re-submit with approve=True.",
-                "command": cmd,
-                "repo": repo,
-                "returncode": -1,
-                "exit_code": -1,
-                "failure_batch": [],
-                "failure_count": 0,
-            }, 403
-
-    timeout = min(int(data.get("timeout") or 120), 120)
-    cwd = get_repo_path(repo, ctx.workspace_id) if (repo and repo in repos) else ctx.paths["workspace_root"]
-    cmd_args = shlex.split(cmd)
-    try:
-        res = ctx.exec.run(cmd_args, shell=False, cwd=cwd, timeout=timeout, check=False)
-        stdout_str = (res.stdout or "")[-16000:]
-        stderr_str = (res.stderr or "")[-16000:]
-        combined = f"{stdout_str}\n{stderr_str}".strip()
-        failure_lines = [
-            line.strip()
-            for line in combined.splitlines()
-            if any(tok in line for tok in ("FAIL:", "ERROR:", "❌ [VIOLATION:", "FAILED ", "AssertionError:"))
-        ][:35]
-        return {
-            "status": "passed" if res.returncode == 0 else "failed",
-            "returncode": res.returncode,
-            "exit_code": res.returncode,
-            "command": cmd,
-            "repo": repo,
-            "stdout": stdout_str,
-            "stderr": stderr_str,
-            "combined_output": combined,
-            "failure_batch": failure_lines,
-            "failure_count": len(failure_lines),
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "returncode": -1,
-            "exit_code": -1,
-            "command": cmd,
-            "repo": repo,
-            "stdout": "",
-            "stderr": str(e),
-            "combined_output": str(e),
-            "failure_batch": [],
-            "failure_count": 0,
-        }
+    target_str = str(data.get("target") or "").strip()
+    target_files = [target_str] if target_str else None
+    diag_res = run_repo_test_diagnostics(
+        ctx,
+        repo=repo,
+        command_override=data.get("command"),
+        target_files=target_files,
+        timeout=max(1, min(int(data.get("timeout") or 120), 120)),
+    )
+    if diag_res.get("status") == "needs_approval":
+        return diag_res, 403
+    norm_status = "passed" if diag_res.get("exit_code") == 0 else "failed"
+    return {
+        **diag_res,
+        "status": norm_status,
+    }
 @agent_bp.route('sessions', methods=['GET'], docstring="[sync] Retrieves all chat sessions for the active workspace.")
 def get_sessions(ctx):
     rows = ctx.db.get_all("chat_sessions", order_by="updated_at DESC")
@@ -647,11 +636,50 @@ def create_session(ctx):
     })
     return {"status": "success", "session_id": session_id}
 
-@agent_bp.route('messages/<session_id>', methods=['GET'], docstring="[sync] Retrieves message history for a specific chat session.")
+@agent_bp.route('messages/<session_id>', methods=['GET'], docstring="[sync] Retrieves message history, working-set state, token ledger, and plan contracts for a specific chat session.")
 def get_messages(ctx, session_id):
     cursor = ctx.db.execute("SELECT * FROM chat_messages WHERE session_id=? ORDER BY timestamp ASC", (session_id,))
     messages = [dict(r) for r in cursor.fetchall()]
-    return {"messages": messages}
+    s_row = ctx.db.execute("SELECT * FROM chat_sessions WHERE session_id=?", (session_id,)).fetchone()
+
+    working_set = []
+    token_ledger = {"prompt_tokens": 0, "completion_tokens": 0, "saved_by_slicing": 0}
+    checkpoint = None
+    plan_path = ""
+    summary = ""
+
+    if s_row:
+        try:
+            working_set = json.loads(s_row["working_set_json"] or "[]")
+        except Exception:
+            working_set = []
+        try:
+            token_ledger = json.loads(s_row["token_ledger_json"] or "{}")
+        except Exception:
+            token_ledger = {"prompt_tokens": 0, "completion_tokens": 0, "saved_by_slicing": 0}
+        try:
+            checkpoint = json.loads(s_row["checkpoint_json"] or "null")
+        except Exception:
+            checkpoint = None
+        plan_path = s_row["active_plan_path"] or ""
+        summary = s_row["summary"] or ""
+
+    # Tier 0 Constitution Files: Auto-pin engineering standards and contract files
+    constitution = []
+    for r_dir in (r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")):
+        for walk_p in ctx.vfs.walk(f"vfs://{r_dir}/docs/standards", exts=[".md"]):
+            if walk_p and not walk_p.endswith((".gitkeep", ".keep")):
+                constitution.append(walk_p)
+
+    return {
+        "messages": messages,
+        "working_set": working_set,
+        "token_ledger": token_ledger,
+        "checkpoint": checkpoint,
+        "active_plan_path": plan_path,
+        "summary": summary,
+        "constitution_files": sorted(list(dict.fromkeys(constitution))),
+    }
 @agent_bp.route('cancel', methods=['POST'], request_schema=AgentSessionActionPayload, docstring="[sync] Signals an active agent turn to abort before the next LLM call or VFS mutation.")
 def cancel_agent_turn(ctx):
     data = ctx.payload or {}
@@ -706,6 +734,9 @@ def submit_prompt(ctx):
     data = ctx.payload or {}
     session_id = data.get("session_id")
     raw_prompt = str(data.get("prompt") or "").strip()
+    explicit_mode = str(data.get("mode") or "").strip().lower().lstrip("/")
+    if explicit_mode == "undo" or raw_prompt.lower() == "/undo":
+        return ctx.call("agent.undo", session_id=session_id, transaction_id=data.get("transaction_id"))
     attached_files = data.get("attached_files", [])
     read_only_files = data.get("read_only_files", [])
     routine_id = str(data.get("routine_id") or "workspace_turn").strip()
@@ -781,6 +812,69 @@ def submit_prompt(ctx):
     ctx.db.commit()
 
     return {"status": "accepted", "job_id": job_id, "message_id": user_msg_id, "mode": resolved_mode}, 202
+def _compact_session_history(
+    ctx,
+    session_id: str,
+    rows: List[Dict[str, Any]],
+    existing_summary: str = "",
+) -> Tuple[List[Dict[str, str]], str]:
+    """
+    Two-Stage Rolling History Compaction (Section 3.2):
+    - Tier 1 (Hot Verbatim Window): Last 2 user/assistant turns (4 messages) injected verbatim (prose-only `content`, never `raw_content`).
+    - Tier 2 (Warm Micro-Receipts): Turns N-2 through N-5 condensed into 1-2 line receipts.
+    - Tier 3 (Cold Session Summary): Turns older than N-5 folded into <session_summary>.
+    """
+    if not rows:
+        return [], existing_summary
+
+    clean_msgs = [{"role": r["role"], "content": (r["content"] or "").strip()} for r in rows if (r["content"] or "").strip()]
+    total_len = len(clean_msgs)
+    if total_len <= 4:
+        return clean_msgs, existing_summary
+
+    hot_verbatim = clean_msgs[-4:]
+    warm_slice = clean_msgs[max(0, total_len - 12):-4]
+    cold_slice = clean_msgs[:max(0, total_len - 12)]
+
+    updated_summary = existing_summary
+    if cold_slice:
+        compaction_mode = str(ctx.settings.get("compaction_strategy", "deterministic") or "deterministic")
+        cold_lines = [f"[{m['role']}]: {m['content'][:160].replace(chr(10), ' ')}" for m in cold_slice]
+        cold_digest = "\n".join(cold_lines)
+        if compaction_mode == "llm_compactor":
+            try:
+                sum_res = ctx.call(
+                    "llm.complete",
+                    messages=[{"role": "user", "content": f"Condense these prior turns into a concise architectural summary:\n{existing_summary}\n\n{cold_digest}"}],
+                    tier="fast",
+                    wait=True,
+                )
+                if isinstance(sum_res, dict) and sum_res.get("text"):
+                    updated_summary = sum_res["text"].strip()
+            except Exception:
+                updated_summary = (f"{existing_summary}\n{cold_digest}").strip()[-4000:]
+        else:
+            updated_summary = (f"{existing_summary}\n{cold_digest}").strip()[-4000:]
+
+    warm_receipts = [
+        f"[Turn Receipt ({m['role']})]: {m['content'].splitlines()[0][:180]}"
+        for m in warm_slice
+    ]
+
+    compacted_history: List[Dict[str, str]] = []
+    prefix_parts = []
+    if updated_summary:
+        prefix_parts.append(f"<session_summary>\n{updated_summary}\n</session_summary>")
+    if warm_receipts:
+        prefix_parts.append("Recent Turn Micro-Receipts:\n" + "\n".join(warm_receipts))
+    if prefix_parts:
+        compacted_history.append({"role": "user", "content": "\n\n".join(prefix_parts)})
+        compacted_history.append({"role": "assistant", "content": "Acknowledged session summary and recent turn receipts."})
+
+    compacted_history.extend(hot_verbatim)
+    return compacted_history, updated_summary
+
+
 @agent_bp.worker("agent_turn_task")
 def _execute_agent_turn(
     ctx,
@@ -794,14 +888,15 @@ def _execute_agent_turn(
     extra_inputs: Optional[Dict[str, Any]] = None,
     retry_count: int = 0,
 ):
+    s_row = ctx.db.execute("SELECT summary, working_set_json, token_ledger_json FROM chat_sessions WHERE session_id=?", (session_id,)).fetchone()
+    existing_summary = (s_row["summary"] if s_row and s_row["summary"] else "") or ""
+
     cursor = ctx.db.execute(
         "SELECT role, content, raw_content FROM chat_messages WHERE session_id=? ORDER BY timestamp ASC",
         (session_id,),
     )
-    history_messages = [
-        {"role": r["role"], "content": (r["raw_content"] if r["raw_content"] else r["content"])}
-        for r in cursor.fetchall()
-    ]
+    raw_rows = [dict(r) for r in cursor.fetchall()]
+    history_messages, updated_summary = _compact_session_history(ctx, session_id or "default", raw_rows, existing_summary)
     if not history_messages and user_prompt:
         history_messages = [{"role": "user", "content": user_prompt}]
 
@@ -839,12 +934,35 @@ def _execute_agent_turn(
                 "chain_context": routine_result.get("chain_context", {}),
             },
         }
+
+    # P1 Execution Budget Checkpoint
+    if routine_result.get("status") == "paused_for_budget":
+        now = time.time()
+        checkpoint = routine_result.get("checkpoint") or {}
+        ctx.db.execute(
+            "UPDATE chat_sessions SET active_job_id=NULL, checkpoint_json=?, updated_at=? WHERE session_id=?",
+            (json.dumps(checkpoint), now, session_id),
+        )
+        ctx.db.commit()
+        return {
+            "message": routine_result.get("message", "Paused for execution budget checkpoint."),
+            "artifact": {
+                "session_id": session_id,
+                "routine_id": routine_result.get("routine_id", routine_id),
+                "status": "paused_for_budget",
+                "checkpoint": checkpoint,
+                "wavefront_index": routine_result.get("wavefront_index", 0),
+            },
+        }
     full_response = routine_result.get("response") or ""
     raw_full_response = routine_result.get("raw_response") or full_response
     all_tx_ids = routine_result.get("transaction_ids") or ([routine_result["transaction_id"]] if routine_result.get("transaction_id") else [])
     tx_id = ",".join(all_tx_ids) if all_tx_ids else None
     asst_msg_id = f"msg_{uuid.uuid4().hex[:12]}"
     now = time.time()
+    cursor = ctx.db.execute("SELECT count(*) as cnt FROM chat_messages WHERE session_id=?", (session_id,))
+    msg_count = cursor.fetchone()["cnt"] or 0
+
     ctx.db.insert_or_replace("chat_messages", {
         "message_id": asst_msg_id,
         "session_id": session_id,
@@ -852,16 +970,105 @@ def _execute_agent_turn(
         "content": full_response,
         "raw_content": raw_full_response,
         "timestamp": now,
+        "turn_index": msg_count + 1,
     })
+
+    # End-of-Turn Working Set Maintenance (Pillar 1: 5-Turn TTL Decay & Eviction)
+    working_set_row = ctx.db.execute("SELECT working_set_json FROM chat_sessions WHERE session_id=?", (session_id,)).fetchone()
+    working_set: List[Dict[str, Any]] = []
+    if working_set_row and working_set_row["working_set_json"]:
+        try:
+            working_set = json.loads(working_set_row["working_set_json"])
+        except Exception:
+            working_set = []
+
+    ws_map: Dict[str, Dict[str, Any]] = {}
+    for ws_entry in working_set:
+        if not isinstance(ws_entry, dict):
+            continue
+        raw_fp = ws_entry.get("filepath") or ws_entry.get("uri") or ""
+        if not raw_fp:
+            continue
+        norm_fp = str(InSetuURI(raw_fp))
+        ws_map[norm_fp] = {
+            "filepath": norm_fp,
+            "tier": ws_entry.get("tier") or "pinned",
+            "idle_turns": int(ws_entry.get("idle_turns") or 0),
+            "user_pinned": bool(ws_entry.get("user_pinned", False)),
+        }
+
+    # Age inactive items (user_pinned files are exempt from auto-decay per Section 3.1)
+    for ws_entry in ws_map.values():
+        if not ws_entry.get("user_pinned"):
+            ws_entry["idle_turns"] = ws_entry.get("idle_turns", 0) + 1
+            if ws_entry["idle_turns"] >= 6 and ws_entry.get("tier") == "pinned":
+                ws_entry["tier"] = "reference"
+
+    # Persist explicitly attached user files as user_pinned
+    for af in (attached_files or []):
+        norm_af = str(InSetuURI(af))
+        if norm_af not in ws_map:
+            ws_map[norm_af] = {
+                "filepath": norm_af,
+                "tier": "pinned",
+                "idle_turns": 0,
+                "user_pinned": True,
+            }
+
+    # Promote newly committed files
+    committed_list = list(routine_result.get("committed_files") or [])
+    for cf in committed_list:
+        norm_cf = str(InSetuURI(cf))
+        was_user_pinned = bool(ws_map.get(norm_cf, {}).get("user_pinned", False))
+        ws_map[norm_cf] = {
+            "filepath": norm_cf,
+            "tier": "pinned",
+            "idle_turns": 0,
+            "user_pinned": was_user_pinned,
+        }
+
+    # Reinforce Global Hebbian Affinity Graph (Section 4.1)
+    try:
+        if len(committed_list) >= 2:
+            record_affinity_interaction(ctx, committed_list, interaction_type="commit", weight=3.0)
+        if attached_files and len(attached_files) >= 2:
+            record_affinity_interaction(ctx, attached_files, interaction_type="pin", weight=2.0)
+    except Exception:
+        pass
+
+    # Update cumulative Session Token Ledger (Section 3.1)
+    token_ledger = {"prompt_tokens": 0, "completion_tokens": 0, "saved_by_slicing": 0}
+    if s_row and s_row["token_ledger_json"]:
+        try:
+            token_ledger.update(json.loads(s_row["token_ledger_json"]))
+        except Exception:
+            pass
+    fetch_ctx_state = (routine_result.get("chain_context") or {}).get("fetch_context") or {}
+    ctx_est_tok = int(fetch_ctx_state.get("total_tokens_estimated") or 0)
+    turn_prompt_tok = max(1, (len(user_prompt or "") // 4) + ctx_est_tok)
+    turn_comp_tok = max(1, len(raw_full_response or "") // 4)
+    turn_saved_tok = int(fetch_ctx_state.get("saved_by_slicing_tokens") or 0)
+    token_ledger["prompt_tokens"] = int(token_ledger.get("prompt_tokens", 0)) + turn_prompt_tok
+    token_ledger["completion_tokens"] = int(token_ledger.get("completion_tokens", 0)) + turn_comp_tok
+    token_ledger["saved_by_slicing"] = int(token_ledger.get("saved_by_slicing", 0)) + turn_saved_tok
+    serialized_ledger = json.dumps(token_ledger)
+
+    # Evict items past Turn 8
+    surviving_ws = [
+        ws_entry for ws_entry in ws_map.values()
+        if ws_entry.get("user_pinned") or ws_entry.get("idle_turns", 0) < 9
+    ]
+    serialized_ws = json.dumps(surviving_ws)
+
     if tx_id:
         ctx.db.execute(
-            "UPDATE chat_sessions SET last_transaction_id=?, active_job_id=NULL, updated_at=? WHERE session_id=?",
-            (tx_id, now, session_id),
+            "UPDATE chat_sessions SET last_transaction_id=?, active_job_id=NULL, updated_at=?, working_set_json=?, summary=?, token_ledger_json=? WHERE session_id=?",
+            (tx_id, now, serialized_ws, updated_summary, serialized_ledger, session_id),
         )
     else:
         ctx.db.execute(
-            "UPDATE chat_sessions SET active_job_id=NULL, updated_at=? WHERE session_id=?",
-            (now, session_id),
+            "UPDATE chat_sessions SET active_job_id=NULL, updated_at=?, working_set_json=?, summary=?, token_ledger_json=? WHERE session_id=?",
+            (now, serialized_ws, updated_summary, serialized_ledger, session_id),
         )
     ctx.db.commit()
 

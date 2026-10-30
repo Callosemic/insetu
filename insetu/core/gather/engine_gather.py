@@ -34,6 +34,12 @@ from insetu.core.utils_core import (
     InSetuURI,
 )
 from insetu.core.topology.engine_topology import resolve_file_bucket
+from .context_assemble import (
+    ContextAssemblePayload,
+    ContextAssembleResponse,
+    assemble_context_payload,
+    resolve_query_context,
+)
 
 VFS_INDEX_SCHEMA = {
     'manifest_ledger': {
@@ -44,6 +50,16 @@ VFS_INDEX_SCHEMA = {
     'sync_metadata': {
         'key': 'TEXT PRIMARY KEY',
         'value': 'TEXT'
+    },
+    'affinity_edges': {
+        'edge_id': 'TEXT PRIMARY KEY',
+        'file_a': 'TEXT NOT NULL',
+        'file_b': 'TEXT NOT NULL',
+        'commit_co_count': 'REAL DEFAULT 0.0',
+        'pin_co_count': 'REAL DEFAULT 0.0',
+        'chat_co_count': 'REAL DEFAULT 0.0',
+        'scout_miss_count': 'REAL DEFAULT 0.0',
+        'last_updated_at': 'REAL NOT NULL'
     }
 }
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
@@ -845,6 +861,28 @@ def _pack_selection_worker(
             "manifest_entry": manifest_entry
         }
     }
+
+class QueryContextPayload(TypedDict):
+    query: str
+
+@gather_bp.route('context/assemble', methods=['POST'], request_schema=ContextAssemblePayload, response_schema=ContextAssembleResponse, docstring="[sync] Assembles live workspace context via 'blast_radius' or 'llm_scout' with soft-budget AST interface slicing.")
+def api_gather_context_assemble(ctx):
+    data = ctx.payload or {}
+    return assemble_context_payload(
+        ctx,
+        edit_targets=data.get("edit_targets", []),
+        user_message=str(data.get("user_message") or ""),
+        strategy=data.get("strategy"),
+        session_id=data.get("session_id"),
+        history_summary=str(data.get("history_summary") or ""),
+        reference_files=data.get("reference_files"),
+        constitution_files=data.get("constitution_files"),
+    )
+
+@gather_bp.route('context/query', methods=['POST'], request_schema=QueryContextPayload, docstring="[sync] Resolves single-hop symbolic read directives (symbol_def, file_slice, symbol_search).")
+def api_gather_context_query(ctx):
+    data = ctx.payload or {}
+    return resolve_query_context(ctx, str(data.get("query") or ""))
 
 class ClearQuickpacksResponse(TypedDict):
     status: str
