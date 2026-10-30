@@ -44,6 +44,7 @@ if _sibling_akasa.exists() and (_sibling_akasa / "akasa").is_dir():
         sys.path.insert(0, _akasa_posix)
 from insetu.core.sdk import (
     CORE_MODULES_TUPLE,
+    INSETU_PROTECTED_VFS_TARGETS,
     SettingsManager,
     boot_kernel,
     configure_kernel,
@@ -63,6 +64,7 @@ configure_kernel(
     core_modules=CORE_MODULES_TUPLE,
     sse_passthrough=["topology_resolved"],
     tune_os_resources=True,
+    protected_vfs_targets=INSETU_PROTECTED_VFS_TARGETS,
 )
 
 # Fire Drill: Intercept the boot sequence to test the Lifeboat FS
@@ -152,16 +154,18 @@ def load_workspace_extensions():
     # Inject Tier 2 Core Modules into the DAG automatically
     core_dir = Path(__file__).parent.joinpath("core")
     if core_dir.exists() and core_dir.is_dir():
-        for item in os.listdir(core_dir):
-            if os.path.isdir(core_dir.joinpath(item)) and not item.startswith("__") and item != "sdk":
+        for item in sorted(os.listdir(core_dir)):
+            if os.path.isdir(core_dir.joinpath(item)) and not item.startswith("__") and item not in ("sdk", "languages"):
                 raw_extensions.add(item)
 
     # Resolve Backend Python Dependencies via vendor.json
-    resolve_python_vendors(list(raw_extensions))
+    resolve_python_vendors(sorted(raw_extensions))
 
-    # DAG Node Resolution
+    # DAG Node Resolution (load foundational Tier 2 core modules first)
+    priority_order = ("system", "fs", "topology", "cartographer", "prompts", "gather", "llm", "bridge", "agent", "mcp", "offline", "remote")
+    ordered_discovery = [e for e in priority_order if e in raw_extensions] + sorted(raw_extensions - set(priority_order))
     modules = {}
-    for ext in list(raw_extensions):
+    for ext in ordered_discovery:
         if ext == "config": continue # Pure frontend UI extension
         try:
             # Try the extensions folder first, fallback to core chassis

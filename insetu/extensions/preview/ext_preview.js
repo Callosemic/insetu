@@ -17,6 +17,13 @@ const SERVER_MODE_OPTIONS = [
     { value: 'custom', label: 'Custom Command' }
 ];
 
+const LAN_LEASE_OPTIONS = [
+    { value: 'run', label: 'Until this server stops' },
+    { value: '15m', label: 'For 15 minutes' },
+    { value: '1h', label: 'For 1 hour' },
+    { value: '8h', label: 'For 8 hours' }
+];
+
 export const PreviewStore = createExtensionStore('Preview', {
     servers: {},
     selectedRepo: '',
@@ -27,6 +34,8 @@ export const PreviewStore = createExtensionStore('Preview', {
     logsOpen: false,
     logs: [],
     loading: false,
+    pendingApproval: null,
+    lanDuration: 'run',
     fetchStatus: async () => {
         PreviewStore.setState({ loading: true });
         try {
@@ -85,6 +94,8 @@ export class InSetuExtPreview extends InSetuElement {
         logsOpen: { type: Boolean },
         logs: { type: Array },
         loading: { type: Boolean },
+        pendingApproval: { type: Object },
+        lanDuration: { type: String },
         _draftConfig: { type: Object }
     };
 
@@ -179,6 +190,32 @@ export class InSetuExtPreview extends InSetuElement {
             border: none;
             background: var(--preview-canvas-bg, var(--pane-bg));
         }
+        .exposure-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+            padding: 8px 12px;
+            font-size: 0.8rem;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .exposure-bar.warning {
+            color: var(--text);
+            background: color-mix(in srgb, var(--intent-warning) 14%, transparent);
+            border-bottom-color: color-mix(in srgb, var(--intent-warning) 45%, transparent);
+        }
+        .exposure-bar.neutral {
+            color: var(--text-muted);
+            background: var(--pane-bg);
+        }
+        .exposure-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
         .logs-drawer {
             flex-shrink: 0;
             border-top: 1px solid var(--border);
@@ -227,6 +264,8 @@ export class InSetuExtPreview extends InSetuElement {
         this.logsOpen = !!st.logsOpen;
         this.logs = st.logs || [];
         this.loading = !!st.loading;
+        this.pendingApproval = st.pendingApproval || null;
+        this.lanDuration = st.lanDuration || 'run';
         this._draftConfig = {};
     }
 
@@ -243,7 +282,9 @@ export class InSetuExtPreview extends InSetuElement {
                 configOpen: !!state.configOpen,
                 logsOpen: !!state.logsOpen,
                 logs: state.logs || [],
-                loading: !!state.loading
+                loading: !!state.loading,
+                pendingApproval: state.pendingApproval || null,
+                lanDuration: state.lanDuration || 'run'
             }),
             { autoFetch: 'fetchStatus' }
         );
@@ -321,9 +362,10 @@ export class InSetuExtPreview extends InSetuElement {
             server_mode: srv.server_mode || 'auto',
             serve_dir: srv.serve_dir || '.',
             port: srv.port || 0,
-            bind_host: srv.bind_host || '0.0.0.0',
+            bind_host: srv.bind_host || '127.0.0.1',
             entry_target: srv.entry_target || '',
             tailscale_https: !!srv.tailscale_https,
+            static_cors: !!srv.static_cors,
             auto_start: !!srv.auto_start
         };
     }
@@ -337,15 +379,134 @@ export class InSetuExtPreview extends InSetuElement {
             }
         }
     }
-    _resolvePreviewUrl(srv) {
-        if (!srv || !srv.port) return '';
+    _isLocalViewer() {
         const host = window.location.hostname || '127.0.0.1';
-        const isLocal = host === '127.0.0.1' || host === 'localhost';
+        return host === '127.0.0.1' || host === 'localhost' || host === '[::1]';
+    }
+
+    // A loopback-only server is unreachable from another device unless Tailscale HTTPS proxies it (S2).
+    _isUnreachableHere(srv) {
+        // An adopted external server binds wherever its owner chose, so only managed servers are judged here.
+        return !!srv && srv.status === 'running' && !this._isLocalViewer() && srv.exposure === 'loopback';
+    }
+
+    _resolvePreviewUrl(srv) {
+        if (!srv || !srv.port || this._isUnreachableHere(srv)) return '';
+        const host = window.location.hostname || '127.0.0.1';
+        const isLocal = this._isLocalViewer();
         const protocol = (!isLocal && srv.tailscale_https) ? 'https:' : 'http:';
         const baseOrigin = isLocal ? `http://127.0.0.1:${srv.port}` : `${protocol}//${host}:${srv.port}`;
         const cleanSub = (this.subpath || '').replace(/^\/+/, '');
+        const params = [`_t=${this.reloadTick || 1}`];
+        if (srv.access_token) params.push(`access_token=${encodeURIComponent(srv.access_token)}`);
         const sep = cleanSub.includes('?') ? '&' : '?';
-        return `${baseOrigin}/${cleanSub}${sep}_t=${this.reloadTick || 1}`;
+        return `${baseOrigin}/${cleanSub}${sep}${params.join('&')}`;
+    }
+
+    _applyServerResult(repo, srv) {
+        const crashed = srv?.status === 'crashed';
+        PreviewStore.setState(state => ({
+            servers: { ...state.servers, [repo]: srv },
+            logs: srv?.logs || [],
+            logsOpen: crashed ? true : state.logsOpen,
+            pendingApproval: null,
+            reloadTick: Date.now()
+        }));
+        this._syncDraftFromServer(repo);
+        return crashed;
+    }
+
+    async _postServerAction(path, payload) {
+        const res = await this.api.post(path, payload);
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 403 && data.status === 'needs_approval') {
+            PreviewStore.setState({ pendingApproval: { repo: data.repo || payload.repo, command: data.command || '' } });
+            this.setStatus('This custom command needs your approval before it runs.', 3000, true);
+            return null;
+        }
+        if (!res.ok) throw new Error(data.error || 'Preview server request failed.');
+        return data.server;
+    }
+
+    async _approveAndStart() {
+        const pending = this.pendingApproval;
+        if (!pending?.repo || !pending?.command) return;
+        const res = await this.api.post('preview/approve_command', { repo: pending.repo, command: pending.command });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Approval failed.');
+        }
+        PreviewStore.setState({ pendingApproval: null });
+        await this._startServer(pending.repo);
+    }
+
+    async _openToLan() {
+        if (!this.selectedRepo) return;
+        const srv = await this._postServerAction('preview/open_lan', { repo: this.selectedRepo, duration: this.lanDuration || 'run' });
+        if (srv) {
+            this._applyServerResult(this.selectedRepo, srv);
+            this.setStatus(`'${this.selectedRepo}' is open to the LAN on port :${srv.port}.`, 3000);
+        }
+    }
+
+    async _closeLan() {
+        if (!this.selectedRepo) return;
+        const srv = await this._postServerAction('preview/close_lan', { repo: this.selectedRepo });
+        if (srv) {
+            this._applyServerResult(this.selectedRepo, srv);
+            this.setStatus(`'${this.selectedRepo}' is back on loopback.`, 2500);
+        }
+    }
+
+    async _enableTailscaleHttps() {
+        if (!this.selectedRepo) return;
+        this._draftConfig = { ...this._draftConfig, tailscale_https: true };
+        await this._saveRepoConfig();
+        await this._startServer();
+    }
+
+    _renderExposureBar(srv, isRunning) {
+        if (!srv || !this.selectedRepo) return '';
+        if (this.pendingApproval && this.pendingApproval.repo === this.selectedRepo) {
+            return html`
+                <div class="exposure-bar warning">
+                    <span>Approve this custom command before it runs: <code>${this.pendingApproval.command}</code></span>
+                    <div class="exposure-actions">
+                        <sutram-async-btn size="sm" intent="warning" icon="check" label="Approve & Start" .onClick=${() => this._approveAndStart()}></sutram-async-btn>
+                        <sutram-btn size="sm" intent="neutral" label="Cancel" @click=${() => PreviewStore.setState({ pendingApproval: null })}></sutram-btn>
+                    </div>
+                </div>
+            `;
+        }
+        if (isRunning && srv.exposure === 'lan') {
+            const until = srv.lan_lease_until ? `until ${this.utils.formatDate(srv.lan_lease_until * 1000)}` : 'until this server stops';
+            return html`
+                <div class="exposure-bar warning">
+                    <span>Open to the LAN on port :${srv.port} ${until}. Anyone on your network can reach it.</span>
+                    <div class="exposure-actions">
+                        <sutram-async-btn size="sm" intent="warning" icon="shield" label="Back to Loopback" .onClick=${() => this._closeLan()}></sutram-async-btn>
+                    </div>
+                </div>
+            `;
+        }
+        if (srv.status === 'running' && srv.lan_allowed) {
+            return html`
+                <div class="exposure-bar neutral">
+                    <span>Running on loopback. This repository may be opened to the LAN.</span>
+                    <div class="exposure-actions">
+                        <sutram-select
+                            ?flush=${true}
+                            style="width: 190px; margin: 0;"
+                            .value=${this.lanDuration || 'run'}
+                            .options=${LAN_LEASE_OPTIONS}
+                            @sutram-input-changed=${(e) => PreviewStore.setState({ lanDuration: e.detail.value })}>
+                        </sutram-select>
+                        <sutram-async-btn size="sm" intent="warning" icon="wifi" label="Open to LAN" .onClick=${() => this._openToLan()}></sutram-async-btn>
+                    </div>
+                </div>
+            `;
+        }
+        return '';
     }
     async _startServer(repoOverride = null) {
         const repo = repoOverride || this.selectedRepo;
@@ -354,21 +515,9 @@ export class InSetuExtPreview extends InSetuElement {
             repo,
             ...(this._draftConfig || {})
         };
-        const res = await this.api.post('preview/start', payload);
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.error || 'Failed to start server.');
-        }
-        const data = await res.json();
-        const srv = data.server;
-        const crashed = srv?.status === 'crashed';
-        PreviewStore.setState(state => ({
-            servers: { ...state.servers, [repo]: srv },
-            logs: srv?.logs || [],
-            logsOpen: crashed ? true : state.logsOpen,
-            reloadTick: Date.now()
-        }));
-        this._syncDraftFromServer(repo);
+        const srv = await this._postServerAction('preview/start', payload);
+        if (!srv) return;
+        const crashed = this._applyServerResult(repo, srv);
         if (crashed) {
             this.setStatus(`Server for '${repo}' exited prematurely. Check logs.`, 4000, true);
         } else {
@@ -570,10 +719,10 @@ export class InSetuExtPreview extends InSetuElement {
                         <sutram-select
                             label="Bind Host"
                             ?flush=${true}
-                            .value=${this._draftConfig.bind_host || '0.0.0.0'}
+                            .value=${this._draftConfig.bind_host || '127.0.0.1'}
                             .options=${[
-                                { value: '0.0.0.0', label: '0.0.0.0 (LAN / Tailnet)' },
-                                { value: '127.0.0.1', label: '127.0.0.1 (Loopback)' }
+                                { value: '127.0.0.1', label: '127.0.0.1 (Loopback)' },
+                                { value: '0.0.0.0', label: '0.0.0.0 (May open to LAN)' }
                             ]}
                             @sutram-input-changed=${(e) => {
                                 this._draftConfig = { ...this._draftConfig, bind_host: e.detail.value };
@@ -599,6 +748,14 @@ export class InSetuExtPreview extends InSetuElement {
                                 .checked=${!!this._draftConfig.tailscale_https}
                                 @sutram-input-changed=${(e) => {
                                     this._draftConfig = { ...this._draftConfig, tailscale_https: e.detail.value };
+                                }}>
+                            </sutram-toggle>
+                            <sutram-toggle
+                                label="Static Server CORS"
+                                ?flush=${true}
+                                .checked=${!!this._draftConfig.static_cors}
+                                @sutram-input-changed=${(e) => {
+                                    this._draftConfig = { ...this._draftConfig, static_cors: e.detail.value };
                                 }}>
                             </sutram-toggle>
                             <sutram-toggle
@@ -634,8 +791,19 @@ export class InSetuExtPreview extends InSetuElement {
                 </div>
             ` : ''}
 
-            <div class="iframe-stage ${isRunning ? '' : 'empty'}">
-                ${isRunning && previewUrl ? html`
+            ${this._renderExposureBar(srv, isRunning)}
+
+            <div class="iframe-stage ${isRunning && previewUrl ? '' : 'empty'}">
+                ${isRunning && this._isUnreachableHere(srv) ? html`
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 30px; text-align: center; max-width: 460px;">
+                        <yv-icon name="shield" style="width: 44px; height: 44px; color: var(--intent-highlight); opacity: 0.85;"></yv-icon>
+                        <h3 style="margin: 0; color: var(--text);">Only reachable on this machine</h3>
+                        <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted); line-height: 1.5;">
+                            This server only listens on loopback. Turn on Tailscale HTTPS to view it from this device.
+                        </p>
+                        <sutram-async-btn intent="primary" icon="lock" label="Turn On Tailscale HTTPS" .onClick=${() => this._enableTailscaleHttps()}></sutram-async-btn>
+                    </div>
+                ` : isRunning && previewUrl ? html`
                     <iframe
                         src=${previewUrl}
                         allow="clipboard-read; clipboard-write; fullscreen"
