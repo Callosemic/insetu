@@ -96,3 +96,24 @@ Components must cleanly mount, unmount, and protect user data during interaction
 *   **Legacy System URIs**
     *   ❌ **Noncompliant:** Referencing `system://contexts/...` in routing logic or frontend state.
     *   ✅ **Gold Standard:** Strictly utilizing the `ctx://` scheme to represent virtual/ephemeral artifacts across the OS (ADR 0035).
+
+---
+## 5. Security & Exposure
+An extension that adds routes, runs commands, writes files or starts servers is reachable from phones over Tailscale and from LLM agents. These are the minimum bar; the full rules are in `01_engineering_standards.md` §9.
+
+*   **Public Routes**
+    *   ❌ **Noncompliant:** Adding a path to `public_routes` or `public_prefixes` to get an endpoint working from a phone, adding a public path suffix, or making a public route accept POST, PUT, PATCH or DELETE.
+    *   ✅ **Gold Standard:** Leaving the route behind the token gate. If something truly must be public, adding it with a reason to the public list in `tests/unit/test_route_auth_inventory.py` in the same commit, read-only.
+*   **Running Commands**
+    *   ❌ **Noncompliant:** Accepting `command` plus `approve: true` in a payload, adding a code-running capability to `READ_ONLY_MODE_ALLOWED_CAPABILITIES`, or running a caller-chosen command without a recorded approval.
+    *   ✅ **Gold Standard:** Running only the configured default or a command a person approved through a route declared with `mcp_expose=False` and listed in `ROUTINE_BANNED_CAPABILITIES`.
+*   **File Access**
+    *   ❌ **Noncompliant:** `open(path, "w")` or `os.remove(path)` on a path from a request, or reading files outside mounted volumes.
+    *   ✅ **Gold Standard:** `ctx.vfs.save()`, `ctx.vfs.read()` and `ctx.vfs.delete()`, which confine paths to the workspace and refuse protected recovery files.
+*   **Network Servers**
+    *   ❌ **Noncompliant:** Binding `0.0.0.0` by default or at boot, launching code-running tools with `--no-token`, or sending `Access-Control-Allow-Origin: *` from a server that can read repository files.
+    *   ✅ **Gold Standard:** Binding `127.0.0.1`, reaching remote devices through Tailscale HTTPS, and opening to the LAN only through a person's time-limited grant.
+*   **Secrets**
+    *   ❌ **Noncompliant:** Putting tokens or API keys in URLs, logging them, storing them in error records, or sending unscrubbed context to an LLM provider.
+    *   ✅ **Gold Standard:** Headers for credentials, `scrub_outbound_secrets` on outbound context, and settings marked `secure` for secret values.
+

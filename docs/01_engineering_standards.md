@@ -295,3 +295,50 @@ Interactions across core engines and domain extensions follow a strict separatio
 * **1:N Lifecycle & IoC Aggregation (`ctx.emit`, `ctx.emit_first`, `ctx.emit_merge_list`, `ctx.emit_merge_dict`):** Used strictly for lifecycle broadcasts (`workspace_boot`, `topology_boot_complete`, `vfs_mutated`) and Inversion-of-Control plugin aggregation (`gather_declare_topology`, `register_compilation_steps`, `request_changelog_suggestions`).
 * **Cross-Module Private Import Ban (`CROSS_MODULE_PRIVATE_IMPORT_BAN`):** Importing private underscore-prefixed symbols (`_helper`) across module boundaries is strictly banned by the AST fitness suite. Shared Tier 2 primitives belong in `insetu.core.utils_core` or `insetu.core.sdk`, and cross-extension invocations must route through `ctx.call()` and declare upstream hard dependencies in `__depends__`.
 
+---
+
+## 9. Security Guardrails (Tier 0)
+
+inSetu is reachable from phones and tablets over Tailscale, and an LLM agent writes and runs code inside it. Every guard below exists because a specific hole was found and fixed (see the roadmap's Tier 0 items). Each one is enforced by a test or a fitness rule, named in parentheses; a change that needs to weaken one is a security review, not a test fix.
+
+### 9.1 The Bottom Layer: Auth and the Lifeboat
+* **One Authenticated Way In, Always**: Credential checking and the recovery server (`insetu/fallback_bridge.py`) are the bottom layer. When everything else fails, one authenticated path must still work, so credentials are verified by akasa's stdlib-only `akasa/auth/credentials.py`, which the lifeboat loads by file path rather than through `import akasa`.
+* **Durable Session Token**: The gate accepts the token stored in `.insetu/auth/session_token` (owner-only permissions). The lifeboat accepts the same token, so a signed-in phone can still reach it after a crash, from the same origin. Never clear the saved token in the browser when panicking or rebooting.
+* **The Lifeboat Is Gated Like the App** (`test_lifeboat_auth.py`): token gate, Host check (loopback, `*.ts.net`, configured hosts), reads and writes confined to the workspace with symlinks followed, `.insetu/auth/` never readable or writable, and the panic traceback served only with the token.
+
+### 9.2 Deny-by-Default HTTP (`test_route_auth_inventory.py`)
+* **Every Route Needs the Token**: akasa's gate runs in front of every Flask route, websocket and SSE stream. Public routes are an explicit map of rule to reason in the inventory test; adding to `public_routes`, `public_prefixes` or the lifeboat's public paths requires adding a reasoned entry there.
+* **No Suffix Exemptions**: Never exempt a path suffix (the old `.map` exemption opened every route whose last segment came from the caller). Assets are public by prefix only (`/static/`).
+* **Public Routes Are Read-Only**: No public route may accept POST, PUT, PATCH or DELETE, except `/auth/bootstrap`, which has its own peer checks. A state-changing public route (the old `POST /api/system/panic`) is CSRF-able from any web page.
+* **Tokens Travel in Headers**: Long-lived tokens never appear in URLs, logs or Referer headers. The only remaining query-token cases (SSE, websocket, the lifeboat's download fallback) are replaced by short-lived tickets in S6.
+
+### 9.3 Human-Only Approvals (P5)
+* **No Self-Approval** (`test_test_command_approval.py`, `test_preview_exposure.py`): A route that runs a command, opens network exposure or otherwise needs consent must never accept an `approve` flag from its caller. Checking an approval and recording one are separate functions (`is_command_approved` never records anything).
+* **Approval Routes Are Human-Only**: Routes that record approvals or grant exposure (`preview.open_lan`, `preview.approve_command`, `bridge.test.approve`) are declared with `mcp_expose=False` and added to `ROUTINE_BANNED_CAPABILITIES` in `orchestrator.py`. The MCP server honors `mcp_expose=False` in both `tools/list` and `tools/call`.
+* **Approvals Are Scoped**: An approval is keyed by workspace, domain kind, repository and a hash of the exact command, and an unanswered request is a denial.
+* **Read-Only Mode Runs No Code**: Capabilities in `READ_ONLY_MODE_ALLOWED_CAPABILITIES` must not execute code. Running tests executes code, so `bridge.test` and `agent.run_test` are not read-only.
+* **Custom Commands Need Approval**: Any capability that runs a caller-chosen command (test runners, preview `custom` mode, Hugo extra arguments) runs it only after a person approved that exact command.
+
+### 9.4 Files and the Recovery Path
+* **Writes Go Through the VFS** (`VFS_CONSTRAINT`, `VFS_CONSTRAINT_BYPASS`, `SDK_VFS_READ_MANDATE`): Never call `open()` for writing, `os.remove()` or `shutil` mutations on a path a caller supplied. VFS reads and writes are confined to mounted volumes; absolute paths, `../` and the control directory are refused.
+* **Protected Recovery Files** (`test_protected_vfs_targets.py` in akasa): `insetu/cli.py`, `insetu/fallback_bridge.py` and `akasa/auth/credentials.py` are registered with `register_protected_vfs_targets` (`INSETU_PROTECTED_VFS_TARGETS` in the SDK) and passed to `configure_kernel()`. The kernel refuses VFS writes, moves and deletes that would replace them or shadow them at import time (a same-named package directory, compiled variants, `__pycache__` entries). Add any new file the lifeboat imports to that list.
+* **Edits to the Recovery Path Are Human-Only**: Agent-originated changes to protected files are refused outright. The human path (confirm, smoke test in a subprocess, last-known-good copy, audit log) is S8's open work.
+
+### 9.5 Secrets
+* **Scrub at the Boundary**: Context sent to an LLM provider passes through `scrub_outbound_secrets`, which removes Fernet ciphertext, the session token and workspace secret values. Error records (`bridge_errors`) and logs must not store secrets or full contents of secret-matching files (S9, open: `bridge_errors` still keeps full payloads).
+* **Keys in Headers**: Provider API keys go in request headers, never in URL query strings (S9, open: the Gemini client in `engine_llm.py` still sends `?key=`).
+* **Child Processes**: `execute_binary` strips `AKASA_BOOT_TOKEN` from every child environment. Never pass the token to a subprocess explicitly.
+
+### 9.6 Network Exposure (S2)
+* **Loopback by Default**: Every server inSetu starts (preview servers, notebooks, tools) binds `127.0.0.1` unless a person opens it further. Remote devices reach it through Tailscale HTTPS.
+* **LAN Exposure Is a Lease**: Binding `0.0.0.0` requires a person's grant from the UI, through a human-only route (`preview.open_lan`), for the current server run or a fixed time (15 minutes, 1 hour, 8 hours), after which the server returns to loopback (`_expire_lan_lease`). Auto-start at boot never binds beyond loopback.
+* **No Unauthenticated Code-Running Tools**: Tools that execute code from a browser (marimo edit mode, notebooks, REPLs) always run with a token (`--token-password <access_token>`) unless they are loopback-only and not proxied by Tailscale. Never launch them with `--no-token` otherwise.
+* **Validate Exposure Inputs**: Bind hosts and server modes accepted from callers are checked against the listed options; anything else is refused.
+
+### 9.7 Changing a Guard
+A guard is changed in the same commit as its test, with the reason in the commit message and the roadmap item it belongs to. Tests and fitness rules that encode these guards must not be weakened to make other work pass.
+
+### 9.8 Formal Response Schemas & Test Diagnostic Governance
+* **Formal Response Schema Registry Mandate**: Structured outputs requested from LLM nodes (intent classification, plans, RAG file/interface slices, test diagnostics, debt ratchets) MUST be registered within `insetu.core.agent.schemas`. Schema validators must parse and validate outputs deterministically without external runtime dependencies.
+* **Post-Commit Test Diagnostic Gate**: Automated test gates executed after patch application MUST ingest structured JUnit XML reports (`--junitxml` / `--junit-path`) or bounded exit-code tail slices, suppressing passing log noise from prompt contexts. When `strict_test_enforcement` is enabled, persistent test regressions MUST trigger automated self-healing before executing atomic rollback via `bridge.revert`.
+* **Bounded Turn Budget Checkpoints**: Declarative agent routines MUST enforce step and token budget ceilings (`DEFAULT_STEP_BUDGET = 25`, `DEFAULT_TOKEN_BUDGET = 120000`). If budget limits are reached during multi-wavefront execution, the orchestrator MUST pause with `status: "paused_for_budget"` and persist a resumable checkpoint in `chat_sessions.checkpoint_json`.
