@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.30.0 (2026-10-30)
+
+### Features
+
+- Formal response schemas, post-commit test diagnostics, adaptive working-set compaction, and
+  context budget HUD
+  ([`e0075e6`](https://github.com/Callosemic/insetu/commit/e0075e6ed09168f6e6afb9cdd76bc47d42cd54a2))
+
+- **preview**: Enforce loopback by default, LAN exposure leases, and human approval for custom
+  commands
+  ([`15b0531`](https://github.com/Callosemic/insetu/commit/15b053137cff7f5cc4ee943af2b2d82df262a273))
+
+
 ## v0.29.2 (2026-10-29)
 
 ### Bug Fixes
