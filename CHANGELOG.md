@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.31.0 (2026-10-30)
+
+### Features
+
+- Child environment confinement, repo landmarks routine integration, and mcp optional prompt
+  includes
+  ([`dfe1101`](https://github.com/Callosemic/insetu/commit/dfe1101da870148673dbef939ad1c4b625b8df2b))
+
+
 ## v0.30.0 (2026-10-30)
 
 ### Features
