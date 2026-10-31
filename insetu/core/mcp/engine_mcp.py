@@ -202,8 +202,8 @@ def _render_mcp_prompt(ctx, prompt_name: str, arguments: Optional[Dict[str, Any]
             return None
         _, inc_body, _ = parse_frontmatter(raw_inc)
         return inc_body
-    pattern = r'\{\{\s*include_prompt\s*:\s*([^\s{}]+)\s*(?:\{([\s\S]*?)\})?\s*\}\}'
-    expanded = resolve_macro_includes(main_body, target_uri, pattern, _read_prompt)
+    pattern = r'\{\{\s*include_prompt\??\s*:\s*([^\s{}]+)\s*(?:\{([\s\S]*?)\})?\s*\}\}'
+    expanded = resolve_macro_includes(main_body, target_uri, pattern, _read_prompt, workspace_id=ctx.workspace_id)
     expanded = interpolate_template_variables(expanded, arguments or {})
     return {
         "description": (yaml_meta.get("description") if isinstance(yaml_meta, dict) else None) or f"Resolved prompt {target_uri}",

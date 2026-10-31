@@ -4,7 +4,6 @@ import shlex
 import time
 import zipfile
 import tarfile
-import urllib.request
 import subprocess
 import sys
 import shutil
@@ -13,7 +12,7 @@ from pathlib import Path
 from typing import TypedDict, Optional
 from insetu.core.sdk import InSetuExtension
 from insetu.extensions.git.engine_git import execute_git
-from insetu.core.utils_core import get_repo_path, execute_binary
+from insetu.core.utils_core import child_env, fetch_url, get_repo_path, execute_binary
 # Declarative schema for Semantic Release parameters
 UPDATE_SETTINGS_SCHEMA = [
     {
@@ -139,7 +138,7 @@ def _background_bump_task(ctx, repo: str, prerelease: bool = False):
     cp_match = re.search(r'^commit_parser\s*=\s*[\'"]([^\'"]*)[\'"]', pyproject_content, re.MULTILINE)
     toml_commit_parser = cp_match.group(1) if cp_match else None
     # Environment Variable Injection for Parser Settings
-    env = os.environ.copy()
+    env = child_env("tool")
     parser_style = ctx.settings.get("commit_parser", None, repo=repo) or toml_commit_parser or "conventional"
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
@@ -259,7 +258,7 @@ def _background_first_release_task(ctx, repo: str):
     dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
     if dist_target == "python_pypi":
         log_lines.extend(_build_and_validate_distribution(ctx, repo_path))
-        log_lines.append(_execute_twine_upload(ctx, repo, repo_path, os.environ.copy()))
+        log_lines.append(_execute_twine_upload(ctx, repo, repo_path, child_env("tool")))
     else:
         log_lines.append(f"=== BUILD & UPLOAD [SKIPPED] ===\nDistribution target is set to '{dist_target}'.")
     ctx.jobs.update_progress("Tagging initial release in Git...")
@@ -336,7 +335,7 @@ def _background_publish_task(ctx, repo: str):
 
     ctx.jobs.update_progress("Publishing package to registry...")
 
-    env = os.environ.copy()
+    env = child_env("tool")
     pypi_token = ctx.settings.get("pypi_token", "")
     gh_token = ctx.settings.get("github_token", "")
 
@@ -392,7 +391,7 @@ def _background_preview_bump_task(ctx, repo: str, prerelease: bool = False):
     pyproject_content = ctx.vfs.read(logical_pyproject) or ""
     cp_match = re.search(r'^commit_parser\s*=\s*[\'"]([^\'"]*)[\'"]', pyproject_content, re.MULTILINE)
     toml_commit_parser = cp_match.group(1) if cp_match else None
-    env = os.environ.copy()
+    env = child_env("tool")
     parser_style = ctx.settings.get("commit_parser", None, repo=repo) or toml_commit_parser or "conventional"
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
@@ -464,7 +463,7 @@ def _background_preview_publish_task(ctx, repo: str):
 
     ctx.jobs.update_progress("Evaluating dry-run semantic publish...")
 
-    env = os.environ.copy()
+    env = child_env("tool")
     pypi_token = ctx.settings.get("pypi_token", "")
     gh_token = ctx.settings.get("github_token", "")
     if pypi_token and dist_target == "python_pypi":
@@ -578,7 +577,7 @@ def _background_status_task(ctx, repo: str):
             wheels = list(dist_dir.glob("*.whl"))
             if wheels:
                 latest_build_artifact = max(wheels, key=lambda p: p.stat().st_mtime).name
-    env = os.environ.copy()
+    env = child_env("tool")
     parser_style = ctx.settings.get("commit_parser", None, repo=repo) or toml_commit_parser or "conventional"
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
@@ -635,13 +634,11 @@ def _background_status_task(ctx, repo: str):
     if version:
         try:
             clean_version = version.lstrip('v')
-            req = urllib.request.Request(f"https://pypi.org/pypi/{package_name}/json", headers={'User-Agent': 'inSetu-OS/1.0'})
-            with urllib.request.urlopen(req, timeout=3) as response:
-                if response.status == 200:
-                    pypi_package_exists = True
-                    pypi_data = json.loads(response.read().decode('utf-8'))
-                    releases = pypi_data.get("releases", {})
-                    pypi_published = clean_version in releases or f"v{clean_version}" in releases or version in releases
+            response = fetch_url(f"https://pypi.org/pypi/{package_name}/json", timeout=3)
+            if response.status == 200:
+                pypi_package_exists = True
+                releases = response.json().get("releases", {})
+                pypi_published = clean_version in releases or f"v{clean_version}" in releases or version in releases
         except Exception as e:
             print(f"⚠️ [Semantic Update] PyPI validation ping failed for '{package_name}': {e}")
             pypi_published = False

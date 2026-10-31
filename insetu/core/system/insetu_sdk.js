@@ -257,7 +257,7 @@ const INSETU_RESERVED_MACROS = Object.freeze([
     'system_prompt', 'user_message', 'user_prompt', 'context_block', 'history_summary', 'plan_uri'
 ]);
 const INSETU_RESERVED_PREFIXES = Object.freeze([
-    'wordcount_', 'nodes.', 'inputs.', 'global.', 'item.', 'loop.', 'include_prompt:', 'ymm:'
+    'wordcount_', 'nodes.', 'inputs.', 'global.', 'item.', 'loop.', 'include_prompt:', 'include_prompt?:', 'ymm:', 'sys.'
 ]);
 
 export function extractTemplateVariables(text, options = {}) {
@@ -556,6 +556,10 @@ export class InSetuURI {
         }
         if (clean.includes('prompts/')) {
             return `ctx://prompts/${clean.replace(/^prompts\//, '')}`;
+        }
+        // startsWith, not includes: 'repo/.insetu-data/settings/x.md' is a repository file, not ctx://settings (matches InSetuURI.canonicalize in Python).
+        if (clean.startsWith('settings/')) {
+            return `ctx://settings/${clean.replace(/^settings\//, '')}`;
         }
         if (clean.endsWith('_context.txt') || clean.startsWith('contexts/')) {
             return `ctx://contexts/${clean.replace(/^contexts\//, '')}`;

@@ -19,7 +19,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
 
 from insetu.core.sdk import InSetuURI
-from insetu.core.topology.engine_topology import get_topology_files_for_repo
+from insetu.core.topology.engine_topology import (
+    discover_constitution_files,
+    get_topology_files_for_repo,
+)
 from insetu.core.utils_core import (
     BucketAddress,
     compute_vfs_sha256,
@@ -261,17 +264,7 @@ def detect_external_edits(ctx, filepaths: List[str]) -> List[str]:
     return notices
 
 
-def discover_constitution_files(ctx) -> List[str]:
-    """Discovers Tier 0 auto-pinned engineering standards (docs/standards/*.md) across tracked repos."""
-    constitution: List[str] = []
-    for r_cfg in (ctx.config.get("target_repos") or []):
-        r_dir = r_cfg.get("repo_dir")
-        if not r_dir:
-            continue
-        for walk_p in ctx.vfs.walk(f"vfs://{r_dir}/docs/standards", exts=[".md"]):
-            if walk_p and not walk_p.endswith((".gitkeep", ".keep")):
-                constitution.append(str(InSetuURI(walk_p)))
-    return sorted(list(dict.fromkeys(constitution)))
+
 
 
 class ContextAssemblePayload(TypedDict, total=False):

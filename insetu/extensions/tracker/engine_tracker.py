@@ -358,6 +358,18 @@ def _sync_disk_to_db(workspace_id=None):
                 _parse_and_upsert_ticket(abs_path, ws_rel_path, workspace_id)
 
     ctx.db.commit()
+@tracker_bp.on('register_repo_landmarks')
+def _register_tracker_landmark(workspace_id=None, **kwargs):
+    """Declares the tracker directory as a repository landmark, exposed to prompts as `sys.tracker_dir`."""
+    return [{
+        "id": "tracker",
+        "label": "Tracker Directory",
+        "shape": "dir",
+        "output": "tracker_dir",
+        "defaults": [".insetu-data/tracker"],
+    }]
+
+
 @tracker_bp.on('mutate_workspace_config')
 def inject_tracker_config(cfg, workspace_id=None, **kwargs):
     """Dynamically injects the .tracker logic into the core OS pipelines."""

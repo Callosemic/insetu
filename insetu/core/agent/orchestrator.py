@@ -26,7 +26,7 @@ from insetu.core.utils_core import (
     get_sister_repos,
     load_json_config,
 )
-from insetu.core.topology.engine_topology import get_omniscient_workspace_files
+from insetu.core.topology.engine_topology import get_omniscient_workspace_files, resolve_repo_landmarks
 from insetu.core.gather.context_assemble import (
     assemble_context_payload,
     collect_workspace_secrets as _collect_secret_values_for_scrubbing,
@@ -64,6 +64,7 @@ ROUTINE_BANNED_CAPABILITIES = frozenset({
 })
 READ_ONLY_MODE_ALLOWED_CAPABILITIES = frozenset({
     "topology.overview",
+    "topology.landmarks",
     "topology.verify_plan_targets",
     "topology.audit_upkeep",
     "context.assemble",
@@ -896,9 +897,16 @@ def execute_declarative_routine(
     )
 
     repos_cfg = ctx.config.get("target_repos") or []
-    primary_repo_cfg = repos_cfg[0] if repos_cfg else {}
+    requested_repo = str(extra_inputs.get("repo") or "").strip()
+    # A routine may target one mounted repository by name; an unknown name falls back to the first repository.
+    primary_repo_cfg = (
+        next((r for r in repos_cfg if isinstance(r, dict) and r.get("repo_dir") == requested_repo), None)
+        if requested_repo else None
+    ) or (repos_cfg[0] if repos_cfg and isinstance(repos_cfg[0], dict) else {})
     primary_repo_name = primary_repo_cfg.get("repo_dir") or "workspace"
+    primary_repo_title = primary_repo_cfg.get("title") or primary_repo_name
     primary_repo_desc = primary_repo_cfg.get("description") or ""
+    landmarks_info = resolve_repo_landmarks(ctx, repo=primary_repo_name if primary_repo_name != "workspace" else None)
     rag_strategy_val = str(ctx.settings.get("rag_strategy", "blast_radius") if hasattr(ctx, "settings") else "blast_radius")
     strict_test_val = bool(ctx.settings.get("strict_test_enforcement", False) if hasattr(ctx, "settings") else False)
     run_tests_val = bool(ctx.settings.get("run_tests_on_code", False) if hasattr(ctx, "settings") else False)
@@ -908,8 +916,12 @@ def execute_declarative_routine(
         "_ctx": ctx,
         "sys": {
             **(prior_chain.get("sys") or {}),
-            "repo_name": primary_repo_name,
+            # One sys.<output> variable per landmark kind, including kinds extensions register; the keys below win on a clash.
+            **(landmarks_info.get("landmarks") or {}),
+            "repo_name": landmarks_info.get("repo_name") or primary_repo_name,
+            "repo_title": landmarks_info.get("repo_title") or primary_repo_title,
             "repo_description": primary_repo_desc,
+            "directives": str((prior_chain.get("sys") or {}).get("directives") or ""),
             "active_bucket": f"{primary_repo_name}::main",
             "routine_name": routine.get("id", routine_id),
             "rag_strategy": rag_strategy_val,

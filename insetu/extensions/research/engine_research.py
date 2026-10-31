@@ -3,13 +3,11 @@ import os
 import time
 import uuid
 from datetime import datetime
-import urllib.request
 import urllib.parse
-import urllib.error
 import json
 from typing import TypedDict, Optional
 from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import is_extension_enabled, get_workspace_physics
+from insetu.core.utils_core import FetchHTTPError, fetch_url, is_extension_enabled, get_workspace_physics
 RESEARCH_SCHEMA = {
     "research_jobs": {
         "id": "TEXT PRIMARY KEY",
@@ -113,13 +111,10 @@ class DuckDuckGoHTMLProvider(SearchProvider):
         
         if date_range:
             url += f"&df={date_range}"
-            
+
         # DDG requires a real-looking User-Agent
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-        
         try:
-            with urllib.request.urlopen(req) as response:
-                html = response.read().decode('utf-8', errors='ignore')
+            html = fetch_url(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}, timeout=20).text()
         except Exception as e:
             raise Exception(f"Search request failed: {str(e)}")
         soup = _BeautifulSoup(html, 'html.parser')
@@ -277,15 +272,12 @@ class SerperDevProvider(SearchProvider):
                 except Exception:
                     pass
 
-        req = urllib.request.Request(url, headers={
-            'X-API-KEY': api_key,
-            'Content-Type': 'application/json'
-        }, data=json.dumps(payload).encode('utf-8'))
-
         try:
-            with urllib.request.urlopen(req) as response:
-                data = json.loads(response.read().decode('utf-8'))
-        except urllib.error.HTTPError as e:
+            data = fetch_url(url, headers={
+                'X-API-KEY': api_key,
+                'Content-Type': 'application/json'
+            }, data=json.dumps(payload).encode('utf-8'), timeout=20).json()
+        except FetchHTTPError as e:
             if e.code in (401, 403):
                 raise Exception("Invalid Serper.dev API Key. Please check your Research Settings in the Settings Hub.")
             raise Exception(f"Serper API request failed: HTTP {e.code}")
@@ -395,7 +387,7 @@ def scrape_next_link(ctx, research_job_id: Optional[str] = None, job_id: Optiona
     try:
       job_data = conn.execute("SELECT meta_json FROM research_jobs WHERE id=?", (target_id,)).fetchone()
       meta = json.loads(job_data['meta_json']) if job_data and job_data['meta_json'] else {}
-      parser_type = meta.get('parser', 'jina')
+      parser_type = meta.get('parser', 'bs4')
       extracted = ctx.call("ingest.url", url=target_url, method=parser_type, wait=True)
       now_str = datetime.now().isoformat(timespec='seconds')
       conn.execute("UPDATE research_inbox SET raw_markdown=?, title=?, scraped_at=? WHERE id=?", (extracted.get("markdown", ""), extracted.get("title", "Untitled"), now_str, inbox_id))
@@ -432,7 +424,7 @@ def start_job(ctx):
     provider_name = data.get('provider', 'duckduckgo')
     max_results = int(data.get('max_results', 10))
     date_range = str(data.get('date_range') or '').strip()
-    parser = data.get('parser', 'jina')
+    parser = data.get('parser', 'bs4')
     target_dir = data.get('target_dir', 'research/')
     if not is_extension_enabled('ingest', workspace_id):
         return {"error": "Pre-flight Validation Failed: Extension 'ingest' is required but not enabled in this workspace."}, 422

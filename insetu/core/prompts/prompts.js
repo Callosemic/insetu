@@ -257,7 +257,7 @@ window.addEventListener('insetu:can-preview-file', (e) => {
 
 window.addEventListener('insetu:resolve-buffer-preview', (e) => {
     const { filepath, content, isDirty } = e.detail || {};
-    const hasIncludeMacro = typeof content === 'string' && /\{\{\s*(?:include_prompt\s*:|macro_[a-zA-Z0-9_]+|[a-zA-Z0-9_]+\s*\|)/.test(content);
+    const hasIncludeMacro = typeof content === 'string' && /\{\{\s*(?:include_prompt\??\s*:|macro_[a-zA-Z0-9_]+|[a-zA-Z0-9_]+\s*\|)/.test(content);
     if (filepath && (isPromptPath(filepath) || hasIncludeMacro)) {
         e.inSetuResponses.push((async () => {
             if (isDirty && typeof content === 'string') {

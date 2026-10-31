@@ -5,7 +5,7 @@ import traceback
 import json
 from typing import TypedDict
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from insetu.core.utils_core import is_extension_enabled
+from insetu.core.utils_core import child_env, is_extension_enabled
 try:
     from flask_sock import Sock
     HAS_SOCK = True
@@ -82,7 +82,7 @@ def _run_term_stream(ws, workspace_id):
     ws_root = ctx.paths['workspace_root']
     # Fork a new PTY natively
     master_fd, slave_fd = pty.openpty()
-    env = os.environ.copy()
+    env = child_env("shell")
     env["TERM"] = "xterm-256color"
     # Silence Apple's macOS zsh deprecation warning
     env["BASH_SILENCE_DEPRECATION_WARNING"] = "1"

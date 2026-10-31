@@ -3,16 +3,18 @@ import re
 import time
 import uuid
 import json
+import fnmatch
 import threading
 import traceback
 import queue
 from pathlib import Path
-from typing import TypedDict, Optional, List, Dict, Any, Union, Literal
+from typing import TypedDict, Optional, List, Dict, Any, Union, Literal, Tuple
 from insetu.core.sdk import (
     InSetuExtension,
     ExtensionContext,
     SettingsManager,
     get_connection,
+    get_registered_settings_schemas,
     sse_bus,
     hooks,
     set_workspace_router,
@@ -24,6 +26,7 @@ from insetu.core.utils_core import (
     InSetuURI,
     fold_vfs_events,
     parse_uri,
+    parse_frontmatter,
     get_all_workspace_ids,
     get_workspace_physics,
     load_config,
@@ -31,6 +34,22 @@ from insetu.core.utils_core import (
     execute_vfs_save,
     resolve_physical_path,
 )
+
+TOPOLOGY_SETTINGS_SCHEMA = [
+    {
+        # Held in the repository's `.insetu-data/settings/topology.md`, never in workspace storage, so it stays
+        # hidden from the Settings hub until the hub can show and edit repository tiers.
+        "id": "landmarks",
+        "type": "hidden",
+        "scope": "repo",
+        "about": "repo",
+        "authority": "repo_content",
+        "merge": "override",
+        "default": {},
+        "description": "Repository-relative paths or globs for each landmark kind (see get_landmark_kinds).",
+    }
+]
+
 TOPOLOGY_SCHEMA = {
     "topology_ledger": {
         "filepath": "TEXT PRIMARY KEY",
@@ -53,6 +72,7 @@ topology_bp = InSetuExtension(
     title="Topology Engine", 
     description="Single Source of Truth (SSOT) for workspace file mapping and structural bucket routing.",
     schema=TOPOLOGY_SCHEMA,
+    settings_schema=TOPOLOGY_SETTINGS_SCHEMA,
     core=True
 )
 __depends__ = []
@@ -1111,6 +1131,391 @@ def api_topology_verify_plan_targets(ctx):
         "missing_or_new_targets": missing,
         "total_referenced": len(found_uris),
     }
+
+
+_REPO_TIER_SETTINGS_CACHE: Dict[Tuple[str, str, str], Tuple[Tuple[Optional[str], Optional[str]], Dict[str, Any]]] = {}
+_REPO_TIER_CACHE_LOCK = threading.Lock()
+
+# Landmark kinds core knows about. Extensions add their own through the `register_repo_landmarks` hook.
+# shape: "files" (every matching file), "dir" (the first existing directory), "paths" (matching directories or files).
+# default_pick: "first" keeps only the first default that matches; "all" keeps every match.
+CORE_LANDMARK_KINDS: List[Dict[str, Any]] = [
+    {
+        "id": "standards",
+        "label": "Engineering Standards",
+        "shape": "files",
+        "output": "standards_files",
+        "defaults": ["docs/standards/*.md", "docs/*engineering_standards*.md", "*engineering_standards*.md", "CONTRIBUTING.md"],
+    },
+    {
+        "id": "contracts",
+        "label": "API and Architectural Contracts",
+        "shape": "files",
+        "output": "contract_files",
+        "defaults": ["docs/*contract*.md", "*contract*.md", "README.md"],
+    },
+    {
+        "id": "adrs",
+        "label": "ADR Directory",
+        "shape": "dir",
+        "output": "adr_dir",
+        "defaults": ["docs/adrs", "docs/adr", "adr"],
+    },
+    {
+        "id": "tests",
+        "label": "Unit Test Directories",
+        "shape": "paths",
+        "output": "test_dirs",
+        "defaults": ["tests/unit", "tests", "test"],
+        "default_pick": "first",
+    },
+    {
+        "id": "fitness",
+        "label": "Fitness Suites",
+        "shape": "paths",
+        "output": "fitness_dirs",
+        "defaults": ["tests/fitness", "tests/fitness_functions.py"],
+        "default_pick": "all",
+    },
+]
+_LANDMARK_SHAPES = frozenset({"files", "dir", "paths"})
+_LANDMARK_RESERVED_OUTPUTS = frozenset({"repo_name", "repo_title", "notices", "landmarks"})
+_LANDMARK_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def get_landmark_kinds(workspace_id: Optional[str] = None) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """
+    Returns (kinds, notices): core landmark kinds followed by valid kinds that enabled extensions register.
+    An extension declares `{"id", "label", "shape", "output", "defaults", "default_pick"?}` from a
+    `register_repo_landmarks` hook. A declaration that reuses an id or output, uses an unknown shape,
+    or has a default path that leaves the repository is skipped with a notice.
+    """
+    kinds: List[Dict[str, Any]] = [dict(k) for k in CORE_LANDMARK_KINDS]
+    notices: List[str] = []
+    seen_ids = {k["id"] for k in kinds}
+    seen_outputs = {k["output"] for k in kinds} | set(_LANDMARK_RESERVED_OUTPUTS)
+    for decl in hooks.emit_merge_list("register_repo_landmarks", workspace_id=workspace_id or "default"):
+        if not isinstance(decl, dict):
+            continue
+        kid = str(decl.get("id") or "")
+        out = str(decl.get("output") or "")
+        shape = decl.get("shape")
+        defaults = decl.get("defaults") or []
+        pick = decl.get("default_pick", "all")
+        problem = None
+        if not _LANDMARK_NAME_RE.match(kid) or not _LANDMARK_NAME_RE.match(out):
+            problem = "id and output must be lowercase identifiers"
+        elif kid in seen_ids or out in seen_outputs:
+            problem = "id or output is already taken"
+        elif shape not in _LANDMARK_SHAPES:
+            problem = f"unknown shape '{shape}'"
+        elif pick not in ("first", "all"):
+            problem = f"unknown default_pick '{pick}'"
+        elif not isinstance(defaults, list) or not all(_is_confined_repo_rel_spec(d) for d in defaults):
+            problem = "defaults must be repository-relative paths"
+        if problem:
+            notices.append(f"Skipped landmark kind '{kid or '?'}': {problem}.")
+            continue
+        seen_ids.add(kid)
+        seen_outputs.add(out)
+        kinds.append({
+            "id": kid,
+            "label": str(decl.get("label") or kid),
+            "shape": shape,
+            "output": out,
+            "defaults": list(defaults),
+            "default_pick": pick,
+        })
+    return kinds, notices
+
+
+def _empty_landmark_value(kind: Dict[str, Any]) -> Any:
+    """The value a landmark kind has when nothing matches: "" for a directory, [] otherwise."""
+    return "" if kind["shape"] == "dir" else []
+
+
+def _resolve_landmark_kind(kind: Dict[str, Any], specs: Optional[List[str]], rel_files: List[str], repo_path: Optional[Path], repo_dir: str) -> Any:
+    """
+    Resolves one landmark kind for a repository to VFS URIs.
+    Configured specs replace the kind's defaults entirely; with defaults, `default_pick: first`
+    keeps only the first default that matches.
+    """
+    configured = specs is not None
+    candidates = specs if configured else kind["defaults"]
+    first_only = (not configured) and kind.get("default_pick") == "first"
+    found: List[str] = []
+    for sp in candidates:
+        if kind["shape"] == "dir":
+            matched_d = _match_tracked_dir(rel_files, repo_path, sp)
+            if matched_d:
+                return f"vfs://{repo_dir}/{matched_d}"
+            continue
+        if kind["shape"] == "files":
+            hits = _match_tracked_files(rel_files, sp)
+        else:
+            matched_d = _match_tracked_dir(rel_files, repo_path, sp)
+            hits = [matched_d] if matched_d else _match_tracked_files(rel_files, sp)
+        found.extend(hits)
+        if first_only and hits:
+            break
+    if kind["shape"] == "dir":
+        return ""
+    return [f"vfs://{repo_dir}/{rf}" for rf in dict.fromkeys(found)]
+
+
+def _local_settings_ignored(ctx, repo: str) -> bool:
+    """True when `<repo>/.insetu-data/.gitignore` lists `settings.local/`, so personal overrides stay out of commits."""
+    existing = ctx.vfs.read(f"vfs://{repo}/.insetu-data/.gitignore")
+    if existing is None:
+        return False
+    return any(line.strip().rstrip("/") == "settings.local" for line in existing.splitlines())
+
+
+def _is_confined_repo_rel_spec(spec: Any) -> bool:
+    """Returns True if `spec` is a non-empty, relative path/glob without `..` traversal or scheme prefixes."""
+    if not isinstance(spec, str):
+        return False
+    clean = spec.replace("\\", "/").strip()
+    if not clean or "://" in clean or clean.startswith(("/", "~")):
+        return False
+    if re.match(r'^[a-zA-Z]:', clean):
+        return False
+    parts = [p for p in clean.split("/") if p]
+    if not parts or any(p == ".." for p in parts):
+        return False
+    return True
+
+
+def _get_repo_content_field_ids(workspace_id: str, ext_name: str) -> set:
+    """Returns the set of schema field IDs declared with `authority: 'repo_content'` for `ext_name`."""
+    schemas = get_registered_settings_schemas(workspace_id)
+    ext_schema = schemas.get(ext_name) or []
+    allowed = set()
+    for field_spec in ext_schema:
+        if isinstance(field_spec, dict) and field_spec.get("authority") == "repo_content" and field_spec.get("id"):
+            allowed.add(field_spec["id"])
+    return allowed
+
+
+def read_repo_tier_settings(ctx, repo: str, ext_name: str = "topology") -> Dict[str, Any]:
+    """
+    Reads one extension's repository-tier settings, keeping only fields declared `authority: repo_content`.
+    Sources, in order (later wins):
+    1. `vfs://<repo>/.insetu-data/settings/<ext_name>.md` (shared, committed)
+    2. `vfs://<repo>/.insetu-data/settings.local/<ext_name>.md` (local override, git-ignored)
+    Enforces `authority: repo_content` per schema field and ignores undeclared/unauthorized fields with notices.
+    Cached by the pair of VFS content hashes (revision token).
+    """
+    wid = ctx.workspace_id or "default"
+    clean_repo = str(repo or "").strip()
+    if not clean_repo:
+        return {"values": {}, "notices": [], "body_shared": "", "body_local": ""}
+
+    shared_uri = f"vfs://{clean_repo}/.insetu-data/settings/{ext_name}.md"
+    local_uri = f"vfs://{clean_repo}/.insetu-data/settings.local/{ext_name}.md"
+
+    shared_raw = ctx.vfs.read(shared_uri)
+    local_raw = ctx.vfs.read(local_uri)
+
+    rev_token = (
+        str(hash(shared_raw)) if shared_raw is not None else None,
+        str(hash(local_raw)) if local_raw is not None else None,
+    )
+    cache_key = (wid, clean_repo, ext_name)
+    with _REPO_TIER_CACHE_LOCK:
+        cached = _REPO_TIER_SETTINGS_CACHE.get(cache_key)
+        if cached and cached[0] == rev_token:
+            return json.loads(json.dumps(cached[1]))
+
+    allowed_fields = _get_repo_content_field_ids(wid, ext_name)
+    merged_values: Dict[str, Any] = {}
+    notices: List[str] = []
+    if local_raw is not None and not _local_settings_ignored(ctx, clean_repo):
+        # Reads never write: the person (or a future settings write path) adds the ignore line.
+        notices.append(
+            f"{local_uri} exists but '.insetu-data/.gitignore' does not list 'settings.local/', so these personal overrides could be committed."
+        )
+    body_shared = ""
+    body_local = ""
+
+    for tier_label, uri_str, raw_text in (
+        ("shared", shared_uri, shared_raw),
+        ("local", local_uri, local_raw),
+    ):
+        if raw_text is None:
+            continue
+        meta, body, _ = parse_frontmatter(raw_text)
+        if tier_label == "shared":
+            body_shared = body
+        else:
+            body_local = body
+        if not isinstance(meta, dict):
+            continue
+        for k, v in meta.items():
+            if k == "schema":
+                continue
+            if k not in allowed_fields:
+                notices.append(
+                    f"Ignored field '{k}' in {uri_str}: only fields with authority 'repo_content' may be set in repository settings."
+                )
+                continue
+            if isinstance(v, dict) and isinstance(merged_values.get(k), dict):
+                merged_values[k] = {**merged_values[k], **v}
+            else:
+                merged_values[k] = v
+
+    result = {
+        "values": merged_values,
+        "notices": notices,
+        "body_shared": body_shared,
+        "body_local": body_local,
+    }
+    with _REPO_TIER_CACHE_LOCK:
+        _REPO_TIER_SETTINGS_CACHE[cache_key] = (rev_token, result)
+    return json.loads(json.dumps(result))
+
+
+def _match_tracked_files(rel_files: List[str], spec: str) -> List[str]:
+    """Matches a confined repo-relative path, directory, or glob against tracked relative file paths."""
+    clean = spec.replace("\\", "/").strip().strip("/")
+    if not clean:
+        return []
+    matched: List[str] = []
+    has_glob = any(ch in clean for ch in ("*", "?", "["))
+    for rf in rel_files:
+        if has_glob:
+            if fnmatch.fnmatch(rf, clean) or fnmatch.fnmatch(Path(rf).name, clean):
+                matched.append(rf)
+        else:
+            if rf == clean or rf.startswith(f"{clean}/"):
+                matched.append(rf)
+    return sorted(list(dict.fromkeys(matched)))
+
+
+def _match_tracked_dir(rel_files: List[str], repo_path: Optional[Path], spec: str) -> Optional[str]:
+    """Verifies whether a confined repo-relative directory (or file path) exists in the tracked set or on disk."""
+    clean = spec.replace("\\", "/").strip().strip("/")
+    if not clean:
+        return None
+    if any(rf == clean or rf.startswith(f"{clean}/") for rf in rel_files):
+        return clean
+    if repo_path is not None:
+        cand = (repo_path / clean).resolve()
+        try:
+            cand.relative_to(repo_path.resolve())
+            if cand.exists():
+                return clean
+        except ValueError:
+            pass
+    return None
+
+
+def resolve_repo_landmarks(ctx, repo: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Resolves where a repository keeps each landmark kind (standards, contracts, ADRs, tests, fitness suites,
+    and kinds registered by extensions). Returns `{"repo_name", "repo_title", "landmarks": {output: value}, "notices"}`.
+    - Combines each kind's defaults with `.insetu-data/settings/topology.md` and `settings.local/topology.md` (`merge: override`).
+    - Confines every path/glob to the repository (rejecting absolute paths and `..` segments with notices).
+    - Resolves file and directory matches against `topology_ledger`, falling back to the disk for directories.
+    """
+    kinds, kind_notices = get_landmark_kinds(ctx.workspace_id)
+    empty = {k["output"]: _empty_landmark_value(k) for k in kinds}
+    cfg = ctx.config
+    target_repos = cfg.get("target_repos") or []
+    repo_cfg = None
+    if repo:
+        repo_cfg = next((r for r in target_repos if isinstance(r, dict) and r.get("repo_dir") == repo), None)
+        if repo_cfg is None:
+            # Only mounted repositories have landmarks; an unknown name must not borrow another repository's.
+            return {
+                "repo_name": repo, "repo_title": repo, "landmarks": empty,
+                "notices": kind_notices + [f"'{repo}' is not a mounted repository."],
+            }
+    elif target_repos:
+        repo_cfg = target_repos[0] if isinstance(target_repos[0], dict) else None
+
+    repo_dir = str(repo or (repo_cfg.get("repo_dir") if repo_cfg else "") or "").strip()
+    repo_title = str((repo_cfg.get("title") if repo_cfg else "") or repo_dir or "workspace").strip()
+
+    if not repo_dir:
+        return {"repo_name": "workspace", "repo_title": "workspace", "landmarks": empty, "notices": kind_notices}
+
+    tracked_uris = get_topology_files_for_repo(ctx.workspace_id, repo_dir)
+    if not tracked_uris:
+        r_phys_str = get_repo_path(repo_dir, ctx.workspace_id)
+        if r_phys_str and os.path.exists(r_phys_str) and repo_cfg:
+            valid_rels = get_valid_workspace_files(r_phys_str, repo_cfg, ctx.workspace_id)
+            tracked_uris = [f"vfs://{repo_dir}/{f}" for f in valid_rels]
+
+    rel_files = sorted([
+        InSetuURI(u).path for u in tracked_uris
+        if not InSetuURI(u).basename.endswith((".gitkeep", ".keep"))
+    ])
+    r_phys_str = get_repo_path(repo_dir, ctx.workspace_id)
+    r_phys = Path(r_phys_str).resolve() if r_phys_str else None
+
+    tier_data = read_repo_tier_settings(ctx, repo_dir, "topology")
+    notices: List[str] = kind_notices + list(tier_data.get("notices") or [])
+    raw_landmarks = tier_data.get("values", {}).get("landmarks")
+    known_ids = {k["id"] for k in kinds}
+    landmarks_cfg: Dict[str, Any] = {}
+    if isinstance(raw_landmarks, dict):
+        for lk, lv in raw_landmarks.items():
+            if lk not in known_ids:
+                notices.append(f"Ignored unknown landmark key '{lk}' in topology settings for '{repo_dir}'.")
+                continue
+            landmarks_cfg[lk] = lv
+
+    def _normalize_spec_list(raw_val: Any, key_label: str) -> Optional[List[str]]:
+        if raw_val is None:
+            return None
+        items = raw_val if isinstance(raw_val, list) else ([raw_val] if isinstance(raw_val, str) else [])
+        valid_specs: List[str] = []
+        for item in items:
+            s_item = str(item or "").strip()
+            if not s_item:
+                continue
+            if not _is_confined_repo_rel_spec(s_item):
+                notices.append(f"Refused unconfined landmark path '{s_item}' in landmarks.{key_label} for '{repo_dir}'.")
+                continue
+            valid_specs.append(s_item)
+        return valid_specs
+
+    resolved: Dict[str, Any] = {}
+    for kind in kinds:
+        specs = _normalize_spec_list(landmarks_cfg.get(kind["id"]), kind["id"])
+        resolved[kind["output"]] = _resolve_landmark_kind(kind, specs, rel_files, r_phys, repo_dir)
+
+    return {"repo_name": repo_dir, "repo_title": repo_title, "landmarks": resolved, "notices": notices}
+
+
+def discover_constitution_files(ctx) -> List[str]:
+    """Returns the standards files to auto-pin (Tier 0) across mounted repositories, from each repository's landmarks."""
+    constitution: List[str] = []
+    for r_cfg in (ctx.config.get("target_repos") or []):
+        if not isinstance(r_cfg, dict):
+            continue
+        r_dir = r_cfg.get("repo_dir")
+        if not r_dir:
+            continue
+        landmarks = resolve_repo_landmarks(ctx, repo=r_dir).get("landmarks") or {}
+        for std_uri in (landmarks.get("standards_files") or []):
+            if std_uri and not std_uri.endswith((".gitkeep", ".keep")):
+                constitution.append(str(InSetuURI(std_uri)))
+    return sorted(list(dict.fromkeys(constitution)))
+
+
+class TopologyLandmarksPayload(TypedDict, total=False):
+    """Request schema for topology.landmarks: an optional repository name."""
+    repo: Optional[str]
+
+
+@topology_bp.route('landmarks', methods=['GET', 'POST'], request_schema=TopologyLandmarksPayload, docstring="[sync] Resolves repository landmarks (standards, contracts, ADRs, tests, fitness, and kinds extensions register) from .insetu-data/settings/topology.md and each kind's defaults.")
+def api_topology_landmarks(ctx):
+    """Resolves repository landmarks for one repository (the first mounted one when none is named)."""
+    data = ctx.payload or {}
+    repo = str(data.get("repo") or "").strip() or None
+    return resolve_repo_landmarks(ctx, repo=repo)
 
 
 class AuditUpkeepPayload(TypedDict, total=False):

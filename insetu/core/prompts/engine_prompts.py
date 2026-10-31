@@ -183,8 +183,8 @@ def api_prompts_resolve(ctx):
             _, inc_body, _ = parse_frontmatter(raw_inc)
             return inc_body
 
-        pattern = r'\{\{\s*include_prompt\s*:\s*([^\s{}]+)\s*(?:\{([\s\S]*?)\})?\s*\}\}'
-        resolved_content = resolve_macro_includes(main_body, target_uri, pattern, read_prompt)
+        pattern = r'\{\{\s*include_prompt\??\s*:\s*([^\s{}]+)\s*(?:\{([\s\S]*?)\})?\s*\}\}'
+        resolved_content = resolve_macro_includes(main_body, target_uri, pattern, read_prompt, workspace_id=ctx.workspace_id)
         return resolved_content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
     return "Prompt not found.", 404

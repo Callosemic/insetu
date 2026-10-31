@@ -2,11 +2,10 @@ from pathlib import Path
 import os
 import re
 import json
-import urllib.request
 import urllib.parse
 from typing import TypedDict, Optional, List
 from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import InSetuURI
+from insetu.core.utils_core import InSetuURI, fetch_url
 CITATIONS_SCHEMA = {
     "citations": {
         "id": "TEXT PRIMARY KEY",
@@ -256,9 +255,7 @@ def _background_citation_search(
             else:
                 return {"message": "Search complete.", "artifact": {"citations": []}}
 
-            req = urllib.request.Request(url, headers={'User-Agent': 'mailto:insetu-dev@localhost'})
-            with urllib.request.urlopen(req) as response:
-                data = json.loads(response.read().decode())
+            data = fetch_url(url, headers={'User-Agent': 'mailto:insetu-dev@localhost'}, timeout=20).json()
             for item in data.get('message', {}).get('items', []):
                 csl_items.append({
                     "id": item.get('DOI', item.get('id', 'unknown')),
@@ -271,9 +268,7 @@ def _background_citation_search(
             if not safe_query: 
                 return {"message": "Search complete.", "artifact": {"citations": []}}
             url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={safe_query}&limit=20&offset={offset}&fields=title,authors,year,externalIds,isOpenAccess"
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req) as response:
-                data = json.loads(response.read().decode())
+            data = fetch_url(url, timeout=20).json()
             for item in data.get('data', []):
                 csl_items.append({
                     "id": item.get('externalIds', {}).get('DOI', item.get('paperId', 'unknown')),
@@ -290,12 +285,10 @@ def _background_citation_search(
                 safe_cat = urllib.parse.quote(category)
                 cat_url = f"https://api.openalex.org/topics?search={safe_cat}&per-page=1"
                 try:
-                    cat_req = urllib.request.Request(cat_url, headers={'User-Agent': 'mailto:insetu-dev@localhost'})
-                    with urllib.request.urlopen(cat_req) as cr:
-                        cat_data = json.loads(cr.read().decode())
-                        if cat_data.get('results'):
-                            topic_id = InSetuURI(cat_data['results'][0]['id']).basename
-                            filters.append(f"topics.id:{topic_id}")
+                    cat_data = fetch_url(cat_url, headers={'User-Agent': 'mailto:insetu-dev@localhost'}, timeout=20).json()
+                    if cat_data.get('results'):
+                        topic_id = InSetuURI(cat_data['results'][0]['id']).basename
+                        filters.append(f"topics.id:{topic_id}")
                 except Exception:
                     pass
             if field == 'title' and safe_query:
@@ -307,9 +300,7 @@ def _background_citation_search(
             if field != 'title' and safe_query:
                 url += f"&search={safe_query}"
 
-            req = urllib.request.Request(url, headers={'User-Agent': 'mailto:insetu-dev@localhost'})
-            with urllib.request.urlopen(req) as response:
-                data = json.loads(response.read().decode())
+            data = fetch_url(url, headers={'User-Agent': 'mailto:insetu-dev@localhost'}, timeout=20).json()
             for work in data.get('results', []):
                 csl_items.append({
                     "id": InSetuURI(work.get('id', '')).basename,

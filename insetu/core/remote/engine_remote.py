@@ -29,6 +29,7 @@ from insetu.core.sdk import (
     register_proxy_header,
     register_allowed_host,
 )
+from insetu.core.utils_core import child_env
 
 __depends__ = []
 
@@ -355,7 +356,7 @@ def _execute_serve_bind(workspace_id="default", manual=False, https_port_overrid
     sys_port = SettingsManager('system', 'default').get("port", 5005)
     insetu_port = int(os.environ.get("INSETU_PORT", sys_port))
 
-    env = os.environ.copy()
+    env = child_env("tool")
     env["PYTHONUNBUFFERED"] = "1"
 
     backend_state = _get_tailscale_backend_state(env=env)

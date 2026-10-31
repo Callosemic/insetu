@@ -96,7 +96,7 @@ class CmdExecResponse(TypedDict):
     exit_code: int
     stdout: str
     stderr: str
-@dev_bp.route('exec', methods=['POST'], request_schema=CmdExecPayload, response_schema=CmdExecResponse, docstring="Executes an arbitrary shell command within the workspace sandbox for testing and verification.")
+@dev_bp.route('exec', methods=['POST'], request_schema=CmdExecPayload, response_schema=CmdExecResponse, mcp_expose=False, docstring="Executes an arbitrary shell command in the workspace for testing and verification. Hidden from MCP and banned in routines until S5 sets per-surface policy.")
 def api_dev_exec(ctx):
     """Executes an arbitrary shell command within the workspace sandbox for testing and verification."""
     data = ctx.payload or {}

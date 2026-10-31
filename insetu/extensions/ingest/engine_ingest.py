@@ -1,22 +1,36 @@
 import datetime
-import gzip
-import zlib
-import urllib.request
 import urllib.parse
 import uuid
 import json
 from typing import TypedDict, Optional
 from insetu.core.sdk import InSetuExtension
+from insetu.core.utils_core import fetch_url
+
+INGEST_SETTINGS_SCHEMA = [
+    {
+        "id": "allowed_private_hosts",
+        "label": "Allowed Private Hosts",
+        "type": "comma_list",
+        "scope": "workspace",
+        "default": [],
+        "description": "Hosts on your own machine or network that ingest may fetch (for example 'localhost:8000' or 'docs.lan'). Every other loopback, private, link-local and tailnet address is refused."
+    }
+]
+JINA_READER_PREFIX = "https://r.jina.ai/"
+INGEST_TIMEOUT_SECONDS = 20
+INGEST_MAX_BYTES = 10 * 1024 * 1024
+
 ingest_bp = InSetuExtension(
     'ingest',
     __name__,
     title="URL Ingestion",
     description="Webpage fetching and Markdown conversion.",
     external_dependencies=["beautifulsoup4", "markdownify"],
+    settings_schema=INGEST_SETTINGS_SCHEMA,
 )
 __depends__ = []
 @ingest_bp.worker("ingest_task")
-def _background_ingest(ctx, url: str, method: str = "jina"):
+def _background_ingest(ctx, url: str, method: str = "bs4"):
     ctx.jobs.update_progress('Fetching and converting URL content...')
     extracted = extract_markdown_from_url(ctx, url, method)
     safe_title = extracted["title"].replace('"', "'")
@@ -29,7 +43,17 @@ def _background_ingest(ctx, url: str, method: str = "jina"):
         }
     }
 
-def extract_markdown_from_url(ctx, target_url, method="jina"):
+def _allowed_private_hosts(ctx) -> list:
+    raw = ctx.settings.get("allowed_private_hosts", []) or []
+    items = raw if isinstance(raw, (list, tuple)) else str(raw).split(",")
+    return [str(item).strip() for item in items if str(item).strip()]
+
+
+def extract_markdown_from_url(ctx, target_url, method="bs4"):
+    """
+    Fetches target_url and converts it to Markdown. 'bs4' parses locally; 'jina' sends the URL to r.jina.ai.
+    The URL comes from the caller, so it must be public unless a person listed its host in allowed_private_hosts (S4).
+    """
     # Intercept and unwrap Google search redirect links
     parsed_url = urllib.parse.urlparse(target_url)
     if 'google.com' in parsed_url.netloc and parsed_url.path == '/url':
@@ -49,15 +73,15 @@ def extract_markdown_from_url(ctx, target_url, method="jina"):
             import markdownify as _markdownify
         except ImportError:
             raise Exception("Missing optional dependencies for local parsing. Please install them via: pip install beautifulsoup4 markdownify")
-        req = urllib.request.Request(target_url, headers={'User-Agent': 'Mozilla/5.0', 'Accept-Encoding': 'gzip, deflate'})
-        with urllib.request.urlopen(req) as response:
-            raw_data = response.read()
-            encoding = response.info().get('Content-Encoding', '').lower()
-            if encoding == 'gzip':
-                raw_data = gzip.decompress(raw_data)
-            elif encoding == 'deflate':
-                raw_data = zlib.decompress(raw_data)
-            html_content = raw_data.decode('utf-8', errors='ignore')
+        page = fetch_url(
+            target_url,
+            headers={'User-Agent': 'Mozilla/5.0'},
+            timeout=INGEST_TIMEOUT_SECONDS,
+            max_bytes=INGEST_MAX_BYTES,
+            allowed_private_hosts=_allowed_private_hosts(ctx),
+        )
+        html_content = page.text()
+        extracted_url = page.url
 
         soup = _BeautifulSoup(html_content, 'html.parser')
         if soup.title and soup.title.string:
@@ -75,16 +99,16 @@ def extract_markdown_from_url(ctx, target_url, method="jina"):
             clean_markdown = _markdownify.markdownify(html_content, heading_style="ATX").strip()
 
     else:
-        # Use Jina Reader API to cleanly convert HTML to Markdown without heavy local dependencies
-        req = urllib.request.Request(f"https://r.jina.ai/{target_url}", headers={'User-Agent': 'inSetu-OS/1.0', 'Accept-Encoding': 'gzip, deflate'})
-        with urllib.request.urlopen(req) as response:
-            raw_data = response.read()
-            encoding = response.info().get('Content-Encoding', '').lower()
-            if encoding == 'gzip':
-                raw_data = gzip.decompress(raw_data)
-            elif encoding == 'deflate':
-                raw_data = zlib.decompress(raw_data)
-            markdown_content = raw_data.decode('utf-8', errors='ignore')
+        # Jina Reader converts HTML to Markdown on its servers: the URL is sent to r.jina.ai (a third party).
+        # Jina fetches the page itself, so only the scheme is checked here; private hosts are unreachable from it.
+        if urllib.parse.urlsplit(target_url).scheme.lower() not in ("http", "https"):
+            raise ValueError("Only http and https URLs can be ingested.")
+        page = fetch_url(
+            f"{JINA_READER_PREFIX}{target_url}",
+            timeout=INGEST_TIMEOUT_SECONDS,
+            max_bytes=INGEST_MAX_BYTES,
+        )
+        markdown_content = page.text()
 
         # Parse Jina's header block
         lines = markdown_content.splitlines()
@@ -142,5 +166,5 @@ def api_ingest_url(ctx):
     target_url = str(data.get("url") or "").strip()
     if not target_url: return {"error": "URL is required"}, 400
 
-    job_id = ctx.jobs.submit("ingest_task", url=target_url, method=data.get("method", "jina"), job_category="ui_blocking")
+    job_id = ctx.jobs.submit("ingest_task", url=target_url, method=data.get("method") or "bs4", job_category="ui_blocking")
     return {"status": "accepted", "job_id": job_id}, 202

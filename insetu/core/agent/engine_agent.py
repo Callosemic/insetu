@@ -15,7 +15,7 @@ from insetu.core.utils_core import (
     get_available_contexts,
 )
 from insetu.core.bridge.bridge_test import run_repo_test_diagnostics
-from insetu.core.gather.context_assemble import record_affinity_interaction
+from insetu.core.gather.context_assemble import discover_constitution_files, record_affinity_interaction
 from .orchestrator import (
     execute_declarative_routine,
     list_available_routines,
@@ -664,12 +664,8 @@ def get_messages(ctx, session_id):
         plan_path = s_row["active_plan_path"] or ""
         summary = s_row["summary"] or ""
 
-    # Tier 0 Constitution Files: Auto-pin engineering standards and contract files
-    constitution = []
-    for r_dir in (r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")):
-        for walk_p in ctx.vfs.walk(f"vfs://{r_dir}/docs/standards", exts=[".md"]):
-            if walk_p and not walk_p.endswith((".gitkeep", ".keep")):
-                constitution.append(walk_p)
+    # Tier 0 Constitution Files: Auto-pin engineering standards resolved via repository landmarks
+    constitution = discover_constitution_files(ctx)
 
     return {
         "messages": messages,
@@ -678,7 +674,7 @@ def get_messages(ctx, session_id):
         "checkpoint": checkpoint,
         "active_plan_path": plan_path,
         "summary": summary,
-        "constitution_files": sorted(list(dict.fromkeys(constitution))),
+        "constitution_files": constitution,
     }
 @agent_bp.route('cancel', methods=['POST'], request_schema=AgentSessionActionPayload, docstring="[sync] Signals an active agent turn to abort before the next LLM call or VFS mutation.")
 def cancel_agent_turn(ctx):

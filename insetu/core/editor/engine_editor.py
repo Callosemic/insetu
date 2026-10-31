@@ -1,6 +1,6 @@
 import os
+import re
 import json
-import urllib.request
 from pathlib import Path
 from typing import TypedDict, Optional
 from flask import send_file
@@ -24,6 +24,11 @@ EDITOR_SCHEMA = [
         "description": "Renders Markdown links as clickable icons in the editor."
     }
 ]
+# Language packs shipped with insetu, served as static files (built by scripts/vendor_codemirror.sh).
+BUNDLED_CODEMIRROR_DIR = Path(__file__).resolve().parent.parent.parent.joinpath("static", "vendor", "codemirror")
+BUNDLED_CODEMIRROR_ROUTE = "/static/vendor/codemirror"
+_LANGUAGE_MODE_RE = re.compile(r"^[a-z0-9][a-z0-9_+-]{0,39}$")
+
 editor_bp = InSetuExtension(
     'editor', 
     __name__,
@@ -117,30 +122,24 @@ def serve_vendor_asset(ctx, filename):
         return send_file(target_path.as_posix(), mimetype='application/javascript')
 
     return "Vendor asset not found.", 404
-@editor_bp.route('vendorize', methods=['POST'], request_schema=VendorizePayload, response_schema=VendorizeResponse, docstring="[sync] Dynamically fetches and vendorizes a missing CodeMirror 6 language pack into .insetu/ per ADR 0032.")
+@editor_bp.route('vendorize', methods=['POST'], request_schema=VendorizePayload, response_schema=VendorizeResponse, docstring="[sync] Resolves a CodeMirror 6 language pack from the packs bundled with insetu, then from the workspace's local vendor folder (.insetu/vendor/codemirror/lang-<mode>.js). Never downloads code (S4).")
 def vendorize_language(ctx):
+    """Resolves a language pack locally: bundled packs first, then a pack a person placed in the local vendor folder."""
     data = ctx.payload or {}
     mode = str(data.get("mode") or "").strip().lower()
     if not mode:
         return {"error": "mode parameter is required"}, 400
+    if not _LANGUAGE_MODE_RE.match(mode):
+        return {"error": f"'{mode}' is not a valid language name."}, 400
 
-    vendor_dir = Path(ctx.paths["artifacts_base"]).joinpath("vendor", "codemirror")
     filename = f"lang-{mode}.js"
-    target_path = vendor_dir.joinpath(filename)
-    public_route = f"/api/{ctx.workspace_id}/editor/vendor/{filename}"
+    if BUNDLED_CODEMIRROR_DIR.joinpath(filename).is_file():
+        return {"status": "success", "path": f"{BUNDLED_CODEMIRROR_ROUTE}/{filename}"}
 
-    if not target_path.exists():
-        esm_url = f"https://esm.sh/@codemirror/lang-{mode}?bundle&external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/autocomplete,@codemirror/commands,@codemirror/lint,codemirror"
-        try:
-            req = urllib.request.Request(esm_url, headers={"User-Agent": "inSetu-Vendorizer/1.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                code_bytes = resp.read()
-            code_str = code_bytes.decode('utf-8')
+    local_dir = Path(ctx.paths["artifacts_base"]).joinpath("vendor", "codemirror")
+    if local_dir.joinpath(filename).is_file():
+        return {"status": "success", "path": f"/api/{ctx.workspace_id}/editor/vendor/{filename}"}
 
-            # Synchronous write guarantees Read-After-Write consistency for the frontend import
-            vendor_dir.mkdir(parents=True, exist_ok=True)
-            target_path.write_text(code_str, encoding='utf-8')
-        except Exception as e:
-            return {"error": f"Failed to fetch language bundle for '{mode}': {str(e)}"}, 500
-
-    return {"status": "success", "path": public_route}
+    return {
+        "error": f"No language pack for '{mode}'. insetu does not download code at runtime; to add one, place a built ESM module at {local_dir.joinpath(filename).as_posix()}.",
+    }, 404

@@ -14,7 +14,7 @@ export const ResearchStore = createExtensionStore('Research', {
     aiTriageMode: false,
     isTabActive: false,
     newJobModalOpen: false,
-    searchForm: { query: '', provider: 'serper', parser: 'jina', dateRange: '', dateStart: '', dateEnd: '', yearStart: '', yearEnd: '', maxResults: '50', maxCustom: '' },
+    searchForm: { query: '', provider: 'serper', parser: 'bs4', dateRange: '', dateStart: '', dateEnd: '', yearStart: '', yearEnd: '', maxResults: '50', maxCustom: '' },
     setSearchForm: (field, val) => ResearchStore.setState(state => ({ searchForm: { ...state.searchForm, [field]: val } })),
     openItemPreview: (itemId) => {
         ResearchStore.setState({ selectedItemId: itemId });
@@ -434,7 +434,7 @@ export class InSetuExtResearch extends InSetuElement {
                     </div>
                     <div style="display: flex; gap: 10px; align-items: flex-end;">
                         <div style="flex: 1;">
-                            ${bindStoreInput(ResearchStore, 'searchForm.parser', this.searchForm.parser || 'jina', { label: 'Extraction Parser', type: 'select', style: 'width: 100%;', selectOptions: [{value: 'jina', label: 'Jina AI (Rich Markdown)'}, {value: 'bs4', label: 'Local (BeautifulSoup)'}] })}
+                            ${bindStoreInput(ResearchStore, 'searchForm.parser', this.searchForm.parser || 'bs4', { label: 'Extraction Parser', type: 'select', style: 'width: 100%;', selectOptions: [{value: 'bs4', label: 'Local (BeautifulSoup)'}, {value: 'jina', label: 'Jina AI (sends each URL to r.jina.ai)'}] })}
                         </div>
                         <div style="flex: 1;">
                             <div style="display: flex; gap: 8px; align-items: flex-end;">

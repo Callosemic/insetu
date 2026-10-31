@@ -9,7 +9,7 @@ import datetime
 from pathlib import Path
 from typing import TypedDict, Optional
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from insetu.core.utils_core import get_daemon_host_config_path, load_json_config, save_json_config
+from insetu.core.utils_core import child_env, get_daemon_host_config_path, load_json_config, save_json_config
 from insetu.core.topology.engine_topology import resolve_file_bucket
 
 HOOKS_SCHEMA = {
@@ -57,7 +57,7 @@ def _background_execute_rule(
     if expanded_cmd.startswith('~'):
         expanded_cmd = Path(expanded_cmd).expanduser().as_posix()
     # Enforce non-interactive environment
-    env = os.environ.copy()
+    env = child_env("tool")
     env["PYTHONUNBUFFERED"] = "1"
 
     use_shell = any(char in expanded_cmd for char in (';', '&&', '||', '|', '>', '<', '&'))

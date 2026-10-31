@@ -132,7 +132,7 @@ export function isBufferReadOnly(buf) {
 }
 
 export function hasMacroSyntax(text) {
-    return typeof text === 'string' && /\{\{\s*(?:include_prompt\s*:|macro_[a-zA-Z0-9_]+|[a-zA-Z0-9_]+\s*\|)/.test(text);
+    return typeof text === 'string' && /\{\{\s*(?:include_prompt\??\s*:|macro_[a-zA-Z0-9_]+|[a-zA-Z0-9_]+\s*\|)/.test(text);
 }
 export function canPreviewFileMacros(filepath, content = '') {
     if (hasMacroSyntax(content)) return true;

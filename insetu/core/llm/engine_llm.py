@@ -11,6 +11,7 @@ from flask import Response, stream_with_context
 from insetu.core.sdk import InSetuExtension, SettingsManager, slugify, atomic_write_text
 from insetu.core.agent.schemas import validate_schema_response as _registry_validate_schema
 from insetu.core.utils_core import (
+    child_env,
     execute_binary,
     parse_blocks,
     encrypt_secret,
@@ -836,7 +837,7 @@ def _stream_claude_cli(model: str, messages: list, system_prompt: str) -> Genera
     if model and model.strip():
         cmd.extend(["--model", model.strip()])
 
-    cli_env = dict(os.environ)
+    cli_env = child_env("tool")
     cli_env["NO_COLOR"] = "1"
     cli_env["TERM"] = "dumb"
 

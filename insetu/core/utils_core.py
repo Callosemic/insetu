@@ -11,6 +11,12 @@ import shutil
 import socket
 import threading
 import subprocess
+import http.client
+import ipaddress
+import urllib.error
+import urllib.parse
+import urllib.request
+import zlib
 from collections import OrderedDict
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -137,6 +143,8 @@ class InSetuURI(AkasaURI):
             return f"ctx://contexts/{Path(clean_stripped).name}"
         if clean_stripped.startswith('prompts/'):
             return f"ctx://prompts/{clean_stripped[len('prompts/'):].lstrip('/')}"
+        if clean_stripped.startswith('settings/'):
+            return f"ctx://settings/{clean_stripped[len('settings/'):].lstrip('/')}"
         prefix = default_prefix if default_prefix.endswith('://') else f"{default_prefix.rstrip('/')}/"
         return f"{prefix}{clean_stripped}"
 
@@ -474,17 +482,18 @@ def update_frontmatter(content, new_data):
     return f"---\n{formatted_yaml}\n---\n\n{body}"
 def _extract_balanced_include_macros(text: str):
     """
-    Finds all {{include_prompt: ...}} blocks using balanced brace/quote scanning so nested
-    {{include_prompt: ...}} directives or braces inside parameter strings never truncate the match.
-    Yields (start_idx, end_idx, include_path, params_str).
+    Finds all {{include_prompt: ...}} and {{include_prompt?: ...}} blocks using balanced
+    brace/quote scanning so nested directives or braces inside parameter strings never truncate the match.
+    Yields (start_idx, end_idx, include_path, params_str, is_optional).
     """
-    header_re = re.compile(r'\{\{\s*include_prompt\s*:\s*')
+    header_re = re.compile(r'\{\{\s*include_prompt(\?)?\s*:\s*')
     pos = 0
     n = len(text)
     while pos < n:
         m = header_re.search(text, pos)
         if not m:
             break
+        is_optional = bool(m.group(1))
         start_idx = m.start()
         cursor = m.end()
         path_start = cursor
@@ -537,7 +546,7 @@ def _extract_balanced_include_macros(text: str):
             raw_params = raw_params[1:].strip()
         if raw_params.startswith('{') and raw_params.endswith('}'):
             raw_params = raw_params[1:-1].strip()
-        yield start_idx, end_idx, include_path, raw_params
+        yield start_idx, end_idx, include_path, raw_params, is_optional
         pos = end_idx
 
 
@@ -602,7 +611,39 @@ def _parse_macro_params(params_str: str) -> Dict[str, str]:
     return params
 
 
-def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth=0):
+_EXT_TEMPLATE_URI_RE = re.compile(r'^ctx://prompts/\.templates/([a-zA-Z0-9_-]+)/.+$')
+_OPTIONAL_OMITTED_SENTINEL = "\x00__INSETU_OPTIONAL_INCLUDE_OMITTED__\x00"
+
+
+def _evaluate_optional_include_target(target_path: str, raw_include_path: str, workspace_id: Optional[str] = None) -> Tuple[str, str]:
+    """
+    Decides what an optional include ({{include_prompt?: ...}}) does. Returns ('error', message) unless the target is
+    an extension's template (ctx://prompts/.templates/<ext>/..., not 'user'); ('omit', '') when that extension is
+    disabled in the workspace; ('expand', '') when it is enabled, so a missing file still reports MACRO TARGET NOT FOUND.
+    """
+    m = _EXT_TEMPLATE_URI_RE.match(str(target_path or "").strip())
+    if not m or m.group(1).lower() == "user":
+        return (
+            "error",
+            f"[!] OPTIONAL INCLUDE ERROR: '?' is only valid on extension templates (ctx://prompts/.templates/<ext>/...): {raw_include_path}",
+        )
+    wid = workspace_id or sniff_tenant_id() or "default"
+    if not is_extension_enabled(m.group(1), wid):
+        return ("omit", "")
+    return ("expand", "")
+
+
+def _collapse_omitted_optional_includes(rendered: str) -> str:
+    """Removes each omitted optional include and the blank lines it leaves, without touching blank lines elsewhere."""
+    if _OPTIONAL_OMITTED_SENTINEL not in rendered:
+        return rendered
+    # A sentinel alone on its line takes the line and one surrounding blank line with it; an inline one just disappears.
+    cleaned = re.sub(r'(?:\n[ \t]*){0,1}\n[ \t]*' + re.escape(_OPTIONAL_OMITTED_SENTINEL) + r'[ \t]*(?=\n|$)', '', rendered)
+    return cleaned.replace(_OPTIONAL_OMITTED_SENTINEL, '')
+
+
+def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth=0, workspace_id=None):
+    """Expands {{include_prompt: ...}} and optional {{include_prompt?: ...}} macros recursively (depth 5), with macro parameters."""
     if depth > 5:
         return text + "\n[!] INCLUSION DEPTH LIMIT EXCEEDED"
     if not text:
@@ -625,10 +666,16 @@ def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth
                     rel_parts.append(p)
             joined_rel = '/'.join(rel_parts)
             return f"{base_prefix}/{joined_rel}".rstrip('/') if joined_rel else base_prefix
+        if cur_uri.scheme == "ctx" and cur_uri.volume == "prompts":
+            clean_rel = include_path.lstrip("/")
+            if clean_rel.startswith("prompts/"):
+                clean_rel = clean_rel[len("prompts/"):].lstrip("/")
+            return f"ctx://prompts/{clean_rel}"
         return include_path
+
     def _apply_params_and_recurse(inc_content: str, target_path: str, params_str: str) -> str:
         if params_str:
-            resolved_params_str = resolve_macro_includes(params_str, current_filepath, pattern, read_callback, depth + 1)
+            resolved_params_str = resolve_macro_includes(params_str, current_filepath, pattern, read_callback, depth + 1, workspace_id=workspace_id)
             parsed_params = _parse_macro_params(resolved_params_str)
             for raw_key, val in parsed_params.items():
                 clean_key = raw_key[len('macro_'):] if raw_key.startswith('macro_') else raw_key
@@ -640,16 +687,25 @@ def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth
             lambda m: m.group(1).strip(),
             inc_content
         )
-        return resolve_macro_includes(inc_content, target_path, pattern, read_callback, depth + 1)
+        return resolve_macro_includes(inc_content, target_path, pattern, read_callback, depth + 1, workspace_id=workspace_id)
 
     if "include_prompt" in text:
         spans = list(_extract_balanced_include_macros(text))
         if spans:
             out_parts = []
             last_idx = 0
-            for start_idx, end_idx, include_path, params_str in spans:
+            for start_idx, end_idx, include_path, params_str, is_optional in spans:
                 out_parts.append(text[last_idx:start_idx])
                 target_path = _resolve_target_uri(include_path)
+                last_idx = end_idx
+                if is_optional:
+                    opt_action, opt_err = _evaluate_optional_include_target(target_path, include_path, workspace_id=workspace_id)
+                    if opt_action == "error":
+                        out_parts.append(opt_err)
+                        continue
+                    if opt_action == "omit":
+                        out_parts.append(_OPTIONAL_OMITTED_SENTINEL)
+                        continue
                 try:
                     inc_content = read_callback(target_path)
                 except Exception:
@@ -658,9 +714,8 @@ def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth
                     out_parts.append(_apply_params_and_recurse(inc_content, target_path, params_str))
                 else:
                     out_parts.append(f"[!] MACRO TARGET NOT FOUND: {include_path}")
-                last_idx = end_idx
             out_parts.append(text[last_idx:])
-            return "".join(out_parts)
+            return _collapse_omitted_optional_includes("".join(out_parts))
 
     def replacer(match):
         include_path = match.group(1).strip().rstrip(';,').strip('\'"')
@@ -675,6 +730,8 @@ def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth
         return f"[!] MACRO TARGET NOT FOUND: {include_path}"
 
     return re.sub(pattern, replacer, text)
+
+
 def _get_base_step_and_diffs(lines):
     """Analyzes a block of code to find its true structural base indentation unit (LCD > 1)."""
     indents = sorted(list(set(len(line) - len(line.lstrip()) for line in lines if line.strip())))
@@ -1533,6 +1590,268 @@ def is_test_command_approved(
     if not clean_cmd or clean_cmd == clean_default:
         return True
     return is_command_approved(workspace_id, "test", repo, clean_cmd)
+
+
+# Child process environments (S3). Every process insetu starts gets its environment from child_env().
+CHILD_ENV_PURPOSES = ("shell", "tool", "repo_code")
+# insetu's own process-private variables; no child needs them. (akasa also strips AKASA_BOOT_TOKEN itself.)
+HOST_PRIVATE_ENV_VARS = frozenset({"AKASA_BOOT_TOKEN", "INSETU_BOOT_TOKEN", "INSETU_PANIC_DETAILS"})
+# Variable names that look like credentials. Stripped from processes that run repository code, unless allowed per repo.
+_SECRET_ENV_NAME_RE = re.compile(
+    r"(?:^|_)(?:API_?KEY|ACCESS_?KEY|SECRET|SECRET_?KEY|TOKEN|PASSWORD|PASSWD|PRIVATE_?KEY|CREDENTIALS?|AUTH)(?:$|_)",
+    re.IGNORECASE,
+)
+
+
+def is_secret_env_name(name: str) -> bool:
+    """True for environment variable names that look like credentials (API keys, tokens, passwords, SSH_AUTH_SOCK)."""
+    return bool(_SECRET_ENV_NAME_RE.search(name or ""))
+
+
+def get_child_env_passthrough(workspace_id: str, repo: str) -> set:
+    """The credential-like variable names a person allowed through to this repository's processes."""
+    raw = SettingsManager('system', workspace_id).get("child_env_passthrough", [], repo=repo) or []
+    items = raw if isinstance(raw, (list, tuple)) else re.split(r"[\s,]+", str(raw))
+    return {str(item).strip() for item in items if str(item).strip()}
+
+
+def child_env(
+    purpose: str,
+    workspace_id: Optional[str] = None,
+    repo: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
+    """
+    Builds the environment for a child process. Who chose the command decides what it inherits.
+
+    'shell' is the person's interactive terminal: their full environment, minus insetu's own variables.
+    'tool' covers commands insetu or the person configured (git, release tooling, tailscale, hooks, CLIs);
+    it matches 'shell', because these tools legitimately need GH_TOKEN, TWINE_PASSWORD and similar.
+    'repo_code' covers processes that run a repository's own code (preview servers, test runners) and also
+    drops credential-like variables, except the names a person allowed for that repository (system setting
+    'child_env_passthrough'). That prevents accidental leaks through debug pages, error reporters and logs;
+    a child running as the user can still read any file the user can read.
+    """
+    if purpose not in CHILD_ENV_PURPOSES:
+        raise ValueError(f"Unknown child environment purpose '{purpose}'. Use one of {', '.join(CHILD_ENV_PURPOSES)}.")
+    env = {key: value for key, value in os.environ.items() if key not in HOST_PRIVATE_ENV_VARS}
+    if purpose == "repo_code":
+        allowed = get_child_env_passthrough(workspace_id, repo) if workspace_id and repo else set()
+        env = {key: value for key, value in env.items() if key in allowed or not is_secret_env_name(key)}
+    for key, value in (extra or {}).items():
+        env[str(key)] = str(value)
+    return env
+
+
+# Outbound HTTP (S4). Every fetch insetu makes goes through fetch_url().
+FETCH_DEFAULT_TIMEOUT = 15
+FETCH_DEFAULT_MAX_BYTES = 10 * 1024 * 1024
+_FETCH_SCHEMES = ("http", "https")
+_FETCH_MAX_REDIRECTS = 5
+
+
+class FetchRefused(Exception):
+    """A URL was refused before or during the fetch: wrong scheme, a non-public address, or a body over the cap."""
+
+
+class FetchHTTPError(Exception):
+    """The server answered with an HTTP error status. Carries the (capped) response body."""
+
+    def __init__(self, status: int, url: str, body: bytes):
+        super().__init__(f"HTTP {status} from {url}")
+        self.status = status
+        self.code = status
+        self.url = url
+        self.body = body
+
+    def text(self) -> str:
+        return self.body.decode("utf-8", errors="replace")
+
+
+class FetchResult:
+    """A completed fetch: final URL after redirects, status, headers and the decoded (decompressed) body."""
+
+    def __init__(self, url: str, status: int, headers, body: bytes):
+        self.url = url
+        self.status = status
+        self.headers = headers
+        self.body = body
+
+    def text(self, encoding: str = "utf-8") -> str:
+        return self.body.decode(encoding, errors="ignore")
+
+    def json(self):
+        return json.loads(self.body.decode("utf-8")) if self.body else {}
+
+
+def _is_public_address(addr: str) -> bool:
+    ip = ipaddress.ip_address(addr.split("%", 1)[0])
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    # is_global excludes loopback, private, link-local (cloud metadata), CGNAT/tailnet (100.64.0.0/10) and reserved ranges.
+    return ip.is_global and not ip.is_multicast
+
+
+def _host_is_allowed_private(host: str, port: Optional[int], allowed_private_hosts) -> bool:
+    host = (host or "").lower().strip("[]")
+    for entry in allowed_private_hosts or ():
+        item = str(entry).strip().lower()
+        if not item:
+            continue
+        if item == host or (port is not None and item == f"{host}:{port}"):
+            return True
+    return False
+
+
+def _goes_through_proxy(url: str) -> bool:
+    parts = urllib.parse.urlsplit(url)
+    proxy = urllib.request.getproxies().get(parts.scheme.lower())
+    return bool(proxy) and not urllib.request.proxy_bypass(parts.hostname or "")
+
+
+def _check_fetch_target(url: str, allow_private: bool, allowed_private_hosts) -> None:
+    """Refuses non-http(s) URLs and, unless allowed, hosts that resolve to any non-public address."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme.lower() not in _FETCH_SCHEMES:
+        raise FetchRefused(f"Only http and https URLs can be fetched (got '{parts.scheme or 'none'}').")
+    if not parts.hostname:
+        raise FetchRefused("The URL has no host.")
+    if allow_private or _host_is_allowed_private(parts.hostname, parts.port, allowed_private_hosts):
+        return
+    try:
+        literal = ipaddress.ip_address(parts.hostname.split("%", 1)[0])
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if not _is_public_address(str(literal)):
+            raise FetchRefused(f"'{parts.hostname}' is a non-public address, which is not fetched.")
+        return
+    port = parts.port or (443 if parts.scheme.lower() == "https" else 80)
+    try:
+        infos = socket.getaddrinfo(parts.hostname, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        if _goes_through_proxy(url):
+            return  # The proxy resolves the name; this machine may not be able to.
+        raise FetchRefused(f"Could not resolve '{parts.hostname}': {e}") from e
+    for info in infos:
+        if not _is_public_address(info[4][0]):
+            raise FetchRefused(f"'{parts.hostname}' resolves to a non-public address ({info[4][0]}), which is not fetched.")
+
+
+class _PeerCheckingMixin:
+    """Checks the address actually connected to, so a DNS answer that changes after the check is still refused."""
+
+    _fetch_guard = None  # (allow_private, allowed_private_hosts), set per opener
+
+    def connect(self):
+        super().connect()
+        guard = self._fetch_guard
+        if guard is None or guard[0]:
+            return
+        if _host_is_allowed_private(self.host, self.port, guard[1]):
+            return
+        peer = self.sock.getpeername()[0]
+        if not _is_public_address(peer):
+            self.sock.close()
+            raise FetchRefused(f"Connected to a non-public address ({peer}); refused.")
+
+
+def _build_fetch_opener(allow_private: bool, allowed_private_hosts, max_redirects: int, proxied: bool):
+    # Through a proxy, the connected address is the proxy's and says nothing about the target, so only the
+    # pre-connect resolution check applies there.
+    guard = None if proxied else (allow_private, tuple(allowed_private_hosts or ()))
+
+    class _HTTPConnection(_PeerCheckingMixin, http.client.HTTPConnection):
+        _fetch_guard = guard
+
+    class _HTTPSConnection(_PeerCheckingMixin, http.client.HTTPSConnection):
+        _fetch_guard = guard
+
+    class _HTTPHandler(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(_HTTPConnection, req)
+
+    class _HTTPSHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(_HTTPSConnection, req, context=self._context)
+
+    class _RedirectHandler(urllib.request.HTTPRedirectHandler):
+        max_redirections = max_redirects
+
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            _check_fetch_target(newurl, allow_private, allowed_private_hosts)
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    return urllib.request.build_opener(_HTTPHandler, _HTTPSHandler, _RedirectHandler)
+
+
+def _read_capped(response, max_bytes: int) -> bytes:
+    """Reads the body, decompressing gzip or deflate, and refuses anything over max_bytes before or after decoding."""
+    encoding = (response.headers.get("Content-Encoding") or "").lower().strip()
+    # wbits 32 + MAX_WBITS accepts both gzip and zlib-wrapped deflate streams.
+    decoder = zlib.decompressobj(32 + zlib.MAX_WBITS) if encoding in ("gzip", "x-gzip", "deflate") else None
+    out = bytearray()
+    raw_seen = 0
+    while True:
+        chunk = response.read(64 * 1024)
+        if not chunk:
+            break
+        raw_seen += len(chunk)
+        if raw_seen > max_bytes:
+            raise FetchRefused(f"Response is larger than the {max_bytes // 1024} KB limit.")
+        if decoder is None:
+            out.extend(chunk)
+        else:
+            out.extend(decoder.decompress(chunk, max_bytes + 1 - len(out)))
+            if decoder.unconsumed_tail:
+                raise FetchRefused(f"Decompressed response is larger than the {max_bytes // 1024} KB limit.")
+        if len(out) > max_bytes:
+            raise FetchRefused(f"Decompressed response is larger than the {max_bytes // 1024} KB limit.")
+    return bytes(out)
+
+
+def fetch_url(
+    url: str,
+    *,
+    method: Optional[str] = None,
+    headers: Optional[Dict[str, str]] = None,
+    data: Optional[bytes] = None,
+    timeout: float = FETCH_DEFAULT_TIMEOUT,
+    max_bytes: int = FETCH_DEFAULT_MAX_BYTES,
+    allow_private: bool = False,
+    allowed_private_hosts=(),
+    max_redirects: int = _FETCH_MAX_REDIRECTS,
+) -> FetchResult:
+    """
+    The one way insetu makes an outbound HTTP request (S4). Only http and https; a timeout; a byte cap applied
+    while reading and after decompression; redirects re-checked. Unless allow_private is set, a host that resolves
+    to a loopback, private, link-local (cloud metadata), CGNAT or tailnet address is refused, both before connecting
+    and against the address actually connected to. Who chose the URL decides allow_private: a URL a caller supplies
+    (ingest) must be public unless a person listed its host in allowed_private_hosts; an endpoint a person
+    configured in settings (a local model server) may be private.
+    Raises FetchRefused, FetchHTTPError (4xx/5xx, body capped) or URLError/TimeoutError for network failures.
+    """
+    _check_fetch_target(url, allow_private, allowed_private_hosts)
+    req_headers = {"User-Agent": "inSetu/1.0", "Accept-Encoding": "gzip, deflate"}
+    req_headers.update(headers or {})
+    req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
+    opener = _build_fetch_opener(allow_private, allowed_private_hosts, max_redirects, _goes_through_proxy(url))
+    try:
+        with opener.open(req, timeout=timeout) as response:
+            body = _read_capped(response, max_bytes)
+            return FetchResult(response.geturl(), getattr(response, "status", 200), response.headers, body)
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = _read_capped(e, min(max_bytes, 256 * 1024))
+        except Exception:
+            err_body = b""
+        raise FetchHTTPError(e.code, url, err_body) from None
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, FetchRefused):
+            raise e.reason from None
+        raise
+
+
 def resolve_logical_path(path, workspace_id=None):
     if not path:
         return ""

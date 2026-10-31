@@ -18,7 +18,7 @@ from insetu.core.agent.schemas.diagnostics import (
     parse_junit_xml,
     parse_test_tail_output,
 )
-from insetu.core.utils_core import get_repo_path, is_test_command_approved
+from insetu.core.utils_core import child_env, get_repo_path, is_test_command_approved
 
 
 def run_repo_test_diagnostics(
@@ -79,7 +79,7 @@ def run_repo_test_diagnostics(
     cmd_args = shlex.split(cmd)
     t0 = time.time()
     try:
-        proc = ctx.exec.run(cmd_args, cwd=repo_path, timeout=timeout, check=False)
+        proc = ctx.exec.run(cmd_args, cwd=repo_path, timeout=timeout, check=False, env=child_env("repo_code", ctx.workspace_id, repo))
         stdout_txt = proc.stdout or ""
         stderr_txt = proc.stderr or ""
         exit_code = proc.returncode

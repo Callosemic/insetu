@@ -14,6 +14,7 @@ from insetu.core.sdk import InSetuExtension
 from insetu.core.remote.engine_remote import set_tailscale_https_serve
 from insetu.core.utils_core import (
     approve_command,
+    child_env,
     is_command_approved,
     is_subpath,
     get_repo_path,
@@ -341,7 +342,7 @@ def _build_launch_command(
     _, inferred_target = _detect_repo_mode(ctx, repo_dir, repo_path, serve_dir=clean_sub)
     target = (entry_target or "").strip() or inferred_target
 
-    env = os.environ.copy()
+    env = child_env("repo_code", ctx.workspace_id, repo_dir)
     env["PORT"] = str(port)
     env["HOST"] = str(bind_host)
     env["BROWSER"] = "none"
@@ -755,11 +756,13 @@ class PreviewRepoTargetPayload(TypedDict):
 
 
 class PreviewOpenLanPayload(TypedDict, total=False):
+    """Request schema for opening a repository's server to the LAN for 'run', '15m', '1h' or '8h' (S2)."""
     repo: str
     duration: str
 
 
 class PreviewApproveCommandPayload(TypedDict):
+    """Request schema for a person approving one exact custom preview command for a repository (P5)."""
     repo: str
     command: str
 

@@ -313,6 +313,7 @@ class BridgeTestPayload(TypedDict, total=False):
 
 
 class BridgeTestApprovePayload(TypedDict):
+    """Request schema for a person approving one custom test command for a repository (P5)."""
     repo: str
     command: str
 
@@ -339,6 +340,7 @@ def bridge_run_test_gate(ctx):
 
 @bridge_bp.route('test/approve', methods=['POST'], request_schema=BridgeTestApprovePayload, mcp_expose=False, docstring="[sync] Records a person's approval of a custom repository test command. Not exposed over MCP and banned in routines, so agents cannot approve their own commands (P5).")
 def bridge_approve_test_command(ctx):
+    """Records a person's approval of a custom repository test command; hidden from MCP and banned in routines (P5)."""
     data = ctx.payload or {}
     repo = str(data.get("repo") or "").strip()
     command = str(data.get("command") or "").strip()

@@ -1,10 +1,106 @@
 import os
+import re
 import ast
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 from .core import (
     PROJECT_ROOT, BACKEND_DIR, AKASA_DIR, AKASA_MEMBRANE_WHITELIST, VFS_WRITE_WHITELIST,
     SQLITE_WHITELIST, SUBPROCESS_WHITELIST, EXECUTE_BINARY_WHITELIST, report_violation, collect_unique_files
 )
+
+# ==============================================================================
+# SETTINGS_ACCESS_RATCHET (P13 blueprint, section 3, rule 1)
+# ==============================================================================
+# Every Python file in `insetu/insetu/` that reads or writes configuration directly (load_config(),
+# config.json, host.json, workspace.settings.json, repo.settings.json, target_repos) instead of going
+# through ctx.settings or the topology API, with how many such accesses it has and why. The counts are
+# a ratchet: a new file, or a higher count, fails; a lower count also fails until the baseline here is
+# lowered to match, so a removed access can never quietly come back. Boot-floor entries are permanent.
+
+SETTINGS_ACCESS_RATCHET: Dict[str, Tuple[int, str]] = {
+    # Permanent boot floor (stdlib-only or pre-kernel boot and recovery)
+    "insetu/app.py": (8, "Boot floor: daemon port pre-seed and extension mounting before and during kernel boot."),
+    "insetu/cli.py": (3, "Boot floor: profile scaffolding before the app is imported."),
+    "insetu/fallback_bridge.py": (3, "Boot floor: the stdlib-only lifeboat reads workspaces.json, config.json and host.json."),
+    # Legacy seams, removed by later P13 phases
+    "insetu/core/utils_core.py": (23, "Phase 3/4: helper seam (get_repo_path, get_sister_repos, command approvals in host.json, sanitize_workspace_config)."),
+    "insetu/core/system/engine_system.py": (19, "Phase 3/4: the config route and the 3-tier cascade migration bridge."),
+    "insetu/core/system/cli_commands.py": (5, "Phase 3/4: CLI init, service and mcp commands that read load_config and write config.json, host.json and workspace.settings.json."),
+    "insetu/core/system/legacy.py": (2, "Phase 6: one-shot boot migration of legacy config.json keys."),
+    "insetu/core/topology/engine_topology.py": (10, "Phase 3: the topology engine's own target_repos and load_config queries."),
+    "insetu/core/gather/engine_gather.py": (4, "Phase 3: gather declarations and the compiler reading target_repos."),
+    "insetu/core/cartographer/cartographer.py": (3, "Phase 3: map_repositories reading target_repos."),
+    "insetu/core/prompts/engine_prompts.py": (2, "Phase 3: prompt config mutation and repository prompt discovery."),
+    "insetu/core/agent/engine_agent.py": (3, "Phase 3: plan and test-command helpers reading target_repos."),
+    "insetu/core/agent/orchestrator.py": (1, "Phase 3: the orchestrator's primary repository lookup."),
+    "insetu/core/bridge/bridge_test.py": (1, "Phase 3: the test runner resolving its repository config."),
+    "insetu/core/bridge/bridge_vfs.py": (1, "Phase 4: the control-plane filename write guard, until protected targets replace it."),
+    "insetu/core/mcp/engine_mcp.py": (1, "Phase 3: the MCP resource list iterating target_repos."),
+    "insetu/core/remote/engine_remote.py": (1, "Phase 4: the legacy Tailscale settings migration in host.json."),
+    # Extensions, removed in Phase 3
+    "insetu/extensions/git/engine_git.py": (5, "Phase 3: target_repos and load_config."),
+    "insetu/extensions/notes/engine_notes.py": (6, "Phase 3: target_repos."),
+    "insetu/extensions/tracker/engine_tracker.py": (8, "Phase 3: target_repos and load_config."),
+    "insetu/extensions/preview/engine_preview.py": (1, "Phase 3: target_repos."),
+    "insetu/extensions/hooks/engine_hooks.py": (2, "Phase 3: target_repos and host.json."),
+    "insetu/extensions/update/engine_update.py": (1, "Phase 3: target_repos."),
+}
+
+_DIRECT_SETTINGS_PATTERNS = (
+    re.compile(r'\bload_config\s*\('),
+    re.compile(r'\bget_daemon_host_config_path\s*\('),
+    re.compile(r'["\'](?:config|host|workspace\.settings|repo\.settings)\.json["\']'),
+    re.compile(r'["\']target_repos["\']'),
+)
+
+
+def count_direct_settings_access(source: str) -> int:
+    """Number of direct configuration accesses in one file's source (the unit SETTINGS_ACCESS_RATCHET counts)."""
+    return sum(len(pat.findall(source)) for pat in _DIRECT_SETTINGS_PATTERNS)
+
+
+def check_settings_access_ratchet(repo_root: Path = PROJECT_ROOT, report: bool = False, ratchet: Optional[Dict[str, Tuple[int, str]]] = None) -> List[str]:
+    """
+    Compares each file's direct configuration access count with SETTINGS_ACCESS_RATCHET. Fails on a new file,
+    a count above its baseline, a count below it (lower the baseline), and an entry whose file no longer has any.
+    """
+    baseline = SETTINGS_ACCESS_RATCHET if ratchet is None else ratchet
+    violations: List[str] = []
+    insetu_pkg = Path(repo_root) / "insetu"
+    if not insetu_pkg.exists():
+        return violations
+
+    def _flag(rel_path: str, line: int, msg: str, path: Path) -> None:
+        violations.append(f"❌ [VIOLATION: SETTINGS_ACCESS_RATCHET] {rel_path}:{line} — {msg}")
+        if report:
+            report_violation("SETTINGS_ACCESS_RATCHET", path, line, msg)
+
+    seen = set()
+    for py_file in sorted(insetu_pkg.rglob("*.py")):
+        if "__pycache__" in py_file.parts or "venv" in py_file.parts:
+            continue
+        rel_path = py_file.relative_to(repo_root).as_posix()
+        try:
+            source = py_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        count = count_direct_settings_access(source)
+        if not count:
+            continue
+        seen.add(rel_path)
+        first = min((m.start() for pat in _DIRECT_SETTINGS_PATTERNS for m in [pat.search(source)] if m), default=0)
+        line = source.count("\n", 0, first) + 1
+        if rel_path not in baseline:
+            _flag(rel_path, line, f"New direct configuration access ({count}). Use ctx.settings or the topology API instead.", py_file)
+        elif count > baseline[rel_path][0]:
+            _flag(rel_path, line, f"Direct configuration access grew from {baseline[rel_path][0]} to {count}. Use ctx.settings or the topology API instead.", py_file)
+        elif count < baseline[rel_path][0]:
+            _flag(rel_path, line, f"Direct configuration access fell from {baseline[rel_path][0]} to {count}: lower its SETTINGS_ACCESS_RATCHET baseline to {count}.", py_file)
+    for rel_path in sorted(set(baseline) - seen):
+        _flag(rel_path, 1, "No direct configuration access remains: remove this SETTINGS_ACCESS_RATCHET entry.", Path(repo_root) / rel_path)
+    return violations
+
+
 # Client-identity forwarding headers (HTTP and WSGI spellings). inSetu never reads them: akasa's
 # classify_peer() is the single source of truth, exposed through the SDK membrane.
 FORWARDED_CLIENT_HEADERS = frozenset({
@@ -14,6 +110,16 @@ FORWARDED_CLIENT_HEADERS = frozenset({
 
 
 SETTING_SUBSCHEMA_KEYS = ("item_schema", "fields")
+
+# S3: every child process environment comes from utils_core.child_env(purpose).
+CHILD_ENV_BUILDER_FILES = frozenset({"insetu/core/utils_core.py"})
+# S4: every outbound HTTP request goes through utils_core.fetch_url(). Reviewed exceptions, with the reason.
+RAW_URLOPEN_REVIEWED = {
+    "insetu/core/llm/engine_llm.py": "Provider calls (streaming SSE) to endpoints a person configured; moves to fetch_url with P4's provider layer.",
+    "insetu/core/system/cli_commands.py": "The CLI talking to its own local daemon on loopback.",
+}
+# S4: insetu never loads code from a CDN at runtime.
+REMOTE_CODE_HOSTS = ("esm.sh/", "cdn.jsdelivr.net/", "unpkg.com/", "cdnjs.cloudflare.com/", "cdn.skypack.dev/")
 
 _CROSS_MODULE_PRIVATE_REFS = None
 
@@ -259,7 +365,32 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                         report_violation("URI_VOLUME_MANDATE", self.filepath, node.lineno, "Manual path splitting ([0]) detected. Use InSetuURI(path).volume or .repo instead.")
 
         self.generic_visit(node)
+    def _check_child_env_and_fetch(self, node):
+        func = node.func
+        environ_ref = lambda n: isinstance(n, ast.Attribute) and n.attr == "environ" and isinstance(n.value, ast.Name) and n.value.id == "os"
+        copies_environ = (
+            (isinstance(func, ast.Attribute) and func.attr == "copy" and environ_ref(func.value))
+            or (isinstance(func, ast.Name) and func.id == "dict" and node.args and environ_ref(node.args[0]))
+        )
+        if copies_environ and self.rel_posix not in CHILD_ENV_BUILDER_FILES:
+            report_violation(
+                "CHILD_ENV_MANDATE",
+                self.filepath,
+                node.lineno,
+                "Copy of os.environ for a child process. Use child_env('shell' | 'tool' | 'repo_code', ...) from insetu.core.utils_core, which decides what the child may inherit (S3)."
+            )
+        is_urlopen = (isinstance(func, ast.Attribute) and func.attr == "urlopen") or (isinstance(func, ast.Name) and func.id == "urlopen")
+        if is_urlopen and self.rel_posix not in RAW_URLOPEN_REVIEWED:
+            report_violation(
+                "OUTBOUND_FETCH_MANDATE",
+                self.filepath,
+                node.lineno,
+                "Raw urlopen(). Use fetch_url() from insetu.core.utils_core, which enforces schemes, timeouts, size caps and the private-address policy (S4)."
+            )
+
     def visit_Call(self, node):
+        if not self.is_test:
+            self._check_child_env_and_fetch(node)
         for arg in node.args:
             if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                 if any(m in arg.value for m in ('manifest.json', 'manifest_cache.json')):
@@ -907,6 +1038,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
 
         self.generic_visit(node)
     def visit_Constant(self, node):
+        if isinstance(node.value, str) and not self.is_test and any(f"://{host}" in node.value for host in REMOTE_CODE_HOSTS):
+            report_violation(
+                "REMOTE_CODE_URL_BAN",
+                self.filepath,
+                node.lineno,
+                "CDN URL in shipped code. insetu loads no code from the network at runtime; vendor it under static/vendor/ instead (S4)."
+            )
         if isinstance(node.value, str):
             if not self.is_test and node.value.strip().lower() in FORWARDED_CLIENT_HEADERS:
                 report_violation(
@@ -1145,6 +1283,9 @@ def check_python_files():
                 1,
                 "Retired compatibility shim directory 'insetu/core/gather/languages/' still contains Python files. Delete them and use 'insetu/core/languages/' exclusively."
             )
+    # Enforce SETTINGS_ACCESS_RATCHET across all Python files in insetu/
+    check_settings_access_ratchet(PROJECT_ROOT, report=True)
+
     # Validate CODE_INDEX.md has no unresolved file/directory Cartographer placeholders
     code_index_path = PROJECT_ROOT / "CODE_INDEX.md"
     if code_index_path.exists():

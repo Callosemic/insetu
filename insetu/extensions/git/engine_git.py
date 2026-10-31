@@ -8,6 +8,7 @@ import json
 from typing import TypedDict, Optional, List, Dict, Any, Union, Literal
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import (
+    child_env,
     get_repo_path,
     execute_binary,
     BucketAddress,
@@ -19,7 +20,7 @@ from insetu.core.topology.engine_topology import resolve_file_bucket, topology_b
 from insetu.core.cartographer.cartographer import map_repositories
 def get_headless_git_env():
     """Returns a secure OS environment block pre-configured for non-interactive SSH connections."""
-    env = os.environ.copy()
+    env = child_env("tool")
     env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
     return env
 def execute_git(*args_tuple, **kwargs):

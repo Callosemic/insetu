@@ -44,6 +44,7 @@ insetu/
 │       ├── 0092-incremental-topology-gitignore-parity-and-post-commit-cache-invalidation.md # ADR 0092: Incremental Topology Gitignore Parity via Batched Check-Ignore and Post-Commit Manifest Cache Re-Invalidation
 │       ├── 0093-preview-exposure-leases-command-approval-and-core-module-priority.md # ADR 0093: App Server Exposure Leases, Human-Only Custom Command Approval, Protected VFS Target Enforcement, and Core Module Priority Loading
 │       ├── 0094-formal-response-schemas-post-commit-test-diagnostics-and-adaptive-working-set-compaction.md # ADR 0094: Formal Response Schema Registry, Post-Commit Test Diagnostics Gate, Adaptive Working-Set Compaction, and Context Budget HUD
+│       ├── 0095-child-environment-confinement-repo-landmarks-routine-integration-and-mcp-optional-includes.md # ADR 0095: Child Environment Confinement, Repository Landmarks Routine Integration, and MCP Optional Prompt Include Resolution
 │       ├── archived/               # Superseded and historical ADR documents.
 │       │   ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │       │   ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -162,7 +163,7 @@ insetu/
 │   │   │   │   ├── def api_ensure_plan_file(ctx) # Resolves or creates a canonical Markdown plan file URI for /plan.
 │   │   │   │   ├── class ResolveTestCommandPayload(TypedDict) # Request schema for resolving a repository test command.
 │   │   │   │   ├── def api_resolve_test_command(ctx) # Inspects repository files to determine the appropriate test runner command.
-│   │   │   │   ├── class AgentRunTestPayload(TypedDict) # [stale?] Request schema for executing an approved repository test command.
+│   │   │   │   ├── class AgentRunTestPayload(TypedDict) # Request schema for running a repository's default or a person-approved test command; it carries no approval flag (P5).
 │   │   │   │   ├── def api_agent_run_test(ctx) # [stale?] Executes an approved repository test command with shell=False.
 │   │   │   │   ├── def get_sessions(ctx) # Retrieves all chat sessions for the active workspace.
 │   │   │   │   ├── def create_session(ctx) # Creates a new chat session record in SQLite.
@@ -273,9 +274,9 @@ insetu/
 │   │   │   │   ├── def bridge_ast_rename(ctx) # [comment required]
 │   │   │   │   ├── class BridgeCommitMessageQuery(TypedDict) # [comment required]
 │   │   │   │   ├── class BridgeTestPayload(TypedDict) # [comment required]
-│   │   │   │   ├── class BridgeTestApprovePayload(TypedDict) # [comment required]
+│   │   │   │   ├── class BridgeTestApprovePayload(TypedDict) # Request schema for a person approving one custom test command for a repository (P5).
 │   │   │   │   ├── def bridge_run_test_gate(ctx) # [comment required]
-│   │   │   │   ├── def bridge_approve_test_command(ctx) # [comment required]
+│   │   │   │   ├── def bridge_approve_test_command(ctx) # Records a person's approval of a custom repository test command; hidden from MCP and banned in routines (P5).
 │   │   │   │   ├── def bridge_commit_message(ctx) # [comment required]
 │   │   │   │   ├── class BridgeMergeBlocksPayload(TypedDict) # [comment required]
 │   │   │   │   ├── def bridge_merge_blocks(ctx) # [comment required]
@@ -305,7 +306,7 @@ insetu/
 │   │   │       ├── class VendorizePayload(TypedDict) # [comment required]
 │   │   │       ├── class VendorizeResponse(TypedDict) # [comment required]
 │   │   │       ├── def serve_vendor_asset(ctx, filename) # [comment required]
-│   │   │       └── def vendorize_language(ctx) # [comment required]
+│   │   │       └── def vendorize_language(ctx) # Resolves a language pack locally: bundled packs first, then a pack a person placed in the local vendor folder.
 │   │   ├── fs/                     # Virtual File System REST gateway and editing modals.
 │   │   │   ├── engine_fs.py        # VFS file operations, upload, and OCC conflict REST gateway.
 │   │   │   │   ├── class FileTargetPayload(TypedDict) # [comment required]
@@ -408,7 +409,6 @@ insetu/
 │   │   │   │   ├── def collect_workspace_secrets(ctx) # Collects decrypted/raw secret values from the tenant secrets.json vault for outbound scrubbing.
 │   │   │   │   ├── def assemble_blast_radius(ctx, edit_targets, user_message, history_summary) # [stale?] 4-Layer Deterministic Blast Radius: 1.
 │   │   │   │   ├── def detect_external_edits(ctx, filepaths) # SHA-256 External Edit Detection (Section 3.1): Compares live disk SHA-256 of working_set files against the latest bridge_ledger post_patch_h...
-│   │   │   │   ├── def discover_constitution_files(ctx) # Discovers Tier 0 auto-pinned engineering standards (docs/standards/*.md) across tracked repos.
 │   │   │   │   ├── class ContextAssemblePayload(TypedDict) # [comment required]
 │   │   │   │   ├── class ContextAssembleResponse(TypedDict) # [comment required]
 │   │   │   │   ├── def assemble_context_payload(ctx, edit_targets, user_message, strategy, ...) # [stale?] Main entry point for context.assemble: Resolves targets, applies soft-budget interface slicing, and wraps in a secured nonce envelope.
@@ -491,7 +491,7 @@ insetu/
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   └── engine_mcp.py       # JSON-RPC 2.0 MCP gateway exposing capabilities as tools, contexts as resources, and prompt templates.
 │   │   │       ├── class McpJsonRpcPayload(TypedDict) # [comment required]
-│   │   │       ├── def handle_mcp_jsonrpc(ctx, rpc_payload) # [stale?] Evaluates a single MCP 2025-03-26 JSON-RPC 2.0 request or notification dictionary.
+│   │   │       ├── def handle_mcp_jsonrpc(ctx, rpc_payload) # Evaluates one MCP 2025-03-26 JSON-RPC 2.0 request or notification; capabilities marked mcp_expose=False are neither listed nor callable.
 │   │   │       ├── def api_mcp_rpc(ctx) # [comment required]
 │   │   │       └── def api_mcp_http_root(workspace_id) # [comment required]
 │   │   ├── offline/                # Local offline data provider and sync reconciliation engine.
@@ -510,7 +510,7 @@ insetu/
 │   │   │   │   ├── class PromptsListResponse(TypedDict) # [comment required]
 │   │   │   │   ├── class PromptResolveQuery(TypedDict) # [comment required]
 │   │   │   │   ├── def api_prompts_list(ctx) # Provides a list of available prompts (including virtual .templates) for the UI.
-│   │   │   │   └── def api_prompts_resolve(ctx) # Fetches a canonical prompt URI or live POST buffer and recursively resolves {{include_prompt: ...}} macros.
+│   │   │   │   └── def api_prompts_resolve(ctx) # Fetches a canonical prompt URI or live POST buffer and recursively resolves {{include_prompt: ...}} and optional {{include_prompt?: ...}} macros.
 │   │   │   └── prompts.js          # Core Prompt Library UI, virtual module .templates browser, and macro embedding.
 │   │   │       ├── class InSetuExtPrompts # [comment required]
 │   │   │       └── function isPromptPath(filepath) # [comment required]
@@ -649,7 +649,7 @@ insetu/
 │   │   │   └── types.js            # Root JSDoc type definitions entry point.
 │   │   ├── topology/               # Central SSOT for logical workspace topologies.
 │   │   │   ├── __init__.py         # Module initialization.
-│   │   │   └── engine_topology.py  # Tracks the active layout of repositories and buckets.
+│   │   │   └── engine_topology.py  # Tracks the active layout of repositories and buckets, and resolves repository landmarks from core and extension-registered kinds.
 │   │   │       ├── def hook_topology_manifest_signatures(workspace_id, since_ts, **kwargs) # Yields lightweight repository signatures for the vfs domain, incorporating git_status counts.
 │   │   │       ├── def api_topology_vfs_repo(ctx) # Surgically fetches the VFS bucket structure and git modification state for a specific repository.
 │   │   │       ├── def force_topology_scan(workspace_id, target_repos, **kwargs) # [stale?] Synchronously forces a full physical disk walk to rebuild the Topology Ledger.
@@ -669,6 +669,12 @@ insetu/
 │   │   │       ├── class VerifyPlanTargetsPayload(TypedDict) # Request schema for verifying plan file targets against the workspace VFS.
 │   │   │       ├── def api_topology_overview(ctx) # Compiles a lightweight structural overview of tracked repositories, sub-buckets, and CODE_INDEX.md headers.
 │   │   │       ├── def api_topology_verify_plan_targets(ctx) # Verifies that vfs:// file targets referenced in an architectural plan exist or are marked as new files.
+│   │   │       ├── def get_landmark_kinds(workspace_id) # Returns (kinds, notices): core landmark kinds followed by valid kinds that enabled extensions register.
+│   │   │       ├── def read_repo_tier_settings(ctx, repo, ext_name) # Reads one extension's repository-tier settings, keeping only fields declared `authority: repo_content`.
+│   │   │       ├── def resolve_repo_landmarks(ctx, repo) # Resolves where a repository keeps each landmark kind (standards, contracts, ADRs, tests, fitness suites, and kinds registered by extensions).
+│   │   │       ├── def discover_constitution_files(ctx) # Returns the standards files to auto-pin (Tier 0) across mounted repositories, from each repository's landmarks.
+│   │   │       ├── class TopologyLandmarksPayload(TypedDict) # Request schema for topology.landmarks: an optional repository name.
+│   │   │       ├── def api_topology_landmarks(ctx) # Resolves repository landmarks for one repository (the first mounted one when none is named).
 │   │   │       ├── class AuditUpkeepPayload(TypedDict) # Request schema for running a deterministic codebase upkeep audit.
 │   │   │       └── def api_topology_audit_upkeep(ctx) # Deterministically audits workspace documentation/symbol drift, God-object candidates, and test relevance.
 │   │   └── utils_core.py           # [Workspace Physics & Universal Utils]
@@ -679,7 +685,7 @@ insetu/
 │   │       ├── def dump_yaml_string(yaml_data) # Centralized YAML string serializer using the round-trip ruamel.yaml engine with safe fallback.
 │   │       ├── def parse_frontmatter(content) # [comment required]
 │   │       ├── def update_frontmatter(content, new_data) # [comment required]
-│   │       ├── def resolve_macro_includes(text, current_filepath, pattern, read_callback, ...) # [comment required]
+│   │       ├── def resolve_macro_includes(text, current_filepath, pattern, read_callback, ...) # Expands {{include_prompt: ...}} and optional {{include_prompt?: ...}} macros recursively (depth 5), with macro parameters.
 │   │       ├── def parse_blocks(text) # [comment required]
 │   │       ├── def clean_date_str(val) # Safely normalizes varied date inputs into a standard ISO format.
 │   │       ├── def get_earlier_date(d1, d2) # Safely compares and returns the earlier of two ISO timestamp strings.
@@ -704,9 +710,16 @@ insetu/
 │   │       ├── def get_approved_commands(workspace_id) # Returns the approved command signatures for workspace_id from host.json (P5).
 │   │       ├── def approve_command(workspace_id, kind, repo, command) # Records a person's approval of one exact command of a kind ('test', 'preview') for a repository.
 │   │       ├── def is_command_approved(workspace_id, kind, repo, command) # True only when a person approved this exact command of this kind for this repository.
-│   │       ├── def get_approved_test_commands(workspace_id) # [stale?] Returns the set of approved custom test command signatures for workspace_id from host.json.
-│   │       ├── def approve_test_command(workspace_id, repo, command) # [stale?] Persists approval for a custom repository test command in host.json and returns its signature.
-│   │       ├── def is_test_command_approved(workspace_id, repo, command, default_command) # [stale?] True when `command` may run in `workspace_id` for `repo`: the repository's default test command, or a custom command a person approved earli...
+│   │       ├── def get_approved_test_commands(workspace_id) # Returns the approved command signatures for workspace_id (kept for existing callers of the P5 store).
+│   │       ├── def approve_test_command(workspace_id, repo, command) # Records a person's approval of a custom test command (approve_command with kind 'test') and returns its signature.
+│   │       ├── def is_test_command_approved(workspace_id, repo, command, default_command) # True for the repository's default test command, or a custom command a person approved; never approves anything itself (P5).
+│   │       ├── def is_secret_env_name(name) # True for environment variable names that look like credentials (API keys, tokens, passwords, SSH_AUTH_SOCK).
+│   │       ├── def get_child_env_passthrough(workspace_id, repo) # The credential-like variable names a person allowed through to this repository's processes.
+│   │       ├── def child_env(purpose, workspace_id, repo, extra) # Builds the environment for a child process.
+│   │       ├── class FetchRefused(Exception) # A URL was refused before or during the fetch: wrong scheme, a non-public address, or a body over the cap.
+│   │       ├── class FetchHTTPError(Exception) # The server answered with an HTTP error status.
+│   │       ├── class FetchResult   # A completed fetch: final URL after redirects, status, headers and the decoded (decompressed) body.
+│   │       ├── def fetch_url(url)  # The one way insetu makes an outbound HTTP request (S4).
 │   │       ├── def resolve_logical_path(path, workspace_id) # [comment required]
 │   │       ├── def hook_expand_selection(items, workspace_id, gather_only, **kwargs) # [comment required]
 │   │       ├── def find_path_candidates(query_path, workspace_id, allowed_repos, **kwargs) # Explicit, opt-in candidate finder for path disambiguation.
@@ -819,7 +832,7 @@ insetu/
 │   │   │       └── class InSetuExtFreshdesk # 2.
 │   │   ├── git/                    # Version control, branch management, and workspace sweeping.
 │   │   │   ├── engine_git.py       # [Git Operations & Diff Generator]
-│   │   │   │   ├── def get_headless_git_env() # Returns a secure OS environment block pre-configured for non-interactive SSH connections.
+│   │   │   │   ├── def get_headless_git_env() # Returns the 'tool' child environment with non-interactive SSH settings for git (S3).
 │   │   │   │   ├── def execute_git(**kwargs) # Universal Git command wrapper supporting both logical volumes and physical paths.
 │   │   │   │   ├── def generate_diff_context(workspace_id, target_repos, manifest_ref, touched_buckets) # [comment required]
 │   │   │   │   ├── def pre_warm_git_sweep(ctx, workspace_id, **kwargs) # Pre-warms the Git sweepable state silently in the background after the topology settles.
@@ -875,9 +888,9 @@ insetu/
 │   │   ├── ingest/                 # URL to Markdown extraction via Jina or BeautifulSoup.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── engine_ingest.py    # URL fetching and parsing logic.
-│   │   │   │   ├── def extract_markdown_from_url(ctx, target_url, method) # [comment required]
+│   │   │   │   ├── def extract_markdown_from_url(ctx, target_url, method) # Fetches a URL and converts it to Markdown ('bs4' locally, 'jina' via r.jina.ai); caller URLs must be public unless a person allowed the host (S4).
 │   │   │   │   ├── class IngestUrlPayload(TypedDict) # [comment required]
-│   │   │   │   └── def api_ingest_url(ctx) # Fetches content from a URL and converts it into clean Markdown.
+│   │   │   │   └── def api_ingest_url(ctx) # Queues a URL ingest job; parses locally by default, or through r.jina.ai when the caller asks (S4).
 │   │   │   └── ext_ingest.js       # UI modal for URL ingestion.
 │   │   │       ├── class InSetuExtIngestActions # [comment required]
 │   │   │       └── class InSetuExtIngestModals # [comment required]
@@ -907,10 +920,10 @@ insetu/
 │   │   │   │   ├── def cleanup_all_preview_servers(**kwargs) # [comment required]
 │   │   │   │   ├── class PreviewStartPayload(TypedDict) # [comment required]
 │   │   │   │   ├── class PreviewRepoTargetPayload(TypedDict) # [comment required]
-│   │   │   │   ├── class PreviewOpenLanPayload(TypedDict) # [comment required]
-│   │   │   │   ├── class PreviewApproveCommandPayload(TypedDict) # [comment required]
+│   │   │   │   ├── class PreviewOpenLanPayload(TypedDict) # Request schema for opening a repository's server to the LAN for 'run', '15m', '1h' or '8h' (S2).
+│   │   │   │   ├── class PreviewApproveCommandPayload(TypedDict) # Request schema for a person approving one exact custom preview command for a repository (P5).
 │   │   │   │   ├── def api_preview_status(ctx) # Passively inspects server status, sticky ports, and detected modes across all workspace repositories.
-│   │   │   │   ├── def api_preview_start(ctx) # [stale?] Starts or restarts a managed development server for a target repository.
+│   │   │   │   ├── def api_preview_start(ctx) # Starts or restarts a repository's server on loopback; answers 403 needs_approval for an unapproved custom command (S2).
 │   │   │   │   ├── def api_preview_open_lan(ctx) # Restarts a repository's server on 0.0.0.0 under a LAN lease a person grants.
 │   │   │   │   ├── def api_preview_close_lan(ctx) # Ends a repository's LAN lease early by restarting its server on loopback.
 │   │   │   │   ├── def api_preview_approve_command(ctx) # Records a person's approval of one exact custom preview command for a repository.
@@ -938,9 +951,9 @@ insetu/
 │   │   │   │   ├── class SerperDevProvider(SearchProvider) # [comment required]
 │   │   │   │   ├── def get_provider(provider_name) # [comment required]
 │   │   │   │   ├── def gather_next_page(ctx, research_job_id, job_id) # Metronome callback to fetch a single SERP page, preventing rate limits.
-│   │   │   │   ├── def scrape_next_link(ctx, research_job_id, job_id) # Executes a single link scrape inside the centralized ThreadPool.
+│   │   │   │   ├── def scrape_next_link(ctx, research_job_id, job_id) # Scrapes one link of a research job through ingest (local parsing by default) inside the shared thread pool.
 │   │   │   │   ├── class ResearchStartPayload(TypedDict) # [comment required]
-│   │   │   │   ├── def start_job(ctx) # Starts a new asynchronous research and scraping job.
+│   │   │   │   ├── def start_job(ctx) # Starts an asynchronous research job; searches go through fetch_url and each result is queued for scraping (S4).
 │   │   │   │   ├── class ResearchActionPayload(TypedDict) # [comment required]
 │   │   │   │   ├── def job_action(ctx, job_id) # Performs lifecycle actions (pause, resume, cancel, retry, delete) on a specific research job.
 │   │   │   │   ├── def list_jobs(ctx) # Retrieves the history of active and past research jobs.
@@ -1099,6 +1112,8 @@ insetu/
     │   │   ├── def check_tier0_domain_purity() # [comment required]
     │   │   └── def check_javascript_files() # [comment required]
     │   └── rules_python.py         # Python AST linter enforcing async barriers and context accessors.
+    │       ├── def count_direct_settings_access(source) # Number of direct configuration accesses in one file's source (the unit SETTINGS_ACCESS_RATCHET counts).
+    │       ├── def check_settings_access_ratchet(repo_root, report, ratchet) # Compares each file's direct configuration access count with SETTINGS_ACCESS_RATCHET.
     │       ├── class BackendFitnessVisitor(ast.NodeVisitor) # [comment required]
     │       └── def check_python_files() # [comment required]
     ├── fitness_functions.py        # Master CLI runner for the architectural fitness linter suite.
@@ -1118,8 +1133,16 @@ insetu/
         ├── test_cartographer_file_descriptions.py # Tests that the Cartographer derives file descriptions from docstrings instead of leaving placeholders.
         │   ├── class TestDescribeSourceFile(unittest.TestCase) # describe_source_file reads module docstrings and leading file comments, never symbol docs.
         │   └── class TestMapRepositoriesFileFallback(unittest.TestCase) # map_repositories describes a new file from its docstring when the index has no line for it.
+        ├── test_child_env.py       # S3 tests: purposes, credential stripping for repository code, per-repository passthrough, a real env run showing no token or key, preview's...
+        │   ├── class TestChildEnvPurposes(_EnvCase) # Who chose the command decides what it inherits.
+        │   ├── class TestRepositoryProcesses(_EnvCase) # Preview servers and test runners use repo_code, and a real child sees neither the token nor a key.
+        │   └── class TestChildEnvAndFetchRules(unittest.TestCase) # CHILD_ENV_MANDATE, OUTBOUND_FETCH_MANDATE and REMOTE_CODE_URL_BAN flag the raw patterns outside their homes.
         ├── test_config_cascade.py  # Unit tests for the 3-tier configuration cascade, secret encryption, and lazy migration.
         │   └── class TestConfigurationCascade(unittest.TestCase) # [comment required]
+        ├── test_dev_exec_exposure.py # Tests that MCP neither lists nor calls dev.exec and that routines cannot use it.
+        │   └── class TestDevExecExposure(unittest.TestCase) # MCP neither lists nor calls dev.exec, and routines cannot use it.
+        ├── test_editor_vendorize.py # S4 tests: bundled and local language packs resolve, unknown packs are not downloaded, and invalid names are refused.
+        │   └── class TestEditorVendorize(unittest.TestCase) # Bundled and local packs resolve; unknown packs are not downloaded; invalid names are refused.
         ├── test_ext_preview_unit.py # Unittest suite for passive framework detection and preview server lifecycle.
         │   └── class TestExtPreviewUnit(unittest.TestCase) # [comment required]
         ├── test_fallback_bridge.py # Unit tests for the Lifeboat recovery bridge block parser, genesis patches, and recovery endpoints.
@@ -1140,6 +1163,9 @@ insetu/
         │   └── class TestLlmPoolPrecedence(unittest.TestCase) # [stale?] Routing precedence: saved pool/profiles, then explicitly saved legacy settings, then the schema's default pool.
         ├── test_macro_escapes.py   # Tests that transport macros expand in files documenting them, literal tokens via brace macros, and lifeboat parity.
         │   └── class TestMacroEscapes(unittest.TestCase) # The namespaced transport macro always expands, even in files that document it, and both bridges agree.
+        ├── test_outbound_fetch.py  # S4 tests: schemes, private and metadata addresses, person-allowed hosts, redirects into private addresses or other schemes, the connected-ad...
+        │   ├── class TestOutboundFetch(unittest.TestCase) # fetch_url() against a local server: schemes, address policy, redirects, caps and error bodies.
+        │   └── class TestIngestUsesThePolicy(unittest.TestCase) # Ingest refuses file:// and private hosts in both parser modes, unless a person allowed the host.
         ├── test_preview_exposure.py # S2: preview servers bind loopback, open to the LAN only on a person's lease, and run custom commands only once approved.
         │   ├── class TestLoopbackByDefault(_PreviewCase) # Nothing binds beyond loopback unless a person opens it, and auto-start never does.
         │   ├── class TestLanLease(_PreviewCase) # A LAN lease needs the repository's permission, and a timed lease falls back to loopback by itself.
@@ -1151,6 +1177,8 @@ insetu/
         │   ├── class TestTailscaleIdentityProvider(unittest.TestCase) # S1: Route B authenticates Tailscale devices only after whois verification of the trusted client IP.
         │   ├── class TestRemoteBootstrapIntegration(unittest.TestCase) # S1 end to end: akasa's /auth/bootstrap plus the insetu Tailscale provider and Host gate.
         │   └── class TestRemoteSettingsLifecycle(unittest.TestCase) # Settings migration from the retired 'tailscale' extension, configured hosts, and the preview helper.
+        ├── test_repo_landmarks.py  # Genesis unit test suite verifying Sprint 1 (landmarks discovery on insetu/akasa layouts, overrides, local precedence, path confinement, unde...
+        │   └── class TestRepoLandmarks(unittest.TestCase) # Landmarks resolve from discovery and repo settings within the repository, and optional includes follow extension state.
         ├── test_route_auth_inventory.py # V4: every HTTP route needs the token unless it is on a reviewed public list, in the app and in the lifeboat.
         │   ├── class TestAppRouteAuthInventory(_InventoryCase) # The main app: one token gate in front of every route, with a short reviewed public list.
         │   └── class TestLifeboatRouteAuthInventory(_InventoryCase) # The lifeboat: the same rules, because it listens on the port Tailscale exposes.

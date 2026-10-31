@@ -2,11 +2,10 @@ import base64
 import datetime
 import json
 import re
-import urllib.request
-import urllib.error
 from pathlib import Path
 from typing import TypedDict, Optional, Dict, Any, Union
 from insetu.core.sdk import InSetuExtension
+from insetu.core.utils_core import FetchHTTPError, fetch_url
 # Declarative schema for settings so users can input credentials via the UI
 FRESHDESK_SETTINGS_SCHEMA = [
     {
@@ -89,15 +88,11 @@ def _fd_request(ctx, endpoint, method='GET', payload=None):
     url = endpoint if endpoint.startswith("http") else f"https://{domain}.freshdesk.com/api/v2/{endpoint}"
 
     data = json.dumps(payload).encode('utf-8') if payload else None
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-
     try:
-        with urllib.request.urlopen(req, timeout=10) as response:
-            body = response.read().decode('utf-8')
-            return json.loads(body) if body else {}
-    except urllib.error.HTTPError as e:
-        err_msg = e.read().decode('utf-8')
-        raise ValueError(f"Freshdesk API Error: {err_msg}")
+        response = fetch_url(url, data=data, headers=headers, method=method, timeout=10)
+        return response.json()
+    except FetchHTTPError as e:
+        raise ValueError(f"Freshdesk API Error: {e.text()}")
 @freshdesk_bp.worker("fetch_tickets_task")
 def _background_fetch_tickets(ctx, filters: Optional[Dict[str, Any]] = None):
     if filters is None: filters = {}

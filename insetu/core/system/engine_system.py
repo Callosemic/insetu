@@ -49,7 +49,7 @@ import insetu.core.system.legacy  # Mount one-off migration hooks
 
 def _authorize_inter_workspace_mount(target_ws: str, subscriber_ws: str, domain: str, rel_path: str = "") -> bool:
     """Tier 2 Policy Evaluator for ws:// virtual mounts."""
-    if target_ws == "default" and rel_path.startswith("prompts/.templates/user"):
+    if target_ws == "default" and rel_path.startswith(("prompts/.templates/user", "settings/.templates/user")):
         return True
     sub_settings = SettingsManager('system', subscriber_ws)
     mounts = sub_settings.get("shared_mounts") or []
@@ -167,6 +167,14 @@ SYSTEM_SETTINGS_SCHEMA = [
                 ]
             }
         ]
+    },
+    {
+        "id": "child_env_passthrough",
+        "label": "Allowed Credential Variables",
+        "type": "comma_list",
+        "scope": "repo",
+        "default": [],
+        "description": "Credential-like environment variables (names with KEY, TOKEN, SECRET, PASSWORD, AUTH) that this repository's preview servers and test runners may inherit from insetu's environment. Everything else of that kind is withheld. Stored in the workspace, never in the repository."
     }
 ]
 system_bp = InSetuExtension(
@@ -174,7 +182,16 @@ system_bp = InSetuExtension(
     title="Core OS",
     description="Core OS daemon and workspace environment configurations.",
     core=True,
-    settings_schema=SYSTEM_SETTINGS_SCHEMA
+    settings_schema=SYSTEM_SETTINGS_SCHEMA,
+    volumes={
+        'settings': {
+            'tier': 'data',
+            'scheme': 'ctx',
+            'path_key': 'settings_dir',
+            'module_subdir': 'settings',
+            'legacy_dirs': ['settings', 'data/settings'],
+        }
+    },
 )
 def vault_repeater_secrets_for_schema(ext_name: str, workspace_id: Optional[str] = None) -> None:
     """

@@ -6,7 +6,7 @@ const AppStore = window.inSetu.stores.App;
 export const IngestStore = createExtensionStore('Ingest', {
     ingestModalOpen: false,
     ingestUrl: '',
-    ingestMethod: 'jina',
+    ingestMethod: 'bs4',
     ingestStatus: null,
     ingestError: null,
     activeIngestJobId: null
@@ -42,7 +42,7 @@ export class InSetuExtIngestModals extends InSetuElement {
         super();
         this.ingestModalOpen = false;
         this.ingestUrl = '';
-        this.ingestMethod = 'jina';
+        this.ingestMethod = 'bs4';
         this.ingestStatus = null;
         this.ingestError = null;
         this.activeIngestJobId = null;
@@ -54,7 +54,7 @@ export class InSetuExtIngestModals extends InSetuElement {
             state => ({
                 ingestModalOpen: !!state.ingestModalOpen,
                 ingestUrl: state.ingestUrl || '',
-                ingestMethod: state.ingestMethod || 'jina',
+                ingestMethod: state.ingestMethod || 'bs4',
                 ingestStatus: state.ingestStatus || null,
                 ingestError: state.ingestError || null,
                 activeIngestJobId: state.activeIngestJobId || null
@@ -122,8 +122,8 @@ export class InSetuExtIngestModals extends InSetuElement {
                         label="Extraction Method:" 
                         .value=${this.ingestMethod} 
                         .options=${[
-                            {value: 'jina', label: 'Jina Reader API (Clean formatting, remote server)'},
-                            {value: 'bs4', label: bs4Missing ? `BeautifulSoup Local (⚠️ Missing ${missingPkgs.join(', ')})` : 'BeautifulSoup Local (bs4 & markdownify)'}
+                            {value: 'bs4', label: bs4Missing ? `BeautifulSoup Local (⚠️ Missing ${missingPkgs.join(', ')})` : 'BeautifulSoup Local (bs4 & markdownify)'},
+                            {value: 'jina', label: 'Jina Reader API (sends the URL to r.jina.ai)'}
                         ]} 
                         @sutram-input-changed=${e => IngestStore.setState({ ingestMethod: e.detail.value })}>
                     </sutram-select>
