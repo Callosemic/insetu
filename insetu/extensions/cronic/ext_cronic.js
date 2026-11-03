@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
@@ -56,15 +56,7 @@ export class InSetuExtCronic extends InSetuElement {
         selectedJobId: { type: String },
         hasCrontab: { type: Boolean }
     };
-    static styles = [
-        sharedStyles,
-        css`
-            :host { display: flex; flex-direction: column; height: 100%; width: 100%; box-sizing: border-box; background: var(--bg); overflow: hidden; container-type: inline-size; }
-            .header-wrap { padding: 0 var(--mobile-edge-padding); padding-top: var(--mobile-edge-padding); }
-            .job-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-            .log-box { font-family: var(--font-mono); background: var(--input-bg); border: 1px solid var(--border); padding: 12px; border-radius: 6px; white-space: pre-wrap; font-size: 0.85rem; max-height: 250px; overflow-y: auto; margin-top: 10px; }
-        `
-    ];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.jobs = [];
@@ -139,56 +131,56 @@ export class InSetuExtCronic extends InSetuElement {
     render() {
         if (!this.hasCrontab) {
             return html`
-                <div style="padding: 20px; background: var(--input-bg); border: 1px solid var(--intent-warning); border-radius: 6px; color: var(--text); margin: 20px; display: flex; align-items: flex-start; gap: 10px;">
-                    <yv-icon name="alert-triangle" style="width: 20px; height: 20px; color: var(--intent-warning); flex-shrink: 0;"></yv-icon>
-                    <div>
-                        <h3 style="margin-top: 0; color: var(--intent-warning);">OS Not Supported</h3>
-                        <p style="margin-bottom: 0;">The Cronic extension requires a Unix-like environment with <code>crontab</code> installed (Linux, macOS, WSL).</p>
-                    </div>
-                </div>
+                <sutram-view>
+                    <sutram-surface variant="tinted" intent="warning" padding="md">
+                        <sutram-stack direction="row" align="start" gap="sm">
+                            <sutram-icon name="alert-triangle" size="lg" intent="warning"></sutram-icon>
+                            <sutram-stack direction="col" gap="xs">
+                                <h3>OS Not Supported</h3>
+                                <sutram-label text="The Cronic extension requires a Unix-like environment with crontab installed (Linux, macOS, WSL)."></sutram-label>
+                            </sutram-stack>
+                        </sutram-stack>
+                    </sutram-surface>
+                </sutram-view>
             `;
         }
         if (this.loading && this.jobs.length === 0) {
-            return html`<sutram-scroll-view><sutram-spinner text="Loading scheduled jobs..."></sutram-spinner></sutram-scroll-view>`;
+            return html`<sutram-view><sutram-spinner text="Loading scheduled jobs..."></sutram-spinner></sutram-view>`;
         }
 
         return html`
-            <sutram-scroll-view style="gap: 15px;">
-                <div class="header-wrap" style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 5px;">
-                    <h3 style="margin: 0; color: var(--text); display: flex; align-items: center; gap: 8px;">
-                        <yv-icon name="clock" style="width: 18px; height: 18px; color: var(--intent-warning);"></yv-icon> Scheduled System Tasks
-                    </h3>
-                    <span style="font-size: 0.85rem; color: var(--text-muted);">Manage crontab bindings and manual script executions.</span>
-                </div>
+            <sutram-view titleText="Scheduled System Tasks" descriptionText="Manage crontab bindings and manual script executions.">
+                <sutram-stack direction="col" gap="md">
 
-                <sutram-card-group>
-                    ${this.jobs.length === 0 ? html`<p style="color: var(--text-muted); font-style: italic;">No active cronic jobs scheduled for this workspace.</p>` : ''}
-                    ${this.jobs.map(job => {
-                        const jobBasename = new this.utils.InSetuURI(job.filepath).basename;
-                        return html`
-                        <sutram-card
-                            .filename=${jobBasename}
-                            .titleText=${jobBasename}
-                            .descriptionText=${`Schedule: ${job.schedule} • Status: ${job.last_status || 'pending'}`}
-                            .detailText=${job.filepath}
-                            icon="clock"
-                            intent=${job.enabled ? 'success' : 'neutral'}>
-                            <div slot="actions" class="job-actions">
-                                <sutram-async-btn size="sm" icon="play" label="Run Now" intent="primary" style="margin: 0;" .onClick=${this._getRunNowAction(job.id)}></sutram-async-btn>
-                                <sutram-async-btn size="sm" icon="square" label="Stop" intent="neutral" style="margin: 0;" .onClick=${this._getKillAction(job.id)}></sutram-async-btn>
-                                <sutram-async-btn size="sm" icon=${job.enabled ? 'pause' : 'play'} label=${job.enabled ? 'Pause' : 'Resume'} intent="warning" style="margin: 0;" .onClick=${async () => this._toggleJob(job)}></sutram-async-btn>
-                                <sutram-btn size="sm" intent="neutral" icon="file-text" label="Logs" @click=${() => CronicStore.getState().fetchLogs(job.id)}></sutram-btn>
-                                <sutram-async-btn size="sm" icon="trash-2" label="Remove" intent="danger" style="margin: 0;" .onClick=${async () => this._deleteJob(job.id)}></sutram-async-btn>
-                            </div>
-                        </sutram-card>
-                    `;})}
-                </sutram-card-group>
-                ${this.selectedJobId ? html`
-                    <sutram-collapsible titleText="Execution Output Log" .open=${true} style="margin-top: 10px;">
-                        <div class="log-box">${this.selectedLog || 'No logs recorded.'}</div>
-                    </sutram-collapsible>
-                ` : ''}
-            </sutram-scroll-view>
+                    <sutram-card-group>
+                        ${this.jobs.length === 0 ? html`<sutram-empty-state text="No active cronic jobs scheduled for this workspace."></sutram-empty-state>` : ''}
+                        ${this.jobs.map(job => {
+                            const jobBasename = new this.utils.InSetuURI(job.filepath).basename;
+                            return html`
+                            <sutram-card
+                                .filename=${jobBasename}
+                                .titleText=${jobBasename}
+                                .descriptionText=${`Schedule: ${job.schedule} • Status: ${job.last_status || 'pending'}`}
+                                .detailText=${job.filepath}
+                                icon="clock"
+                                intent=${job.enabled ? 'success' : 'neutral'}>
+                                <sutram-stack slot="actions" direction="row" gap="sm" ?wrap=${true}>
+                                    <sutram-async-btn ?compact=${true} icon="play" label="Run Now" intent="primary" .onClick=${this._getRunNowAction(job.id)}></sutram-async-btn>
+                                    <sutram-async-btn ?compact=${true} icon="square" label="Stop" intent="neutral" .onClick=${this._getKillAction(job.id)}></sutram-async-btn>
+                                    <sutram-async-btn ?compact=${true} icon=${job.enabled ? 'pause' : 'play'} label=${job.enabled ? 'Pause' : 'Resume'} intent="warning" .onClick=${async () => this._toggleJob(job)}></sutram-async-btn>
+                                    <sutram-btn ?compact=${true} intent="neutral" icon="file-text" label="Logs" @click=${() => CronicStore.getState().fetchLogs(job.id)}></sutram-btn>
+                                    <sutram-async-btn ?compact=${true} icon="trash-2" label="Remove" intent="danger" .onClick=${async () => this._deleteJob(job.id)}></sutram-async-btn>
+                                </sutram-stack>
+                            </sutram-card>
+                        `;})}
+                    </sutram-card-group>
+                    ${this.selectedJobId ? html`
+                        <sutram-collapsible titleText="Execution Output Log" .open=${true}>
+                            <pre style="max-height: 250px; overflow-y: auto; margin: 0;">${this.selectedLog || 'No logs recorded.'}</pre>
+                        </sutram-collapsible>
+                    ` : ''}
+                </sutram-stack>
+            </sutram-view>
         `;
     }
 }

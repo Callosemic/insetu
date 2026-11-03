@@ -407,6 +407,20 @@ def delete_citation(ctx, csl_id):
         return {"status": "success", "message": f"Deleted citation {csl_id}"}
     except Exception as e:
         return {"error": str(e)}, 500
+@citations_bp.on('check_url_in_library')
+def _check_url_in_citations_library(ctx, url=None, workspace_id=None, **kwargs):
+    if not url:
+        return None
+    try:
+        row = ctx.db.execute(
+            "SELECT id FROM citations WHERE json_extract(raw_json, '$.URL') = ?",
+            (url,),
+        ).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+
+
 @citations_bp.on('pre_compile_document')
 def inject_citation_middleware(text, workspace_id=None, **kwargs):
     """Parses text for citation macros and injects bibliography temp files and citeproc flags into the compiler."""

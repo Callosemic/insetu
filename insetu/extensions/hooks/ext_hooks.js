@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { createExtensionStore, InSetuElement, bindStoreInput, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
@@ -49,15 +49,9 @@ export class InSetuExtHooks extends InSetuElement {
         ruleModalOpen: { type: Boolean },
         editingRule: { type: Object },
         ruleForm: { type: Object },
-        allRepos: { type: Array },
-        targetConfigs: { type: Array }
+        allRepos: { type: Array }
     };
-    static styles = [
-        sharedStyles,
-        css`
-            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-        `
-    ];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.rules = [];
@@ -67,7 +61,6 @@ export class InSetuExtHooks extends InSetuElement {
         this.editingRule = null;
         this.ruleForm = { name: '', trigger_type: 'repo_update', trigger_target: 'ALL', command: '', enabled: true };
         this.allRepos = [];
-        this.targetConfigs = [];
     }
     connectedCallback() {
         super.connectedCallback();
@@ -90,19 +83,12 @@ export class InSetuExtHooks extends InSetuElement {
         );
         this.subscribe(
             AppStore,
-            state => ({
-                allRepos: state.allRepos || [],
-                targetConfigs: state.targetConfigs || []
-            }),
-            (slice) => {
-                this.allRepos = slice.allRepos;
-                this.targetConfigs = slice.targetConfigs;
-                this.requestUpdate();
+            state => state.allRepos || [],
+            (allRepos) => {
+                this.allRepos = allRepos;
             }
         );
-        const aState = AppStore.getState();
-        this.allRepos = aState?.allRepos || [];
-        this.targetConfigs = aState?.targetConfigs || [];
+        this.allRepos = AppStore.getState()?.allRepos || [];
 
         this.registerGlobalListener('insetu:hooks:toggle', window, (e) => this.toggleRule(e.detail.data));
         this.registerGlobalListener('insetu:hooks:execute', window, (e) => this.executeRule(e.detail.id));
@@ -183,68 +169,48 @@ export class InSetuExtHooks extends InSetuElement {
     }
     render() {
         return html`
-            <div style="flex: 1; overflow-y: auto; padding: 20px;">
-                <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
-                    <h3 style="margin: 0; color: var(--text);">Automation Rules</h3>
-                    <span style="font-size: 0.85rem; color: var(--text-muted);">Trigger local commands automatically when repositories or buckets update.</span>
-                </div>
-                ${this.loading ? html`<div style="padding: 15px; color: var(--text-muted); font-style: italic;">⏳ Loading automation rules...</div>` : ''}
-                <div style="display: flex; flex-direction: column; gap: 10px;">
-                    ${this.rules.length === 0 && !this.loading ? html`<p style="color: var(--text-muted); font-style: italic;">No automation rules configured. Click "+ New Rule" to create one.</p>` : ''}
-                    ${this.rules.map(rule => html`
-                        <sutram-card
-                            .filename=${rule.id}
-                            .titleText=${rule.name}
-                            .descriptionText=${`IF: ${rule.trigger_type} [Target:${rule.trigger_target}]`}
-                            icon=${rule.enabled ? 'play-circle' : 'circle'}
-                            intent=${rule.enabled ? 'success' : 'neutral'}
-                            entityType="hook_rule"
-                            .entityData=${rule}
-                            style="opacity: ${rule.enabled ? '1' : '0.6'}; display: block;">
+            <sutram-view titleText="Automation Rules" descriptionText="Trigger local commands automatically when repositories or buckets update.">
+                <sutram-stack direction="col" gap="lg">
+                    ${this.loading ? html`<sutram-spinner text="Loading automation rules..."></sutram-spinner>` : ''}
+                    <sutram-stack direction="col" gap="sm">
+                        ${this.rules.length === 0 && !this.loading ? html`<sutram-empty-state text="No automation rules configured. Click '+ New Rule' to create one."></sutram-empty-state>` : ''}
+                        ${this.rules.map(rule => html`
+                            <sutram-card
+                                .filename=${rule.id}
+                                .titleText=${rule.name}
+                                .descriptionText=${`IF: ${rule.trigger_type} [Target:${rule.trigger_target}]`}
+                                icon=${rule.enabled ? 'play-circle' : 'circle'}
+                                intent=${rule.enabled ? 'success' : 'neutral'}
+                                entityType="hook_rule"
+                                .entityData=${rule}>
+                                <sutram-surface variant="inset" padding="xs">
+                                    <code><b>THEN:</b> ${rule.command}</code>
+                                </sutram-surface>
+                            </sutram-card>
+                        `)}
+                    </sutram-stack>
 
-                            <div style="font-family: var(--font-mono); background: var(--bg); border: 1px solid var(--border); padding: 8px 12px; border-radius: 4px; font-size: 0.85rem; color: var(--intent-primary); word-break: break-all; margin-top: 5px;"><b>THEN:</b> ${rule.command}</div>
-                        </sutram-card>
-                    `)}
-                </div>
-                <div style="margin-top: 30px; border-top: 1px solid var(--border); padding-top: 20px;">
-                    <div style="margin-bottom: 15px;">
-                        <h3 style="margin: 0; color: var(--text);">Recent Activity</h3>
-                        <span style="font-size: 0.85rem; color: var(--text-muted);">Displays the last 20 execution logs (cleared automatically after 24 hours).</span>
-                    </div>
-
-                    <div style="display: flex; flex-direction: column; gap: 10px;">
-                        ${this.logs.length === 0 ? html`<p style="color: var(--text-muted); font-style: italic;">No recent activity logged.</p>` : ''}
-
-                        ${this.logs.map(log => {
-                            const statusColor = log.status === 'completed' ? 'var(--intent-success)' : (log.status === 'failed' ? 'var(--intent-danger)' : 'var(--intent-warning)');
-                            // Python time.time() returns seconds, JS expects milliseconds
-                            const safeDate = log.updated_at ? this.utils.formatDate(log.updated_at * 1000) : 'Unknown';
-                            const output = log.artifact?.output || '';
-
-                            return html`
-                                <details style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; overflow: hidden;">
-                                    <summary style="padding: 10px 15px; cursor: pointer; outline: none; user-select: none; display: flex; align-items: center; justify-content: space-between; background: var(--bg);">
-                                        <div style="display: flex; align-items: center; gap: 10px;">
-                                            <span style="color: ${statusColor}; font-weight: bold; font-size: 0.85rem;">[${log.status.toUpperCase()}]</span>
-                                            <span style="font-size: 0.9rem; color: var(--text);">${log.message}</span>
-                                        </div>
-                                        <span style="font-size: 0.75rem; color: var(--text-muted);">${safeDate}</span>
-                                    </summary>
-                                    ${output ? html`
-                                        <div style="padding: 15px; border-top: 1px solid var(--border);">
-                                            <pre style="margin: 0; font-size: 0.8rem; color: var(--text-muted); white-space: pre-wrap; word-break: break-word;">${output}</pre>
-                                        </div>
-                                    ` : html`
-                                        <div style="padding: 15px; border-top: 1px solid var(--border); font-size: 0.8rem; color: var(--text-muted); font-style: italic;">
-                                            No terminal output captured.
-                                        </div>
-                                    `}
-                                </details>
-                            `;
-                        })}
-                    </div>
-                </div>
-            </div>
+                    <sutram-surface variant="ghost" border="top" padding="sm" gap="sm">
+                        <sutram-stack direction="col" gap="xs">
+                            <h3>Recent Activity</h3>
+                            <sutram-label text="Displays the last 20 execution logs (cleared automatically after 24 hours)."></sutram-label>
+                        </sutram-stack>
+                        <sutram-stack direction="col" gap="sm">
+                            ${this.logs.length === 0 ? html`<sutram-empty-state text="No recent activity logged."></sutram-empty-state>` : ''}
+                            ${this.logs.map(log => {
+                                const intent = log.status === 'completed' ? 'success' : (log.status === 'failed' ? 'danger' : 'warning');
+                                const safeDate = log.updated_at ? this.utils.formatDate(log.updated_at * 1000) : 'Unknown';
+                                const output = log.artifact?.output || '';
+                                return html`
+                                    <sutram-collapsible titleText="[${log.status.toUpperCase()}] ${log.message} (${safeDate})" .intent=${intent}>
+                                        ${output ? html`<pre>${output}</pre>` : html`<sutram-label text="No terminal output captured."></sutram-label>`}
+                                    </sutram-collapsible>
+                                `;
+                            })}
+                        </sutram-stack>
+                    </sutram-surface>
+                </sutram-stack>
+            </sutram-view>
             ${this.ruleModalOpen ? html`
             <sutram-modal  
                 ?open=${true} 
@@ -252,89 +218,87 @@ export class InSetuExtHooks extends InSetuElement {
                 titleText=${this.editingRule ? 'Edit Automation Rule' : 'New Automation Rule'}
                 @sutram-modal-closed=${() => HooksStore.setState({ ruleModalOpen: false })}>
 
-                <div slot="body" style="display: contents;">
-                    <div>
-                        <label style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Rule Friendly Title</label>
-                        ${bindStoreInput(HooksStore, 'ruleForm.name', this.ruleForm.name, { placeholder: 'e.g., Auto-Compile UI Assets on Save' })}
-                    </div>
+                <sutram-stack slot="body" direction="col" gap="md">
+                    ${bindStoreInput(HooksStore, 'ruleForm.name', this.ruleForm.name, { label: 'Rule Friendly Title', placeholder: 'e.g., Auto-Compile UI Assets on Save', flush: true })}
 
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                        <div style="flex: 1; min-width: 180px;">
-                            <label style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Trigger Type (IF)</label>
-                            ${bindStoreInput(HooksStore, 'ruleForm.trigger_type', this.ruleForm.trigger_type, {
-                                type: 'select',
-                                selectOptions: [
-                                    { value: 'repo_update', label: 'IF (repo_update)' },
-                                    { value: 'repo_bucket_update', label: 'IF (repo_bucket_update)' }
-                                ],
-                                onUpdate: () => {
-                                    if (this.ruleForm.trigger_type === 'repo_update') {
-                                        HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: 'ALL' } }));
-                                    } else {
-                                        const firstRepo = this.allRepos[0] || '';
-                                        const buckets = firstRepo ? this.sys.getFlattenedBuckets(firstRepo) : [];
-                                        const firstBucket = buckets.length > 0 ? buckets[0].id : '';
-                                        HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: firstRepo + '::' + firstBucket } }));
-                                    }
+                    <sutram-stack direction="grid" ?compact=${true}>
+                        ${bindStoreInput(HooksStore, 'ruleForm.trigger_type', this.ruleForm.trigger_type, {
+                            label: 'Trigger Type (IF)',
+                            type: 'select',
+                            flush: true,
+                            selectOptions: [
+                                { value: 'repo_update', label: 'IF (repo_update)' },
+                                { value: 'repo_bucket_update', label: 'IF (repo_bucket_update)' }
+                            ],
+                            onUpdate: () => {
+                                if (this.ruleForm.trigger_type === 'repo_update') {
+                                    HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: 'ALL' } }));
+                                } else {
+                                    const firstRepo = this.allRepos[0] || '';
+                                    const buckets = firstRepo ? this.sys.getFlattenedBuckets(firstRepo) : [];
+                                    const firstBucket = buckets.length > 0 ? buckets[0].id : '';
+                                    HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: firstRepo + '::' + firstBucket } }));
                                 }
-                            })}
-                        </div>
+                            }
+                        })}
 
-                        <div style="flex: 1; min-width: 180px;">
-                            <label style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Target Boundary</label>
-                            ${this.ruleForm.trigger_type === 'repo_update' ? html`
-                                <sutram-select 
-                                    .value=${this.ruleForm.trigger_target}
-                                    .options=${[{ value: 'ALL', label: 'ALL Repositories' }, ...this.allRepos.map(r => ({ value: r, label: r }))]}
-                                    @sutram-input-changed=${e => HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: e.detail.value } }))}>
-                                </sutram-select>
-                            ` : html`
-                                <div style="display: flex; gap: 8px;">
-                                    ${(() => {
-                                        const parts = (this.ruleForm.trigger_target || '').split('::');
-                                        const selectedRepo = parts[0] || this.allRepos[0] || '';
-                                        const selectedBucket = parts[1] || '';
-                                        const buckets = selectedRepo ? this.sys.getFlattenedBuckets(selectedRepo) : [];
+                        ${this.ruleForm.trigger_type === 'repo_update' ? html`
+                            <sutram-select 
+                                label="Target Boundary"
+                                ?flush=${true}
+                                .value=${this.ruleForm.trigger_target}
+                                .options=${[{ value: 'ALL', label: 'ALL Repositories' }, ...this.allRepos.map(r => ({ value: r, label: r }))]}
+                                @sutram-input-changed=${e => HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: e.detail.value } }))}>
+                            </sutram-select>
+                        ` : html`
+                            <sutram-stack direction="row" gap="sm">
+                                ${(() => {
+                                    const parts = (this.ruleForm.trigger_target || '').split('::');
+                                    const selectedRepo = parts[0] || this.allRepos[0] || '';
+                                    const selectedBucket = parts[1] || '';
+                                    const buckets = selectedRepo ? this.sys.getFlattenedBuckets(selectedRepo) : [];
 
-                                        return html`
-                                            <sutram-select 
-                                                style="flex: 1;"
-                                                .value=${selectedRepo}
-                                                .options=${this.allRepos.map(r => ({ value: r, label: r }))}
-                                                @sutram-input-changed=${e => {
-                                                    const newRepo = e.detail.value;
-                                                    const newBuckets = this.sys.getFlattenedBuckets(newRepo);
-                                                    const newBucket = newBuckets.length > 0 ? newBuckets[0].id : '';
-                                                    HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: newRepo + '::' + newBucket } }));
-                                                }}>
-                                            </sutram-select>
-                                            <sutram-select 
-                                                style="flex: 1;"
-                                                .value=${selectedBucket}
-                                                .options=${buckets.length > 0 ? buckets.map(b => ({ value: b.id, label: b.title })) : [{ value: '', label: 'No Buckets' }]}
-                                                @sutram-input-changed=${e => {
-                                                    HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: selectedRepo + '::' + e.detail.value } }));
-                                                }}>
-                                            </sutram-select>
-                                        `;
-                                    })()}
-                                </div>
-                            `}
-                        </div>
-                    </div>
+                                    return html`
+                                        <sutram-select 
+                                            label="Repo"
+                                            ?flush=${true}
+                                            ?grow=${true}
+                                            .value=${selectedRepo}
+                                            .options=${this.allRepos.map(r => ({ value: r, label: r }))}
+                                            @sutram-input-changed=${e => {
+                                                const newRepo = e.detail.value;
+                                                const newBuckets = this.sys.getFlattenedBuckets(newRepo);
+                                                const newBucket = newBuckets.length > 0 ? newBuckets[0].id : '';
+                                                HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: newRepo + '::' + newBucket } }));
+                                            }}>
+                                        </sutram-select>
+                                        <sutram-select 
+                                            label="Bucket"
+                                            ?flush=${true}
+                                            ?grow=${true}
+                                            .value=${selectedBucket}
+                                            .options=${buckets.length > 0 ? buckets.map(b => ({ value: b.id, label: b.title })) : [{ value: '', label: 'No Buckets' }]}
+                                            @sutram-input-changed=${e => {
+                                                HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: selectedRepo + '::' + e.detail.value } }));
+                                            }}>
+                                        </sutram-select>
+                                    `;
+                                })()}
+                            </sutram-stack>
+                        `}
+                    </sutram-stack>
 
-                    <div>
-                        <label style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Command Line Command (THEN)</label>
-                        ${bindStoreInput(HooksStore, 'ruleForm.command', this.ruleForm.command, { placeholder: 'e.g., bash ./insetu/scripts/vendor_sutram.sh or pytest' })}
-                        <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px;">
-                            Executed from workspace root by default. Use explicit <code>~</code> or <code>/</code> for host paths.
-                        </span>
-                    </div>
-                    <div style="display: flex; align-items: center; gap: 8px; margin-top: 5px;">
-                        ${bindStoreInput(HooksStore, 'ruleForm.enabled', this.ruleForm.enabled, { type: 'checkbox' })}
-                        <label style="font-size: 0.9rem; color: var(--text); font-weight: bold; cursor: pointer;">Enable Rule Immediately</label>
-                    </div>
-                </div>
+                    <sutram-stack direction="col" gap="xs">
+                        ${bindStoreInput(HooksStore, 'ruleForm.command', this.ruleForm.command, { label: 'Command Line Command (THEN)', placeholder: 'e.g., bash ./insetu/scripts/vendor_sutram.sh or pytest', flush: true })}
+                        <sutram-label text="Executed from workspace root by default. Use explicit ~ or / for host paths."></sutram-label>
+                    </sutram-stack>
+                    <sutram-toggle
+                        label="Enable Rule Immediately"
+                        ?flush=${true}
+                        .checked=${!!this.ruleForm.enabled}
+                        @sutram-input-changed=${e => HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, enabled: e.detail.value } }))}>
+                    </sutram-toggle>
+                </sutram-stack>
                 <sutram-async-btn slot="footer" label="💾 Save Rule" intent="primary" .onClick=${this.saveRule.bind(this)}></sutram-async-btn>
             </sutram-modal>
             ` : ''}

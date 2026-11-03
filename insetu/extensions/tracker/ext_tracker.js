@@ -1,3 +1,4 @@
+import { html } from 'lit';
 import { createExtensionStore, InSetuElement, bindStoreInput, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
@@ -285,7 +286,6 @@ function _isRepoActive(activePins, repo) {
     return false;
 }
 
-import { LitElement, html, css } from 'lit';
 export class InSetuTrackerTicket extends InSetuElement {
     static get extensionName() { return 'tracker'; }
     static properties = {
@@ -332,7 +332,7 @@ export class InSetuTrackerTicket extends InSetuElement {
                 entityType="file:task"
                 .entityData=${{ ...t, isFS: true, repoDir: t.repo, suppressCopy: true, suppressDownload: true }}
                 @card-clicked=${() => this.dispatchEvent(new CustomEvent('ticket-clicked', { bubbles: true, composed: true }))}>
-                <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">
+                <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true}>
                     ${t.priority ? html`<sutram-tag>${t.priority === 'P0' ? '🔴' : '⚡'} ${t.priority}</sutram-tag>` : ''}
                     ${t.size ? html`<sutram-tag>📏 ${t.size}</sutram-tag>` : ''}
                     ${allKidsDone && t.status !== 'closed' ? html`<sutram-tag intent="success">🔔 All Sub-tasks Complete</sutram-tag>` : ''}
@@ -355,7 +355,6 @@ export class InSetuTrackerTicket extends InSetuElement {
                         return html`
                             <sutram-tag 
                                 intent="${activeCount === 0 ? 'success' : 'danger'}" 
-                                style="cursor: pointer;"
                                 @click=${(e) => {
                                     e.stopPropagation();
                                     window.inSetu.events.emit('insetu:tracker:open-deps', { task: t, mode: 'upstream' });
@@ -367,7 +366,6 @@ export class InSetuTrackerTicket extends InSetuElement {
                     ${downstreamTasks.length > 0 ? html`
                         <sutram-tag 
                             intent="warning" 
-                            style="cursor: pointer;"
                             @click=${(e) => {
                                 e.stopPropagation();
                                 window.inSetu.events.emit('insetu:tracker:open-deps', { task: t, mode: 'downstream' });
@@ -376,7 +374,7 @@ export class InSetuTrackerTicket extends InSetuElement {
                         </sutram-tag>
                     ` : ''}
                     ${t.deliveryDate ? html`<sutram-tag intent="${isOverdue ? 'danger' : ''}">Due: ${t.deliveryDate}</sutram-tag>` : ''}
-                </div>
+                </sutram-stack>
             </sutram-card>
         `;
     }
@@ -389,10 +387,8 @@ export class InSetuExtTracker extends InSetuElement {
     static properties = {
         tasks: { type: Array },
         cachedTags: { type: Array },
-        cachedSubBuckets: { type: Array },
         customViews: { type: Array },
         settings: { type: Object },
-        systemSchemas: { type: Array },
         pinnedTags: { type: Object },
         pinnedBuckets: { type: Object },
         activeTab: { type: String },
@@ -405,18 +401,13 @@ export class InSetuExtTracker extends InSetuElement {
         _localPinnedTags: { type: Object },
         _localPinnedBuckets: { type: Object }
     };
-static styles = [
-    sharedStyles,
-    css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
-    `
-];
-constructor() {
+    static styles = [sharedStyles];
+    constructor() {
         super();
         this.tasks = [];
         this.cachedTags = [];
-        this.cachedSubBuckets = [];
-        this.systemSchemas = [];
+        this.customViews = [];
+        this.settings = {};
         this.pinnedTags = new Set(['ALL']);
         this.pinnedBuckets = new Set(['ALL']);
         this.activeTab = 'todos';
@@ -428,7 +419,7 @@ constructor() {
         this._localPinnedRepos = new Set(['ALL']);
         this._localPinnedTags = new Set(['ALL']);
         this._localPinnedBuckets = new Set(['ALL']);
-}
+    }
     connectedCallback() {
         super.connectedCallback();
         const rawTab = this.dataset.subId || this.parentElement?.id?.replace('sub-', '') || 'todos';
@@ -439,10 +430,8 @@ constructor() {
                 state => ({
                     tasks: state?.tasks || [],
                     cachedTags: state?.cachedTags || [],
-                    cachedSubBuckets: state?.cachedSubBuckets || [],
                     customViews: state?.customViews || [],
                     settings: state?.settings || {},
-                    systemSchemas: state?.systemSchemas || [],
                     pinnedTags: state?.pinnedTags || new Set(['ALL']),
                     pinnedBuckets: state?.pinnedBuckets || new Set(['ALL'])
                 }),
@@ -541,26 +530,6 @@ constructor() {
     disconnectedCallback() {
         super.disconnectedCallback();
     }
-
-    updated(changedProperties) {
-        super.updated(changedProperties);
-        if (changedProperties.has('tasks')) {
-            this._childMapCache = null;
-        }
-    }
-
-    _getChildTasksMap() {
-        if (!this._childMapCache) {
-            this._childMapCache = this.tasks.reduce((acc, t) => {
-                if (t.parentId) {
-                    if (!acc[t.parentId]) acc[t.parentId] = [];
-                    acc[t.parentId].push(t);
-                }
-                return acc;
-            }, {});
-        }
-        return this._childMapCache;
-    }
     _getResolvedTierLabel(repo, tierNumber) {
         const globalLabels = this.settings?.hierarchy_labels || {};
         const repoLabels = this.settings?.[repo]?.hierarchy_labels || {};
@@ -589,7 +558,7 @@ constructor() {
         }
 
         return html`
-            <div style="display: flex; flex-direction: column; gap: 15px;">
+            <sutram-stack direction="col" gap="md">
                 ${parentCards.map(parent => {
                     const childTasks = this.tasks.filter(t => t.status !== 'template' && (t.parentId === parent.id || (t.dependsOn && t.dependsOn.includes(`${parent.repo}::${parent.id}`))));
                     const closedCount = childTasks.filter(t => ['closed', 'archived', 'logged'].includes(t.status)).length;
@@ -611,7 +580,7 @@ constructor() {
                         </sutram-card-group>
                     `;
                 })}
-            </div>
+            </sutram-stack>
         `;
     }
     _renderColumns(filters, filteredTasks) {
@@ -666,7 +635,7 @@ constructor() {
                 <sutram-column titleText="Open">
                     ${topOpen.map(t => renderGroupedTask(t))}
                 </sutram-column>
-                <sutram-column titleText="Closed" intentColor="var(--intent-success)">
+                <sutram-column titleText="Closed" intent="success">
                     ${topClosed.map(t => renderGroupedTask(t))}
                 </sutram-column>
             </sutram-board>
@@ -683,16 +652,16 @@ constructor() {
             this.requestUpdate();
         };
         return html`
-            <div style="display: flex; flex-direction: column; gap: 0;">
+            <sutram-stack direction="col" gap="none">
                 <sutram-collapsible 
                     titleText="Closed" 
                     intent="success" 
                     .open=${this._logExpanded?.closed !== false}
                     @sutram-collapsible-toggled=${(e) => toggleLog('closed', e.detail.open)}>
-                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px; font-style: italic;">(Recently resolved tickets in their grace period)</p>
-                    <div style="display: flex; flex-direction: column; gap: 10px;">
-                        ${closed.length > 0 ? closed.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${this.tasks} @ticket-clicked=${() => this.vfs.viewSourceFile(t.filepath, true)}></insetu-tracker-ticket>`) : html`<span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No closed tickets in grace period.</span>`}
-                    </div>
+                    <sutram-label text="(Recently resolved tickets in their grace period)"></sutram-label>
+                    <sutram-stack direction="col" gap="sm">
+                        ${closed.length > 0 ? closed.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${this.tasks} @ticket-clicked=${() => this.vfs.viewSourceFile(t.filepath, true)}></insetu-tracker-ticket>`) : html`<sutram-label text="No closed tickets in grace period."></sutram-label>`}
+                    </sutram-stack>
                 </sutram-collapsible>
 
                 <sutram-collapsible 
@@ -700,10 +669,10 @@ constructor() {
                     intent="warning" 
                     .open=${this._logExpanded?.logged !== false}
                     @sutram-collapsible-toggled=${(e) => toggleLog('logged', e.detail.open)}>
-                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px; font-style: italic;">(Swept to the log directory, awaiting archive)</p>
-                    <div style="display: flex; flex-direction: column; gap: 10px;">
-                        ${logged.length > 0 ? logged.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${this.tasks} @ticket-clicked=${() => this.vfs.viewSourceFile(t.filepath, true)}></insetu-tracker-ticket>`) : html`<span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No logged tickets.</span>`}
-                    </div>
+                    <sutram-label text="(Swept to the log directory, awaiting archive)"></sutram-label>
+                    <sutram-stack direction="col" gap="sm">
+                        ${logged.length > 0 ? logged.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${this.tasks} @ticket-clicked=${() => this.vfs.viewSourceFile(t.filepath, true)}></insetu-tracker-ticket>`) : html`<sutram-label text="No logged tickets."></sutram-label>`}
+                    </sutram-stack>
                 </sutram-collapsible>
 
                 <sutram-collapsible 
@@ -711,12 +680,12 @@ constructor() {
                     intent="neutral" 
                     .open=${this._logExpanded?.archived === true}
                     @sutram-collapsible-toggled=${(e) => toggleLog('archived', e.detail.open)}>
-                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">(Historical context permanently preserved on disk)</p>
-                    <div style="display: flex; flex-direction: column; gap: 10px;">
-                        ${archived.length > 0 ? archived.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${this.tasks} @ticket-clicked=${() => this.vfs.viewSourceFile(t.filepath, true)}></insetu-tracker-ticket>`) : html`<span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No archived tickets fetched. Ensure "Include Archived in UI Log" is enabled in settings.</span>`}
-                    </div>
+                    <sutram-label text="(Historical context permanently preserved on disk)"></sutram-label>
+                    <sutram-stack direction="col" gap="sm">
+                        ${archived.length > 0 ? archived.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${this.tasks} @ticket-clicked=${() => this.vfs.viewSourceFile(t.filepath, true)}></insetu-tracker-ticket>`) : html`<sutram-label text="No archived tickets fetched. Ensure Include Archived in UI Log is enabled in settings."></sutram-label>`}
+                    </sutram-stack>
                 </sutram-collapsible>
-            </div>
+            </sutram-stack>
         `;
     }
     render() {
@@ -831,28 +800,28 @@ constructor() {
             searchFields: t => `${t.title} ${t.id} ${t.description} ${(t.tags || []).join(' ')}`
         });
 
-        const setPinnedRepos = (reposSet) => repoStrategy === 'global' ? AppStore.getState().setPinnedRepos(reposSet) : (this._localPinnedRepos = reposSet, this.requestUpdate());
-        const setPinnedBuckets = (bucketsSet) => repoStrategy === 'global' ? KanbanStore.setState({ pinnedBuckets: bucketsSet }) : (this._localPinnedBuckets = bucketsSet, this.requestUpdate());
-        const setPinnedTags = (tagsSet) => repoStrategy === 'global' ? KanbanStore.setState({ pinnedTags: tagsSet }) : (this._localPinnedTags = tagsSet, this.requestUpdate());
+        const setPinnedRepos = (reposSet) => repoStrategy === 'global' ? AppStore.getState().setPinnedRepos(reposSet) : (this._localPinnedRepos = reposSet);
+        const setPinnedBuckets = (bucketsSet) => repoStrategy === 'global' ? KanbanStore.setState({ pinnedBuckets: bucketsSet }) : (this._localPinnedBuckets = bucketsSet);
+        const setPinnedTags = (tagsSet) => repoStrategy === 'global' ? KanbanStore.setState({ pinnedTags: tagsSet }) : (this._localPinnedTags = tagsSet);
+        const isBoardLayout = Boolean(currentView && currentView.layout !== 'log' && currentView.layout !== 'stacked');
 
         return html`
+            <sutram-view ?flush=${isBoardLayout} ?noScroll=${isBoardLayout}>
             <sutram-toolbar
+                slot="toolbar"
                 searchPlaceholder="🔍 Fuzzy search tickets..."
                 .searchQuery=${this.searchQuery}
                 @search-changed=${(e) => this.searchQuery = e.detail.value}
                 .enableFilterDropdown=${true}
-                .filterText=${"Filters"}
                 .hasFiltersOverride=${hasFilters}>
-                <div slot="filters" style="display: flex; flex-direction: column; gap: 15px; width: 100%;">
+                <sutram-stack slot="filters" direction="col" gap="md">
                     ${repoStrategy !== 'global' ? html`
-                        <div style="background: var(--intent-highlight); color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; text-align: center; margin-bottom: -5px;">
-                            Tab-Specific Filtering Enabled
-                        </div>
+                        <sutram-tag text="Tab-Specific Filtering Enabled" intent="highlight"></sutram-tag>
                     ` : ''}
-                    <div style="display: flex; align-items: flex-start; gap: 5px;">
-                        <span style="font-size: 0.85rem; font-weight: bold; color: var(--text); cursor: pointer; user-select: none; margin-top: 4px; white-space: nowrap;" @click=${() => this._reposExpanded = !this._reposExpanded}>
+                    <sutram-stack direction="row" align="start" gap="xs">
+                        <strong style="cursor: pointer; user-select: none; white-space: nowrap;" @click=${() => this._reposExpanded = !this._reposExpanded}>
                             📌 Repos ${this._reposExpanded ? '▼' : '▶'}
-                        </span>
+                        </strong>
                         <insetu-repo-filter
                             label=""
                             .repos=${this._reposExpanded ? baseAllowedRepos : Array.from(activeRepoPins).filter(r => r !== 'ALL')}
@@ -862,89 +831,90 @@ constructor() {
                                 setPinnedBuckets(new Set(['ALL']));
                             }}>
                         </insetu-repo-filter>
-                    </div>
-                        ${!activeRepoPins.has('ALL') ? html`
-                            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);">
-                                ${Array.from(activeRepoPins).map(repo => {
-                                    const buckets = this.sys.getFlattenedBuckets(repo);
-                                    if (buckets.length === 0) return '';
+                    </sutram-stack>
+                    ${!activeRepoPins.has('ALL') ? html`
+                        <sutram-surface variant="ghost" border="top" padding="xs" gap="xs">
+                            ${Array.from(activeRepoPins).map(repo => {
+                                const buckets = this.sys.getFlattenedBuckets(repo);
+                                if (buckets.length === 0) return '';
 
-                                    const repoBucketsActive = buckets.some(b => activeBucketPins.has(repo + '::' + b.id));
-                                    const repoAllActive = activeBucketPins.has('ALL') || !repoBucketsActive;
+                                const repoBucketsActive = buckets.some(b => activeBucketPins.has(repo + '::' + b.id));
+                                const repoAllActive = activeBucketPins.has('ALL') || !repoBucketsActive;
 
-                                    const visibleBuckets = this._bucketsExpanded 
-                                        ? buckets 
-                                        : buckets.filter(b => activeBucketPins.has(repo + '::' + b.id));
+                                const visibleBuckets = this._bucketsExpanded 
+                                    ? buckets 
+                                    : buckets.filter(b => activeBucketPins.has(repo + '::' + b.id));
 
-                                    if (!this._bucketsExpanded && !repoBucketsActive) return '';
+                                if (!this._bucketsExpanded && !repoBucketsActive) return '';
 
-                                    return html`
-                                        <div style="display: flex; align-items: flex-start; gap: 5px;">
-                                            <span style="font-size: 0.85rem; font-weight: bold; color: var(--text); cursor: pointer; user-select: none; margin-top: 4px; white-space: nowrap;" @click=${() => this._bucketsExpanded = !this._bucketsExpanded}>
-                                                🗂️ ${repo} ${this._bucketsExpanded ? '▼' : '▶'}
-                                            </span>
-                                            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;" @sutram-pill-toggled=${(e) => {
-                                                e.stopPropagation();
-                                                const { id, active } = e.detail;
-                                                const newSet = new Set(activeBucketPins);
+                                return html`
+                                    <sutram-stack direction="row" align="start" gap="xs">
+                                        <strong style="cursor: pointer; user-select: none; white-space: nowrap;" @click=${() => this._bucketsExpanded = !this._bucketsExpanded}>
+                                            🗂️ ${repo} ${this._bucketsExpanded ? '▼' : '▶'}
+                                        </strong>
+                                        <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true} @sutram-pill-toggled=${(e) => {
+                                            e.stopPropagation();
+                                            const { id, active } = e.detail;
+                                            const newSet = new Set(activeBucketPins);
 
-                                                if (id === repo + '::ALL') {
-                                                    buckets.forEach(b => newSet.delete(repo + '::' + b.id));
-                                                    if (newSet.size === 0) newSet.add('ALL');
-                                                } else {
-                                                    newSet.delete('ALL');
-                                                    if (active) newSet.add(id);
-                                                    else newSet.delete(id);
-                                                    if (newSet.size === 0) newSet.add('ALL');
-                                                }
-                                                setPinnedBuckets(newSet);
-                                            }}>
-                                                <sutram-pill pillId=${repo + '::ALL'} labelText="All" variant="text" ?active=${repoAllActive}></sutram-pill>
-                                                ${visibleBuckets.map(b => html`
-                                                    <sutram-pill pillId=${repo + '::' + b.id} labelText=${b.title} variant="text" ?active=${activeBucketPins.has(repo + '::' + b.id)}></sutram-pill>
-                                                `)}
-                                            </div>
-                                        </div>
-                                    `;
-                                })}
-                            </div>
-                        ` : ''}
-                        ${tagsArray.length > 0 ? html`
-                            <div style="display: flex; align-items: flex-start; gap: 5px; margin-top: 10px;">
-                                <span style="font-size: 0.85rem; font-weight: bold; color: var(--text); cursor: pointer; user-select: none; margin-top: 4px; white-space: nowrap;" @click=${() => this._tagsExpanded = !this._tagsExpanded}>
-                                    🏷️ Tags ${this._tagsExpanded ? '▼' : '▶'}
-                                </span>
-                                <sutram-filter-group
-                                    label=""
-                                    .allowAll=${true}
-                                    .items=${(this._tagsExpanded ? tagsArray : Array.from(activeTagPins).filter(t => t !== 'ALL')).map(t => ({id: t, label: '#' + t}))}
-                                    .activeItems=${Array.from(activeTagPins)}
-                                    @sutram-filter-changed=${(e) => {
-                                        setPinnedTags(new Set(e.detail.activeItems));
-                                    }}>
-                                </sutram-filter-group>
-                            </div>
-                        ` : ''}
-                </div>
+                                            if (id === repo + '::ALL') {
+                                                buckets.forEach(b => newSet.delete(repo + '::' + b.id));
+                                                if (newSet.size === 0) newSet.add('ALL');
+                                            } else {
+                                                newSet.delete('ALL');
+                                                if (active) newSet.add(id);
+                                                else newSet.delete(id);
+                                                if (newSet.size === 0) newSet.add('ALL');
+                                            }
+                                            setPinnedBuckets(newSet);
+                                        }}>
+                                            <sutram-pill pillId=${repo + '::ALL'} labelText="All" variant="text" ?active=${repoAllActive}></sutram-pill>
+                                            ${visibleBuckets.map(b => html`
+                                                <sutram-pill pillId=${repo + '::' + b.id} labelText=${b.title} variant="text" ?active=${activeBucketPins.has(repo + '::' + b.id)}></sutram-pill>
+                                            `)}
+                                        </sutram-stack>
+                                    </sutram-stack>
+                                `;
+                            })}
+                        </sutram-surface>
+                    ` : ''}
+                    ${tagsArray.length > 0 ? html`
+                        <sutram-stack direction="row" align="start" gap="xs">
+                            <strong style="cursor: pointer; user-select: none; white-space: nowrap;" @click=${() => this._tagsExpanded = !this._tagsExpanded}>
+                                🏷️ Tags ${this._tagsExpanded ? '▼' : '▶'}
+                            </strong>
+                            <sutram-filter-group
+                                label=""
+                                .allowAll=${true}
+                                .items=${(this._tagsExpanded ? tagsArray : Array.from(activeTagPins).filter(t => t !== 'ALL')).map(t => ({id: t, label: '#' + t}))}
+                                .activeItems=${Array.from(activeTagPins)}
+                                @sutram-filter-changed=${(e) => {
+                                    setPinnedTags(new Set(e.detail.activeItems));
+                                }}>
+                            </sutram-filter-group>
+                        </sutram-stack>
+                    ` : ''}
+                </sutram-stack>
             </sutram-toolbar>
-            <sutram-scroll-view>
                 ${activeFocusId ? html`
-                    <div style="background: var(--intent-highlight); color: white; padding: 10px 15px; border-radius: 6px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <span style="font-size: 1.2rem;">🎯</span>
-                            <div style="display: flex; flex-direction: column;">
-                                <span style="font-weight: bold; font-size: 0.95rem;">Active Focus</span>
-                                <span style="font-size: 0.85rem; opacity: 0.9;">${focusedTaskTitle}</span>
-                            </div>
-                        </div>
-                        <div style="display: flex; gap: 8px;">
-                            <sutram-btn size="sm" intent="neutral" label="🌳 View Hierarchy" style="background: rgba(0,0,0,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); margin: 0;" @click=${() => {
-                                const task = this.tasks.find(t => t.id === activeFocusId);
-                                if (task) window.inSetu.events.emit('insetu:tracker:open-hierarchy', { task });
-                            }}></sutram-btn>
-                            <sutram-btn size="sm" intent="neutral" label="✕ Clear Focus" style="background: rgba(0,0,0,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); margin: 0;" @click=${() => KanbanStore.getState().setFocus(null)}></sutram-btn>
-                        </div>
-                    </div>
+                    <sutram-surface variant="tinted" intent="highlight" padding="sm">
+                        <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                            <sutram-stack direction="row" align="center" gap="sm">
+                                <sutram-icon name="target" size="md" intent="highlight"></sutram-icon>
+                                <sutram-stack direction="col" gap="none">
+                                    <strong>Active Focus</strong>
+                                    <sutram-label .text=${focusedTaskTitle}></sutram-label>
+                                </sutram-stack>
+                            </sutram-stack>
+                            <sutram-stack direction="row" gap="xs">
+                                <sutram-btn ?compact=${true} intent="highlight" label="🌳 View Hierarchy" @click=${() => {
+                                    const task = this.tasks.find(t => t.id === activeFocusId);
+                                    if (task) window.inSetu.events.emit('insetu:tracker:open-hierarchy', { task });
+                                }}></sutram-btn>
+                                <sutram-btn ?compact=${true} intent="neutral" label="✕ Clear Focus" @click=${() => KanbanStore.getState().setFocus(null)}></sutram-btn>
+                            </sutram-stack>
+                        </sutram-stack>
+                    </sutram-surface>
                 ` : ''}
                 ${hiddenTracker.count > 0 && repoStrategy === 'global' ? html`
                     <div style="font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-bottom: 15px; text-align: center;">
@@ -964,7 +934,7 @@ constructor() {
                         return this._renderColumns(currentView.filters, textFilteredTasks);
                     }
                 })()}
-            </sutram-scroll-view>
+            </sutram-view>
         `;
     }
     _generateHistoricalChangelog(allRepos = false) {
@@ -1081,10 +1051,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
     static properties = {
         pinnedTags: { type: Object },
         _modals: { type: Object },
-        _yamlExpanded: { type: Boolean },
-        _isSaving: { type: Boolean },
-        _isCopying: { type: Boolean },
-        _isDownloading: { type: Boolean },
         _pickerOpen: { type: Boolean },
         _pickerMode: { type: String },
         _pickerForm: { type: String },
@@ -1102,26 +1068,17 @@ export class InSetuExtTrackerModals extends InSetuElement {
         _templatesBrowserOpen: { type: Boolean },
         _activeTemplateRoot: { type: String },
         _templateRepoFilter: { type: String },
-        _returnToTemplatesBrowser: { type: Boolean },
         _hierarchyModalOpen: { type: Boolean },
         _hierarchyTask: { type: Object },
-        _returnToHierarchy: { type: Boolean },
         _depsModalOpen: { type: Boolean },
         _depsTask: { type: Object },
         _depsMode: { type: String }
     };
-    static styles = [sharedStyles, css`
-        :host { display: contents; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.pinnedTags = new Set(['ALL']);
         this._modals = { new: false, edit: false };
-        this._yamlExpanded = false;
-        this._isSaving = false;
-        this._isCopying = false;
-        this._isDownloading = false;
-        this._isDirtyTracker = false;
         this._pickerOpen = false;
         this._pickerMode = 'parentId';
         this._pickerForm = 'new';
@@ -1139,10 +1096,8 @@ export class InSetuExtTrackerModals extends InSetuElement {
         this._templatesBrowserOpen = false;
         this._activeTemplateRoot = null;
         this._templateRepoFilter = null;
-        this._returnToTemplatesBrowser = false;
         this._hierarchyModalOpen = false;
         this._hierarchyTask = null;
-
         this._depsModalOpen = false;
         this._depsTask = null;
         this._depsMode = 'upstream';
@@ -1191,7 +1146,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
         this.registerGlobalListener('insetu:tracker:open-convert', window, (e) => {
             this._convertTask = e.detail.task;
             this._convertOpen = true;
-            this.requestUpdate();
         });
         this.registerGlobalListener('insetu:tracker:open-spawn', window, (e) => {
             this._openSpawnModal(e.detail.task);
@@ -1199,18 +1153,15 @@ export class InSetuExtTrackerModals extends InSetuElement {
         this.registerGlobalListener('insetu:tracker:open-templates-browser', window, () => {
             this._templatesBrowserOpen = true;
             this._activeTemplateRoot = null;
-            this.requestUpdate();
         });
         this.registerGlobalListener('insetu:tracker:open-hierarchy', window, (e) => {
             this._hierarchyTask = e.detail.task;
             this._hierarchyModalOpen = true;
-            this.requestUpdate();
         });
         this.registerGlobalListener('insetu:tracker:open-deps', window, (e) => {
             this._depsTask = e.detail.task;
             this._depsMode = e.detail.mode;
             this._depsModalOpen = true;
-            this.requestUpdate();
         });
         this.registerGlobalListener('insetu:tracker:open-picker', window, (e) => {
             if (e.detail) {
@@ -1270,14 +1221,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
         this._spawnCompatibleRepos = compatibleRepos;
         this._spawnDisplayName = displayName;
         this._spawnModalOpen = true;
-        this.requestUpdate();
-    }
-    _getBucketsForRepo(repoDir) {
-        const getFn = window.inSetu?.utils?.getFlattenedBuckets || this.sys?.getFlattenedBuckets;
-        if (!getFn) return [];
-        const repoConfig = this.ecosystem.targetConfigs.find(r => r && r.repo_dir === repoDir);
-        if (!repoConfig) return [];
-        return getFn([repoConfig]);
     }
     _openNewTaskModal(activeTab, prefill = null) {
         const state = KanbanStore.getState();
@@ -1458,8 +1401,8 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 @sutram-modal-closed=${() => {
                     KanbanStore.getState().setModal('new', false);
                 }}>
-                <div slot="body" style="display: contents;">
-                    <div class="meta-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 15px;">
+                <sutram-stack slot="body" direction="col" gap="md">
+                    <sutram-stack direction="grid" ?compact=${true}>
                         ${(() => {
                             const schema = KanbanStore.getState().getSchemaForRepo(selectedRepoNew);
                             const getTierTypes = (t) => KanbanStore.getState().getTierTypes(schema, t);
@@ -1495,38 +1438,38 @@ export class InSetuExtTrackerModals extends InSetuElement {
                         ${bindStoreInput(KanbanStore, 'newTaskForm.size', newTaskForm.size, { label: 'Size Estimate', type: 'select', flush: true, selectOptions: [{value: '', label: 'None'}, {value: 'XS', label: 'XS'}, {value: 'S', label: 'S'}, {value: 'M', label: 'M'}, {value: 'L', label: 'L'}, {value: 'XL', label: 'XL'}] })}
                         ${bindStoreInput(KanbanStore, 'newTaskForm.tags', newTaskForm.tags, { label: 'Tags (comma-separated)', placeholder: 'Architecture, UI', flush: true })}
                         ${bindStoreInput(KanbanStore, 'newTaskForm.deliveryDate', newTaskForm.deliveryDate, { label: 'Delivery Deadline', type: 'date', flush: true })}
-                    </div>
-                    <div class="meta-grid" style="display: flex; flex-direction: column; gap: 12px; margin-top: 12px; flex: 1; min-height: 0;">
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.title', newTaskForm.title, { label: 'Ticket Title', placeholder: 'e.g., Fix schema registry timeout', style: 'font-weight: bold;', flush: true })}
-                        <div style="display: flex; flex-direction: column; gap: 15px; align-items: stretch;">
-                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                    </sutram-stack>
+                    <sutram-stack direction="col" gap="sm">
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.title', newTaskForm.title, { label: 'Ticket Title', placeholder: 'e.g., Fix schema registry timeout', flush: true })}
+                        <sutram-stack direction="col" gap="sm">
+                            <sutram-stack direction="col" gap="xs">
                                 <sutram-label text="Parent ID"></sutram-label>
-                                <div style="display: flex; gap: 8px; align-items: center;">
+                                <sutram-stack direction="row" align="center" gap="sm">
                                     ${newTaskForm.parentId ? html`
                                         <sutram-tag intent="primary">
                                             <span>${newTaskForm.parentId}</span>
                                             <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, parentId: '' } }))}>×</span>
                                         </sutram-tag>
                                     ` : ''}
-                                    <sutram-async-btn size="sm" label="🔗 Pick Parent" intent="neutral" .onClick=${() => this._openPicker('parentId', 'new')}></sutram-async-btn>
-                                </div>
-                            </div>
-                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                    <sutram-async-btn ?compact=${true} label="🔗 Pick Parent" intent="neutral" .onClick=${() => this._openPicker('parentId', 'new')}></sutram-async-btn>
+                                </sutram-stack>
+                            </sutram-stack>
+                            <sutram-stack direction="col" gap="xs">
                                 <sutram-label text="Dependencies"></sutram-label>
-                                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
                                     ${(newTaskForm.dependsOn || []).map(dep => html`
                                         <sutram-tag intent="warning">
                                             <span>${dep}</span>
                                             <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => this._removeDependency(dep, 'new')}>×</span>
                                         </sutram-tag>
                                     `)}
-                                    <sutram-async-btn size="sm" label="🔗 Add Dep" intent="neutral" .onClick=${() => this._openPicker('dependsOn', 'new')}></sutram-async-btn>
-                                </div>
-                            </div>
-                        </div>
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.desc', newTaskForm.desc, { label: 'Description', type: 'textarea', placeholder: 'Markdown description...', style: 'flex: 1; min-height: 150px;', flush: true })}
-                    </div>
-                </div>
+                                    <sutram-async-btn ?compact=${true} label="🔗 Add Dep" intent="neutral" .onClick=${() => this._openPicker('dependsOn', 'new')}></sutram-async-btn>
+                                </sutram-stack>
+                            </sutram-stack>
+                        </sutram-stack>
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.desc', newTaskForm.desc, { label: 'Description', type: 'textarea', placeholder: 'Markdown description...', flush: true })}
+                    </sutram-stack>
+                </sutram-stack>
                 <sutram-async-btn slot="footer" label="💾 Save" intent="primary" .onClick=${async (e) => {
                     await this._saveNewTask();
                 }}></sutram-async-btn>
@@ -1603,7 +1546,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                         }
 
                         return otherTypes.map(t => html`
-                            <sutram-async-btn label="Convert to ${t.charAt(0).toUpperCase() + t.slice(1)}" intent="neutral" style="width: 100%; justify-content: flex-start;" .onClick=${async () => {
+                            <sutram-async-btn label="Convert to ${t.charAt(0).toUpperCase() + t.slice(1)}" intent="neutral" ?fullWidth=${true} .onClick=${async () => {
                                 await KanbanStore.getState().transitionTask(this._convertTask, 'open', t);
                                 this._convertOpen = false;
                                 this._convertTask = null;
@@ -1619,28 +1562,30 @@ export class InSetuExtTrackerModals extends InSetuElement {
             ${this._pickerOpen ? html`
             <sutram-modal 
                 ?open=${true}  
-                maxWidth="650px"
+                size="normal"
                 titleText=${this._pickerMode === 'parentId' ? '🔗 Select Parent Ticket' : '🔗 Select Dependency Ticket'}
                 @sutram-modal-closed=${() => this._pickerOpen = false}>
-                <div slot="body" style="display: contents;">
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                <sutram-stack slot="body" direction="col" gap="md">
+                    <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
                         <sutram-select 
                             label="Filter Repo Scope"
+                            ?flush=${true}
+                            ?grow=${true}
                             .value=${this._pickerRepoFilter}
                             .options=${[{ value: 'ALL', label: 'ALL Repositories' }, ...this.ecosystem.allRepos.map(r => ({ value: r, label: r }))]}
                             @sutram-input-changed=${e => this._pickerRepoFilter = e.detail.value}
-                            ?disabled=${this._pickerMode === 'parentId'}
-                            style="flex: 1; margin: 0;">
+                            ?disabled=${this._pickerMode === 'parentId'}>
                         </sutram-select>
                         <sutram-input  
                             label="Fuzzy Search" 
+                            ?flush=${true}
+                            ?grow=${true}
                             placeholder="Type ID, title, tags, or bucket..." 
                             .value=${this._pickerSearchQuery} 
-                            @sutram-input-changed=${e => this._pickerSearchQuery = e.detail.value}
-                            style="flex: 2; margin: 0;">
+                            @sutram-input-changed=${e => this._pickerSearchQuery = e.detail.value}>
                         </sutram-input>
-                    </div>
-                    <div style="display: flex; flex-direction: column; gap: 8px; padding-right: 5px;">
+                    </sutram-stack>
+                    <sutram-stack direction="col" gap="xs">
                         ${(() => {
                             const state = KanbanStore.getState();
                             const activeForm = this._pickerForm === 'new' ? state.newTaskForm : state.editTaskForm;
@@ -1681,14 +1626,14 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                         intent="primary"
                                         @click=${() => this._selectPickerItem(targetString)}>
                                         <div slot="actions">
-                                            <sutram-async-btn size="sm" label="Select" intent="primary" .onClick=${() => this._selectPickerItem(targetString)}></sutram-async-btn>
+                                            <sutram-async-btn ?compact=${true} label="Select" intent="primary" .onClick=${() => this._selectPickerItem(targetString)}></sutram-async-btn>
                                         </div>
                                     </sutram-card>
                                 `;
                             });
                         })()}
-                    </div>
-                </div>
+                    </sutram-stack>
+                </sutram-stack>
             </sutram-modal>
             ` : ''}
             <!-- Templates Browser Modal -->
@@ -1702,14 +1647,13 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     ${this._renderTemplatesView()}
                 </div>
                 ${!this._activeTemplateRoot ? html`
-                    <div slot="footer" style="width: 100%;">
+                    <div slot="footer">
                         <sutram-async-btn 
                             label="➕ Create New Template" 
                             intent="success" 
-                            style="width: 100%; display: block;" 
+                            ?fullWidth=${true} 
                             .onClick=${() => {
                                 this._templatesBrowserOpen = false;
-                                this._returnToTemplatesBrowser = true;
                                 const currentRepo = this._templateRepoFilter && this._templateRepoFilter !== 'ALL' ? this._templateRepoFilter : (this.ecosystem.allRepos[0] || '');
                                 this.dispatch('insetu:tracker:open-new-task', {
                                     activeTab: 'todos',
@@ -1848,7 +1792,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                 <div style="position: relative; display: flex; flex-direction: column; padding-left: 30px; padding-bottom: 12px;">
                                     <div style="position: absolute; left: 10px; top: -15px; height: 35px; width: 2px; background: var(--border); z-index: 1;"></div>
                                     <div style="position: absolute; left: 10px; top: 18px; width: 20px; height: 2px; background: var(--border); z-index: 1;"></div>
-                                    <sutram-btn size="sm" variant="tinted" intent="neutral" label="➕ New ${nextTierLabel}" style="width: fit-content; z-index: 2;"
+                                    <sutram-btn ?compact=${true} variant="tinted" intent="neutral" label="➕ New ${nextTierLabel}"
                                         @click=${() => {
                                             const prefill = { parentId: task.id, tier: nextTier, repo: task.repo };
                                             if (isTemplate) prefill.status = 'template';
@@ -1892,34 +1836,34 @@ export class InSetuExtTrackerModals extends InSetuElement {
         });
 
         return html`
-            <div style="display: flex; flex-direction: column; gap: 20px;">
-                <div style="display: flex; align-items: center; gap: 15px; border-bottom: 1px solid var(--border); padding-bottom: 15px;">
-                    <h3 style="margin: 0; color: var(--text);">Hierarchy & Dependencies: ${rootDisplayTitle}</h3>
-                </div>
+            <sutram-stack direction="col" gap="md">
+                <sutram-surface variant="ghost" border="bottom" padding="sm">
+                    <h3>Hierarchy & Dependencies: ${rootDisplayTitle}</h3>
+                </sutram-surface>
 
                 ${upstreamTasks.length > 0 ? html`
-                    <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px dashed var(--intent-danger);">
-                        <h4 style="margin: 0 0 10px 0; color: var(--intent-danger);">🔒 Blocked By (Upstream)</h4>
-                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <sutram-surface variant="tinted" intent="danger" padding="md" gap="sm">
+                        <h4>🔒 Blocked By (Upstream)</h4>
+                        <sutram-stack direction="col" gap="xs">
                             ${upstreamTasks.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${allTasks} @ticket-clicked=${() => this._handleCardClick(t)}></insetu-tracker-ticket>`)}
-                        </div>
-                    </div>
+                        </sutram-stack>
+                    </sutram-surface>
                 ` : ''}
 
-                <div>
-                    <h4 style="margin: 0 0 10px 0; color: var(--text);">🌳 Task Tree</h4>
+                <sutram-stack direction="col" gap="sm">
+                    <h4>🌳 Task Tree</h4>
                     ${this._renderTaskTree(this._hierarchyTask, allTasks, false)}
-                </div>
+                </sutram-stack>
 
                 ${downstreamTasks.length > 0 ? html`
-                    <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px dashed var(--intent-warning); margin-top: 10px;">
-                        <h4 style="margin: 0 0 10px 0; color: var(--intent-warning);">🚧 Blocking (Downstream)</h4>
-                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <sutram-surface variant="tinted" intent="warning" padding="md" gap="sm">
+                        <h4>🚧 Blocking (Downstream)</h4>
+                        <sutram-stack direction="col" gap="xs">
                             ${downstreamTasks.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${allTasks} @ticket-clicked=${() => this._handleCardClick(t)}></insetu-tracker-ticket>`)}
-                        </div>
-                    </div>
+                        </sutram-stack>
+                    </sutram-surface>
                 ` : ''}
-            </div>
+            </sutram-stack>
         `;
     }
 
@@ -1939,15 +1883,17 @@ export class InSetuExtTrackerModals extends InSetuElement {
             }
             const rootDisplayTitle = rootTask.title ? rootTask.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
             return html`
-                <div style="display: flex; flex-direction: column; gap: 20px;">
-                    <div style="display: flex; align-items: center; gap: 15px; border-bottom: 1px solid var(--border); padding-bottom: 15px;">
-                        <sutram-btn size="sm" intent="neutral" label="🔙 Back" @click=${() => this._activeTemplateRoot = null}></sutram-btn>
-                        <h3 style="margin: 0; color: var(--text);">Template Editor: ${rootDisplayTitle}</h3>
-                    </div>
+                <sutram-stack direction="col" gap="md">
+                    <sutram-surface variant="ghost" border="bottom" padding="sm">
+                        <sutram-stack direction="row" align="center" gap="sm">
+                            <sutram-btn ?compact=${true} intent="neutral" label="🔙 Back" @click=${() => this._activeTemplateRoot = null}></sutram-btn>
+                            <h3>Template Editor: ${rootDisplayTitle}</h3>
+                        </sutram-stack>
+                    </sutram-surface>
                     <div>
                         ${this._renderTaskTree(rootTask, filteredTasks, true)}
                     </div>
-                </div>
+                </sutram-stack>
             `;
         }
         // LIST VIEW
@@ -1971,23 +1917,26 @@ export class InSetuExtTrackerModals extends InSetuElement {
         const roots = repoFiltered.filter(t => !t.parentId);
 
         return html`
-            <div style="display: flex; flex-direction: column; gap: 20px;">
-                <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border-radius: 6px; border: 1px solid var(--border);">
-                    <span style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted);">Repository:</span>
-                    <sutram-select 
-                        style="margin: 0; min-width: 200px;"
-                        .value=${currentRepo}
-                        .options=${[{value: 'ALL', label: 'All Repositories'}, ...this.ecosystem.allRepos.map(r => ({value: r, label: r}))]}
-                        @sutram-input-changed=${(e) => { this._templateRepoFilter = e.detail.value; this.requestUpdate(); }}>
-                    </sutram-select>
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 10px;">
+            <sutram-stack direction="col" gap="md">
+                <sutram-surface variant="panel" padding="sm">
+                    <sutram-stack direction="row" justify="between" align="center" gap="sm">
+                        <strong>Repository:</strong>
+                        <sutram-select 
+                            ?flush=${true}
+                            ?grow=${true}
+                            .value=${currentRepo}
+                            .options=${[{value: 'ALL', label: 'All Repositories'}, ...this.ecosystem.allRepos.map(r => ({value: r, label: r}))]}
+                            @sutram-input-changed=${(e) => { this._templateRepoFilter = e.detail.value; this.requestUpdate(); }}>
+                        </sutram-select>
+                    </sutram-stack>
+                </sutram-surface>
+                <sutram-stack direction="col" gap="sm">
                     ${roots.length > 0 
                         ? roots.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${KanbanStore.getState().tasks || []} @ticket-clicked=${() => { this._activeTemplateRoot = t.id; this.requestUpdate(); }}></insetu-tracker-ticket>`) 
                         : html`<sutram-empty-state text="No templates found for this repository's schema."></sutram-empty-state>`
                     }
-                </div>
-            </div>
+                </sutram-stack>
+            </sutram-stack>
         `;
     }
     _openPicker(mode, formType) {
@@ -2000,7 +1949,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
         this._pickerSearchQuery = '';
         this._pickerRepoFilter = mode === 'parentId' ? currentRepo : 'ALL';
         this._pickerOpen = true;
-        this.requestUpdate();
     }
     _selectPickerItem(targetString) {
         const state = KanbanStore.getState();
@@ -2024,7 +1972,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
             }
         }
         this._pickerOpen = false;
-        this.requestUpdate();
     }
 }
 customElements.define('insetu-ext-tracker-modals', InSetuExtTrackerModals);
@@ -2035,9 +1982,7 @@ export class InSetuTrackerEditProjection extends InSetuElement {
         editTaskForm: { type: Object },
         _isDirtyTracker: { type: Boolean }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.editTaskForm = KanbanStore.getState().editTaskForm || {};
@@ -2112,7 +2057,7 @@ export class InSetuTrackerEditProjection extends InSetuElement {
         const bucketsEdit = activeRepoEdit && this.sys?.getFlattenedBuckets ? this.sys.getFlattenedBuckets(activeRepoEdit) : [];
 
         return html`
-            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+            <sutram-view ?flush=${true} ?noScroll=${true}>
                 <insetu-frontmatter-editor
                     id="fm-editor-tracker"
                     .filepath=${editTaskForm.filepath}
@@ -2120,23 +2065,21 @@ export class InSetuTrackerEditProjection extends InSetuElement {
                     @editor-dirty=${e => { this._isDirtyTracker = e.detail.isDirty; this.requestUpdate(); }}
                     @insetu:frontmatter-loaded=${this._onFrontmatterLoaded}>
 
-                    <div slot="title-control" style="padding: 0;">
+                    <div slot="title-control">
                         <sutram-textarea
                             .value=${editTaskForm.title}
                             placeholder="Ticket Summary Blueprint..."
-                            ?autoSize=${true}
-                            .minRows=${1}
-                            .maxHeight=${150}
-                            ?borderless=${true}
-                            style="font-weight: bold; font-size: 1.25rem; width: 100%; color: var(--text); margin: 0;"
+                            variant="ghost"
+                            ?compact=${true}
+                            ?flush=${true}
                             @sutram-input-changed=${(e) => {
                                 const val = e.detail.value.replace(/[\r\n]+/g, ' ');
                                 KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, title: val } }));
                             }}>
                         </sutram-textarea>
                     </div>
-                    <div slot="metadata-controls" style="display: flex; flex-direction: column; gap: 12px; margin: 0; max-height: 40vh; overflow-y: auto; overflow-x: hidden; padding-right: 5px;">
-                        <div class="meta-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 15px;">
+                    <sutram-stack slot="metadata-controls" direction="col" gap="sm" ?scrollable=${true}>
+                        <sutram-stack direction="grid" ?compact=${true}>
                             ${(() => {
                                 const schema = KanbanStore.getState().getSchemaForRepo(activeRepoEdit);
                                 const getTierTypes = (t) => KanbanStore.getState().getTierTypes(schema, t);
@@ -2172,47 +2115,49 @@ export class InSetuTrackerEditProjection extends InSetuElement {
                             ${bindStoreInput(KanbanStore, 'editTaskForm.deliveryDate', editTaskForm.deliveryDate, { label: 'Delivery Deadline', type: 'date', flush: true })}
                             ${bindStoreInput(KanbanStore, 'editTaskForm.createdAt', editTaskForm.createdAt, { label: 'Created At', type: 'datetime-local', flush: true })}
                             ${bindStoreInput(KanbanStore, 'editTaskForm.closedAt', editTaskForm.closedAt, { label: 'Closed At', type: 'datetime-local', flush: true })}
-                        </div>
-                        <div style="display: flex; flex-direction: column; gap: 15px; align-items: stretch; padding-top: 12px; border-top: 1px solid var(--border);">
-                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                        </sutram-stack>
+                        <sutram-surface variant="ghost" border="top" padding="xs" gap="sm">
+                            <sutram-stack direction="col" gap="xs">
                                 <sutram-label text="Parent ID"></sutram-label>
-                                <div style="display: flex; gap: 8px; align-items: center;">
+                                <sutram-stack direction="row" align="center" gap="sm">
                                     ${editTaskForm.parentId ? html`
                                         <sutram-tag intent="primary">
                                             <span>${editTaskForm.parentId}</span>
                                             <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, parentId: '' } }))}>×</span>
                                         </sutram-tag>
                                     ` : ''}
-                                    <sutram-async-btn size="sm" label="🔗 Pick Parent" intent="neutral" .onClick=${() => this.dispatch('insetu:tracker:open-picker', { mode: 'parentId', formType: 'edit' })}></sutram-async-btn>
-                                </div>
-                            </div>
-                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                    <sutram-async-btn ?compact=${true} label="🔗 Pick Parent" intent="neutral" .onClick=${() => this.dispatch('insetu:tracker:open-picker', { mode: 'parentId', formType: 'edit' })}></sutram-async-btn>
+                                </sutram-stack>
+                            </sutram-stack>
+                            <sutram-stack direction="col" gap="xs">
                                 <sutram-label text="Dependencies"></sutram-label>
-                                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
                                     ${(editTaskForm.dependsOn || []).map(dep => html`
                                         <sutram-tag intent="warning">
                                             <span>${dep}</span>
                                             <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => KanbanStore.getState().removeDependency(dep, 'edit')}>×</span>
                                         </sutram-tag>
                                     `)}
-                                    <sutram-async-btn size="sm" label="🔗 Add Dep" intent="neutral" .onClick=${() => this.dispatch('insetu:tracker:open-picker', { mode: 'dependsOn', formType: 'edit' })}></sutram-async-btn>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                                    <sutram-async-btn ?compact=${true} label="🔗 Add Dep" intent="neutral" .onClick=${() => this.dispatch('insetu:tracker:open-picker', { mode: 'dependsOn', formType: 'edit' })}></sutram-async-btn>
+                                </sutram-stack>
+                            </sutram-stack>
+                        </sutram-surface>
+                    </sutram-stack>
                 </insetu-frontmatter-editor>
-            </div>
-            <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; justify-content: space-between; width: 100%; flex-shrink: 0;">
-                <sutram-async-btn size="sm" style="margin: 0;" icon="trash-2" label="Delete" intent="danger" .onClick=${() => this._deleteTask()}></sutram-async-btn>
-                <div style="display: flex; gap: 10px;">
-                    <sutram-btn size="sm" intent="warning" icon="code" label="Raw Edit" @click=${() => {
-                        const fp = editTaskForm.filepath;
-                        if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('tracker:edit');
-                        if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(fp, true, true);
-                    }}></sutram-btn>
-                    ${this._isDirtyTracker ? html`<sutram-async-btn style="margin: 0;" icon="save" label="Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor-tracker').save()}></sutram-async-btn>` : ''}
-                </div>
-            </div>
+                <sutram-surface slot="footer" variant="panel" border="top" padding="sm">
+                    <sutram-action-bar collapse="sm" align="between">
+                        <sutram-async-btn ?compact=${true} icon="trash-2" label="Delete" intent="danger" .onClick=${() => this._deleteTask()}></sutram-async-btn>
+                        <sutram-stack direction="row" gap="sm">
+                            <sutram-btn ?compact=${true} intent="warning" icon="code" label="Raw Edit" @click=${() => {
+                                const fp = editTaskForm.filepath;
+                                if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('tracker:edit');
+                                if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(fp, true, true);
+                            }}></sutram-btn>
+                            ${this._isDirtyTracker ? html`<sutram-async-btn icon="save" label="Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor-tracker').save()}></sutram-async-btn>` : ''}
+                        </sutram-stack>
+                    </sutram-action-bar>
+                </sutram-surface>
+            </sutram-view>
         `;
     }
 }
@@ -2221,9 +2166,7 @@ customElements.define('insetu-tracker-edit-projection', InSetuTrackerEditProject
 // OS Registration Hook
 export class InSetuExtTrackerSettings extends InSetuElement {
     static get extensionName() { return 'tracker'; }
-    static styles = [sharedStyles, css`
-        :host { display: contents; }
-    `];
+    static styles = [sharedStyles];
     static properties = {
         embedded: { type: Boolean, reflect: true },
         settingsModalOpen: { type: Boolean },
@@ -2232,8 +2175,6 @@ export class InSetuExtTrackerSettings extends InSetuElement {
         allRepos: { type: Array },
         repoMap: { type: Object },
         customSchemas: { type: Array },
-        selectedSchemaId: { type: String },
-        schemaFormData: { type: Object },
         globalViews: { type: Array },
         parentTabs: { type: Array }
     };
@@ -2246,8 +2187,6 @@ export class InSetuExtTrackerSettings extends InSetuElement {
         this.allRepos = [];
         this.repoMap = {};
         this.customSchemas = [];
-        this.selectedSchemaId = 'agile_basic';
-        this.schemaFormData = null;
         this.globalViews = [];
         this.parentTabs = [];
         this._originalSchemas = [];
@@ -2312,8 +2251,6 @@ export class InSetuExtTrackerSettings extends InSetuElement {
         this.allRepos.forEach(repo => {
             if (!this.repoMap[repo]) this.repoMap[repo] = 'agile_basic';
         });
-
-        this._onSelectSchema({ detail: { value: 'agile_basic' }});
     }
     _getCustomProfilesRepeaterSchema() {
         return {
@@ -2452,9 +2389,9 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                     custom_render: (v, _idx, patchItem) => {
                         const currentExplicit = Array.isArray(v.explicit_repos) ? v.explicit_repos : [];
                         return html`
-                            <div style="display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px dashed var(--border);">
-                                <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Select Explicit Repositories</label>
-                                <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                            <sutram-surface variant="ghost" border="top" padding="xs" gap="xs">
+                                <sutram-label text="Select Explicit Repositories"></sutram-label>
+                                <sutram-stack direction="row" gap="sm" ?wrap=${true}>
                                     ${(this.allRepos || []).map(repo => html`
                                         <sutram-toggle
                                             label=${repo}
@@ -2468,8 +2405,8 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                             ?flush=${true}>
                                         </sutram-toggle>
                                     `)}
-                                </div>
-                            </div>
+                                </sutram-stack>
+                            </sutram-surface>
                         `;
                     }
                 },
@@ -2502,11 +2439,11 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                         };
 
                         return html`
-                            <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 4px; padding-top: 10px; border-top: 1px dashed var(--border);">
+                            <sutram-surface variant="ghost" border="top" padding="xs" gap="sm">
                                 ${availableTypes.length > 1 ? html`
-                                    <div style="display: flex; flex-direction: column; gap: 6px;">
-                                        <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Filter by Type</label>
-                                        <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                                    <sutram-stack direction="col" gap="xs">
+                                        <sutram-label text="Filter by Type"></sutram-label>
+                                        <sutram-stack direction="row" gap="sm" ?wrap=${true}>
                                             ${availableTypes.map(type => {
                                                 const isChecked = currentTypes.includes(type);
                                                 return html`
@@ -2525,12 +2462,12 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                                     </sutram-toggle>
                                                 `;
                                             })}
-                                        </div>
-                                    </div>
+                                        </sutram-stack>
+                                    </sutram-stack>
                                 ` : ''}
-                                <div style="display: flex; flex-direction: column; gap: 6px;">
-                                    <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Filter by Status</label>
-                                    <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                                <sutram-stack direction="col" gap="xs">
+                                    <sutram-label text="Filter by Status"></sutram-label>
+                                    <sutram-stack direction="row" gap="sm" ?wrap=${true}>
                                         ${allStatuses.map(status => {
                                             const isChecked = currentStatuses.includes(status);
                                             return html`
@@ -2549,9 +2486,9 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                                 </sutram-toggle>
                                             `;
                                         })}
-                                    </div>
-                                </div>
-                            </div>
+                                    </sutram-stack>
+                                </sutram-stack>
+                            </sutram-surface>
                         `;
                     }
                 }
@@ -2629,12 +2566,12 @@ export class InSetuExtTrackerSettings extends InSetuElement {
         if (!this.embedded && !this.settingsModalOpen) return html``;
         const allSchemas = this.customSchemas;
         const modalBody = this.isMigrating ? html`
-            <div style="display: flex; flex-direction: column; gap: 15px; padding: 30px; margin: 20px; align-items: center; justify-content: center; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px;">
-                <sutram-spinner text="Harmonizing semantic vocabulary across workspace..."></sutram-spinner>
-                <p style="font-size: 0.85rem; color: var(--text-muted); text-align: center; margin-top: 15px;">
-                    The system is safely migrating your Markdown files. This panel is locked to prevent race conditions.
-                </p>
-            </div>
+            <sutram-surface variant="panel" padding="lg">
+                <sutram-stack direction="col" align="center" gap="sm">
+                    <sutram-spinner text="Harmonizing semantic vocabulary across workspace..."></sutram-spinner>
+                    <sutram-label text="The system is safely migrating your Markdown files. This panel is locked to prevent race conditions."></sutram-label>
+                </sutram-stack>
+            </sutram-surface>
         ` : html`
             <div style="display: contents;">
                 <sutram-tabs 
@@ -2646,35 +2583,37 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                     .activeTab=${this.activeSettingsTab}
                     @sutram-tab-selected=${(e) => this.activeSettingsTab = e.detail.tabId}>
 
-                    <div slot="schemas" style="display: flex; flex-direction: column; overflow-y: auto;">
+                    <sutram-stack slot="schemas" direction="col" gap="none">
                         <sutram-collapsible titleText="Assign Schemas" intent="neutral" ?open=${true}>
-                            <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">Assign a Kanban template to each repository.</p>
-                            <div style="display: flex; flex-direction: column; gap: 8px;">
+                            <sutram-label text="Assign a Kanban template to each repository."></sutram-label>
+                            <sutram-stack direction="col" gap="xs">
                                 ${this.allRepos.map(repo => html`
-                                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px;">
-                                        <span style="font-weight: bold; color: var(--text);">📁 ${repo}</span>
-                                        <sutram-select 
-                                            .value=${this.repoMap[repo] || 'agile_basic'} 
-                                            .options=${allSchemas.map(s => ({value: s.id, label: s.name}))}
-                                            @sutram-input-changed=${e => { this.repoMap = {...this.repoMap, [repo]: e.detail.value}; this.requestUpdate(); }}
-                                            ?flush=${true}
-                                            style="min-width: 250px;">
-                                        </sutram-select>
-                                    </div>
+                                    <sutram-surface variant="inset" padding="xs">
+                                        <sutram-stack direction="row" justify="between" align="center" gap="sm">
+                                            <strong>📁 ${repo}</strong>
+                                            <sutram-select 
+                                                .value=${this.repoMap[repo] || 'agile_basic'} 
+                                                .options=${allSchemas.map(s => ({value: s.id, label: s.name}))}
+                                                @sutram-input-changed=${e => { this.repoMap = {...this.repoMap, [repo]: e.detail.value}; this.requestUpdate(); }}
+                                                ?flush=${true}
+                                                ?grow=${true}>
+                                            </sutram-select>
+                                        </sutram-stack>
+                                    </sutram-surface>
                                 `)}
-                            </div>
+                            </sutram-stack>
                         </sutram-collapsible>
                         <sutram-collapsible titleText="Built-In System Schemas (Read-Only Reference)" intent="neutral" ?open=${false}>
-                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px;">
+                            <sutram-stack direction="grid" gap="sm">
                                 ${allSchemas.filter(s => s.isSystem).map(sys => html`
-                                    <div style="padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font-size: 0.82rem;">
-                                        <div style="font-weight: bold; color: var(--intent-primary); margin-bottom: 4px;">${sys.name} (${sys.id})</div>
+                                    <sutram-surface variant="inset" padding="sm" gap="xs">
+                                        <strong>${sys.name} (${sys.id})</strong>
                                         <div><b>${sys.t1_label}:</b> <code>${sys.t1_types}</code></div>
                                         <div><b>${sys.t2_label}:</b> <code>${sys.t2_types}</code></div>
                                         <div><b>${sys.t3_label}:</b> <code>${sys.t3_types}</code></div>
-                                    </div>
+                                    </sutram-surface>
                                 `)}
-                            </div>
+                            </sutram-stack>
                         </sutram-collapsible>
 
                         <insetu-schema-repeater
@@ -2693,8 +2632,8 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                 this.requestUpdate();
                             }}>
                         </insetu-schema-repeater>
-                    </div>
-                    <div slot="views" style="display: flex; flex-direction: column; gap: 14px; overflow-y: auto;">
+                    </sutram-stack>
+                    <sutram-stack slot="views" direction="col" gap="md">
                         <insetu-schema-repeater
                             .field=${this._getParentTabsRepeaterSchema()}
                             .items=${this.parentTabs}
@@ -2727,15 +2666,15 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                 this.requestUpdate();
                             }}>
                         </insetu-schema-repeater>
-                    </div>
+                    </sutram-stack>
                 </sutram-tabs>
-        </div>
+            </div>
         `;
         if (this.embedded) {
             return html`
-                <div style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
+                <sutram-stack direction="col" ?flex=${true}>
                     ${modalBody}
-                </div>
+                </sutram-stack>
             `;
         }
         if (!this.settingsModalOpen) return html``;
@@ -2743,9 +2682,9 @@ export class InSetuExtTrackerSettings extends InSetuElement {
             <sutram-modal ?open=${true} ?fullscreen=${true} ?flush=${true} titleText="Kanban Configuration" @sutram-modal-closed=${() => {
                 KanbanStore.setState({ settingsModalOpen: false });
             }}>
-                <div slot="body" style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
+                <sutram-stack slot="body" direction="col" ?flex=${true}>
                     ${modalBody}
-                </div>
+                </sutram-stack>
                 <sutram-async-btn slot="footer" label="💾 Save Settings" intent="primary" .onClick=${async () => {
                     await this.saveSettings();
                 }} ?disabled=${this.isMigrating}></sutram-async-btn>

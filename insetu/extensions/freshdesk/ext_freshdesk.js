@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { InSetuElement, createExtensionStore, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 
 const AppStore = window.inSetu.stores.App;
@@ -307,136 +307,128 @@ export class InSetuExtFreshdesk extends InSetuElement {
         return html`
             ${this.isModalOpen ? html`
             <sutram-modal ?open=${true} titleText="Ticket #${this.selectedTicket?.id || ''}" ?fullscreen=${true} @sutram-modal-closed=${() => FreshdeskStore.setState({ isModalOpen: false })}>
-                <div slot="body" style="display: contents;">
-                    <!-- Metadata Header -->
-                    <details style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; font-size: 0.95rem; flex-shrink: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                        <summary style="padding: 15px; cursor: pointer; outline: none; user-select: none; font-weight: bold;">
-                            Subject: <span style="color: var(--intent-primary); font-size: 1.1rem;">${this.selectedTicket?.subject}</span>
-                        </summary>
-                        <div style="padding: 0 15px 15px 15px; display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 15px; border-top: 1px dashed var(--border); margin-top: 5px; padding-top: 15px;">
-                            <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-                                <div><b>Sender:</b> <span style="color: var(--intent-success);">${this.selectedTicket?.requester?.name || 'Customer'} <span style="color: var(--text-muted);">(${this.selectedTicket?.requester?.email || 'No email'})</span></span></div>
-                                <div><b>Assigned Agent:</b> <span style="color: ${this.selectedTicket?.responder_id === this.myAgentId ? 'var(--intent-success)' : 'var(--intent-highlight)'}; font-weight: ${this.selectedTicket?.responder_id === this.myAgentId ? 'bold' : 'normal'};">${this.selectedTicket?.responder_id === this.myAgentId ? 'You' : (this.selectedTicket?.responder_name || 'Unassigned')}</span></div>
-                            </div>
-                            <div style="display: flex; gap: 8px;">
-                                <sutram-btn size="sm" intent="primary" label="📋 Copy Thread" @click=${() => this.copyThread()}></sutram-btn>${(!this.myAgentId || this.selectedTicket?.responder_id !== this.myAgentId) ? html`<sutram-btn size="sm" intent="success" label="🙋 Take" @click=${() => this.takeTicket(this.selectedTicket?.id)}></sutram-btn>` : ''}
-                                ${(this.selectedTicket?.status !== 4 && this.selectedTicket?.status !== 5) ? html`<sutram-btn size="sm" intent="neutral" label="✅ Resolve" @click=${() => this.resolveTicket(this.selectedTicket?.id)}></sutram-btn>` : ''}
-                                <sutram-btn size="sm" intent="danger" label="🚫 Ignore" @click=${() => { this.ignoreTicket(this.selectedTicket?.id); FreshdeskStore.setState({ isModalOpen: false }); }}></sutram-btn>
-                            </div>
-                        </div>
-                    </details>
+                <sutram-stack slot="body" direction="col" gap="md">
+                    <sutram-collapsible titleText="Subject: ${this.selectedTicket?.subject || ''}" intent="primary" ?open=${true}>
+                        <sutram-stack direction="row" justify="between" align="center" gap="md" ?wrap=${true}>
+                            <sutram-stack direction="row" gap="md" ?wrap=${true}>
+                                <span><b>Sender:</b> ${this.selectedTicket?.requester?.name || 'Customer'} (${this.selectedTicket?.requester?.email || 'No email'})</span>
+                                <span><b>Assigned Agent:</b> ${this.selectedTicket?.responder_id === this.myAgentId ? 'You' : (this.selectedTicket?.responder_name || 'Unassigned')}</span>
+                            </sutram-stack>
+                            <sutram-stack direction="row" gap="xs" ?wrap=${true}>
+                                <sutram-btn ?compact=${true} intent="primary" label="📋 Copy Thread" @click=${() => this.copyThread()}></sutram-btn>
+                                ${(!this.myAgentId || this.selectedTicket?.responder_id !== this.myAgentId) ? html`<sutram-btn ?compact=${true} intent="success" label="🙋 Take" @click=${() => this.takeTicket(this.selectedTicket?.id)}></sutram-btn>` : ''}
+                                ${(this.selectedTicket?.status !== 4 && this.selectedTicket?.status !== 5) ? html`<sutram-btn ?compact=${true} intent="neutral" label="✅ Resolve" @click=${() => this.resolveTicket(this.selectedTicket?.id)}></sutram-btn>` : ''}
+                                <sutram-btn ?compact=${true} intent="danger" label="🚫 Ignore" @click=${() => { this.ignoreTicket(this.selectedTicket?.id); FreshdeskStore.setState({ isModalOpen: false }); }}></sutram-btn>
+                            </sutram-stack>
+                        </sutram-stack>
+                    </sutram-collapsible>
 
-                    <!-- Message Timeline Thread -->
-                    <div @click=${() => FreshdeskStore.setState({ editorFocused: false })} style="flex: ${this.editorFocused ? '1' : '2'}; min-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 5px; transition: flex 0.3s ease;">
-                        <details open style="background: var(--bg); border: 1px solid var(--border); border-left: 4px solid var(--intent-primary); border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                            <summary style="padding: 15px; cursor: pointer; display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-muted); font-weight: bold; outline: none; user-select: none;">
-                                <span>Initial Description</span>
-                                <span>${this.selectedTicket?.created_at ? this.utils.formatDate(this.selectedTicket.created_at) : ''}</span>
-                            </summary>
-                            <div style="padding: 0 15px 15px 15px; font-size: 0.95rem; word-break: break-word; border-top: 1px dashed var(--border); margin-top: 5px; padding-top: 15px; white-space: pre-wrap;">${this.selectedTicket?.description_text || this.selectedTicket?.description || 'No description provided.'}</div>
-                        </details>
+                    <sutram-stack direction="col" gap="sm" @click=${() => FreshdeskStore.setState({ editorFocused: false })}>
+                        <sutram-collapsible titleText="Initial Description (${this.selectedTicket?.created_at ? this.utils.formatDate(this.selectedTicket.created_at) : ''})" intent="primary" ?open=${true}>
+                            <div style="white-space: pre-wrap; word-break: break-word;">${this.selectedTicket?.description_text || this.selectedTicket?.description || 'No description provided.'}</div>
+                        </sutram-collapsible>
 
-                        ${this.conversationsLoading ? html`<div class="spinner" style="display:block; text-align:center; padding: 20px;">Loading thread...</div>` : ''}
+                        ${this.conversationsLoading ? html`<sutram-spinner text="Loading thread..."></sutram-spinner>` : ''}
                         ${this.conversations?.map(conv => html`
-                            <details ?open=${!conv.private} style="background: var(--bg); border: 1px solid var(--border); border-left: 4px solid ${conv.private ? 'var(--intent-neutral)' : (conv.incoming ? 'var(--intent-warning)' : 'var(--intent-success)')}; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                                <summary style="padding: 15px; cursor: pointer; display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-muted); font-weight: bold; outline: none; user-select: none;">
-                                    <span style="display: flex; align-items: center; gap: 8px;">
-                                        <span>${conv.private ? '📝 Private Note' : (conv.incoming ? '📨 Reply from Customer' : '📤 Agent Response')}</span>
-                                        <span style="color: var(--text); opacity: 0.6;">${conv.from_email ? `<${conv.from_email}>` : ''}</span>
-                                    </span>
-                                    <span>${this.utils.formatDate(conv.created_at)}</span>
-                                </summary>
-                                <div style="padding: 0 15px 15px 15px; font-size: 0.95rem; word-break: break-word; color: var(--text); border-top: 1px dashed var(--border); margin-top: 5px; padding-top: 15px; white-space: pre-wrap;">${conv.body_text || conv.body || 'No text content.'}</div>
-                            </details>
+                            <sutram-collapsible
+                                titleText="${conv.private ? '📝 Private Note' : (conv.incoming ? '📨 Reply from Customer' : '📤 Agent Response')} ${conv.from_email ? `<${conv.from_email}>` : ''} (${this.utils.formatDate(conv.created_at)})"
+                                intent=${conv.private ? 'neutral' : (conv.incoming ? 'warning' : 'success')}
+                                ?open=${!conv.private}>
+                                <div style="white-space: pre-wrap; word-break: break-word;">${conv.body_text || conv.body || 'No text content.'}</div>
+                            </sutram-collapsible>
                         `)}
-                    </div>
+                    </sutram-stack>
 
-                    <!-- Reply Editor -->
-                    <div @click=${() => FreshdeskStore.setState({ editorFocused: true })} @focusin=${() => FreshdeskStore.setState({ editorFocused: true })} style="border-top: 1px solid var(--border); padding-top: 15px; display: flex; flex-direction: column; gap: 10px; flex: ${this.editorFocused ? '2' : '1'}; min-height: 200px; transition: flex 0.3s ease;">
-                        <div style="flex: 1; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; background: var(--bg); display: flex; flex-direction: column;">
+                    <sutram-surface variant="panel" border="top" padding="sm" gap="sm" @click=${() => FreshdeskStore.setState({ editorFocused: true })} @focusin=${() => FreshdeskStore.setState({ editorFocused: true })}>
+                        <div style="min-height: 180px;">
                             <insetu-markdown-editor  
                                 .value=${this.replyContent} 
                                 @content-changed=${e => FreshdeskStore.setState({ replyContent: e.detail.value })}>
                             </insetu-markdown-editor>
                         </div>
-                        <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                        <sutram-stack direction="row" justify="end">
                             <sutram-async-btn label="📤 Send Reply" intent="primary" .onClick=${this._getSendReplyAction()}></sutram-async-btn>
-                        </div>
-                    </div>
-                </div>
+                        </sutram-stack>
+                    </sutram-surface>
+                </sutram-stack>
             </sutram-modal>
             ` : ''}
-            <div style="display: flex; gap: 15px; margin-top: 15px; align-items: center; background: var(--input-bg); padding: 10px; border-radius: 6px; border: 1px solid var(--border); flex-wrap: wrap;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <sutram-select 
-                        label="Assignee" 
-                        .value=${this.filterAssignee} 
-                        .options=${[
-                            { value: 'Self', label: 'Self' },
-                            { value: 'Unassigned', label: 'Unassigned' },
-                            { value: 'Self + Unassigned', label: 'Self + Unassigned' },
-                            { value: 'All', label: 'All' }
-                        ]} 
-                        @sutram-input-changed=${e => { FreshdeskStore.setState({ filterAssignee: e.detail.value }); this.fetchTickets(); }}>
-                    </sutram-select>
-                </div>
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <sutram-select 
-                        label="Status" 
-                        .value=${this.filterStatus} 
-                        .options=${[
-                            { value: 'Open', label: 'Open' },
-                            { value: 'Pending', label: 'Pending' },
-                            { value: 'Open + Pending', label: 'Open + Pending' },
-                            { value: 'All', label: 'All' }
-                        ]} 
-                        @sutram-input-changed=${e => { FreshdeskStore.setState({ filterStatus: e.detail.value }); this.fetchTickets(); }}>
-                    </sutram-select>
-                </div>
-            </div>
-            ${this.syncLedger.length > 0 ? html`
-                <div style="background: var(--input-bg); padding: 10px 15px; border-radius: 6px; border: 1px solid var(--border); font-size: 0.85rem; color: var(--text-muted); margin-top: 15px;">
-                    <strong style="color: var(--text);">Cache Coverage:</strong>
-                    <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 5px;">
-                        ${this.syncLedger.map(l => html`
-                            <div>✔️ ${this.utils.formatDate(l.start_time)} to ${this.utils.formatDate(l.end_time)}</div>
-                        `)}
-                    </div>
-                </div>
-            ` : ''}
-            <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 15px;">
-                ${this.activeJobId ? html`<sutram-spinner text=${this.loadingMsg || 'Fetching Freshdesk tickets...'}></sutram-spinner>` : ''}
-                ${(this.tickets.length === 0 && !this.activeJobId) ? html`<p style="color: var(--text-muted); font-style: italic; padding: 20px;">No active tickets found.</p>` : ''}
-                <div style="display: flex; flex-direction: column; gap: 10px; opacity: ${this.activeJobId ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.activeJobId ? 'none' : 'auto'};">
-                ${this.tickets.filter(t => {
-                    if (this.ignoredTickets?.includes(t.id)) return false;
-                    return this._ticketMatchesFilters(t, this.filterStatus, this.filterAssignee, this.myAgentId);
-                }).map(t => {
-                    const statusMap = { 2: 'Open', 3: 'Pending', 4: 'Resolved', 5: 'Closed' };
-                    const prioMap = { 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Urgent' };
+            <sutram-view>
+                <sutram-stack direction="col" gap="md">
+                    <sutram-surface variant="panel" padding="sm">
+                        <sutram-stack direction="grid" ?compact=${true}>
+                            <sutram-select 
+                                label="Assignee" 
+                                ?flush=${true}
+                                .value=${this.filterAssignee} 
+                                .options=${[
+                                    { value: 'Self', label: 'Self' },
+                                    { value: 'Unassigned', label: 'Unassigned' },
+                                    { value: 'Self + Unassigned', label: 'Self + Unassigned' },
+                                    { value: 'All', label: 'All' }
+                                ]} 
+                                @sutram-input-changed=${e => { FreshdeskStore.setState({ filterAssignee: e.detail.value }); this.fetchTickets(); }}>
+                            </sutram-select>
+                            <sutram-select 
+                                label="Status" 
+                                ?flush=${true}
+                                .value=${this.filterStatus} 
+                                .options=${[
+                                    { value: 'Open', label: 'Open' },
+                                    { value: 'Pending', label: 'Pending' },
+                                    { value: 'Open + Pending', label: 'Open + Pending' },
+                                    { value: 'All', label: 'All' }
+                                ]} 
+                                @sutram-input-changed=${e => { FreshdeskStore.setState({ filterStatus: e.detail.value }); this.fetchTickets(); }}>
+                            </sutram-select>
+                        </sutram-stack>
+                    </sutram-surface>
 
-                    const assigneeText = t.responder_id ? ((t.responder_id === this.myAgentId) ? 'Me' : (t.responder_name || 'Someone Else')) : 'None';
-                    return html`
-                    <sutram-card
-                        .filename=${`Ticket #${t.id}`}
-                        .titleText=${t.subject}
-                        .descriptionText=${`Assignee: ${assigneeText} | Status: ${statusMap[t.status] || t.status} | Priority:${prioMap[t.priority] || t.priority}`}
-                        .detailText=${this.utils.formatDate(t.created_at)}
-                        icon="ticket"
-                        intent="highlight"
-                        entityType="freshdesk_ticket"
-                        .entityData=${t}
-                        @card-clicked=${() => {
-                            FreshdeskStore.setState({ selectedTicket: t, isModalOpen: true });
-                            this.fetchConversations(t.id);
-                        }}>
-                    </sutram-card>
-                `})}
-                </div>
-                ${(!this.activeJobId && this.tickets.length > 0) ? html`
-                    <sutram-btn intent="primary" style="width: 100%; margin-top: 10px; padding: 12px;" label=${'⬇️ Load Older Tickets (Pages ' + Math.max((this.lastFetchedPage || 0) + 1, Math.floor(this.contiguousCount / 100) + 1) + ' & ' + (Math.max((this.lastFetchedPage || 0) + 1, Math.floor(this.contiguousCount / 100) + 1) + 1) + ')'} @click=${() => this.fetchTickets(true)}></sutram-btn>
-                ` : ''}
-            </div>
+                    ${this.syncLedger.length > 0 ? html`
+                        <sutram-surface variant="panel" padding="sm" gap="xs">
+                            <strong>Cache Coverage:</strong>
+                            <sutram-stack direction="col" gap="xs">
+                                ${this.syncLedger.map(l => html`
+                                    <sutram-label .text=${`✔️ ${this.utils.formatDate(l.start_time)} to ${this.utils.formatDate(l.end_time)}`}></sutram-label>
+                                `)}
+                            </sutram-stack>
+                        </sutram-surface>
+                    ` : ''}
+
+                    <sutram-stack direction="col" gap="sm">
+                        ${this.activeJobId ? html`<sutram-spinner text=${this.loadingMsg || 'Fetching Freshdesk tickets...'}></sutram-spinner>` : ''}
+                        ${(this.tickets.length === 0 && !this.activeJobId) ? html`<sutram-empty-state text="No active tickets found."></sutram-empty-state>` : ''}
+                        <sutram-stack direction="col" gap="sm">
+                            ${this.tickets.filter(t => {
+                                if (this.ignoredTickets?.includes(t.id)) return false;
+                                return this._ticketMatchesFilters(t, this.filterStatus, this.filterAssignee, this.myAgentId);
+                            }).map(t => {
+                                const statusMap = { 2: 'Open', 3: 'Pending', 4: 'Resolved', 5: 'Closed' };
+                                const prioMap = { 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Urgent' };
+                                const assigneeText = t.responder_id ? ((t.responder_id === this.myAgentId) ? 'Me' : (t.responder_name || 'Someone Else')) : 'None';
+                                return html`
+                                <sutram-card
+                                    .filename=${`Ticket #${t.id}`}
+                                    .titleText=${t.subject}
+                                    .descriptionText=${`Assignee: ${assigneeText} | Status: ${statusMap[t.status] || t.status} | Priority:${prioMap[t.priority] || t.priority}`}
+                                    .detailText=${this.utils.formatDate(t.created_at)}
+                                    icon="ticket"
+                                    intent="highlight"
+                                    entityType="freshdesk_ticket"
+                                    .entityData=${t}
+                                    @card-clicked=${() => {
+                                        FreshdeskStore.setState({ selectedTicket: t, isModalOpen: true });
+                                        this.fetchConversations(t.id);
+                                    }}>
+                                </sutram-card>
+                            `})}
+                        </sutram-stack>
+                        ${(!this.activeJobId && this.tickets.length > 0) ? html`
+                            <sutram-btn intent="primary" ?fullWidth=${true} label=${'⬇️ Load Older Tickets (Pages ' + Math.max((this.lastFetchedPage || 0) + 1, Math.floor(this.contiguousCount / 100) + 1) + ' & ' + (Math.max((this.lastFetchedPage || 0) + 1, Math.floor(this.contiguousCount / 100) + 1) + 1) + ')'} @click=${() => this.fetchTickets(true)}></sutram-btn>
+                        ` : ''}
+                    </sutram-stack>
+                </sutram-stack>
+            </sutram-view>
         `;
     }
 }

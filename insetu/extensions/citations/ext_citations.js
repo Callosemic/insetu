@@ -3,8 +3,6 @@ window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
 export const CitationStore = createExtensionStore('Citations', {
     localLibrary: [],
-            cachedPublications: [],
-            cachedAuthors: [],
             activeAttachCitation: null,
             activeEditCitation: null,
             currentEditAuthors: [],
@@ -16,15 +14,13 @@ export const CitationStore = createExtensionStore('Citations', {
 });
 
 window.inSetu.stores.Citations = CitationStore;
-import { html, css } from 'lit';
+import { html } from 'lit';
 export class InSetuExtCitations extends InSetuElement {
     static get extensionName() { return 'citations'; }
     static properties = {
         importingIds: { type: Object },
         localLibrary: { type: Array },
         pinnedRepos: { type: Object },
-        cachedPublications: { type: Array },
-        cachedAuthors: { type: Array },
         activeAttachCitation: { type: Object },
         activeEditCitation: { type: Object },
         currentEditAuthors: { type: Array },
@@ -45,15 +41,11 @@ export class InSetuExtCitations extends InSetuElement {
 
         allRepos: { type: Array }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; container-type: inline-size; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.localLibrary = [];
         this.pinnedRepos = new Set(['ALL']);
-        this.cachedPublications = [];
-        this.cachedAuthors = [];
         this.activeAttachCitation = null;
         this.activeEditCitation = null;
         this.currentEditAuthors = [];
@@ -71,7 +63,6 @@ export class InSetuExtCitations extends InSetuElement {
         this.currentExplorePage = 1;
         this.importLog = '';
         this.importStrategy = 'overwrite';
-        this._importingIds = new Set();
 
         this.allRepos = [];
     }
@@ -85,8 +76,6 @@ export class InSetuExtCitations extends InSetuElement {
             CitationStore,
             state => ({
                 localLibrary: state.localLibrary || [],
-                cachedPublications: state.cachedPublications || [],
-                cachedAuthors: state.cachedAuthors || [],
                 activeAttachCitation: state.activeAttachCitation,
                 activeEditCitation: state.activeEditCitation,
                 currentEditAuthors: state.currentEditAuthors || [],
@@ -105,7 +94,6 @@ export class InSetuExtCitations extends InSetuElement {
             ({ allRepos, pinnedRepos }) => {
                 this.allRepos = allRepos;
                 this.pinnedRepos = pinnedRepos;
-                this.requestUpdate();
             }
         );
 
@@ -133,12 +121,6 @@ export class InSetuExtCitations extends InSetuElement {
     async loadMainLibrary() {
         this.mainLoading = true;
         try {
-            const idxRes = await this.api.get('citations/index');
-            if (idxRes.ok) {
-                const d = await idxRes.json();
-                if(d.publications) CitationStore.setState({ cachedPublications: d.publications });
-                if(d.authors) CitationStore.setState({ cachedAuthors: d.authors });
-            }
             const res = await this.api.get('citations/list');
             if (res.ok) {
                 const data = await res.json();
@@ -246,18 +228,13 @@ export class InSetuExtCitations extends InSetuElement {
             const res = await window.inSetu.api.post('fs/search', { q: cslId });
             if (res.ok) {
                 const data = await res.json();
-                const results = await (async () => {
-                    if (res.status !== 202) return data.results || [];
-                    const jobId = data.job_id;
-                    while (true) {
-                        await new Promise(resolve => setTimeout(resolve, 1000));
-                        const pollRes = await window.inSetu.api.workspace.get(`system/jobs/${jobId}`);
-                        if (!pollRes.ok) throw new Error("Search job failed");
-                        const pollData = await pollRes.json();
-                        if (pollData.status === 'completed') return pollData.artifact?.results || [];
-                        if (pollData.status === 'failed') throw new Error(pollData.message);
-                    }
-                })();
+                const results = await new Promise((resolve, reject) => {
+                    if (res.status !== 202) return resolve(data.results || []);
+                    window.inSetu.utils.pollJob(data.job_id, {
+                        onComplete: (statusData) => resolve(statusData.artifact?.results || []),
+                        onError: (err) => reject(err)
+                    });
+                });
 
                 if (results && results.length === 1) {
                     if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(results[0].path, true);
@@ -393,7 +370,7 @@ export class InSetuExtCitations extends InSetuElement {
         const alreadyExists = isExplore ? this.localLibrary.some(libItem => libItem.id === c.id || (libItem.URL && c.URL && libItem.URL.toLowerCase() === c.URL.toLowerCase())) : false;
 
         const attTags = !isExplore && c._attachments && c._attachments.length > 0
-            ? c._attachments.map(a => html`<span class="task-tag" style="background: var(--border);">${a.repo}${a.bucket !== 'None' ? ':'+a.bucket : ''}</span>`)
+            ? c._attachments.map(a => html`<sutram-tag text="${a.repo}${a.bucket !== 'None' ? ':'+a.bucket : ''}" intent="neutral"></sutram-tag>`)
             : '';
         return html`
             <sutram-card
@@ -404,11 +381,24 @@ export class InSetuExtCitations extends InSetuElement {
                 intent="highlight"
                 entityType=${isExplore ? 'explore_citation' : 'citation'}
                 .entityData=${{ ...c, isImporting, isExplore, alreadyExists }}>
-                <div style="font-size: 0.8rem; margin-top: 4px; color: var(--text-muted); display: flex; align-items: center; gap: 6px;">
-                    <span>ID: <span style="font-family: monospace; color: var(--intent-primary);">[@${c.id}]</span></span> ${c.open_access ? html`<span style="display: inline-flex; align-items: center; gap: 2px;"><yv-icon name="unlock" style="width: 12px; height: 12px; color: var(--intent-success);"></yv-icon> OA</span>` : ''}
-                </div>
-                ${c.URL ? html`<div style="font-size: 0.8rem; margin-top: 4px; display: flex; align-items: center; gap: 4px;"><yv-icon name="globe" style="width: 12px; height: 12px; color: var(--intent-success); flex-shrink: 0;"></yv-icon> <a href="${c.URL}" target="_blank" style="color: var(--intent-success); text-decoration: underline; word-break: break-all;">${c.URL}</a></div>` : ''}
-                ${attTags ? html`<div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">${attTags}</div>` : ''}
+                <sutram-stack direction="col" gap="xs">
+                    <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
+                        <code>[@${c.id}]</code>
+                        ${c.open_access ? html`
+                            <sutram-stack direction="row" align="center" gap="xs">
+                                <sutram-icon name="unlock" size="sm" intent="success"></sutram-icon>
+                                <span>OA</span>
+                            </sutram-stack>
+                        ` : ''}
+                    </sutram-stack>
+                    ${c.URL ? html`
+                        <sutram-stack direction="row" align="center" gap="xs">
+                            <sutram-icon name="globe" size="sm" intent="success"></sutram-icon>
+                            <a href="${c.URL}" target="_blank" style="color: var(--intent-success); text-decoration: underline; word-break: break-all;">${c.URL}</a>
+                        </sutram-stack>
+                    ` : ''}
+                    ${attTags ? html`<sutram-stack direction="row" gap="xs" ?wrap=${true}>${attTags}</sutram-stack>` : ''}
+                </sutram-stack>
             </sutram-card>
         `;
     }
@@ -425,37 +415,39 @@ export class InSetuExtCitations extends InSetuElement {
             searchFields: c => [c.title || '', c.id || '', c.author ? c.author.map(a => a.family).join(' ') : ''].join(' ')
         });
         return html`
-            <sutram-toolbar
-                searchPlaceholder="Fuzzy search personal library..."
-                .searchQuery=${this.mainSearchQuery}
-                @search-changed=${(e) => { this.mainSearchQuery = e.detail.value; }}
-                .bottomBorder=${true}>
-                <div slot="bottom-row" class="toolbar-row" style="background: var(--input-bg);">
-                    <insetu-repo-filter
-                        label="Repos:"
-                        .repos=${this.allRepos}
-                        .activeRepos=${Array.from(this.pinnedRepos)}
-                        .extraRepos=${[{id: "ORPHANS", label: "Orphans"}]}
-                        @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                    </insetu-repo-filter>
-                </div>
-            </sutram-toolbar>
-            <div>
+            <sutram-view>
+                <sutram-toolbar
+                    slot="toolbar"
+                    searchPlaceholder="Fuzzy search personal library..."
+                    .searchQuery=${this.mainSearchQuery}
+                    @search-changed=${(e) => { this.mainSearchQuery = e.detail.value; }}
+                    ?flush=${true}>
+                    <sutram-surface slot="bottom-row" variant="panel" border="top" padding="xs">
+                        <insetu-repo-filter
+                            label="Repos:"
+                            .repos=${this.allRepos}
+                            .activeRepos=${Array.from(this.pinnedRepos)}
+                            .extraRepos=${[{id: "ORPHANS", label: "Orphans"}]}
+                            @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                        </insetu-repo-filter>
+                    </sutram-surface>
+                </sutram-toolbar>
                 ${this.mainLoading ? html`<sutram-spinner text="Loading library..."></sutram-spinner>` : ''}
-                <div style="display: flex; flex-direction: column; gap: 10px; opacity: ${this.mainLoading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.mainLoading ? 'none' : 'auto'};">
-                    ${filtered.length === 0 ? html`<p style="color: var(--text-muted); font-style: italic;">No results.</p>` : filtered.map(c => this._renderCard(c, false))}
-                </div>
-            </div>
+                <sutram-stack direction="col" gap="sm">
+                    ${filtered.length === 0 ? html`<sutram-empty-state text="No results."></sutram-empty-state>` : filtered.map(c => this._renderCard(c, false))}
+                </sutram-stack>
+            </sutram-view>
         `;
     }
 
     _renderExplore() {
         return html`
-            <div>
-                <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 15px; background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
-                    <div>
+            <sutram-view>
+                <sutram-stack direction="col" gap="md">
+                    <sutram-surface variant="panel" padding="md" gap="sm">
                         <sutram-select 
                             label="Catalog Source" 
+                            ?flush=${true}
                             .value=${this.exploreSource} 
                             .options=${[
                                 { value: 'openalex', label: 'OpenAlex (Recommended)' },
@@ -464,20 +456,38 @@ export class InSetuExtCitations extends InSetuElement {
                             ]}
                             @sutram-input-changed=${e => this.exploreSource = e.detail.value}>
                         </sutram-select>
-                    </div>
-                    <div>
                         <sutram-input 
                             label="Search Query" 
+                            ?flush=${true}
                             placeholder="${this.exploreSource === 'crossref' ? 'DOIs, precise titles, or authors...' : 'Keywords, titles, or authors...'}" 
                             .value=${this.exploreSearchQuery} 
                             @sutram-input-changed=${e => this.exploreSearchQuery = e.detail.value}>
                         </sutram-input>
-                    </div>
-                    ${this.exploreSource === 'openalex' ? html`
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                        <div style="flex: 1; min-width: 150px;">
+                        ${this.exploreSource === 'openalex' ? html`
+                            <sutram-stack direction="grid" ?compact=${true}>
+                                <sutram-select 
+                                    label="Target Field" 
+                                    ?flush=${true}
+                                    .value=${this.exploreField} 
+                                    .options=${[
+                                        { value: 'all', label: 'All Fields' },
+                                        { value: 'title', label: 'Title Only' }
+                                    ]}
+                                    @sutram-input-changed=${e => this.exploreField = e.detail.value}>
+                                </sutram-select>
+                                <sutram-input 
+                                    label="Topic Filter" 
+                                    ?flush=${true}
+                                    placeholder="e.g., Ethnomusicology..." 
+                                    .value=${this.exploreCategory} 
+                                    @sutram-input-changed=${e => this.exploreCategory = e.detail.value}>
+                                </sutram-input>
+                            </sutram-stack>
+                        ` : ''}
+                        ${this.exploreSource === 'crossref' ? html`
                             <sutram-select 
                                 label="Target Field" 
+                                ?flush=${true}
                                 .value=${this.exploreField} 
                                 .options=${[
                                     { value: 'all', label: 'All Fields' },
@@ -485,54 +495,32 @@ export class InSetuExtCitations extends InSetuElement {
                                 ]}
                                 @sutram-input-changed=${e => this.exploreField = e.detail.value}>
                             </sutram-select>
-                        </div>
-                        <div style="flex: 1; min-width: 150px;">
-                            <sutram-input 
-                                label="Topic Filter" 
-                                placeholder="e.g., Ethnomusicology..." 
-                                .value=${this.exploreCategory} 
-                                @sutram-input-changed=${e => this.exploreCategory = e.detail.value}>
-                            </sutram-input>
-                        </div>
-                    </div>
-                    ` : ''}
-                    ${this.exploreSource === 'crossref' ? html`
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                        <div style="flex: 1; min-width: 150px;">
-                            <sutram-select 
-                                label="Target Field" 
-                                .value=${this.exploreField} 
-                                .options=${[
-                                    { value: 'all', label: 'All Fields' },
-                                    { value: 'title', label: 'Title Only' }
-                                ]}
-                                @sutram-input-changed=${e => this.exploreField = e.detail.value}>
-                            </sutram-select>
-                        </div>
-                    </div>
-                    ` : ''}
-                    <sutram-btn size="sm" intent="highlight" icon="search" label="Search Catalog" style="margin: 0; padding: 10px; font-size: 1rem;" @click=${() => this._performExploreSearch(false)}></sutram-btn>
-                </div>
-                ${this.exploreLoading ? html`<div class="spinner" style="display: block;">Querying global catalogs...</div>` : ''}
-                <div style="display: flex; flex-direction: column; gap: 10px;">
-                    ${this.exploredItems.length === 0 && !this.exploreLoading ? html`<p style="color: var(--text-muted); font-style: italic;">Search the open science index to discover and import citations.</p>` : ''}
-                    ${this.exploredItems.map(c => this._renderCard(c, true))}${this.exploredItems.length > 0 && this.exploredItems.length % 20 === 0 ? html`
-                        <sutram-btn size="sm" intent="neutral" icon="download" label="Load More" style="margin: 10px auto; display: block;" @click=${() => this._performExploreSearch(true)}></sutram-btn>
-                    ` : ''}
-                </div>
-            </div>
+                        ` : ''}
+                        <sutram-btn intent="highlight" icon="search" label="Search Catalog" ?fullWidth=${true} @click=${() => this._performExploreSearch(false)}></sutram-btn>
+                    </sutram-surface>
+                    ${this.exploreLoading ? html`<sutram-spinner text="Querying global catalogs..."></sutram-spinner>` : ''}
+                    <sutram-stack direction="col" gap="sm">
+                        ${this.exploredItems.length === 0 && !this.exploreLoading ? html`<sutram-empty-state text="Search the open science index to discover and import citations."></sutram-empty-state>` : ''}
+                        ${this.exploredItems.map(c => this._renderCard(c, true))}
+                        ${this.exploredItems.length > 0 && this.exploredItems.length % 20 === 0 ? html`
+                            <sutram-btn ?compact=${true} intent="neutral" icon="download" label="Load More" @click=${() => this._performExploreSearch(true)}></sutram-btn>
+                        ` : ''}
+                    </sutram-stack>
+                </sutram-stack>
+            </sutram-view>
         `;
     }
 
     _renderImport() {
         return html`
-            <div style="display: flex; flex-direction: column; height: 100%;">
-                <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 15px;">
-                    <h3 style="margin-top: 0; color: var(--intent-primary);">Import CSL-JSON</h3>
-                    <p style="font-size: 0.9rem; color: var(--text-muted);">Select a JSON export from Zotero or Better BibTeX.</p>
-                    <div style="margin: 15px 0;">
+            <sutram-view>
+                <sutram-stack direction="col" gap="md">
+                    <sutram-surface variant="panel" padding="md" gap="sm">
+                        <h3>Import CSL-JSON</h3>
+                        <sutram-label text="Select a JSON export from Zotero or Better BibTeX."></sutram-label>
                         <sutram-select
                             label="Conflict Strategy"
+                            ?flush=${true}
                             .value=${this.importStrategy}
                             .options=${[
                                 { value: 'overwrite', label: 'Overwrite Existing' },
@@ -541,12 +529,12 @@ export class InSetuExtCitations extends InSetuElement {
                             ]}
                             @sutram-input-changed=${e => this.importStrategy = e.detail.value}>
                         </sutram-select>
-                    </div>
-                    <sutram-btn size="sm" intent="success" icon="folder" label="Choose File" style="margin: 0; padding: 8px 16px;" @click=${() => this.shadowRoot.getElementById('lib-file-picker').click()}></sutram-btn>
-                    <input type="file" id="lib-file-picker" accept=".json,application/json" style="display: none;" @change=${this._handleImportFile}>
-                </div>
-                <div style="font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; color: var(--text);">${this.importLog}</div>
-            </div>
+                        <sutram-btn ?compact=${true} intent="success" icon="folder" label="Choose File" @click=${() => this.shadowRoot.getElementById('lib-file-picker').click()}></sutram-btn>
+                        <input type="file" id="lib-file-picker" accept=".json,application/json" style="display: none;" @change=${this._handleImportFile}>
+                    </sutram-surface>
+                    ${this.importLog ? html`<pre>${this.importLog}</pre>` : ''}
+                </sutram-stack>
+            </sutram-view>
         `;
     }
     _renderModals() {
@@ -554,80 +542,77 @@ export class InSetuExtCitations extends InSetuElement {
             <!-- Attach Modal -->
             ${!!this.activeAttachCitation ? html`
             <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Pin to Repo: [@${this.activeAttachCitation?.id}]" @sutram-modal-closed=${() => CitationStore.setState({ activeAttachCitation: null })}>
-                <div slot="body" style="display: contents;">
-                    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                        <sutram-select style="flex:1; margin:0;" .value=${this.attachForm.repo} .options=${this.allRepos.map(r => ({value: r, label: r}))} @sutram-input-changed=${e => { CitationStore.setState(s => ({ attachForm: { ...s.attachForm, repo: e.detail.value, bucket: 'None' } })); }}></sutram-select>
-                        <sutram-select style="flex:1; margin:0;" .value=${this.attachForm.bucket} .options=${[{value: 'None', label: 'No Bucket'}, ...(this.attachForm.repo ? this.sys.getFlattenedBuckets(this.attachForm.repo).map(b => ({value: b.id, label: b.title})) : [])]} @sutram-input-changed=${e => CitationStore.setState(s => ({ attachForm: { ...s.attachForm, bucket: e.detail.value } }))}></sutram-select>
-                        <sutram-async-btn class="btn-sm" icon="pin" label="Pin" intent="success" style="margin: 0;" .onClick=${() => this._saveAttachmentList([...(this.activeAttachCitation?._attachments || []), { repo: this.attachForm.repo, bucket: this.attachForm.bucket }])}></sutram-async-btn>
-                    </div>
-                    <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:5px;">Currently Pinned Repositories:</label>
-                    <div style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px; overflow-y: auto; flex: 1;">
-                        ${(this.activeAttachCitation?._attachments || []).length === 0 ? html`<span style="color: var(--text-muted); font-style: italic;">Not pinned to any repository.</span>` : (this.activeAttachCitation?._attachments || []).map((a, idx) => html`
-                            <div style="display: flex; justify-content: space-between; align-items: center; background: var(--pane-bg); border: 1px solid var(--border); padding: 6px 10px; border-radius: 4px;">
-                                <span style="font-size: 0.85rem; font-family: monospace; color: var(--text);">${a.repo} ${a.bucket !== 'None' ? ' : ' + a.bucket : ''}</span>
-                                <sutram-btn size="sm" variant="text" intent="danger" icon="x" label="Remove" style="margin: 0;" @click=${() => {
-                                    const atts = [...this.activeAttachCitation._attachments];
-                                    atts.splice(idx, 1);
-                                    this._saveAttachmentList(atts);
-                                }}></sutram-btn>
-                            </div>
+                <sutram-stack slot="body" direction="col" gap="md">
+                    <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
+                        <sutram-select ?flush=${true} ?grow=${true} .value=${this.attachForm.repo} .options=${this.allRepos.map(r => ({value: r, label: r}))} @sutram-input-changed=${e => { CitationStore.setState(s => ({ attachForm: { ...s.attachForm, repo: e.detail.value, bucket: 'None' } })); }}></sutram-select>
+                        <sutram-select ?flush=${true} ?grow=${true} .value=${this.attachForm.bucket} .options=${[{value: 'None', label: 'No Bucket'}, ...(this.attachForm.repo ? this.sys.getFlattenedBuckets(this.attachForm.repo).map(b => ({value: b.id, label: b.title})) : [])]} @sutram-input-changed=${e => CitationStore.setState(s => ({ attachForm: { ...s.attachForm, bucket: e.detail.value } }))}></sutram-select>
+                        <sutram-async-btn ?compact=${true} icon="pin" label="Pin" intent="success" .onClick=${() => this._saveAttachmentList([...(this.activeAttachCitation?._attachments || []), { repo: this.attachForm.repo, bucket: this.attachForm.bucket }])}></sutram-async-btn>
+                    </sutram-stack>
+                    <sutram-label text="Currently Pinned Repositories:"></sutram-label>
+                    <sutram-stack direction="col" gap="xs">
+                        ${(this.activeAttachCitation?._attachments || []).length === 0 ? html`<sutram-empty-state text="Not pinned to any repository."></sutram-empty-state>` : (this.activeAttachCitation?._attachments || []).map((a, idx) => html`
+                            <sutram-surface variant="panel" padding="xs">
+                                <sutram-stack direction="row" justify="between" align="center" gap="sm">
+                                    <code>${a.repo}${a.bucket !== 'None' ? ' : ' + a.bucket : ''}</code>
+                                    <sutram-btn ?compact=${true} variant="text" intent="danger" icon="x" label="Remove" @click=${() => {
+                                        const atts = [...this.activeAttachCitation._attachments];
+                                        atts.splice(idx, 1);
+                                        this._saveAttachmentList(atts);
+                                    }}></sutram-btn>
+                                </sutram-stack>
+                            </sutram-surface>
                         `)}
-                    </div>
-                </div>
+                    </sutram-stack>
+                </sutram-stack>
             </sutram-modal>
             ` : ''}
             <!-- Edit Modal -->
             ${!!this.activeEditCitation ? html`
             <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Edit: [@${this.activeEditCitation?.id}]" @sutram-modal-closed=${() => CitationStore.setState({ activeEditCitation: null })}>
-                <div slot="body" style="display: contents;">
-                    <div style="display: flex; gap: 10px; margin-bottom: 12px;">
-                        <div style="flex: 1;">
-                            <sutram-select label="Type" .value=${this.editForm.type} .options=${[
-                                {value: 'article-journal', label: 'Journal Article'},
-                                {value: 'book', label: 'Book'},
-                                {value: 'chapter', label: 'Book Chapter'},
-                                {value: 'paper-conference', label: 'Conference Paper'},
-                                {value: 'article-magazine', label: 'Magazine Article'},
-                                {value: 'article-newspaper', label: 'Newspaper Article'},
-                                {value: 'webpage', label: 'Webpage'},
-                                {value: 'thesis', label: 'Thesis'},
-                                {value: 'report', label: 'Report'},
-                                {value: 'document', label: 'Document (Generic)'}
-                            ]} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, type: e.detail.value } }))}></sutram-select>
-                        </div>
-                    </div>
-                    <sutram-input label="Item Title" .value=${this.editForm.title} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, title: e.detail.value } }))}></sutram-input>
+                <sutram-stack slot="body" direction="col" gap="md">
+                    <sutram-select label="Type" ?flush=${true} .value=${this.editForm.type} .options=${[
+                        {value: 'article-journal', label: 'Journal Article'},
+                        {value: 'book', label: 'Book'},
+                        {value: 'chapter', label: 'Book Chapter'},
+                        {value: 'paper-conference', label: 'Conference Paper'},
+                        {value: 'article-magazine', label: 'Magazine Article'},
+                        {value: 'article-newspaper', label: 'Newspaper Article'},
+                        {value: 'webpage', label: 'Webpage'},
+                        {value: 'thesis', label: 'Thesis'},
+                        {value: 'report', label: 'Report'},
+                        {value: 'document', label: 'Document (Generic)'}
+                    ]} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, type: e.detail.value } }))}></sutram-select>
+                    <sutram-input label="Item Title" ?flush=${true} .value=${this.editForm.title} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, title: e.detail.value } }))}></sutram-input>
+                    <sutram-input label="Publication Title (e.g., Journal Name)" ?flush=${true} .value=${this.editForm.pubTitle} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, pubTitle: e.detail.value } }))}></sutram-input>
 
-                    <div style="display: flex; gap: 8px; margin-bottom: 12px;">
-                        <sutram-input label="Publication Title (e.g., Journal Name)" style="flex: 1;" .value=${this.editForm.pubTitle} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, pubTitle: e.detail.value } }))}></sutram-input>
-                    </div>
-
-                    <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Authors:</label>
-                    <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;">
+                    <sutram-label text="Authors:"></sutram-label>
+                    <sutram-stack direction="row" gap="xs" ?wrap=${true}>
                         ${this.currentEditAuthors.map((a, idx) => html`
-                            <span class="task-tag" style="background: var(--intent-primary); color: white; border: none; display: flex; align-items: center; gap: 6px; font-size: 0.8rem; padding: 4px 8px; border-radius: 12px;">
-                                <span>${a.given ? `${a.family}, ${a.given}` : a.family || a.literal || 'Unknown'}</span>
-                                <span style="cursor: pointer; font-weight: bold; font-size: 1rem; line-height: 1; margin-left: 2px;" @click=${() => {
+                            <sutram-pill
+                                pillId=${String(idx)}
+                                labelText=${`${a.given ? `${a.family}, ${a.given}` : a.family || a.literal || 'Unknown'} ×`}
+                                ?active=${true}
+                                @sutram-pill-toggled=${() => {
                                     const updatedAuthors = [...this.currentEditAuthors];
                                     updatedAuthors.splice(idx, 1);
                                     CitationStore.setState({ currentEditAuthors: updatedAuthors });
-                                }}>×</span>
-                            </span>
+                                }}>
+                            </sutram-pill>
                         `)}
-                    </div>
-                    <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: flex-end;">
-                        <sutram-input label="Author Input" placeholder="Last, First" style="flex: 1; margin: 0;" .value=${this.editForm.authorInput} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, authorInput: e.detail.value } }))}></sutram-input>
-                        <sutram-btn id="btn-add-cit-author" size="sm" intent="primary" icon="plus" label="Add" style="margin: 0; padding: 8px 12px;" @click=${() => {
+                    </sutram-stack>
+                    <sutram-stack direction="row" align="end" gap="sm">
+                        <sutram-input label="Author Input" placeholder="Last, First" ?flush=${true} ?grow=${true} .value=${this.editForm.authorInput} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, authorInput: e.detail.value } }))}></sutram-input>
+                        <sutram-btn id="btn-add-cit-author" ?compact=${true} intent="primary" icon="plus" label="Add" @click=${() => {
                             const val = (this.editForm.authorInput || '').trim();
                             if (!val) return;
                             const parts = val.split(',').map(s => s.trim());
                             const newAuthor = parts.length > 1 ? { family: parts[0], given: parts.slice(1).join(', ') } : { family: parts[0] };
                             CitationStore.setState(s => ({ currentEditAuthors: [...s.currentEditAuthors, newAuthor], editForm: { ...s.editForm, authorInput: '' } }));
                         }}></sutram-btn>
-                    </div>
-                    <sutram-input label="Date (YYYY or YYYY-MM-DD)" .value=${this.editForm.dateStr} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, dateStr: e.detail.value } }))}></sutram-input>
-                    <sutram-textarea label="Other Metadata (CSL-JSON)" .value=${this.editForm.jsonStr} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, jsonStr: e.detail.value } }))}></sutram-textarea>
-                </div>
+                    </sutram-stack>
+                    <sutram-input label="Date (YYYY or YYYY-MM-DD)" ?flush=${true} .value=${this.editForm.dateStr} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, dateStr: e.detail.value } }))}></sutram-input>
+                    <sutram-textarea label="Other Metadata (CSL-JSON)" ?flush=${true} .value=${this.editForm.jsonStr} @sutram-input-changed=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, jsonStr: e.detail.value } }))}></sutram-textarea>
+                </sutram-stack>
                 <sutram-async-btn slot="footer" icon="trash-2" label="Delete" intent="danger" .onClick=${this._deleteDynamicCitation.bind(this)}></sutram-async-btn>
                 <sutram-async-btn slot="footer" icon="save" label="Save Changes" intent="primary" .onClick=${this._saveDynamicCitation.bind(this)}></sutram-async-btn>
             </sutram-modal>
@@ -673,7 +658,6 @@ export class InSetuExtCitationsModals extends InSetuElement {
                 this.citationModalOpen = slice.citationModalOpen;
                 this.citationSearchQuery = slice.citationSearchQuery;
                 this.citationLibraryCache = slice.citationLibraryCache;
-                this.requestUpdate();
             }
         );
     }
@@ -690,10 +674,10 @@ export class InSetuExtCitationsModals extends InSetuElement {
         }).slice(0, 30) : [];
         return html`
             <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Insert Citation" @sutram-modal-closed=${() => CitationStore.setState({ citationModalOpen: false })}>
-                <div slot="body" style="display: contents;">
-                    <sutram-input placeholder="Search library by author, title, or ID..." .value=${this.citationSearchQuery} @sutram-input-changed=${(e) => CitationStore.setState({ citationSearchQuery: e.detail.value })}></sutram-input>
-                    <div style="display: flex; flex-direction: column; overflow-y: auto; flex: 1; gap: 5px;">
-                        ${!q ? html`<span style="color:var(--text-muted); font-style:italic;">Type to search...</span>` : results.length === 0 ? html`<span style="color:var(--text-muted); font-style:italic;">No citations found.</span>` : results.map(c => {
+                <sutram-stack slot="body" direction="col" gap="sm">
+                    <sutram-input placeholder="Search library by author, title, or ID..." ?flush=${true} .value=${this.citationSearchQuery} @sutram-input-changed=${(e) => CitationStore.setState({ citationSearchQuery: e.detail.value })}></sutram-input>
+                    <sutram-stack direction="col" gap="xs" ?flex=${true} ?scrollable=${true}>
+                        ${!q ? html`<sutram-label text="Type to search..."></sutram-label>` : results.length === 0 ? html`<sutram-empty-state text="No citations found."></sutram-empty-state>` : results.map(c => {
                             const authors = c.author ? c.author.map(a => a.family).join(', ') : 'Unknown';
                             const year = c.issued && c.issued['date-parts'] && c.issued['date-parts'][0] ? c.issued['date-parts'][0][0] : 'n.d.';
                             return html`
@@ -707,8 +691,8 @@ export class InSetuExtCitationsModals extends InSetuElement {
                                 </sutram-card>
                             `;
                         })}
-                    </div>
-                </div>
+                    </sutram-stack>
+                </sutram-stack>
             </sutram-modal>
         `;
     }

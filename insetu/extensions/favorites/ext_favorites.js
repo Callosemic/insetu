@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 
 const AppStore = window.inSetu.stores.App;
@@ -139,7 +139,7 @@ export class InSetuFavBtn extends InSetuElement {
         return html`
             <sutram-btn 
                 intent="${this._isPinned ? 'warning' : 'neutral'}"
-                .icon=${html`<yv-icon name="star" style="width: 14px; height: 14px; ${this._isPinned ? 'fill: currentColor;' : ''}"></yv-icon>`}
+                icon="star"
                 ?active=${this._isPinned}
                 title="${this._isPinned ? 'Unpin' : 'Pin'}"
                 @click=${this._toggle}>
@@ -154,10 +154,7 @@ export class InSetuExtFavorites extends InSetuElement {
         items: { type: Array },
         loading: { type: Boolean }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-        p.empty-msg { padding: 20px; margin: 0; }
-    `];
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -197,32 +194,34 @@ export class InSetuExtFavorites extends InSetuElement {
         }
     }
     render() {
-        if (this.items.length === 0 && !this.loading) return html`<sutram-scroll-view><p class="empty-msg" style="color: var(--text-muted); font-style: italic;">No favorited nodes pinned yet. Pin nodes from the file tree views!</p></sutram-scroll-view>`;
+        if (this.items.length === 0 && !this.loading) {
+            return html`<sutram-view><sutram-empty-state text="No favorited nodes pinned yet. Pin nodes from the file tree views!"></sutram-empty-state></sutram-view>`;
+        }
 
         return html`
-            <sutram-scroll-view style="gap: 8px;">
+            <sutram-view>
                 ${this.loading ? html`<sutram-spinner text="Loading bookmarks..."></sutram-spinner>` : ''}
-                <div style="display: flex; flex-direction: column; gap: 8px; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
-                ${this.items.map(item => {
-                    const isContext = item.type === 'file' && (item.path.startsWith('ctx://') || item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_'));
-                    const eType = item.type === 'folder' ? 'folder' : (isContext ? 'file:context' : 'file');
-                    const { repo, relativePath } = new this.utils.InSetuURI(item.path);
-                    const displayPath = repo ? `${repo}/${relativePath}` : relativePath;
-                    return html`
-                    <sutram-card
-                        .filename=${displayPath}
-                        .titleText=${item.name}
-                        .descriptionText=${item.path}
-                        icon=${item.type === 'folder' ? 'folder' : (isContext ? 'package' : 'file-text')}
-                        intent="highlight"
-                        entityType=${eType}
-                        .entityData=${{ filepath: item.path, folderpath: item.type === 'folder' ? item.path : undefined, repoDir: repo, isFS: !isContext }}
-                        @card-clicked=${() => this._navigateToFavorite(item)}>
-                    </sutram-card>
-                    `;
-                })}
-                </div>
-            </sutram-scroll-view>
+                <sutram-stack direction="col" gap="sm">
+                    ${this.items.map(item => {
+                        const isContext = item.type === 'file' && (item.path.startsWith('ctx://') || item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_'));
+                        const eType = item.type === 'folder' ? 'folder' : (isContext ? 'file:context' : 'file');
+                        const { repo, relativePath } = new this.utils.InSetuURI(item.path);
+                        const displayPath = repo ? `${repo}/${relativePath}` : relativePath;
+                        return html`
+                        <sutram-card
+                            .filename=${displayPath}
+                            .titleText=${item.name}
+                            .descriptionText=${item.path}
+                            icon=${item.type === 'folder' ? 'folder' : (isContext ? 'package' : 'file-text')}
+                            intent="highlight"
+                            entityType=${eType}
+                            .entityData=${{ filepath: item.path, folderpath: item.type === 'folder' ? item.path : undefined, repoDir: repo, isFS: !isContext }}
+                            @card-clicked=${() => this._navigateToFavorite(item)}>
+                        </sutram-card>
+                        `;
+                    })}
+                </sutram-stack>
+            </sutram-view>
         `;
     }
 }

@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 
 const AppStore = window.inSetu.stores.App;
@@ -18,9 +18,11 @@ export class InSetuExtIngestActions extends InSetuElement {
     static styles = [sharedStyles];
     render() {
         return html`
-            <div style="display: flex; gap: 10px; margin-bottom: 10px; padding: 8px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; align-items: center;">
-                <sutram-btn size="sm" intent="primary" icon="globe" label="Import from URL" style="margin: 0;" @click=${(e) => { e.preventDefault(); IngestStore.setState({ ingestModalOpen: true, ingestError: null, ingestStatus: null }); }}></sutram-btn>
-            </div>
+            <sutram-surface variant="panel" padding="xs">
+                <sutram-stack direction="row" align="center" gap="sm">
+                    <sutram-btn ?compact=${true} intent="primary" icon="globe" label="Import from URL" @click=${(e) => { e.preventDefault(); IngestStore.setState({ ingestModalOpen: true, ingestError: null, ingestStatus: null }); }}></sutram-btn>
+                </sutram-stack>
+            </sutram-surface>
         `;
     }
 }
@@ -92,7 +94,7 @@ export class InSetuExtIngestModals extends InSetuElement {
                         const urlBase = (() => {
                             if (titleBase) return titleBase;
                             try {
-                                const urlObj = new URL(statusData.artifact.resolved_url || url);
+                                const urlObj = new URL(statusData.artifact.resolved_url || this.ingestUrl.trim());
                                 return (urlObj.pathname.split('/').pop() || urlObj.hostname).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
                             } catch(e) { return ''; }
                         })();
@@ -115,11 +117,12 @@ export class InSetuExtIngestModals extends InSetuElement {
         const bs4Missing = missingPkgs.length > 0;
         return html`
             <sutram-modal ?open=${true} titleText="Import from URL" @sutram-modal-closed=${() => IngestStore.setState({ ingestModalOpen: false })}>
-                <div slot="body" style="display: contents;">
-                    <sutram-input label="Target URL:" placeholder="https://..." .value=${this.ingestUrl} @sutram-input-changed=${e => IngestStore.setState({ ingestUrl: e.detail.value })}></sutram-input>
+                <sutram-stack slot="body" direction="col" gap="md">
+                    <sutram-input label="Target URL:" placeholder="https://..." ?flush=${true} .value=${this.ingestUrl} @sutram-input-changed=${e => IngestStore.setState({ ingestUrl: e.detail.value })}></sutram-input>
 
                     <sutram-select 
                         label="Extraction Method:" 
+                        ?flush=${true}
                         .value=${this.ingestMethod} 
                         .options=${[
                             {value: 'bs4', label: bs4Missing ? `BeautifulSoup Local (⚠️ Missing ${missingPkgs.join(', ')})` : 'BeautifulSoup Local (bs4 & markdownify)'},
@@ -129,22 +132,23 @@ export class InSetuExtIngestModals extends InSetuElement {
                     </sutram-select>
 
                     ${this.ingestMethod === 'bs4' && bs4Missing ? html`
-                        <div style="background: var(--input-bg); border: 1px solid var(--intent-warning); border-radius: 6px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
-                            <span style="font-size: 0.8rem; color: var(--intent-warning);">Local parsing requires <strong>${missingPkgs.join(', ')}</strong>.</span>
-                            <sutram-async-btn
-                                size="sm"
-                                intent="primary"
-                                icon="download"
-                                label="Install Now"
-                                style="margin: 0;"
-                                .onClick=${this.installExtensionDependencies('ingest')}>
-                            </sutram-async-btn>
-                        </div>
+                        <sutram-surface variant="tinted" intent="warning" padding="sm">
+                            <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                                <span>Local parsing requires <strong>${missingPkgs.join(', ')}</strong>.</span>
+                                <sutram-async-btn
+                                    ?compact=${true}
+                                    intent="primary"
+                                    icon="download"
+                                    label="Install Now"
+                                    .onClick=${this.installExtensionDependencies('ingest')}>
+                                </sutram-async-btn>
+                            </sutram-stack>
+                        </sutram-surface>
                     ` : ''}
 
-                    ${this.ingestStatus ? html`<div style="color: var(--text-muted); font-weight: bold; margin-bottom: 10px;">${this.ingestStatus}</div>` : ''}
-                    ${this.ingestError ? html`<div style="color: var(--intent-danger); font-weight: bold; margin-bottom: 10px;">❌ Error: ${this.ingestError}</div>` : ''}
-                </div>
+                    ${this.ingestStatus ? html`<sutram-label .text=${this.ingestStatus}></sutram-label>` : ''}
+                    ${this.ingestError ? html`<sutram-surface variant="tinted" intent="danger" padding="xs">❌ Error: ${this.ingestError}</sutram-surface>` : ''}
+                </sutram-stack>
                 <sutram-async-btn slot="footer" label="📥 Fetch & Convert" intent="primary" .onClick=${this._getImportAction()}></sutram-async-btn>
             </sutram-modal>
         `;

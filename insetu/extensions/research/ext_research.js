@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { createExtensionStore, InSetuElement, bindStoreInput, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
@@ -52,15 +52,7 @@ export class InSetuExtResearch extends InSetuElement {
         searchForm: { type: Object },
         _aiJsonInput: { type: String }
     };
-    static styles = [
-        sharedStyles,
-        css`
-            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; container-type: inline-size; }
-            .rs-layout { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
-            .rs-view { display: none; flex-direction: column; height: 100%; overflow: hidden; }
-            .rs-view.active { display: flex; }
-        `
-    ];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.jobs = [];
@@ -289,7 +281,7 @@ export class InSetuExtResearch extends InSetuElement {
                 entityType="research_job"
                 .entityData=${job}
                 @card-clicked=${() => ResearchStore.setState({ selectedJobId: job.id, selectedItemId: null })}>
-                ${(job.status === 'failed' && meta.error) ? html`<div style="font-size: 0.8rem; color: var(--intent-danger); background: var(--input-bg); padding: 6px 10px; border-radius: 4px; margin-top: 8px; border: 1px solid var(--intent-danger);">⚠️ <b>Error:</b> ${meta.error}</div>` : ''}
+                ${(job.status === 'failed' && meta.error) ? html`<sutram-surface variant="tinted" intent="danger" padding="xs"><span>⚠️ <b>Error:</b> ${meta.error}</span></sutram-surface>` : ''}
             </sutram-card>
         `;
     }
@@ -312,144 +304,144 @@ export class InSetuExtResearch extends InSetuElement {
             : `(${job.processed_links}/${job.total_links} scraped)`;
         const activeInbox = this.inbox.filter(i => i.job_id === this.selectedJobId);
         return html`
-            <div id="rs-detail-header" style="margin-bottom: 15px; padding: 15px; background: var(--input-bg); border-radius: 6px; border: 1px solid var(--border);">
-                <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px; flex-wrap: wrap;">
-                    <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
-                        <sutram-btn size="sm" intent="neutral" icon="arrow-left" label="Back to Jobs" style="margin: 0; flex-shrink: 0;" @click=${() => ResearchStore.setState({ selectedJobId: null, selectedItemId: null, aiTriageMode: false })}></sutram-btn>
-                        <div style="font-weight: bold; color: var(--intent-primary); font-size: 1.15rem; word-break: break-word; display: flex; align-items: center; gap: 8px;"><yv-icon name="search" style="width: 18px; height: 18px; flex-shrink: 0;"></yv-icon> ${job.query}</div>
-                    </div>
-                    <sutram-async-btn style="flex-shrink: 0;" icon="copy" label="Copy" intent="neutral" .onClick=${() => this.utils.copyRawText(job.query)}></sutram-async-btn>
-                </div>
-                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                    <span style="font-size: 0.95rem;"><b>Status:</b> <span style="color: var(--intent-${activeIntent}); font-weight: bold;">${job.status.toUpperCase()}</span> <span style="color: var(--text-muted);">${cardStatusExtra}</span></span>
-                </div>
-                <div style="display: flex; gap: 15px; font-size: 0.85rem; color: var(--text-muted); flex-wrap: wrap; margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border);">
-                    <span><b>Provider:</b> <span style="color: var(--text);">${job.provider}</span></span>
-                    <span><b>Date Range:</b> <span style="color: var(--text);">${meta.date_range || 'Any Time'}</span></span>
-                    <span><b>Started:</b> <span style="color: var(--text);">${safeDate}</span></span>
-                </div>
-            </div>
-            <div id="rs-job-actions-row" style="margin-bottom: 15px; display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap;">
-                ${job.status === 'running' ? html`<sutram-btn size="sm" intent="warning" icon="pause" label="Pause" @click=${() => this.handleJobAction(job.id, 'pause')}></sutram-btn>` : ''}
-                ${job.status === 'paused' ? html`<sutram-btn size="sm" intent="success" icon="play" label="Resume" @click=${() => this.handleJobAction(job.id, 'resume')}></sutram-btn>` : ''}
-                ${job.status === 'failed' ? html`<sutram-btn size="sm" intent="highlight" icon="refresh-cw" label="Retry" @click=${() => this.handleJobAction(job.id, 'retry')}></sutram-btn>` : ''}
-                ${['running', 'paused', 'gathering', 'failed'].includes(job.status) ? html`<sutram-btn size="sm" intent="neutral" icon="square" label="Cancel" @click=${() => this.handleJobAction(job.id, 'cancel')}></sutram-btn>` : ''}
-                <sutram-btn size="sm" variant="tinted" intent="danger" icon="trash-2" label="Delete" @click=${() => this.handleJobAction(job.id, 'delete')}></sutram-btn>
-                <sutram-btn size="sm" intent="highlight" icon="${this.aiTriageMode ? 'arrow-left' : 'bot'}" .label=${this.aiTriageMode ? 'Back to Manual Triage' : 'AI-Assisted Batch Triage'} @click=${() => ResearchStore.setState({ aiTriageMode: !this.aiTriageMode })}></sutram-btn>
-            </div>
+            <sutram-surface id="rs-detail-header" variant="panel" padding="md" gap="sm">
+                <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                    <sutram-stack direction="row" align="center" gap="sm">
+                        <sutram-btn ?compact=${true} intent="neutral" icon="arrow-left" label="Back to Jobs" @click=${() => ResearchStore.setState({ selectedJobId: null, selectedItemId: null, aiTriageMode: false })}></sutram-btn>
+                        <sutram-icon name="search" size="md" intent="primary"></sutram-icon>
+                        <h4>${job.query}</h4>
+                    </sutram-stack>
+                    <sutram-async-btn icon="copy" label="Copy" intent="neutral" .onClick=${() => this.utils.copyRawText(job.query)}></sutram-async-btn>
+                </sutram-stack>
+                <sutram-stack direction="row" align="center" gap="sm">
+                    <sutram-tag .text=${`${job.status.toUpperCase()} ${cardStatusExtra}`} .intent=${activeIntent}></sutram-tag>
+                </sutram-stack>
+                <sutram-stack direction="row" gap="md" ?wrap=${true}>
+                    <sutram-label .text=${`Provider: ${job.provider}`}></sutram-label>
+                    <sutram-label .text=${`Date Range: ${meta.date_range || 'Any Time'}`}></sutram-label>
+                    <sutram-label .text=${`Started: ${safeDate}`}></sutram-label>
+                </sutram-stack>
+            </sutram-surface>
+            <sutram-stack id="rs-job-actions-row" direction="row" justify="end" gap="sm" ?wrap=${true}>
+                ${job.status === 'running' ? html`<sutram-btn ?compact=${true} intent="warning" icon="pause" label="Pause" @click=${() => this.handleJobAction(job.id, 'pause')}></sutram-btn>` : ''}
+                ${job.status === 'paused' ? html`<sutram-btn ?compact=${true} intent="success" icon="play" label="Resume" @click=${() => this.handleJobAction(job.id, 'resume')}></sutram-btn>` : ''}
+                ${job.status === 'failed' ? html`<sutram-btn ?compact=${true} intent="highlight" icon="refresh-cw" label="Retry" @click=${() => this.handleJobAction(job.id, 'retry')}></sutram-btn>` : ''}
+                ${['running', 'paused', 'gathering', 'failed'].includes(job.status) ? html`<sutram-btn ?compact=${true} intent="neutral" icon="square" label="Cancel" @click=${() => this.handleJobAction(job.id, 'cancel')}></sutram-btn>` : ''}
+                <sutram-btn ?compact=${true} variant="tinted" intent="danger" icon="trash-2" label="Delete" @click=${() => this.handleJobAction(job.id, 'delete')}></sutram-btn>
+                <sutram-btn ?compact=${true} intent="highlight" icon="${this.aiTriageMode ? 'arrow-left' : 'bot'}" .label=${this.aiTriageMode ? 'Back to Manual Triage' : 'AI-Assisted Batch Triage'} @click=${() => ResearchStore.setState({ aiTriageMode: !this.aiTriageMode })}></sutram-btn>
+            </sutram-stack>
 
             ${this.aiTriageMode ? html`
-                <div style="display: flex; flex-direction: column; flex: 1; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 20px; overflow-y: auto;">
-                    <h3 style="margin-top: 0; color: var(--intent-highlight); margin-bottom: 15px;">Batch Triage Pipeline</h3>
-                    <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 1: Download Context</h4>
-                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Downloads all fully-scraped pending URLs in this job as chunked text files.</p>
-                    <sutram-async-btn style="margin-bottom: 25px; display: block;" icon="package" label="Pack Context Files" intent="primary" .onClick=${this._getGenerateContextAction(job.id)}></sutram-async-btn>
+                <sutram-surface variant="panel" padding="lg" gap="md">
+                    <h3>Batch Triage Pipeline</h3>
+                    <h4>Step 1: Download Context</h4>
+                    <sutram-label text="Downloads all fully-scraped pending URLs in this job as chunked text files."></sutram-label>
+                    <sutram-async-btn icon="package" label="Pack Context Files" intent="primary" .onClick=${this._getGenerateContextAction(job.id)}></sutram-async-btn>
 
-                    <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 2: Prompt Template</h4>
-                    <sutram-textarea readonly style="width: 100%; min-height: 160px; margin-bottom: 25px;" .value=${'Review these scraped documents. I am researching [INSERT TOPIC]. Filter out any documents that are SEO spam, irrelevant, or low quality. Output your response as a raw JSON object containing three arrays of `id` strings: `accept` (highly relevant), `reject` (spam/irrelevant), and `rescan` (relevant but poorly formatted or truncated). Do not include markdown blocks. Example: {"accept": ["id-1"], "reject": ["id-2"], "rescan": ["id-3"]}'}></sutram-textarea>
-                    <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 3: Ingest AI Triage</h4>
-                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Paste the raw JSON object from the LLM here to process the batch.</p>
-                    <sutram-textarea id="rs-ai-json-input" .value=${this._aiJsonInput} @sutram-input-changed=${e => this._aiJsonInput = e.detail.value} placeholder='{"accept": [], "reject": [], "rescan": []}' style="width: 100%; min-height: 120px; margin-bottom: 10px;"></sutram-textarea>
-                    <sutram-async-btn style="width: 100%; display: block;" icon="bot" label="Execute Triage" intent="highlight" .onClick=${this.executeAITriage.bind(this)}></sutram-async-btn>
-                </div>
+                    <h4>Step 2: Prompt Template</h4>
+                    <sutram-textarea readonly ?flush=${true} .value=${'Review these scraped documents. I am researching [INSERT TOPIC]. Filter out any documents that are SEO spam, irrelevant, or low quality. Output your response as a raw JSON object containing three arrays of `id` strings: `accept` (highly relevant), `reject` (spam/irrelevant), and `rescan` (relevant but poorly formatted or truncated). Do not include markdown blocks. Example: {"accept": ["id-1"], "reject": ["id-2"], "rescan": ["id-3"]}'}></sutram-textarea>
+                    <h4>Step 3: Ingest AI Triage</h4>
+                    <sutram-label text="Paste the raw JSON object from the LLM here to process the batch."></sutram-label>
+                    <sutram-textarea id="rs-ai-json-input" ?flush=${true} .value=${this._aiJsonInput} @sutram-input-changed=${e => this._aiJsonInput = e.detail.value} placeholder='{"accept": [], "reject": [], "rescan": []}'></sutram-textarea>
+                    <sutram-async-btn ?fullWidth=${true} icon="bot" label="Execute Triage" intent="highlight" .onClick=${this.executeAITriage.bind(this)}></sutram-async-btn>
+                </sutram-surface>
             ` : html`
-                <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
-                    <div style="flex: 1; display: flex; flex-direction: column; min-height: 200px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg);">
-                        <div style="display: flex; flex-direction: column; gap: 8px; overflow-y: auto; padding: 10px; flex: 1;">
-                            ${activeInbox.length === 0 ? html`<sutram-empty-state text="No pending items for this job."></sutram-empty-state>` : activeInbox.map(item => {
-                                const statusBadge = item.scraped_at ? '✅' : '⏳';
-                                const isSelected = this.selectedItemId === item.id;
-                                return html`
-                                    <sutram-card
-                                        .filename=${item.id}
-                                        .titleText=${`${statusBadge}${item.title || 'Untitled'}`}
-                                        .descriptionText=${item.url}
-                                        .detailText=${`ID: ${item.id}`}
-                                        icon="file-text"
-                                        ?selected=${isSelected}
-                                        intent="primary"
-                                        @card-clicked=${() => ResearchStore.getState().openItemPreview(item.id)}>
-                                        ${item.status === 'duplicate' ? html`<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;"><span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold;">⚠️ Already Scraped</span><sutram-btn size="sm" intent="warning" label="Force Scrape Anyway" style="padding: 2px 8px; margin: 0; font-size: 0.7rem;" @click=${(e) => { e.stopPropagation(); this.handleDisposition(item.id, 'force_scrape'); }}></sutram-btn></div>` : ''}
-                                        ${item.status === 'in_library' ? html`<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;"><span style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold;">📚 In Library</span><sutram-btn size="sm" intent="highlight" label="Force Scrape Anyway" style="padding: 2px 8px; margin: 0; font-size: 0.7rem;" @click=${(e) => { e.stopPropagation(); this.handleDisposition(item.id, 'force_scrape'); }}></sutram-btn></div>` : ''}
-                                    </sutram-card>
-                                `;
-                            })}
-                        </div>
-                    </div>
-                </div>
+                <sutram-surface variant="panel" padding="sm">
+                    <sutram-stack direction="col" gap="sm">
+                        ${activeInbox.length === 0 ? html`<sutram-empty-state text="No pending items for this job."></sutram-empty-state>` : activeInbox.map(item => {
+                            const statusBadge = item.scraped_at ? '✅ ' : '⏳ ';
+                            const isSelected = this.selectedItemId === item.id;
+                            return html`
+                                <sutram-card
+                                    .filename=${item.id}
+                                    .titleText=${`${statusBadge}${item.title || 'Untitled'}`}
+                                    .descriptionText=${item.url}
+                                    .detailText=${`ID: ${item.id}`}
+                                    icon="file-text"
+                                    ?selected=${isSelected}
+                                    intent="primary"
+                                    @card-clicked=${() => ResearchStore.getState().openItemPreview(item.id)}>
+                                    ${item.status === 'duplicate' ? html`<sutram-stack direction="row" align="center" gap="sm"><sutram-tag text="⚠️ Already Scraped" intent="warning"></sutram-tag><sutram-btn ?compact=${true} intent="warning" label="Force Scrape Anyway" @click=${(e) => { e.stopPropagation(); this.handleDisposition(item.id, 'force_scrape'); }}></sutram-btn></sutram-stack>` : ''}
+                                    ${item.status === 'in_library' ? html`<sutram-stack direction="row" align="center" gap="sm"><sutram-tag text="📚 In Library" intent="highlight"></sutram-tag><sutram-btn ?compact=${true} intent="highlight" label="Force Scrape Anyway" @click=${(e) => { e.stopPropagation(); this.handleDisposition(item.id, 'force_scrape'); }}></sutram-btn></sutram-stack>` : ''}
+                                </sutram-card>
+                            `;
+                        })}
+                    </sutram-stack>
+                </sutram-surface>
             `}
         `;
     }
     render() {
         return html`
-            <div class="rs-layout">
+            <sutram-view>
                 ${!this.selectedJobId ? html`
-                    <div class="rs-view active" style="overflow-y: auto; padding-right: 5px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
-                            <h4 style="margin: 0; color: var(--text);">Active & Past Jobs</h4>
-                            <sutram-btn size="sm" intent="success" icon="plus" label="New Job" @click=${() => ResearchStore.setState({ newJobModalOpen: true })}></sutram-btn>
-                        </div>
-                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <sutram-stack direction="col" gap="md">
+                        <sutram-surface variant="ghost" border="bottom" padding="sm">
+                            <sutram-stack direction="row" justify="between" align="center">
+                                <h4>Active & Past Jobs</h4>
+                                <sutram-btn ?compact=${true} intent="success" icon="plus" label="New Job" @click=${() => ResearchStore.setState({ newJobModalOpen: true })}></sutram-btn>
+                            </sutram-stack>
+                        </sutram-surface>
+                        <sutram-stack direction="col" gap="sm">
                             ${(this.jobs || []).map(job => this._renderJobCard(job))}
-                        </div>
-                    </div>
+                        </sutram-stack>
+                    </sutram-stack>
                 ` : html`
-                    <div class="rs-view active">
+                    <sutram-stack direction="col" gap="md">
                         ${this._renderJobDetailView()}
-                    </div>
+                    </sutram-stack>
                 `}
-            </div>
+            </sutram-view>
             ${this.newJobModalOpen ? (() => {
                 const missingPkgs = this.getMissingDependencies('research').packages;
                 const needsPlaywright = (this.searchForm.provider === 'google') && missingPkgs.includes('playwright');
                 const needsBs4 = (this.searchForm.provider === 'duckduckgo' || this.searchForm.parser === 'bs4') && missingPkgs.includes('beautifulsoup4');
                 return html`
             <sutram-modal ?open=${true} ?fullscreen=${true} titleText="New Research Job" @sutram-modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
-                <div slot="body" style="display: contents;">
-                    ${bindStoreInput(ResearchStore, 'searchForm.query', this.searchForm.query, { placeholder: 'Search Query...', style: 'width: 100%;' })}
-                    <div style="display: flex; gap: 10px;">
-                        ${bindStoreInput(ResearchStore, 'searchForm.provider', this.searchForm.provider || 'serper', { type: 'select', style: 'flex: 1;', selectOptions: [{value: 'serper', label: 'Google (Serper.dev API)'}, {value: 'google', label: missingPkgs.includes('playwright') ? 'Google (Playwright — ⚠️ Missing playwright)' : 'Google (Playwright)'}, {value: 'duckduckgo', label: missingPkgs.includes('beautifulsoup4') ? 'DuckDuckGo (⚠️ Missing beautifulsoup4)' : 'DuckDuckGo'}] })}
-                        ${bindStoreInput(ResearchStore, 'searchForm.dateRange', this.searchForm.dateRange || '', { type: 'select', style: 'flex: 1;', selectOptions: [{value: '', label: 'Any Time'}, {value: 'd', label: 'Past Day'}, {value: 'w', label: 'Past Week'}, {value: 'm', label: 'Past Month'}, {value: 'y', label: 'Past Year'}, {value: 'custom', label: 'Custom Range (Exact)...'}, {value: 'custom_year', label: 'Custom Range (Years)...'}] })}
-                    </div>
+                <sutram-stack slot="body" direction="col" gap="md">
+                    ${bindStoreInput(ResearchStore, 'searchForm.query', this.searchForm.query, { placeholder: 'Search Query...', flush: true })}
+                    <sutram-stack direction="grid" ?compact=${true}>
+                        ${bindStoreInput(ResearchStore, 'searchForm.provider', this.searchForm.provider || 'serper', { type: 'select', flush: true, selectOptions: [{value: 'serper', label: 'Google (Serper.dev API)'}, {value: 'google', label: missingPkgs.includes('playwright') ? 'Google (Playwright — ⚠️ Missing playwright)' : 'Google (Playwright)'}, {value: 'duckduckgo', label: missingPkgs.includes('beautifulsoup4') ? 'DuckDuckGo (⚠️ Missing beautifulsoup4)' : 'DuckDuckGo'}] })}
+                        ${bindStoreInput(ResearchStore, 'searchForm.dateRange', this.searchForm.dateRange || '', { type: 'select', flush: true, selectOptions: [{value: '', label: 'Any Time'}, {value: 'd', label: 'Past Day'}, {value: 'w', label: 'Past Week'}, {value: 'm', label: 'Past Month'}, {value: 'y', label: 'Past Year'}, {value: 'custom', label: 'Custom Range (Exact)...'}, {value: 'custom_year', label: 'Custom Range (Years)...'}] })}
+                    </sutram-stack>
                     ${(needsPlaywright || needsBs4) ? html`
-                        <div style="background: var(--input-bg); border: 1px solid var(--intent-warning); border-radius: 6px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
-                            <span style="font-size: 0.8rem; color: var(--intent-warning);">Selected provider/parser requires <strong>${missingPkgs.join(', ')}</strong>.</span>
-                            <sutram-async-btn
-                                size="sm"
-                                intent="primary"
-                                icon="download"
-                                label="Install Missing Packages"
-                                style="margin: 0;"
-                                .onClick=${this.installExtensionDependencies('research')}>
-                            </sutram-async-btn>
-                        </div>
+                        <sutram-surface variant="tinted" intent="warning" padding="sm">
+                            <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                                <span>Selected provider/parser requires <strong>${missingPkgs.join(', ')}</strong>.</span>
+                                <sutram-async-btn
+                                    ?compact=${true}
+                                    intent="primary"
+                                    icon="download"
+                                    label="Install Missing Packages"
+                                    .onClick=${this.installExtensionDependencies('research')}>
+                                </sutram-async-btn>
+                            </sutram-stack>
+                        </sutram-surface>
                     ` : ''}
-                    <div style="display: ${this.searchForm.dateRange === 'custom' ? 'flex' : 'none'}; gap: 10px;">
-                        ${bindStoreInput(ResearchStore, 'searchForm.dateStart', this.searchForm.dateStart, { type: 'date', style: 'flex: 1;' })}
-                        ${bindStoreInput(ResearchStore, 'searchForm.dateEnd', this.searchForm.dateEnd, { type: 'date', style: 'flex: 1;' })}
-                    </div>
-                    <div style="display: ${this.searchForm.dateRange === 'custom_year' ? 'flex' : 'none'}; gap: 10px;">
-                        ${bindStoreInput(ResearchStore, 'searchForm.yearStart', this.searchForm.yearStart, { type: 'number', placeholder: 'YYYY (e.g. 1999)', min: 1990, max: 2100, style: 'flex: 1;' })}
-                        ${bindStoreInput(ResearchStore, 'searchForm.yearEnd', this.searchForm.yearEnd, { type: 'number', placeholder: 'YYYY (e.g. 2005)', min: 1990, max: 2100, style: 'flex: 1;' })}
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: flex-end;">
-                        <div style="flex: 1;">
-                            ${bindStoreInput(ResearchStore, 'searchForm.parser', this.searchForm.parser || 'bs4', { label: 'Extraction Parser', type: 'select', style: 'width: 100%;', selectOptions: [{value: 'bs4', label: 'Local (BeautifulSoup)'}, {value: 'jina', label: 'Jina AI (sends each URL to r.jina.ai)'}] })}
-                        </div>
-                        <div style="flex: 1;">
-                            <div style="display: flex; gap: 8px; align-items: flex-end;">
-                                ${bindStoreInput(ResearchStore, 'targetDir', this.targetDir || 'research/', { label: 'Default Output Folder', placeholder: 'e.g. research/', style: 'flex: 1; font-family: monospace;' })}
-                                <sutram-btn size="sm" intent="highlight" label="..." style="margin: 0; padding: 8px 12px; height: 38px;" @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}></sutram-btn>
-                            </div>
-                        </div>
-                    </div>
-                    <div>
-                        <div style="display: flex; gap: 8px; align-items: flex-end;">
-                            ${bindStoreInput(ResearchStore, 'searchForm.maxResults', this.searchForm.maxResults || '50', { label: 'Max Results', type: 'select', style: 'flex: 1;', selectOptions: [{value: '10', label: '10 Results'}, {value: '25', label: '25 Results'}, {value: '50', label: '50 Results'}, {value: '100', label: '100 Results'}, {value: '9999', label: 'All (Keep Scraping)'}, {value: 'custom', label: 'Custom...'}] })}
-                            ${bindStoreInput(ResearchStore, 'searchForm.maxCustom', this.searchForm.maxCustom, { type: 'number', placeholder: 'e.g. 150', min: 1, max: 1000, style: `flex: 1; display: ${this.searchForm.maxResults === 'custom' ? 'block' : 'none'};` })}
-                        </div>
-                    </div>
-                </div>
+                    ${this.searchForm.dateRange === 'custom' ? html`
+                        <sutram-stack direction="grid" ?compact=${true}>
+                            ${bindStoreInput(ResearchStore, 'searchForm.dateStart', this.searchForm.dateStart, { type: 'date', flush: true })}
+                            ${bindStoreInput(ResearchStore, 'searchForm.dateEnd', this.searchForm.dateEnd, { type: 'date', flush: true })}
+                        </sutram-stack>
+                    ` : ''}
+                    ${this.searchForm.dateRange === 'custom_year' ? html`
+                        <sutram-stack direction="grid" ?compact=${true}>
+                            ${bindStoreInput(ResearchStore, 'searchForm.yearStart', this.searchForm.yearStart, { type: 'number', placeholder: 'YYYY (e.g. 1999)', min: 1990, max: 2100, flush: true })}
+                            ${bindStoreInput(ResearchStore, 'searchForm.yearEnd', this.searchForm.yearEnd, { type: 'number', placeholder: 'YYYY (e.g. 2005)', min: 1990, max: 2100, flush: true })}
+                        </sutram-stack>
+                    ` : ''}
+                    <sutram-stack direction="grid" ?compact=${true}>
+                        ${bindStoreInput(ResearchStore, 'searchForm.parser', this.searchForm.parser || 'bs4', { label: 'Extraction Parser', type: 'select', flush: true, selectOptions: [{value: 'bs4', label: 'Local (BeautifulSoup)'}, {value: 'jina', label: 'Jina AI (sends each URL to r.jina.ai)'}] })}
+                        <sutram-stack direction="row" align="end" gap="xs">
+                            ${bindStoreInput(ResearchStore, 'targetDir', this.targetDir || 'research/', { label: 'Default Output Folder', placeholder: 'e.g. research/', flush: true, grow: true })}
+                            <sutram-btn ?compact=${true} intent="highlight" label="..." @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}></sutram-btn>
+                        </sutram-stack>
+                    </sutram-stack>
+                    <sutram-stack direction="row" align="end" gap="sm">
+                        ${bindStoreInput(ResearchStore, 'searchForm.maxResults', this.searchForm.maxResults || '50', { label: 'Max Results', type: 'select', flush: true, grow: true, selectOptions: [{value: '10', label: '10 Results'}, {value: '25', label: '25 Results'}, {value: '50', label: '50 Results'}, {value: '100', label: '100 Results'}, {value: '9999', label: 'All (Keep Scraping)'}, {value: 'custom', label: 'Custom...'}] })}
+                        ${this.searchForm.maxResults === 'custom' ? bindStoreInput(ResearchStore, 'searchForm.maxCustom', this.searchForm.maxCustom, { type: 'number', placeholder: 'e.g. 150', min: 1, max: 1000, flush: true, grow: true }) : ''}
+                    </sutram-stack>
+                </sutram-stack>
                 <sutram-async-btn slot="footer" icon="rocket" label="Start Scraping" loadingLabel="Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></sutram-async-btn>
             </sutram-modal>
             `;
@@ -466,9 +458,7 @@ export class InSetuResearchPreviewProjection extends InSetuElement {
         selectedItemId: { type: String },
         targetDir: { type: String }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         const st = ResearchStore.getState();
@@ -489,7 +479,6 @@ export class InSetuResearchPreviewProjection extends InSetuElement {
                 this.inbox = slice.inbox;
                 this.selectedItemId = slice.selectedItemId;
                 this.targetDir = slice.targetDir;
-                this.requestUpdate();
             }
         );
     }
@@ -529,25 +518,28 @@ export class InSetuResearchPreviewProjection extends InSetuElement {
         const activeItem = this.inbox.find(i => i.id === this.selectedItemId);
         if (!activeItem) return html``;
         return html`
-            <div style="padding: 15px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; background: var(--input-bg); flex-shrink: 0;">
-                <div>
-                    <div style="margin-bottom: 4px; font-weight: bold; color: var(--intent-highlight); font-size: 1.15rem;">${activeItem.title || 'Untitled'}</div>
-                    <div style="margin-bottom: 4px; display: flex; align-items: center; gap: 6px;"><yv-icon name="link" style="width: 14px; height: 14px; color: var(--intent-primary); flex-shrink: 0;"></yv-icon><a href="${activeItem.url}" target="_blank" style="color: var(--intent-primary); font-size: 0.85rem; word-break: break-all; font-weight: normal; text-decoration: none;">${activeItem.url}</a></div>
-                    <div style="color: var(--text-muted); font-family: monospace; font-size: 0.75rem; font-weight: normal; user-select: all;">Item ID: ${activeItem.id}</div>
-                </div>
-                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                    <div style="display: flex; gap: 5px; flex: 1; min-width: 200px;">
-                        <sutram-input ?flush=${true} .value=${this.targetDir || 'research/'} placeholder="Target path (e.g. research/)" style="flex: 1; margin: 0; font-family: monospace;" @sutram-input-changed=${(e) => ResearchStore.setState({ targetDir: e.detail.value })}></sutram-input>
-                        <sutram-btn size="sm" intent="highlight" label="..." style="margin: 0; padding: 6px 12px;" @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}></sutram-btn>
-                    </div>
-                    <sutram-btn size="sm" intent="success" icon="check" label="Accept to Workspace" style="margin: 0;" @click=${() => this.handleDisposition(activeItem.id, 'accepted')}></sutram-btn>
-                    <sutram-btn size="sm" intent="danger" icon="trash-2" label="Reject" style="margin: 0;" @click=${() => this.handleDisposition(activeItem.id, 'rejected')}></sutram-btn>
-                    <sutram-btn size="sm" intent="warning" icon="refresh-cw" label="Re-Scrape" style="margin: 0;" @click=${() => this.handleDisposition(activeItem.id, 'force_scrape')}></sutram-btn>
-                </div>
-            </div>
-            <sutram-scroll-view padding="20px">
-                <div tabindex="0" style="font-size: 0.95rem; outline: none; white-space: pre-wrap; font-family: var(--font-mono);" .textContent=${activeItem.raw_markdown || 'Awaiting extraction...'}></div>
-            </sutram-scroll-view>
+            <sutram-view>
+                <sutram-surface slot="header" variant="panel" border="bottom" padding="md" gap="sm">
+                    <sutram-stack direction="col" gap="xs">
+                        <h4>${activeItem.title || 'Untitled'}</h4>
+                        <sutram-stack direction="row" align="center" gap="xs">
+                            <sutram-icon name="link" size="sm" intent="primary"></sutram-icon>
+                            <a href="${activeItem.url}" target="_blank" style="color: var(--intent-primary); word-break: break-all;">${activeItem.url}</a>
+                        </sutram-stack>
+                        <code>Item ID: ${activeItem.id}</code>
+                    </sutram-stack>
+                    <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
+                        <sutram-stack direction="row" align="center" gap="xs" ?flex=${true}>
+                            <sutram-input ?flush=${true} ?grow=${true} .value=${this.targetDir || 'research/'} placeholder="Target path (e.g. research/)" @sutram-input-changed=${(e) => ResearchStore.setState({ targetDir: e.detail.value })}></sutram-input>
+                            <sutram-btn ?compact=${true} intent="highlight" label="..." @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}></sutram-btn>
+                        </sutram-stack>
+                        <sutram-btn ?compact=${true} intent="success" icon="check" label="Accept to Workspace" @click=${() => this.handleDisposition(activeItem.id, 'accepted')}></sutram-btn>
+                        <sutram-btn ?compact=${true} intent="danger" icon="trash-2" label="Reject" @click=${() => this.handleDisposition(activeItem.id, 'rejected')}></sutram-btn>
+                        <sutram-btn ?compact=${true} intent="warning" icon="refresh-cw" label="Re-Scrape" @click=${() => this.handleDisposition(activeItem.id, 'force_scrape')}></sutram-btn>
+                    </sutram-stack>
+                </sutram-surface>
+                <pre tabindex="0" .textContent=${activeItem.raw_markdown || 'Awaiting extraction...'}></pre>
+            </sutram-view>
         `;
     }
 }

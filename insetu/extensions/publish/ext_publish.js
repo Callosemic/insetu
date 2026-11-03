@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
@@ -25,33 +25,7 @@ export class InSetuExtPublishModals extends InSetuElement {
         publishError: { type: String },
         snippetHtml: { type: String }
     };
-    static styles = [sharedStyles, css`
-        .snippet-box {
-            margin-top: 14px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            background: var(--input-bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 14px;
-        }
-        .snippet-pre {
-            margin: 0;
-            padding: 12px;
-            background: var(--bg-deep);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            font-family: var(--font-mono);
-            font-size: 0.8rem;
-            line-height: 1.45;
-            color: var(--text);
-            white-space: pre-wrap;
-            word-break: break-word;
-            max-height: 320px;
-            overflow-y: auto;
-        }
-    `];
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -102,11 +76,11 @@ export class InSetuExtPublishModals extends InSetuElement {
         const missingPdflatex = missingBins.includes('pdflatex');
         return html`
             <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Publish Document" @sutram-modal-closed=${() => PublishStore.setState({ publishModalOpen: false, snippetHtml: '', publishError: '' })}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 12px;">
+                <sutram-stack slot="body" direction="col" gap="md">
                     ${missingPandoc ? html`
-                        <div style="padding: 10px 12px; background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 6px; color: var(--intent-danger); font-size: 0.82rem;">
+                        <sutram-surface variant="tinted" intent="danger" padding="sm">
                             ⚠️ System binary <code>pandoc</code> was not found in PATH. Install Pandoc on your host OS to compile documents.
-                        </div>
+                        </sutram-surface>
                     ` : ''}
                     <sutram-select 
                         label="Target Format"
@@ -121,45 +95,45 @@ export class InSetuExtPublishModals extends InSetuElement {
                     </sutram-select>
 
                     ${this.publishError ? html`
-                        <div style="padding: 12px; background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 4px; color: var(--intent-danger); font-size: 0.85rem; font-family: var(--font-mono); white-space: pre-wrap;">
+                        <sutram-surface variant="tinted" intent="danger" padding="sm">
                             <strong>Error:</strong> ${this.publishError}
-                        </div>
+                        </sutram-surface>
                     ` : ''}
 
                     ${this.snippetHtml ? html`
-                        <div class="snippet-box">
-                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
-                                <span style="font-size: 0.85rem; font-weight: bold; color: var(--intent-success); display: flex; align-items: center; gap: 6px;">
-                                    <yv-icon name="check-circle-2" style="width: 16px; height: 16px;"></yv-icon>
-                                    <span>HTML Snippet Ready (${this.snippetHtml.length} chars)</span>
-                                </span>
-                                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <sutram-surface variant="panel" padding="md" gap="sm">
+                            <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                                <sutram-stack direction="row" align="center" gap="xs">
+                                    <sutram-icon name="check-circle-2" size="md" intent="success"></sutram-icon>
+                                    <strong>HTML Snippet Ready (${this.snippetHtml.length} chars)</strong>
+                                </sutram-stack>
+                                <sutram-stack direction="row" gap="sm" ?wrap=${true}>
                                     <sutram-btn
-                                        size="sm"
+                                        ?compact=${true}
                                         intent="success"
                                         icon="clipboard"
                                         label="Copy for Substack (Rich Paste)"
                                         @click=${() => this._copyRichForSubstack(this.snippetHtml)}>
                                     </sutram-btn>
                                     <sutram-btn
-                                        size="sm"
+                                        ?compact=${true}
                                         intent="highlight"
                                         icon="code"
                                         label="Copy Raw HTML Tags"
                                         @click=${() => this._copyRawHtml(this.snippetHtml)}>
                                     </sutram-btn>
-                                </div>
-                            </div>
-                            <pre class="snippet-pre">${this.snippetHtml}</pre>
-                        </div>
+                                </sutram-stack>
+                            </sutram-stack>
+                            <pre style="max-height: 320px; overflow-y: auto; margin: 0;">${this.snippetHtml}</pre>
+                        </sutram-surface>
                     ` : ''}
-                </div>
-                <div slot="footer" style="display: flex; gap: 10px; width: 100%;">
+                </sutram-stack>
+                <sutram-stack slot="footer" direction="row" gap="sm">
                     <sutram-async-btn 
                         icon="${isSnippetMode ? 'code' : 'download'}"
                         label="${isSnippetMode ? 'Generate & Copy Substack Snippet' : 'Compile & Download'}" 
                         intent="primary" 
-                        style="flex: 1; margin: 0;"
+                        ?grow=${true}
                         .onClick=${this.api.bindJobAction('publish/compile-document', 
                             () => {
                                 PublishStore.setState({ publishError: '', snippetHtml: '' });
@@ -204,7 +178,7 @@ export class InSetuExtPublishModals extends InSetuElement {
                             }
                         )}>
                     </sutram-async-btn>
-                </div>
+                </sutram-stack>
             </sutram-modal>
         `;
     }

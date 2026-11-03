@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 
 const AppStore = window.inSetu.stores.App;
@@ -102,16 +102,12 @@ export class InSetuExtSkills extends InSetuElement {
         formStatus: { type: String },
         formMetrics: { type: Object },
         modalMode: { type: String },
-        _configModalOpen: { type: Boolean },
-        _configText: { type: String },
         _newSkillDomain: { type: String },
         _editName: { type: String },
         _editTags: { type: String },
         _editGroup: { type: String }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; container-type: inline-size; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.playlist = [];
@@ -301,11 +297,11 @@ export class InSetuExtSkills extends InSetuElement {
     _renderGroupsTab() {
         const structuredGroups = [...this.groupsList];
         if (structuredGroups.length === 0) {
-            return html`<p style="color: var(--text-muted); font-style: italic; padding: 20px 0;">No grouped track items established. Assign a "Group" value in an item's Edit panel to start.</p>`;
+            return html`<sutram-empty-state text="No grouped track items established. Assign a 'Group' value in an item's Edit panel to start."></sutram-empty-state>`;
         }
 
         return html`
-            <div style="display: flex; flex-direction: column; gap: 15px;">
+            <sutram-stack direction="col" gap="md">
                 ${structuredGroups.map(groupName => {
                     const linkedItems = this.allSkills.filter(s => s.group_name === groupName);
                     if (linkedItems.length === 0) return '';
@@ -315,18 +311,11 @@ export class InSetuExtSkills extends InSetuElement {
                     const progressPercentage = absoluteParts > 0 ? Math.round((absoluteCompleted / absoluteParts) * 100) : 0;
                     return html`
                         <sutram-collapsible intent="neutral" titleText="📦 ${groupName}">
-                            <div slot="actions" style="display: flex; align-items: center; gap: 10px;">
-                                <span style="font-size: 0.8rem; color: var(--text-muted); background: var(--bg); padding: 2px 8px; border-radius: 12px; border: 1px solid var(--border);">
-                                    ${linkedItems.length} item(s)
-                                </span>
-                                <div style="display: flex; align-items: center; gap: 8px; width: 150px;">
-                                    <div style="flex: 1; height: 6px; background: var(--bg); border-radius: 4px; border: 1px solid var(--border); overflow: hidden; position: relative;">
-                                        <div style="width: ${progressPercentage}%; height: 100%; background: var(--intent-success); transition: width 0.3s ease;"></div>
-                                    </div>
-                                    <span style="font-size: 0.8rem; color: var(--intent-success); font-family: var(--font-mono);">${absoluteCompleted}/${absoluteParts}</span>
-                                </div>
-                            </div>
-                            <div style="display: flex; flex-direction: column; gap: 10px; cursor: default;" @click=${(e) => e.stopPropagation()}>
+                            <sutram-stack slot="actions" direction="row" align="center" gap="sm">
+                                <sutram-tag text="${linkedItems.length} item(s)" intent="neutral"></sutram-tag>
+                                <sutram-tag text="${absoluteCompleted}/${absoluteParts} (${progressPercentage}%)" intent="success"></sutram-tag>
+                            </sutram-stack>
+                            <sutram-stack direction="col" gap="sm" @click=${(e) => e.stopPropagation()}>
                                 ${linkedItems.map(item => {
                                     const domainMeta = this.domainConfig[item.domain] || { label: item.domain };
                                     const tagsLabel = item.tags ? ` [${item.tags}]` : '';
@@ -338,7 +327,6 @@ export class InSetuExtSkills extends InSetuElement {
                                             .detailText=${item.filepath}
                                             icon="music"
                                             intent="neutral"
-                                            style="cursor: pointer;"
                                             @click=${() => SkillsStore.getState().selectItem(item, 'train')}
                                             entityType="skill"
                                             .entityData=${item}
@@ -346,11 +334,11 @@ export class InSetuExtSkills extends InSetuElement {
                                         </sutram-card>
                                     `;
                                 })}
-                            </div>
+                            </sutram-stack>
                         </sutram-collapsible>
                     `;
                 })}
-            </div>
+            </sutram-stack>
         `;
     }
     render() {
@@ -358,19 +346,20 @@ export class InSetuExtSkills extends InSetuElement {
         const activeNewDomain = this._newSkillDomain || Object.keys(this.domainConfig)[0] || 'musical_repertoire';
 
         return html`
-            <div style="display: flex; flex-direction: column; gap: 20px;">
-                ${this.loading ? html`<sutram-spinner text="Sweeping session items..."></sutram-spinner>` : ''}
-                <div style="display: flex; flex-direction: column; gap: 20px; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
-                <div style="display: flex; justify-content: flex-end; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-top: -10px;">
-                    <sutram-btn size="sm" intent="success" icon="plus" label="New Skill Item" @click=${() => { this._newSkillDomain = Object.keys(this.domainConfig)[0] || ''; SkillsStore.setState({ newSkillModalOpen: true }); }}></sutram-btn>
-                </div>
+            <sutram-view>
+                <sutram-stack direction="col" gap="md">
+                    ${this.loading ? html`<sutram-spinner text="Sweeping session items..."></sutram-spinner>` : ''}
+                    <sutram-surface variant="ghost" border="bottom" padding="xs">
+                        <sutram-stack direction="row" justify="end" align="center">
+                            <sutram-btn ?compact=${true} intent="success" icon="plus" label="New Skill Item" @click=${() => { this._newSkillDomain = Object.keys(this.domainConfig)[0] || ''; SkillsStore.setState({ newSkillModalOpen: true }); }}></sutram-btn>
+                        </sutram-stack>
+                    </sutram-surface>
 
-                ${viewMode === 'active' ? html`
-                    <div>
+                    ${viewMode === 'active' ? html`
                         ${this.playlist.length === 0 ? html`
-                            <p style="color: var(--text-muted); font-style: italic; padding: 20px 0;">✨ Repertoire profile optimized. No tracks currently scheduled for decay inspection.</p>
+                            <sutram-empty-state text="✨ Repertoire profile optimized. No tracks currently scheduled for decay inspection."></sutram-empty-state>
                         ` : html`
-                            <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <sutram-stack direction="col" gap="sm">
                                 ${this.playlist.map(item => {
                                     const domainMeta = this.domainConfig[item.domain] || { label: item.domain };
                                     const tagsLabel = item.tags ? ` [${item.tags}]` : '';
@@ -382,7 +371,6 @@ export class InSetuExtSkills extends InSetuElement {
                                             .detailText=${item.filepath}
                                             icon="target"
                                             intent="primary"
-                                            style="cursor: pointer;"
                                             @click=${() => SkillsStore.getState().selectItem(item, 'train')}
                                             entityType="skill"
                                             .entityData=${item}
@@ -390,15 +378,13 @@ export class InSetuExtSkills extends InSetuElement {
                                         </sutram-card>
                                     `;
                                 })}
-                            </div>
+                            </sutram-stack>
                         `}
-                    </div>
-                ` : viewMode === 'repertoire' ? html`
-                    <div>
+                    ` : viewMode === 'repertoire' ? html`
                         ${this.allSkills.length === 0 ? html`
-                            <p style="color: var(--text-muted); font-style: italic; padding: 20px 0;">No items currently added. Click "+ New Skill Item" above to expand database footprint.</p>
+                            <sutram-empty-state text="No items currently added. Click '+ New Skill Item' above to expand database footprint."></sutram-empty-state>
                         ` : html`
-                            <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <sutram-stack direction="col" gap="sm">
                                 ${this.allSkills.map(item => {
                                     const domainMeta = this.domainConfig[item.domain] || { label: item.domain };
                                     const tagsLabel = item.tags ? ` [${item.tags}]` : '';
@@ -410,7 +396,6 @@ export class InSetuExtSkills extends InSetuElement {
                                             .detailText=${item.filepath}
                                             icon="folder"
                                             intent="neutral"
-                                            style="cursor: pointer;"
                                             entityType="skill"
                                             .entityData=${item}
                                             @click=${() => SkillsStore.getState().selectItem(item, 'train')}
@@ -418,29 +403,26 @@ export class InSetuExtSkills extends InSetuElement {
                                         </sutram-card>
                                     `;
                                 })}
-                            </div>
+                            </sutram-stack>
                         `}
-                    </div>
-                ` : this._renderGroupsTab()}
-            </div>
-            </div>
+                    ` : this._renderGroupsTab()}
+                </sutram-stack>
+            </sutram-view>
             ${(!!this.selectedItem && this.modalMode === 'edit') ? html`
             <sutram-modal
                 ?open=${true}
                 ?fullscreen=${true}
                 titleText="Edit Skill Architecture & Structure"
                 @sutram-modal-closed=${() => SkillsStore.setState({ selectedItem: null })}>
-                <div slot="body" style="display: contents;">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-                        <sutram-input label="Track / Skill Title" .value=${this._editName || ''} @sutram-input-changed=${(e) => this._editName = e.detail.value}></sutram-input>
-                        <div>
-                            <sutram-input label="Parent Collection Group" placeholder="e.g. Warmups (or leave blank)" .value=${this._editGroup || ''} @sutram-input-changed=${(e) => this._editGroup = e.detail.value}></sutram-input>
-                        </div>
-                    </div>
-                    <sutram-input label="Tags" .value=${this._editTags || ''} placeholder="e.g. Piano, Acoustic, Classical" @sutram-input-changed=${(e) => this._editTags = e.detail.value}></sutram-input>
-                    <sutram-input label="Section / Parts Definition Matrix" .value=${this.formMetrics.parts || ''} placeholder="e.g. Intro, Verse, Solo" @sutram-input-changed=${(e) => SkillsStore.getState().updateMetricField('parts', e.detail.value)}></sutram-input>
-                    <sutram-input label="Optional Path Custom Steps (Comma Separated Overrides)" .value=${this.formMetrics.custom_steps || ''} placeholder="e.g. Intro, Solo, Chorus, Mastered" @sutram-input-changed=${(e) => SkillsStore.getState().updateMetricField('custom_steps', e.detail.value)}></sutram-input>
-                </div>
+                <sutram-stack slot="body" direction="col" gap="md">
+                    <sutram-stack direction="grid" ?compact=${true}>
+                        <sutram-input label="Track / Skill Title" ?flush=${true} .value=${this._editName || ''} @sutram-input-changed=${(e) => this._editName = e.detail.value}></sutram-input>
+                        <sutram-input label="Parent Collection Group" ?flush=${true} placeholder="e.g. Warmups (or leave blank)" .value=${this._editGroup || ''} @sutram-input-changed=${(e) => this._editGroup = e.detail.value}></sutram-input>
+                    </sutram-stack>
+                    <sutram-input label="Tags" ?flush=${true} .value=${this._editTags || ''} placeholder="e.g. Piano, Acoustic, Classical" @sutram-input-changed=${(e) => this._editTags = e.detail.value}></sutram-input>
+                    <sutram-input label="Section / Parts Definition Matrix" ?flush=${true} .value=${this.formMetrics.parts || ''} placeholder="e.g. Intro, Verse, Solo" @sutram-input-changed=${(e) => SkillsStore.getState().updateMetricField('parts', e.detail.value)}></sutram-input>
+                    <sutram-input label="Optional Path Custom Steps (Comma Separated Overrides)" ?flush=${true} .value=${this.formMetrics.custom_steps || ''} placeholder="e.g. Intro, Solo, Chorus, Mastered" @sutram-input-changed=${(e) => SkillsStore.getState().updateMetricField('custom_steps', e.detail.value)}></sutram-input>
+                </sutram-stack>
                 <sutram-async-btn slot="footer" icon="trash-2" label="Delete Item" intent="danger" .onClick=${this._deleteSkillItem.bind(this)}></sutram-async-btn>
                 <sutram-async-btn slot="footer" icon="save" label="Save Structural Changes" intent="primary" .onClick=${this._submitStructuralEdit.bind(this)}></sutram-async-btn>
             </sutram-modal>
@@ -451,23 +433,22 @@ export class InSetuExtSkills extends InSetuElement {
                 ?fullscreen=${true}
                 titleText="Add New Training Skill Item"
                 @sutram-modal-closed=${() => SkillsStore.setState({ newSkillModalOpen: false })}>
-                <div slot="body" style="display: contents;">
-                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
-                        <sutram-input label="Item Name / Track Title" placeholder="e.g. Stairway to Heaven" .value=${this._newSkillForm.name || ''} @sutram-input-changed=${e => this._newSkillForm.name = e.detail.value}></sutram-input>
-                        <div>
-                            <sutram-input label="Collection Group" placeholder="e.g. Repertoire (or leave blank)" .value=${this._newSkillForm.group || ''} @sutram-input-changed=${e => this._newSkillForm.group = e.detail.value}></sutram-input>
-                        </div>
+                <sutram-stack slot="body" direction="col" gap="md">
+                    <sutram-stack direction="grid" ?compact=${true}>
+                        <sutram-input label="Item Name / Track Title" ?flush=${true} placeholder="e.g. Stairway to Heaven" .value=${this._newSkillForm.name || ''} @sutram-input-changed=${e => this._newSkillForm.name = e.detail.value}></sutram-input>
+                        <sutram-input label="Collection Group" ?flush=${true} placeholder="e.g. Repertoire (or leave blank)" .value=${this._newSkillForm.group || ''} @sutram-input-changed=${e => this._newSkillForm.group = e.detail.value}></sutram-input>
                         <sutram-select 
                             label="Target Domain Framework" 
+                            ?flush=${true}
                             .value=${activeNewDomain} 
                             .options=${Object.keys(this.domainConfig).map(k => ({ value: k, label: this.domainConfig[k].label || k }))}
-                            @sutram-input-changed=${(e) => { this._newSkillDomain = e.detail.value; this._newSkillForm.domain = e.detail.value; this.requestUpdate(); }}>
+                            @sutram-input-changed=${(e) => { this._newSkillDomain = e.detail.value; this._newSkillForm.domain = e.detail.value; }}>
                         </sutram-select>
-                    </div>
+                    </sutram-stack>
 
-                    <sutram-input label="Tags" placeholder="e.g. Piano, Acoustic, Classical" .value=${this._newSkillForm.tags || ''} @sutram-input-changed=${e => this._newSkillForm.tags = e.detail.value}></sutram-input>
+                    <sutram-input label="Tags" ?flush=${true} placeholder="e.g. Piano, Acoustic, Classical" .value=${this._newSkillForm.tags || ''} @sutram-input-changed=${e => this._newSkillForm.tags = e.detail.value}></sutram-input>
 
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                    <sutram-stack direction="grid" ?compact=${true}>
                         ${(() => {
                             const cfg = this.domainConfig[activeNewDomain];
                             const options = (cfg && cfg.step_labels) ? (Array.isArray(cfg.step_labels) ? cfg.step_labels : Object.keys(cfg.step_labels).map(k => ({ key: k, label: cfg.step_labels[k] }))) : [{ key: 'untouched', label: 'Untouched' }];
@@ -475,60 +456,61 @@ export class InSetuExtSkills extends InSetuElement {
                             return html`
                                 <sutram-select 
                                     label="Initial Starting Status Stage" 
+                                    ?flush=${true}
                                     .value=${this._newSkillForm.status || 'untouched'} 
                                     .options=${mappedOptions}
                                     @sutram-input-changed=${e => this._newSkillForm.status = e.detail.value}>
                                 </sutram-select>
                             `;
                         })()}
-                        <sutram-input label="Sections / Parts Matrix Checklist" placeholder="e.g. Intro, Verse, Solo" .value=${this._newSkillForm.parts || ''} @sutram-input-changed=${e => this._newSkillForm.parts = e.detail.value}></sutram-input>
-                    </div>
-                    <sutram-input label="Optional Path Custom Steps (Comma Separated Overrides)" placeholder="e.g. Intro, Solo, Chorus, Mastered" .value=${this._newSkillForm.custom_steps || ''} @sutram-input-changed=${e => this._newSkillForm.custom_steps = e.detail.value}></sutram-input>
+                        <sutram-input label="Sections / Parts Matrix Checklist" ?flush=${true} placeholder="e.g. Intro, Verse, Solo" .value=${this._newSkillForm.parts || ''} @sutram-input-changed=${e => this._newSkillForm.parts = e.detail.value}></sutram-input>
+                    </sutram-stack>
+                    <sutram-input label="Optional Path Custom Steps (Comma Separated Overrides)" ?flush=${true} placeholder="e.g. Intro, Solo, Chorus, Mastered" .value=${this._newSkillForm.custom_steps || ''} @sutram-input-changed=${e => this._newSkillForm.custom_steps = e.detail.value}></sutram-input>
                     ${(() => {
                         const activeConfig = this.domainConfig[activeNewDomain];
                         if (!activeConfig || !activeConfig.metrics) return '';
                         return html`
-                            <div style="border-top: 1px solid var(--border); padding-top: 15px; margin-top: 5px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
-                                ${Object.keys(activeConfig.metrics).map(key => {
-                                    const m = activeConfig.metrics[key];
-                                    if (key === 'parts' || key === 'completed_parts' || key === 'custom_steps') return '';
+                            <sutram-surface variant="ghost" border="top" padding="sm">
+                                <sutram-stack direction="grid" ?compact=${true}>
+                                    ${Object.keys(activeConfig.metrics).map(key => {
+                                        const m = activeConfig.metrics[key];
+                                        if (key === 'parts' || key === 'completed_parts' || key === 'custom_steps') return '';
 
-                                    if (m.type === 'rating' || (m.min !== undefined && m.max !== undefined)) {
-                                        const min = m.min !== undefined ? m.min : 1;
-                                        const max = m.max !== undefined ? m.max : 5;
-                                        const options = [];
-                                        for (let i = min; i <= max; i++) {
-                                            options.push(i);
-                                        }
-                                        return html`
-                                            <div>
+                                        if (m.type === 'rating' || (m.min !== undefined && m.max !== undefined)) {
+                                            const min = m.min !== undefined ? m.min : 1;
+                                            const max = m.max !== undefined ? m.max : 5;
+                                            const options = [];
+                                            for (let i = min; i <= max; i++) {
+                                                options.push(i);
+                                            }
+                                            return html`
                                                 <sutram-select 
                                                     label=${m.label} 
+                                                    ?flush=${true}
                                                     .value=${this._newSkillMetrics[key] || min} 
                                                     .options=${options.map(opt => ({ value: opt, label: String(opt) }))}
                                                     @sutram-input-changed=${e => this._newSkillMetrics[key] = e.detail.value}>
                                                 </sutram-select>
-                                            </div>
-                                        `;
-                                    }
+                                            `;
+                                        }
 
-                                    return html`
-                                        <div>
+                                        return html`
                                             <sutram-input 
                                                 type="number"
+                                                ?flush=${true}
                                                 label="${m.label} ${m.unit ? `(${m.unit})` : ''}"
                                                 placeholder="${m.unit ? m.unit : 'Value'}"
                                                 .value=${this._newSkillMetrics[key] || ''} 
                                                 @sutram-input-changed=${e => this._newSkillMetrics[key] = e.detail.value}>
                                             </sutram-input>
-                                        </div>
-                                    `;
-                                })}
-                            </div>
+                                        `;
+                                    })}
+                                </sutram-stack>
+                            </sutram-surface>
                         `;
                     })()}
-                </div>
-                <sutram-async-btn slot="footer" intent="success" icon="plus" label="Initialize Track on Disk" style="width: 100%; display: block;" .onClick=${(e) => this._handleCreateSkill(e)}></sutram-async-btn>
+                </sutram-stack>
+                <sutram-async-btn slot="footer" intent="success" icon="plus" label="Initialize Track on Disk" ?fullWidth=${true} .onClick=${(e) => this._handleCreateSkill(e)}></sutram-async-btn>
             </sutram-modal>
             ` : ''}
         `;
@@ -545,9 +527,7 @@ export class InSetuSkillsSessionProjection extends InSetuElement {
         formStatus: { type: String },
         formMetrics: { type: Object }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         const st = SkillsStore.getState();
@@ -574,7 +554,6 @@ export class InSetuSkillsSessionProjection extends InSetuElement {
                 this.formScore = slice.formScore;
                 this.formStatus = slice.formStatus;
                 this.formMetrics = slice.formMetrics;
-                this.requestUpdate();
             }
         );
     }
@@ -599,11 +578,9 @@ export class InSetuSkillsSessionProjection extends InSetuElement {
         const completedPartsStr = this.formMetrics.completed_parts || '';
         const completedParts = completedPartsStr.split(',').map(p => p.trim()).filter(p => p);
         return html`
-            <div style="margin-top: 10px; border-top: 1px solid var(--border); padding-top: 15px;">
-                <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 8px; color: var(--text-muted);">
-                    Section Coverage Checklist
-                </label>
-                <div style="display: flex; flex-direction: column; gap: 8px; background: var(--input-bg); padding: 12px; border-radius: 4px; border: 1px solid var(--border);">
+            <sutram-surface variant="panel" border="top" padding="sm" gap="xs">
+                <sutram-label text="Section Coverage Checklist"></sutram-label>
+                <sutram-stack direction="col" gap="xs">
                     ${allParts.map(part => {
                         const isChecked = completedParts.includes(part);
                         return html`
@@ -615,8 +592,8 @@ export class InSetuSkillsSessionProjection extends InSetuElement {
                             </sutram-toggle>
                         `;
                     })}
-                </div>
-            </div>
+                </sutram-stack>
+            </sutram-surface>
         `;
     }
     _renderMetricInput(key, def) {
@@ -685,33 +662,33 @@ export class InSetuSkillsSessionProjection extends InSetuElement {
             ? this.selectedItem.metrics.custom_steps.split(',').map(s => ({ key: s.trim(), label: s.trim() }))
             : ((domainMeta && domainMeta.step_labels) ? (Array.isArray(domainMeta.step_labels) ? domainMeta.step_labels : Object.keys(domainMeta.step_labels).map(k => ({ key: k, label: domainMeta.step_labels[k] }))) : []);
         return html`
-            <sutram-scroll-view padding="15px" style="gap: 12px;">
-                <sutram-select label="Quality Rating Scale (SM-2 Algorithm)" .value=${this.formScore} .options=${[
-                    {value: 5, label: '5 - Perfect execution (Immediate retention)'},
-                    {value: 4, label: '4 - Correct execution with minimal hesitation'},
-                    {value: 3, label: '3 - Correct execution but required notable effort'},
-                    {value: 2, label: '2 - Incorrect execution; clear structural breakdown'},
-                    {value: 1, label: '1 - Blackout/Untouched (Complete memory lapse)'}
-                ]} @sutram-input-changed=${(e) => SkillsStore.setState({ formScore: parseInt(e.detail.value, 10) })}></sutram-select>
+            <sutram-view>
+                <sutram-stack direction="col" gap="md">
+                    <sutram-select label="Quality Rating Scale (SM-2 Algorithm)" .value=${this.formScore} .options=${[
+                        {value: 5, label: '5 - Perfect execution (Immediate retention)'},
+                        {value: 4, label: '4 - Correct execution with minimal hesitation'},
+                        {value: 3, label: '3 - Correct execution but required notable effort'},
+                        {value: 2, label: '2 - Incorrect execution; clear structural breakdown'},
+                        {value: 1, label: '1 - Blackout/Untouched (Complete memory lapse)'}
+                    ]} @sutram-input-changed=${(e) => SkillsStore.setState({ formScore: parseInt(e.detail.value, 10) })}></sutram-select>
 
-                ${options.length > 0 ? html`
-                    <sutram-select label="Current Mastery Stage" .value=${this.formStatus} .options=${options.map(opt => ({value: opt.key, label: opt.label}))} @sutram-input-changed=${(e) => this._handleStatusChange(e.detail.value)}></sutram-select>
-                ` : ''}
+                    ${options.length > 0 ? html`
+                        <sutram-select label="Current Mastery Stage" .value=${this.formStatus} .options=${options.map(opt => ({value: opt.key, label: opt.label}))} @sutram-input-changed=${(e) => this._handleStatusChange(e.detail.value)}></sutram-select>
+                    ` : ''}
 
-                ${this._renderPartsCheckboxes()}
+                    ${this._renderPartsCheckboxes()}
 
-                ${domainMeta && domainMeta.metrics ? html`
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; border-top: 1px solid var(--border); padding-top: 15px;">
-                        ${Object.keys(domainMeta.metrics).map(key => this._renderMetricInput(key, domainMeta.metrics[key]))}
-                    </div>
-                ` : ''}
-            </sutram-scroll-view>
-            <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; gap: 10px; flex-shrink: 0;">
-                <sutram-btn intent="neutral" icon="x" label="Cancel" style="flex: 1; margin: 0;" @click=${() => {
+                    ${domainMeta && domainMeta.metrics ? html`
+                        <sutram-stack direction="grid" ?compact=${true}>
+                            ${Object.keys(domainMeta.metrics).map(key => this._renderMetricInput(key, domainMeta.metrics[key]))}
+                        </sutram-stack>
+                    ` : ''}
+                </sutram-stack>
+                <sutram-btn slot="footer" intent="neutral" icon="x" label="Cancel" @click=${() => {
                     if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('skills:session');
                 }}></sutram-btn>
-                <sutram-async-btn icon="save" label="Flush Session Data" intent="success" style="flex: 2; margin: 0;" .onClick=${this._submitPracticeSession.bind(this)}></sutram-async-btn>
-            </div>
+                <sutram-async-btn slot="footer" icon="save" label="Flush Session Data" intent="success" .onClick=${this._submitPracticeSession.bind(this)}></sutram-async-btn>
+            </sutram-view>
         `;
     }
 }
