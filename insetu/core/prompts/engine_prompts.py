@@ -5,6 +5,7 @@ from typing import TypedDict, List, Optional, Dict, Any
 from insetu.core.sdk import InSetuExtension, ExtensionContext, TemplateOverlayVFSDriver
 from insetu.core.topology.engine_topology import build_sys_landmarks_context
 from insetu.core.utils_core import (
+    get_sister_repos,
     interpolate_mustache_chain,
     resolve_macro_includes,
     parse_frontmatter,
@@ -66,9 +67,8 @@ def migrate_legacy_prompt_macros_on_boot(workspace_id=None, **kwargs):
         ctx = prompts_bp.get_context(workspace_id)
         pattern = re.compile(r'(\{\{\s*include_prompt\s*:\s*)([^\s{};,\'"]+)')
         target_roots = ["ctx://prompts"] + [
-            f"vfs://{r.get('repo_dir')}/.insetu-data/prompts"
-            for r in (ctx.config.get("target_repos") or [])
-            if isinstance(r, dict) and r.get("repo_dir")
+            f"vfs://{r_dir}/.insetu-data/prompts"
+            for r_dir in get_sister_repos(ctx.workspace_id)
         ]
         candidate_uris = [
             u for root in target_roots
@@ -129,8 +129,7 @@ def provide_available_prompts(workspace_id=None, **kwargs):
     for tpl_uri in _discover_module_template_prompts(workspace_id):
         prompts.append(tpl_uri)
 
-    for repo_cfg in ctx.config.get("target_repos", []):
-        r_dir = repo_cfg.get("repo_dir")
+    for r_dir in get_sister_repos(ctx.workspace_id):
         if r_dir:
             repo_prompt_root = f"vfs://{r_dir}/.insetu-data/prompts"
             found_repo_prompts = list(ctx.vfs.walk(repo_prompt_root, exts=['.md', '.txt', '.gitkeep', '.keep']))
@@ -164,18 +163,13 @@ def read_prompt_with_cascade(ctx, uri_str: str) -> Optional[str]:
     """
     if not uri_str:
         return None
-    u_obj = InSetuURI.from_external_input(uri_str, default_scheme="ctx")
-    canon_str = InSetuURI.canonicalize(str(u_obj), default_prefix="ctx://prompts/")
+    canon_str = InSetuURI.canonicalize(uri_str, default_prefix="ctx://prompts/")
     u_obj = InSetuURI(canon_str)
     rel_p = (u_obj.path or "").lstrip("/")
 
     if u_obj.scheme == "ctx" and u_obj.volume == "prompts" and not rel_p.startswith(".templates/"):
         first_seg, sep, rest_rel = rel_p.partition("/")
-        known_repos = {
-            r.get("repo_dir")
-            for r in (ctx.config.get("target_repos") or [])
-            if isinstance(r, dict) and r.get("repo_dir")
-        }
+        known_repos = set(get_sister_repos(ctx.workspace_id))
         repo_cands: List[str] = []
         fallback_rel = rel_p
         if sep and rest_rel and first_seg in known_repos:
@@ -222,7 +216,7 @@ def resolve_prompt_text(
     Expands `{{include_prompt: ...}}` macros and interpolates `{{ var | sys.* | default }}`
     against the target repository's `sys.*` landmarks and any caller-supplied `extra_context`.
     """
-    canon_uri = str(InSetuURI.from_external_input(target_uri, default_scheme="ctx")) if target_uri else "ctx://prompts/preview.md"
+    canon_uri = InSetuURI.canonicalize(target_uri, default_prefix="ctx://prompts/") if target_uri else "ctx://prompts/preview.md"
     content = raw_content if raw_content is not None else read_prompt_with_cascade(ctx, canon_uri)
     if content is None:
         return None
@@ -230,7 +224,7 @@ def resolve_prompt_text(
     yaml_meta, main_body, _ = parse_frontmatter(content)
 
     def _read_included_body(target_req: str) -> Optional[str]:
-        raw_inc = read_prompt_with_cascade(ctx, str(InSetuURI.from_external_input(target_req, default_scheme="ctx")))
+        raw_inc = read_prompt_with_cascade(ctx, InSetuURI.canonicalize(target_req, default_prefix="ctx://prompts/"))
         if raw_inc is None:
             return None
         _, inc_body, _ = parse_frontmatter(raw_inc)
@@ -274,7 +268,7 @@ def api_prompts_resolve(ctx):
     if not filename and live_content is None:
         return {"error": "File required"}, 400
 
-    target_uri = str(InSetuURI.from_external_input(filename, default_scheme="ctx")) if filename else "ctx://prompts/preview.md"
+    target_uri = InSetuURI.canonicalize(filename, default_prefix="ctx://prompts/") if filename else "ctx://prompts/preview.md"
     resolved_content = resolve_prompt_text(
         ctx,
         target_uri=target_uri,

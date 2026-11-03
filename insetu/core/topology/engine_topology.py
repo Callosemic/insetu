@@ -1469,7 +1469,11 @@ def get_landmark_kinds(workspace_id: Optional[str] = None) -> Tuple[List[Dict[st
     notices: List[str] = []
     seen_ids = {k["id"] for k in kinds}
     seen_outputs = {k["output"] for k in kinds} | set(_LANDMARK_RESERVED_OUTPUTS)
-    for decl in hooks.emit_merge_list("register_repo_landmarks", workspace_id=workspace_id or "default"):
+    try:
+        registered_decls = hooks.emit_merge_list("register_repo_landmarks", workspace_id=workspace_id or "default")
+    except (KeyError, Exception):
+        registered_decls = []
+    for decl in registered_decls:
         if not isinstance(decl, dict):
             continue
         kid = str(decl.get("id") or "")
@@ -1811,11 +1815,11 @@ def infer_target_repo(
         if not inc_str:
             continue
         try:
-            u_inc = InSetuURI.from_external_input(inc_str)
+            u_inc = InSetuURI(InSetuURI.canonicalize(inc_str))
             if u_inc.scheme == "vfs" and u_inc.repo in known_repo_dirs:
                 return u_inc.repo
             if u_inc.scheme == "ctx" and u_inc.volume == "prompts" and u_inc.path:
-                first_seg = u_inc.path.strip("/").split("/", 1)[0]
+                first_seg, _, _ = u_inc.path.strip("/").partition("/")
                 if first_seg in known_repo_dirs:
                     return first_seg
             if u_inc.scheme == "ctx" and u_inc.volume in ("contexts", "diffs"):
