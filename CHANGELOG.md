@@ -2,6 +2,54 @@
 
 <!-- version list -->
 
+## v0.32.0 (2026-11-03)
+
+### Build System
+
+- **codemirror**: Code-split 39 language packs with shared lezer singletons and cryptographic
+  lockfile
+  ([`9dedb85`](https://github.com/Callosemic/insetu/commit/9dedb8526a7921a3d3abcddd38f64b64c1e68785))
+
+### Features
+
+- **ai-bridge**: Compiler-grade parser extraction, signature memoization, in-place n-1 healing, and
+  web-chat handoff
+  ([`6b95158`](https://github.com/Callosemic/insetu/commit/6b951581d98043a6d28ed1276e017ef464face9f))
+
+- **app-shell**: Implement two-tier DAG fault quarantine, S8 workspace extension approvals, and
+  authenticated panic triggers
+  ([`f1f740f`](https://github.com/Callosemic/insetu/commit/f1f740f2408c147e66793deeee05646466236331))
+
+- **core**: Implement interleaved AST diffs, persistent Cartographer working memory, topology sieve
+  reconciliation, S8 workspace extension approvals, and zero-CSS modernization
+  ([`ba19ee1`](https://github.com/Callosemic/insetu/commit/ba19ee161342d32bd059e14421f108f2d0446bbc))
+
+- **devops**: Zero-CSS presentation overhaul, batched git cat-file pre-fetching, and topology sieve
+  diff parity
+  ([`3f24ebc`](https://github.com/Callosemic/insetu/commit/3f24ebc52f2b9bf8b3a713b5ae047c8936a77f12))
+
+### Refactoring
+
+- **core-pipeline**: Enforce sister repo accessors and canonical URI resolution in prompts and
+  topology
+  ([`96c2ca0`](https://github.com/Callosemic/insetu/commit/96c2ca03aa1f8940e3d694d2b6018899ca2de7c0))
+
+- **core-system**: Optimize macro include partitioning and cache migration repository lookups
+  ([`76417e1`](https://github.com/Callosemic/insetu/commit/76417e103866b09ee87dbc5bf29bb28125c5e7d2))
+
+- **extensions**: Unify Knowledge, Content, Work, and Automation suites under Zero-CSS and sieve
+  standards
+  ([`ccabc04`](https://github.com/Callosemic/insetu/commit/ccabc04733a31c473f40dcd2ba2a3f990b2b451f))
+
+### Testing
+
+- **fitness**: Add static rules for type annotations, unmanaged polling, and component zero-css
+  ([`c21ba60`](https://github.com/Callosemic/insetu/commit/c21ba606d28d5a70569da54714acd30b5dcfa7e1))
+
+- **unit**: Add node esm loader harness, codemirror verification, and last-failed test filtering
+  ([`0cb9bf0`](https://github.com/Callosemic/insetu/commit/0cb9bf0105bdfa183d3fbc194faf964b7fcb3d95))
+
+
 ## v0.31.0 (2026-10-30)
 
 ### Features
