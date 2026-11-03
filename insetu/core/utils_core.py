@@ -694,7 +694,7 @@ def resolve_macro_includes(text, current_filepath, pattern=_DEFAULT_INCLUDE_PROM
                 if clean_rel.startswith(strip_p):
                     clean_rel = clean_rel[len(strip_p):].lstrip("/")
             if cur_uri.scheme == "vfs" and cur_uri.repo:
-                first_seg = clean_rel.split("/", 1)[0]
+                first_seg, _, _ = clean_rel.partition("/")
                 if first_seg != cur_uri.repo and not clean_rel.startswith(".templates/"):
                     return f"ctx://prompts/{cur_uri.repo}/{clean_rel}"
             return f"ctx://prompts/{clean_rel}"

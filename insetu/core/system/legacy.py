@@ -165,8 +165,9 @@ def migrate_physical_sandboxes(**kwargs):
         try:
             cfg_path, ws_root = get_workspace_physics(ws_id)
             raw_cfg = load_json_config(cfg_path, {})
+            raw_target_repos = raw_cfg.get("target_repos") or []
             migrated_tracker = False
-            for repo_cfg in (raw_cfg.get("target_repos") or []):
+            for repo_cfg in raw_target_repos:
                 if not isinstance(repo_cfg, dict):
                     continue
                 r_dir = repo_cfg.get("repo_dir")
@@ -185,7 +186,7 @@ def migrate_physical_sandboxes(**kwargs):
                 )
 
             # 7. Migrate legacy workspace .insetu/data/prompts/<repo_dir> folders into <repo>/.insetu-data/prompts
-            for repo_cfg in (raw_cfg.get("target_repos") or []):
+            for repo_cfg in raw_target_repos:
                 if not isinstance(repo_cfg, dict):
                     continue
                 r_dir = repo_cfg.get("repo_dir")
