@@ -91,6 +91,38 @@ class TestVendorLock(unittest.TestCase):
             lock = json.loads((VENDOR_ROOT / vendor_lock.LOCK_FILENAME).read_text(encoding="utf-8"))["sutram"]
             self.assertFalse(lock["dirty"], "The committed vendor build came from a sutram checkout with uncommitted changes.")
 
+    def test_codemirror_lock_detects_edited_extra_and_lockfile_drift(self):
+        """check_codemirror catches an extra file, a hand-edited file, and a modified package-lock.json."""
+        cm_dir = self.vendor / "codemirror"
+        (cm_dir / "lang").mkdir(parents=True)
+        (cm_dir / "codemirror-core.js").write_text("export const core = 1;\n", encoding="utf-8")
+        (cm_dir / "lang" / "rust.js").write_text("export const rust = () => [];\n", encoding="utf-8")
+        pkg_lock = self.root / "package-lock.json"
+        pkg_lock.write_text('{"name": "cm", "lockfileVersion": 3}\n', encoding="utf-8")
+
+        vendor_lock.sync_codemirror(pkg_lock, cm_dir)
+        self.assertEqual(vendor_lock.check_codemirror(cm_dir, pkg_lock), [])
+
+        # 1. Hand-edit a file -> check fails
+        (cm_dir / "lang" / "rust.js").write_text("export const rust = () => [1];\n", encoding="utf-8")
+        self.assertTrue(any("contents" in p for p in vendor_lock.check_codemirror(cm_dir, pkg_lock)))
+
+        # 2. Extra file -> check fails
+        vendor_lock.sync_codemirror(pkg_lock, cm_dir)
+        (cm_dir / "state.js").write_text("// leftover shim\n", encoding="utf-8")
+        self.assertTrue(any("file count" in p for p in vendor_lock.check_codemirror(cm_dir, pkg_lock)))
+        (cm_dir / "state.js").unlink()
+
+        # 3. Modified package-lock.json -> check fails
+        pkg_lock.write_text('{"name": "cm", "lockfileVersion": 3, "changed": true}\n', encoding="utf-8")
+        self.assertTrue(any("package-lock.json" in p for p in vendor_lock.check_codemirror(cm_dir, pkg_lock)))
+
+    def test_committed_codemirror_vendor_tree_matches_its_lock(self):
+        """The committed static/vendor/codemirror tree must match codemirror.lock.json."""
+        cm_dir = VENDOR_ROOT / "codemirror"
+        problems = vendor_lock.check_codemirror(cm_dir)
+        self.assertEqual(problems, [], "Re-run scripts/vendor_codemirror.sh and commit the result:\n" + "\n".join(problems))
+
 
 if __name__ == "__main__":
     unittest.main()

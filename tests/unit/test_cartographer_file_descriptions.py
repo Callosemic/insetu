@@ -14,6 +14,7 @@ from akasa.workers import _init_worker_schema
 from insetu.core.bridge.bridge_vfs import execute_bridge_sync
 from insetu.core.bridge.engine_bridge import BRIDGE_SCHEMA
 from insetu.core.cartographer.cartographer import CARTOGRAPHER_SCHEMA, describe_source_file, map_repositories
+from insetu.core.languages import describe_directory
 from insetu.core.topology.engine_topology import (
     TOPOLOGY_SCHEMA,
     force_topology_scan,
@@ -22,7 +23,7 @@ from insetu.core.topology.engine_topology import (
 
 
 class TestDescribeSourceFile(unittest.TestCase):
-    """describe_source_file reads module docstrings and leading file comments, never symbol docs."""
+    """describe_source_file derives a description from the file itself (docstrings, leading comments, frontmatter, metadata), never symbol docs."""
 
     def test_python_module_docstring(self):
         src = '"""Vendors sutram into insetu. More detail here."""\nimport os\n'
@@ -50,6 +51,54 @@ class TestDescribeSourceFile(unittest.TestCase):
     def test_js_jsdoc_attached_to_a_declaration_is_not_a_file_description(self):
         src = "/**\n * Formats currency.\n */\nexport function formatCurrency(amount) {}\n"
         self.assertEqual(describe_source_file("ui/format.js", src), "")
+
+    def test_polyglot_markdown_shell_json_toml_and_root_files(self):
+        self.assertEqual(
+            describe_source_file("docs/guide.md", "---\ndescription: Developer guide for extensions.\n---\n# Body\n"),
+            "Developer guide for extensions.",
+        )
+        self.assertEqual(
+            describe_source_file("scripts/build.sh", "#!/usr/bin/env bash\n# Bundles assets via esbuild.\nset -e\n"),
+            "Bundles assets via esbuild.",
+        )
+        self.assertEqual(
+            describe_source_file("pyproject.toml", '[project]\nname = "demo"\ndescription = "Demo package."\n'),
+            "Demo package.",
+        )
+        self.assertEqual(
+            describe_source_file("scripts/codemirror/package.json", '{"name": "insetu-codemirror-bundle", "private": true}'),
+            "npm package manifest for insetu-codemirror-bundle.",
+        )
+        self.assertEqual(
+            describe_source_file("scripts/codemirror/package-lock.json", '{"name": "cm", "lockfileVersion": 3}'),
+            "npm dependency lockfile.",
+        )
+        # Other JSON files describe themselves with a "description" key; their file name never invents one.
+        self.assertEqual(
+            describe_source_file("scripts/codemirror/languages.src.json", '{"schema": 1, "description": "Editor languages to bundle.", "languages": {}}'),
+            "Editor languages to bundle.",
+        )
+        self.assertEqual(describe_source_file("scripts/codemirror/languages.src.json", '{"schema": 1, "languages": {}}'), "")
+        self.assertEqual(
+            describe_source_file(".gitignore", "# Virtual envs\n.venv/\n"),
+            "Git ignore rules.",
+        )
+        self.assertEqual(
+            describe_source_file("LICENSE", "Apache License\nVersion 2.0, January 2004\n"),
+            "Apache-2.0 open-source software license.",
+        )
+        self.assertEqual(
+            describe_source_file("NOTICE", "inSetu Developer OS\nCopyright 2026\n"),
+            "Copyright notice and third-party software attributions.",
+        )
+        self.assertEqual(
+            describe_directory(
+                "scripts/codemirror",
+                ["scripts/codemirror/package.json", "scripts/codemirror/build.mjs"],
+                lambda p: '{"name": "insetu-codemirror-bundle"}',
+            ),
+            "Build and dependency specification for insetu-codemirror-bundle.",
+        )
 
 
 class TestMapRepositoriesFileFallback(unittest.TestCase):
@@ -138,6 +187,37 @@ class TestMapRepositoriesFileFallback(unittest.TestCase):
         map_repositories("default", silent=True)
         sync_vfs_barrier("default")
         self.assertIn("# Parses widget manifests into typed records.", self._index_line("widgets.py"))
+
+    def _write_index(self, *lines):
+        body = "".join(f"{line}\n" for line in lines)
+        (self.repo_dir / "CODE_INDEX.md").write_text(
+            f"# Alpha Code Index\n\n```text\nalpha/\n├── CODE_INDEX.md                   # Index file\n{body}```\n",
+            encoding="utf-8",
+        )
+
+    def _remap(self):
+        force_topology_scan(workspace_id="default")
+        map_repositories("default", silent=True)
+        sync_vfs_barrier("default")
+
+    def test_description_survives_the_file_leaving_and_coming_back(self):
+        (self.repo_dir / "roundtrip.py").write_text("X = 1\n", encoding="utf-8")
+        self._write_index("└── roundtrip.py                    # Hand-written description.")
+        self._remap()
+        (self.repo_dir / "roundtrip.py").rename(self.root_path / "roundtrip.py.away")
+        self._remap()
+        self.assertNotIn("roundtrip.py", (self.repo_dir / "CODE_INDEX.md").read_text(encoding="utf-8"))
+        (self.root_path / "roundtrip.py.away").rename(self.repo_dir / "roundtrip.py")
+        self._remap()
+        self.assertIn("# Hand-written description.", self._index_line("roundtrip.py"))
+
+    def test_description_a_person_removed_is_not_brought_back(self):
+        (self.repo_dir / "trimmed.py").write_text("X = 1\n", encoding="utf-8")
+        self._write_index("└── trimmed.py                      # Text the author later deletes.")
+        self._remap()
+        self._write_index("└── trimmed.py")
+        self._remap()
+        self.assertIn("# [comment required]", self._index_line("trimmed.py"))
 
 
 if __name__ == "__main__":

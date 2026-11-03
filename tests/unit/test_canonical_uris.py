@@ -170,6 +170,17 @@ class TestCanonicalURIs(unittest.TestCase):
         self.assertEqual(valid_vfs.scheme, "vfs")
         self.assertEqual(valid_vfs.repo, "alpha")
         self.assertEqual(valid_vfs.path, "main.py")
+        self.assertFalse(valid_vfs.is_template)
+
+        ro_tpl = InSetuURI("ctx://prompts/.templates/agent/code.md")
+        self.assertTrue(ro_tpl.is_readonly_template)
+        self.assertFalse(ro_tpl.is_user_template)
+        self.assertTrue(ro_tpl.is_template)
+
+        user_tpl = InSetuURI("ctx://routines/.templates/user/custom.md")
+        self.assertTrue(user_tpl.is_user_template)
+        self.assertFalse(user_tpl.is_readonly_template)
+        self.assertTrue(user_tpl.is_template)
 
     def test_python_insetu_uri_manipulation_and_flow_archive_routing(self):
         """Python InSetuURI supports parent_uri, join, with_name, and resolve_sibling_uri, and handle_flow_pre_save archives prior dated files."""

@@ -56,8 +56,13 @@ class TestSutramCompliance(unittest.TestCase):
         kwargs = {"allow_host_globals": True} if "allow_host_globals" in sig.parameters else {}
 
         core_targets = [
+            BACKEND_DIR / "core" / "agent",
+            BACKEND_DIR / "core" / "bridge",
             BACKEND_DIR / "core" / "config",
+            BACKEND_DIR / "core" / "fs",
+            BACKEND_DIR / "core" / "gather",
             BACKEND_DIR / "core" / "offline",
+            BACKEND_DIR / "core" / "prompts",
             BACKEND_DIR / "core" / "system" / "components",
         ]
         total_violations = 0
@@ -98,29 +103,29 @@ class TestSutramCompliance(unittest.TestCase):
         4. Extension settings panels (like ext_tracker.js) declare 'component' on settingsActions rather than slots:global modals.
         """
         config_js = (BACKEND_DIR / "core" / "config" / "config.js").read_text(encoding="utf-8")
-        self.assertIn("sutram-field-card", config_js)
-        self.assertIn(r"split(/[\r\n,]+/)", config_js)
-        self.assertNotIn("insetu-config-root", config_js)
+        self.assertIn("sutram-field-card", config_js, "config.js must use <sutram-field-card>")
+        self.assertIn(r"split(/[\r\n,]+/)", config_js, "config.js must split newline/comma pattern lists")
+        self.assertNotIn("insetu-config-root", config_js, "Legacy insetu-config-root must not be in config.js")
 
         sys_settings_js = (BACKEND_DIR / "core" / "system" / "components" / "ui_system_settings.js").read_text(encoding="utf-8")
-        self.assertIn("sys:topology", sys_settings_js)
-        self.assertIn("sys:workspaces", sys_settings_js)
-        self.assertIn("action:", sys_settings_js)
-        self.assertNotIn("InSetuWorkspaceEditor", sys_settings_js)
-        self.assertNotIn("insetu-generic-settings-root", sys_settings_js)
+        self.assertIn("sys:topology", sys_settings_js, "ui_system_settings.js must route sys:topology")
+        self.assertIn("sys:workspaces", sys_settings_js, "ui_system_settings.js must route sys:workspaces")
+        self.assertIn("action:", sys_settings_js, "ui_system_settings.js must route action: views")
+        self.assertNotIn("InSetuWorkspaceEditor", sys_settings_js, "Legacy InSetuWorkspaceEditor must be removed")
+        self.assertNotIn("insetu-generic-settings-root", sys_settings_js, "Legacy insetu-generic-settings-root must be removed")
 
         offline_js = (BACKEND_DIR / "core" / "offline" / "offline_ui.js").read_text(encoding="utf-8")
-        self.assertNotIn("InSetuCoreOfflineSettings", offline_js)
-        self.assertIn("sys:topology", offline_js)
+        self.assertNotIn("InSetuCoreOfflineSettings", offline_js, "Legacy InSetuCoreOfflineSettings must be removed")
+        self.assertIn("sys:topology", offline_js, "offline_ui.js must route settings to sys:topology")
 
         tracker_js = (BACKEND_DIR / "extensions" / "tracker" / "ext_tracker.js").read_text(encoding="utf-8")
-        self.assertIn("component: 'insetu-ext-tracker-settings'", tracker_js)
+        self.assertIn("component: 'insetu-ext-tracker-settings'", tracker_js, "ext_tracker.js must declare component: 'insetu-ext-tracker-settings'")
         if (SUTRAM_DIR / "yenvui" / "js" / "collapsible.js").exists():
             yenvui_col = (SUTRAM_DIR / "yenvui" / "js" / "collapsible.js").read_text(encoding="utf-8")
             sutram_prim = (SUTRAM_DIR / "sutram" / "js" / "primitives.js").read_text(encoding="utf-8")
-            self.assertIn("bubbles: false", yenvui_col)
-            self.assertIn("bubbles: false", sutram_prim)
-            self.assertIn("customElements.define('sutram-field-card'", sutram_prim)
+            self.assertIn("bubbles: false", yenvui_col, "YenvuiCollapsible toggle event must set bubbles: false")
+            self.assertIn("bubbles: false", sutram_prim, "SutramCollapsible toggle event must set bubbles: false")
+            self.assertIn("customElements.define('sutram-field-card'", sutram_prim, "primitives.js must register sutram-field-card")
 
     def test_three_layer_chassis_provider_contract_and_single_file_membrane(self):
         """
@@ -143,14 +148,14 @@ class TestSutramCompliance(unittest.TestCase):
         sutram_prim = SUTRAM_DIR / "sutram" / "js" / "primitives.js"
         if yenvui_index.exists() and sutram_index.exists():
             yenvui_src = yenvui_index.read_text(encoding="utf-8")
-            self.assertIn("CHASSIS_PROVIDER_META", yenvui_src)
-            self.assertIn("sharedStyles", yenvui_src)
-            self.assertIn("physics", yenvui_src)
+            self.assertIn("CHASSIS_PROVIDER_META", yenvui_src, "yenvui/js/index.js must export CHASSIS_PROVIDER_META")
+            self.assertIn("sharedStyles", yenvui_src, "yenvui/js/index.js must export sharedStyles")
+            self.assertIn("physics", yenvui_src, "yenvui/js/index.js must export physics")
 
             prim_src = sutram_prim.read_text(encoding="utf-8")
-            self.assertIn("export const REQUIRED_CHASSIS_PRIMITIVES", prim_src)
-            self.assertIn("export function validateChassisContract", prim_src)
-            self.assertNotIn("../../yenvui/", prim_src)
+            self.assertIn("export const REQUIRED_CHASSIS_PRIMITIVES", prim_src, "primitives.js must export REQUIRED_CHASSIS_PRIMITIVES")
+            self.assertIn("export function validateChassisContract", prim_src, "primitives.js must export validateChassisContract")
+            self.assertNotIn("../../yenvui/", prim_src, "primitives.js must not use relative ../../yenvui/ imports")
             # Execute validateChassisContract in Node against both a complete DummyChassis and an incomplete provider
             start_idx = prim_src.index("export const REQUIRED_CHASSIS_PRIMITIVES")
             end_idx = prim_src.index("SutramUIAdapter.registerChassis(Chassis);")
@@ -186,12 +191,12 @@ assert.throws(
         store_js = (BACKEND_DIR / "core" / "system" / "store.js").read_text(encoding="utf-8")
         fs_js = (BACKEND_DIR / "core" / "fs" / "fs.js").read_text(encoding="utf-8")
 
-        self.assertNotIn("globalBrowsePath", store_js)
-        self.assertNotIn("currentBrowsePath", store_js)
-        self.assertNotIn("globalBrowsePath", fs_js)
-        self.assertNotIn("currentBrowsePath", fs_js)
-        self.assertIn("getBrowsePath:", store_js)
-        self.assertIn("setBrowsePath:", store_js)
+        self.assertNotIn("globalBrowsePath", store_js, "store.js must not reference globalBrowsePath")
+        self.assertNotIn("currentBrowsePath", store_js, "store.js must not reference currentBrowsePath")
+        self.assertNotIn("globalBrowsePath", fs_js, "fs.js must not reference globalBrowsePath")
+        self.assertNotIn("currentBrowsePath", fs_js, "fs.js must not reference currentBrowsePath")
+        self.assertIn("getBrowsePath:", store_js, "store.js must define getBrowsePath")
+        self.assertIn("setBrowsePath:", store_js, "store.js must define setBrowsePath")
 
     def test_fs_domain_agnosticism_and_no_speculative_on_reveal(self):
         """
@@ -201,19 +206,26 @@ assert.throws(
         3. InSetuURI in insetu_sdk.js remains strictly lexical and never couples to AppStore or derivedVfsFiles.
         """
         fs_js = (BACKEND_DIR / "core" / "fs" / "fs.js").read_text(encoding="utf-8")
-        self.assertIn("insetu:ensure-fresh-artifact", fs_js)
-        self.assertIn("keepDrawerOpen: true", fs_js)
-        self.assertNotIn("onReveal", fs_js)
-        self.assertNotIn("flow_workflows", fs_js)
-        self.assertNotIn("stores.Gather", fs_js)
+        self.assertIn("insetu:ensure-fresh-artifact", fs_js, "fs.js must emit insetu:ensure-fresh-artifact")
+        self.assertIn("keepDrawerOpen: true", fs_js, "fs.js share actions must set keepDrawerOpen: true")
+        self.assertNotIn("onReveal", fs_js, "fs.js must not use speculative onReveal pre-warming")
+        self.assertNotIn("flow_workflows", fs_js, "fs.js must not hardcode flow_workflows")
+        self.assertNotIn("stores.Gather", fs_js, "fs.js must not couple directly to stores.Gather")
         sdk_js = (BACKEND_DIR / "core" / "system" / "insetu_sdk.js").read_text(encoding="utf-8")
-        self.assertIn("emitHookAll:", sdk_js)
-        self.assertIn("_resolveScopedPath:", sdk_js)
+        vendor_sutram_js = "\n".join(
+            p.read_text(encoding="utf-8")
+            for p in sorted((BACKEND_DIR / "static" / "vendor" / "sutram" / "js").glob("*.js"))
+        )
+        combined_membrane_src = sdk_js + "\n" + vendor_sutram_js
+        for lego_export in ("SutramIcon", "SutramView", "SutramStack", "SutramSurface", "SutramActionBar", "SutramFloatingHud", "SutramComposer", "SutramSpinner", "SutramEmptyState"):
+            self.assertIn(lego_export, combined_membrane_src, f"Missing Lego primitive export '{lego_export}' in SDK membrane")
+        self.assertIn("emitHookAll:", sdk_js, "insetu_sdk.js must define emitHookAll")
+        self.assertIn("_resolveScopedPath:", sdk_js, "insetu_sdk.js must define _resolveScopedPath")
         start_idx = sdk_js.index("export class InSetuURI {")
         end_idx = sdk_js.index("window.inSetu = window.inSetu || {};", start_idx)
         uri_class_src = sdk_js[start_idx:end_idx]
-        self.assertNotIn("derivedVfsFiles", uri_class_src)
-        self.assertNotIn("AppStore", uri_class_src)
+        self.assertNotIn("derivedVfsFiles", uri_class_src, "InSetuURI must not couple to derivedVfsFiles")
+        self.assertNotIn("AppStore", uri_class_src, "InSetuURI must not couple to AppStore")
 
     def test_canonical_api_route_resolution_contract(self):
         """
@@ -223,12 +235,15 @@ assert.throws(
         3. Gracefully prefixes legacy relative routes ('batches/save' -> 'flow/batches/save').
         """
         sdk_js = (BACKEND_DIR / "core" / "system" / "insetu_sdk.js").read_text(encoding="utf-8")
-        self.assertIn("_resolveScopedPath:", sdk_js)
-        self.assertIn("this.api._resolveScopedPath(path)", sdk_js)
+        self.assertIn("_resolveScopedPath:", sdk_js, "insetu_sdk.js must define _resolveScopedPath")
+        self.assertIn("this.api._resolveScopedPath(path)", sdk_js, "insetu_sdk.js must route API calls through _resolveScopedPath")
         api_js = (BACKEND_DIR / "core" / "system" / "api.js").read_text(encoding="utf-8")
-        self.assertIn("getJson:", api_js)
-        self.assertIn("postJson:", api_js)
-        self.assertIn("deleteJson:", api_js)
+        self.assertIn("getJson:", api_js, "api.js must define getJson")
+        self.assertIn("postJson:", api_js, "api.js must define postJson")
+        self.assertIn("deleteJson:", api_js, "api.js must define deleteJson")
+        self.assertIn("bindJobAction:", api_js, "api.js must define bindJobAction")
+        self.assertNotIn("api.workspace", api_js, "Legacy api.workspace sub-namespace must be removed from api.js")
+        self.assertNotIn("api.system", api_js, "Legacy api.system sub-namespace must be removed from api.js")
 
     def test_workflow_management_suite_canonical_api_routes(self):
         """
@@ -245,7 +260,7 @@ assert.throws(
         }
 
         api_call_pattern = re.compile(
-            r'\b(?:this\.api|window\.inSetu\.api(?:\.workspace)?)\.(?:get|post|delete|getJson|postJson|deleteJson|bindJobAction)\(\s*([\'`"])([^?\'"`\s)]+)'
+            r'\b(?:this\.api|window\.inSetu\.api)\.(?:get|post|delete|getJson|postJson|deleteJson|bindJobAction)\(\s*([\'`"])([^?\'"`\s)]+)'
         )
         known_modules = {
             "bridge", "gather", "cartographer", "config", "editor", "fs", "system",
@@ -298,18 +313,18 @@ assert.throws(
         fs_js = (BACKEND_DIR / "core" / "fs" / "fs.js").read_text(encoding="utf-8")
         ui_editor_js = (BACKEND_DIR / "core" / "system" / "components" / "ui_editor.js").read_text(encoding="utf-8")
         prompts_js = (BACKEND_DIR / "core" / "prompts" / "prompts.js").read_text(encoding="utf-8")
-        self.assertIn("if (!isFS)", fs_js)
-        self.assertIn("toggleBufferPreview:", fs_js)
-        self.assertIn("id: 'file-preview'", fs_js)
-        self.assertIn("id: 'file-copy-expanded'", fs_js)
-        self.assertIn("id: 'file-share-expanded'", fs_js)
-        self.assertIn("id: 'file-download-expanded'", fs_js)
-        self.assertIn("resolveExpandedExportText", fs_js)
-        self.assertIn("Macro-Expanded Preview (Read-Only)", fs_js)
-        self.assertIn("if (this._buffer?.previewMode) return;", fs_js)
-        self.assertIn("id: 'editor-toggle-macro-preview'", ui_editor_js)
-        self.assertIn("{ previewMode: !isEditable }", prompts_js)
-        self.assertNotIn("insetu:file-fetch-url", prompts_js)
+        self.assertIn("if (!isFS)", fs_js, "fs.js resolveFileFetchUrl must guard insetu:file-fetch-url with if (!isFS)")
+        self.assertIn("toggleBufferPreview:", fs_js, "fs.js FsStore must define toggleBufferPreview")
+        self.assertIn("id: 'file-preview'", fs_js, "fs.js must register file-preview action")
+        self.assertIn("id: 'file-copy-expanded'", fs_js, "fs.js must register file-copy-expanded action")
+        self.assertIn("id: 'file-share-expanded'", fs_js, "fs.js must register file-share-expanded action")
+        self.assertIn("id: 'file-download-expanded'", fs_js, "fs.js must register file-download-expanded action")
+        self.assertIn("resolveExpandedExportText", fs_js, "fs.js must define resolveExpandedExportText")
+        self.assertIn("Macro-Expanded Preview (Read-Only)", fs_js, "fs.js must render Macro-Expanded Preview banner")
+        self.assertIn("if (this._buffer?.previewMode) return;", fs_js, "fs.js must guard edits when previewMode is active")
+        self.assertIn("id: 'editor-toggle-macro-preview'", ui_editor_js, "ui_editor.js must register editor-toggle-macro-preview")
+        self.assertIn("{ previewMode: !isEditable }", prompts_js, "prompts.js must pass { previewMode: !isEditable }")
+        self.assertNotIn("insetu:file-fetch-url", prompts_js, "prompts.js must not register insetu:file-fetch-url")
 
 
 if __name__ == "__main__":

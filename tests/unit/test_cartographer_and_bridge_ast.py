@@ -33,7 +33,8 @@ from insetu.core.topology.engine_topology import (
     force_topology_scan,
     mount_topology_volumes_dynamically,
 )
-from insetu.core.utils_core import execute_binary, parse_blocks
+from insetu.core.bridge.parser import parse_blocks
+from insetu.core.utils_core import execute_binary
 from tests.fitness.core import FitnessState
 from tests.fitness.rules_python import BackendFitnessVisitor
 

@@ -72,6 +72,7 @@ class TestRepoLandmarks(unittest.TestCase):
             "vfs://insetu/README.md",
             "vfs://insetu/docs/01_engineering_standards.md",
             "vfs://insetu/docs/02_extension_api_contract.md",
+            "vfs://insetu/docs/models/yomama_bridge.md",
             "vfs://insetu/docs/adrs/0001-record-architecture-decisions.md",
             "vfs://insetu/tests/unit/test_sample.py",
             "vfs://insetu/tests/fitness/rules_python.py",
@@ -100,6 +101,7 @@ class TestRepoLandmarks(unittest.TestCase):
             self.assertIn("vfs://insetu/docs/01_engineering_standards.md", insetu_lm["landmarks"]["standards_files"])
             self.assertIn("vfs://insetu/docs/02_extension_api_contract.md", insetu_lm["landmarks"]["contract_files"])
             self.assertIn("vfs://insetu/README.md", insetu_lm["landmarks"]["contract_files"])
+            self.assertEqual(insetu_lm["landmarks"]["model_files"], ["vfs://insetu/docs/models/yomama_bridge.md"])
             self.assertEqual(insetu_lm["landmarks"]["adr_dir"], "vfs://insetu/docs/adrs")
             self.assertEqual(insetu_lm["landmarks"]["tracker_dir"], "vfs://insetu/.insetu-data/tracker")
             self.assertEqual(insetu_lm["landmarks"]["test_dirs"], ["vfs://insetu/tests/unit"])
@@ -160,6 +162,10 @@ class TestRepoLandmarks(unittest.TestCase):
             _engine_topology,
             "get_repo_path",
             side_effect=lambda repo_dir, wid=None: "",
+        ), patch.object(
+            _engine_topology.hooks,
+            "emit_merge_list",
+            return_value=[],
         ):
             ctx = _FakeCtx(
                 workspace_id="ws_override_test",
@@ -190,7 +196,15 @@ class TestRepoLandmarks(unittest.TestCase):
 
     def test_unknown_repository_has_no_landmarks(self):
         ctx = _FakeCtx(workspace_id="ws_unknown_repo")
-        with patch.object(_engine_topology, "get_topology_files_for_repo", side_effect=AssertionError("must not scan")):
+        with patch.object(
+            _engine_topology,
+            "get_topology_files_for_repo",
+            side_effect=AssertionError("must not scan"),
+        ), patch.object(
+            _engine_topology.hooks,
+            "emit_merge_list",
+            return_value=[],
+        ):
             lm = resolve_repo_landmarks(ctx, repo="not-mounted")
         self.assertEqual((lm["landmarks"]["standards_files"], lm["landmarks"]["adr_dir"]), ([], ""))
         self.assertTrue(any("not a mounted repository" in n for n in lm["notices"]))
@@ -198,7 +212,7 @@ class TestRepoLandmarks(unittest.TestCase):
     def test_core_names_no_extension_landmark(self):
         with patch.object(_engine_topology.hooks, "emit_merge_list", return_value=[]):
             kinds, notices = get_landmark_kinds("ws_core_only")
-        self.assertEqual([k["id"] for k in kinds], ["standards", "contracts", "adrs", "tests", "fitness"])
+        self.assertEqual([k["id"] for k in kinds], ["standards", "contracts", "models", "adrs", "tests", "fitness"])
         self.assertEqual(notices, [])
 
     def test_extension_landmark_kinds_are_validated(self):
@@ -211,7 +225,7 @@ class TestRepoLandmarks(unittest.TestCase):
         with patch.object(_engine_topology.hooks, "emit_merge_list", return_value=bad + _register_tracker_landmark()):
             kinds, notices = get_landmark_kinds("ws_bad_kinds")
         self.assertEqual([k["id"] for k in kinds][-1], "tracker")
-        self.assertEqual(len(kinds), 6)
+        self.assertEqual(len(kinds), 7)
         self.assertEqual(len(notices), 4)
 
     def test_landmarks_setting_is_hidden_from_the_hub(self):

@@ -25,16 +25,16 @@ class TestWorkspaceSwapFSM(unittest.TestCase):
         insetu_sdk_js = (PROJECT_ROOT / "insetu" / "core" / "system" / "insetu_sdk.js").read_text(encoding="utf-8")
         api_js = (PROJECT_ROOT / "insetu" / "core" / "system" / "api.js").read_text(encoding="utf-8")
         # SessionOrchestrator phases & StoreRegistry integration
-        self.assertIn("export const SessionOrchestrator", system_js)
+        self.assertIn("export const SessionOrchestrator", system_js, "system.js must export SessionOrchestrator")
         for phase in ("LOCKED", "TEARDOWN", "IDENTITY_SWAP", "HYDRATE", "ROUTING", "READY"):
-            self.assertIn(f"'{phase}'", system_js)
-        self.assertIn("beginScopeTransition(targetWs)", system_js)
-        self.assertIn("endScopeTransition()", system_js)
+            self.assertIn(f"'{phase}'", system_js, f"system.js SessionOrchestrator missing phase '{phase}'")
+        self.assertIn("beginScopeTransition(targetWs)", system_js, "system.js must call beginScopeTransition(targetWs)")
+        self.assertIn("endScopeTransition()", system_js, "system.js must call endScopeTransition()")
         # Centralized Event Valve & Epoch-Guarded Extension Stores
-        self.assertIn("shouldDropTenantEvent", insetu_sdk_js)
-        self.assertIn("_runWorkspaceHydration", insetu_sdk_js)
-        self.assertIn("_scopeEpoch", insetu_sdk_js)
-        self.assertIn("_shouldDrop(", api_js)
+        self.assertIn("shouldDropTenantEvent", insetu_sdk_js, "insetu_sdk.js must define shouldDropTenantEvent")
+        self.assertIn("_runWorkspaceHydration", insetu_sdk_js, "insetu_sdk.js must define _runWorkspaceHydration")
+        self.assertIn("_scopeEpoch", insetu_sdk_js, "insetu_sdk.js must track _scopeEpoch")
+        self.assertIn("_shouldDrop(", api_js, "api.js must guard responses with _shouldDrop(")
     def test_store_hydration_cascade_and_workspace_swap_isolation_in_node(self):
         """
         Executes the actual vendored sutram_sdk.js in Node.js to verify:

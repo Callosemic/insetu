@@ -264,7 +264,9 @@ class TestSdkImprovements(unittest.TestCase):
                 "def _unused_private_helper(x):\n"
                 "    return x + 1\n"
                 "def _find_brace_balanced_end(lines, start_idx):\n"
-                "    return _unused_private_helper(start_idx)\n"
+                "    def _nested_closure(pair: UnimportedTypingSymbol) -> int:\n"
+                "        return 1\n"
+                "    return _unused_private_helper(start_idx) + _nested_closure(lines)\n"
             )
             fake_path = Path(__file__).resolve().parent.parent.parent / "insetu" / "extensions" / "demo" / "engine_demo.py"
             tree = ast.parse(bad_code, filename=str(fake_path))
@@ -274,6 +276,7 @@ class TestSdkImprovements(unittest.TestCase):
                 visitor.visit(tree)
             out_bad = buf_bad.getvalue()
             self.assertIn("REDUNDANT_VOLUME_MOUNT_BAN", out_bad)
+            self.assertIn("UNDEFINED_TYPE_ANNOTATION_BAN", out_bad)
             self.assertIn("DEAD_COMPILE_CONTEXTS_HOOK_BAN", out_bad)
             self.assertIn("WORKER_TYPED_SIGNATURE_MANDATE", out_bad)
             self.assertIn("WORKER_PARAMETER_OVERLOAD_BAN", out_bad)
@@ -453,6 +456,19 @@ class TestSdkImprovements(unittest.TestCase):
             post_cmd = mock_run_research.call_args_list[1][0][0]
             self.assertIn("playwright", post_cmd)
             self.assertIn("chromium", post_cmd)
+
+    def test_unified_frontend_api_client_contract(self):
+        """api.js and insetu_sdk.js expose a unified flat API client without legacy api.workspace or api.system sub-objects."""
+        insetu_pkg = Path(__file__).resolve().parent.parent.parent / "insetu"
+        api_js = (insetu_pkg / "core" / "system" / "api.js").read_text(encoding="utf-8")
+        sdk_js = (insetu_pkg / "core" / "system" / "insetu_sdk.js").read_text(encoding="utf-8")
+
+        for verb in ("get:", "post:", "delete:", "getJson:", "postJson:", "deleteJson:", "bindJobAction:", "pollJob:"):
+            self.assertIn(verb, api_js, f"api.js must define flat canonical verb '{verb}'")
+        self.assertNotIn("api.workspace", api_js)
+        self.assertNotIn("api.system", api_js)
+        self.assertNotIn("api.workspace", sdk_js)
+        self.assertNotIn("api.system", sdk_js)
 
 
 if __name__ == "__main__":

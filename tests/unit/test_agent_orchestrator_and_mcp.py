@@ -364,11 +364,11 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         self.assertEqual(http_res.status_code, 200)
         self.assertEqual(http_res.get_json()["id"], 99)
 
-    def test_bridge_auto_heal_defers_overlapping_chunk_and_heals_against_post_valid_buffer(self):
-        """bridge.sync with auto_heal=True defers a failed/overlapping chunk, applies valid chunks in memory first, and heals the deferred chunk against the post-valid buffer using tier='fast'."""
+    def test_bridge_auto_heal_repairs_in_canonical_order_from_n_minus_1_state(self):
+        """bridge.sync with auto_heal=True heals a failed chunk n against the exact n-1 virtual buffer state and substitutes the repaired chunk in-place without reordering."""
         target_py = self.repo_dir / "overlap.py"
         target_py.write_text(
-            "def first():\n    return 1\n\ndef second():\n    return 2\n",
+            "def first():\n    return 1\n\ndef second():\n    return 2\n\ndef third():\n    return 3\n",
             encoding="utf-8",
         )
         force_topology_scan(workspace_id="default")
@@ -381,17 +381,37 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
             "api_key": "sk-test",
         })
 
-        # Chunk 1 has a stale/overlapping anchor, while Chunk 2 is valid.
+        # Chunk 1 is valid (return 1 -> return 10).
+        # Chunk 2 has a stale anchor (def second_wrong_anchor); its n-1 state has Chunk 1 applied ('return 10'),
+        # and replaces 'return 2' with 'return 20'.
+        # Chunk 3 depends on Chunk 2 having been applied first in canonical order (matches 'return 20' -> 'return 200')!
         raw_payload = (
             "<<<<<<< FILE: vfs://alpha/overlap.py\n"
-            "<<<<<<< ID: cell_bad_1\n"
+            "<<<<<<< ID: cell_good_1\n"
             "<<<<<<< SEARCH\n"
-            "def first_wrong_anchor():\n    return 999\n"
+            "def first():\n    return 1\n"
             "=======\n"
             "def first():\n    return 10\n"
             ">>>>>>> REPLACE\n\n"
             "<<<<<<< FILE: vfs://alpha/overlap.py\n"
-            "<<<<<<< ID: cell_good_2\n"
+            "<<<<<<< ID: cell_bad_2\n"
+            "<<<<<<< SEARCH\n"
+            "def second_wrong_anchor():\n    return 999\n"
+            "=======\n"
+            "def second():\n    return 20\n"
+            ">>>>>>> REPLACE\n\n"
+            "<<<<<<< FILE: vfs://alpha/overlap.py\n"
+            "<<<<<<< ID: cell_dependent_3\n"
+            "<<<<<<< SEARCH\n"
+            "def second():\n    return 20\n\ndef third():\n    return 3\n"
+            "=======\n"
+            "def second():\n    return 20\n\ndef third():\n    return 30\n"
+            ">>>>>>> REPLACE"
+        )
+
+        captured_prompts = []
+        healed_chunk_2 = (
+            "<<<<<<< FILE: vfs://alpha/overlap.py\n"
             "<<<<<<< SEARCH\n"
             "def second():\n    return 2\n"
             "=======\n"
@@ -399,19 +419,9 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
             ">>>>>>> REPLACE"
         )
 
-        captured_prompts = []
-        healed_tail = (
-            "<<<<<<< FILE: vfs://alpha/overlap.py\n"
-            "<<<<<<< SEARCH\n"
-            "def first():\n    return 1\n"
-            "=======\n"
-            "def first():\n    return 10\n"
-            ">>>>>>> REPLACE"
-        )
-
         def fake_fast_healer(provider, api_key, model, messages, system_prompt, base_url="", **kwargs):
             captured_prompts.append((model, messages[-1]["content"]))
-            return healed_tail, None
+            return healed_chunk_2, None
 
         sys_ctx = system_bp.get_context("default")
         with patch("insetu.core.llm.engine_llm._run_single_inference", side_effect=fake_fast_healer):
@@ -425,16 +435,21 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
             )
 
         sync_vfs_barrier("default")
-        self.assertTrue(res.get("can_commit"))
+        self.assertTrue(res.get("can_commit"), f"Expected canonical in-place heal to commit cleanly: {res}")
         self.assertEqual(res.get("healed_attempts"), 1)
         self.assertEqual(len(captured_prompts), 1)
         used_model, healer_prompt = captured_prompts[0]
         self.assertEqual(used_model, "claude-3-5-haiku-latest")
-        # Verify the buffer handed to the healer ALREADY had Chunk 2 ('return 20') applied in memory!
-        self.assertIn("return 20", healer_prompt)
+        # Verify the buffer handed to the healer for Chunk 2 is the exact n-1 state (Chunk 1's 'return 10' applied, Chunk 3's 'return 3' untouched)
+        self.assertIn("return 10", healer_prompt)
+        self.assertIn("return 3", healer_prompt)
+        self.assertNotIn("return 30", healer_prompt)
+        # Verify canonical order was preserved so Chunk 3 anchored on top of healed Chunk 2!
+        self.assertEqual([p["cell_id"] for p in res["patches"]], ["cell_good_1", "cell_bad_2", "cell_dependent_3"])
         final_disk = target_py.read_text(encoding="utf-8")
         self.assertIn("return 10", final_disk)
         self.assertIn("return 20", final_disk)
+        self.assertIn("return 30", final_disk)
 
     def test_mcp_tool_declaration_schema_contract(self):
         """MCP tools/list enforces that every registered tool exposes an inputSchema with type='object' and defined properties."""
@@ -786,7 +801,7 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         # Verify bridge.turn_diff accurately replays prior JSON_PATCH/TEXTEDIT chunks when computing turn diffs
         turn_diff_res = sys_ctx.call("bridge.turn_diff", transaction_ids=[confirmed_ow["transaction_id"]])
         self.assertIn("vfs://alpha/essay.md", turn_diff_res["files"])
-        self.assertIn("+# Completely Overwritten Essay", turn_diff_res["diff_text"])
+        self.assertIn("+ # Completely Overwritten Essay", turn_diff_res["diff_text"])
 
         # 4. Control-plane write ban rejects .insetu/secrets.json
         banned_patch = (
@@ -907,6 +922,52 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         )
         self.assertEqual(done_res["status"], "completed")
         self.assertEqual(done_res["response"], "ALL_SYSTEMS_GO")
+
+        # 3b. Verify routine with include_prompt + nested {{include_prompt:...}} macro + bare slash command invocation
+        #     expands the full prompt and Yomama directives on manual handoff (never returning the bare routine ID slug!)
+        p_ctx = prompts_bp.get_context("default")
+        p_ctx.vfs.save(
+            "ctx://prompts/sub_rules.md",
+            "---\ntitle: Sub Rules\n---\nAlways check edge cases.",
+        )
+        p_ctx.vfs.save(
+            "ctx://prompts/wrap_main.md",
+            "---\ntitle: Wrap Main\n---\nPerform wrap audit for {{ macro_target | core }}.\n\n{{include_prompt: ctx://prompts/sub_rules.md}}",
+        )
+        wrap_routine_md = (
+            "---\n"
+            "id: insetu_core_ai_bridge_wrap\n"
+            "title: AI Bridge Wrap\n"
+            "transport: manual\n"
+            "include_prompt: ctx://prompts/wrap_main.md\n"
+            "includes:\n"
+            "  - vfs://alpha/README.md\n"
+            "nodes:\n"
+            "  - id: synthesize_step\n"
+            "    type: llm\n"
+            "    tier: standard\n"
+            "    output_schema: conversational_with_patches\n"
+            "---\n"
+        )
+        sys_ctx.call("agent.routines.save", id="insetu_core_ai_bridge_wrap", raw_content=wrap_routine_md)
+        sync_vfs_barrier("default")
+
+        # Also verify InSetuContext.call("prompts.resolve", ...) unwraps the Flask (text, 200, headers) tuple into a plain str
+        direct_resolved = sys_ctx.call("prompts.resolve", file="ctx://prompts/wrap_main.md")
+        self.assertIsInstance(direct_resolved, str)
+        self.assertIn("Always check edge cases.", direct_resolved)
+
+        wrap_handoff = execute_declarative_routine(
+            agent_ctx,
+            routine_id="insetu_core_ai_bridge_wrap",
+            user_prompt="insetu_core_ai_bridge_wrap",
+        )
+        self.assertEqual(wrap_handoff["status"], "paused_for_user")
+        copied_prompt = wrap_handoff["pending_handoff"]["prompt_text"]
+        self.assertNotEqual(copied_prompt.strip(), "insetu_core_ai_bridge_wrap")
+        self.assertIn("Perform wrap audit for core.", copied_prompt)
+        self.assertIn("Always check edge cases.", copied_prompt)
+        self.assertIn("<<<<<<< FILE:", copied_prompt)
 
         # 4. agent/run_test refuses an unapproved custom command (403), and the caller cannot approve it.
         #    Only the human-only bridge/test/approve route records an approval (P5).

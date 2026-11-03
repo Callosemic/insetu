@@ -7,13 +7,18 @@ from pathlib import Path
 
 import akasa
 import akasa.utils as akasa_utils
+from unittest.mock import patch
 from insetu.core.bridge.bridge_fuzzy import (
     find_all_block_anchors,
     find_block_anchor,
     apply_block_in_memory,
     is_effectively_identical,
+    rebase_overlapping_block_in_memory,
 )
-from insetu.core.bridge.bridge_vfs import _process_sync_transaction
+from insetu.core.bridge.bridge_vfs import (
+    _process_sync_transaction,
+    clear_bridge_eval_cache,
+)
 
 
 class TestBridgeAnchorInvariants(unittest.TestCase):
@@ -206,12 +211,14 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
         assert deferred[0]["block"]["id"] == "cell_1"
 
 
-    def test_deferred_overlap_preserves_visual_patch_index(self):
+    def test_canonical_order_and_n_minus_1_state_recording(self):
         """
-        Verifies that when Chunk #1 depends on Chunk #2 (so Chunk #1 is deferred via
-        deferred_overlap and evaluated after Chunk #2), telemetry['patches'] still
-        preserves patch_index=0 for cell_1 and patch_index=1 for cell_2.
+        Verifies that the internal test loop strictly follows canonical given order (0 .. n)
+        without reordering failed patches to the end, and records the exact n-1 virtual buffer
+        state (pre_buffer) when patch n fails.
         """
+        clear_bridge_eval_cache()
+
         class DummyVFS:
             def __init__(self, initial_files):
                 self.files = dict(initial_files)
@@ -222,13 +229,17 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
             def save(self, fp, content):
                 self.files[fp] = content
 
-        vfs = DummyVFS({"vfs://repo/order.py": "x = 1\n"})
-        # cell_1 looks for 'x = 2', which is only introduced by cell_2
+        initial_py = "a = 1\nb = 2\nc = 3\n"
+        vfs = DummyVFS({"vfs://repo/order.py": initial_py})
+        # Patch 1 succeeds (a = 1 -> a = 10)
+        # Patch 2 fails to anchor (b = 999 -> b = 20); its n-1 state must have a = 10 and c = 3!
+        # Patch 3 succeeds (c = 3 -> c = 30)
         raw_payload = "\n\n".join([
-            "<<<<<<< FILE: vfs://repo/order.py\n<<<<<<< ID: cell_1\n<<<<<<< SEARCH\nx = 2\n=======\nx = 3\n>>>>>>> REPLACE",
-            "<<<<<<< FILE: vfs://repo/order.py\n<<<<<<< ID: cell_2\n<<<<<<< SEARCH\nx = 1\n=======\nx = 2\n>>>>>>> REPLACE",
+            "<<<<<<< FILE: vfs://repo/order.py\n<<<<<<< ID: cell_1\n<<<<<<< SEARCH\na = 1\n=======\na = 10\n>>>>>>> REPLACE",
+            "<<<<<<< FILE: vfs://repo/order.py\n<<<<<<< ID: cell_2\n<<<<<<< SEARCH\nb = 999\n=======\nb = 20\n>>>>>>> REPLACE",
+            "<<<<<<< FILE: vfs://repo/order.py\n<<<<<<< ID: cell_3\n<<<<<<< SEARCH\nc = 3\n=======\nc = 30\n>>>>>>> REPLACE",
         ])
-        telemetry = _process_sync_transaction(
+        telemetry, buffers, deferred = _process_sync_transaction(
             vfs,
             workspace_id="default",
             data={
@@ -239,12 +250,47 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
             },
             sister_repos=["repo"],
             ws_root="/tmp",
+            return_buffers=True,
         )
-        assert telemetry["can_commit"] is True
-        assert telemetry["patches"][0]["cell_id"] == "cell_1"
-        assert telemetry["patches"][0]["patch_index"] == 0
-        assert telemetry["patches"][1]["cell_id"] == "cell_2"
-        assert telemetry["patches"][1]["patch_index"] == 1
+        self.assertFalse(telemetry["can_commit"])
+        self.assertEqual([p["cell_id"] for p in telemetry["patches"]], ["cell_1", "cell_2", "cell_3"])
+        self.assertEqual([p["patch_index"] for p in telemetry["patches"]], [0, 1, 2])
+        self.assertEqual(telemetry["patches"][0]["status"], "resolved")
+        self.assertEqual(telemetry["patches"][1]["status"], "needs_confirmation")
+        self.assertEqual(telemetry["patches"][2]["status"], "resolved")
+        self.assertEqual(len(deferred), 1)
+        self.assertEqual(deferred[0]["block"]["id"], "cell_2")
+        # The n-1 buffer for cell_2 must contain cell_1's edit (a = 10) but NOT cell_3's edit (c = 30)!
+        self.assertEqual(deferred[0]["pre_buffer"], "a = 10\nb = 2\nc = 3\n")
+
+    def test_path_resolution_and_test_loop_never_mutate_input_blocks(self):
+        """
+        Verifies that apply_block_in_memory and _process_sync_transaction never mutate
+        the input block dictionary's 'search' or 'replace' fields (preserving block signatures).
+        """
+        clear_bridge_eval_cache()
+        from insetu.core.bridge.parser import compute_block_signature as _compute_sig
+
+        # 1. Direct apply_block_in_memory with artifact healing and trailing-line absorption
+        file_content = "def calc(x):\n    return x + 1\n    # trailing context\n"
+        raw_block = {
+            "id": "cell_imm_1",
+            "type": "exact",
+            "search": "def calc(x):\n    return x + 1",
+            "replace": "def calc(x):\n    return x + 2\n    # trailing context",
+        }
+        sig_before = _compute_sig(raw_block)
+        search_before = raw_block["search"]
+        replace_before = raw_block["replace"]
+
+        ok, updated, status = apply_block_in_memory(file_content, raw_block, silent=True)
+        self.assertTrue(ok)
+        self.assertEqual(status, "success")
+        self.assertIn("return x + 2", updated)
+        self.assertNotIn("[cite:", updated)
+        self.assertEqual(raw_block["search"], search_before, "Input block['search'] must not be mutated")
+        self.assertEqual(raw_block["replace"], replace_before, "Input block['replace'] must not be mutated")
+        self.assertEqual(_compute_sig(raw_block), sig_before, "Block signature must remain invariant after evaluation")
 
 
     def test_fitness_no_unconditional_startswith_in_strict_scan(self):
@@ -312,6 +358,295 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
         assert apply_block_in_memory(content, {"search": "a\n    b", "replace": "a\n    b"}, silent=True)[2] == "no_op"
         assert is_effectively_identical(["    a", "        b"], ["a", "    b"])
         assert not is_effectively_identical(["a", "", "b"], ["a", "b"])
+
+    def test_deterministic_overlap_rebase_merges_shared_boundary_context(self):
+        """
+        When Patch #1 and Patch #2 are both written against the original file (O) and share
+        overlapping sandwich context lines, _process_sync_transaction rebases Patch #2 deterministically
+        in memory (0 LLM calls) and flags 'rebased_overlap'.
+        """
+        clear_bridge_eval_cache()
+
+        class DummyVFS:
+            def __init__(self, initial_files):
+                self.files = dict(initial_files)
+
+            def read(self, fp):
+                return self.files.get(fp)
+
+            def save(self, fp, content):
+                self.files[fp] = content
+
+        orig_py = "\n".join([
+            "def compute_totals(items):",
+            "    subtotal = sum(items)",
+            "    tax = subtotal * 0.08",
+            "    shipping = 5.0",
+            "    return subtotal + tax + shipping",
+        ]) + "\n"
+        vfs = DummyVFS({"vfs://repo/billing.py": orig_py})
+
+        # Patch 1 modifies `tax = subtotal * 0.08` -> `tax = subtotal * 0.10`
+        # Patch 2 (written against orig_py) includes `tax = subtotal * 0.08` as its top sandwich context line
+        # while changing `shipping = 5.0` -> `shipping = 0.0`.
+        raw_payload = "\n\n".join([
+            "<<<<<<< FILE: vfs://repo/billing.py\n<<<<<<< ID: cell_p1\n<<<<<<< SEARCH\n    subtotal = sum(items)\n    tax = subtotal * 0.08\n    shipping = 5.0\n=======\n    subtotal = sum(items)\n    tax = subtotal * 0.10\n    shipping = 5.0\n>>>>>>> REPLACE",
+            "<<<<<<< FILE: vfs://repo/billing.py\n<<<<<<< ID: cell_p2\n<<<<<<< SEARCH\n    tax = subtotal * 0.08\n    shipping = 5.0\n    return subtotal + tax + shipping\n=======\n    tax = subtotal * 0.08\n    shipping = 0.0\n    return subtotal + tax + shipping\n>>>>>>> REPLACE",
+        ])
+        telemetry, buffers, deferred = _process_sync_transaction(
+            vfs,
+            workspace_id="default",
+            data={
+                "text": raw_payload,
+                "active_files": ["vfs://repo/billing.py"],
+                "dry_run": True,
+                "pinned_repos": ["ALL"],
+            },
+            sister_repos=["repo"],
+            ws_root="/tmp",
+            return_buffers=True,
+        )
+        self.assertTrue(telemetry["can_commit"], f"Expected overlap rebase to succeed: {telemetry}")
+        self.assertEqual(len(deferred), 0)
+        final_buf = buffers["vfs://repo/billing.py"]
+        self.assertIn("tax = subtotal * 0.10", final_buf)
+        self.assertIn("shipping = 0.0", final_buf)
+        p2_tel = next(p for p in telemetry["patches"] if p["cell_id"] == "cell_p2")
+        self.assertEqual(p2_tel["status"], "resolved")
+
+    def test_two_tier_signature_memoization_and_single_eof_ast_gate(self):
+        """
+        Verifies:
+        1. O(1) End-of-File AST Gate: _validate_buffer_syntax runs ONCE per modified file on clean multi-chunk batches (instead of N times).
+        2. Tier 1 FileEvalSig Cache Hit: Re-evaluating a multi-file batch where File A is untouched and File B is edited skips _validate_buffer_syntax and apply_block_in_memory on File A completely.
+        """
+        clear_bridge_eval_cache()
+
+        class DummyVFS:
+            def __init__(self, initial_files):
+                self.files = dict(initial_files)
+
+            def read(self, fp):
+                return self.files.get(fp)
+
+            def save(self, fp, content):
+                self.files[fp] = content
+
+        file_a = "\n".join([f"def fn_a_{i}():\n    return {i}\n" for i in range(5)])
+        file_b = "def fn_b():\n    return 100\n"
+        vfs = DummyVFS({
+            "vfs://repo/file_a.py": file_a,
+            "vfs://repo/file_b.py": file_b,
+        })
+
+        chunks_a = [
+            f"<<<<<<< FILE: vfs://repo/file_a.py\n<<<<<<< ID: cell_a_{i}\n<<<<<<< SEARCH\ndef fn_a_{i}():\n    return {i}\n=======\ndef fn_a_{i}():\n    return {(i + 1) * 10}\n>>>>>>> REPLACE"
+            for i in range(5)
+        ]
+        chunk_b_v1 = "<<<<<<< FILE: vfs://repo/file_b.py\n<<<<<<< ID: cell_b_1\n<<<<<<< SEARCH\ndef fn_b():\n    return 100\n=======\ndef fn_b():\n    return 200\n>>>>>>> REPLACE"
+
+        from insetu.core.bridge import bridge_vfs as _bvfs
+        with patch.object(_bvfs, "_validate_buffer_syntax", wraps=_bvfs._validate_buffer_syntax) as spy_syntax:
+            tel_1 = _process_sync_transaction(
+                vfs,
+                workspace_id="default",
+                data={
+                    "text": "\n\n".join(chunks_a + [chunk_b_v1]),
+                    "active_files": ["vfs://repo/file_a.py", "vfs://repo/file_b.py"],
+                    "dry_run": True,
+                    "pinned_repos": ["ALL"],
+                },
+                sister_repos=["repo"],
+                ws_root="/tmp",
+            )
+            self.assertTrue(tel_1["can_commit"])
+            # 5 chunks in file_a + 1 chunk in file_b -> _validate_buffer_syntax must be called only ONCE per file (2 calls total)!
+            self.assertEqual(spy_syntax.call_count, 2)
+
+            # Pass 2: Triage/modify ONLY file_b while file_a's 5 chunks are unchanged -> file_a hits _FILE_EVAL_CACHE (0 syntax calls for file_a)!
+            spy_syntax.reset_mock()
+            chunk_b_v2 = "<<<<<<< FILE: vfs://repo/file_b.py\n<<<<<<< ID: cell_b_1\n<<<<<<< SEARCH\ndef fn_b():\n    return 100\n=======\ndef fn_b():\n    return 300\n>>>>>>> REPLACE"
+            tel_2 = _process_sync_transaction(
+                vfs,
+                workspace_id="default",
+                data={
+                    "text": "\n\n".join(chunks_a + [chunk_b_v2]),
+                    "active_files": ["vfs://repo/file_a.py", "vfs://repo/file_b.py"],
+                    "dry_run": True,
+                    "pinned_repos": ["ALL"],
+                },
+                sister_repos=["repo"],
+                ws_root="/tmp",
+            )
+            self.assertTrue(tel_2["can_commit"])
+            self.assertEqual(tel_2["summary"]["resolved"], 6)
+            self.assertEqual(spy_syntax.call_count, 1, "Untouched file_a must hit _FILE_EVAL_CACHE with 0 AST syntax re-validations")
+
+        # 3. Tier 2 Intra-File PatchEvalSig Memoization:
+        # When chunk 4 of file_a is modified (simulating a healed patch at index 4), chunks 0..3 hit _PATCH_EVAL_CACHE
+        # and make ZERO calls to apply_block_in_memory!
+        chunks_a_healed_last = list(chunks_a)
+        chunks_a_healed_last[4] = (
+            "<<<<<<< FILE: vfs://repo/file_a.py\n<<<<<<< ID: cell_a_4\n"
+            "<<<<<<< SEARCH\ndef fn_a_4():\n    return 4\n=======\ndef fn_a_4():\n    return 444\n>>>>>>> REPLACE"
+        )
+        with patch.object(_bvfs, "apply_block_in_memory", wraps=_bvfs.apply_block_in_memory) as spy_apply:
+            tel_3 = _process_sync_transaction(
+                vfs,
+                workspace_id="default",
+                data={
+                    "text": "\n\n".join(chunks_a_healed_last),
+                    "active_files": ["vfs://repo/file_a.py"],
+                    "dry_run": True,
+                    "pinned_repos": ["ALL"],
+                },
+                sister_repos=["repo"],
+                ws_root="/tmp",
+            )
+            self.assertTrue(tel_3["can_commit"])
+            self.assertEqual(
+                spy_apply.call_count,
+                1,
+                "Chunks 0..3 must hit _PATCH_EVAL_CACHE without calling apply_block_in_memory; only chunk 4 should execute",
+            )
+
+        # 4. Pointer-change invalidation: remapping the pointer to a different target file forces fresh signature evaluation
+        vfs.files["vfs://repo/file_a_copy.py"] = file_a
+        with patch.object(_bvfs, "apply_block_in_memory", wraps=_bvfs.apply_block_in_memory) as spy_apply_remap:
+            tel_4 = _process_sync_transaction(
+                vfs,
+                workspace_id="default",
+                data={
+                    "text": "\n\n".join(chunks_a),
+                    "active_files": ["vfs://repo/file_a.py"],
+                    "resolutions": {"vfs://repo/file_a.py": {"selected_uri": "vfs://repo/file_a_copy.py"}},
+                    "dry_run": True,
+                    "pinned_repos": ["ALL"],
+                },
+                sister_repos=["repo"],
+                ws_root="/tmp",
+            )
+            self.assertTrue(tel_4["can_commit"])
+            self.assertEqual(spy_apply_remap.call_count, 5, "Changing the target file pointer must invalidate cached signatures and evaluate all 5 chunks against the new pointer")
+
+        # 5. Phase 4.4 70-Patch Multi-File Batch Benchmark:
+        # 14 files x 5 chunks = 70 patches total. Mutating 1 chunk in file_13 must skip 13 files via Tier 1
+        # (_FILE_EVAL_CACHE) and 4 leading chunks in file_13 via Tier 2 (_PATCH_EVAL_CACHE) -> 69/70 (98.5%) cache hits in < 15ms!
+        import time as _time
+        clear_bridge_eval_cache()
+        batch_files = {
+            f"vfs://repo/mod_{f_idx}.py": "\n".join([f"def fn_{f_idx}_{c_idx}():\n    return {c_idx}\n" for c_idx in range(5)])
+            for f_idx in range(14)
+        }
+        vfs_70 = DummyVFS(batch_files)
+        blocks_70 = []
+        for f_idx in range(14):
+            for c_idx in range(5):
+                blocks_70.append(
+                    f"<<<<<<< FILE: vfs://repo/mod_{f_idx}.py\n<<<<<<< ID: cell_{f_idx}_{c_idx}\n"
+                    f"<<<<<<< SEARCH\ndef fn_{f_idx}_{c_idx}():\n    return {c_idx}\n"
+                    f"=======\ndef fn_{f_idx}_{c_idx}():\n    return {(c_idx + 1) * 10}\n>>>>>>> REPLACE"
+                )
+        active_70 = list(batch_files.keys())
+
+        # Warm the cache with Pass 1 (all 70 patches)
+        tel_70_pass1 = _process_sync_transaction(
+            vfs_70,
+            workspace_id="default",
+            data={"text": "\n\n".join(blocks_70), "active_files": active_70, "dry_run": True, "pinned_repos": ["ALL"]},
+            sister_repos=["repo"],
+            ws_root="/tmp",
+        )
+        self.assertTrue(tel_70_pass1["can_commit"])
+        self.assertEqual(tel_70_pass1["summary"]["resolved"], 70)
+
+        # Mutate ONLY the 70th patch (file 13, chunk 4) and measure Pass 2 cache hits and wall time
+        blocks_70_mutated = list(blocks_70)
+        blocks_70_mutated[-1] = (
+            "<<<<<<< FILE: vfs://repo/mod_13.py\n<<<<<<< ID: cell_13_4\n"
+            "<<<<<<< SEARCH\ndef fn_13_4():\n    return 4\n"
+            "=======\ndef fn_13_4():\n    return 9999\n>>>>>>> REPLACE"
+        )
+        with patch.object(_bvfs, "apply_block_in_memory", wraps=_bvfs.apply_block_in_memory) as spy_apply_70:
+            t0 = _time.perf_counter()
+            tel_70_pass2 = _process_sync_transaction(
+                vfs_70,
+                workspace_id="default",
+                data={"text": "\n\n".join(blocks_70_mutated), "active_files": active_70, "dry_run": True, "pinned_repos": ["ALL"]},
+                sister_repos=["repo"],
+                ws_root="/tmp",
+            )
+            elapsed_ms = (_time.perf_counter() - t0) * 1000.0
+            self.assertTrue(tel_70_pass2["can_commit"])
+            self.assertEqual(tel_70_pass2["summary"]["resolved"], 70)
+            # 69 out of 70 patches hit cache (98.57% >= 95%): only 1 call to apply_block_in_memory!
+            self.assertEqual(spy_apply_70.call_count, 1)
+            self.assertLess(elapsed_ms, 50.0, f"Expected 70-patch memoized re-evaluation in <50ms, took {elapsed_ms:.2f}ms")
+
+    def test_fitness_no_undefined_type_annotations_across_codebase(self):
+        """
+        Architectural Fitness Check:
+        In Python without `from __future__ import annotations`, type annotations on nested
+        functions or local variables inside branches are only evaluated when that branch runs.
+        Scans all Python files in insetu/ to verify that every identifier referenced in any
+        parameter, return, or variable type annotation is defined in module scope or builtins.
+        """
+        import builtins as _builtins
+
+        builtin_names = set(dir(_builtins)) | {"__file__", "__name__", "__doc__", "__package__"}
+        insetu_pkg = Path(__file__).resolve().parent.parent.parent / "insetu"
+        violations = []
+
+        for py_file in sorted(insetu_pkg.rglob("*.py")):
+            if "/vendor/" in py_file.as_posix():
+                continue
+            try:
+                tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=py_file.as_posix())
+            except SyntaxError:
+                continue
+
+            # Collect all names bound in the file (imports, defs, classes, assignments, comprehensions, args)
+            bound_names = set(builtin_names)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        bound_names.add((alias.asname or alias.name).split(".")[0])
+                elif isinstance(node, ast.ImportFrom):
+                    for alias in node.names:
+                        bound_names.add(alias.asname or alias.name)
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    bound_names.add(node.name)
+                elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                    bound_names.add(node.id)
+                elif isinstance(node, ast.arg):
+                    bound_names.add(node.arg)
+
+            # Inspect every annotation expression in the module
+            annotation_nodes = []
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if node.returns:
+                        annotation_nodes.append((node.lineno, node.returns))
+                    for a in (
+                        list(node.args.posonlyargs)
+                        + list(node.args.args)
+                        + list(node.args.kwonlyargs)
+                        + ([node.args.vararg] if node.args.vararg else [])
+                        + ([node.args.kwarg] if node.args.kwarg else [])
+                    ):
+                        if a and a.annotation:
+                            annotation_nodes.append((a.lineno, a.annotation))
+                elif isinstance(node, ast.AnnAssign) and node.annotation:
+                    annotation_nodes.append((node.lineno, node.annotation))
+
+            for lineno, ann in annotation_nodes:
+                for sub in ast.walk(ann):
+                    if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
+                        if sub.id not in bound_names:
+                            rel = py_file.relative_to(insetu_pkg.parent).as_posix()
+                            violations.append(f"{rel}:{lineno} references unimported type annotation '{sub.id}'")
+
+        self.assertEqual(violations, [], "Unimported type annotation symbols found:\n" + "\n".join(violations))
 
 
 if __name__ == "__main__":

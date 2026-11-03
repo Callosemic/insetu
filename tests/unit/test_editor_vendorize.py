@@ -1,6 +1,8 @@
 """S4: editor/vendorize resolves language packs locally (bundled, then the workspace vendor folder) and never downloads code."""
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +15,7 @@ from insetu.core.editor.engine_editor import editor_bp
 
 
 class TestEditorVendorize(unittest.TestCase):
-    """Bundled and local packs resolve; unknown packs are not downloaded; invalid names are refused."""
+    """Bundled and local descriptors resolve; local entries cannot shadow bundled ids; unknown packs are not downloaded; invalid names are refused."""
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -27,7 +29,8 @@ class TestEditorVendorize(unittest.TestCase):
         app = Flask(__name__)
         app.register_blueprint(editor_bp.bp)
         self.client = app.test_client()
-        self.local_dir = Path(editor_bp.get_context("default").paths["artifacts_base"]).joinpath("vendor", "codemirror")
+        # Person-placed packs live beside the workspace configuration (.insetu/vendor/codemirror/), not in a cache.
+        self.local_dir = Path(editor_bp.get_context("default").paths["control_dir"]).joinpath("vendor", "codemirror")
 
     def tearDown(self):
         self.env_patch.stop()
@@ -37,29 +40,152 @@ class TestEditorVendorize(unittest.TestCase):
     def _vendorize(self, mode):
         return self.client.post("/api/default/editor/vendorize", json={"mode": mode})
 
-    def test_bundled_pack_is_served_from_static(self):
-        res = self._vendorize("css")
-        self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.get_json()["path"], "/static/vendor/codemirror/lang-css.js")
-
-    def test_local_pack_is_served_from_the_workspace(self):
-        self.local_dir.mkdir(parents=True, exist_ok=True)
-        (self.local_dir / "lang-rust.js").write_text("export function rust() { return []; }\n", encoding="utf-8")
+    def test_bundled_pack_returns_descriptor_from_static(self):
         res = self._vendorize("rust")
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.get_json()["path"], "/api/default/editor/vendor/lang-rust.js")
+        data = res.get_json()
+        self.assertEqual(data["path"], "/static/vendor/codemirror/lang/rust.js")
+        self.assertEqual(data["url"], "/static/vendor/codemirror/lang/rust.js")
+        self.assertEqual(data["kind"], "lezer")
+        self.assertEqual(data["export"], "rust")
+
+        stream_res = self._vendorize("toml")
+        self.assertEqual(stream_res.status_code, 200)
+        stream_data = stream_res.get_json()
+        self.assertEqual(stream_data["path"], "/static/vendor/codemirror/legacy/toml.js")
+        self.assertEqual(stream_data["kind"], "stream")
+        self.assertEqual(stream_data["export"], "toml")
+
+    def test_local_manifest_and_bare_pack_resolve_without_shadowing_bundled(self):
+        self.local_dir.mkdir(parents=True, exist_ok=True)
+        # 1. Bare legacy pack lang-cobol.js with no local manifest entry
+        (self.local_dir / "lang-cobol.js").write_text("export function cobol() { return []; }\n", encoding="utf-8")
+        # 2. Local manifest entry for 'zig' and an attempted shadow of bundled 'rust'
+        (self.local_dir / "zig-pack.js").write_text("export function zigLang() { return []; }\n", encoding="utf-8")
+        (self.local_dir / "fake-rust.js").write_text("export function fakeRust() { return []; }\n", encoding="utf-8")
+        (self.local_dir / "languages.json").write_text(json.dumps({
+            "schema": 1,
+            "languages": {
+                "zig": {
+                    "label": "Zig",
+                    "kind": "lezer",
+                    "file": "zig-pack.js",
+                    "export": "zigLang",
+                    "extensions": ["zig"],
+                },
+                "rust": {
+                    "label": "Shadowed Rust",
+                    "kind": "lezer",
+                    "file": "fake-rust.js",
+                    "export": "fakeRust",
+                    "extensions": ["rs"],
+                },
+            },
+        }), encoding="utf-8")
+
+        # Bare pack resolves
+        cobol_res = self._vendorize("cobol")
+        self.assertEqual(cobol_res.status_code, 200)
+        self.assertEqual(cobol_res.get_json()["path"], "/api/default/editor/vendor/lang-cobol.js")
+        self.assertEqual(cobol_res.get_json()["kind"], "lezer")
+        self.assertEqual(cobol_res.get_json()["export"], "cobol")
+
+        # Local manifest entry resolves and is served by editor/vendor/<filename>
+        zig_res = self._vendorize("zig")
+        self.assertEqual(zig_res.status_code, 200)
+        self.assertEqual(zig_res.get_json()["path"], "/api/default/editor/vendor/zig-pack.js")
+        self.assertEqual(zig_res.get_json()["export"], "zigLang")
+        served_zig = self.client.get("/api/default/editor/vendor/zig-pack.js")
+        self.assertEqual(served_zig.status_code, 200)
+        self.assertIn(b"zigLang", served_zig.data)
+
+        # Bundled 'rust' cannot be shadowed by local languages.json
+        rust_res = self._vendorize("rust")
+        self.assertEqual(rust_res.status_code, 200)
+        self.assertEqual(rust_res.get_json()["path"], "/static/vendor/codemirror/lang/rust.js")
+        self.assertEqual(rust_res.get_json()["export"], "rust")
+
+        # GET editor/languages includes bundled rust + local zig + local cobol
+        langs_res = self.client.get("/api/default/editor/languages")
+        self.assertEqual(langs_res.status_code, 200)
+        langs = langs_res.get_json()["languages"]
+        self.assertIn("zig", langs)
+        self.assertIn("cobol", langs)
+        self.assertEqual(langs["rust"]["file"], "lang/rust.js")
 
     def test_unknown_pack_is_not_downloaded(self):
         with patch("urllib.request.urlopen", side_effect=AssertionError("network used")):
-            res = self._vendorize("cobol")
+            res = self._vendorize("brainfuck")
         self.assertEqual(res.status_code, 404)
         self.assertIn("does not download", res.get_json()["error"])
-        self.assertFalse((self.local_dir / "lang-cobol.js").exists())
+        self.assertFalse((self.local_dir / "lang-brainfuck.js").exists())
 
     def test_invalid_names_are_refused(self):
         for mode in ("../../evil", "a/b", "x" * 60, "UPPER;rm"):
             with self.subTest(mode=mode):
                 self.assertEqual(self._vendorize(mode).status_code, 400)
+
+    def test_resolve_editor_mode_reads_manifest_and_prioritizes_filenames_in_node(self):
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("Node.js binary is not installed in PATH")
+
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        ui_editor_path = repo_root / "insetu" / "core" / "system" / "components" / "ui_editor.js"
+        manifest_path = repo_root / "insetu" / "static" / "vendor" / "codemirror" / "languages.json"
+        self.assertTrue(manifest_path.is_file(), "languages.json is missing; run scripts/vendor_codemirror.sh and commit the result")
+
+        src = ui_editor_path.read_text(encoding="utf-8")
+        start_idx = src.index("const _BUILTIN_FALLBACK_LANGUAGES =")
+        end_idx = src.index("export function getActiveEditorPath()")
+        resolver_slice = src[start_idx:end_idx]
+
+        node_script = f"""
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+
+{resolver_slice}
+
+// 1. Before manifest fetch settles, built-in 8 languages work immediately
+assert.deepEqual(resolveEditorMode('vfs://repo/app.py'), {{ ext: 'py', mode: 'python', isMarkdown: false }});
+assert.deepEqual(resolveEditorMode('vfs://repo/data.json'), {{ ext: 'json', mode: 'json', isMarkdown: false }});
+assert.deepEqual(resolveEditorMode('vfs://repo/mod.ts'), {{ ext: 'ts', mode: 'typescript', isMarkdown: false }});
+assert.deepEqual(resolveEditorMode('vfs://repo/notes.md'), {{ ext: 'md', mode: 'markdown', isMarkdown: true }});
+
+// 2. Load bundled languages.json manifest -> Layer 1, Layer 2, and exact filenames resolve
+const manifest = JSON.parse(fs.readFileSync({json.dumps(manifest_path.as_posix())}, 'utf-8'));
+
+// The first-paint fallback table must be exactly the manifest's built-in entries.
+const manifestBuiltins = Object.fromEntries(Object.entries(manifest.languages).filter(([, spec]) => spec.kind === 'builtin'));
+assert.deepEqual(Object.keys(_BUILTIN_FALLBACK_LANGUAGES).sort(), Object.keys(manifestBuiltins).sort());
+for (const [id, spec] of Object.entries(manifestBuiltins)) {{
+    const fb = _BUILTIN_FALLBACK_LANGUAGES[id];
+    for (const field of ['export', 'options', 'extensions', 'filenames']) {{
+        assert.deepEqual(fb[field] ?? null, spec[field] ?? null, `Fallback '${{id}}'.${{field}} differs from languages.json`);
+    }}
+}}
+setEditorLanguageManifest(manifest.languages);
+
+assert.deepEqual(resolveEditorMode('vfs://repo/src/lib.rs'), {{ ext: 'rs', mode: 'rust', isMarkdown: false }});
+assert.deepEqual(resolveEditorMode('vfs://repo/pyproject.toml'), {{ ext: 'toml', mode: 'toml', isMarkdown: false }});
+assert.deepEqual(resolveEditorMode('vfs://repo/deploy.sh'), {{ ext: 'sh', mode: 'shell', isMarkdown: false }});
+assert.deepEqual(resolveEditorMode('vfs://repo/Dockerfile'), {{ ext: '', mode: 'dockerfile', isMarkdown: false }});
+assert.deepEqual(resolveEditorMode('vfs://repo/.bashrc'), {{ ext: '', mode: 'shell', isMarkdown: false }});
+assert.deepEqual(resolveEditorMode('vfs://repo/CMakeLists.txt'), {{ ext: 'txt', mode: 'cmake', isMarkdown: false }});
+
+// 3. Unknown extension resolves to mode: 'plaintext' so every text file opens in CodeMirror
+assert.deepEqual(resolveEditorMode('vfs://repo/server.log'), {{ ext: 'log', mode: 'plaintext', isMarkdown: false }});
+assert.deepEqual(resolveEditorMode('vfs://repo/data.csv'), {{ ext: 'csv', mode: 'plaintext', isMarkdown: false }});
+console.log('RESOLVE_EDITOR_MODE_PASSED');
+"""
+        res = subprocess.run(
+            [node_bin, "--input-type=module", "-e", node_script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(res.returncode, 0, f"Node resolveEditorMode test failed:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
+        self.assertIn("RESOLVE_EDITOR_MODE_PASSED", res.stdout)
 
 
 if __name__ == "__main__":
