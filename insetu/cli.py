@@ -84,11 +84,12 @@ def main():
         _handle_init(cwd, sys.argv[2:])
 
     elif command == "create-extension":
-        if len(sys.argv) < 3:
-            print("Usage: insetu create-extension <extension_name>")
+        ext_args = [arg for arg in sys.argv[2:] if arg != "--bundled"]
+        if not ext_args:
+            print("Usage: insetu create-extension <extension_name> [--bundled]")
             sys.exit(1)
         from insetu.core.system.cli_commands import scaffold_extension as _scaffold_extension
-        _scaffold_extension(sys.argv[2])
+        _scaffold_extension(ext_args[0], bundled="--bundled" in sys.argv[2:])
 
     elif command == "gui":
         from insetu.core.system.cli_commands import launch_gui as _launch_gui

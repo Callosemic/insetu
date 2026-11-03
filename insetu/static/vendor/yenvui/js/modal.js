@@ -1,4 +1,4 @@
-import{LitElement as i,html as a,css as r}from"lit";export class YenvuiModal extends i{static properties={titleText:{type:String},open:{type:Boolean,reflect:!0},maxWidth:{type:String},fullscreen:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0},transparent:{type:Boolean,reflect:!0},_hasFooter:{type:Boolean,state:!0}};static styles=r`
+import{LitElement as i,html as a,css as r}from"lit";export class YenvuiModal extends i{static properties={titleText:{type:String},open:{type:Boolean,reflect:!0},size:{type:String,reflect:!0},compact:{type:Boolean,reflect:!0},fullscreen:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0},_hasFooter:{type:Boolean,state:!0}};static styles=r`
         :host { display: contents; } /* Native dialog handles its own visibility. Host must remain permeable. */
         dialog {
             background: var(--pane-bg, #1e1e1e);
@@ -7,7 +7,7 @@ import{LitElement as i,html as a,css as r}from"lit";export class YenvuiModal ext
             border-radius: 8px;
             padding: 0;
             width: 100%;
-            max-width: var(--modal-max-width, 600px);
+            max-width: var(--modal-max-width, var(--yv-modal-normal, 600px));
             max-height: 85dvh;
             box-shadow: 0 10px 30px rgba(0,0,0,0.6);
             display: none; /* Hide when not open */
@@ -15,6 +15,12 @@ import{LitElement as i,html as a,css as r}from"lit";export class YenvuiModal ext
             margin: auto; /* Centers natively in the #top-layer */
             box-sizing: border-box;
         }
+
+        :host([compact]),
+        :host([size="compact"]) { --modal-max-width: var(--yv-modal-compact, 440px); }
+        :host([size="normal"]) { --modal-max-width: var(--yv-modal-normal, 600px); }
+        :host([size="wide"]) { --modal-max-width: var(--yv-modal-wide, 840px); }
+        :host([size="full"]) { --modal-max-width: 100%; }
 
         dialog[open] {
             display: grid; /* Bypass Safari flex collapse bug */
@@ -34,7 +40,6 @@ import{LitElement as i,html as a,css as r}from"lit";export class YenvuiModal ext
             background: var(--modal-backdrop, rgba(0, 0, 0, 0.75));
             backdrop-filter: var(--modal-backdrop-filter, blur(3px));
         }
-        :host([transparent]) dialog::backdrop,
         :host([fullscreen]) dialog::backdrop {
             background: transparent !important;
             backdrop-filter: none !important;
@@ -150,14 +155,14 @@ import{LitElement as i,html as a,css as r}from"lit";export class YenvuiModal ext
             --btn-font-size: 1.05rem;
             --btn-border-radius: 6px;
         }
-    `;constructor(){super(),this.open=!1,this.titleText="",this.maxWidth="",this.fullscreen=!1,this._hasFooter=!1}_handleFooterSlotChange(e){this._hasFooter=e.target.assignedElements({flatten:!0}).length>0}updated(e){const t=this.shadowRoot.querySelector("dialog");t&&(this.open&&!t.open?(window.getComputedStyle(this).display==="none"&&console.warn(`[yenVUI] \u26A0\uFE0F Cannot execute showModal() on <yenvui-modal> because an ancestor is setting 'display: none'. This will cause a UI freeze. Target title: "${this.titleText}"`),t.showModal()):!this.open&&t.open?setTimeout(()=>{t.open&&t.close()},0):this.open&&t.open&&e.has("open")&&(t.close(),t.showModal())),e.has("maxWidth")&&this.maxWidth&&this.style.setProperty("--modal-max-width",this.maxWidth)}bringToFront(){const e=this.shadowRoot.querySelector("dialog");e&&e.open&&(e.close(),e.showModal())}disconnectedCallback(){super.disconnectedCallback();const e=this.shadowRoot.querySelector("dialog");e&&e.open&&(document.body.appendChild(e),e.close(),e.remove())}_handleNativeCancel(e){e.preventDefault(),this._dispatchClose()}_handleBackdropClick(e){const t=this.shadowRoot.querySelector("dialog")||e.currentTarget;if(!t)return;const o=t.getBoundingClientRect();o.top<=e.clientY&&e.clientY<=o.top+o.height&&o.left<=e.clientX&&e.clientX<=o.left+o.width||this._dispatchClose()}_dispatchClose(){const e=new CustomEvent("yenvui-modal-closing",{bubbles:!0,composed:!0,cancelable:!0});if(this.dispatchEvent(e),e.defaultPrevented)return;const t=this.shadowRoot.querySelector("dialog");t&&t.open&&t.close(),setTimeout(()=>{this.open=!1,this.dispatchEvent(new CustomEvent("yenvui-modal-closed",{bubbles:!0,composed:!0}))},10)}render(){return a`
+    `;constructor(){super(),this.open=!1,this.titleText="",this.size="normal",this.compact=!1,this.fullscreen=!1,this._hasFooter=!1}_handleFooterSlotChange(e){this._hasFooter=e.target.assignedElements({flatten:!0}).length>0}updated(e){const o=this.shadowRoot.querySelector("dialog");o&&(this.open&&!o.open?(window.getComputedStyle(this).display==="none"&&console.warn(`[yenVUI] \u26A0\uFE0F Cannot execute showModal() on <yenvui-modal> because an ancestor is setting 'display: none'. This will cause a UI freeze. Target title: "${this.titleText}"`),o.showModal()):!this.open&&o.open?setTimeout(()=>{o.open&&o.close()},0):this.open&&o.open&&e.has("open")&&(o.close(),o.showModal()))}bringToFront(){const e=this.shadowRoot.querySelector("dialog");e&&e.open&&(e.close(),e.showModal())}disconnectedCallback(){super.disconnectedCallback();const e=this.shadowRoot.querySelector("dialog");e&&e.open&&(document.body.appendChild(e),e.close(),e.remove())}_handleNativeCancel(e){e.preventDefault(),this._dispatchClose()}_handleBackdropClick(e){const o=this.shadowRoot.querySelector("dialog")||e.currentTarget;if(!o)return;const t=o.getBoundingClientRect();t.top<=e.clientY&&e.clientY<=t.top+t.height&&t.left<=e.clientX&&e.clientX<=t.left+t.width||this._dispatchClose()}_dispatchClose(){const e=new CustomEvent("yenvui-modal-closing",{bubbles:!0,composed:!0,cancelable:!0});if(this.dispatchEvent(e),e.defaultPrevented)return;const o=this.shadowRoot.querySelector("dialog");o&&o.open&&o.close(),setTimeout(()=>{this.open=!1,this.dispatchEvent(new CustomEvent("yenvui-modal-closed",{bubbles:!0,composed:!0}))},10)}render(){return a`
             <dialog 
                 @cancel=${this._handleNativeCancel}
                 @click=${this._handleBackdropClick}>
                 <div class="header">
                     <h3>${this.titleText}</h3>
                     <button class="close-btn" title="Close Modal (Esc)" aria-label="Close Modal" @click=${this._dispatchClose}>
-                        <yv-icon name="x" style="width: 16px; height: 16px;"></yv-icon>
+                        <yenvui-icon name="x" size="md"></yenvui-icon>
                     </button>
                 </div>
                 <div class="body">

@@ -392,7 +392,8 @@ HTML_TEMPLATE = """
         async function api(url, options = {}) {
             options.headers = Object.assign({}, options.headers || {}, { 'X-InSetu-Token': getToken() });
             const res = await fetch(url, options);
-            document.getElementById('token-box').style.display = res.status === 401 ? 'block' : 'none';
+            const tokenBox = document.getElementById('token-box');
+            if (tokenBox) tokenBox.style.display = res.status === 401 ? 'block' : 'none';
             return res;
         }
 
@@ -448,10 +449,10 @@ HTML_TEMPLATE = """
                     for (let reg of regs) await reg.unregister();
                 } catch(e) {}
             }
-            document.body.innerHTML = "<h2 style='color: #10b981; text-align: center; margin-top: 20%;'>Rebooting Engine...<br><span style='font-size: 0.8rem; color: #888;'>Waiting for OS to come back online...</span></h2>";
             try {
                 const rebootRes = await api('/api/system/reboot', { method: 'POST' });
                 if (rebootRes.status === 401) { window.location.reload(); return; }
+                document.body.innerHTML = "<h2 style='color: #10b981; text-align: center; margin-top: 20%;'>Rebooting Engine...<br><span style='font-size: 0.8rem; color: #888;'>Waiting for OS to come back online...</span></h2>";
                 setTimeout(() => {
                     setInterval(async () => {
                         try {

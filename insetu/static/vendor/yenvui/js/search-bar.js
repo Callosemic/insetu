@@ -41,7 +41,7 @@ import{html as e,css as i}from"lit";import{YenvuiBase as n}from"./yenvui-base.js
         }
     `;constructor(){super(),this.placeholder="Search...",this.value="",this._debounceTimer=null}disconnectedCallback(){super.disconnectedCallback(),this._debounceTimer&&clearTimeout(this._debounceTimer)}_handleInput(t){const r=t.target.value;this._debounceTimer&&clearTimeout(this._debounceTimer),this._debounceTimer=setTimeout(()=>{this.dispatchEvent(new CustomEvent("yenvui-search-changed",{detail:{value:r},bubbles:!0,composed:!0}))},250)}_handleClear(){this._debounceTimer&&clearTimeout(this._debounceTimer),this.dispatchEvent(new CustomEvent("yenvui-search-changed",{detail:{value:""},bubbles:!0,composed:!0}))}render(){return e`
             <div class="fuzzy-search-wrapper">
-                <yv-icon name="search" stroke-width="2.5" style="width: 14px; height: 14px; color: var(--text-muted); margin-right: 8px; flex-shrink: 0;"></yv-icon>
+                <yenvui-icon name="search" size="sm" intent="muted" stroke-width="2.5" style="margin-right: 8px; flex-shrink: 0;"></yenvui-icon>
                 <input type="text" .placeholder=${this.placeholder} .value=${this.value} @input=${this._handleInput}>
                 ${this.value?e`<button class="fuzzy-search-clear" @click=${this._handleClear}>Clear</button>`:""}
             </div>

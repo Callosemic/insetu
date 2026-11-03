@@ -33,26 +33,27 @@ import{html as n,css as i}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
         .window-btn.active-span { background: color-mix(in srgb, var(--intent-color, var(--intent-primary)) 20%, transparent); color: var(--intent-color, var(--intent-primary)); border: 1px solid var(--intent-color, var(--intent-primary)); }
         .window-btn.close-btn:hover { color: var(--intent-danger); background: color-mix(in srgb, var(--intent-danger) 15%, transparent); }
         .body { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; background: var(--bg); container-type: inline-size; }
+        .body > ::slotted(*) { flex: 1 1 0%; min-height: 0; min-width: 0; height: 100%; width: 100%; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; }
 
         :host-context([data-theme="e-ink"]) dialog {
             border: 2px solid #000;
             box-shadow: 4px 4px 0 var(--intent-color, #8b5cf6);
         }
-    `;constructor(){super(),this.anchorCol="center",this.span=1,this.z=1e3,this.titleText="",this.icon="component",this.intent="primary"}disconnectedCallback(){super.disconnectedCallback();const t=this.shadowRoot.querySelector("dialog");t&&t.open&&(document.body.appendChild(t),t.close(),t.remove())}updated(t){super.updated(t);const e=this.shadowRoot.querySelector("dialog");if(e){e.open||e.show(),e.style.zIndex=this.z;const o=`var(--intent-${this.intent})`;e.style.setProperty("--intent-color",o)}}render(){return n`
+    `;constructor(){super(),this.anchorCol="center",this.span=1,this.z=1e3,this.titleText="",this.icon="component",this.intent="primary"}disconnectedCallback(){super.disconnectedCallback();const e=this.shadowRoot.querySelector("dialog");e&&e.open&&(document.body.appendChild(e),e.close(),e.remove())}updated(e){super.updated(e);const t=this.shadowRoot.querySelector("dialog");if(t){t.open||t.show(),t.style.zIndex=this.z;const o=`var(--intent-${this.intent})`;t.style.setProperty("--intent-color",o)}}render(){return n`
             <dialog @pointerdown=${()=>this.dispatchEvent(new CustomEvent("yenvui-window-focus",{bubbles:!0,composed:!0}))}>
                 <div class="header" 
-                    @dblclick=${t=>{t.stopPropagation(),this.dispatchEvent(new CustomEvent("yenvui-window-dock",{bubbles:!0,composed:!0}))}}
-                    @pointerdown=${t=>{t.stopPropagation();const e=Date.now();if(e-(this._lastTapTime||0)<300){this.dispatchEvent(new CustomEvent("yenvui-window-dock",{bubbles:!0,composed:!0})),this._lastTapTime=0;return}this._lastTapTime=e,this.dispatchEvent(new CustomEvent("yenvui-window-drag-start",{detail:{originalEvent:t},bubbles:!0,composed:!0}))}}>
+                    @dblclick=${e=>{e.stopPropagation(),this.dispatchEvent(new CustomEvent("yenvui-window-dock",{bubbles:!0,composed:!0}))}}
+                    @pointerdown=${e=>{e.stopPropagation();const t=Date.now();if(t-(this._lastTapTime||0)<300){this.dispatchEvent(new CustomEvent("yenvui-window-dock",{bubbles:!0,composed:!0})),this._lastTapTime=0;return}this._lastTapTime=t,this.dispatchEvent(new CustomEvent("yenvui-window-drag-start",{detail:{originalEvent:e},bubbles:!0,composed:!0}))}}>
                     <div class="title-area">
-                        <yv-icon name="${this.icon}" style="width: 14px; height: 14px; color: var(--intent-color, var(--intent-primary));"></yv-icon>
+                        <yenvui-icon name="${this.icon}" size="sm" style="color: var(--intent-color, var(--intent-primary));"></yenvui-icon>
                         ${this.titleText}
                     </div>
                     <button 
                         class="window-btn close-btn" 
                         title="Close Window"
-                        @pointerdown=${t=>t.stopPropagation()}
-                        @click=${t=>{t.stopPropagation(),this.dispatchEvent(new CustomEvent("yenvui-window-close",{bubbles:!0,composed:!0}))}}>
-                        <yv-icon name="x" style="width: 16px; height: 16px;"></yv-icon>
+                        @pointerdown=${e=>e.stopPropagation()}
+                        @click=${e=>{e.stopPropagation(),this.dispatchEvent(new CustomEvent("yenvui-window-close",{bubbles:!0,composed:!0}))}}>
+                        <yenvui-icon name="x" size="md"></yenvui-icon>
                     </button>
                 </div>
                 <div class="body"><slot></slot></div>

@@ -5,12 +5,15 @@ import io
 import re
 import random
 import datetime
+import ast
 import json
 import importlib
+import importlib.util
 import operator
 import queue
 import threading
 import time
+import traceback
 import logging
 from contextlib import redirect_stdout
 os.environ.setdefault("AKASA_CONTROL_DIR", ".insetu")
@@ -54,6 +57,11 @@ from insetu.core.sdk import (
     init_kernel_app,
     is_core_module,
     load_config,
+)
+from insetu.core.utils_core import (
+    current_workspace_extension_fingerprint,
+    get_workspace_extensions_root,
+    scan_workspace_extensions,
 )
 
 # Phase A: Configure Akasa Kernel Physics & Host Namespaces
@@ -140,16 +148,22 @@ def load_workspace_extensions():
         for item in os.listdir(ext_dir):
             if os.path.isdir(ext_dir.joinpath(item)) and not item.startswith("__"):
                 raw_extensions.add(item)
+    for sim_ext in (os.environ.get("INSETU_SIMULATE_QUARANTINE") or "").split(","):
+        clean_sim = sim_ext.strip()
+        if clean_sim and ext_dir.joinpath(clean_sim).is_dir():
+            raw_extensions.add(clean_sim)
 
-    # Scan local workspace .insetu/extensions/ for user-space extensions
-    _, ws_root = get_workspace_physics()
-    local_ext_dir = Path(ws_root).joinpath(".insetu", "extensions")
-    if local_ext_dir.exists() and local_ext_dir.is_dir():
-        if local_ext_dir.as_posix() not in sys.path:
-            sys.path.insert(0, local_ext_dir.as_posix())
-        for item in os.listdir(local_ext_dir):
-            if os.path.isdir(local_ext_dir.joinpath(item)) and not item.startswith("__"):
-                raw_extensions.add(item)
+    # Workspace extensions in .insetu/extensions/ (S8): only one whose exact files a person approved is loaded.
+    # The approved bytes are read once, here, and those same bytes are what runs.
+    workspace_extensions = scan_workspace_extensions(with_contents=True)
+    workspace_ext_snapshots = {}
+    for ws_name, ws_entry in workspace_extensions.items():
+        snap = ws_entry.pop("snapshot", None)
+        if ws_entry["status"] == "approved" and snap:
+            workspace_ext_snapshots[ws_name] = (Path(ws_entry["dir"]), snap)
+            raw_extensions.add(ws_name)
+        else:
+            print(f"🔒 Workspace extension not loaded [{ws_name}]: {ws_entry.get('reason', ws_entry['status'])}")
 
     # Inject Tier 2 Core Modules into the DAG automatically
     core_dir = Path(__file__).parent.joinpath("core")
@@ -158,101 +172,281 @@ def load_workspace_extensions():
             if os.path.isdir(core_dir.joinpath(item)) and not item.startswith("__") and item not in ("sdk", "languages"):
                 raw_extensions.add(item)
 
-    # Resolve Backend Python Dependencies via vendor.json
+    priority_order = ("system", "topology", "editor", "fs", "prompts", "offline", "remote", "llm", "cartographer", "gather", "bridge", "agent", "mcp")
+    core_candidates = [e for e in priority_order if e in raw_extensions] + sorted(
+        e for e in raw_extensions if is_core_module(e) and e not in priority_order and e != "config"
+    )
+    tier3_candidates = sorted(e for e in raw_extensions if not is_core_module(e) and e != "config")
+
+    # Resolve Backend Python Dependencies via vendor.json before importing modules
     resolve_python_vendors(sorted(raw_extensions))
 
-    # DAG Node Resolution (load foundational Tier 2 core modules first)
-    priority_order = ("system", "fs", "topology", "cartographer", "prompts", "gather", "llm", "bridge", "agent", "mcp", "offline", "remote")
-    ordered_discovery = [e for e in priority_order if e in raw_extensions] + sorted(raw_extensions - set(priority_order))
-    modules = {}
-    for ext in ordered_discovery:
-        if ext == "config": continue # Pure frontend UI extension
-        try:
-            # Try the extensions folder first, fallback to core chassis
-            def safe_import(target):
-                try:
-                    return importlib.import_module(target), None
-                except ModuleNotFoundError as e:
-                    if e.name == target.split('.')[-1] or e.name == target or (e.name and target.startswith(f"{e.name}.")):
-                        return None, None
-                    return None, e
-                except Exception as e:
-                    return None, e
-
-            for target in [
-                f"insetu.core.{ext}.engine_{ext}",
-                f"insetu.core.{ext}.{ext}",
-                f"insetu.extensions.{ext}.engine_{ext}",
-                f"insetu.extensions.engine_{ext}",
-                f"insetu.engine_{ext}"
-            ]:
-                mod, err = safe_import(target)
-                if err:
-                    raise err
-                if mod:
-                    modules[ext] = mod
-                    break
-        except Exception as e:
-            print(f"⚠️  Extension Load Failed [{ext}]: {type(e).__name__} - {str(e)}")
-    # Topological Sort
-    sorted_exts = []
-    visited = set()
-    visiting = set()
+    simulated_faults = {
+        m.strip() for m in (os.environ.get("INSETU_SIMULATE_QUARANTINE") or "").split(",") if m.strip()
+    }
+    quarantined_modules = {}
     bypassed_extensions = []
+    modules = {}
 
-    def visit(ext):
-        if ext in visited: return
-        if ext in visiting:
-            print(f"⚠️ Circular dependency detected involving [{ext}]. Bypassing.")
+    def _safe_import(target):
+        try:
+            return importlib.import_module(target), None
+        except ModuleNotFoundError as e:
+            if e.name == target.split('.')[-1] or e.name == target or (e.name and target.startswith(f"{e.name}.")):
+                return None, None
+            return None, e
+        except Exception as e:
+            return None, e
+
+    def _verify_and_load_workspace_ext(ext_name: str, ext_dir: Path, snapshot: dict):
+        """Runs the approved engine_<ext_name>.py from the bytes that were fingerprinted, after a hygiene AST check.
+
+        The approval is the security boundary; the AST check only catches common SDK mistakes early.
+        """
+        if is_core_module(ext_name) or ext_name in CORE_MODULES_TUPLE:
+            raise PermissionError(f"Workspace extension '{ext_name}' cannot shadow reserved Tier 2 Core module '{ext_name}'.")
+        engine_py = ext_dir / f"engine_{ext_name}.py"
+        engine_bytes = (snapshot.get("contents") or {}).get(engine_py.name)
+        if engine_bytes is None:
+            return None
+        src = engine_bytes.decode("utf-8")
+        tree = ast.parse(src, filename=engine_py.as_posix())
+        has_depends = any(
+            isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "__depends__" for t in n.targets)
+            for n in tree.body
+        )
+        if not has_depends:
+            raise ValueError(f"[EXTENSION_DAG] Missing '__depends__ = []' declaration in {engine_py.name}.")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "akasa" or alias.name.startswith("akasa."):
+                        raise PermissionError(f"[AKASA_MEMBRANE_ISOLATION] Direct import of '{alias.name}' is banned in workspace extension '{ext_name}'. Import from 'insetu.core.sdk'.")
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                if node.module == "akasa" or node.module.startswith("akasa."):
+                    raise PermissionError(f"[AKASA_MEMBRANE_ISOLATION] Direct import from '{node.module}' is banned in workspace extension '{ext_name}'. Import from 'insetu.core.sdk'.")
+            elif isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id == "open":
+                    raise PermissionError(f"[SDK_VFS_READ_MANDATE] Raw open() call is banned in workspace extension '{ext_name}'. Use ctx.vfs.")
+                if isinstance(node.func, ast.Attribute) and node.func.attr == "urlopen":
+                    raise PermissionError(f"[OUTBOUND_FETCH_MANDATE] Raw urlopen() is banned in workspace extension '{ext_name}'. Use fetch_url().")
+        spec = importlib.util.spec_from_file_location(f"insetu.extensions.{ext_name}.engine_{ext_name}", engine_py.as_posix())
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Could not create module spec for {engine_py.as_posix()}")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        exec(compile(tree, engine_py.as_posix(), "exec"), mod.__dict__)
+        return mod
+
+    def _import_candidates(candidates, is_core_tier):
+        for ext in candidates:
+            if ext == "config":
+                continue
+            tier_label = "core" if is_core_tier else "ext"
+            try:
+                if ext in simulated_faults:
+                    raise RuntimeError(f"Simulated fault quarantine for module '{ext}'.")
+                if not is_core_tier and ext in workspace_ext_snapshots:
+                    ws_dir, ws_snap = workspace_ext_snapshots[ext]
+                    ws_mod = _verify_and_load_workspace_ext(ext, ws_dir, ws_snap)
+                    if ws_mod:
+                        modules[ext] = ws_mod
+                        continue
+                targets = (
+                    [f"insetu.core.{ext}.engine_{ext}", f"insetu.core.{ext}.{ext}"]
+                    if is_core_tier
+                    else [f"insetu.extensions.{ext}.engine_{ext}", f"insetu.extensions.engine_{ext}", f"insetu.engine_{ext}"]
+                )
+                for target in targets:
+                    mod, err = _safe_import(target)
+                    if err:
+                        raise err
+                    if mod:
+                        modules[ext] = mod
+                        break
+            except Exception as e:
+                tb_str = traceback.format_exc()
+                reason_str = f"{type(e).__name__}: {e}"
+                print(f"⚠️  Module Quarantined [{ext}] ({tier_label}): {reason_str}")
+                quarantined_modules[ext] = {
+                    "id": ext,
+                    "tier": tier_label,
+                    "status": "quarantined",
+                    "reason": reason_str,
+                    "traceback": tb_str,
+                }
+
+    # Stage 1A: Import Tier 2 Core Modules and evaluate Core DAG
+    _import_candidates(core_candidates, is_core_tier=True)
+
+    sorted_core = []
+    visited_core = set()
+    visiting_core = set()
+
+    def _visit_core(ext):
+        if ext in visited_core or ext in quarantined_modules:
             return
-        visiting.add(ext)
+        if ext in visiting_core:
+            quarantined_modules[ext] = {
+                "id": ext,
+                "tier": "core",
+                "status": "quarantined",
+                "reason": f"Circular dependency detected involving core module '{ext}'.",
+                "traceback": "",
+            }
+            return
+        visiting_core.add(ext)
         mod = modules.get(ext)
-        missing_dep = False
+        dep_failed = None
         if mod and hasattr(mod, "__depends__"):
-            for dep in mod.__depends__:
-                if dep in modules:
-                    visit(dep)
-                else:
-                    msg = f"Extension [{ext}] requires missing dependency [{dep}]."
-                    print(f"⚠️ {msg} Bypassing.")
-                    bypassed_extensions.append({
-                        "extension": ext,
-                        "missing_dependency": dep,
-                        "reason": msg
-                    })
-                    missing_dep = True
+            for dep in (mod.__depends__ or []):
+                if dep in modules and dep not in quarantined_modules:
+                    _visit_core(dep)
+                if dep not in visited_core or dep in quarantined_modules:
+                    dep_failed = dep
+                    break
+        visiting_core.remove(ext)
+        if dep_failed:
+            msg = f"Core module [{ext}] skipped because dependency [{dep_failed}] is quarantined."
+            print(f"⚠️  {msg}")
+            quarantined_modules[ext] = {
+                "id": ext,
+                "tier": "core",
+                "status": "skipped",
+                "missing_dependency": dep_failed,
+                "reason": msg,
+                "traceback": "",
+            }
+            bypassed_extensions.append({"extension": ext, "missing_dependency": dep_failed, "reason": msg})
+            return
+        visited_core.add(ext)
+        sorted_core.append(ext)
 
-        visiting.remove(ext)
-        if not missing_dep:
-            visited.add(ext)
-            sorted_exts.append(ext)
+    for ext in core_candidates:
+        if ext in modules and ext not in visited_core:
+            _visit_core(ext)
 
-    for ext in list(modules.keys()):
-        if ext not in visited:
-            visit(ext)
-
-    app._bypassed_extensions = bypassed_extensions
-    # Mount Blueprints in safe DAG order
-    for ext in sorted_exts:
+    # Mount healthy Tier 2 Core blueprints in topological order
+    mounted_core = set()
+    for ext in sorted_core:
         try:
             mod = modules[ext]
             bp_attr = f"{ext}_bp"
-
             if hasattr(mod, bp_attr):
                 ext_module = getattr(mod, bp_attr)
-                # SDK Check: Unwrap the Blueprint if it utilizes the InSetuExtension SDK class
-                blueprint = ext_module.bp if hasattr(ext_module, 'bp') else ext_module
-
+                blueprint = ext_module.bp if hasattr(ext_module, "bp") else ext_module
                 if blueprint.name not in app.blueprints:
                     app.register_blueprint(blueprint)
-            # Wire up native WebSockets natively via flask-sock if the module provides it
-            if getattr(mod, 'sock', None) is not None:
+            if getattr(mod, "sock", None) is not None:
                 mod.sock.init_app(app)
-
-            print(f"🔌 Module Mounted Successfully: [{ext}]")
+            mounted_core.add(ext)
+            print(f"🔌 Core Module Mounted Successfully: [{ext}]")
         except Exception as e:
-            print(f"⚠️  Unexpected Mount Failure [{ext}]: {type(e).__name__} - {str(e)}")
-    # Purge the config cache via decoupled event so the fully-mounted Extension DAG gets a chance to inject
+            tb_str = traceback.format_exc()
+            reason_str = f"Mount failure ({type(e).__name__}): {e}"
+            print(f"⚠️  Core Mount Failure [{ext}]: {reason_str}")
+            quarantined_modules[ext] = {
+                "id": ext,
+                "tier": "core",
+                "status": "quarantined",
+                "reason": reason_str,
+                "traceback": tb_str,
+            }
+
+    degraded_core = any(v.get("tier") == "core" for v in quarantined_modules.values())
+
+    # Stage 1B: Tier 3 Extensions (Skipped automatically if any Tier 2 Core module failed)
+    sorted_tier3 = []
+    if degraded_core:
+        failed_core_names = ", ".join(sorted(k for k, v in quarantined_modules.items() if v.get("tier") == "core"))
+        for ext in tier3_candidates:
+            msg = f"Extension [{ext}] paused because Tier 2 Core is in Degraded Mode ({failed_core_names})."
+            quarantined_modules[ext] = {
+                "id": ext,
+                "tier": "ext",
+                "status": "skipped",
+                "missing_dependency": failed_core_names,
+                "reason": msg,
+                "traceback": "",
+            }
+            bypassed_extensions.append({"extension": ext, "missing_dependency": failed_core_names, "reason": msg})
+    else:
+        _import_candidates(tier3_candidates, is_core_tier=False)
+        visited_ext = set(mounted_core)
+        visiting_ext = set()
+
+        def _visit_ext(ext):
+            if ext in visited_ext or ext in quarantined_modules:
+                return
+            if ext in visiting_ext:
+                print(f"⚠️ Circular dependency detected involving [{ext}]. Bypassing.")
+                return
+            visiting_ext.add(ext)
+            mod = modules.get(ext)
+            missing_dep = None
+            if mod and hasattr(mod, "__depends__"):
+                for dep in (mod.__depends__ or []):
+                    if dep in modules and dep not in quarantined_modules:
+                        _visit_ext(dep)
+                    if dep not in visited_ext or dep in quarantined_modules:
+                        missing_dep = dep
+                        break
+            visiting_ext.remove(ext)
+            if missing_dep:
+                msg = f"Extension [{ext}] requires missing or quarantined dependency [{missing_dep}]."
+                print(f"⚠️ {msg} Bypassing.")
+                quarantined_modules[ext] = {
+                    "id": ext,
+                    "tier": "ext",
+                    "status": "skipped",
+                    "missing_dependency": missing_dep,
+                    "reason": msg,
+                    "traceback": "",
+                }
+                bypassed_extensions.append({"extension": ext, "missing_dependency": missing_dep, "reason": msg})
+                return
+            visited_ext.add(ext)
+            sorted_tier3.append(ext)
+
+        for ext in tier3_candidates:
+            if ext in modules and ext not in visited_ext:
+                _visit_ext(ext)
+
+        for ext in sorted_tier3:
+            try:
+                mod = modules[ext]
+                bp_attr = f"{ext}_bp"
+                if hasattr(mod, bp_attr):
+                    ext_module = getattr(mod, bp_attr)
+                    blueprint = ext_module.bp if hasattr(ext_module, "bp") else ext_module
+                    if blueprint.name not in app.blueprints:
+                        app.register_blueprint(blueprint)
+                if getattr(mod, "sock", None) is not None:
+                    mod.sock.init_app(app)
+                print(f"🔌 Extension Mounted Successfully: [{ext}]")
+            except Exception as e:
+                tb_str = traceback.format_exc()
+                reason_str = f"Mount failure ({type(e).__name__}): {e}"
+                print(f"⚠️  Unexpected Mount Failure [{ext}]: {reason_str}")
+                quarantined_modules[ext] = {
+                    "id": ext,
+                    "tier": "ext",
+                    "status": "quarantined",
+                    "reason": reason_str,
+                    "traceback": tb_str,
+                }
+
+    app._bypassed_extensions = bypassed_extensions
+    app._quarantined_modules = quarantined_modules
+    # Workspace extensions that are running, with the fingerprint they were loaded from (static serving checks it).
+    app._loaded_workspace_extensions = {
+        name: snap["fingerprint"] for name, (_, snap) in workspace_ext_snapshots.items()
+        if name in modules and name not in quarantined_modules
+    }
+    for name, entry in workspace_extensions.items():
+        entry["loaded"] = name in app._loaded_workspace_extensions
+    app._workspace_extensions = workspace_extensions
+    app._degraded_core = degraded_core
     hooks.emit('config_mutated')
 
 OPERATORS = {
@@ -359,15 +553,21 @@ def resolve_js_vendors(active_exts):
                 }
         except Exception: pass
 
-    # 2. Sweep Active Extensions
+    core_protected_specifiers = set(packages.keys())
+    quarantined = getattr(app, "_quarantined_modules", {})
+    # 2. Sweep Active Non-Quarantined Extensions (Core specifiers are immutable)
     ext_base = Path(app.root_path).joinpath("extensions")
     for ext in active_exts:
+        if ext in quarantined:
+            continue
         vendor_file = ext_base.joinpath(ext, "vendor.json")
         if vendor_file.exists() and vendor_file.is_file():
             try:
                 with open(vendor_file, "r", encoding="utf-8") as f:
                     ext_imports = json.load(f).get("imports", {})
                 for specifier, meta in ext_imports.items():
+                    if specifier in core_protected_specifiers:
+                        continue
                     if specifier not in packages or parse_semver(meta.get("version", "0.0.0")) > parse_semver(packages[specifier]["version"]):
                         packages[specifier] = {
                             "version": meta.get("version", "0.0.0"),
@@ -376,13 +576,35 @@ def resolve_js_vendors(active_exts):
             except Exception: pass
 
     return {specifier: meta["resolvedPath"] for specifier, meta in packages.items()}
+def _resolve_workspace_ext_dir(ext_name: str):
+    """The folder of a running workspace extension, only while its files still match what was approved and loaded.
+
+    An extension's browser code runs with the person's session, so unapproved or edited files are never served.
+    """
+    if not ext_name or not re.match(r'^[a-z0-9_]+$', ext_name) or is_core_module(ext_name):
+        return None
+    if ext_name in getattr(app, "_quarantined_modules", {}):
+        return None
+    loaded_fingerprint = getattr(app, "_loaded_workspace_extensions", {}).get(ext_name)
+    if not loaded_fingerprint:
+        return None
+    cand = get_workspace_extensions_root().joinpath(ext_name)
+    if cand.is_symlink() or not cand.is_dir():
+        return None
+    if current_workspace_extension_fingerprint(cand) != loaded_fingerprint:
+        return None
+    return cand.resolve()
+
+
 @app.route('/static/extensions/<ext_name>/<path:filename>')
 def serve_extension_static(ext_name, filename):
     """Serves static assets and vendored dependencies directly from an extension directory."""
     if is_core_module(ext_name):
         ext_dir = Path(app.root_path).joinpath("core", ext_name).resolve()
     else:
-        ext_dir = Path(app.root_path).joinpath("extensions", ext_name).resolve()
+        bundled_dir = Path(app.root_path).joinpath("extensions", ext_name).resolve()
+        ws_ext_dir = _resolve_workspace_ext_dir(ext_name)
+        ext_dir = bundled_dir if bundled_dir.is_dir() else (ws_ext_dir or bundled_dir)
 
     target_path = ext_dir.joinpath(filename).resolve()
 
@@ -402,12 +624,19 @@ def serve_extension_static(ext_name, filename):
     return "Extension static asset not found", 404
 @app.route('/static/js/extensions/ext_<ext_name>.js')
 def serve_extension_js(ext_name):
-    """ADR 0012: Dynamically serve frontend JS from the bundled extension subdirectory."""
+    """ADR 0012: Dynamically serve frontend JS from the bundled or workspace extension subdirectory."""
 
     # 1. Try bundled topology
     bundled_path = Path(app.root_path).joinpath("extensions", ext_name, f"ext_{ext_name}.js").as_posix()
     if os.path.exists(bundled_path):
         return send_file(bundled_path, mimetype='application/javascript')
+
+    # 1b. Try an approved, running workspace extension in .insetu/extensions/<ext_name>/
+    ws_ext_dir = _resolve_workspace_ext_dir(ext_name)
+    if ws_ext_dir is not None:
+        ws_js = ws_ext_dir / f"ext_{ext_name}.js"
+        if ws_js.is_file():
+            return send_file(ws_js.as_posix(), mimetype='application/javascript')
 
     # 2. Fallback to legacy flat topology
     legacy_path = Path(app.static_folder).joinpath("js", "extensions", f"ext_{ext_name}.js").as_posix()

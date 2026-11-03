@@ -14,17 +14,61 @@ import{css as e}from"lit";export const sharedStyles=e`
         min-width: max-content;
         flex-shrink: 0;
     }
+    yenvui-btn[grow], yenvui-async-btn[grow] {
+        flex: 1 1 0%;
+    }
+    yenvui-btn[fullwidth], yenvui-async-btn[fullwidth] {
+        width: 100%;
+    }
+    yenvui-icon { display: inline-block; vertical-align: middle; flex-shrink: 0; }
     yenvui-pill { display: inline-flex; }
     yenvui-tag { display: inline-flex; align-items: center; }
-    yenvui-label { display: inline-block; margin-bottom: 4px; }
+    yenvui-label { display: inline-block; margin-bottom: 4px; max-width: 100%; }
+    yenvui-label[truncate] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* --- ZERO-JS STACK & SURFACE UTILITY CLASSES (.yv-row, .yv-col, .yv-surface) --- */
+    .yv-row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: var(--yv-gap, 8px);
+        min-width: 0;
+        box-sizing: border-box;
+    }
+    .yv-row--between { justify-content: space-between; }
+    .yv-row--wrap { flex-wrap: wrap; }
+    .yv-col {
+        display: flex;
+        flex-direction: column;
+        gap: var(--yv-gap, 10px);
+        min-width: 0;
+        box-sizing: border-box;
+    }
+    .yv-surface {
+        display: flex;
+        flex-direction: column;
+        gap: var(--yv-gap, 8px);
+        padding: 12px 14px;
+        background: var(--input-bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        box-sizing: border-box;
+    }
     yenvui-input, yenvui-select, yenvui-textarea, yenvui-toggle {
         display: block;
         margin-bottom: 15px;
         font-family: inherit;
     }
     yenvui-input[flush], yenvui-select[flush], yenvui-textarea[flush], yenvui-toggle[flush],
-    yenvui-input[inline], yenvui-select[inline], yenvui-textarea[inline], yenvui-toggle[inline] {
+    yenvui-input[inline], yenvui-select[inline], yenvui-textarea[inline], yenvui-toggle[inline],
+    yenvui-stack > yenvui-input, yenvui-stack > yenvui-select, yenvui-stack > yenvui-textarea, yenvui-stack > yenvui-toggle,
+    yenvui-surface > yenvui-input, yenvui-surface > yenvui-select, yenvui-surface > yenvui-textarea, yenvui-surface > yenvui-toggle,
+    yenvui-action-bar > yenvui-input, yenvui-action-bar > yenvui-select {
         margin-bottom: 0 !important;
+    }
+    yenvui-input[grow], yenvui-select[grow] {
+        flex: 1 1 0%;
+        min-width: 120px;
     }
 
     /* --- BUTTON PRIMITIVES (.yv-btn) --- */
@@ -154,6 +198,16 @@ import{css as e}from"lit";export const sharedStyles=e`
         font-family: var(--font-family, inherit);
         user-select: none;
     }
+    .yv-label--primary { color: var(--intent-primary); }
+    .yv-label--success { color: var(--intent-success); }
+    .yv-label--warning { color: var(--intent-warning); }
+    .yv-label--danger { color: var(--intent-danger); }
+    .yv-label--highlight { color: var(--intent-highlight); }
+    .yv-label--neutral { color: var(--text); }
+    .yv-label--mono { font-family: var(--font-mono, monospace); user-select: text; }
+    .yv-label--truncate { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .yv-label--pre-wrap { white-space: pre-wrap; word-break: break-word; user-select: text; }
+    .yv-label--strike { text-decoration: line-through; }
     :host-context([data-theme="e-ink"]) .yv-label,
     :host([data-theme="e-ink"]) .yv-label,
     [data-theme="e-ink"] .yv-label {
@@ -164,35 +218,55 @@ import{css as e}from"lit";export const sharedStyles=e`
     /* --- TAG PRIMITIVES (.yv-tag) --- */
     .yv-tag {
         background: var(--tag-bg, var(--input-bg, #2d2d2d));
-        color: var(--tag-color, var(--text, #e0e0e0));
+        color: var(--tag-color, var(--text-muted, #94a3b8));
         border: 1px solid var(--tag-border, var(--border, #444));
-        padding: 4px 8px;
+        padding: 3px 8px;
         border-radius: 4px;
-        font-size: 0.75rem;
-        font-weight: bold;
+        font-size: 0.72rem;
+        font-family: var(--font-mono, monospace);
+        font-weight: 700;
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        line-height: 1;
+        line-height: 1.2;
         white-space: nowrap;
     }
-    .yv-tag--primary { --tag-bg: var(--intent-primary); --tag-color: #fff; --tag-border: var(--intent-primary); }
-    .yv-tag--success { --tag-bg: var(--intent-success); --tag-color: #fff; --tag-border: var(--intent-success); }
-    .yv-tag--danger { --tag-bg: var(--intent-danger); --tag-color: #fff; --tag-border: var(--intent-danger); }
-    .yv-tag--warning { --tag-bg: var(--intent-warning); --tag-color: #000; --tag-border: var(--intent-warning); }
+    .yv-tag--primary {
+        --tag-bg: color-mix(in srgb, var(--intent-primary) 18%, var(--input-bg));
+        --tag-color: var(--intent-primary);
+        --tag-border: color-mix(in srgb, var(--intent-primary) 45%, var(--border));
+    }
+    .yv-tag--success {
+        --tag-bg: color-mix(in srgb, var(--intent-success) 18%, var(--input-bg));
+        --tag-color: var(--intent-success);
+        --tag-border: color-mix(in srgb, var(--intent-success) 45%, var(--border));
+    }
+    .yv-tag--danger {
+        --tag-bg: color-mix(in srgb, var(--intent-danger) 18%, var(--input-bg));
+        --tag-color: var(--intent-danger);
+        --tag-border: color-mix(in srgb, var(--intent-danger) 45%, var(--border));
+    }
+    .yv-tag--warning {
+        --tag-bg: color-mix(in srgb, var(--intent-warning) 18%, var(--input-bg));
+        --tag-color: var(--intent-warning);
+        --tag-border: color-mix(in srgb, var(--intent-warning) 45%, var(--border));
+    }
+    .yv-tag--highlight {
+        --tag-bg: color-mix(in srgb, var(--intent-highlight) 18%, var(--input-bg));
+        --tag-color: var(--intent-highlight);
+        --tag-border: color-mix(in srgb, var(--intent-highlight) 45%, var(--border));
+    }
+    .yv-tag--neutral {
+        --tag-bg: var(--bg);
+        --tag-color: var(--text-muted);
+        --tag-border: var(--border);
+    }
     :host-context([data-theme="e-ink"]) .yv-tag,
     :host([data-theme="e-ink"]) .yv-tag,
     [data-theme="e-ink"] .yv-tag {
         background: transparent !important;
         color: #000000 !important;
         border: 1px dashed #000000 !important;
-    }
-    :host-context([data-theme="light"]) .yv-tag,
-    :host([data-theme="light"]) .yv-tag,
-    [data-theme="light"] .yv-tag {
-        background: var(--tag-bg, #f1f5f9);
-        border-color: var(--tag-border, #cbd5e1);
-        color: var(--tag-color, #0f172a);
     }
 
     /* --- INPUT & FORM PRIMITIVES (.yv-input, .yv-select, .yv-textarea, .yv-toggle) --- */
@@ -256,4 +330,11 @@ import{css as e}from"lit";export const sharedStyles=e`
         box-shadow: 0 1px 3px rgba(0,0,0,0.2);
     }
     .yv-toggle-track.checked .yv-toggle-thumb { transform: translateX(16px); }
+
+    .yv-interactive-row {
+        transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .yv-interactive-row:hover {
+        background: var(--bg-hover);
+    }
 `;if(typeof document<"u"&&!document.getElementById("yenvui-shared-styles")){const t=document.createElement("style");t.id="yenvui-shared-styles",t.textContent=sharedStyles.cssText,document.head.appendChild(t)}

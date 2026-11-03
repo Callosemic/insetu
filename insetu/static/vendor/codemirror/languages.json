@@ -1,0 +1,453 @@
+{
+  "schema": 1,
+  "languages": {
+    "python": {
+      "label": "Python",
+      "kind": "builtin",
+      "export": "python",
+      "extensions": [
+        "py",
+        "pyi"
+      ],
+      "sample": "def greet(name: str) -> str:\n    return name\n"
+    },
+    "javascript": {
+      "label": "JavaScript",
+      "kind": "builtin",
+      "export": "javascript",
+      "options": {
+        "jsx": true
+      },
+      "extensions": [
+        "js",
+        "mjs",
+        "cjs",
+        "jsx"
+      ],
+      "sample": "export const add = (a, b) => a + b;\n"
+    },
+    "typescript": {
+      "label": "TypeScript",
+      "kind": "builtin",
+      "export": "javascript",
+      "options": {
+        "typescript": true,
+        "jsx": true
+      },
+      "extensions": [
+        "ts",
+        "mts",
+        "cts",
+        "tsx"
+      ],
+      "sample": "export function id<T>(x: T): T { return x; }\n"
+    },
+    "json": {
+      "label": "JSON",
+      "kind": "builtin",
+      "export": "json",
+      "extensions": [
+        "json",
+        "jsonl"
+      ],
+      "sample": "{\"ok\": true, \"count\": 1}\n"
+    },
+    "yaml": {
+      "label": "YAML",
+      "kind": "builtin",
+      "export": "yaml",
+      "extensions": [
+        "yaml",
+        "yml"
+      ],
+      "sample": "title: Example\ncount: 1\n"
+    },
+    "html": {
+      "label": "HTML",
+      "kind": "builtin",
+      "export": "htmlLang",
+      "extensions": [
+        "html",
+        "htm"
+      ],
+      "sample": "<!doctype html><html><body><h1>Hi</h1></body></html>\n"
+    },
+    "css": {
+      "label": "CSS",
+      "kind": "builtin",
+      "export": "cssLang",
+      "extensions": [
+        "css"
+      ],
+      "sample": "body { color: #333; margin: 0; }\n"
+    },
+    "markdown": {
+      "label": "Markdown",
+      "kind": "builtin",
+      "export": "markdown",
+      "extensions": [
+        "md",
+        "markdown"
+      ],
+      "sample": "# Heading\n\nSome **bold** text.\n"
+    },
+    "rust": {
+      "label": "Rust",
+      "kind": "lezer",
+      "export": "rust",
+      "file": "lang/rust.js",
+      "extensions": [
+        "rs"
+      ],
+      "sample": "fn main() { let x: i32 = 42; }\n"
+    },
+    "go": {
+      "label": "Go",
+      "kind": "lezer",
+      "export": "go",
+      "file": "lang/go.js",
+      "extensions": [
+        "go"
+      ],
+      "sample": "package main\nfunc main() { println(1) }\n"
+    },
+    "cpp": {
+      "label": "C/C++",
+      "kind": "lezer",
+      "export": "cpp",
+      "file": "lang/cpp.js",
+      "extensions": [
+        "c",
+        "h",
+        "cpp",
+        "cc",
+        "cxx",
+        "hpp",
+        "hxx"
+      ],
+      "sample": "int main() { return 0; }\n"
+    },
+    "java": {
+      "label": "Java",
+      "kind": "lezer",
+      "export": "java",
+      "file": "lang/java.js",
+      "extensions": [
+        "java"
+      ],
+      "sample": "class Main { public static void main(String[] a) {} }\n"
+    },
+    "php": {
+      "label": "PHP",
+      "kind": "lezer",
+      "export": "php",
+      "file": "lang/php.js",
+      "extensions": [
+        "php",
+        "phtml"
+      ],
+      "sample": "<?php echo 'hi'; ?>\n"
+    },
+    "sql": {
+      "label": "SQL",
+      "kind": "lezer",
+      "export": "sql",
+      "file": "lang/sql.js",
+      "extensions": [
+        "sql"
+      ],
+      "sample": "SELECT id, name FROM users WHERE active = 1;\n"
+    },
+    "xml": {
+      "label": "XML",
+      "kind": "lezer",
+      "export": "xml",
+      "file": "lang/xml.js",
+      "extensions": [
+        "xml",
+        "svg",
+        "plist",
+        "xhtml"
+      ],
+      "sample": "<note><to>User</to></note>\n"
+    },
+    "sass": {
+      "label": "Sass/SCSS",
+      "kind": "lezer",
+      "export": "sass",
+      "file": "lang/sass.js",
+      "extensions": [
+        "scss",
+        "sass"
+      ],
+      "sample": "$primary: #333;\n.box { color: $primary; }\n"
+    },
+    "less": {
+      "label": "Less",
+      "kind": "lezer",
+      "export": "less",
+      "file": "lang/less.js",
+      "extensions": [
+        "less"
+      ],
+      "sample": "@base: #f938ab;\n.box { color: @base; }\n"
+    },
+    "vue": {
+      "label": "Vue",
+      "kind": "lezer",
+      "export": "vue",
+      "file": "lang/vue.js",
+      "extensions": [
+        "vue"
+      ],
+      "sample": "<template><div>{{ msg }}</div></template>\n"
+    },
+    "shell": {
+      "label": "Shell",
+      "kind": "stream",
+      "export": "shell",
+      "file": "legacy/shell.js",
+      "extensions": [
+        "sh",
+        "bash",
+        "zsh"
+      ],
+      "filenames": [
+        ".bashrc",
+        ".zshrc",
+        ".profile"
+      ],
+      "sample": "#!/usr/bin/env bash\necho \"hello\"\n"
+    },
+    "toml": {
+      "label": "TOML",
+      "kind": "stream",
+      "export": "toml",
+      "file": "legacy/toml.js",
+      "extensions": [
+        "toml"
+      ],
+      "sample": "[project]\nname = \"insetu\"\n"
+    },
+    "dockerfile": {
+      "label": "Dockerfile",
+      "kind": "stream",
+      "export": "dockerFile",
+      "file": "legacy/dockerfile.js",
+      "extensions": [
+        "dockerfile"
+      ],
+      "filenames": [
+        "Dockerfile"
+      ],
+      "sample": "FROM python:3.11-slim\nRUN echo ok\n"
+    },
+    "lua": {
+      "label": "Lua",
+      "kind": "stream",
+      "export": "lua",
+      "file": "legacy/lua.js",
+      "extensions": [
+        "lua"
+      ],
+      "sample": "local function add(a, b) return a + b end\n"
+    },
+    "ruby": {
+      "label": "Ruby",
+      "kind": "stream",
+      "export": "ruby",
+      "file": "legacy/ruby.js",
+      "extensions": [
+        "rb",
+        "gemspec"
+      ],
+      "filenames": [
+        "Gemfile",
+        "Rakefile"
+      ],
+      "sample": "def greet(name)\n  puts name\nend\n"
+    },
+    "perl": {
+      "label": "Perl",
+      "kind": "stream",
+      "export": "perl",
+      "file": "legacy/perl.js",
+      "extensions": [
+        "pl",
+        "pm"
+      ],
+      "sample": "my $x = 42;\nprint $x;\n"
+    },
+    "powershell": {
+      "label": "PowerShell",
+      "kind": "stream",
+      "export": "powerShell",
+      "file": "legacy/powershell.js",
+      "extensions": [
+        "ps1",
+        "psm1"
+      ],
+      "sample": "$x = Get-ChildItem\nWrite-Host $x\n"
+    },
+    "diff": {
+      "label": "Diff",
+      "kind": "stream",
+      "export": "diff",
+      "file": "legacy/diff.js",
+      "extensions": [
+        "diff",
+        "patch"
+      ],
+      "sample": "@@ -1,1 +1,1 @@\n-old\n+new\n"
+    },
+    "properties": {
+      "label": "Properties/INI",
+      "kind": "stream",
+      "export": "properties",
+      "file": "legacy/properties.js",
+      "extensions": [
+        "ini",
+        "cfg",
+        "conf",
+        "properties",
+        "env"
+      ],
+      "filenames": [
+        ".env",
+        ".gitignore"
+      ],
+      "sample": "PORT=5005\nDEBUG=0\n"
+    },
+    "swift": {
+      "label": "Swift",
+      "kind": "stream",
+      "export": "swift",
+      "file": "legacy/swift.js",
+      "extensions": [
+        "swift"
+      ],
+      "sample": "let message = \"Hello\"\nprint(message)\n"
+    },
+    "kotlin": {
+      "label": "Kotlin",
+      "kind": "stream",
+      "export": "kotlin",
+      "file": "legacy/clike.js",
+      "extensions": [
+        "kt",
+        "kts"
+      ],
+      "sample": "fun main() { val x = 1 }\n"
+    },
+    "scala": {
+      "label": "Scala",
+      "kind": "stream",
+      "export": "scala",
+      "file": "legacy/clike.js",
+      "extensions": [
+        "scala",
+        "sc"
+      ],
+      "sample": "object Main extends App { val x = 1 }\n"
+    },
+    "r": {
+      "label": "R",
+      "kind": "stream",
+      "export": "r",
+      "file": "legacy/r.js",
+      "extensions": [
+        "r"
+      ],
+      "sample": "x <- c(1, 2, 3)\nmean(x)\n"
+    },
+    "julia": {
+      "label": "Julia",
+      "kind": "stream",
+      "export": "julia",
+      "file": "legacy/julia.js",
+      "extensions": [
+        "jl"
+      ],
+      "sample": "function f(x)\n  return x + 1\nend\n"
+    },
+    "haskell": {
+      "label": "Haskell",
+      "kind": "stream",
+      "export": "haskell",
+      "file": "legacy/haskell.js",
+      "extensions": [
+        "hs"
+      ],
+      "sample": "double :: Int -> Int\ndouble x = x + x\n"
+    },
+    "erlang": {
+      "label": "Erlang",
+      "kind": "stream",
+      "export": "erlang",
+      "file": "legacy/erlang.js",
+      "extensions": [
+        "erl",
+        "hrl"
+      ],
+      "sample": "-module(demo).\nhello() -> ok.\n"
+    },
+    "clojure": {
+      "label": "Clojure",
+      "kind": "stream",
+      "export": "clojure",
+      "file": "legacy/clojure.js",
+      "extensions": [
+        "clj",
+        "cljs",
+        "cljc",
+        "edn"
+      ],
+      "sample": "(defn square [x] (* x x))\n"
+    },
+    "scheme": {
+      "label": "Scheme",
+      "kind": "stream",
+      "export": "scheme",
+      "file": "legacy/scheme.js",
+      "extensions": [
+        "scm",
+        "ss",
+        "rkt"
+      ],
+      "sample": "(define (square x) (* x x))\n"
+    },
+    "protobuf": {
+      "label": "Protobuf",
+      "kind": "stream",
+      "export": "protobuf",
+      "file": "legacy/protobuf.js",
+      "extensions": [
+        "proto"
+      ],
+      "sample": "syntax = \"proto3\";\nmessage Item { string id = 1; }\n"
+    },
+    "cmake": {
+      "label": "CMake",
+      "kind": "stream",
+      "export": "cmake",
+      "file": "legacy/cmake.js",
+      "extensions": [
+        "cmake"
+      ],
+      "filenames": [
+        "CMakeLists.txt"
+      ],
+      "sample": "cmake_minimum_required(VERSION 3.20)\nproject(Demo)\n"
+    },
+    "nginx": {
+      "label": "Nginx",
+      "kind": "stream",
+      "export": "nginx",
+      "file": "legacy/nginx.js",
+      "filenames": [
+        "nginx.conf"
+      ],
+      "sample": "server { listen 80; server_name localhost; }\n"
+    }
+  }
+}

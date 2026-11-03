@@ -145,7 +145,7 @@ import{html as e,css as o}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
                 <div style="display: flex; align-items: center; gap: 15px;">
                     <slot name="actions" @click=${t=>t.stopPropagation()}></slot>
                     <span class="chevron">
-                        <yv-icon name="chevron-down" style="width: 16px; height: 16px;"></yv-icon>
+                        <yenvui-icon name="chevron-down" size="md"></yenvui-icon>
                     </span>
                 </div>
             </div>

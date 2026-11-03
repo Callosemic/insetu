@@ -1,4 +1,4 @@
-import{html as l}from"lit";import{YenvuiBase as s}from"./yenvui-base.js";export class YenvuiPill extends s{static properties={pillId:{type:String},labelText:{type:String},active:{type:Boolean},small:{type:Boolean},variant:{type:String}};createRenderRoot(){return this}constructor(){super(),this.variant="standard"}render(){const t=this.active?"yv-pill--active":"yv-pill--inactive",e=this.small?"yv-pill--small":"",i=`yv-pill--${this.variant||"standard"}`;return l`
+import{html as l}from"lit";import{YenvuiBase as s}from"./yenvui-base.js";export class YenvuiPill extends s{static properties={pillId:{type:String},labelText:{type:String},active:{type:Boolean},compact:{type:Boolean,reflect:!0},variant:{type:String}};createRenderRoot(){return this}constructor(){super(),this.compact=!1,this.variant="standard"}render(){const t=this.active?"yv-pill--active":"yv-pill--inactive",e=this.compact?"yv-pill--small":"",i=`yv-pill--${this.variant||"standard"}`;return l`
             <button 
                 class="yv-pill ${t} ${e} ${i}"
                 @click=${this._onClick}>

@@ -1,4 +1,4 @@
-import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js";import{YenvuiGestureController as h,getEventPath as v}from"./physics.js";export class YenvuiCard extends p{static properties={titleText:{type:String},detailText:{type:String},detailPrefix:{type:String},detailSuffix:{type:String},descriptionText:{type:String},statusText:{type:String},icon:{type:String},intentColor:{type:String},intent:{type:String},selected:{type:Boolean,reflect:!0},disableSelection:{type:Boolean},_overlayActive:{type:Boolean,reflect:!0},_hasActions:{type:Boolean,reflect:!0,attribute:"has-actions"},compact:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0},stale:{type:Boolean,reflect:!0}};static styles=d`
+import{html as s,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js";import{YenvuiGestureController as h,getEventPath as v}from"./physics.js";export class YenvuiCard extends p{static properties={titleText:{type:String},detailText:{type:String},detailPrefix:{type:String},detailSuffix:{type:String},descriptionText:{type:String},statusText:{type:String},icon:{type:String},intent:{type:String},selected:{type:Boolean,reflect:!0},disableSelection:{type:Boolean},_overlayActive:{type:Boolean,reflect:!0},_hasActions:{type:Boolean,reflect:!0,attribute:"has-actions"},_hasBodySlot:{type:Boolean,state:!0},compact:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0},stale:{type:Boolean,reflect:!0}};static styles=d`
         :host {
             display: block;
             margin-bottom: var(--card-margin-bottom, 12px);
@@ -106,6 +106,7 @@ import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
             flex: 1;
             display: flex;
             flex-direction: column;
+            justify-content: center;
             min-width: 0;
             padding: 12px;
             transform: translateY(var(--peek-content-y, 0px));
@@ -114,22 +115,28 @@ import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
         .card-header {
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
+            align-items: center;
             margin-bottom: 4px;
+            gap: 8px;
+        }
+        .card-header.single-row {
+            margin-bottom: 0;
         }
         .card-title {
-            font-weight: bold;
+            font-weight: 700;
             color: var(--text, #e0e0e0);
-            font-size: 0.95rem;
+            font-size: 0.88rem;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
+            min-width: 0;
+            overflow: hidden;
             overflow-wrap: anywhere;
             word-break: break-word;
         }
         .card-desc {
             color: var(--text-muted, #888);
-            font-size: 0.8rem;
+            font-size: 0.76rem;
             overflow-wrap: anywhere;
             word-break: break-word;
             display: -webkit-box;
@@ -139,10 +146,16 @@ import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
             margin-bottom: 4px;
         }
         .card-body {
-            display: flex;
+            display: none;
             flex-direction: column;
             overflow: hidden;
             min-width: 0;
+            font-size: 0.8rem;
+            line-height: 1.4;
+            margin-top: 4px;
+        }
+        .card-body.has-content {
+            display: flex;
         }
         :host([flush]) .card-body {
             padding: 0;
@@ -225,8 +238,12 @@ import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
             flex-wrap: nowrap;
             gap: 6px;
             overflow-x: auto;
+            overflow-y: hidden;
+            -webkit-overflow-scrolling: touch;
+            touch-action: pan-x pan-y;
             scrollbar-width: none;
             width: 100%;
+            min-width: 0;
             box-sizing: border-box;
         }
         .actions-wrapper::-webkit-scrollbar {
@@ -254,7 +271,7 @@ import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
             margin: 0;
         }
         /* Unstyled slots for host-injected buttons */
-        ::slotted(button), ::slotted([slot="actions"]), ::slotted(yenvui-btn), ::slotted(yenvui-async-btn) {
+        ::slotted(button), ::slotted(yenvui-btn), ::slotted(yenvui-async-btn) {
             height: 30px;
             padding: 0 10px !important;
             font-size: 0.75rem !important;
@@ -264,6 +281,14 @@ import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
             gap: 5px;
             white-space: nowrap;
             margin: 0 !important;
+        }
+        ::slotted([slot="actions"]) {
+            display: inline-flex !important;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+            margin: 0 !important;
+            flex-shrink: 0;
         }
 
         /* E-Ink High Contrast Overrides */
@@ -363,44 +388,44 @@ import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
                 border-left-width: 6px;
             }
         }
-    `;constructor(){super(),this.titleText="",this.detailText="",this.detailPrefix="",this.detailSuffix="",this.descriptionText="",this.statusText="",this.icon="",this.intentColor="",this.intent="",this.disableSelection=!1,this.compact=!1,this.flush=!1,this.stale=!1,this._overlayActive=!1,this._hasActions=!1,this.selected=!1,this._isPanning=!1,this._overlayListener=t=>{t.detail.source!==this&&this._overlayActive&&(this._overlayActive=!1)},this._focusOutListener=t=>{!this.contains(t.relatedTarget)&&this._overlayActive&&(this._overlayActive=!1)}}_initGestureController(){this._gestureController||(this._gestureController=new h(this,{scrollableContainerSelector:"actions-wrapper",onPanStart:(t,s)=>{const e=this.getBoundingClientRect();this._cardWidth=e.width,this._localStartX=t-e.left;const r=this.shadowRoot.querySelector(".actions-wrapper");this._actionsScrollLeft=r?r.scrollLeft:null,this._initialScrollLeft=this._actionsScrollLeft},onPanMove:(t,s,e)=>{if(e==="horizontal"&&this._overlayActive){const r=this._gestureController.startX-t,i=this.shadowRoot.querySelector(".actions-wrapper");if(i&&this._initialScrollLeft!==null){let a=this._initialScrollLeft+r;this._drawerRafId&&cancelAnimationFrame(this._drawerRafId),this._drawerRafId=requestAnimationFrame(()=>{a<0?i.style.transform=`translateX(${Math.abs(a)*.4}px)`:(i.style.transform="translateX(0px)",i.scrollLeft=a)})}}},onPanEnd:(t,s,e)=>{if(e!=="horizontal")return;const r=this._gestureController.startX-t;if(Math.abs(r)>10&&(this._isPanning=!0,setTimeout(()=>this._isPanning=!1,150)),this._overlayActive){const i=this.shadowRoot.querySelector(".actions-wrapper");i&&(i.style.transition="transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)",i.style.transform="translateX(0px)",setTimeout(()=>{i.style.transition=""},200),this._initialScrollLeft+r<-(this._cardWidth*.2)&&(this._overlayActive=!1));return}if(Math.abs(r)>30){const i=r>30,a=r<-30,c=this._localStartX<this._cardWidth*.3,o=this._localStartX>this._cardWidth*.7;c&&a&&!this.disableSelection?this._toggleSelection():o&&i&&(this._hasActions||this.querySelector('[slot="actions"]'))&&(this._overlayActive=!0)}}}))}get actionsOpen(){return!!this._overlayActive}set actionsOpen(t){this._overlayActive=!!t}get hasActions(){return!!this._hasActions}set hasActions(t){this._hasActions=!!t}connectedCallback(){super.connectedCallback(),this.setAttribute("data-yv-card",""),this.addEventListener("focusout",this._focusOutListener),document.addEventListener("yenvui-overlay-opened",this._overlayListener),this.registerOutsideClick(()=>{this._overlayActive&&(this._overlayActive=!1)})}disconnectedCallback(){super.disconnectedCallback(),this.removeEventListener("focusout",this._focusOutListener),document.removeEventListener("yenvui-overlay-opened",this._overlayListener),this._gestureController&&typeof this._gestureController.abort=="function"&&this._gestureController.abort()}updated(t){if(super.updated(t),t.has("_overlayActive")&&this._overlayActive&&(this.dispatchEvent(new CustomEvent("yenvui-overlay-opened",{bubbles:!0,composed:!0,detail:{source:this}})),this.dispatchEvent(new CustomEvent("yenvui-card-actions-opened",{bubbles:!0,composed:!0,detail:{source:this}}))),t.has("entityData")||t.has("filename")||t.has("titleText")){const s=t.get("filename"),e=t.get("titleText"),r=t.has("filename")&&s!==this.filename,i=t.has("titleText")&&e!==this.titleText;this._overlayActive&&(r||i)&&(this._overlayActive=!1)}}_toggleSelection(){this.selected=!this.selected,this.dispatchEvent(new CustomEvent("yenvui-card-select-toggled",{detail:{selected:this.selected},bubbles:!0,composed:!0}))}firstUpdated(){this._checkActions()}_checkActions(){const t=this.shadowRoot.querySelector('slot[name="actions"]');if(t){const s=t.assignedElements({flatten:!0});this._hasActions=s.length>0}else this._hasActions=!!this.querySelector('[slot="actions"]')}_handleSlotChange(t){this._checkActions()}render(){const t=!this.descriptionText&&!this.detailText,s=this.intent?`var(--intent-${this.intent})`:this.intentColor||"var(--intent-neutral)";return n`
-            <div class="card-wrapper" style="--card-intent: ${s}"
+    `;constructor(){super(),this.titleText="",this.detailText="",this.detailPrefix="",this.detailSuffix="",this.descriptionText="",this.statusText="",this.icon="",this.intent="",this.disableSelection=!1,this.compact=!1,this.flush=!1,this.stale=!1,this._overlayActive=!1,this._hasActions=!1,this._hasBodySlot=!1,this.selected=!1,this._isPanning=!1,this._overlayListener=t=>{t.detail.source!==this&&this._overlayActive&&(this._overlayActive=!1)},this._focusOutListener=t=>{!this.contains(t.relatedTarget)&&this._overlayActive&&(this._overlayActive=!1)}}_initGestureController(){this._gestureController||(this._gestureController=new h(this,{scrollableContainerSelector:"actions-wrapper",onPanStart:(t,o)=>{const e=this.getBoundingClientRect();this._cardWidth=e.width,this._localStartX=t-e.left;const r=this.shadowRoot.querySelector(".actions-wrapper");this._actionsScrollLeft=r?r.scrollLeft:null,this._initialScrollLeft=this._actionsScrollLeft},onPanMove:(t,o,e)=>{if(e==="horizontal"&&this._overlayActive){const r=this._gestureController.startX-t,i=this.shadowRoot.querySelector(".actions-wrapper");if(i&&this._initialScrollLeft!==null){let n=this._initialScrollLeft+r;this._drawerRafId&&cancelAnimationFrame(this._drawerRafId),this._drawerRafId=requestAnimationFrame(()=>{n<0?i.style.transform=`translateX(${Math.abs(n)*.4}px)`:(i.style.transform="translateX(0px)",i.scrollLeft=n)})}}},onPanEnd:(t,o,e)=>{if(e!=="horizontal")return;const r=this._gestureController.startX-t;if(Math.abs(r)>10&&(this._isPanning=!0,setTimeout(()=>this._isPanning=!1,150)),this._overlayActive){const i=this.shadowRoot.querySelector(".actions-wrapper");i&&(i.style.transition="transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)",i.style.transform="translateX(0px)",setTimeout(()=>{i.style.transition=""},200),this._initialScrollLeft+r<-(this._cardWidth*.2)&&(this._overlayActive=!1));return}if(Math.abs(r)>30){const i=r>30,n=r<-30,c=this._localStartX<this._cardWidth*.3,a=this._localStartX>this._cardWidth*.7;c&&n&&!this.disableSelection?this._toggleSelection():a&&i&&(this._hasActions||this.querySelector('[slot="actions"]'))&&(this._overlayActive=!0)}}}))}get actionsOpen(){return!!this._overlayActive}set actionsOpen(t){this._overlayActive=!!t}get hasActions(){return!!this._hasActions}set hasActions(t){this._hasActions=!!t}connectedCallback(){super.connectedCallback(),this.setAttribute("data-yv-card",""),this.addEventListener("focusout",this._focusOutListener),document.addEventListener("yenvui-overlay-opened",this._overlayListener),this.registerOutsideClick(()=>{this._overlayActive&&(this._overlayActive=!1)})}disconnectedCallback(){super.disconnectedCallback(),this.removeEventListener("focusout",this._focusOutListener),document.removeEventListener("yenvui-overlay-opened",this._overlayListener),this._gestureController&&typeof this._gestureController.abort=="function"&&this._gestureController.abort()}updated(t){if(super.updated(t),t.has("_overlayActive")&&this._overlayActive&&(this.dispatchEvent(new CustomEvent("yenvui-overlay-opened",{bubbles:!0,composed:!0,detail:{source:this}})),this.dispatchEvent(new CustomEvent("yenvui-card-actions-opened",{bubbles:!0,composed:!0,detail:{source:this}}))),t.has("entityData")||t.has("filename")||t.has("titleText")){const o=t.get("filename"),e=t.get("titleText"),r=t.has("filename")&&o!==this.filename,i=t.has("titleText")&&e!==this.titleText;this._overlayActive&&(r||i)&&(this._overlayActive=!1)}}_toggleSelection(){this.selected=!this.selected,this.dispatchEvent(new CustomEvent("yenvui-card-select-toggled",{detail:{selected:this.selected},bubbles:!0,composed:!0}))}firstUpdated(){this._checkActions()}_checkActions(){const t=this.shadowRoot.querySelector('slot[name="actions"]');if(t){const o=t.assignedElements({flatten:!0});this._hasActions=o.length>0}else this._hasActions=!!this.querySelector('[slot="actions"]')}_handleSlotChange(t){this._checkActions()}_handleBodySlotChange(t){const o=t.target.assignedNodes({flatten:!0});this._hasBodySlot=o.some(e=>e.nodeType===Node.ELEMENT_NODE||e.nodeType===Node.TEXT_NODE&&e.textContent.trim().length>0)}render(){const t=!this.descriptionText&&!this.detailText&&!this._hasBodySlot,o=this.intent?`var(--intent-${this.intent})`:"var(--intent-neutral)";return s`
+            <div class="card-wrapper" style="--card-intent: ${o}"
                 @mouseleave=${()=>{window.matchMedia("(hover: hover)").matches&&(!this._gestureController||!this._gestureController.active)&&(this._overlayActive=!1)}}
                 @pointerdown=${e=>{this._initGestureController(),this._gestureController.start(e)}}>
 
-                ${this.disableSelection?"":n`<div class="selection-hit-zone" title="Select Item" @click=${e=>{e.stopPropagation(),this._toggleSelection()}}></div><div class="selection-strip"></div>`}
-                <div class="content-col" @click=${e=>{if(this._isPanning){e.stopPropagation(),e.preventDefault();return}this.dispatchEvent(new CustomEvent("yenvui-card-clicked",{detail:{filename:this.filename,isSource:!0},bubbles:!0,composed:!0}))}} style="cursor: pointer; padding: 12px; min-width: 0;">
-                    <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; gap: 8px;">
-                        <div class="card-title" style="display: flex; align-items: center; gap: 6px; font-weight: bold; color: var(--text); font-size: 0.85rem; min-width: 0; overflow: hidden;">
-                            ${this.icon?/^[a-zA-Z0-9-]+$/.test(this.icon)?n`<yv-icon name="${this.icon}" style="width: 14px; height: 14px; color: var(--card-intent, var(--intent-primary)); flex-shrink: 0;"></yv-icon>`:n`<span style="flex-shrink: 0;">${this.icon}</span>`:""}
-                            <yenvui-scrub-track style="flex: 1; min-width: 0;">
+                ${this.disableSelection?"":s`<div class="selection-hit-zone" title="Select Item" @click=${e=>{e.stopPropagation(),this._toggleSelection()}}></div><div class="selection-strip"></div>`}
+                <div class="content-col" @click=${e=>{if(this._isPanning){e.stopPropagation(),e.preventDefault();return}this.dispatchEvent(new CustomEvent("yenvui-card-clicked",{detail:{filename:this.filename,isSource:!0},bubbles:!0,composed:!0}))}} style="cursor: pointer;">
+                    <div class="card-header ${t?"single-row":""}">
+                        <div class="card-title">
+                            ${this.icon?/^[a-zA-Z0-9-]+$/.test(this.icon)?s`<yenvui-icon name="${this.icon}" size="sm" style="color: var(--card-intent, var(--intent-primary)); flex-shrink: 0;"></yenvui-icon>`:s`<span style="flex-shrink: 0;">${this.icon}</span>`:""}
+                            <yenvui-scrub-track ?grow=${!0}>
                                 ${this.titleText}
                             </yenvui-scrub-track>
                         </div>
                         <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
-                            ${this.statusText?n`<span style="font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-right: 4px;">${this.statusText}</span>`:""}
+                            ${this.statusText?s`<span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic; margin-right: 4px;">${this.statusText}</span>`:""}
                             <slot name="header-actions"></slot>
-                            ${this.detailSuffix?n`
-                                <div class="card-detail-suffix" style="font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); opacity: 0.8; flex-shrink: 0; margin-left: 8px;">
+                            ${this.detailSuffix?s`
+                                <div class="card-detail-suffix" style="font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-muted); opacity: 0.85; flex-shrink: 0; margin-left: 8px;">
                                     ${this.detailSuffix.replace(/^[\s|]+/,"")}
                                 </div>
                             `:""}
                         </div>
                     </div>
 
-                    ${this.descriptionText?n`
-                        <div class="card-desc" style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
+                    ${this.descriptionText?s`
+                        <div class="card-desc">
                             ${this.descriptionText}
                         </div>
                     `:""}
-                    ${this.detailText?n`
-                        <div class="card-detail" style="font-family: var(--font-mono); font-size: 10px; color: var(--card-intent, var(--intent-primary)); opacity: 0.8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    ${this.detailText?s`
+                        <div class="card-detail" style="color: var(--card-intent, var(--intent-primary));">
                             ${this.detailPrefix||""}${this.detailText}
                         </div>
                     `:""}
 
-                    <div class="card-body">
-                        <slot></slot>
+                    <div class="card-body ${this._hasBodySlot?"has-content":""}">
+                        <slot @slotchange=${this._handleBodySlotChange}></slot>
                     </div>
 
                     <slot name="detail"></slot>
@@ -409,10 +434,10 @@ import{html as n,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
                 <div class="action-grip-rail"  
                     @pointerenter=${e=>{e.pointerType==="mouse"&&(this._overlayActive=!0)}}
                     @click=${e=>{e.stopPropagation(),e.preventDefault(),this._overlayActive=!this._overlayActive}}>
-                    <yv-icon name="chevron-left" style="width: 14px; height: 14px;"></yv-icon>
+                    <yenvui-icon name="chevron-left" size="sm"></yenvui-icon>
                 </div>
-                <div class="actions-tray" @click=${{handleEvent:e=>{if(this._isPanning){e.stopPropagation(),e.preventDefault();return}const r=v(e),i=r.some(o=>o.tagName&&o.tagName.endsWith("-DROPDOWN")),a=r.some(o=>o.classList&&o.classList.contains("menu-item"));if(i&&!a)return;const c=r.some(o=>{if(!o.tagName)return!1;const l=o.tagName.toUpperCase();return!!(l==="BUTTON"||l.endsWith("-ASYNC-BTN")||l.endsWith("-BTN")||a)})},capture:!0}}>
-                    ${t?"":n`<span class="tray-caption">${this.titleText}</span>`}
+                <div class="actions-tray" @click=${{handleEvent:e=>{if(this._isPanning){e.stopPropagation(),e.preventDefault();return}const r=v(e),i=r.some(a=>a.tagName&&a.tagName.endsWith("-DROPDOWN")),n=r.some(a=>a.classList&&a.classList.contains("menu-item"));if(i&&!n)return;const c=r.some(a=>{if(!a.tagName)return!1;const l=a.tagName.toUpperCase();return!!(l==="BUTTON"||l.endsWith("-ASYNC-BTN")||l.endsWith("-BTN")||n)})},capture:!0}}>
+                    ${t?"":s`<span class="tray-caption">${this.titleText}</span>`}
                     <div class="actions-wrapper">
                         <slot name="actions" @slotchange=${this._handleSlotChange}></slot>
                     </div>

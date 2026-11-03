@@ -1,4 +1,4 @@
-import{html as t,css as e}from"lit";import{YenvuiBase as r}from"./yenvui-base.js";export class YenvuiBoard extends r{static styles=e`
+import{html as t,css as e}from"lit";import{YenvuiBase as n}from"./yenvui-base.js";export class YenvuiBoard extends n{static styles=e`
         :host { 
             display: grid; 
             grid-template-columns: repeat(3, 1fr);
@@ -17,7 +17,7 @@ import{html as t,css as e}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
                 gap: 25px; 
             }
         }
-    `;render(){return t`<slot></slot>`}}customElements.define("yenvui-board",YenvuiBoard);export class YenvuiColumn extends r{static properties={titleText:{type:String},intentColor:{type:String}};static styles=e`
+    `;render(){return t`<slot></slot>`}}customElements.define("yenvui-board",YenvuiBoard);export class YenvuiColumn extends n{static properties={titleText:{type:String},intent:{type:String,reflect:!0}};static styles=e`
         :host { 
             min-width: 0; 
             background: var(--input-bg, #2d2d2d); 
@@ -25,14 +25,21 @@ import{html as t,css as e}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
             border-radius: 6px; 
             display: flex; 
             flex-direction: column; 
-            gap: 10px; 
+            gap: 10px;
+            --col-accent: var(--text, #e0e0e0);
         }
+        :host([intent="primary"]) { --col-accent: var(--intent-primary); }
+        :host([intent="success"]) { --col-accent: var(--intent-success); }
+        :host([intent="warning"]) { --col-accent: var(--intent-warning); }
+        :host([intent="danger"]) { --col-accent: var(--intent-danger); }
+        :host([intent="highlight"]) { --col-accent: var(--intent-highlight); }
+        :host([intent="neutral"]) { --col-accent: var(--intent-neutral); }
         .header { 
             margin-top: 0; 
             font-size: 1.1rem; 
             font-weight: bold; 
             margin-bottom: 10px; 
-            color: var(--text, #e0e0e0); 
+            color: var(--col-accent); 
         }
         @container (max-width: 700px) {
             :host { 
@@ -46,7 +53,7 @@ import{html as t,css as e}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
                 margin-bottom: 15px; 
             }
         }
-    `;constructor(){super(),this.titleText="",this.intentColor=""}render(){return t`
-            ${this.titleText?t`<div class="header" style="color: ${this.intentColor||"var(--text, #e0e0e0)"};">${this.titleText}</div>`:""}
+    `;constructor(){super(),this.titleText="",this.intent=""}render(){return t`
+            ${this.titleText?t`<div class="header">${this.titleText}</div>`:""}
             <slot></slot>
         `}}customElements.define("yenvui-column",YenvuiColumn);

@@ -1,4 +1,4 @@
-import{html as i,css as s}from"lit";import{YenvuiBase as l}from"./yenvui-base.js";import"./search-bar.js";import"./dropdown.js";export class YenvuiToolbar extends l{static properties={searchQuery:{type:String},searchPlaceholder:{type:String},enableFilterDropdown:{type:Boolean},filterText:{type:String},activeFilters:{type:Array},hasFiltersOverride:{type:Boolean},bottomBorder:{type:Boolean}};static styles=s`
+import{html as i,css as l}from"lit";import{YenvuiBase as o}from"./yenvui-base.js";import"./search-bar.js";import"./dropdown.js";export class YenvuiToolbar extends o{static properties={searchQuery:{type:String},searchPlaceholder:{type:String},enableFilterDropdown:{type:Boolean},filterText:{type:String},activeFilters:{type:Array},hasFiltersOverride:{type:Boolean},flush:{type:Boolean,reflect:!0}};static styles=l`
         :host { display: contents; }
         .sticky-header {
             position: relative;
@@ -27,9 +27,9 @@ import{html as i,css as s}from"lit";import{YenvuiBase as l}from"./yenvui-base.js
             align-self: stretch;
         }
         .bottom-border { border-bottom: none; }
-    `;constructor(){super(),this.searchQuery="",this.searchPlaceholder="Search...",this.enableFilterDropdown=!1,this.filterText="",this.activeFilters=[],this.hasFiltersOverride=!1,this.bottomBorder=!1}render(){let t=this.filterText,r=this.hasFiltersOverride||!1;if(!t&&this.activeFilters){const e=this.activeFilters.filter(o=>o!=="ALL");e.length>0?(t=`Filters: ${e.slice(0,2).join(", ")}${e.length>2?"...":""}`,r=!0):t="Filters"}return i`
+    `;constructor(){super(),this.searchQuery="",this.searchPlaceholder="Search...",this.enableFilterDropdown=!1,this.filterText="",this.activeFilters=[],this.hasFiltersOverride=!1,this.flush=!1}render(){let t=this.filterText,r=this.hasFiltersOverride||!1;if(!t&&this.activeFilters){const e=this.activeFilters.filter(s=>s!=="ALL");e.length>0?(t=`Filters: ${e.slice(0,2).join(", ")}${e.length>2?"...":""}`,r=!0):t="Filters"}return i`
             <div class="sticky-header">
-                <div class="toolbar-row ${this.bottomBorder?"bottom-border":""}">
+                <div class="toolbar-row ${this.flush?"bottom-border":""}">
                     <yenvui-search-bar 
                         style="flex: 1;"
                         .placeholder=${this.searchPlaceholder} 
