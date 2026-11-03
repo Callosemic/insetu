@@ -1,0 +1,348 @@
+{
+  "schema": 1,
+  "description": "Editor languages bundled by build.mjs: built-ins from codemirror-core, official Lezer packs, and legacy stream modes.",
+  "languages": {
+    "python": {
+      "label": "Python",
+      "kind": "builtin",
+      "export": "python",
+      "extensions": ["py", "pyi"],
+      "sample": "def greet(name: str) -> str:\n    return name\n"
+    },
+    "javascript": {
+      "label": "JavaScript",
+      "kind": "builtin",
+      "export": "javascript",
+      "options": { "jsx": true },
+      "extensions": ["js", "mjs", "cjs", "jsx"],
+      "sample": "export const add = (a, b) => a + b;\n"
+    },
+    "typescript": {
+      "label": "TypeScript",
+      "kind": "builtin",
+      "export": "javascript",
+      "options": { "typescript": true, "jsx": true },
+      "extensions": ["ts", "mts", "cts", "tsx"],
+      "sample": "export function id<T>(x: T): T { return x; }\n"
+    },
+    "json": {
+      "label": "JSON",
+      "kind": "builtin",
+      "export": "json",
+      "extensions": ["json", "jsonl"],
+      "sample": "{\"ok\": true, \"count\": 1}\n"
+    },
+    "yaml": {
+      "label": "YAML",
+      "kind": "builtin",
+      "export": "yaml",
+      "extensions": ["yaml", "yml"],
+      "sample": "title: Example\ncount: 1\n"
+    },
+    "html": {
+      "label": "HTML",
+      "kind": "builtin",
+      "export": "htmlLang",
+      "extensions": ["html", "htm"],
+      "sample": "<!doctype html><html><body><h1>Hi</h1></body></html>\n"
+    },
+    "css": {
+      "label": "CSS",
+      "kind": "builtin",
+      "export": "cssLang",
+      "extensions": ["css"],
+      "sample": "body { color: #333; margin: 0; }\n"
+    },
+    "markdown": {
+      "label": "Markdown",
+      "kind": "builtin",
+      "export": "markdown",
+      "extensions": ["md", "markdown"],
+      "sample": "# Heading\n\nSome **bold** text.\n"
+    },
+    "rust": {
+      "label": "Rust",
+      "kind": "lezer",
+      "package": "@codemirror/lang-rust",
+      "file": "lang/rust.js",
+      "export": "rust",
+      "extensions": ["rs"],
+      "sample": "fn main() { let x: i32 = 42; }\n"
+    },
+    "go": {
+      "label": "Go",
+      "kind": "lezer",
+      "package": "@codemirror/lang-go",
+      "file": "lang/go.js",
+      "export": "go",
+      "extensions": ["go"],
+      "sample": "package main\nfunc main() { println(1) }\n"
+    },
+    "cpp": {
+      "label": "C/C++",
+      "kind": "lezer",
+      "package": "@codemirror/lang-cpp",
+      "file": "lang/cpp.js",
+      "export": "cpp",
+      "extensions": ["c", "h", "cpp", "cc", "cxx", "hpp", "hxx"],
+      "sample": "int main() { return 0; }\n"
+    },
+    "java": {
+      "label": "Java",
+      "kind": "lezer",
+      "package": "@codemirror/lang-java",
+      "file": "lang/java.js",
+      "export": "java",
+      "extensions": ["java"],
+      "sample": "class Main { public static void main(String[] a) {} }\n"
+    },
+    "php": {
+      "label": "PHP",
+      "kind": "lezer",
+      "package": "@codemirror/lang-php",
+      "file": "lang/php.js",
+      "export": "php",
+      "extensions": ["php", "phtml"],
+      "sample": "<?php echo 'hi'; ?>\n"
+    },
+    "sql": {
+      "label": "SQL",
+      "kind": "lezer",
+      "package": "@codemirror/lang-sql",
+      "file": "lang/sql.js",
+      "export": "sql",
+      "extensions": ["sql"],
+      "sample": "SELECT id, name FROM users WHERE active = 1;\n"
+    },
+    "xml": {
+      "label": "XML",
+      "kind": "lezer",
+      "package": "@codemirror/lang-xml",
+      "file": "lang/xml.js",
+      "export": "xml",
+      "extensions": ["xml", "svg", "plist", "xhtml"],
+      "sample": "<note><to>User</to></note>\n"
+    },
+    "sass": {
+      "label": "Sass/SCSS",
+      "kind": "lezer",
+      "package": "@codemirror/lang-sass",
+      "file": "lang/sass.js",
+      "export": "sass",
+      "extensions": ["scss", "sass"],
+      "sample": "$primary: #333;\n.box { color: $primary; }\n"
+    },
+    "less": {
+      "label": "Less",
+      "kind": "lezer",
+      "package": "@codemirror/lang-less",
+      "file": "lang/less.js",
+      "export": "less",
+      "extensions": ["less"],
+      "sample": "@base: #f938ab;\n.box { color: @base; }\n"
+    },
+    "vue": {
+      "label": "Vue",
+      "kind": "lezer",
+      "package": "@codemirror/lang-vue",
+      "file": "lang/vue.js",
+      "export": "vue",
+      "extensions": ["vue"],
+      "sample": "<template><div>{{ msg }}</div></template>\n"
+    },
+    "shell": {
+      "label": "Shell",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/shell",
+      "file": "legacy/shell.js",
+      "export": "shell",
+      "extensions": ["sh", "bash", "zsh"],
+      "filenames": [".bashrc", ".zshrc", ".profile"],
+      "sample": "#!/usr/bin/env bash\necho \"hello\"\n"
+    },
+    "toml": {
+      "label": "TOML",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/toml",
+      "file": "legacy/toml.js",
+      "export": "toml",
+      "extensions": ["toml"],
+      "sample": "[project]\nname = \"insetu\"\n"
+    },
+    "dockerfile": {
+      "label": "Dockerfile",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/dockerfile",
+      "file": "legacy/dockerfile.js",
+      "export": "dockerFile",
+      "extensions": ["dockerfile"],
+      "filenames": ["Dockerfile"],
+      "sample": "FROM python:3.11-slim\nRUN echo ok\n"
+    },
+    "lua": {
+      "label": "Lua",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/lua",
+      "file": "legacy/lua.js",
+      "export": "lua",
+      "extensions": ["lua"],
+      "sample": "local function add(a, b) return a + b end\n"
+    },
+    "ruby": {
+      "label": "Ruby",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/ruby",
+      "file": "legacy/ruby.js",
+      "export": "ruby",
+      "extensions": ["rb", "gemspec"],
+      "filenames": ["Gemfile", "Rakefile"],
+      "sample": "def greet(name)\n  puts name\nend\n"
+    },
+    "perl": {
+      "label": "Perl",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/perl",
+      "file": "legacy/perl.js",
+      "export": "perl",
+      "extensions": ["pl", "pm"],
+      "sample": "my $x = 42;\nprint $x;\n"
+    },
+    "powershell": {
+      "label": "PowerShell",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/powershell",
+      "file": "legacy/powershell.js",
+      "export": "powerShell",
+      "extensions": ["ps1", "psm1"],
+      "sample": "$x = Get-ChildItem\nWrite-Host $x\n"
+    },
+    "diff": {
+      "label": "Diff",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/diff",
+      "file": "legacy/diff.js",
+      "export": "diff",
+      "extensions": ["diff", "patch"],
+      "sample": "@@ -1,1 +1,1 @@\n-old\n+new\n"
+    },
+    "properties": {
+      "label": "Properties/INI",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/properties",
+      "file": "legacy/properties.js",
+      "export": "properties",
+      "extensions": ["ini", "cfg", "conf", "properties", "env"],
+      "filenames": [".env", ".gitignore"],
+      "sample": "PORT=5005\nDEBUG=0\n"
+    },
+    "swift": {
+      "label": "Swift",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/swift",
+      "file": "legacy/swift.js",
+      "export": "swift",
+      "extensions": ["swift"],
+      "sample": "let message = \"Hello\"\nprint(message)\n"
+    },
+    "kotlin": {
+      "label": "Kotlin",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/clike",
+      "file": "legacy/clike.js",
+      "export": "kotlin",
+      "extensions": ["kt", "kts"],
+      "sample": "fun main() { val x = 1 }\n"
+    },
+    "scala": {
+      "label": "Scala",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/clike",
+      "file": "legacy/clike.js",
+      "export": "scala",
+      "extensions": ["scala", "sc"],
+      "sample": "object Main extends App { val x = 1 }\n"
+    },
+    "r": {
+      "label": "R",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/r",
+      "file": "legacy/r.js",
+      "export": "r",
+      "extensions": ["r"],
+      "sample": "x <- c(1, 2, 3)\nmean(x)\n"
+    },
+    "julia": {
+      "label": "Julia",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/julia",
+      "file": "legacy/julia.js",
+      "export": "julia",
+      "extensions": ["jl"],
+      "sample": "function f(x)\n  return x + 1\nend\n"
+    },
+    "haskell": {
+      "label": "Haskell",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/haskell",
+      "file": "legacy/haskell.js",
+      "export": "haskell",
+      "extensions": ["hs"],
+      "sample": "double :: Int -> Int\ndouble x = x + x\n"
+    },
+    "erlang": {
+      "label": "Erlang",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/erlang",
+      "file": "legacy/erlang.js",
+      "export": "erlang",
+      "extensions": ["erl", "hrl"],
+      "sample": "-module(demo).\nhello() -> ok.\n"
+    },
+    "clojure": {
+      "label": "Clojure",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/clojure",
+      "file": "legacy/clojure.js",
+      "export": "clojure",
+      "extensions": ["clj", "cljs", "cljc", "edn"],
+      "sample": "(defn square [x] (* x x))\n"
+    },
+    "scheme": {
+      "label": "Scheme",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/scheme",
+      "file": "legacy/scheme.js",
+      "export": "scheme",
+      "extensions": ["scm", "ss", "rkt"],
+      "sample": "(define (square x) (* x x))\n"
+    },
+    "protobuf": {
+      "label": "Protobuf",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/protobuf",
+      "file": "legacy/protobuf.js",
+      "export": "protobuf",
+      "extensions": ["proto"],
+      "sample": "syntax = \"proto3\";\nmessage Item { string id = 1; }\n"
+    },
+    "cmake": {
+      "label": "CMake",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/cmake",
+      "file": "legacy/cmake.js",
+      "export": "cmake",
+      "extensions": ["cmake"],
+      "filenames": ["CMakeLists.txt"],
+      "sample": "cmake_minimum_required(VERSION 3.20)\nproject(Demo)\n"
+    },
+    "nginx": {
+      "label": "Nginx",
+      "kind": "stream",
+      "package": "@codemirror/legacy-modes/mode/nginx",
+      "file": "legacy/nginx.js",
+      "export": "nginx",
+      "filenames": ["nginx.conf"],
+      "sample": "server { listen 80; server_name localhost; }\n"
+    }
+  }
+}

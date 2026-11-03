@@ -7,8 +7,10 @@ hash, so a hand edit, a half-finished vendor run, or a stale leftover file is ca
 
 Standard library only (Python 3.10+). Used by vendor_sutram.sh and by tests/unit/test_vendor_lock.py.
 
-    python3 scripts/vendor_lock.py sync  <sutram_root> <vendor_root>   # vendor, prune, write the lock
-    python3 scripts/vendor_lock.py check <vendor_root>                 # verify files against the lock
+    python3 scripts/vendor_lock.py sync  <sutram_root> <vendor_root>   # vendor sutram, prune, write sutram.lock.json
+    python3 scripts/vendor_lock.py check <vendor_root>                 # verify sutram files against sutram.lock.json
+    python3 scripts/vendor_lock.py sync  codemirror [lockfile] [dir]   # write codemirror.lock.json from a built tree
+    python3 scripts/vendor_lock.py check codemirror [dir] [lockfile]   # verify codemirror tree against codemirror.lock.json
 """
 import filecmp
 import hashlib
@@ -20,7 +22,14 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+DEFAULT_VENDOR_ROOT = REPO_ROOT / "insetu" / "static" / "vendor"
+DEFAULT_CODEMIRROR_VENDOR_DIR = DEFAULT_VENDOR_ROOT / "codemirror"
+DEFAULT_CODEMIRROR_PACKAGE_LOCK = SCRIPT_DIR / "codemirror" / "package-lock.json"
+
 LOCK_FILENAME = "sutram.lock.json"
+CODEMIRROR_LOCK_FILENAME = "codemirror.lock.json"
 SUTRAM_REPO_URL = "https://github.com/Callosemic/sutram"
 
 # (source path inside the sutram repo, destination path inside insetu/static/vendor)
@@ -31,19 +40,33 @@ BUILD_MAP: Tuple[Tuple[str, str], ...] = (
 )
 
 
+def _digest_files(base: Path, files: List[Path]) -> Tuple[str, int]:
+    """Returns (sha256, file_count) over files in the given order, each keyed by its path relative to base (the one digest every lock uses)."""
+    hasher = hashlib.sha256()
+    for item in files:
+        rel = item.relative_to(base).as_posix()
+        hasher.update(rel.encode("utf-8") + b"\0" + hashlib.sha256(item.read_bytes()).hexdigest().encode("ascii") + b"\n")
+    return hasher.hexdigest(), len(files)
+
+
+def _digest_problems(label: str, lock_name: str, entry: Dict[str, object], digest: str, file_count: int) -> List[str]:
+    """Compares a tree digest with its lock entry and describes any mismatch."""
+    problems = []
+    if file_count != entry.get("files"):
+        problems.append(f"{label} file count is {file_count}, {lock_name} says {entry.get('files')}")
+    if digest != entry.get("sha256"):
+        problems.append(f"{label} file contents do not match {lock_name} (hand edit, partial vendor run, or stale file)")
+    return problems
+
+
 def tree_digest(vendor_root: Path) -> Tuple[str, int]:
     """Returns (sha256, file_count) over every file under the BUILD_MAP destinations, keyed by relative path."""
-    hasher = hashlib.sha256()
-    count = 0
+    files: List[Path] = []
     for _src_rel, dest_rel in BUILD_MAP:
         dest = vendor_root / dest_rel
-        if not dest.is_dir():
-            continue
-        for item in sorted(p for p in dest.rglob("*") if p.is_file()):
-            rel = item.relative_to(vendor_root).as_posix()
-            hasher.update(rel.encode("utf-8") + b"\0" + hashlib.sha256(item.read_bytes()).hexdigest().encode("ascii") + b"\n")
-            count += 1
-    return hasher.hexdigest(), count
+        if dest.is_dir():
+            files.extend(sorted(p for p in dest.rglob("*") if p.is_file()))
+    return _digest_files(vendor_root, files)
 
 
 def read_sutram_version(sutram_root: Path) -> Optional[str]:
@@ -165,11 +188,7 @@ def check(vendor_root: Path, strict: bool = False) -> List[str]:
         return [f"{LOCK_FILENAME} is missing; run scripts/vendor_sutram.sh to vendor sutram and write it."]
     entry = json.loads(lock_path.read_text(encoding="utf-8")).get("sutram") or {}
     digest, file_count = tree_digest(vendor_root)
-    problems = []
-    if file_count != entry.get("files"):
-        problems.append(f"vendored file count is {file_count}, lock says {entry.get('files')}")
-    if digest != entry.get("sha256"):
-        problems.append("vendored file contents do not match the lock (hand edit, partial vendor run, or stale file)")
+    problems = _digest_problems("vendored", LOCK_FILENAME, entry, digest, file_count)
     if not entry.get("commit"):
         problems.append("lock has no sutram commit; vendor from a git checkout of sutram")
     if entry.get("dirty"):
@@ -181,14 +200,87 @@ def check(vendor_root: Path, strict: bool = False) -> List[str]:
     return problems
 
 
+def codemirror_tree_digest(codemirror_dir: Path) -> Tuple[str, int]:
+    """Returns (sha256, file_count) over every file in static/vendor/codemirror except codemirror.lock.json."""
+    if not codemirror_dir.is_dir():
+        return _digest_files(codemirror_dir, [])
+    files = sorted(
+        p for p in codemirror_dir.rglob("*")
+        if p.is_file() and p.relative_to(codemirror_dir).as_posix() != CODEMIRROR_LOCK_FILENAME
+    )
+    return _digest_files(codemirror_dir, files)
+
+
+def sync_codemirror(
+    package_lock_path: Path = DEFAULT_CODEMIRROR_PACKAGE_LOCK,
+    codemirror_dir: Path = DEFAULT_CODEMIRROR_VENDOR_DIR,
+) -> Dict[str, object]:
+    """Records the hash of scripts/codemirror/package-lock.json and the tree digest of static/vendor/codemirror/."""
+    package_lock_path = package_lock_path.resolve()
+    codemirror_dir = codemirror_dir.resolve()
+    if not package_lock_path.is_file():
+        raise FileNotFoundError(f"CodeMirror package-lock.json not found at {package_lock_path}")
+    if not codemirror_dir.is_dir():
+        raise FileNotFoundError(f"CodeMirror vendor directory not found at {codemirror_dir}")
+
+    pkg_lock_sha = hashlib.sha256(package_lock_path.read_bytes()).hexdigest()
+    digest, file_count = codemirror_tree_digest(codemirror_dir)
+    lock = {
+        "codemirror": {
+            "package_lock_sha256": pkg_lock_sha,
+            "files": file_count,
+            "sha256": digest,
+        }
+    }
+    lock_path = codemirror_dir / CODEMIRROR_LOCK_FILENAME
+    lock_path.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
+    print(f"🔒 Locked codemirror ({file_count} files, sha256={digest[:12]}) -> {lock_path}")
+    return lock
+
+
+def check_codemirror(
+    codemirror_dir: Path = DEFAULT_CODEMIRROR_VENDOR_DIR,
+    package_lock_path: Path = DEFAULT_CODEMIRROR_PACKAGE_LOCK,
+) -> List[str]:
+    """Verifies static/vendor/codemirror/ against codemirror.lock.json and scripts/codemirror/package-lock.json."""
+    lock_path = codemirror_dir / CODEMIRROR_LOCK_FILENAME
+    if not lock_path.is_file():
+        return [f"{CODEMIRROR_LOCK_FILENAME} is missing; run scripts/vendor_codemirror.sh to build and lock CodeMirror."]
+    entry = json.loads(lock_path.read_text(encoding="utf-8")).get("codemirror") or {}
+    digest, file_count = codemirror_tree_digest(codemirror_dir)
+    problems = _digest_problems("codemirror", CODEMIRROR_LOCK_FILENAME, entry, digest, file_count)
+    if package_lock_path.is_file():
+        actual_pkg_sha = hashlib.sha256(package_lock_path.read_bytes()).hexdigest()
+        if actual_pkg_sha != entry.get("package_lock_sha256"):
+            problems.append("scripts/codemirror/package-lock.json does not match codemirror.lock.json; re-run scripts/vendor_codemirror.sh")
+    else:
+        problems.append(f"scripts/codemirror/package-lock.json is missing at {package_lock_path}")
+    return problems
+
+
 def main(argv: List[str]) -> int:
+    if len(argv) >= 2 and argv[0] == "sync" and argv[1] == "codemirror":
+        pkg_lock = Path(argv[2]) if len(argv) > 2 else DEFAULT_CODEMIRROR_PACKAGE_LOCK
+        cm_dir = Path(argv[3]) if len(argv) > 3 else DEFAULT_CODEMIRROR_VENDOR_DIR
+        sync_codemirror(pkg_lock, cm_dir)
+        return 0
+    if len(argv) >= 2 and argv[0] == "check" and argv[1] == "codemirror":
+        cm_dir = Path(argv[2]) if len(argv) > 2 else DEFAULT_CODEMIRROR_VENDOR_DIR
+        pkg_lock = Path(argv[3]) if len(argv) > 3 else DEFAULT_CODEMIRROR_PACKAGE_LOCK
+        problems = check_codemirror(cm_dir, pkg_lock)
+        for problem in problems:
+            print(f"❌ {problem}")
+        if not problems:
+            print("✅ Vendored codemirror matches codemirror.lock.json")
+        return 1 if problems else 0
     if len(argv) >= 3 and argv[0] == "sync":
         source = argv[3] if len(argv) > 3 else "sibling"
         sync(Path(argv[1]), Path(argv[2]), source=source)
         return 0
     if len(argv) >= 2 and argv[0] == "check":
         strict = "--strict" in argv[2:]
-        problems = check(Path(argv[1]), strict=strict)
+        target_arg = Path(argv[1]) if argv[1] != "sutram" else DEFAULT_VENDOR_ROOT
+        problems = check(target_arg, strict=strict)
         for problem in problems:
             print(f"❌ {problem}")
         if not problems:

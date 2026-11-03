@@ -1,71 +1,28 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
-# 1. Resolve absolute paths dynamically based on script location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CM_BUILD_DIR="$SCRIPT_DIR/codemirror"
 TARGET_DIR="$SCRIPT_DIR/../insetu/static/vendor/codemirror"
 
-echo "🚀 Starting CodeMirror core & language packs vendorization..."
+echo "🚀 Building CodeMirror core & code-split language packs..."
+cd "$CM_BUILD_DIR"
 
-# 2. Ensure target directory exists
+# Bring package-lock.json in line with package.json (creating it on first run). When they already
+# agree this changes nothing; after a pin changes it re-resolves, so npm ci below never sees a mismatch.
+echo "📌 Syncing package-lock.json with package.json..."
+npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
+echo "📦 Running npm ci in scripts/codemirror/..."
+npm ci --ignore-scripts --no-audit --no-fund
+
+# Every file in the vendor folder is build output, so start empty: nothing stale can survive into the lock.
+rm -rf "$TARGET_DIR"
 mkdir -p "$TARGET_DIR"
 
-# 3. Create temporary build workspace
-BUILD_DIR=$(mktemp -d)
-echo "📁 Created temporary build environment in $BUILD_DIR"
-cd "$BUILD_DIR"
+echo "🔨 Running scripts/codemirror/build.mjs..."
+node "$CM_BUILD_DIR/build.mjs"
 
-# 4. Install CodeMirror core, utilities, language packages, and esbuild
-echo "📦 Installing CodeMirror dependencies and esbuild..."
-npm init -y > /dev/null
-npm install \
-  codemirror \
-  @codemirror/state \
-  @codemirror/view \
-  @codemirror/theme-one-dark \
-  @codemirror/language \
-  @codemirror/autocomplete \
-  @codemirror/commands \
-  @codemirror/lint \
-  @codemirror/lang-markdown \
-  @codemirror/lang-python \
-  @codemirror/lang-javascript \
-  @codemirror/lang-json \
-  @codemirror/lang-yaml \
-  @codemirror/lang-html \
-  @codemirror/lang-css \
-  @codemirror/merge \
-  esbuild --silent
+python3 "$SCRIPT_DIR/vendor_lock.py" sync codemirror "$CM_BUILD_DIR/package-lock.json" "$TARGET_DIR"
 
-# 5. Create entry point re-exporting the full core API & utilities
-echo "✍️  Generating ESM entry bridge for core..."
-cat << 'EOF' > entry.js
-export * from "@codemirror/state";
-export * from "@codemirror/view";
-export * from "@codemirror/language";
-export * from "@codemirror/autocomplete";
-export * from "@codemirror/commands";
-export * from "@codemirror/lint";
-export * from "@codemirror/merge";
-export { basicSetup } from "codemirror";
-export { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
-export { markdown } from "@codemirror/lang-markdown";
-export { python } from "@codemirror/lang-python";
-export { javascript } from "@codemirror/lang-javascript";
-export { json } from "@codemirror/lang-json";
-export { yaml } from "@codemirror/lang-yaml";
-export { html as htmlLang } from "@codemirror/lang-html";
-export { css as cssLang } from "@codemirror/lang-css";
-EOF
-# 6. Bundle core into a single deduplicated ESM file
-echo "🔨 Bundling codemirror-core.js..."
-npx esbuild entry.js --bundle --minify --format=esm --outfile="$TARGET_DIR/codemirror-core.js"
-
-# 7. Ship the upstream license with the bundle (MIT requires its text in every copy)
-cp node_modules/codemirror/LICENSE "$TARGET_DIR/LICENSE"
-
-# 8. Clean up
-cd "$SCRIPT_DIR"
-rm -rf "$BUILD_DIR"
-
-echo "✅ Success! CodeMirror core and all language packs vendorized to: $TARGET_DIR"
+echo "✅ CodeMirror core, language packs, licenses, and lockfile written to: $TARGET_DIR"
