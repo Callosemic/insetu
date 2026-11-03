@@ -14,4 +14,5 @@ This document serves as the local master index for the inSetu Workbench, an AI-f
 * **[06 Extension Compliance Checklist](./06_extension_compliance_checklist.md)**: The definitive audit checklist for architectural purity and SDK adherence.
 * **[07 SDK V2 Contracts](./07_sdk_v2_contracts.md)**: Absolute Single Source of Truth for the Python backend and JavaScript frontend SDK interfaces.
 * **[08 Sutram Platform Contracts](./08_sutram_contracts.md)**: API surface and Web Component definitions for the Tier 0 presentation chassis.
+* **[Mental Models & Subsystem Invariants](./models/yomama_bridge.md)**: Concise state-machine and invariant specifications (`docs/models/*.md`) governing core subsystems.
 * **[Ledger of Logic (ADR Index)](./ADR_INDEX.md)**: Historical index of all Architectural Decision Records.

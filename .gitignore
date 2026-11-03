@@ -13,6 +13,12 @@ build/
 dist/
 *.egg-info/
 .eggs/
+tmp/
+
+# Node & Vendoring Build Artifacts
+node_modules/
+scripts/codemirror/.entry_stage/
+npm-debug.log*
 
 # Local Testing/Artifacts (if running insetu serve inside its own repo)
 data/

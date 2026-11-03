@@ -35,7 +35,7 @@ Extensions must register their UI topology via `window.ExtensionRegistry.registe
 
 ## III. State Management & Utilities
 *   **`createSutramStore(name: String, initialState: Object, persistenceSchema: Object, getScopeId: Function, prefix: String)`**: Generates a Zustand vanilla store wrapped with devtools and `subscribeWithSelector`. `persistenceSchema` supports `{ localSync: [...], sessionSync: [...], onEvict: { windowId: resetStateOrFn } }`.
-*   **`bindStoreInput(store: Object, statePath: String, currentValue: Any, options: Object)`**: Utility to automate 2-way binding between Sutram form inputs and Zustand stores. `options` accepts `{ type, label, placeholder, style, selectOptions, onUpdate, inline, flush }`.
+*   **`bindStoreInput(store: Object, statePath: String, currentValue: Any, options: Object)`**: Utility to automate 2-way binding between Sutram form inputs and Zustand stores. `options` accepts `{ type, label, placeholder, selectOptions, onUpdate, inline, flush, grow }`.
 *   **`createJobPoller(apiClient: Object)`**: Factory returning a standalone async poller (`pollJob(jobId: String, options: Object)`). `options` accepts `{ onProgress(msg), onComplete(statusData), onError(err) }`.
 *   **Pure Utilities (`window.inSetu.utils` / `window.Sutram.utils`)**:
     *   `fuzzyFilterObjects(items: Array, query: String, searchStringAccessor: Function)`
@@ -60,10 +60,13 @@ Dynamically generates form controls from backend JSON schemas.
 ## V. Layout & Container Primitives
 
 *   **`<sutram-app-shell>`**: Top-level declarative tab layout shell.
-*   **`<sutram-card>`**: Polymorphic catalog item. Automatically binds to `SelectionStore` if `selectionStoreKey` is provided. Properties: `.titleText`, `.descriptionText`, `.detailText`, `.detailPrefix`, `.detailSuffix`, `.icon`, `.intent` (`'primary'` | `'warning'` | `'danger'` | `'neutral'` | `'highlight'`), `.intentColor`, `?selected`, `?disableSelection`, `selectionStoreKey="Selection"`, `?compact`, `?flush`. Emits `@sutram-card-select-toggled`.
+*   **`<sutram-view>`**: Primary viewport container. Properties: `.titleText`, `.descriptionText`, `?compact`, `?flush`, `?noScroll`, `?zen`, `size` (`'compact'` | `'normal'` | `'wide'` | `'full'`). Slots: `header`, `header-actions`, `toolbar`, `overlay`, default, `footer` (direct buttons in `slot="footer"` automatically form a full-width action bar).
+*   **`<sutram-stack>`**: Flex and auto-fit CSS Grid layout stack. Properties: `direction` (`'col'` | `'row'` | `'grid'`), `?compact`, `columns` (`'compact'` | `'normal'` | `'wide'`), `gap` (`'none'` | `'compact'` | `'normal'` | `'wide'`), `align`, `alignSelf` (`'start'` | `'center'` | `'end'` | `'stretch'`), `justify`, `padding` (`'none'` | `'compact'` | `'normal'` | `'wide'`), `width` (`'auto'` | `'bubble'` | `'full'`), `?grow`, `?wrap`, `?flex`, `?scrollable`, `?spanFull`.
+*   **`<sutram-surface>`**: Semantic container surface. Properties: `variant` (`'panel'` | `'inset'` | `'tinted'` | `'floating'` | `'ghost'`), `intent`, `?compact`, `?flush`, `padding` (`'none'` | `'compact'` | `'normal'` | `'wide'`), `border` (`'all'` | `'top'` | `'bottom'` | `'left'` | `'none'`), `radius` (`'none'` | `'compact'` | `'normal'` | `'wide'`), `gap` (`'none'` | `'compact'` | `'normal'` | `'wide'`), `align`, `justify`, `alignSelf`, `width` (`'auto'` | `'bubble'` | `'full'`), `minHeight` (`'compact'` | `'normal'` | `'wide'`), `?flex`, `?interactive`.
+*   **`<sutram-card>`**: Polymorphic catalog item. Automatically binds to `SelectionStore` if `selectionStoreKey` is provided. Properties: `.titleText`, `.descriptionText`, `.detailText`, `.detailPrefix`, `.detailSuffix`, `.icon`, `.intent` (`'primary'` | `'success'` | `'warning'` | `'danger'` | `'neutral'` | `'highlight'`), `?selected`, `?disableSelection`, `selectionStoreKey="Selection"`, `?compact`, `?flush`, `?stale`. Emits `@sutram-card-select-toggled`.
 *   **`<sutram-card-group>`**: Wraps cards with horizontal gesture locking and accordion physics. Properties: `?enableEdgeSelection`, `?stacked`, `?accordion`.
-*   **`<sutram-modal>`**: Native `#top-layer` dialog overlay. Properties: `?open`, `.titleText`, `?fullscreen`, `?flush`, `.maxWidth`. Emits `@sutram-modal-closed`.
-*   **`<sutram-board>` & `<sutram-column>`**: Multi-column flex grid layout. Column properties: `.titleText`, `.intentColor`.
+*   **`<sutram-modal>`**: Native `#top-layer` dialog overlay. Properties: `?open`, `.titleText`, `?compact`, `size` (`'compact'` | `'normal'` | `'wide'` | `'full'`), `?fullscreen`, `?flush`. Emits `@sutram-modal-closed`.
+*   **`<sutram-board>` & `<sutram-column>`**: Multi-column flex grid layout. Column properties: `.titleText`, `.intent` (`'primary'` | `'success'` | `'warning'` | `'danger'` | `'highlight'` | `'neutral'`).
 *   **`<sutram-collapsible>`**: Expandable accordion container. Properties: `.titleText`, `?open`, `.intent`, `?flush`. Emits `@sutram-collapsible-toggled`.
 *   **`<sutram-category-section>`**: Categorized list section wrapper. Properties: `.titleText`.
 *   **`<sutram-categorized-list>`**: Grouping renderer. Properties: `.items` (Array), `.categoryKey` (String), `.categoryOrder` (Array), `.renderItem` (Function), `.renderCategoryHeader` (Function).
@@ -71,13 +74,13 @@ Dynamically generates form controls from backend JSON schemas.
 *   **`<sutram-folder-browser>`**: Interactive directory tree browser with breadcrumbs. Properties: `.files` (Array of paths), `.currentPath` (Array of strings). Emits `@path-changed`.
 
 ## VI. Interactive Primitives
-*   **`<sutram-async-btn>`**: Action button with an integrated state machine (`idle` -> `loading` -> `success` | `error`). Properties: `.label`, `.loadingLabel`, `.successLabel`, `.errorLabel`, `.intent` (e.g., `'primary'`, `'danger'`), `?disabled`, `?active`. You MUST bind a functional object to `.onClick=${async (e) => {...}}`.
-*   **`<sutram-report-projection>`**: Generalized spatial viewport projection for multi-tab or single-block reports, logs, and dry-run outputs. Properties: `.caption` (String), `.content` (String), `.tabs` (Array of `{ id, label, icon, content }`), `.activeTab` (String), `.actions` (Array of `{ label, icon, intent, primary, asyncAction, onClick, style, disabled }`), `.extraContent` (TemplateResult), `.suggestedFilename` (String).
+*   **`<sutram-btn>` & `<sutram-async-btn>`**: Action buttons (`<sutram-async-btn>` includes an integrated state machine `idle` -> `loading` -> `success` | `error`). Properties: `.label`, `.icon`, `.intent`, `.variant`, `?compact`, `?emphasis`, `?grow`, `?fullWidth`, `?disabled`, `?active`. For `<sutram-async-btn>`, bind a functional object to `.onClick=${async (e) => {...}}`.
+*   **`<sutram-report-projection>`**: Generalized spatial viewport projection for multi-tab or single-block reports, logs, and dry-run outputs. Properties: `.caption` (String), `.content` (String), `.tabs` (Array of `{ id, label, icon, content }`), `.activeTab` (String), `.actions` (Array of `{ label, icon, intent, primary, asyncAction, onClick, disabled }`), `.extraContent` (TemplateResult), `.suggestedFilename` (String).
 *   **`<sutram-diff-viewer>`**: Side-by-side structural comparison primitive backed by CodeMirror 6 `@codemirror/merge`. Properties: `.diffText` (String), `.searchStr` (String), `.replaceStr` (String), `.leftTitle` (String), `.rightTitle` (String).
 *   **`<sutram-editor>`**: State-aware wrapper for CodeMirror 6. Properties: `.value`, `?readOnly`, `.language`, `?writingMode`, `.customExtensions`, `?enableWordcount`. Methods: `insertAtCursor(text: String)`. Emits `@editor-changed`.
 *   **`<sutram-dropdown>`**: Context menu. Properties: `.items` (Array of `{label, icon, onClick}`), `?open`, `.align`.
 *   **`<sutram-tag>`**: Badge label. Properties: `.text`, `.intent`.
-*   **`<sutram-label>`**: Standardized label primitive. Properties: `.text`.
+*   **`<sutram-label>`**: Standardized typography label primitive. Properties: `.text`, `intent` (`'primary'` | `'success'` | `'warning'` | `'danger'` | `'highlight'` | `'neutral'`), `?monospace`, `?truncate`, `?preWrap`, `?strikethrough`.
 *   **`<sutram-spinner>`**: Loading indicator. Properties: `.text`.
 *   **`<sutram-empty-state>`**: Empty list placeholder. Properties: `.icon`, `.text`.
 
@@ -85,19 +88,20 @@ Dynamically generates form controls from backend JSON schemas.
 
 All Sutram inputs emit the standardized `@sutram-input-changed` event, where `e.detail.value` contains the new state.
 
-*   **`<sutram-input>`:** Single-line text/number input. Properties: `type`, `.label`, `.value`, `.placeholder`, `?disabled`, `?inline`.
-*   **`<sutram-textarea>`:** Auto-resizing multi-line text block. Properties: `.label`, `.value`, `.placeholder`, `.rows`, `?monospace`, `?disabled`, `?readOnly`, `?inline`, `?autoSize`, `?borderless`.
-*   **`<sutram-select>`:** Dropdown menu. Properties: `.label`, `.value`, `.options` (Array of `{value, label}`), `?disabled`, `?inline`.
+*   **`<sutram-input>`:** Single-line text/number input. Properties: `type`, `.label`, `.value`, `.placeholder`, `?disabled`, `?inline`, `?flush`, `?grow`.
+*   **`<sutram-textarea>`:** Auto-resizing multi-line text block. Properties: `.label`, `.value`, `.placeholder`, `.rows`, `?monospace`, `?disabled`, `?readOnly`, `?inline`, `?flush`, `?autoSize`, `?borderless`.
+*   **`<sutram-select>`:** Dropdown menu. Properties: `.label`, `.value`, `.options` (Array of `{value, label}`), `?disabled`, `?inline`, `?flush`, `?grow`.
 *   **`<sutram-toggle>`:** Boolean switch. Properties: `.label`, `.checked`, `?disabled`.
 *   **`<sutram-combobox>`:** Searchable text input with filterable dropdown menu. Properties: `.label`, `.value`, `.placeholder`, `.options` (Array of strings or `{value, label, badge}`), `?disabled`, `?inline`, `?flush`.
 *   **`<sutram-target-binding>`:** Composite endpoint and model selector pairing an endpoint `<sutram-select>` with a model `<sutram-combobox>`. Properties: `.label`, `.value` (`{endpoint, model}`), `.endpoints` (Array of `{value, label}`), `.models` (Array or resolver Function `(endpointId) => options`), `.endpointPlaceholder`, `.modelPlaceholder`, `?allowEmptyEndpoint`, `?disabled`, `?flush`.
 
 ## VIII. Toolbars & Filtering
 
-*   **`<sutram-toolbar>`:** Sticky header integrating search and filters. Properties: `.searchQuery`, `.searchPlaceholder`, `?enableFilterDropdown`, `.filterText`, `.activeFilters`, `?hasFiltersOverride`, `?bottomBorder`.
+*   **`<sutram-toolbar>`:** Sticky header integrating search and filters. Properties: `.searchQuery`, `.searchPlaceholder`, `?enableFilterDropdown`, `.filterText`, `.activeFilters`, `?hasFiltersOverride`, `?flush`.
+*   **`<sutram-scrub-track>`:** Horizontal touch-scrubbing track. Properties: `?grow`, `?monospace`.
 *   **`<sutram-search-bar>`:** Standalone text filter. Properties: `.placeholder`, `.value`. Emits `@search-changed`.
 *   **`<sutram-filter-group>`:** Interactive toggle pill array. Properties: `.label`, `.items`, `.activeItems`, `?allowAll`. Emits `@sutram-filter-changed`.
-*   **`<sutram-pill>`**: Toggle tag badge. Properties: `.pillId`, `.labelText`, `?active`, `?small`, `.variant` (`'standard'` | `'text'`). Emits `@sutram-pill-toggled`.
+*   **`<sutram-pill>`**: Toggle tag badge. Properties: `.pillId`, `.labelText`, `?active`, `?compact`, `.variant` (`'standard'` | `'text'`). Emits `@sutram-pill-toggled`.
 
 ## IX. System State UI Brokers
 

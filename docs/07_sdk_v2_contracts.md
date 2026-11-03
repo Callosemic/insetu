@@ -101,14 +101,13 @@ Extensions are strictly forbidden from relative-importing OS chassis functions. 
 ### 3.2 Client Network Gateway (ADR 0016)
 
 Network synchronization must route through the client API abstraction to inherit multi-tenant isolation tokens natively. Raw `fetch()` is banned. All API methods enforce client-side extension enablement checks against `window.ACTIVE_EXTENSIONS` prior to network dispatch, returning a 403 Forbidden response if the target extension is disabled.
-* `this.api.request(url, options, scopeId)`
-* `this.api.workspace(path, options)` / `this.api.system(path, options)`
-* `this.api.get(path, options)`
+* `this.api.request(url, options, scopeId)` (also available on `window.inSetu.api` and `store.api`)
+* `this.api.get(path, options)` (flat canonical `<module>/<endpoint>` route dispatch; `api.workspace` and `api.system` are permanently eradicated)
 * `this.api.post(path, payload, options)`
 * `this.api.delete(path, options)`
 * `this.api.getJson(path, options)` / `postJson` / `deleteJson`
 * `this.api.fetchImmutableText(path, options)`
-* `this.api.bindJobAction(endpoint, payloadGetter, options)`
+* `this.api.bindJobAction(endpoint, payloadGetter, options)` (centralized job-polling button action binder)
 * `this.api.pollJob(jobId, { interval, onProgress, onComplete, onError })`
 ### 3.3 Brokered Lifecycle Managers
 * `this.subscribe(store, selector, listener)`: Unified Zustand observer that cleanly unmounts itself on element disconnection to eliminate memory bleed.

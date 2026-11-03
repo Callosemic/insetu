@@ -4,12 +4,19 @@
 
 ---
 
-## 0. The yenVUI "House Style" & The Zero-CSS Mandate
+## 0. The yenVUI "House Style", Beautiful Baseline & Semantic-First Parameterization
 **inSetu is the reference implementation and default consumer of the `sutram`/`yenVUI` presentation chassis.** 
-Because of this relationship, the baseline visual identity of the OS (the "House Style") must be entirely vacuumed down into the `sutram` and `yenvui` vendor packages. 
+Because of this relationship, the baseline visual identity of the OS (the "House Style") is entirely encapsulated inside the `sutram` and `yenvui` packages.
 
-* **The Zero-CSS Goal**: `inSetu` itself should eventually contain *zero* structural CSS and *zero* random HTML layout `<div>` elements. All visual primitives (cards, inputs, layouts, headers) must be absorbed by `yenVUI`.
-* **The Baseline Ecosystem**: While other downstream applications consuming `sutram` (like the Axoneme Console) may heavily override CSS intent tokens to look entirely different, `inSetu` serves as the naked, default manifestation of the yenVUI design system. If a general visual layout or component is needed in inSetu, it belongs in yenVUI.
+* **The Zero-CSS & Zero-Inline-Style Mandate (`CUSTOM_COMPONENT_CSS_BAN` & `SUTRAM_INLINE_STYLE_BAN`)**: `inSetu` components (`insetu/core/**` and `insetu/extensions/**`) must contain *zero* custom `css\`...\`` blocks (inheriting `static styles = [sharedStyles];` only) and *zero* inline `style="..."` overrides on `<sutram-*>` primitives.
+* **The Beautiful Baseline Principle**: Every `yenVUI` / `sutram` primitive must render with balanced typography, spacing, borders, and responsive container physics out of the box across Dark, Light, and E-Ink themes without consumer style overrides. If an `inSetu` view needs a layout wrapper or visual adjustment, that capability belongs in the `yenVUI` primitive's baseline styles.
+* **Semantic-Only Parameterization**: Properties, attributes, and UI hooks crossing the `sutram` ↔ `inSetu` boundary must express **semantic role, intent, scale, or state**—never raw CSS measurements or colors:
+    * **Intent**: `intent="primary|success|warning|danger|highlight|neutral"` (never `intentColor` or raw CSS color strings).
+    * **Universal Scale (`none | compact | normal | wide | full`) & `?compact`**: All containers and controls share a single scale (`none | compact | normal | wide | full`, with `normal` as the automatic default) plus a universal `?compact=${true}` boolean across `<sutram-view>`, `<sutram-modal>`, `<sutram-stack>`, `<sutram-surface>`, `<sutram-card>`, `<sutram-btn>`, `<sutram-async-btn>`, and `<sutram-pill>`.
+    * **Zero-Config Grids & Form Spacing**: `<sutram-stack direction="grid">` defaults to `normal` (`240px`) columns (add `?compact=${true}` for `160px` grids or `columns="wide"` for `320px` grids) and automatically spans direct `<sutram-textarea>` and `<sutram-target-binding>` children across the full row. Form controls inside `<sutram-stack>`, `<sutram-surface>`, `<sutram-field-card>`, and `<sutram-action-bar>` automatically zero their bottom margins without requiring `?flush=${true}`.
+    * **View & Modal Header/Footer Parity**: `<sutram-view>` supports `.titleText`, `.descriptionText`, `slot="header-actions"`, and direct `slot="footer"` buttons that automatically render a top-bordered footer bar with equal-width (`flex: 1`) buttons—matching `<sutram-modal>` 1:1.
+    * **Flex & Width Allocation**: `?grow=${true}` (`flex: 1 1 0%`) and `?fullWidth=${true}` (`width: 100%`) on buttons, inputs, selects, and scrub tracks; `width="auto|bubble|full"` and `align-self="start|center|end|stretch"` on `<sutram-surface>` and `<sutram-stack>`.
+    * **Typography & Surface Modifiers**: `<sutram-label intent="..." ?monospace=${true} ?truncate=${true} ?preWrap=${true} ?strikethrough=${true}>` and `<sutram-surface ?interactive=${true} min-height="compact|normal|wide">`.
 
 ## 1. Spatial Layout & The "Single Scroll" Rule
 The interface must feel like a native application, not a nested web document.

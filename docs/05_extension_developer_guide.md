@@ -10,8 +10,17 @@ Extensions must never manually wire multi-tenant boundaries, write raw SQLite cr
 ## 2. Backend: The `InSetuExtension` Contract
 All backend extensions must be instantiated using the `InSetuExtension` wrapper, not raw Flask Blueprints.
 
-### User-Space & Workspace-Isolated Extensions
-Extensions may reside either in the global distribution directory (`insetu/extensions/`) or within a specific workspace's `.insetu/extensions/` directory. During system boot, `load_workspace_extensions()` automatically scans and injects local workspace extension paths into `sys.path`. This supports zero-config extension prototyping and tenant-isolated custom workflows without modifying the core package distribution.
+### Workspace Extensions (`.insetu/extensions/`)
+Bundled extensions live in the package (`insetu/extensions/`). Extensions you build yourself live outside it, in `.insetu/extensions/<name>/` under the workspace root, so they survive a `pip install --upgrade` and never touch the installed package. Each one is a folder holding `engine_<name>.py` (with `__depends__ = [...]` and a `<name>_bp = InSetuExtension(...)`), and optionally `ext_<name>.js` and other assets.
+
+Anyone may write these files: you in the Files editor, the Yomama bridge, or an agent. insetu only **runs** an extension whose exact files a person approved (S8):
+
+1. At boot, insetu fingerprints every file in each folder (SHA-256 of each file, `__pycache__` and `.pyc` skipped). An extension loads only if its fingerprint matches the approval recorded in `host.json`, and the bytes that were fingerprinted are the bytes that run.
+2. A new or edited extension stays off. The banner shows it as waiting; **Review Files** lists what was added, changed or removed since the last approval, and **Approve & Restart** records the approval and restarts. If the files changed after you reviewed them, the approval is refused and you review again. Once running, it appears in Settings as `<Title> (workspace)` and is enabled per workspace like a bundled extension.
+3. The browser code of a running extension is served only while its files still match what was loaded. Edit any file and it stops being served until you approve the new version and restart.
+4. A folder with a symbolic link, over 20 MB, without `engine_<name>.py`, or named like a bundled extension or core module is never loaded.
+
+Approving and revoking (`system/extensions/workspace/approve`, `.../revoke`) are human-only: hidden from MCP and banned in routines. An approved extension runs with insetu's full rights, so approve only code you have read. The pre-import AST check (no direct `akasa` imports, no raw `open()` or `urlopen()`) catches common SDK mistakes early; it is not a security boundary.
 
 ### The Declarative Schema
 Do not hook into `system_boot` to execute `CREATE TABLE`. Pass a `schema` dictionary to the constructor. The OS will automatically handle schema migrations via diffing on boot.

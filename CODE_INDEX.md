@@ -4,9 +4,12 @@ This index serves as the architectural map. It outlines the core directories and
 
 ```text
 insetu/
+├── .gitignore                      # Git ignore rules.
 ├── .gitkeep                        # Git folder retention.
 ├── CHANGELOG.md                    # Auto-generated semantic release changelog.
 ├── CODE_INDEX.md                   # Topological map of the inSetu repository (this file).
+├── LICENSE                         # Apache-2.0 open-source software license.
+├── NOTICE                          # Copyright notice and third-party software attributions.
 ├── README.md                       # Primary project overview, architecture, and installation guide.
 ├── docs/                           # Internal Documentation and Architecture.
 │   ├── 00_index.md                 # Master Index for inSetu.
@@ -19,103 +22,115 @@ insetu/
 │   ├── 07_sdk_v2_contracts.md      # Interface contracts for the V2 extension SDK.
 │   ├── 08_sutram_contracts.md      # Sutram Platform API & Interface Contracts.
 │   ├── ADR_INDEX.md                # Ledger of Logic for inSetu ADRs.
-│   └── adrs/                       # Architectural Decision Records.
-│       ├── 0071-synchronous-workspace-swap-fsm-three-way-occ-and-declarative-volumes.md # Synchronous workspace swap FSM, 3-way OCC text merging, and declarative volume mounts.
-│       ├── 0072-core-pipeline-akasa-membrane-declarative-volumes-and-jit-healing.md # Core pipeline Akasa membrane decoupling, declarative volumes, and JIT artifact healing.
-│       ├── 0073-devops-extension-suite-membrane-decoupling-and-declarative-diff-volumes.md # DevOps extension suite membrane decoupling and declarative diff volume mounts.
-│       ├── 0074-knowledge-suite-membrane-decoupling-declarative-volumes-and-substack-publishing.md # Knowledge suite membrane decoupling, declarative volumes, and Substack HTML snippet publishing.
-│       ├── 0075-workflow-management-suite-membrane-decoupling-declarative-flow-volumes-and-tracker-hub-embedding.md # Workflow management suite membrane decoupling, declarative flow volumes, and tracker settings hub embedding.
-│       ├── 0076-dual-representation-macro-preview-dependency-whitelisting-and-tier2-membrane-decoupling.md # Dual-representation macro preview, dependency whitelisting, and Tier 2 membrane decoupling.
-│       ├── 0077-devops-suite-flask-decoupling-typed-workers-and-canonical-routing.md # DevOps extension suite Flask transport decoupling, typed workers, and canonical routing.
-│       ├── 0078-knowledge-suite-flask-decoupling-typed-workers-and-canonical-routing.md # Knowledge extension suite Flask transport decoupling, typed workers, and canonical routing.
-│       ├── 0079-workflow-management-suite-flask-decoupling-typed-workers-and-canonical-routing.md # Workflow management suite Flask transport decoupling, typed workers, and canonical routing.
-│       ├── 0080-mcp-server-declarative-agent-routines-and-ast-refactoring.md # ADR 0080: Model Context Protocol (MCP) Gateway, Declarative Agent Orchestration Routines, AST-Aware Refactoring Primitives, and Recovery Tok...
-│       ├── 0081-relational-watermark-derivation-mcp-stdio-bridge-and-reboot-polling-resilience.md # ADR 0081: Reactive Relational Watermark Derivation, MCP Stdio CLI Bridge, AST Refactoring Directives, and Reboot Resilience
-│       ├── 0082-yomama-multi-surface-shell-deferred-chunk-healing-and-openai-compatible-gateway.md # ADR 0082: Yomama Multi-Surface Shell Architecture, Deferred Post-Valid Chunk Auto-Healing, OpenAI-Compatible Local Inference Gateway, and Co...
-│       ├── 0083-compute-endpoint-pools-cognitive-profiles-markdown-routines-and-yomama-v4-directives.md # ADR 0083: Universal Compute Endpoint Pools, Cognitive Configuration Profiles, Markdown-as-Code Agent Routines, and Yomama Patch Protocol v4...
-│       ├── 0084-ast-symbol-drift-watermarks-template-overlay-driver-and-topology-upkeep-audit.md # ADR 0084: AST Symbol Drift Watermarks, Template Overlay VFS Driver Delegation, and Topology Upkeep Audit Substrate
-│       ├── 0085-single-file-frontend-membrane-schema-repeaters-and-universal-secret-vaulting.md # ADR 0085: Single-File Frontend Membrane Isolation, Declarative Schema Repeaters, and Universal Repeater Secret Vaulting
-│       ├── 0086-git-diff-capabilities-autonomous-routines-and-tailscale-extension-retirement.md # ADR 0086: Git Diff Capabilities, Autonomous Routines, Tailscale Extension Retirement, and Single-File Membrane Compliance
-│       ├── 0087-flow-extension-decommissioning-tracker-schema-repeaters-and-hooks-bridge-protection.md # ADR 0087: Flow Extension Decommissioning, Tracker Settings Repeater Migration, and Hooks Bridge Path Protection
-│       ├── 0088-stack-ci-battery-single-file-sdk-membrane-vendor-locking-and-whois-remote-identity.md # ADR 0088: Callosemic Stack CI Battery, Single-File SDK Membrane, Vendored Substrate Provenance Locking, and Whois Remote Identity Verificati...
-│       ├── 0089-dynamic-code-context-scouting-web-chat-handoff-composer-and-cognitive-target-bindings.md # ADR 0089: Dynamic /code Context Scouting, Interactive Web-Chat Handoff Composer, Yomama Patch Splitting, and Cognitive Profile Target Bindin...
-│       ├── 0090-decoupled-llm-target-resolution-reentrant-routine-handoff-and-raw-transcript-preservation.md # ADR 0090: Decoupled LLM Target Resolution, Reentrant Routine Handoff Propagation, and Raw Transcript History Preservation
-│       ├── 0091-lifeboat-bottom-layer-auth-host-gatehouse-and-workspace-confinement.md # ADR 0091: Lifeboat Bottom-Layer Authentication, Host Gatehouse Verification, Panic Token Gating, and Workspace Confinement
-│       ├── 0092-incremental-topology-gitignore-parity-and-post-commit-cache-invalidation.md # ADR 0092: Incremental Topology Gitignore Parity via Batched Check-Ignore and Post-Commit Manifest Cache Re-Invalidation
-│       ├── 0093-preview-exposure-leases-command-approval-and-core-module-priority.md # ADR 0093: App Server Exposure Leases, Human-Only Custom Command Approval, Protected VFS Target Enforcement, and Core Module Priority Loading
-│       ├── 0094-formal-response-schemas-post-commit-test-diagnostics-and-adaptive-working-set-compaction.md # ADR 0094: Formal Response Schema Registry, Post-Commit Test Diagnostics Gate, Adaptive Working-Set Compaction, and Context Budget HUD
-│       ├── 0095-child-environment-confinement-repo-landmarks-routine-integration-and-mcp-optional-includes.md # ADR 0095: Child Environment Confinement, Repository Landmarks Routine Integration, and MCP Optional Prompt Include Resolution
-│       ├── archived/               # Superseded and historical ADR documents.
-│       │   ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
-│       │   ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
-│       │   ├── 0003-stateless-multi-tenant-routing.md # Initial stateless request-scoped multi-tenant REST routing setup.
-│       │   ├── 0004-asynchronous-vfs-commit-pipeline.md # Defines the non-blocking VFS write queue and thread safety.
-│       │   ├── 0005-transport-shell-decoupling.md # Decoupling of HTTP transport shell from pure domain logic.
-│       │   ├── 0006-tenant-isolated-compilation-locks.md # Defines thread-local locks for RAG payload compilations.
-│       │   ├── 0007-stateless-ui-factory-and-component-decoupling.md # UI decoupling from business logic via Zustand UDF.
-│       │   ├── 0008-offline-first-synchronization.md # Offline capabilities and Service Worker caching.
-│       │   ├── 0009-ephemeral-artifacts-and-immediate-jobs-ledger.md # Management of short-lived job artifacts and garbage collection.
-│       │   ├── 0010-vfs-boundary-exemptions.md # Rules for paths exempt from strict VFS isolation.
-│       │   ├── 0011-vfs-barrier-synchronization.md # Synchronization barriers for asynchronous VFS flushes.
-│       │   ├── 0012-extension-subdirectory-extraction.md # Extraction of domain extensions into isolated subdirectories.
-│       │   ├── 0013-posix-compliant-pathlib-migration.md # Standardization on POSIX paths for cross-platform parity.
-│       │   ├── 0014-event-bus-tenant-authorization.md # Authorization rules for cross-tenant event bus emissions.
-│       │   ├── 0015-codemirror6-migration.md # Transition from legacy editors to CodeMirror 6.
-│       │   ├── 0016-explicit-api-client-and-fetch-deprecation.md # Mandates the use of the centralized inSetu API client.
-│       │   ├── 0017-extension-sdk-and-pit-of-success.md # Defines the InSetuExtension and InSetuElement base classes.
-│       │   ├── 0018-event-sourced-vfs-ledger.md # SQLite event sourcing for VFS mutations and Watchdog events.
-│       │   ├── 0021_standardized_state_isolation.md # Unidirectional Data Flow and tenant state isolation.
-│       │   ├── 0022-differential-context-compilation.md # Surgical updates to RAG contexts avoiding full recompilation.
-│       │   ├── 0023-polymorphic-entity-action-card-registry.md # Dynamic context-aware actions for UI entity cards.
-│       │   ├── 0024-frontend-sdk-decoupling-and-domain-accessors.md # Front-end SDK abstraction (this.vfs, this.sys, this.editor).
-│       │   ├── 0025-declarative-app-shell-and-brokered-resource-management.md # Declarative UI layout definitions and slot brokering.
-│       │   ├── 0026-unified-token-gatehouse-and-tailscale-auth.md # Centralized REST/WebSocket authentication and Tailscale WHOIS.
-│       │   ├── 0027-global-multi-select-and-batch-action-registry.md # Global UI selection tray and batch action execution.
-│       │   ├── 0028-native-hash-routing-and-event-bus.md # Zero-bundler SPA routing using URL hashes.
-│       │   ├── 0029-core-kernel-extraction-and-three-tier-architecture.md # Separation of Kernel, Core OS, and Domain Extensions.
-│       │   ├── 0030-kernel-utility-bisect-and-domain-relocation.md # Decoupling kernel utilities from core OS domains.
-│       │   ├── 0031-sutram-micro-kernel-vendorization-and-vfs-ledger-unification.md # Vendorizing Sutram and merging VFS tracking ledgers.
-│       │   ├── 0032-dynamic-polyglot-vendorization-and-importmap-resolution.md # Import map strategies for offline-first vendor libraries.
-│       │   ├── 0034-async-job-action-binding-and-gather-decoupling.md # Binding UI actions directly to background polling jobs.
-│       │   ├── 0035-vfs-file-resolution-hooks-and-topology-gateway.md # Centralized resolution of logical vfs:// and ctx:// paths.
-│       │   ├── 0036-vfs-manifest-sqlite-cqrs-and-delta-sync.md # Moving manifest indexing from JSON to SQLite CQRS.
-│       │   ├── 0037-gather-inversion-of-control-topology.md # Inverting context assembly dependencies to Cartographer.
-│       │   ├── 0038-decoupled-topology-engine-partitioned-manifest-two-stage-slew-limiting.md # Stage 1 (VFS) and Stage 2 (CTX) slew limiters.
-│       │   ├── 0039-decentralized-manifest-signature-sync-and-topology-boot.md # Syncing manifest signatures statelessly on UI boot.
-│       │   ├── 0041-deprecation-of-ui-zones-and-presentation-decoupling.md # Deprecation of UI zones and presentation decoupling.
-│       │   ├── 0042-vfs-logical-uri-boundary-standardization-and-path-heuristic-purge.md # Standardized vfs:// logical URI boundaries and purged legacy path heuristics.
-│       │   ├── 0043-client-offline-provider-and-offline-engine.md # Client offline provider, SW core vendorization, and outbox reconciliation.
-│       │   ├── 0044-ruamel-yaml-frontmatter-parsing-and-uri-event-canonicalization.md # Round-trip YAML frontmatter parsing and canonical vfs:// event normalization.
-│       │   ├── 0045-two-pass-deterministic-boot-sequence.md # Two-pass deterministic boot sequence bisecting spatial discovery and deferred mutation.
-│       │   ├── 0046-unified-watchdog-debouncer-and-manifest-caching.md # Unified Watchdog debouncer, pre-I/O intent capture, and thread-local manifest caching.
-│       │   ├── 0047-queued-event-barrier-sentinel-vfs-synchronization.md # Queued event-driven barrier sentinel for exact VFS write watermark synchronization.
-│       │   ├── 0048-akasa-kernel-package-extraction-and-insetu-uri-wrapper.md # Extraction of Tier 1 Kernel into standalone 'akasa' package and InSetuURI domain wrapper.
-│       │   ├── 0049-sse-telemetry-pipeline-ram-slew-limiter-and-on-demand-context-compilation.md # Real-time SSE telemetry pipeline, Stage 1 RAM queue slew limiting, and on-demand context compilation.
-│       │   ├── 0050-openapi-spec-gateway-universal-binary-execution-and-workspace-event-routing.md # Real-time OpenAPI 3.0 spec gateway, universal binary execution wrapper, and multi-tenant workspace event routing.
-│       │   ├── 0051-generic-dag-compilation-chain-resolution-and-step-anchoring.md # Generic Akasa DAG compilation chain resolution, positional step anchoring, and Watchdog manifest exclusion.
-│       │   ├── 0052-polymorphic-uri-coercion-bucket-address-refinement-and-sse-step-telemetry.md # Polymorphic InSetuURI coercion, BucketAddress SSOT refinement, and un-blocked SSE step telemetry.
-│       │   ├── 0053-git-state-resolution-autostash-pulls-and-non-fast-forward-resilience.md # Git rebase/merge state resolution, autostash pulls, and multi-repo sweep isolation.
-│       │   ├── 0054-multi-column-viewport-projections-and-virtual-buffer-editing.md # Multi-column viewport projections and virtual buffer editing.
-│       │   ├── 0055-vfs-parity-action-middleware-and-singleton-modal-deprecation.md # VFS parity gatekeeper action middleware, singleton file modal deprecation, and InSetuURI coercion hooks.
-│       │   ├── 0056-system-sdk-module-renaming-spatial-grid-routing-and-syntax-fallback.md # System SDK module renaming, spatial grid routing, and Tree-Sitter syntax fallback.
-│       │   ├── 0057-workspace-swap-layout-eviction-and-yv-icon-migration.md # Pre-swap layout eviction, yv-icon migration, and primitive alias purge.
-│       │   ├── 0058-universal-llm-gateway-react-agent-harness-and-vfs-modal-projection-decoupling.md # Universal LLM gateway, autonomous ReAct agent harness, and spatial VFS projections.
-│       │   ├── 0059-extension-modal-annihilation-spatial-projection-migration-and-store-eviction.md # Extension modal annihilation, spatial viewport projections, and store eviction governance.
-│       │   ├── 0060-git-aware-topology-manifest-sync-and-spatial-diff-projections.md # Git-aware topology CQRS ledger, real-time manifest delta sync, and spatial diff projections.
-│       │   ├── 0061-polymorphic-bulk-entity-actions-subsumption-pruning-and-recursive-vfs-eviction.md # Polymorphic bulk entity actions, subsumption pruning, and recursive VFS eviction.
-│       │   ├── 0062-projection-popouts-occ-concurrency-and-memoized-manifest-cqrs.md # Ephemeral pop-out windows, SHA-256 OCC conflict detection, and memoized manifest derivations.
-│       │   ├── 0063-atomic-vfs-bulk-mutations-popout-presence-and-sw-consolidation.md # Atomic VFS bulk mutations, popout presence heartbeat, and Service Worker consolidation.
-│       │   ├── 0064-core-prompt-engine-virtual-module-templates-and-job-api-unification.md # Core prompt engine graduation, virtual module template projection, and Akasa job API unification.
-│       │   ├── 0065-repository-data-containment-extension-state-hydration-and-security-hardening.md # Repository data containment (.insetu-data/), dual-scope notes migration, and cryptographic hook gating.
-│       │   ├── 0066-canonical-uris-inter-workspace-mounts-and-config-cascade-hardening.md # Canonical scheme:// URIs, inter-workspace ws:// mounts, and 3-tier configuration cascade hardening.
-│       │   ├── 0067-universal-extension-suite-modernization-and-domain-mounts.md # Universal extension suite modernization, declarative domain mounts, and SDK standardization.
-│       │   ├── 0068-hierarchical-vfs-sieve-sub-bucket-filtering-and-settings-hub.md # Hierarchical VFS sieve, .gitignore sub-bucket filtering, and unified OS Settings Hub.
-│       │   ├── 0069-managed-app-server-preview-bulk-vcs-and-memory-telemetry.md # Managed dev server preview supervisor, bulk Git VCS actions, and kernel memory telemetry.
-│       │   └── 0070-akasa-kernel-lifecycle-encapsulation-and-lifeboat-resilience.md # Akasa kernel lifecycle encapsulation, 4-file membrane isolation, and Lifeboat FS resilience.
-│       └── superseded/             # Archived and superseded architectural decision records.
-│           ├── .gitkeep            # Git folder retention.
-│           ├── 0033-kernel-package-encapsulation-and-root-wrapper-cleanup.md # Moving kernel dependencies to isolated packages (akasa).
-│           └── 0040-system-configuration-ssot-and-multi-scoped-settings.md # Centralized settings schema definition and hierarchical scope isolation (daemon, workspace, repo).
+│   ├── adrs/                       # Architectural Decision Records.
+│   │   ├── 0071-synchronous-workspace-swap-fsm-three-way-occ-and-declarative-volumes.md # Synchronous workspace swap FSM, 3-way OCC text merging, and declarative volume mounts.
+│   │   ├── 0072-core-pipeline-akasa-membrane-declarative-volumes-and-jit-healing.md # Core pipeline Akasa membrane decoupling, declarative volumes, and JIT artifact healing.
+│   │   ├── 0073-devops-extension-suite-membrane-decoupling-and-declarative-diff-volumes.md # DevOps extension suite membrane decoupling and declarative diff volume mounts.
+│   │   ├── 0074-knowledge-suite-membrane-decoupling-declarative-volumes-and-substack-publishing.md # Knowledge suite membrane decoupling, declarative volumes, and Substack HTML snippet publishing.
+│   │   ├── 0075-workflow-management-suite-membrane-decoupling-declarative-flow-volumes-and-tracker-hub-embedding.md # Workflow management suite membrane decoupling, declarative flow volumes, and tracker settings hub embedding.
+│   │   ├── 0076-dual-representation-macro-preview-dependency-whitelisting-and-tier2-membrane-decoupling.md # Dual-representation macro preview, dependency whitelisting, and Tier 2 membrane decoupling.
+│   │   ├── 0077-devops-suite-flask-decoupling-typed-workers-and-canonical-routing.md # DevOps extension suite Flask transport decoupling, typed workers, and canonical routing.
+│   │   ├── 0078-knowledge-suite-flask-decoupling-typed-workers-and-canonical-routing.md # Knowledge extension suite Flask transport decoupling, typed workers, and canonical routing.
+│   │   ├── 0079-workflow-management-suite-flask-decoupling-typed-workers-and-canonical-routing.md # Workflow management suite Flask transport decoupling, typed workers, and canonical routing.
+│   │   ├── 0080-mcp-server-declarative-agent-routines-and-ast-refactoring.md # ADR 0080: Model Context Protocol (MCP) Gateway, Declarative Agent Orchestration Routines, AST-Aware Refactoring Primitives, and Recovery Tok...
+│   │   ├── 0081-relational-watermark-derivation-mcp-stdio-bridge-and-reboot-polling-resilience.md # ADR 0081: Reactive Relational Watermark Derivation, MCP Stdio CLI Bridge, AST Refactoring Directives, and Reboot Resilience
+│   │   ├── 0082-yomama-multi-surface-shell-deferred-chunk-healing-and-openai-compatible-gateway.md # ADR 0082: Yomama Multi-Surface Shell Architecture, Deferred Post-Valid Chunk Auto-Healing, OpenAI-Compatible Local Inference Gateway, and Co...
+│   │   ├── 0083-compute-endpoint-pools-cognitive-profiles-markdown-routines-and-yomama-v4-directives.md # ADR 0083: Universal Compute Endpoint Pools, Cognitive Configuration Profiles, Markdown-as-Code Agent Routines, and Yomama Patch Protocol v4...
+│   │   ├── 0084-ast-symbol-drift-watermarks-template-overlay-driver-and-topology-upkeep-audit.md # ADR 0084: AST Symbol Drift Watermarks, Template Overlay VFS Driver Delegation, and Topology Upkeep Audit Substrate
+│   │   ├── 0085-single-file-frontend-membrane-schema-repeaters-and-universal-secret-vaulting.md # ADR 0085: Single-File Frontend Membrane Isolation, Declarative Schema Repeaters, and Universal Repeater Secret Vaulting
+│   │   ├── 0086-git-diff-capabilities-autonomous-routines-and-tailscale-extension-retirement.md # ADR 0086: Git Diff Capabilities, Autonomous Routines, Tailscale Extension Retirement, and Single-File Membrane Compliance
+│   │   ├── 0087-flow-extension-decommissioning-tracker-schema-repeaters-and-hooks-bridge-protection.md # ADR 0087: Flow Extension Decommissioning, Tracker Settings Repeater Migration, and Hooks Bridge Path Protection
+│   │   ├── 0088-stack-ci-battery-single-file-sdk-membrane-vendor-locking-and-whois-remote-identity.md # ADR 0088: Callosemic Stack CI Battery, Single-File SDK Membrane, Vendored Substrate Provenance Locking, and Whois Remote Identity Verificati...
+│   │   ├── 0089-dynamic-code-context-scouting-web-chat-handoff-composer-and-cognitive-target-bindings.md # ADR 0089: Dynamic /code Context Scouting, Interactive Web-Chat Handoff Composer, Yomama Patch Splitting, and Cognitive Profile Target Bindin...
+│   │   ├── 0090-decoupled-llm-target-resolution-reentrant-routine-handoff-and-raw-transcript-preservation.md # ADR 0090: Decoupled LLM Target Resolution, Reentrant Routine Handoff Propagation, and Raw Transcript History Preservation
+│   │   ├── 0091-lifeboat-bottom-layer-auth-host-gatehouse-and-workspace-confinement.md # ADR 0091: Lifeboat Bottom-Layer Authentication, Host Gatehouse Verification, Panic Token Gating, and Workspace Confinement
+│   │   ├── 0092-incremental-topology-gitignore-parity-and-post-commit-cache-invalidation.md # ADR 0092: Incremental Topology Gitignore Parity via Batched Check-Ignore and Post-Commit Manifest Cache Re-Invalidation
+│   │   ├── 0093-preview-exposure-leases-command-approval-and-core-module-priority.md # ADR 0093: App Server Exposure Leases, Human-Only Custom Command Approval, Protected VFS Target Enforcement, and Core Module Priority Loading
+│   │   ├── 0094-formal-response-schemas-post-commit-test-diagnostics-and-adaptive-working-set-compaction.md # ADR 0094: Formal Response Schema Registry, Post-Commit Test Diagnostics Gate, Adaptive Working-Set Compaction, and Context Budget HUD
+│   │   ├── 0095-child-environment-confinement-repo-landmarks-routine-integration-and-mcp-optional-includes.md # ADR 0095: Child Environment Confinement, Repository Landmarks Routine Integration, and MCP Optional Prompt Include Resolution
+│   │   ├── 0096-code-split-codemirror-language-packs-manifest-ssot-and-vendor-lock.md # ADR 0096: Code-Split CodeMirror Language Packs, Manifest-Driven Mode Resolution, Layer-3 Local Packs, and Vendor Lock Verification
+│   │   ├── 0097-two-phase-yomama-parser-signature-memoization-in-place-healing-and-overlap-rebasing.md # ADR 0097: Two-Phase Lookahead Yomama Parser, Content-Addressed Signature Memoization, In-Place n-1 Auto-Healing, and Deterministic Overlap R...
+│   │   ├── 0098-interleaved-ast-diffs-persistent-cartographer-descriptions-topology-sieve-reconciler-and-workspace-extension-approvals.md # ADR 0098: Interleaved AST Diffs, Persistent Cartographer Working Memory, Topology Sieve Reconciler, S8 Workspace Extension Approvals, and Un...
+│   │   ├── 0099-devops-extension-suite-zero-css-modernization-batched-git-cat-file-and-sieve-diff-parity.md # ADR 0099: DevOps Extension Suite Zero-CSS Modernization, Batched Git Cat-File Pre-Fetching, Topology Sieve Diff Parity, and Landmark-Driven...
+│   │   ├── 0100-knowledge-and-work-extension-suites-convergence-sieve-parity-and-metronome-polling.md # ADR 0100: Knowledge & Content and Work & Automation Suites Convergence, Sieve Parity, and Metronome Polling Unification
+│   │   ├── archived/               # Superseded and historical ADR documents.
+│   │   │   ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
+│   │   │   ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
+│   │   │   ├── 0003-stateless-multi-tenant-routing.md # Initial stateless request-scoped multi-tenant REST routing setup.
+│   │   │   ├── 0004-asynchronous-vfs-commit-pipeline.md # Defines the non-blocking VFS write queue and thread safety.
+│   │   │   ├── 0005-transport-shell-decoupling.md # Decoupling of HTTP transport shell from pure domain logic.
+│   │   │   ├── 0006-tenant-isolated-compilation-locks.md # Defines thread-local locks for RAG payload compilations.
+│   │   │   ├── 0007-stateless-ui-factory-and-component-decoupling.md # UI decoupling from business logic via Zustand UDF.
+│   │   │   ├── 0008-offline-first-synchronization.md # Offline capabilities and Service Worker caching.
+│   │   │   ├── 0009-ephemeral-artifacts-and-immediate-jobs-ledger.md # Management of short-lived job artifacts and garbage collection.
+│   │   │   ├── 0010-vfs-boundary-exemptions.md # Rules for paths exempt from strict VFS isolation.
+│   │   │   ├── 0011-vfs-barrier-synchronization.md # Synchronization barriers for asynchronous VFS flushes.
+│   │   │   ├── 0012-extension-subdirectory-extraction.md # Extraction of domain extensions into isolated subdirectories.
+│   │   │   ├── 0013-posix-compliant-pathlib-migration.md # Standardization on POSIX paths for cross-platform parity.
+│   │   │   ├── 0014-event-bus-tenant-authorization.md # Authorization rules for cross-tenant event bus emissions.
+│   │   │   ├── 0015-codemirror6-migration.md # Transition from legacy editors to CodeMirror 6.
+│   │   │   ├── 0016-explicit-api-client-and-fetch-deprecation.md # Mandates the use of the centralized inSetu API client.
+│   │   │   ├── 0017-extension-sdk-and-pit-of-success.md # Defines the InSetuExtension and InSetuElement base classes.
+│   │   │   ├── 0018-event-sourced-vfs-ledger.md # SQLite event sourcing for VFS mutations and Watchdog events.
+│   │   │   ├── 0021_standardized_state_isolation.md # Unidirectional Data Flow and tenant state isolation.
+│   │   │   ├── 0022-differential-context-compilation.md # Surgical updates to RAG contexts avoiding full recompilation.
+│   │   │   ├── 0023-polymorphic-entity-action-card-registry.md # Dynamic context-aware actions for UI entity cards.
+│   │   │   ├── 0024-frontend-sdk-decoupling-and-domain-accessors.md # Front-end SDK abstraction (this.vfs, this.sys, this.editor).
+│   │   │   ├── 0025-declarative-app-shell-and-brokered-resource-management.md # Declarative UI layout definitions and slot brokering.
+│   │   │   ├── 0026-unified-token-gatehouse-and-tailscale-auth.md # Centralized REST/WebSocket authentication and Tailscale WHOIS.
+│   │   │   ├── 0027-global-multi-select-and-batch-action-registry.md # Global UI selection tray and batch action execution.
+│   │   │   ├── 0028-native-hash-routing-and-event-bus.md # Zero-bundler SPA routing using URL hashes.
+│   │   │   ├── 0029-core-kernel-extraction-and-three-tier-architecture.md # Separation of Kernel, Core OS, and Domain Extensions.
+│   │   │   ├── 0030-kernel-utility-bisect-and-domain-relocation.md # Decoupling kernel utilities from core OS domains.
+│   │   │   ├── 0031-sutram-micro-kernel-vendorization-and-vfs-ledger-unification.md # Vendorizing Sutram and merging VFS tracking ledgers.
+│   │   │   ├── 0032-dynamic-polyglot-vendorization-and-importmap-resolution.md # Import map strategies for offline-first vendor libraries.
+│   │   │   ├── 0034-async-job-action-binding-and-gather-decoupling.md # Binding UI actions directly to background polling jobs.
+│   │   │   ├── 0035-vfs-file-resolution-hooks-and-topology-gateway.md # Centralized resolution of logical vfs:// and ctx:// paths.
+│   │   │   ├── 0036-vfs-manifest-sqlite-cqrs-and-delta-sync.md # Moving manifest indexing from JSON to SQLite CQRS.
+│   │   │   ├── 0037-gather-inversion-of-control-topology.md # Inverting context assembly dependencies to Cartographer.
+│   │   │   ├── 0038-decoupled-topology-engine-partitioned-manifest-two-stage-slew-limiting.md # Stage 1 (VFS) and Stage 2 (CTX) slew limiters.
+│   │   │   ├── 0039-decentralized-manifest-signature-sync-and-topology-boot.md # Syncing manifest signatures statelessly on UI boot.
+│   │   │   ├── 0041-deprecation-of-ui-zones-and-presentation-decoupling.md # Deprecation of UI zones and presentation decoupling.
+│   │   │   ├── 0042-vfs-logical-uri-boundary-standardization-and-path-heuristic-purge.md # Standardized vfs:// logical URI boundaries and purged legacy path heuristics.
+│   │   │   ├── 0043-client-offline-provider-and-offline-engine.md # Client offline provider, SW core vendorization, and outbox reconciliation.
+│   │   │   ├── 0044-ruamel-yaml-frontmatter-parsing-and-uri-event-canonicalization.md # Round-trip YAML frontmatter parsing and canonical vfs:// event normalization.
+│   │   │   ├── 0045-two-pass-deterministic-boot-sequence.md # Two-pass deterministic boot sequence bisecting spatial discovery and deferred mutation.
+│   │   │   ├── 0046-unified-watchdog-debouncer-and-manifest-caching.md # Unified Watchdog debouncer, pre-I/O intent capture, and thread-local manifest caching.
+│   │   │   ├── 0047-queued-event-barrier-sentinel-vfs-synchronization.md # Queued event-driven barrier sentinel for exact VFS write watermark synchronization.
+│   │   │   ├── 0048-akasa-kernel-package-extraction-and-insetu-uri-wrapper.md # Extraction of Tier 1 Kernel into standalone 'akasa' package and InSetuURI domain wrapper.
+│   │   │   ├── 0049-sse-telemetry-pipeline-ram-slew-limiter-and-on-demand-context-compilation.md # Real-time SSE telemetry pipeline, Stage 1 RAM queue slew limiting, and on-demand context compilation.
+│   │   │   ├── 0050-openapi-spec-gateway-universal-binary-execution-and-workspace-event-routing.md # Real-time OpenAPI 3.0 spec gateway, universal binary execution wrapper, and multi-tenant workspace event routing.
+│   │   │   ├── 0051-generic-dag-compilation-chain-resolution-and-step-anchoring.md # Generic Akasa DAG compilation chain resolution, positional step anchoring, and Watchdog manifest exclusion.
+│   │   │   ├── 0052-polymorphic-uri-coercion-bucket-address-refinement-and-sse-step-telemetry.md # Polymorphic InSetuURI coercion, BucketAddress SSOT refinement, and un-blocked SSE step telemetry.
+│   │   │   ├── 0053-git-state-resolution-autostash-pulls-and-non-fast-forward-resilience.md # Git rebase/merge state resolution, autostash pulls, and multi-repo sweep isolation.
+│   │   │   ├── 0054-multi-column-viewport-projections-and-virtual-buffer-editing.md # Multi-column viewport projections and virtual buffer editing.
+│   │   │   ├── 0055-vfs-parity-action-middleware-and-singleton-modal-deprecation.md # VFS parity gatekeeper action middleware, singleton file modal deprecation, and InSetuURI coercion hooks.
+│   │   │   ├── 0056-system-sdk-module-renaming-spatial-grid-routing-and-syntax-fallback.md # System SDK module renaming, spatial grid routing, and Tree-Sitter syntax fallback.
+│   │   │   ├── 0057-workspace-swap-layout-eviction-and-yv-icon-migration.md # Pre-swap layout eviction, yv-icon migration, and primitive alias purge.
+│   │   │   ├── 0058-universal-llm-gateway-react-agent-harness-and-vfs-modal-projection-decoupling.md # Universal LLM gateway, autonomous ReAct agent harness, and spatial VFS projections.
+│   │   │   ├── 0059-extension-modal-annihilation-spatial-projection-migration-and-store-eviction.md # Extension modal annihilation, spatial viewport projections, and store eviction governance.
+│   │   │   ├── 0060-git-aware-topology-manifest-sync-and-spatial-diff-projections.md # Git-aware topology CQRS ledger, real-time manifest delta sync, and spatial diff projections.
+│   │   │   ├── 0061-polymorphic-bulk-entity-actions-subsumption-pruning-and-recursive-vfs-eviction.md # Polymorphic bulk entity actions, subsumption pruning, and recursive VFS eviction.
+│   │   │   ├── 0062-projection-popouts-occ-concurrency-and-memoized-manifest-cqrs.md # Ephemeral pop-out windows, SHA-256 OCC conflict detection, and memoized manifest derivations.
+│   │   │   ├── 0063-atomic-vfs-bulk-mutations-popout-presence-and-sw-consolidation.md # Atomic VFS bulk mutations, popout presence heartbeat, and Service Worker consolidation.
+│   │   │   ├── 0064-core-prompt-engine-virtual-module-templates-and-job-api-unification.md # Core prompt engine graduation, virtual module template projection, and Akasa job API unification.
+│   │   │   ├── 0065-repository-data-containment-extension-state-hydration-and-security-hardening.md # Repository data containment (.insetu-data/), dual-scope notes migration, and cryptographic hook gating.
+│   │   │   ├── 0066-canonical-uris-inter-workspace-mounts-and-config-cascade-hardening.md # Canonical scheme:// URIs, inter-workspace ws:// mounts, and 3-tier configuration cascade hardening.
+│   │   │   ├── 0067-universal-extension-suite-modernization-and-domain-mounts.md # Universal extension suite modernization, declarative domain mounts, and SDK standardization.
+│   │   │   ├── 0068-hierarchical-vfs-sieve-sub-bucket-filtering-and-settings-hub.md # Hierarchical VFS sieve, .gitignore sub-bucket filtering, and unified OS Settings Hub.
+│   │   │   ├── 0069-managed-app-server-preview-bulk-vcs-and-memory-telemetry.md # Managed dev server preview supervisor, bulk Git VCS actions, and kernel memory telemetry.
+│   │   │   └── 0070-akasa-kernel-lifecycle-encapsulation-and-lifeboat-resilience.md # Akasa kernel lifecycle encapsulation, 4-file membrane isolation, and Lifeboat FS resilience.
+│   │   └── superseded/             # Archived and superseded architectural decision records.
+│   │       ├── .gitkeep            # Git folder retention.
+│   │       ├── 0033-kernel-package-encapsulation-and-root-wrapper-cleanup.md # Moving kernel dependencies to isolated packages (akasa).
+│   │       └── 0040-system-configuration-ssot-and-multi-scoped-settings.md # Centralized settings schema definition and hierarchical scope isolation (daemon, workspace, repo).
+│   ├── models/                     # Human-authored subsystem mental models and state-machine invariant specifications.
+│   │   ├── agent_orchestrator_and_rag.md # Black-box DAG execution contracts, the 6 volatility-ordered context buckets, fork-join holding confinement, and self-contained healing loops...
+│   │   └── yomama_bridge.md        # Three-phase state machine, canonical ordering, n-1 healing, and content-addressed signature invariants for the Yomama Sync Bridge.
+│   └── plans/                      # Architectural blueprints and multi-sprint implementation plans.
+│       ├── 2026-11-03-routine-expression-compiler-and-parser-unification.md # Create blueprint stub for compiler-grade routine condition parsing and Yomama parser unification, explicitly marked for human-architect disc...
+│       ├── 2026-11-03-six-bucket-orchestrator-and-composable-rag.md # Refactor orchestrator.py, engine_agent.py, and context_assemble.py to implement the 6-bucket envelope, 4 resource lenses, composable RAG uni...
+│       └── 2026-11-03-subsystem-mental-models-and-worker-fault-transparency.md # Create a blueprint for institutionalizing Subsystem Mental Models across the core engines, wiring blast-radius model injection, and enforcin...
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── app.py                      # [Micro-Kernel & Extension Bootloader]
@@ -124,9 +139,9 @@ insetu/
 │   │   ├── def eval_single_clause(v_tuple, clause) # Evaluates a single comparison clause against a version tuple.
 │   │   ├── def satisfies_range(version_str, range_str) # Evaluates compound range expressions (e.g., '>=5.0.0 && <6.0.0').
 │   │   ├── def resolve_python_vendors(active_exts) # Statelessly scans core and extension vendor.json manifests to resolve and inject Python dependencies.
-│   │   ├── def resolve_js_vendors(active_exts) # Resolves and builds the JS import map for the frontend bootloader statelessly.
-│   │   ├── def serve_extension_static(ext_name, filename) # Serves static assets and vendored dependencies directly from an extension directory.
-│   │   ├── def serve_extension_js(ext_name) # ADR 0012: Dynamically serve frontend JS from the bundled extension subdirectory.
+│   │   ├── def resolve_js_vendors(active_exts) # [stale?] Resolves and builds the JS import map for the frontend bootloader statelessly.
+│   │   ├── def serve_extension_static(ext_name, filename) # [stale?] Serves static assets and vendored dependencies directly from an extension directory.
+│   │   ├── def serve_extension_js(ext_name) # [stale?] ADR 0012: Dynamically serve frontend JS from the bundled extension subdirectory.
 │   │   ├── def sw()                # [comment required]
 │   │   ├── def root_readme()       # [comment required]
 │   │   ├── def manifest()          # [comment required]
@@ -158,9 +173,9 @@ insetu/
 │   │   │   │   ├── class RoutineSavePayload(TypedDict) # Request schema for saving or forking a declarative routine.
 │   │   │   │   ├── def api_save_routine(ctx) # Validates and saves a declarative routine in ctx://routines/.
 │   │   │   │   ├── class RoutineDeletePayload(TypedDict) # Request schema for deleting a routine override.
-│   │   │   │   ├── def api_delete_routine(ctx) # Deletes a workspace or user-template routine override.
+│   │   │   │   ├── def api_delete_routine(ctx) # [stale?] Deletes a workspace or user-template routine override.
 │   │   │   │   ├── class EnsurePlanFilePayload(TypedDict) # Request schema for resolving or creating a Markdown plan file.
-│   │   │   │   ├── def api_ensure_plan_file(ctx) # Resolves or creates a canonical Markdown plan file URI for /plan.
+│   │   │   │   ├── def api_ensure_plan_file(ctx) # [stale?] Resolves or creates a canonical Markdown plan file URI for /plan.
 │   │   │   │   ├── class ResolveTestCommandPayload(TypedDict) # Request schema for resolving a repository test command.
 │   │   │   │   ├── def api_resolve_test_command(ctx) # Inspects repository files to determine the appropriate test runner command.
 │   │   │   │   ├── class AgentRunTestPayload(TypedDict) # Request schema for running a repository's default or a person-approved test command; it carries no approval flag (P5).
@@ -168,22 +183,23 @@ insetu/
 │   │   │   │   ├── def get_sessions(ctx) # Retrieves all chat sessions for the active workspace.
 │   │   │   │   ├── def create_session(ctx) # Creates a new chat session record in SQLite.
 │   │   │   │   ├── def get_messages(ctx, session_id) # [stale?] Retrieves chronological message history for a chat session.
-│   │   │   │   ├── def cancel_agent_turn(ctx) # Signals an active agent turn to abort before the next LLM or VFS step.
+│   │   │   │   ├── def cancel_agent_turn(ctx) # [stale?] Signals an active agent turn to abort before the next LLM or VFS step.
 │   │   │   │   ├── def undo_last_agent_turn(ctx) # Reverts the most recent Yomama Bridge transaction for the session.
 │   │   │   │   └── def submit_prompt(ctx) # [stale?] Dispatches a user prompt or colon-scoped slash routine into the agent worker.
 │   │   │   ├── orchestrator.py     # Declarative YAML routine DAG interpreter, conditional evaluator, and 256KB scratch vaulter.
 │   │   │   │   ├── def validate_routine_definition(routine_dict) # [stale?] Validates a parsed routine definition dictionary: 1.
 │   │   │   │   ├── def parse_routine_content(raw_text, fallback_id, is_markdown) # Parses either a Markdown-as-Code (.md) routine (YAML frontmatter + ## <node_id> sections) or a YAML (.yaml/.yml) routine into a normalized d...
 │   │   │   │   ├── def serialize_routine_to_markdown(defn) # Serializes a routine definition dict into Markdown-as-Code (YAML frontmatter + ## <node_id> sections).
-│   │   │   │   ├── def list_available_routines(ctx) # Discovers all declarative YAML routines across built-in defaults and workspace .insetu/routines/*.yaml.
+│   │   │   │   ├── def list_available_routines(ctx) # [stale?] Discovers all declarative YAML routines across built-in defaults and workspace .insetu/routines/*.yaml.
 │   │   │   │   ├── def resolve_routine_mode(routine, requested_mode) # Resolves a requested slash mode or alias (e.g., 'plan' or 'architect') against the YAML routine's declarative `modes:` block.
-│   │   │   │   ├── def load_routine_definition(ctx, routine_id) # Loads a declarative YAML routine from workspace .insetu/routines/<id>.yaml or built-in defaults.
+│   │   │   │   ├── def load_routine_definition(ctx, routine_id) # [stale?] Loads a declarative YAML routine from workspace .insetu/routines/<id>.yaml or built-in defaults.
 │   │   │   │   ├── def evaluate_when_condition(when_expr, chain_context) # [stale?] AST-restricted, zero-eval conditional evaluator for YAML 'when' expressions.
 │   │   │   │   ├── def strip_yomama_blocks_keep_prose(raw_text) # Strips raw Yomama <<<<<<< FILE: ...
 │   │   │   │   ├── def clamp_rag_files_to_topology(ctx, candidate_files, allowed_repos) # Clamps LLM-selected RAG file URIs against topology_ledger within allowed_repos (max MAX_RAG_FILES_PER_HOP).
 │   │   │   │   └── def execute_declarative_routine(ctx, session_id, user_prompt, mode, ...) # [stale?] Executes a declarative YAML routine DAG for an Agent turn.
 │   │   │   ├── prompts/            # Management of global prompt templates and macro inclusions.
 │   │   │   │   ├── routine_authoring_guide.md # Authoring guide for declarative Markdown-as-Code (ctx://routines/*.md) wavefront routines.
+│   │   │   │   ├── start_session_protocol.md # Initializes an engineering or editorial session with repository landmarks, architectural directives, and the Yomama Patch Protocol.
 │   │   │   │   └── test_triage_rubric.md # Diagnostic rubric for triaging test suite failures against implementation code.
 │   │   │   ├── routines/           # Co-located Git declarative DAG routines (/audit and /closeout).
 │   │   │   │   ├── ask.md          # Answers architectural and codebase questions using a 2-stage context expansion funnel without mutating files.
@@ -209,7 +225,7 @@ insetu/
 │   │   │       │   ├── class TestFailureItem # Structured record of a single failing test assertion or error.
 │   │   │       │   ├── class TestDiagnosticSchema # Unified test run diagnostic emitted by bridge.test and ingested by test.md.
 │   │   │       │   ├── def parse_junit_xml(xml_content, exit_code) # Parses JUnit XML output, extracting failure nodes while stripping all passing noise.
-│   │   │       │   ├── def parse_test_tail_output(output_text, exit_code) # Fallback parser extracting failure slices from raw stdout/stderr when JUnit XML is absent.
+│   │   │       │   ├── def parse_test_tail_output(output_text, exit_code) # [stale?] Fallback parser extracting failure slices from raw stdout/stderr when JUnit XML is absent.
 │   │   │       │   ├── def get_test_diagnostic_directive() # Returns the prompt directive for test diagnostic responses.
 │   │   │       │   └── def validate_test_diagnostic_response(raw_text) # [stale?] Validates an LLM output against the TestDiagnosticSchema contract.
 │   │   │       ├── plan.py         # Hierarchical plan schema and markdown parser for the insetu_plan protocol.
@@ -244,7 +260,7 @@ insetu/
 │   │   │   │   └── def generate_commit_message_from_ledger(ctx, repo, transaction_id, limit) # Synthesizes a Conventional Commit message and Transaction-ID trailers directly from recent bridge_ledger intent comments (<<<<<<< COMMENT).
 │   │   │   ├── bridge_fuzzy.py     # Fuzzy matching and fallback regex algorithms.
 │   │   │   │   ├── def heal_chevron_meltdown(text) # Trims conversational garbage or broken markdown fences trailing the final REPLACE block.
-│   │   │   │   ├── def heal_latex_vert(text) # Replaces Gemini LaTeX math-mode pipe escapes (\vert{}) back into '|' strictly when bounded by $ ...
+│   │   │   │   ├── def heal_latex_vert(text) # [stale?] Replaces Gemini LaTeX math-mode pipe escapes (\vert{}) back into '|' strictly when bounded by $ ...
 │   │   │   │   ├── def heal_citation_artifacts(text) # Strips leaked LLM citation markers (,, [cite_start], [cite_end]).
 │   │   │   │   ├── def heal_llm_block_artifacts(text, reference_content) # Unified chatbot artifact healing pipeline for SEARCH and REPLACE blocks.
 │   │   │   │   ├── def expand_macros(text, reference_content) # Expands Yomama transport escape macros.
@@ -253,12 +269,16 @@ insetu/
 │   │   │   │   ├── def find_block_anchor(file_lines, block_lines, allow_boundary_partial) # [stale?] Abstracted 100% contiguous block search engine.
 │   │   │   │   ├── def normalize_patch_payload(text, reference_content) # Single Source of Truth normalizer for Yomama SEARCH, REPLACE, TEXTEDIT, and JSON_PATCH payloads.
 │   │   │   │   ├── def apply_block_in_memory(content, block, silent) # [comment required]
+│   │   │   │   ├── def rebase_overlapping_block_in_memory(original_content, current_content, block, silent) # [stale?] Tier 2 Deterministic Overlap Rebaser: When a patch block fails to anchor in `current_content` (A) because an earlier patch in the same batch...
 │   │   │   │   ├── def apply_textedit_in_memory(content, block, silent) # [stale?] Applies a <<<<<<< TEXTEDIT inline prose diff block ({-delete}} / {{+insert}}) using exact or soft-wrap-normalized character span matching.
 │   │   │   │   └── def apply_json_patch_in_memory(filepath, content, block, silent) # [stale?] Applies a <<<<<<< JSON_PATCH block (either a dotted/selector key-path dict or RFC 6902 array) to .json, .yaml/.yml, or .md (YAML frontmatter...
 │   │   │   ├── bridge_test.py      # JUnit XML test runner adapter and exit-code fallback diagnostic extractor.
 │   │   │   │   └── def run_repo_test_diagnostics(ctx, repo, command_override, target_files, ...) # [stale?] Executes the configured test runner for repo and extracts compact diagnostics.
 │   │   │   ├── bridge_vfs.py       # Async VFS commit pipelines and concurrency locks.
-│   │   │   │   └── def execute_bridge_sync(workspace_id, data) # [comment required]
+│   │   │   │   ├── def clear_bridge_eval_cache() # Clears the in-memory content-addressed FileEvalSig and PatchEvalSig caches.
+│   │   │   │   ├── def compute_file_eval_signature(workspace_id, target_file, disk_hash, blocks, ...) # [stale?] Tier 1 Per-File Bundle Signature (FileEvalSig): Pure function of the target file's on-disk SHA-256 hash, the ordered list of active patch bl...
+│   │   │   │   ├── def compute_patch_eval_signature(resolved_path, input_buffer_hash, orig_disk_hash, block, ...) # Tier 2 Intra-File Sequential Chunk Signature (PatchEvalSig): Models a single chunk evaluation as a pure state transition from `input_buffer_...
+│   │   │   │   └── def execute_bridge_sync(workspace_id, data, ctx) # [comment required]
 │   │   │   ├── engine_bridge.py    # [Yomama Sync Bridge Transaction Logic]
 │   │   │   │   ├── class BridgeLedgerRecord(TypedDict) # [comment required]
 │   │   │   │   ├── class BridgeHistoryResponse(TypedDict) # [comment required]
@@ -282,6 +302,11 @@ insetu/
 │   │   │   │   ├── def bridge_merge_blocks(ctx) # [comment required]
 │   │   │   │   ├── class BridgeTurnDiffPayload(TypedDict) # [comment required]
 │   │   │   │   └── def bridge_turn_diff(ctx) # [comment required]
+│   │   │   ├── parser.py           # Create dedicated Yomama Bridge lexer and lookahead parser module (extracted from utils_core.py) with deterministic block content hashing for...
+│   │   │   │   ├── def get_base_step_and_diffs(lines) # Analyzes a block of code to find its true structural base indentation unit (LCD > 1).
+│   │   │   │   ├── def compute_block_signature(block, resolution) # Computes a deterministic SHA-256 content signature for a parsed Yomama block and its user resolution.
+│   │   │   │   ├── def parse_blocks(text) # [stale?] Compiler-grade two-phase Lexer + Lookahead Parser for Yomama Bridge payloads: - Heals web-chat chevron meltdown (`> > > REPLACE`, `< < < SEA...
+│   │   │   │   └── def flatten_parsed_blocks(parsed_structure) # Returns a flat list of (raw_target_file, block_index_in_file, block_dict) sorted strictly by the canonical 0..n creation order ('order') in...
 │   │   │   └── prompts/            # Management of global prompt templates and macro inclusions.
 │   │   │       └── yomama_patch_protocol.md # Built-in prompt template defining the Yomama Bridge SEARCH/REPLACE patch syntax.
 │   │   ├── cartographer/           # Autonomous topology mapping and CODE_INDEX generation.
@@ -300,13 +325,14 @@ insetu/
 │   │   │   └── config.js           # UI for managing repository topologies and tracked buckets.
 │   │   │       └── class InSetuExtConfig # [comment required]
 │   │   ├── editor/                 # Global CodeMirror editor settings.
-│   │   │   └── engine_editor.py    # Editor preferences and markdown link configurations.
+│   │   │   └── engine_editor.py    # Editor preferences, language manifest discovery, and local language pack resolution.
 │   │   │       ├── def get_preference(ctx) # [comment required]
 │   │   │       ├── def set_preference(ctx) # [comment required]
 │   │   │       ├── class VendorizePayload(TypedDict) # [comment required]
 │   │   │       ├── class VendorizeResponse(TypedDict) # [comment required]
+│   │   │       ├── def get_editor_languages(ctx) # Returns the merged language manifest; bundled language IDs always take precedence over local entries.
 │   │   │       ├── def serve_vendor_asset(ctx, filename) # [comment required]
-│   │   │       └── def vendorize_language(ctx) # Resolves a language pack locally: bundled packs first, then a pack a person placed in the local vendor folder.
+│   │   │       └── def vendorize_language(ctx) # [stale?] Resolves a language pack descriptor locally: bundled manifest entries first, then local packs.
 │   │   ├── fs/                     # Virtual File System REST gateway and editing modals.
 │   │   │   ├── engine_fs.py        # VFS file operations, upload, and OCC conflict REST gateway.
 │   │   │   │   ├── class FileTargetPayload(TypedDict) # [comment required]
@@ -328,7 +354,7 @@ insetu/
 │   │   │   │   ├── class FileUploadResponse(TypedDict) # [comment required]
 │   │   │   │   ├── def api_fs_upload(ctx) # Native multipart/form-data uploader for robust binary handling.
 │   │   │   │   ├── class FileSavePayload(TypedDict) # [comment required]
-│   │   │   │   └── def api_fs_save(ctx) # Universal save-back endpoint with 3-way OCC merge and explicit path routing guardrails.
+│   │   │   │   └── def api_fs_save(ctx) # [stale?] Universal save-back endpoint with 3-way OCC merge and explicit path routing guardrails.
 │   │   │   └── fs.js               # [Virtual File System Modals & UI]
 │   │   │       ├── function bindDownloadDrag(e, filename, fetchUrl) # [comment required]
 │   │   │       ├── function normalizeVfsURI(path, defaultScheme = 'vfs') # [comment required]
@@ -340,7 +366,7 @@ insetu/
 │   │   │       ├── function hasMacroSyntax(text) # [comment required]
 │   │   │       ├── function canPreviewFileMacros(filepath, content = '') # [comment required]
 │   │   │       ├── function resolveLiveBufferPreview(filepath, rawContent, isDirty =...) # [comment required]
-│   │   │       ├── function injectTextToBuffer(filepath, text, isSupportedEdito...) # [comment required]
+│   │   │       ├── function injectTextToBuffer(filepath, text, isMarkdown, isFS...) # [comment required]
 │   │   │       ├── function routeToSpatialGrid(filepath, label = null, preferre...) # [comment required]
 │   │   │       ├── function ensureFreshContext(filePath) # [comment required]
 │   │   │       ├── function fetchAndCopy(filePath, explicitUrl = null) # [comment required]
@@ -362,7 +388,6 @@ insetu/
 │   │   │       ├── function executeMove() # [comment required]
 │   │   │       ├── class InSetuMoveFileProjection # [comment required]
 │   │   │       ├── function deleteEmptyFolder(dirPath) # [comment required]
-│   │   │       ├── function createFileCard(fileInfo, container) # [comment required]
 │   │   │       ├── function getGlobalManifest() # [comment required]
 │   │   │       ├── class InSetuVFSExplorer # [comment required]
 │   │   │       ├── function pruneSubsumedTargets(items) # [comment required]
@@ -404,7 +429,8 @@ insetu/
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── context_assemble.py # Unified RAG funnel (context.assemble) and Hebbian affinity graph.
 │   │   │   │   ├── def record_affinity_interaction(ctx, file_list, interaction_type, weight) # Updates co-occurrence weights in the persistent SQLite affinity_edges table.
-│   │   │   │   ├── def get_affinity_neighbors(ctx, seed_files, top_k) # Calculates time-decayed Hebbian affinity scores to return top correlated peer files.
+│   │   │   │   ├── def get_affinity_neighbors(ctx, seed_files, top_k) # [stale?] Calculates time-decayed Hebbian affinity scores to return top correlated peer files.
+│   │   │   │   ├── def prune_stale_affinity_edges(ctx, grace_period_seconds) # [stale?] Garbage-collects affinity_edges rows only after they have been inactive longer than grace_period_seconds AND are untracked by topology_ledge...
 │   │   │   │   ├── def scrub_outbound_secrets(text, secret_values) # Scrubs Fernet ciphertext tokens, boot tokens, and workspace secrets from outbound context strings.
 │   │   │   │   ├── def collect_workspace_secrets(ctx) # Collects decrypted/raw secret values from the tenant secrets.json vault for outbound scrubbing.
 │   │   │   │   ├── def assemble_blast_radius(ctx, edit_targets, user_message, history_summary) # [stale?] 4-Layer Deterministic Blast Radius: 1.
@@ -414,7 +440,7 @@ insetu/
 │   │   │   │   ├── def assemble_context_payload(ctx, edit_targets, user_message, strategy, ...) # [stale?] Main entry point for context.assemble: Resolves targets, applies soft-budget interface slicing, and wraps in a secured nonce envelope.
 │   │   │   │   └── def resolve_query_context(ctx, query_text) # [stale?] Resolves single-hop symbolic read directives (symbol_def, file_slice, symbol_search).
 │   │   │   ├── engine_gather.py    # [Context Compiler and Workflow Batch routing]
-│   │   │   │   ├── def compile_context_payload(workspace_id, output_dir, base_uri, header_block, ...) # Universal compiler for all system contexts (Gather, Git, Flow).
+│   │   │   │   ├── def compile_context_payload(workspace_id, output_dir, base_uri, header_block, ...) # [stale?] Universal compiler for all system contexts (Gather, Git, Flow).
 │   │   │   │   ├── def handle_topology_resolved(workspace_id, dirty_repos, dirty_buckets, events, **kwargs) # Stage 2 Slew Limiter: Catches resolved topology and schedules a delayed RAG compilation.
 │   │   │   │   ├── def get_ordered_compilation_steps(ctx) # Delegates compilation sequence resolution to Akasa's generic DAG orchestrator.
 │   │   │   │   ├── def init_gather_workers(workspace_id, **kwargs) # [comment required]
@@ -452,7 +478,9 @@ insetu/
 │   │   │   │   ├── def get_language_provider(filepath) # Resolves the appropriate language provider for a file path based on its extension.
 │   │   │   │   ├── def extract_file_symbols(filepath, content) # Stage 2 Shallow Static AST Extractor: Extracts public top-level symbols for .py and .js/.ts/.mjs/.tsx files.
 │   │   │   │   ├── def extract_symbol_source_slice(filepath, content, symbol_query) # Locates a top-level class, method (Class.method or method), or function in `content` and returns its exact source slice (including leading d...
-│   │   │   │   └── def describe_source_file(rel_path, content) # Derives a one-sentence file description for CODE_INDEX.md from the file itself, so a file that has no description in the index gets one inste...
+│   │   │   │   ├── def describe_source_file(rel_path, content) # [stale?] Derives a one-sentence file description for CODE_INDEX.md from docstrings, frontmatter, headers, or metadata.
+│   │   │   │   ├── def describe_directory(rel_dir, child_files, read_fn) # [stale?] Derives a one-sentence directory description from its README.md, __init__.py, package.json, or child script headers.
+│   │   │   │   └── def format_interleaved_file_diff(filepath, base_content, current_content, fallback_padding, ...) # [stale?] Compiles a single-stream, deterministic interleaved diff between `base_content` and `current_content`: - Option 2 (AST-Aware Primary): For s...
 │   │   │   ├── base.py             # Define BaseLanguageProvider contract and shared brace-balancing, docstring normalization, and body hashing utilities.
 │   │   │   │   ├── def first_sentence(text) # Normalizes the first sentence of a docstring or JSDoc comment for single-line index display, stripping reST/module headers.
 │   │   │   │   ├── def compute_normalized_text_body_hash(source_slice) # Computes an 8-char SHA-256 hash of a brace-delimited symbol body with comments and whitespace normalized.
@@ -505,12 +533,14 @@ insetu/
 │   │   │   ├── engine_prompts.py   # Prompt discovery and resolution.
 │   │   │   │   ├── class PromptsVFSDriver(TemplateOverlayVFSDriver) # VFS Driver routing ctx://prompts/.templates/user via ws://default and .templates/<mod> to active module prompt directories.
 │   │   │   │   ├── def inject_prompts_config(cfg, workspace_id, **kwargs) # [comment required]
-│   │   │   │   ├── def migrate_legacy_prompt_macros_on_boot(workspace_id, **kwargs) # One-time boot migration upgrading legacy scheme-less {{include_prompt: ...}} tags in prompt files to canonical ctx://prompts/ URIs.
-│   │   │   │   ├── def provide_available_prompts(workspace_id, **kwargs) # Supplies global (ctx://prompts), virtual module templates (ctx://prompts/.templates), repo-scoped (<repo>/.insetu-data/prompts), and peer-mo...
+│   │   │   │   ├── def migrate_legacy_prompt_macros_on_boot(workspace_id, **kwargs) # [stale?] One-time boot migration upgrading legacy scheme-less {{include_prompt: ...}} tags in prompt files to canonical ctx://prompts/ URIs.
+│   │   │   │   ├── def provide_available_prompts(workspace_id, **kwargs) # [stale?] Supplies global (ctx://prompts), virtual module templates (ctx://prompts/.templates), repo-scoped (<repo>/.insetu-data/prompts), and peer-mo...
 │   │   │   │   ├── class PromptsListResponse(TypedDict) # [comment required]
 │   │   │   │   ├── class PromptResolveQuery(TypedDict) # [comment required]
+│   │   │   │   ├── def read_prompt_with_cascade(ctx, uri_str) # [stale?] Single Source of Truth prompt reader evaluating the 3-Tier Override Cascade: 1.
+│   │   │   │   ├── def resolve_prompt_text(ctx, target_uri, raw_content, repo, ...) # [stale?] Expands `{{include_prompt: ...}}` macros and interpolates `{{ var | sys.* | default }}` against the target repository's `sys.*` landmarks an...
 │   │   │   │   ├── def api_prompts_list(ctx) # Provides a list of available prompts (including virtual .templates) for the UI.
-│   │   │   │   └── def api_prompts_resolve(ctx) # Fetches a canonical prompt URI or live POST buffer and recursively resolves {{include_prompt: ...}} and optional {{include_prompt?: ...}} macros.
+│   │   │   │   └── def api_prompts_resolve(ctx) # [stale?] Fetches a canonical prompt URI or live POST buffer and recursively resolves {{include_prompt: ...}} and optional {{include_prompt?: ...}} macros.
 │   │   │   └── prompts.js          # Core Prompt Library UI, virtual module .templates browser, and macro embedding.
 │   │   │       ├── class InSetuExtPrompts # [comment required]
 │   │   │       └── function isPromptPath(filepath) # [comment required]
@@ -532,6 +562,7 @@ insetu/
 │   │   │   └── __init__.py         # Module initialization.
 │   │   │       ├── class TemplateOverlayVFSDriver(DefaultVFSDriver) # Unified Tier 2 Template Overlay VFS Driver for ctx://prompts and ctx://routines: - Routes ctx://<vol>/.templates/user/...
 │   │   │       ├── class InSetuContext(_BaseExtensionContext) # [stale?] Tier 2 Developer OS Extension Context with dual-root Manifest, RAG compilation, and Frontmatter helpers.
+│   │   │       ├── def get_mountable_data_domains() # Returns options for all registered extensions that own a 'data'-tier VFS volume, plus the '*' wildcard.
 │   │   │       ├── def resolve_external_dependency_spec(dep_str) # Normalizes an external dependency declaration into (import_specifier, pypi_package_name).
 │   │   │       └── class InSetuExtension(AkasaExtension) # [stale?] Tier 2 Developer OS Blueprint wrapper supporting declarative VFS volume mounts, dependency contracts, and InSetuContext injection.
 │   │   ├── system/                 # System lifecycle, settings, and recovery controllers.
@@ -541,13 +572,14 @@ insetu/
 │   │   │   ├── cli_commands.py     # Modular CLI command implementations (init, daemon service, GUI, shortcuts).
 │   │   │   │   ├── def handle_init(cwd, args) # Interactive and headless onboarding wizard for initializing an inSetu workspace.
 │   │   │   │   ├── def handle_service(action, cwd) # Manages the background systemd daemon for inSetu.
-│   │   │   │   ├── def scaffold_extension(ext_name) # Scaffolds a new bundled extension directory from default templates.
+│   │   │   │   ├── def scaffold_extension(ext_name, bundled) # Scaffolds a new extension from the default templates.
 │   │   │   │   ├── def check_daemon_alive(port) # Pings localhost to check if an inSetu daemon is already running.
 │   │   │   │   ├── def launch_gui(cwd) # Launches pywebview desktop shell, attaching to an active daemon or starting an embedded server.
 │   │   │   │   ├── def create_desktop_shortcut(cwd) # Generates a native OS application shortcut for inSetu GUI.
 │   │   │   │   └── def handle_mcp_stdio(cwd, args) # MCP 2025-03-26 Stdio Bridge: Proxies JSON-RPC messages over stdin/stdout to the running HTTP daemon on 127.0.0.1:<port>, or executes headles...
 │   │   │   ├── components/         # Reusable Lit Web Components for the OS.
 │   │   │   │   ├── ui_editor.js    # CodeMirror 6 markdown and frontmatter editor wrappers.
+│   │   │   │   │   ├── function setEditorLanguageManifest(languagesObj) # Replaces the language lookup tables with a manifest's languages (used by tests and hosts that preload it).
 │   │   │   │   │   ├── function resolveEditorMode(filename) # [comment required]
 │   │   │   │   │   ├── function getActiveEditorPath() # [comment required]
 │   │   │   │   │   ├── function getEditorContent() # [comment required]
@@ -571,14 +603,14 @@ insetu/
 │   │   │   │   │   ├── class InSetuJobTracker # [comment required]
 │   │   │   │   │   ├── class InSetuRebootOverlay # [comment required]
 │   │   │   │   │   ├── class InSetConfigBanner # [comment required]
-│   │   │   │   │   ├── class InSetuSpinner # [comment required]
-│   │   │   │   │   ├── class InSetuEmptyState # [comment required]
+│   │   │   │   │   ├── class InSetuQuarantinedSlotPlaceholder # [comment required]
+│   │   │   │   │   ├── class InSetuProjectionWindowControls # [comment required]
 │   │   │   │   │   └── class InSetuHostDirPicker # [comment required]
 │   │   │   │   └── ui_system_settings.js # The 3-Tier Configuration Editor and Settings Hub.
 │   │   │   │       ├── class InSetuSchemaRepeater # [comment required]
 │   │   │   │       └── class InSetuSystemSettings # [comment required]
 │   │   │   ├── engine_system.py    # System topology, deltas, and lifecycle REST endpoints.
-│   │   │   │   ├── def vault_repeater_secrets_for_schema(ext_name, workspace_id) # Universal Repeater Secret Vaulting: Scans any registered settings schema for `type: 'repeater'` fields that contain `secure: True` subfields...
+│   │   │   │   ├── def vault_repeater_secrets_for_schema(ext_name, workspace_id) # [stale?] Universal Repeater Secret Vaulting: Scans any registered settings schema for `type: 'repeater'` fields that contain `secure: True` subfields...
 │   │   │   │   ├── def core_system_settings_updated(workspace_id, **kwargs) # [comment required]
 │   │   │   │   ├── def hydrate_and_migrate_cascade_settings(cfg, workspace_id, **kwargs) # Transparent 3-Tier Cascade Bridge: 1.
 │   │   │   │   ├── def provide_vfs_ignores(workspace_id, **kwargs) # Host application declaration of directories the VFS should never traverse natively.
@@ -593,6 +625,11 @@ insetu/
 │   │   │   │   ├── def save_system_config(workspace_id, payload) # [comment required]
 │   │   │   │   ├── class ExtensionInstallDepsPayload(TypedDict) # [comment required]
 │   │   │   │   ├── def api_system_install_extension_deps(ctx) # [comment required]
+│   │   │   │   ├── class WorkspaceExtensionApprovePayload(TypedDict) # [comment required]
+│   │   │   │   ├── class WorkspaceExtensionRevokePayload(TypedDict) # [comment required]
+│   │   │   │   ├── def api_workspace_extensions(ctx) # Lists .insetu/extensions/ folders with approval status, changed files and whether each is running.
+│   │   │   │   ├── def api_workspace_extension_approve(ctx) # Approves the files a person reviewed: the fingerprint they saw must still match the folder, or nothing is approved.
+│   │   │   │   ├── def api_workspace_extension_revoke(ctx) # Human-only: removes a workspace extension's approval; it stops loading at the next restart.
 │   │   │   │   ├── def api_system_reboot(ctx) # Clean in-place process replacement to restart the OS daemon.
 │   │   │   │   ├── class SystemConfigPayload(TypedDict) # [comment required]
 │   │   │   │   ├── def api_system_config(ctx) # [comment required]
@@ -625,13 +662,13 @@ insetu/
 │   │   │   ├── legacy.py           # Self-healing database recovery and legacy sandbox migration.
 │   │   │   │   ├── def move_tree_contents(src_dir, dst_dir) # Recursively merges files from src_dir into dst_dir and removes empty source directories.
 │   │   │   │   ├── def split_system_json(**kwargs) # Delegates legacy system.json splitting (into host.json and workspaces.json) to the Akasa kernel.
-│   │   │   │   └── def migrate_physical_sandboxes(**kwargs) # Domain-agnostic kernel migration: consolidates SQLite databases into .insetu/cache/db/ and heals .gitignore.
+│   │   │   │   └── def migrate_physical_sandboxes(**kwargs) # [stale?] Domain-agnostic kernel migration: consolidates SQLite databases into .insetu/cache/db/ and heals .gitignore.
 │   │   │   ├── store.js            # [Zustand Unified Data Flow (UDF) Store]
 │   │   │   ├── system.js           # System settings UI, SSE pipeline listeners, and recovery triggers.
 │   │   │   │   ├── function bootServiceWorker() # [comment required]
 │   │   │   │   ├── function autoWireSettingsSchemas() # [comment required]
 │   │   │   │   ├── function bootExtensions() # [comment required]
-│   │   │   │   ├── function checkManifestVersion() # --- DECENTRALIZED MANIFEST SYNC & KERNEL HEARTBEAT ---
+│   │   │   │   ├── function checkManifestVersion() # [stale?] --- DECENTRALIZED MANIFEST SYNC & KERNEL HEARTBEAT ---
 │   │   │   │   ├── function updateBootProgress(statusMsg) # [comment required]
 │   │   │   │   ├── function executeSecurityHandshake() # [comment required]
 │   │   │   │   ├── function executeBootSequence() # [comment required]
@@ -654,44 +691,50 @@ insetu/
 │   │   │       ├── def api_topology_vfs_repo(ctx) # Surgically fetches the VFS bucket structure and git modification state for a specific repository.
 │   │   │       ├── def force_topology_scan(workspace_id, target_repos, **kwargs) # [stale?] Synchronously forces a full physical disk walk to rebuild the Topology Ledger.
 │   │   │       ├── def hook_request_vfs_manifest(workspace_id, **kwargs) # Returns the vfs manifest derived directly from the topology ledger via raw tuple queries.
-│   │   │       ├── def get_omniscient_workspace_files(workspace_id, allowed_repos) # Fast SQL replacement for the old os.walk bridge optimization.
-│   │   │       ├── def get_topology_files_for_repo(workspace_id, repo_dir) # SSOT accessor returning canonical vfs://<repo>/<path> URIs from topology_ledger.
+│   │   │       ├── def get_omniscient_workspace_files(workspace_id, allowed_repos) # [stale?] Fast SQL replacement for the old os.walk bridge optimization.
+│   │   │       ├── def get_topology_files_for_repo(workspace_id, repo_dir) # [stale?] SSOT accessor returning canonical vfs://<repo>/<path> URIs from topology_ledger.
+│   │   │       ├── def clamp_uris_to_topology(workspace_id, candidate_uris, expand_dirs, gather_only) # [stale?] Clamps and optionally expands candidate URIs against topology_ledger.
 │   │   │       ├── def broadcast_cross_workspace_mutations(mutations, workspace_id, **kwargs) # Phase 4 Event Bus Synchronization: Propagates mutations on shared domains to subscriber workspaces as virtual 'ws://' mutations for reactive...
 │   │   │       ├── def buffer_topology_events(mutations, workspace_id, **kwargs) # Stage 1 Slew Limiter: Catches high-velocity disk/watchdog mutations and buffers them in RAM to absorb the I/O storm before hitting SQLite.
+│   │   │       ├── def reconcile_topology_on_config_mutated(workspace_id, **kwargs) # [stale?] Reconciles topology_ledger for repositories whose sieve configuration changed (exts, ignores, mounts).
 │   │   │       ├── def resolve_topology_buffer(workspace_id) # [stale?] Processes any pending events in topology_event_buffer, updates topology_ledger, and emits topology_resolved.
-│   │   │       ├── def mount_topology_volumes_dynamically(cfg, workspace_id, **kwargs) # Dynamically remounts VFS volumes whenever the configuration changes.
+│   │   │       ├── def mount_topology_volumes_dynamically(cfg, workspace_id, **kwargs) # [stale?] Dynamically remounts VFS volumes whenever the configuration changes.
 │   │   │       ├── def init_topology_on_boot(workspace_id, **kwargs) # Topology owns the boot sequence.
 │   │   │       ├── def matches_gitignore_patterns(rel_path, patterns) # Evaluates a relative POSIX path against a list of .gitignore-style patterns.
 │   │   │       ├── def is_file_tracked_by_sieve(rel_path, config, live_cfg, repo_dir) # Single Source of Truth (SSOT) Hierarchical VFS Sieve.
 │   │   │       ├── def get_valid_workspace_files(repo_path, config, workspace_id) # [comment required]
 │   │   │       ├── def resolve_file_bucket(filepath, sub_buckets, repo_dir) # [comment required]
-│   │   │       ├── def resolve_owning_workspaces(event_name, **kwargs) # Domain-aware spatial router for OS lifecycle events.
+│   │   │       ├── def resolve_owning_workspaces(event_name, **kwargs) # [stale?] Domain-aware spatial router for OS lifecycle events.
 │   │   │       ├── class VerifyPlanTargetsPayload(TypedDict) # Request schema for verifying plan file targets against the workspace VFS.
-│   │   │       ├── def api_topology_overview(ctx) # Compiles a lightweight structural overview of tracked repositories, sub-buckets, and CODE_INDEX.md headers.
+│   │   │       ├── def api_topology_overview(ctx) # [stale?] Compiles a lightweight structural overview of tracked repositories, sub-buckets, and CODE_INDEX.md headers.
 │   │   │       ├── def api_topology_verify_plan_targets(ctx) # Verifies that vfs:// file targets referenced in an architectural plan exist or are marked as new files.
-│   │   │       ├── def get_landmark_kinds(workspace_id) # Returns (kinds, notices): core landmark kinds followed by valid kinds that enabled extensions register.
+│   │   │       ├── def get_landmark_kinds(workspace_id) # [stale?] Returns (kinds, notices): core landmark kinds followed by valid kinds that enabled extensions register.
 │   │   │       ├── def read_repo_tier_settings(ctx, repo, ext_name) # Reads one extension's repository-tier settings, keeping only fields declared `authority: repo_content`.
-│   │   │       ├── def resolve_repo_landmarks(ctx, repo) # Resolves where a repository keeps each landmark kind (standards, contracts, ADRs, tests, fitness suites, and kinds registered by extensions).
-│   │   │       ├── def discover_constitution_files(ctx) # Returns the standards files to auto-pin (Tier 0) across mounted repositories, from each repository's landmarks.
+│   │   │       ├── def resolve_repo_landmarks(ctx, repo) # [stale?] Resolves where a repository keeps each landmark kind (standards, contracts, ADRs, tests, fitness suites, and kinds registered by extensions).
+│   │   │       ├── def resolve_repo_code_index_uri(ctx, repo_dir, repo_cfg) # Resolves the canonical VFS URI for a repository's CODE_INDEX.md.
+│   │   │       ├── def infer_target_repo(ctx, explicit_repo, candidate_uris) # [stale?] Infers the target repository directory from an explicit repo name or a list of candidate URIs (such as `ctx://prompts/<repo>/...`, `vfs://<r...
+│   │   │       ├── def build_sys_landmarks_context(ctx, repo_hint, candidate_uris, extra_inputs, ...) # Single Source of Truth builder for the `sys.*` template variable dictionary.
+│   │   │       ├── def discover_constitution_files(ctx) # [stale?] Returns the standards files to auto-pin (Tier 0) across mounted repositories, from each repository's landmarks.
 │   │   │       ├── class TopologyLandmarksPayload(TypedDict) # Request schema for topology.landmarks: an optional repository name.
 │   │   │       ├── def api_topology_landmarks(ctx) # Resolves repository landmarks for one repository (the first mounted one when none is named).
 │   │   │       ├── class AuditUpkeepPayload(TypedDict) # Request schema for running a deterministic codebase upkeep audit.
-│   │   │       └── def api_topology_audit_upkeep(ctx) # Deterministically audits workspace documentation/symbol drift, God-object candidates, and test relevance.
+│   │   │       └── def api_topology_audit_upkeep(ctx) # [stale?] Deterministically audits workspace documentation/symbol drift, God-object candidates, and test relevance.
 │   │   └── utils_core.py           # [Workspace Physics & Universal Utils]
 │   │       ├── def hook_vfs_resolve_path(filename, workspace_id, **kwargs) # [comment required]
-│   │       ├── class InSetuURI(AkasaURI) # Host application URI class enforcing strict canonical scheme:// prefixes for all internal operations, with explicit boundary parsing for ext...
+│   │       ├── class InSetuURI(AkasaURI) # [stale?] Host application URI class enforcing strict canonical scheme:// prefixes for all internal operations, with explicit boundary parsing for ext...
 │   │       ├── class BucketAddress # Immutable value object representing a canonical structural bucket address.
 │   │       ├── def load_yaml_string(raw_yaml) # Centralized YAML string parser using the round-trip ruamel.yaml engine with safe fallback.
 │   │       ├── def dump_yaml_string(yaml_data) # Centralized YAML string serializer using the round-trip ruamel.yaml engine with safe fallback.
 │   │       ├── def parse_frontmatter(content) # [comment required]
 │   │       ├── def update_frontmatter(content, new_data) # [comment required]
-│   │       ├── def resolve_macro_includes(text, current_filepath, pattern, read_callback, ...) # Expands {{include_prompt: ...}} and optional {{include_prompt?: ...}} macros recursively (depth 5), with macro parameters.
-│   │       ├── def parse_blocks(text) # [comment required]
+│   │       ├── def resolve_macro_includes(text, current_filepath, pattern, read_callback, ...) # [stale?] Expands {{include_prompt: ...}} and optional {{include_prompt?: ...}} macros recursively (depth 5), with macro parameters.
+│   │       ├── def resolve_context_var_path(path_expr, context, ctx) # [stale?] Resolves a dotted variable reference ('sys.repo_title', 'global.mode', 'nodes.step.text', 'inputs.scope') against a routine or prompt contex...
+│   │       ├── def interpolate_mustache_chain(template_str, context, ctx) # [stale?] Single Source of Truth evaluator for `{{ var | sys.fallback | literal }}` placeholders across both standalone Prompt resolution (`prompts/re...
 │   │       ├── def clean_date_str(val) # Safely normalizes varied date inputs into a standard ISO format.
 │   │       ├── def get_earlier_date(d1, d2) # Safely compares and returns the earlier of two ISO timestamp strings.
 │   │       ├── def parse_list_field(raw_val) # Safely parses comma-separated strings or JSON arrays into a standardized JSON string.
 │   │       ├── def parse_string_enum(raw_val) # Safely parses and normalizes string enumerations (e.g., priority, sizes).
-│   │       ├── def start_filesystem_observer(**kwargs) # Initializes a unified Watchdog observer for all active workspaces.
+│   │       ├── def start_filesystem_observer(**kwargs) # [stale?] Initializes a unified Watchdog observer for all active workspaces.
 │   │       ├── def stop_filesystem_observer(**kwargs) # [comment required]
 │   │       ├── def generate_text_chunks(blocks, chunk_limit) # [comment required]
 │   │       ├── def evaluate_circuit_breaker(touched_count, total_count, threshold) # [comment required]
@@ -707,12 +750,23 @@ insetu/
 │   │       ├── def get_available_contexts(workspace_id, exclusion_flags, exclude_types, include_types) # [comment required]
 │   │       ├── def get_repo_path(repo_dir, workspace_id) # SSOT for resolving a repository's physical override or logical path.
 │   │       ├── def get_sister_repos(workspace_id) # [comment required]
-│   │       ├── def get_approved_commands(workspace_id) # Returns the approved command signatures for workspace_id from host.json (P5).
-│   │       ├── def approve_command(workspace_id, kind, repo, command) # Records a person's approval of one exact command of a kind ('test', 'preview') for a repository.
+│   │       ├── def get_repeater_secret(ext_name, workspace_id, repeater_id, item_id, ...) # [stale?] SSOT reader for encrypted repeater item secrets stored in .insetu/secrets.json.
+│   │       ├── def set_repeater_secret(ext_name, workspace_id, repeater_id, item_id, ...) # SSOT writer for encrypted repeater item secrets in .insetu/secrets.json.
+│   │       ├── def get_approved_commands(workspace_id) # [stale?] Returns the approved command signatures for workspace_id from host.json (P5).
+│   │       ├── def approve_command(workspace_id, kind, repo, command) # [stale?] Records a person's approval of one exact command of a kind ('test', 'preview') for a repository.
 │   │       ├── def is_command_approved(workspace_id, kind, repo, command) # True only when a person approved this exact command of this kind for this repository.
 │   │       ├── def get_approved_test_commands(workspace_id) # Returns the approved command signatures for workspace_id (kept for existing callers of the P5 store).
 │   │       ├── def approve_test_command(workspace_id, repo, command) # Records a person's approval of a custom test command (approve_command with kind 'test') and returns its signature.
 │   │       ├── def is_test_command_approved(workspace_id, repo, command, default_command) # True for the repository's default test command, or a custom command a person approved; never approves anything itself (P5).
+│   │       ├── def get_workspace_extension_reserved_names() # Names a workspace extension cannot take: every bundled extension and core module, plus config, sdk, languages.
+│   │       ├── def get_workspace_extensions_root() # The one folder workspace extensions load from: .insetu/extensions/ under the default workspace root.
+│   │       ├── def snapshot_workspace_extension(ext_dir, with_contents) # Hashes every file of one workspace extension.
+│   │       ├── def current_workspace_extension_fingerprint(ext_dir) # The extension's fingerprint now, rehashed only when a file's size or mtime changed (for per-request checks).
+│   │       ├── def get_workspace_extension_approvals() # Approved workspace extensions from host.json: {name: {"fingerprint", "files", "approved_at"}}.
+│   │       ├── def approve_workspace_extension(name, snapshot) # Records a person's approval of one extension's exact files.
+│   │       ├── def revoke_workspace_extension(name) # Removes a person's approval for one extension; it stops loading at the next restart.
+│   │       ├── def describe_workspace_extension(name, snapshot, approval, reserved) # Status of one workspace extension for the review screen: approved, changed, unapproved, or invalid.
+│   │       ├── def scan_workspace_extensions(reserved_names, with_contents) # Every folder in .insetu/extensions/ with its status; with_contents adds the "snapshot" for approved ones.
 │   │       ├── def is_secret_env_name(name) # True for environment variable names that look like credentials (API keys, tokens, passwords, SSH_AUTH_SOCK).
 │   │       ├── def get_child_env_passthrough(workspace_id, repo) # The credential-like variable names a person allowed through to this repository's processes.
 │   │       ├── def child_env(purpose, workspace_id, repo, extra) # Builds the environment for a child process.
@@ -829,11 +883,12 @@ insetu/
 │   │   │   │   ├── class FreshdeskFetchPayload(TypedDict) # [comment required]
 │   │   │   │   └── def get_freshdesk_tickets(ctx) # Secure proxy endpoint using the asynchronous jobs ledger to prevent event loop starvation.
 │   │   │   └── ext_freshdesk.js    # Ticket viewing and response UI.
-│   │   │       └── class InSetuExtFreshdesk # 2.
+│   │   │       └── class InSetuExtFreshdesk # [stale?] 2.
 │   │   ├── git/                    # Version control, branch management, and workspace sweeping.
 │   │   │   ├── engine_git.py       # [Git Operations & Diff Generator]
 │   │   │   │   ├── def get_headless_git_env() # Returns the 'tool' child environment with non-interactive SSH settings for git (S3).
 │   │   │   │   ├── def execute_git(**kwargs) # Universal Git command wrapper supporting both logical volumes and physical paths.
+│   │   │   │   ├── def diffable_changes(changed_files, config, live_cfg) # Keeps the (repo-relative path, status, git path) entries the topology sieve tracks.
 │   │   │   │   ├── def generate_diff_context(workspace_id, target_repos, manifest_ref, touched_buckets) # [comment required]
 │   │   │   │   ├── def pre_warm_git_sweep(ctx, workspace_id, **kwargs) # Pre-warms the Git sweepable state silently in the background after the topology settles.
 │   │   │   │   ├── class GitSweepStatusPayload(TypedDict) # [comment required]
@@ -906,9 +961,9 @@ insetu/
 │   │   │   │   ├── def api_notes_new(ctx) # Generates a new note file with managed YAML frontmatter.
 │   │   │   │   └── def declare_notes_topology(ctx, target_repos, ledger_events, workspace_id, **kwargs) # Declares the notes library to the Gather engine for centralized chunking and context compilation.
 │   │   │   └── ext_notes.js        # Note-taking editor and browser.
-│   │   │       ├── class InSetuExtNotesModals # 2.
-│   │   │       ├── class InSetuExtNotesEditor # 3.
-│   │   │       └── class InSetuExtNotes # 4.
+│   │   │       ├── class InSetuExtNotesModals # [stale?] 2.
+│   │   │       ├── class InSetuExtNotesEditor # [stale?] 3.
+│   │   │       └── class InSetuExtNotes # [stale?] 4.
 │   │   ├── preview/                # Managed dev server supervisor and live web application previewer.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── engine_preview.py   # Multi-profile dev server process supervisor, port allocator, and log ring buffer. Loopback by default; LAN leases and custom-command approval (S2).
@@ -950,7 +1005,7 @@ insetu/
 │   │   │   │   ├── class GooglePlaywrightProvider(SearchProvider) # [comment required]
 │   │   │   │   ├── class SerperDevProvider(SearchProvider) # [comment required]
 │   │   │   │   ├── def get_provider(provider_name) # [comment required]
-│   │   │   │   ├── def gather_next_page(ctx, research_job_id, job_id) # Metronome callback to fetch a single SERP page, preventing rate limits.
+│   │   │   │   ├── def gather_next_page(ctx, research_job_id, job_id) # [stale?] Metronome callback to fetch a single SERP page, preventing rate limits.
 │   │   │   │   ├── def scrape_next_link(ctx, research_job_id, job_id) # Scrapes one link of a research job through ingest (local parsing by default) inside the shared thread pool.
 │   │   │   │   ├── class ResearchStartPayload(TypedDict) # [comment required]
 │   │   │   │   ├── def start_job(ctx) # Starts an asynchronous research job; searches go through fetch_url and each result is queued for scraping (S4).
@@ -989,6 +1044,11 @@ insetu/
 │   │   │   │   └── def term_status(ctx) # Checks if the underlying system supports PTY streams and Websocket connections.
 │   │   │   ├── ext_term.js         # [Terminal Emulator UI]
 │   │   │   │   └── class InSetuExtTerm # [comment required]
+│   │   │   ├── vendor/             # Vendored third-party runtime assets.
+│   │   │   │   ├── LICENSE         # Open-source software license.
+│   │   │   │   ├── xterm-addon-fit.js # Vendored xterm-addon-fit runtime asset.
+│   │   │   │   ├── xterm.css       # Stylesheet for xterm.
+│   │   │   │   └── xterm.js        # Vendored xterm runtime asset.
 │   │   │   └── vendor.json         # Map of core third-party UI dependencies (Lit, CodeMirror).
 │   │   ├── tracker/                # Local offline Kanban board using Markdown-as-Code tickets.
 │   │   │   ├── README.md           # Primary project overview, architecture, and installation guide.
@@ -1027,6 +1087,7 @@ insetu/
 │   │   │   │   ├── class InSetuTrackerEditProjection # [comment required]
 │   │   │   │   └── class InSetuExtTrackerSettings # [stale?] OS Registration Hook
 │   │   │   └── prompts/            # Management of global prompt templates and macro inclusions.
+│   │   │       ├── close_session_tickets.md # Protocol for closing completed tracker tickets and generating retrospective changelog epics at session closeout.
 │   │   │       └── ticket_authoring_guide.md # Prompt template guiding LLMs on authoring Markdown-as-Code Kanban tickets.
 │   │   └── update/                 # Automated Python semantic versioning and PyPI distribution.
 │   │       ├── __init__.py         # Module initialization.
@@ -1056,7 +1117,7 @@ insetu/
 │   ├── fallback_bridge.py          # Immutable Recovery OS and Lifeboat UI, behind the same token gate and Host check as the app.
 │   │   ├── def current_token()     # The token this lifeboat accepts: the app's durable session token, or a lifeboat-only one as a last resort.
 │   │   ├── def expand_macros(text) # [stale?] Expands intentional Yomama semantic multiplier macros ({{ c * N }}, ccc).
-│   │   ├── def parse_blocks(text)  # [comment required]
+│   │   ├── def parse_blocks(text)  # Compiler-grade two-phase Lexer + Lookahead Parser for Yomama Bridge payloads: - Heals web-chat chevron meltdown (`> > > REPLACE`, `< < < SEA...
 │   │   ├── def apply_block_in_memory(content, block) # [comment required]
 │   │   ├── def index_redirect()    # [comment required]
 │   │   ├── def recovery_auth_bootstrap() # Allows reboot polling loops (from both main OS and recovery UI) to detect when the server is in recovery mode.
@@ -1082,16 +1143,26 @@ insetu/
 ├── pyproject.toml                  # Python package definition and semantic-release configurations.
 ├── scripts/                        # Build, vendorization, and utility shell scripts.
 │   ├── .gitkeep                    # Git folder retention.
-│   ├── vendor_codemirror.sh        # Bundles CodeMirror 6 core and language modules locally via esbuild.
+│   ├── codemirror/                 # Build and dependency specification for insetu-codemirror-bundle.
+│   │   ├── build.mjs               # Code-splitting esbuild bundler producing codemirror-core, lang/*, legacy/*, lezer/*, licenses, and languages.json.
+│   │   │   ├── function stageEntry(outRelNoExt, code) # [comment required]
+│   │   │   └── function readInstalledVersion(pkgName) # 8.
+│   │   ├── languages.src.json      # Source manifest for built-in, Layer 1 Lezer, and Layer 2 stream editor languages.
+│   │   ├── package-lock.json       # Pinned npm dependency lockfile for reproducible builds.
+│   │   └── package.json            # Pinned npm package manifest for insetu-codemirror-bundle.
+│   ├── vendor_codemirror.sh        # Runs npm ci, executes scripts/codemirror/build.mjs, and syncs codemirror.lock.json.
 │   ├── vendor_jsyaml.sh            # Local esbuild vendorization script for js-yaml library.
 │   ├── vendor_lit.sh               # Local esbuild vendorization script for Lit library.
-│   ├── vendor_lock.py              # Vendors sutram/yenVUI with stale-file pruning and records the build in sutram.lock.json.
-│   │   ├── def tree_digest(vendor_root) # Returns (sha256, file_count) over every file under the BUILD_MAP destinations, keyed by relative path.
+│   ├── vendor_lock.py              # Vendors sutram/yenVUI and locks both sutram.lock.json and codemirror.lock.json.
+│   │   ├── def tree_digest(vendor_root) # [stale?] Returns (sha256, file_count) over every file under the BUILD_MAP destinations, keyed by relative path.
 │   │   ├── def read_sutram_version(sutram_root) # Reads [project].version from sutram's pyproject.toml without tomllib (Python 3.10 has none).
 │   │   ├── def read_git_state(sutram_root) # Returns (HEAD commit, dirty) for the vendored paths, or (None, False) when sutram_root is not a git checkout.
 │   │   ├── def sync(sutram_root, vendor_root, source) # Vendors sutram into vendor_root, deletes files sutram no longer has, and writes the lock.
-│   │   ├── def check(vendor_root, strict) # Returns a list of problems with the vendored files against the lock (empty when they match).
-│   │   └── def main(argv)          # [stale?] CLI entry point: 'sync <sutram_root> <vendor_root> [source]' or 'check <vendor_root>'.
+│   │   ├── def check(vendor_root, strict) # [stale?] Returns a list of problems with the vendored files against the lock (empty when they match).
+│   │   ├── def codemirror_tree_digest(codemirror_dir) # [stale?] Returns (sha256, file_count) over every file in static/vendor/codemirror except codemirror.lock.json.
+│   │   ├── def sync_codemirror(package_lock_path, codemirror_dir) # Records the hash of scripts/codemirror/package-lock.json and the tree digest of static/vendor/codemirror/.
+│   │   ├── def check_codemirror(codemirror_dir, package_lock_path) # [stale?] Verifies static/vendor/codemirror/ against codemirror.lock.json and scripts/codemirror/package-lock.json.
+│   │   └── def main(argv)          # CLI entry point for syncing and checking sutram and codemirror vendor locks.
 │   ├── vendor_lucide.sh            # Generates the local Lucide SVG icon sprite dictionary.
 │   ├── vendor_sutram.sh            # Resolves a sutram checkout (sibling or fresh clone) and runs vendor_lock.py sync.
 │   ├── vendor_zustand.sh           # Local esbuild vendorization script for Zustand modules.
@@ -1120,37 +1191,51 @@ insetu/
     ├── run_unit_tests.py           # Master CLI runner for behavioral unit and integration test suite.
     └── unit/                       # Dynamic behavioral unit and integration test suite.
         ├── __init__.py             # Module initialization.
+        ├── js_loader.mjs           # Zero-dependency Node.js ESM loader and minimal browser environment shim for inSetu unit tests.
+        │   ├── class MemoryStorage # 1.
+        │   ├── function resolve(specifier, context, nextResolve) # [comment required]
+        │   └── function load(url, context, nextLoad) # [comment required]
         ├── route_auth_probe.py     # Probe helper for test_route_auth_inventory.py: boots inSetu (or the lifeboat) in a throwaway workspace and reports which routes answer without a valid token.
         │   └── def main(mode, out_path) # [comment required]
         ├── test_agent_orchestrator_and_mcp.py # Unit tests for LLM semantic tier routing, declarative YAML routines, /undo rollback, and MCP JSON-RPC.
         │   └── class TestAgentOrchestratorAndMcp(unittest.TestCase) # [comment required]
         ├── test_bridge_anchor_invariants.py # Regression and fitness tests for patch anchor matching, blank-line fidelity, no-op detection, chunk blame isolation, and the single patch engine.
-        │   └── class TestBridgeAnchorInvariants(unittest.TestCase) # Regression and fitness tests for patch anchor matching, no-op detection, chunk blame isolation, and the single patch engine.
+        │   └── class TestBridgeAnchorInvariants(unittest.TestCase) # [stale?] Regression and fitness tests for patch anchor matching, no-op detection, chunk blame isolation, and the single patch engine.
         ├── test_canonical_uris.py  # Unit tests for canonical URI enforcement, InSetuURI normalization, and legacy ledger migrations.
         │   └── class TestCanonicalURIs(unittest.TestCase) # [comment required]
         ├── test_cartographer_and_bridge_ast.py # Unit tests for Cartographer AST symbol extraction, 3-tier waterfall indexing, and Yomama RELOCATE/RENAME.
         │   └── class TestCartographerAndBridgeAst(unittest.TestCase) # [comment required]
         ├── test_cartographer_file_descriptions.py # Tests that the Cartographer derives file descriptions from docstrings instead of leaving placeholders.
-        │   ├── class TestDescribeSourceFile(unittest.TestCase) # describe_source_file reads module docstrings and leading file comments, never symbol docs.
-        │   └── class TestMapRepositoriesFileFallback(unittest.TestCase) # map_repositories describes a new file from its docstring when the index has no line for it.
+        │   ├── class TestDescribeSourceFile(unittest.TestCase) # describe_source_file derives a description from the file itself (docstrings, leading comments, frontmatter, metadata), never symbol docs.
+        │   └── class TestMapRepositoriesFileFallback(unittest.TestCase) # [stale?] map_repositories describes a new file from its docstring when the index has no line for it.
         ├── test_child_env.py       # S3 tests: purposes, credential stripping for repository code, per-repository passthrough, a real env run showing no token or key, preview's...
         │   ├── class TestChildEnvPurposes(_EnvCase) # Who chose the command decides what it inherits.
         │   ├── class TestRepositoryProcesses(_EnvCase) # Preview servers and test runners use repo_code, and a real child sees neither the token nor a key.
         │   └── class TestChildEnvAndFetchRules(unittest.TestCase) # CHILD_ENV_MANDATE, OUTBOUND_FETCH_MANDATE and REMOTE_CODE_URL_BAN flag the raw patterns outside their homes.
+        ├── test_codemirror_bundle.py # Genesis unit test suite verifying the CodeMirror bundle manifest, absence of stale files or CDN specifiers, and Node.js parser execution acr...
+        │   └── class TestCodeMirrorBundle(unittest.TestCase) # [stale?] Every file in static/vendor/codemirror/ is accounted for, free of CDN shims, and parses samples in Node.
         ├── test_config_cascade.py  # Unit tests for the 3-tier configuration cascade, secret encryption, and lazy migration.
         │   └── class TestConfigurationCascade(unittest.TestCase) # [comment required]
+        ├── test_context_part_packing.py # Tests that a context block too large for one part is split across consecutive parts nothing else interrupts, within the byte limit.
+        │   └── class TestContextPartPacking(unittest.TestCase) # Split blocks read back whole from consecutive parts, within the byte limit.
+        ├── test_dag_fault_quarantine.py # Behavioral unit tests verifying Two-Tier DAG-Aware Fault Quarantine across Tier 2 Core modules and Tier 3 extensions.
+        │   └── class TestDagFaultQuarantine(unittest.TestCase) # [stale?] Verifies that a fault in a non-foundational Core module or Tier 3 extension quarantines only its DAG dependents.
         ├── test_dev_exec_exposure.py # Tests that MCP neither lists nor calls dev.exec and that routines cannot use it.
         │   └── class TestDevExecExposure(unittest.TestCase) # MCP neither lists nor calls dev.exec, and routines cannot use it.
-        ├── test_editor_vendorize.py # S4 tests: bundled and local language packs resolve, unknown packs are not downloaded, and invalid names are refused.
-        │   └── class TestEditorVendorize(unittest.TestCase) # Bundled and local packs resolve; unknown packs are not downloaded; invalid names are refused.
+        ├── test_editor_vendorize.py # S4 tests: bundled and local language descriptors resolve, local entries cannot shadow bundled ids, unknown packs are not downloaded, and invalid names are refused.
+        │   └── class TestEditorVendorize(unittest.TestCase) # [stale?] Bundled and local descriptors resolve; local entries cannot shadow bundled ids; unknown packs are not downloaded; invalid names are refused.
         ├── test_ext_preview_unit.py # Unittest suite for passive framework detection and preview server lifecycle.
         │   └── class TestExtPreviewUnit(unittest.TestCase) # [comment required]
         ├── test_fallback_bridge.py # Unit tests for the Lifeboat recovery bridge block parser, genesis patches, and recovery endpoints.
         │   └── class TestFallbackBridge(unittest.TestCase) # [comment required]
         ├── test_forwarded_header_rule.py # Tests the FORWARDED_HEADER_MEMBRANE fitness rule that keeps forwarding-header reads in akasa.
         │   └── class TestForwardedHeaderMembraneRule(unittest.TestCase) # S1: inSetu never reads client-identity forwarding headers; akasa's classify_peer() is the single source of truth.
+        ├── test_git_diff_sieve.py  # New: the anchored vendor pattern, name rules at any depth, extensions, exceptions and force-includes apply to diffs as they do to topology.
+        │   └── class TestDiffsFollowTheSieve(unittest.TestCase) # [stale?] Anchored ignore patterns, exceptions, force-includes and extensions apply to diffs exactly as to topology.
         ├── test_import_order.py    # Ensures every core entry point imports first in a fresh interpreter (sdk/utils_core cycle).
         │   └── class TestImportOrder(unittest.TestCase) # Every core entry point must import cleanly as the FIRST insetu import of a fresh interpreter (sdk <-> utils_core cycle).
+        ├── test_js_behavioral_units.py # Behavioral unit tests executing real frontend ES modules (insetu_sdk.js, ui_file_tree.js, fs.js, bridge.js) in Node via js_loader.mjs withou...
+        │   └── class TestJsBehavioralUnits(unittest.TestCase) # [stale?] Executes real inSetu frontend ES modules in Node.js to verify URI, file tree, manifest, and Bridge state machines.
         ├── test_lifeboat_auth.py   # S8: the lifeboat shares the app's durable token, checks Host, and keeps reads and writes inside the workspace.
         │   ├── class TestLifeboatCredentials(_LifeboatCase) # The lifeboat accepts the app's durable session token, so a signed-in phone keeps working after a crash.
         │   ├── class TestLifeboatHostCheck(_LifeboatCase) # DNS-rebinding guard: loopback, *.ts.net and configured hosts only.
@@ -1177,8 +1262,10 @@ insetu/
         │   ├── class TestTailscaleIdentityProvider(unittest.TestCase) # S1: Route B authenticates Tailscale devices only after whois verification of the trusted client IP.
         │   ├── class TestRemoteBootstrapIntegration(unittest.TestCase) # S1 end to end: akasa's /auth/bootstrap plus the insetu Tailscale provider and Host gate.
         │   └── class TestRemoteSettingsLifecycle(unittest.TestCase) # Settings migration from the retired 'tailscale' extension, configured hosts, and the preview helper.
+        ├── test_repeater_secret_scopes.py # Tests that repeater secrets are read only from their own scope, so one workspace never reads another's, and that the scope must be stated.
+        │   └── class TestRepeaterSecretScopes(unittest.TestCase) # A secret is read only from where its scope writes it, so one workspace never sees another's.
         ├── test_repo_landmarks.py  # Genesis unit test suite verifying Sprint 1 (landmarks discovery on insetu/akasa layouts, overrides, local precedence, path confinement, unde...
-        │   └── class TestRepoLandmarks(unittest.TestCase) # Landmarks resolve from discovery and repo settings within the repository, and optional includes follow extension state.
+        │   └── class TestRepoLandmarks(unittest.TestCase) # [stale?] Landmarks resolve from discovery and repo settings within the repository, and optional includes follow extension state.
         ├── test_route_auth_inventory.py # V4: every HTTP route needs the token unless it is on a reviewed public list, in the app and in the lifeboat.
         │   ├── class TestAppRouteAuthInventory(_InventoryCase) # The main app: one token gate in front of every route, with a short reviewed public list.
         │   └── class TestLifeboatRouteAuthInventory(_InventoryCase) # The lifeboat: the same rules, because it listens on the port Tailscale exposes.
@@ -1197,10 +1284,12 @@ insetu/
         ├── test_topology_manifest_freshness.py # Tests that incremental topology events honor .gitignore and that manifest caches never keep pre-commit state.
         │   ├── class TestIncrementalEventsHonorGitignore(_WorkspaceCase) # [stale?] Watcher events for git-ignored files stay out of the ledger, as they do in a full scan.
         │   └── class TestManifestCachesSeeCommittedState(_WorkspaceCase) # A read that lands between a writer's invalidation and its commit must not pin stale data in the 2 s cache.
-        ├── test_vendor_lock.py     # Tests sutram.lock.json provenance, stale-file pruning, drift detection, and the committed vendor tree.
-        │   └── class TestVendorLock(unittest.TestCase) # sutram.lock.json records the vendored sutram build and catches drift between the lock and the committed files.
+        ├── test_vendor_lock.py     # Tests sutram.lock.json and codemirror.lock.json provenance, stale-file pruning, drift detection, and the committed vendor trees.
+        │   └── class TestVendorLock(unittest.TestCase) # [stale?] sutram.lock.json and codemirror.lock.json record vendored builds and catch drift between the locks and the committed files.
         ├── test_vfs_three_way_merge.py # Unit tests for 3-way OCC text merging, ancestor ring buffers, and conflict fallback files.
         │   └── class TestVfsThreeWayMerge(unittest.TestCase) # [comment required]
+        ├── test_workspace_extension_approval.py # Tests that .insetu/extensions/ code loads and is served only while its files match a person's approval, and that only a person can approve.
+        │   └── class TestWorkspaceExtensionApproval(unittest.TestCase) # Only approved, unchanged workspace extensions are imported or served; only a person approves.
         ├── test_workspace_mounts.py # Unit tests for InterWorkspaceVFSDriver, ws:// read-only write barriers, and cross-workspace event broadcasting.
         │   └── class TestWorkspaceMounts(unittest.TestCase) # [comment required]
         └── test_workspace_swap_fsm.py # Behavioral unit tests for the synchronous workspace swap FSM and Bound-Scope StoreRegistry hydration.
