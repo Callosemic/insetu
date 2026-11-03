@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.32.1 (2026-11-03)
+
+### Bug Fixes
+
+- Sutram vendoring
+  ([`fcc5b3e`](https://github.com/Callosemic/insetu/commit/fcc5b3e3d80829831e073b8a416a8be3f226a067))
+
+
 ## v0.32.0 (2026-11-03)
 
 ### Build System
