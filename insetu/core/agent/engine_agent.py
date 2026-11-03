@@ -10,7 +10,6 @@ from typing import TypedDict, List, Dict, Any, Optional, Union, Literal, Tuple
 from insetu.core.sdk import InSetuExtension, slugify
 from insetu.core.utils_core import (
     InSetuURI,
-    parse_blocks,
     generate_ascii_tree,
     get_available_contexts,
 )
@@ -119,7 +118,7 @@ agent_bp = InSetuExtension(
         },
     },
 )
-__depends__ = ['llm', 'gather', 'bridge']
+__depends__ = ['topology', 'llm', 'gather', 'bridge']
 
 
 @agent_bp.on('mutate_workspace_config')
@@ -504,7 +503,7 @@ def api_delete_routine(ctx):
     scope = str(data.get("scope") or "workspace").strip().lower()
 
     candidates = []
-    if fp and (fp.startswith("ctx://routines/") and ("/.templates/" not in fp or "/.templates/user/" in fp)):
+    if fp and fp.startswith("ctx://routines/") and not InSetuURI(fp).is_readonly_template:
         candidates.append(fp)
     if rid:
         if scope in ("user", "global", "user_template"):
@@ -548,8 +547,8 @@ def api_ensure_plan_file(ctx):
     safe_title = title.replace('"', "'")
     date_str = datetime.now().strftime("%Y-%m-%d")
     slug = slugify(title)[:40] or "plan"
-    folder = f"vfs://{repo}/.insetu-data/notes" if (repo != "global" and repo in repos and "notes" in ctx.get_active_modules()) else "ctx://notes"
-    plan_uri = f"{folder}/{date_str}-{slug}.md"
+    folder = f"vfs://{repo}/docs/plans" if (repo != "global" and repo in repos) else "ctx://contexts"
+    plan_uri = f"{folder.rstrip('/')}/{date_str}-{slug}.md"
     existing = ctx.vfs.read(plan_uri)
     if existing is None:
         now_iso = datetime.now().isoformat(timespec="seconds")
@@ -686,8 +685,7 @@ def cancel_agent_turn(ctx):
         _CANCELLED_SESSIONS.add((ctx.workspace_id, session_id))
     row = ctx.db.get_by_id("chat_sessions", session_id, id_col="session_id")
     if row and row.get("active_job_id"):
-        from insetu.core.sdk import get_connection as _get_conn
-        w_conn = _get_conn("workers", workspace_id=ctx.workspace_id)
+        w_conn = ctx.get_db("workers")
         w_conn.execute(
             "UPDATE immediate_jobs SET status='failed', status_message='Cancelled by user.' WHERE id=?",
             (row["active_job_id"],),

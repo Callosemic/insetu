@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 import { AppStore } from '/static/extensions/system/store.js';
 // --- VFS BRIDGE STATE STORE (UDF LAYER) ---
@@ -136,6 +136,7 @@ export const BridgeStore = createExtensionStore('Bridge', {
             if (
                 trimmed === '<<<<<<< COMMENT' ||
                 trimmed === '<<<<<<< SEARCH' ||
+                trimmed === '<<<<<<< SEARCH REGEX' ||
                 trimmed === '<<<<<<< TEXTEDIT' ||
                 trimmed === '<<<<<<< JSON_PATCH' ||
                 trimmed === '<<<<<<< RELOCATE' ||
@@ -211,14 +212,121 @@ export const BridgeStore = createExtensionStore('Bridge', {
         }
         flushFileFallback();
         if (newCells.length > 0) {
-            BridgeStore.setState(state => ({
-                cells: [...state.cells, ...newCells],
-                viewMode: 'input',
-                activeSurface: 'bridge',
-                drawerOpen: false
-            }));
+            BridgeStore.setState(state => {
+                const existingCells = state.cells || [];
+                const telPatches = state.telemetry?.patches || [];
+                const failedCellIds = new Set(
+                    telPatches
+                        .filter(p => p.cell_id && p.status !== 'resolved' && p.status !== 'auto_skipped')
+                        .map(p => p.cell_id)
+                );
+                const incomingFiles = new Set(newCells.map(c => c.file));
+
+                // Smart Replace-on-Paste: If pasting repaired blocks for a file that currently has
+                // failed or inactive cells (or while in console triage view), replace those broken cells in-place!
+                const hasFailedInIncomingFiles = existingCells.some(
+                    c => incomingFiles.has(c.file) && (!c.active || failedCellIds.has(c.id))
+                );
+                let mergedCells;
+                if (hasFailedInIncomingFiles) {
+                    const surviving = existingCells.filter(
+                        c => !(incomingFiles.has(c.file) && (!c.active || failedCellIds.has(c.id)))
+                    );
+                    mergedCells = [...surviving, ...newCells];
+                } else {
+                    mergedCells = [...existingCells, ...newCells];
+                }
+                return {
+                    cells: mergedCells,
+                    viewMode: 'input',
+                    activeSurface: 'bridge',
+                    drawerOpen: false
+                };
+            });
             BridgeStore.getState().setActiveSurface('bridge');
         }
+    },
+    recomputeOptimisticTelemetry: () => {
+        const state = BridgeStore.getState();
+        const tel = state.telemetry;
+        if (!tel || !Array.isArray(tel.patches)) return false;
+        const activeCellIds = new Set((state.cells || []).filter(c => c.active).map(c => c.id));
+        const nextPatches = tel.patches.filter(p => !p.cell_id || activeCellIds.has(p.cell_id));
+        let resolved = 0;
+        let autoSkipped = 0;
+        let actionRequired = 0;
+        let failed = 0;
+        nextPatches.forEach(p => {
+            if (p.status === 'resolved') resolved++;
+            else if (p.status === 'auto_skipped') autoSkipped++;
+            else if (p.status === 'needs_confirmation' || p.status === 'offer_deep_search' || p.status === 'syntax_error') actionRequired++;
+            else failed++;
+        });
+        const totalPatches = nextPatches.length;
+        const canCommit = totalPatches > 0 && actionRequired === 0 && failed === 0 && (resolved > 0 || autoSkipped > 0);
+        BridgeStore.setState({
+            viewMode: totalPatches === 0 ? 'input' : state.viewMode,
+            telemetry: {
+                ...tel,
+                can_commit: canCommit,
+                status: canCommit ? 'dry_run_evaluated' : (actionRequired > 0 ? 'action_required' : 'failed'),
+                summary: {
+                    total_patches: totalPatches,
+                    resolved,
+                    auto_skipped: autoSkipped,
+                    action_required: actionRequired,
+                    failed
+                },
+                patches: nextPatches
+            }
+        });
+        return canCommit;
+    },
+    skipCellOptimistic: (cellId) => {
+        if (!cellId) return;
+        BridgeStore.setState(state => ({
+            cells: (state.cells || []).map(c => c.id === cellId ? { ...c, active: false } : c)
+        }));
+        BridgeStore.getState().recomputeOptimisticTelemetry();
+    },
+    skipAllFailedCellsOptimistic: () => {
+        const state = BridgeStore.getState();
+        const telPatches = state.telemetry?.patches || [];
+        const failedIds = new Set(
+            telPatches
+                .filter(p => p.cell_id && p.status !== 'resolved' && p.status !== 'auto_skipped')
+                .map(p => p.cell_id)
+        );
+        if (failedIds.size === 0) return;
+        BridgeStore.setState(s => ({
+            cells: (s.cells || []).map(c => failedIds.has(c.id) ? { ...c, active: false } : c)
+        }));
+        BridgeStore.getState().recomputeOptimisticTelemetry();
+    },
+    snapAllDeterministicAnchors: () => {
+        const state = BridgeStore.getState();
+        const telPatches = state.telemetry?.patches || [];
+        const anchorMap = new Map();
+        telPatches.forEach(p => {
+            if (p.cell_id && p.actual_anchor && p.available_actions?.includes('heal_anchor')) {
+                try {
+                    const decoded = new TextDecoder().decode(Uint8Array.from(atob(p.actual_anchor), c => c.charCodeAt(0)));
+                    anchorMap.set(p.cell_id, decoded);
+                } catch (_) {}
+            }
+        });
+        if (anchorMap.size === 0) return 0;
+        const blockRegex = /^(<<<<<<< SEARCH)[ \t]*\r?\n([\s\S]*?)^(=======)/m;
+        BridgeStore.setState(s => ({
+            cells: (s.cells || []).map(c => {
+                if (!anchorMap.has(c.id)) return c;
+                return {
+                    ...c,
+                    content: c.content.replace(blockRegex, `$1\n${anchorMap.get(c.id)}\n$3`)
+                };
+            })
+        }));
+        return anchorMap.size;
     },
     updateCellFile: (id, file) => {
         BridgeStore.setState(state => ({ cells: state.cells.map(c => c.id === id ? { ...c, file } : c) }));
@@ -331,6 +439,7 @@ export const BridgeStore = createExtensionStore('Bridge', {
 });
 window.inSetu.stores.Bridge = BridgeStore;
 export class InSetuExtBridge extends InSetuElement {
+    static get extensionName() { return 'bridge'; }
     static properties = {
         cells: { type: Array },
         activeSurface: { type: String },
@@ -343,157 +452,7 @@ export class InSetuExtBridge extends InSetuElement {
         _fileVerificationCache: { type: Object },
         _autoSwaps: { type: Object }
     };
-    static styles = [
-        sharedStyles,
-        css`
-            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; container-type: inline-size; background: var(--bg); }
-            .yomama-shell {
-                display: flex;
-                flex: 1;
-                min-height: 0;
-                width: 100%;
-                position: relative;
-                overflow: hidden;
-            }
-            .yomama-drawer {
-                width: 240px;
-                border-right: 1px solid var(--border);
-                background: var(--input-bg);
-                display: flex;
-                flex-direction: column;
-                padding: 10px;
-                gap: 6px;
-                flex-shrink: 0;
-                box-sizing: border-box;
-                overflow-y: auto;
-                z-index: 40;
-                transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-            }
-            .yomama-drawer.collapsed-desktop {
-                display: none;
-            }
-            .yomama-drawer-backdrop {
-                display: none;
-            }
-            @container (max-width: 45rem) {
-                .yomama-drawer,
-                .yomama-drawer.collapsed-desktop {
-                    display: flex;
-                    position: absolute;
-                    top: 0;
-                    bottom: 0;
-                    left: 0;
-                    width: 260px;
-                    max-width: 82%;
-                    background: color-mix(in srgb, var(--pane-bg) 96%, transparent);
-                    backdrop-filter: blur(10px);
-                    -webkit-backdrop-filter: blur(10px);
-                    box-shadow: var(--overlay-shadow, 0 12px 32px rgba(0,0,0,0.45));
-                    transform: translateX(-105%);
-                }
-                .yomama-drawer.open-mobile {
-                    transform: translateX(0);
-                }
-                .yomama-drawer-backdrop.open-mobile {
-                    display: block;
-                    position: absolute;
-                    inset: 0;
-                    background: rgba(0, 0, 0, 0.45);
-                    z-index: 35;
-                }
-            }
-            .yomama-stage {
-                flex: 1;
-                display: flex;
-                flex-direction: column;
-                min-height: 0;
-                min-width: 0;
-                overflow: hidden;
-                background: var(--bg);
-            }
-            .drawer-nav-item {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                padding: 8px 12px;
-                border-radius: 6px;
-                cursor: pointer;
-                font-size: 0.85rem;
-                font-weight: 700;
-                color: var(--text-muted);
-                border: 1px solid transparent;
-                border-left: 3px solid transparent;
-                user-select: none;
-                transition: all 0.15s ease;
-            }
-            .drawer-nav-item:hover {
-                background: color-mix(in srgb, var(--item-accent, var(--intent-highlight)) 8%, var(--bg-hover));
-                color: var(--text);
-            }
-            .drawer-nav-item.active {
-                background: color-mix(in srgb, var(--item-accent, var(--intent-highlight)) 16%, var(--bg));
-                color: var(--text);
-                border-color: color-mix(in srgb, var(--item-accent, var(--intent-highlight)) 40%, var(--border));
-                border-left: 3px solid var(--item-accent, var(--intent-highlight));
-            }
-            .drawer-badge {
-                background: var(--item-accent, var(--intent-highlight));
-                color: #ffffff;
-                font-size: 0.7rem;
-                font-family: var(--font-mono);
-                padding: 1px 6px;
-                border-radius: 10px;
-            }
-            .bridge-group-container {
-                padding: 15px 20px;
-                display: flex;
-                flex-direction: column;
-                border-bottom: 1px solid var(--border);
-            }
-            .console-header-text { padding: 0 var(--mobile-edge-padding); padding-top: var(--mobile-edge-padding); }
-            @container (max-width: 480px) {
-                .bridge-group-container { padding: 0; }
-            }
-            .bridge-footer {
-                padding: 12px 16px;
-                gap: 10px;
-                border-top: 2px solid color-mix(in srgb, var(--intent-highlight) 55%, var(--border));
-                background: color-mix(in srgb, var(--intent-highlight) 6%, var(--input-bg));
-                display: flex;
-                flex-direction: column;
-                align-items: stretch;
-                flex-shrink: 0;
-                width: 100%;
-                box-sizing: border-box;
-            }
-            .bridge-footer-heal-row {
-                display: flex;
-                align-items: stretch;
-                width: 100%;
-            }
-            .bridge-footer-main-row {
-                display: flex;
-                align-items: stretch;
-                gap: 10px;
-                width: 100%;
-            }
-            @container (min-width: 720px) {
-                .bridge-footer {
-                    flex-direction: row;
-                    align-items: stretch;
-                }
-                .bridge-footer-heal-row {
-                    width: auto;
-                    flex-shrink: 0;
-                }
-                .bridge-footer-main-row {
-                    flex: 1;
-                    min-width: 0;
-                }
-            }
-            .btn-sm { margin: 0; padding: 8px 14px; font-size: 14px; }
-        `
-    ];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.cells = [];
@@ -506,16 +465,6 @@ export class InSetuExtBridge extends InSetuElement {
         this._fileVerificationCache = {};
         this._autoSwaps = {};
         this._rejectedAutoSwaps = new Set();
-        this._surfaceNodes = new Map();
-        this._drawerNodes = new Map();
-    }
-
-    _getOrMountNode(cacheMap, tag) {
-        if (!tag) return '';
-        if (!cacheMap.has(tag)) {
-            cacheMap.set(tag, document.createElement(tag));
-        }
-        return cacheMap.get(tag);
     }
 
     _getRegisteredSurfaces() {
@@ -544,7 +493,6 @@ export class InSetuExtBridge extends InSetuElement {
         const mFiles = this.vfs.getGlobalManifest().filter(f => !f.endsWith('.gitkeep'));
         const files = Array.from(new Set(cells.map(c => c.file)));
 
-        let swapped = false;
         files.forEach(file => {
             const fileCells = cells.filter(c => c.file === file);
             const isAllGenesis = fileCells.length > 0 && fileCells.every(c => /<<<<<<< SEARCH\s*=======/.test(c.content));
@@ -562,8 +510,6 @@ export class InSetuExtBridge extends InSetuElement {
                 if (cands.length === 1) {
                     const newPath = cands[0];
                     this._autoSwaps = { ...this._autoSwaps, [newPath]: file };
-                    swapped = true;
-                    // Run statelessly on the next tick to avoid render loop collisions
                     setTimeout(() => {
                         BridgeStore.getState().updateGroupFile(file, newPath);
                         window.inSetu.stores.Fs.getState().verifyFiles([newPath], true);
@@ -571,11 +517,9 @@ export class InSetuExtBridge extends InSetuElement {
                 }
             }
         });
-        if (swapped) this.requestUpdate();
     }
     onWorkspaceLoad(workspaceId) {
         BridgeStore.getState().clearPayload();
-        window.inSetu.stores.Fs?.setState({ fileVerificationCache: {} });
         BridgeStore.getState().fetchHistory();
         this.requestUpdate();
     }
@@ -621,6 +565,23 @@ export class InSetuExtBridge extends InSetuElement {
         });
         this.registerGlobalListener('insetu:yomama:toggle-drawer', window, () => {
             BridgeStore.getState().toggleDrawer();
+        });
+        this.registerGlobalListener('paste', window, (e) => {
+            if (this.activeSurface !== 'bridge' || !this.offsetParent) return;
+            const path = this.getEventPath(e);
+            if (path.some(el => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))) return;
+            const text = e.clipboardData?.getData('text') || '';
+            if (text && (
+                text.includes('<<<<<<< FILE:') ||
+                text.includes('<<<<<<< RELOCATE') ||
+                text.includes('<<<<<<< RENAME') ||
+                text.includes('<<<<<<< MOVE_FILE') ||
+                text.includes('<<<<<<< ARCHIVE_FILE') ||
+                text.includes('<<<<<<< DELETE_FILE')
+            )) {
+                e.preventDefault();
+                BridgeStore.getState().parseAndAppendCells(text);
+            }
         });
         this.subscribe(
             'Fs',
@@ -718,9 +679,6 @@ export class InSetuExtBridge extends InSetuElement {
         const cells = BridgeStore.getState().cells || [];
         const groupCells = cells.filter(c => c.file === file);
         const selectedCount = groupCells.filter(c => c.active).length;
-        const totalCount = groupCells.length;
-
-        // Mathematical toggle: If the parent is fully unselected, turn all ON. Otherwise, turn all OFF.
         const targetState = selectedCount === 0;
 
         const updatedCells = cells.map(c =>  
@@ -728,7 +686,6 @@ export class InSetuExtBridge extends InSetuElement {
         );
 
         BridgeStore.setState({ cells: updatedCells });
-        this.requestUpdate();
     }
     _deselectAllFilePatches(file, resolvedFile = null) {
         const cells = BridgeStore.getState().cells || [];
@@ -740,7 +697,6 @@ export class InSetuExtBridge extends InSetuElement {
             return matches ? { ...c, active: false } : c;
         });
         BridgeStore.setState({ cells: updatedCells });
-        this.requestUpdate();
     }
     _getSyncAction(dryRunActive, bypassSandwich = false, overridePayload = {}) {
         return async (e) => {
@@ -815,10 +771,121 @@ export class InSetuExtBridge extends InSetuElement {
             }
         };
     }
+    async _copyWebChatRepairPrompt(targetFileFilter = null) {
+        const bState = BridgeStore.getState();
+        const tel = bState.telemetry;
+        if (!tel || !Array.isArray(tel.patches)) return;
+        const failedPatches = tel.patches.filter(p => {
+            const isFailed = p.status !== 'resolved' && p.status !== 'auto_skipped';
+            if (!isFailed) return false;
+            if (!targetFileFilter) return true;
+            return (p.resolved_file === targetFileFilter || p.original_file === targetFileFilter);
+        });
+        if (failedPatches.length === 0) return;
+
+        const cellsById = new Map((bState.cells || []).map(c => [c.id, c]));
+        const postBuffers = tel.post_valid_buffers || {};
+        const filesNeeded = Array.from(new Set(failedPatches.map(p => p.resolved_file || p.original_file).filter(Boolean)));
+        const bufferSections = [];
+
+        for (const fp of filesNeeded) {
+            let fileText = postBuffers[fp];
+            if (fileText === undefined) {
+                try {
+                    const res = await this.api.get(`fs/fetch?file=${encodeURIComponent(fp)}`);
+                    if (res.ok) fileText = await res.text();
+                } catch (_) {}
+            }
+            if (fileText !== undefined) {
+                bufferSections.push(`=== CURRENT FILE STATE (AFTER APPLYING VALID PATCHES): ${fp} ===\n${fileText}`);
+            }
+        }
+
+        const failedBlocksText = failedPatches.map(p => {
+            const cell = cellsById.get(p.cell_id);
+            const fp = p.resolved_file || p.original_file || cell?.file || 'vfs://';
+            const errNote = p.error_message ? `# Diagnostic: ${p.error_message}` : '';
+            const rawChunk = cell ? cell.content : '';
+            return `${errNote}\n<<<<<<< FILE: ${fp}\n${rawChunk}`.trim();
+        }).join('\n\n');
+
+        const promptText = [
+            "All other patches in the batch applied cleanly. The following Yomama patch block(s) failed to anchor or had a syntax error against the updated file buffer(s):",
+            "",
+            failedBlocksText,
+            "",
+            ...bufferSections,
+            "",
+            "Please output ONLY the repaired Yomama patch block(s) (`<<<<<<< FILE:` / `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE`) matching the exact lines in the file state above."
+        ].join('\n');
+
+        await this.utils.copyRawText(promptText, "📋 Copied Web-Chat Repair Prompt!");
+    }
+
+    async _commitCleanFilesOnly() {
+        const bState = BridgeStore.getState();
+        const tel = bState.telemetry;
+        if (!tel || !Array.isArray(tel.patches)) return;
+
+        const patchesByFile = {};
+        tel.patches.forEach(p => {
+            const fp = p.resolved_file || p.original_file;
+            if (!fp) return;
+            if (!patchesByFile[fp]) patchesByFile[fp] = [];
+            patchesByFile[fp].push(p);
+        });
+
+        const cleanFiles = new Set(
+            Object.entries(patchesByFile)
+                .filter(([, list]) => list.some(p => p.status === 'resolved') && list.every(p => p.status === 'resolved' || p.status === 'auto_skipped'))
+                .map(([fp]) => fp)
+        );
+        if (cleanFiles.size === 0) return;
+
+        const cleanCellIds = new Set(
+            tel.patches
+                .filter(p => cleanFiles.has(p.resolved_file || p.original_file) && p.cell_id)
+                .map(p => p.cell_id)
+        );
+        const cleanCells = (bState.cells || []).filter(c => c.active && (cleanCellIds.has(c.id) || cleanFiles.has(c.file)));
+        if (cleanCells.length === 0) return;
+
+        const compiledCleanText = cleanCells.map(c => `<<<<<<< FILE: ${c.file}\n<<<<<<< ID: ${c.id}\n${c.content}`).join('\n\n');
+        const activeProfileId = window.inSetu?.stores?.Agent?.getState()?.activeProfileId || undefined;
+
+        const runCleanCommit = this.api.bindJobAction('bridge/sync', {
+            text: compiledCleanText,
+            active_files: Array.from(cleanFiles),
+            dry_run: false,
+            auto_heal: false,
+            profile_id: activeProfileId,
+            pinned_repos: Array.from(this.ecosystem.pinnedRepos),
+            resolutions: bState.resolutions || {}
+        }, {
+            interval: 200,
+            onProgress: (msg) => BridgeStore.setState({ consoleOutput: msg }),
+            onComplete: (statusData) => {
+                const resTel = statusData?.artifact;
+                if (resTel && resTel.can_commit && resTel.mode === 'live') {
+                    const committedCellIdSet = new Set(cleanCells.map(c => c.id));
+                    BridgeStore.setState(s => ({
+                        cells: (s.cells || []).filter(c => !committedCellIdSet.has(c.id))
+                    }));
+                    BridgeStore.getState().recomputeOptimisticTelemetry();
+                    BridgeStore.getState().fetchHistory();
+                    this.setStatus(`✅ Committed ${cleanFiles.size} clean file(s). Remaining failed patches kept in staging.`, 3000);
+                }
+            }
+        });
+        await runCleanCommit();
+    }
+
     _handleConsoleClick(e) {
         const path = this.getEventPath(e);
         const btn = path.find(el => el && el.dataset && el.dataset.action);
         if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
         const action = btn.dataset.action;
         if (action === 'approve-gate') {
             const cellId = btn.dataset.cellId || btn.dataset.old;
@@ -828,7 +895,8 @@ export class InSetuExtBridge extends InSetuElement {
             if (btn.dataset.old) {
                 BridgeStore.getState().setResolution(btn.dataset.old, { approved_gate: gateCode, selected_uri: targetUri });
             }
-            this._getSyncAction(this._lastDryRun || false)();
+            // Always verify in dry-run mode on triage clicks so the user never triggers an accidental live commit
+            this._getSyncAction(true)();
         } else if (action === 'update-path' || action === 'confirm-candidate') {
             const oldPath = btn.dataset.old;
             const newPath = btn.dataset.new;
@@ -849,7 +917,7 @@ export class InSetuExtBridge extends InSetuElement {
             if (oldPath) {
                 BridgeStore.getState().setResolution(oldPath, { selected_uri: newPath, approved_gate: gateCode });
             }
-            this._getSyncAction(this._lastDryRun || false)();
+            this._getSyncAction(true)();
         } else if (action === 'view-syntax-error') {
             const errText = btn.dataset.err || 'Syntax error detected.';
             const fileTarget = btn.dataset.file || 'file';
@@ -903,7 +971,6 @@ export class InSetuExtBridge extends InSetuElement {
             const isDryRun = btn.dataset.dryrun === 'true';
             this._getSyncAction(isDryRun, true)();
         } else if (action === 'heal-anchor') {
-            const oldPath = btn.dataset.old;
             const cellId = btn.dataset.cellId;
             const actualAnchor = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.anchor), c => c.charCodeAt(0)));
 
@@ -913,190 +980,288 @@ export class InSetuExtBridge extends InSetuElement {
                 const blockRegex = /^(<<<<<<< SEARCH)[ \t]*\r?\n([\s\S]*?)^(=======)/m;
                 const newContent = targetCell.content.replace(blockRegex, "$1\n" + actualAnchor + "\n$3");
                 BridgeStore.getState().updateCellContent(targetCell.id, newContent);
-                this._getSyncAction(this._lastDryRun || false)();
+                this._getSyncAction(true)();
+            }
+        } else if (action === 'snap-all-anchors') {
+            const count = BridgeStore.getState().snapAllDeterministicAnchors();
+            if (count > 0) {
+                this._getSyncAction(true)();
             }
         } else if (action === 'deselect-this-patch') {
             const cellId = btn.dataset.cellId;
-            BridgeStore.getState().toggleCellActive(cellId);
-            this._getSyncAction(this._lastDryRun || false)();
+            // Optimistic 0ms local skip without a network round-trip!
+            BridgeStore.getState().skipCellOptimistic(cellId);
+        } else if (action === 'skip-all-failed') {
+            BridgeStore.getState().skipAllFailedCellsOptimistic();
         } else if (action === 'deselect-all-file-patches' || action === 'deselect-patch') {
             const oldPath = btn.dataset.old;
             const resolvedPath = btn.dataset.resolved;
             this._deselectAllFilePatches(oldPath, resolvedPath);
-            this._getSyncAction(this._lastDryRun || false)();
+            BridgeStore.getState().recomputeOptimisticTelemetry();
         } else if (action === 'deep-search') {
             const cellId = btn.dataset.cellId || btn.dataset.old;
             if (cellId) {
                 BridgeStore.getState().setResolution(cellId, { allow_deep_search: true });
             }
-            this._getSyncAction(this._lastDryRun || false, false, { allow_deep_search: true })();
-        } else if (action === 'ai-heal-sync') {
-            this._getSyncAction(this._lastDryRun || false, false, { auto_heal: true })();
+            this._getSyncAction(true, false, { allow_deep_search: true })();
+        } else if (action === 'ai-repair-cell') {
+            const cellId = btn.dataset.cellId;
+            this._getSyncAction(true, false, { auto_heal: true, target_cell_id: cellId })();
+        } else if (action === 'ai-heal-sync' || action === 'ai-repair-all') {
+            this._getSyncAction(true, false, { auto_heal: true })();
+        } else if (action === 'copy-repair-prompt') {
+            const targetFile = btn.dataset.file || null;
+            this._copyWebChatRepairPrompt(targetFile);
+        } else if (action === 'commit-clean-files') {
+            this._commitCleanFilesOnly();
         }
     }
     _renderTelemetry() {
         const t = this.telemetry;
         const isErrorOutput = typeof this.consoleOutput === 'string' && this.consoleOutput.startsWith('[!]');
-        if (!t) return html`<div id="status-box" class="console-header-text" style=${`width: 100%; font-family: var(--font-mono); font-size: 0.9rem; white-space: pre-wrap; color: ${isErrorOutput ? 'var(--intent-danger)' : 'var(--text)'}; font-weight: ${isErrorOutput ? 'bold' : 'normal'};`}>${this.consoleOutput}</div>`;
+        if (!t) {
+            return html`
+                <sutram-label
+                    id="status-box"
+                    ?monospace=${true}
+                    ?multiline=${true}
+                    intent=${isErrorOutput ? 'danger' : 'neutral'}
+                    .text=${this.consoleOutput}>
+                </sutram-label>
+            `;
+        }
+
+        const safePatches = t.patches || [];
+        const groupedPatches = safePatches.reduce((acc, p) => {
+            const file = p.resolved_file || p.original_file || 'Unknown File';
+            if (!acc[file]) acc[file] = [];
+            acc[file].push(p);
+            return acc;
+        }, {});
+        const fileEntries = Object.entries(groupedPatches);
+        const batchHasAnyErrors = safePatches.some(p => p.status !== 'resolved' && p.status !== 'auto_skipped');
+        const unresolvedCount = safePatches.filter(p => p.status !== 'resolved' && p.status !== 'auto_skipped').length;
+        const snapableCount = safePatches.filter(p => p.available_actions?.includes('heal_anchor') && p.actual_anchor).length;
+        const aiRepairableCount = safePatches.filter(p => (p.status === 'needs_confirmation' || p.status === 'failed' || p.status === 'syntax_error') && !p.gate).length;
+        const cleanFileCount = fileEntries.filter(([, list]) => list.some(p => p.status === 'resolved') && list.every(p => p.status === 'resolved' || p.status === 'auto_skipped')).length;
+        const cellsById = new Map((this.cells || []).map(c => [c.id, c]));
 
         return html`
-            <div style="width: 100%; display: flex; flex-direction: column;">
-                <div class="console-header-text">
-                    <h3 style=${`color: ${t.can_commit ? 'var(--intent-success)' : 'var(--intent-warning)'}; margin-top: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;`}>
-                        <yv-icon name=${t.can_commit ? "check-circle-2" : "alert-triangle"} style="width: 20px; height: 20px;"></yv-icon>
-                        ${t.can_commit ? (t.mode === 'live' ? 'Transaction Committed' : 'Dry Run Verified') : 'Action Required'}
-                        ${t.healed_attempts ? html`<span style="font-size: 0.75rem; background: color-mix(in srgb, var(--intent-highlight) 20%, transparent); color: var(--intent-highlight); border: 1px solid var(--intent-highlight); padding: 2px 8px; border-radius: 12px;">✨ Fast-Healed (${t.healed_attempts} pass${t.healed_attempts > 1 ? 'es' : ''})</span>` : ''}
-                    </h3>
-                <p style="color: var(--text-muted); font-size: 0.9rem;">
-                    Total: ${t.summary?.total_patches ?? 0} &bull; Resolved: ${t.summary?.resolved ?? 0} &bull; Skipped: ${t.summary?.auto_skipped ?? 0} &bull; Confirm: ${t.summary?.action_required ?? 0} &bull; Failed: ${t.summary?.failed ?? 0}
-                </p>
-                ${t.heal_error ? html`<p style="color: var(--intent-danger); font-size: 0.8rem; font-family: var(--font-mono);">⚠️ AI Healer Error: ${t.heal_error}</p>` : ''}
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 20px;">
+            <sutram-stack direction="col" gap="md">
+                <sutram-stack direction="col" gap="xs">
+                    <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
+                        <sutram-icon name=${t.can_commit ? "check-circle-2" : "alert-triangle"} size="lg" intent=${t.can_commit ? "success" : "warning"}></sutram-icon>
+                        <h3>${t.can_commit ? (t.mode === 'live' ? 'Transaction Committed' : 'Verified — Ready to Commit') : 'Action Required'}</h3>
+                        ${t.healed_attempts ? html`<sutram-tag text="✨ AI Auto-Repaired (${t.healed_attempts} pass${t.healed_attempts > 1 ? 'es' : ''})" intent="highlight"></sutram-tag>` : ''}
+                    </sutram-stack>
+                    <sutram-label .text=${`Total: ${t.summary?.total_patches ?? 0} • Resolved: ${t.summary?.resolved ?? 0} • Skipped: ${t.summary?.auto_skipped ?? 0} • Confirm: ${t.summary?.action_required ?? 0} • Failed: ${t.summary?.failed ?? 0}`}></sutram-label>
+                    ${t.heal_error ? html`<sutram-label intent="warning" .text=${`⚠️ AI Auto-Repair Error: ${t.heal_error}`}></sutram-label>` : ''}
+                </sutram-stack>
+
+                ${batchHasAnyErrors && t.mode !== 'live' ? html`
+                    <sutram-surface variant="tinted" intent="warning" padding="sm" gap="xs">
+                        <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                            <strong>Batch Triage (${unresolvedCount} unresolved)</strong>
+                            <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true}>
+                                ${snapableCount > 0 ? html`
+                                    <sutram-btn ?compact=${true} data-action="snap-all-anchors" icon="check" intent="success" label="Snap All Closest Anchors (${snapableCount})"></sutram-btn>
+                                ` : ''}
+                                ${aiRepairableCount > 0 ? html`
+                                    <sutram-btn ?compact=${true} data-action="ai-repair-all" icon="sparkles" intent="highlight" label="AI Repair All Failed (${aiRepairableCount})"></sutram-btn>
+                                ` : ''}
+                                <sutram-btn ?compact=${true} data-action="copy-repair-prompt" icon="clipboard" intent="primary" label="Copy Repair Prompt"></sutram-btn>
+                                <sutram-btn ?compact=${true} data-action="skip-all-failed" icon="skip-forward" intent="neutral" label="Skip All Failed (${unresolvedCount})"></sutram-btn>
+                                ${cleanFileCount > 0 ? html`
+                                    <sutram-btn ?compact=${true} data-action="commit-clean-files" icon="zap" intent="success" label="Commit ${cleanFileCount} Clean File${cleanFileCount !== 1 ? 's' : ''} Now"></sutram-btn>
+                                ` : ''}
+                            </sutram-stack>
+                        </sutram-stack>
+                    </sutram-surface>
+                ` : ''}
+
+                <sutram-stack direction="col" gap="md">
                     ${(() => {
-                        const safePatches = t.patches || [];
                         if (safePatches.length === 0) {
                             return html`
-                                <div style="padding: 15px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text-muted); font-style: italic;">
-                                    ${t.message ? html`<span style="color: var(--intent-danger); font-weight: bold; white-space: pre-wrap;">[Backend Error] ${t.message}</span>` : 'No patch data available for this transaction.'}
-                                </div>
+                                <sutram-surface variant="panel" padding="md">
+                                    ${t.message
+                                        ? html`<sutram-label intent="danger" ?multiline=${true} .text=${`[Backend Error] ${t.message}`}></sutram-label>`
+                                        : html`<sutram-label text="No patch data available for this transaction."></sutram-label>`}
+                                </sutram-surface>
                             `;
                         }
-                        const groupedPatches = safePatches.reduce((acc, p) => {
-                            const file = p.resolved_file || p.original_file || 'Unknown File';
-                            if (!acc[file]) acc[file] = [];
-                            acc[file].push(p);
-                            return acc;
-                        }, {});
 
-                        const origFileCounters = {};
-
-                        return Object.entries(groupedPatches).map(([file, filePatches]) => {
+                        return fileEntries.map(([file, filePatches]) => {
                             const hasError = filePatches.some(p => p.status === 'failed' || p.status === 'syntax_error');
                             const hasWarning = filePatches.some(p => p.status === 'needs_confirmation' || p.status === 'offer_deep_search');
                             const isSkipped = filePatches.every(p => p.status === 'auto_skipped');
-                            let cardIntent = 'success';
-                            let icon = 'check-circle-2';
-                            if (hasError) { cardIntent = 'danger'; icon = 'x-circle'; }
-                            else if (hasWarning) { cardIntent = 'warning'; icon = 'alert-triangle'; }
+                            const resolvedInFile = filePatches.filter(p => p.status === 'resolved').length;
+                            const failedInFile = filePatches.filter(p => p.status !== 'resolved' && p.status !== 'auto_skipped').length;
+                            let cardIntent = 'primary';
+                            let icon = 'file-code-2';
+                            if (hasError || hasWarning) { cardIntent = 'highlight'; icon = 'file-warning'; }
                             else if (isSkipped) { cardIntent = 'neutral'; icon = 'skip-forward'; }
 
-                            const targetEntityFile = file;
+                            const shouldAutoExpand = hasError || hasWarning || !batchHasAnyErrors;
+                            const statusSummaryText = failedInFile > 0
+                                ? `${resolvedInFile} Resolved • ${failedInFile} Action Required`
+                                : `${filePatches.length} Patch${filePatches.length !== 1 ? 'es' : ''} Resolved`;
+
                             return html`
-                                <sutram-card 
-                                    .titleText=${file} 
-                                    .icon=${icon}
-                                    .detailText=${`${filePatches.length} Patch${filePatches.length !== 1 ? 'es' : ''}`} 
-                                    .intent=${cardIntent}
-                                    entityType="file"
-                                    .entityData=${{ filepath: targetEntityFile, isFS: true, suppress: ['file-browse'] }}>
+                                <sutram-card-group ?stacked=${true} ?accordion=${true} .expanded=${shouldAutoExpand}>
+                                    <sutram-card 
+                                        .titleText=${file} 
+                                        .icon=${icon}
+                                        .detailText=${statusSummaryText} 
+                                        .intent=${cardIntent}
+                                        entityType="file"
+                                        .entityData=${{ id: file, filepath: file, titleText: file, isFS: true, suppress: ['file-browse'] }}>
+                                        ${failedInFile > 0 ? html`
+                                            <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true}>
+                                                <sutram-btn ?compact=${true} data-action="copy-repair-prompt" data-file="${file}" icon="clipboard" intent="primary" label="Copy Repair Prompt"></sutram-btn>
+                                                <sutram-btn ?compact=${true} data-action="deselect-all-file-patches" data-old="${filePatches[0]?.original_file || file}" data-resolved="${file}" icon="skip-forward" intent="neutral" label="Skip File"></sutram-btn>
+                                            </sutram-stack>
+                                        ` : ''}
+                                    </sutram-card>
 
-                                    <div style="padding: 2px 0; font-size: 0.85rem; line-height: 1.5; color: var(--text);">
-                                        ${filePatches.map((p) => {
-                                            const origFile = p.original_file;
-                                            const origFileIdx = origFileCounters[origFile] || 0;
-                                            origFileCounters[origFile] = origFileIdx + 1;
-
-                                            return html`
-                                            <div style="border-bottom: ${origFileIdx < filePatches.length - 1 ? '1px solid var(--border)' : 'none'}; padding-bottom: ${origFileIdx < filePatches.length - 1 ? '12px' : '0'}; margin-bottom: ${origFileIdx < filePatches.length - 1 ? '12px' : '0'};">
-                                                <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                                                    <p style="margin: 0; font-weight: bold; color: var(--text-muted);">Patch #${(p.patch_index || 0) + 1}: <span style="color: var(--text);">${(p.status || 'unknown').replace('_', ' ')}</span></p>
-                                                    ${p.flags && p.flags.length > 0 ? html`
-                                                        <span style="font-size: 0.75rem; color: var(--intent-highlight); border: 1px solid var(--intent-highlight); padding: 2px 6px; border-radius: 4px; flex-shrink: 0;">${p.flags.join(', ')}</span>
-                                                    ` : ''}
-                                                </div>
-                                                ${p.error_message ? html`<div style="color: ${p.status === 'auto_skipped' ? 'var(--intent-warning)' : 'var(--intent-danger)'}; margin: 6px 0 0 0; font-family: var(--font-mono); font-size: 0.8rem; white-space: pre-wrap; word-break: break-word;">${p.error_message}</div>` : ''}
-                                                ${p.syntax_error && p.status !== 'syntax_error' ? html`
-                                                    <div style="display: flex; gap: 10px; margin-top: 8px;">
-                                                        <sutram-btn data-action="view-diff" data-b64="${p.syntax_error}" intent="danger" icon="git-compare" label="${p.resolution_type === 'anchor_failed' ? 'Inspect Anchor Mismatch Diff' : 'Inspect Failed Anchor Diff'}" style="--btn-padding: 4px 10px;"></sutram-btn>
-                                                    </div>
-                                                ` : (p.status === 'syntax_error' ? html`
-                                                    <div style="display: flex; gap: 10px; margin-top: 8px;">
-                                                        <sutram-btn data-action="view-syntax-error" data-err="${p.error_message || 'Syntax error'}" data-file="${file}" intent="danger" icon="file-text" label="View Syntax Error" style="--btn-padding: 4px 10px;"></sutram-btn>
-                                                    </div>
-                                                ` : '')}
-                                                ${p.gate ? (() => {
-                                                    const gateUi = BRIDGE_GATE_UI_MAP[p.gate.code] || { label: 'Confirm Action', intent: 'warning', icon: 'check' };
-                                                    return html`
-                                                        <div style="margin-top: 10px; display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px;">
-                                                            <span style="font-family: var(--font-mono); font-size: 0.8rem;">${p.gate.target_uri || p.original_file}</span>
-                                                            <sutram-btn
-                                                                data-action="approve-gate"
-                                                                data-gate="${p.gate.code}"
-                                                                data-old="${p.original_file}"
-                                                                data-target="${p.gate.target_uri || p.original_file}"
-                                                                data-cell-id="${p.cell_id || ''}"
-                                                                intent="${gateUi.intent}"
-                                                                icon="${gateUi.icon}"
-                                                                label="${gateUi.label}"
-                                                                style="--btn-padding: 4px 10px;">
-                                                            </sutram-btn>
-                                                        </div>
-                                                    `;
-                                                })() : ''}
-                                                ${p.candidates && p.candidates.length > 0 && !p.gate ? html`
-                                                    <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 5px;">
-                                                        ${p.candidates.map(c => html`
-                                                            <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 8px; border: 1px solid var(--border); border-radius: 4px;">
-                                                                <span style="font-family: monospace;">${c.filepath}${c.score ? ` (Score: ${c.score})` : ''}</span>
-                                                                <sutram-btn data-action="confirm-candidate" data-old="${p.original_file}" data-new="${c.filepath}" data-cell-id="${p.cell_id || ''}" intent="primary" icon="check" label="Confirm Match" style="--btn-padding: 4px 10px;"></sutram-btn>
-                                                            </div>
+                                    ${filePatches.map((p, idxInFile) => {
+                                        const cellObj = (p.cell_id && cellsById.get(p.cell_id)) || { id: p.cell_id || `patch_${p.patch_index}`, file, content: '', active: true };
+                                        const statusIntent = (p.status === 'failed' || p.status === 'syntax_error')
+                                            ? 'danger'
+                                            : ((p.status === 'needs_confirmation' || p.status === 'offer_deep_search' || p.status === 'auto_skipped') ? 'warning' : 'success');
+                                        const resolveFlagLabel = (flagStr) => {
+                                            if (flagStr === 'rebased_overlap') return 'Rebased Overlap';
+                                            if (flagStr === 'already_applied') return 'Already Applied';
+                                            return String(flagStr || '').replace(/_/g, ' ');
+                                        };
+                                        const resolveFlagIntent = (flagStr) => {
+                                            const f = String(flagStr || '').toLowerCase();
+                                            if (f.includes('syntax') || f.includes('error') || f.includes('delete') || f.includes('destructive')) return 'danger';
+                                            if (f.includes('removal') || f.includes('warn') || f.includes('expansion') || f.includes('overwrite') || f.includes('skip')) return 'warning';
+                                            if (f.includes('heal') || f.includes('rebased') || f.includes('create') || f.includes('genesis')) return 'success';
+                                            return 'primary';
+                                        };
+                                        return html`
+                                            <sutram-card
+                                                .titleText=${`Patch #${(p.patch_index || 0) + 1} (${idxInFile + 1} of ${filePatches.length}): ${(p.status || 'unknown').replace(/_/g, ' ')}`}
+                                                .icon=${statusIntent === 'success' ? 'check' : (statusIntent === 'danger' ? 'alert-octagon' : 'alert-triangle')}
+                                                .intent=${statusIntent}
+                                                ?disableSelection=${true}
+                                                entityType="yomama"
+                                                .entityData=${cellObj}
+                                                @card-clicked=${(e) => {
+                                                    const origEv = e.detail?.originalEvent;
+                                                    if (origEv && this.getEventPath(origEv).some(el => el?.dataset?.action)) return;
+                                                    if (p.cell_id && cellsById.has(p.cell_id)) {
+                                                        this._openEditorModal(cellsById.get(p.cell_id));
+                                                    }
+                                                }}>
+                                                ${p.flags && p.flags.length > 0 ? html`
+                                                    <sutram-stack slot="header-actions" direction="row" align="center" gap="xs" ?wrap=${true}>
+                                                        ${p.flags.map(flag => html`
+                                                            <sutram-tag .text=${resolveFlagLabel(flag)} .intent=${resolveFlagIntent(flag)}></sutram-tag>
                                                         `)}
-                                                    </div>
+                                                    </sutram-stack>
                                                 ` : ''}
-                                                <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; align-items: center;">
-                                                    ${p.available_actions?.includes('offer_deep_search') ? html`
-                                                        <sutram-btn data-action="deep-search" data-old="${p.original_file}" data-cell-id="${p.cell_id || ''}" intent="highlight" label="Run Deep Search" style="--btn-padding: 4px 10px;"></sutram-btn>
+
+                                                <sutram-stack direction="col" gap="xs">
+                                                    ${p.error_message ? html`<sutram-label ?monospace=${true} ?multiline=${true} intent=${p.status === 'auto_skipped' ? 'warning' : 'danger'} .text=${p.error_message}></sutram-label>` : ''}
+                                                    ${p.syntax_error && p.status !== 'syntax_error' ? html`
+                                                        <sutram-stack direction="row" gap="sm">
+                                                            <sutram-btn ?compact=${true} data-action="view-diff" data-b64="${p.syntax_error}" intent="danger" icon="git-compare" label="${p.resolution_type === 'anchor_failed' ? 'Inspect Anchor Mismatch Diff' : 'Inspect Failed Anchor Diff'}"></sutram-btn>
+                                                        </sutram-stack>
+                                                    ` : (p.status === 'syntax_error' ? html`
+                                                        <sutram-stack direction="row" gap="sm">
+                                                            <sutram-btn ?compact=${true} data-action="view-syntax-error" data-err="${p.error_message || 'Syntax error'}" data-file="${file}" intent="danger" icon="file-text" label="View Syntax Error"></sutram-btn>
+                                                            ${p.syntax_error ? html`
+                                                                <sutram-btn ?compact=${true} data-action="view-diff" data-b64="${p.syntax_error}" intent="warning" icon="git-compare" label="Inspect Syntax Diff"></sutram-btn>
+                                                            ` : ''}
+                                                        </sutram-stack>
+                                                    ` : '')}
+                                                    ${p.gate ? (() => {
+                                                        const gateUi = BRIDGE_GATE_UI_MAP[p.gate.code] || { label: 'Confirm Action', intent: 'warning', icon: 'check' };
+                                                        return html`
+                                                            <sutram-surface variant="inset" padding="xs">
+                                                                <sutram-stack direction="row" justify="between" align="center" gap="sm">
+                                                                    <code>${p.gate.target_uri || p.original_file}</code>
+                                                                    <sutram-btn
+                                                                        ?compact=${true}
+                                                                        data-action="approve-gate"
+                                                                        data-gate="${p.gate.code}"
+                                                                        data-old="${p.original_file}"
+                                                                        data-target="${p.gate.target_uri || p.original_file}"
+                                                                        data-cell-id="${p.cell_id || ''}"
+                                                                        intent="${gateUi.intent}"
+                                                                        icon="${gateUi.icon}"
+                                                                        label="${gateUi.label}">
+                                                                    </sutram-btn>
+                                                                </sutram-stack>
+                                                            </sutram-surface>
+                                                        `;
+                                                    })() : ''}
+                                                    ${p.candidates && p.candidates.length > 0 && !p.gate ? html`
+                                                        <sutram-stack direction="col" gap="xs">
+                                                            ${p.candidates.map(c => html`
+                                                                <sutram-surface variant="inset" padding="xs">
+                                                                    <sutram-stack direction="row" justify="between" align="center" gap="sm">
+                                                                        <code>${c.filepath}${c.score ? ` (Score: ${c.score})` : ''}</code>
+                                                                        <sutram-btn ?compact=${true} data-action="confirm-candidate" data-old="${p.original_file}" data-new="${c.filepath}" data-cell-id="${p.cell_id || ''}" intent="primary" icon="check" label="Use This File"></sutram-btn>
+                                                                    </sutram-stack>
+                                                                </sutram-surface>
+                                                            `)}
+                                                        </sutram-stack>
                                                     ` : ''}
-                                                    ${p.available_actions?.includes('heal_anchor') ? html`
-                                                        <sutram-btn data-action="heal-anchor" data-old="${p.original_file}" data-cell-id="${p.cell_id || ''}" data-anchor="${p.actual_anchor}" intent="success" label="Auto-Heal Anchor" style="--btn-padding: 4px 10px;"></sutram-btn>
-                                                    ` : ''}
-                                                    ${(p.status === 'needs_confirmation' || p.status === 'failed' || p.status === 'syntax_error') && !p.gate ? html`
-                                                        <sutram-btn data-action="ai-heal-sync" icon="sparkles" intent="highlight" label="AI Heal & Retry (Fast Tier)" style="--btn-padding: 4px 10px;"></sutram-btn>
-                                                    ` : ''}
-                                                    ${p.available_actions?.includes('deselect_patch') ? html`
-                                                        <div style="display: flex; align-items: center; gap: 6px;">
-                                                            <sutram-btn data-action="deselect-this-patch" data-old="${p.original_file}" data-resolved="${p.resolved_file || ''}" data-cell-id="${p.cell_id}" intent="neutral" label="Deselect Patch" style="--btn-padding: 4px 10px;"></sutram-btn>
-                                                            <sutram-btn data-action="deselect-all-file-patches" data-old="${p.original_file}" data-resolved="${p.resolved_file || ''}" intent="neutral" label="Deselect All File Patches" style="--btn-padding: 4px 10px;"></sutram-btn>
-                                                        </div>
-                                                    ` : ''}
-                                                </div>
-                                            </div>
+                                                    <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
+                                                        ${p.available_actions?.includes('offer_deep_search') ? html`
+                                                            <sutram-btn ?compact=${true} data-action="deep-search" data-old="${p.original_file}" data-cell-id="${p.cell_id || ''}" intent="highlight" label="Run Deep Search"></sutram-btn>
+                                                        ` : ''}
+                                                        ${p.available_actions?.includes('heal_anchor') ? html`
+                                                            <sutram-btn ?compact=${true} data-action="heal-anchor" data-old="${p.original_file}" data-cell-id="${p.cell_id || ''}" data-anchor="${p.actual_anchor}" intent="success" icon="check" label="Snap Anchor to Disk"></sutram-btn>
+                                                        ` : ''}
+                                                        ${(p.status === 'needs_confirmation' || p.status === 'failed' || p.status === 'syntax_error') && !p.gate ? html`
+                                                            <sutram-btn ?compact=${true} data-action="ai-repair-cell" data-cell-id="${p.cell_id || ''}" icon="sparkles" intent="highlight" label="AI Repair This Patch"></sutram-btn>
+                                                        ` : ''}
+                                                        ${p.available_actions?.includes('deselect_patch') ? html`
+                                                            <sutram-btn ?compact=${true} data-action="deselect-this-patch" data-old="${p.original_file}" data-resolved="${p.resolved_file || ''}" data-cell-id="${p.cell_id}" intent="neutral" icon="skip-forward" label="Skip Patch"></sutram-btn>
+                                                        ` : ''}
+                                                    </sutram-stack>
+                                                </sutram-stack>
+                                            </sutram-card>
                                         `;
-                                        })}
-                                    </div>
-                                </sutram-card>
+                                    })}
+                                </sutram-card-group>
                             `;
                         });
                     })()}
-                </div>
-            </div>
+                </sutram-stack>
+            </sutram-stack>
         `;
     }
     _renderBridgeSurface(groupedCells) {
         return html`
-            <div style="display: flex; flex-direction: column; flex: 1; overflow: hidden; background: var(--bg); height: 100%;">
-                <!-- INPUT VIEW -->
-                <div style="display: ${this.viewMode === 'input' ? 'flex' : 'none'}; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; padding: 0; background: var(--bg);">
+            <sutram-view>
+                ${this.viewMode === 'input' ? html`
                     ${this.cells.length === 0 ? html`
-                        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px dashed color-mix(in srgb, var(--intent-highlight) 45%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--intent-highlight) 4%, var(--input-bg)); min-height: 300px; position: relative; margin: 20px;"
+                        <sutram-surface variant="dropzone" intent="highlight"
                             @dragover=${e => e.preventDefault()}
                             @drop=${async e => {
                                 e.preventDefault();
                                 const text = e.dataTransfer.getData('text');
                                 if (text) BridgeStore.getState().parseAndAppendCells(text);
                             }}>
-                            <yv-icon name="bridge" style="width: 48px; height: 48px; color: var(--intent-highlight); margin-bottom: 12px;"></yv-icon>
-                            <h3 style="margin: 0 0 10px 0; color: var(--text);">Yomama Sync Bridge</h3>
-                            <p style="color: var(--text-muted); margin-bottom: 20px; text-align: center; max-width: 400px;">Paste a patch sandwich from your LLM to begin parsing individual file blocks.</p>
-                            <textarea style="opacity: 0.01; position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; z-index: 1; resize: none;" autofocus></textarea>
-                        </div>
+                            <sutram-stack direction="col" align="center" gap="sm">
+                                <sutram-icon name="bridge" size="xl" intent="highlight"></sutram-icon>
+                                <h3>Yomama Sync Bridge</h3>
+                                <sutram-label text="Paste a patch sandwich (Ctrl+V / Cmd+V) or click Paste below to parse individual file blocks."></sutram-label>
+                            </sutram-stack>
+                        </sutram-surface>
                     ` : html`
+                        <sutram-stack direction="col" gap="md">
                         ${Object.entries(groupedCells).map(([file, groupCells]) => {
                             const selectedCount = groupCells.filter(c => c.active).length;
                             const totalCount = groupCells.length;
                             return html`
-                                <div class="bridge-group-container">
+                                <sutram-surface variant="ghost" border="bottom" padding="sm">
                                     <sutram-card-group ?stacked=${true} ?accordion=${true}>
                                     <!-- Target File Card (Top of Stack) -->
                                     <sutram-card
@@ -1109,10 +1274,9 @@ export class InSetuExtBridge extends InSetuElement {
                                         .entityData=${{ filepath: file, isFS: true, suppress: ['file-browse'] }}
                                         selectionStoreKey="none"
                                         ?selected=${selectedCount > 0}
-                                        @sutram-card-select-toggled=${(e) => { e.stopPropagation(); this._handleParentToggle(file); }}
-                                        style="display: block;">
+                                        @sutram-card-select-toggled=${(e) => { e.stopPropagation(); this._handleParentToggle(file); }}>
                                         <div slot="header-actions">
-                                            <sutram-btn intent="highlight" label="Remap" style="--btn-padding: 4px 10px; margin: 0;" @click=${(e) => {
+                                            <sutram-btn ?compact=${true} intent="highlight" label="Remap" @click=${(e) => {
                                                 e.stopPropagation();
                                                 if (this.ui && this.ui.openWorkspaceBrowser) {
                                                     this.ui.openWorkspaceBrowser({
@@ -1127,19 +1291,17 @@ export class InSetuExtBridge extends InSetuElement {
                                             }}></sutram-btn>
                                         </div>
 
-                                        <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 5px;">
-                                            <sutram-input ?flush=${true} .value=${file} style="width: 100\%; margin: 0; --bg-input: var(--bg);" @sutram-input-changed=${(e) => {
+                                        <sutram-stack direction="col" gap="xs">
+                                            <sutram-input ?flush=${true} .value=${file} @sutram-input-changed=${(e) => {
                                                 BridgeStore.getState().updateGroupFile(file, e.detail.value);
                                                 window.inSetu.stores.Fs?.getState()?.verifyFiles([e.detail.value], true);
                                             }}></sutram-input>
-                                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
-                                                <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--intent-highlight);">
-                                                    ${selectedCount} of ${totalCount} patches selected
-                                                </span>
+                                            <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                                                <sutram-label .text=${`${selectedCount} of ${totalCount} patches selected`}></sutram-label>
                                                 ${this._autoSwaps[file] && this._autoSwaps[file] !== file ? html`
-                                                    <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--intent-success); font-weight: bold;">
-                                                        <span>✨ Auto-mapped</span>
-                                                        <sutram-btn size="sm" intent="neutral" label="Undo" style="--btn-padding: 1px 6px; --btn-font-size: 0.7rem; margin: 0;" @click=${(e) => {
+                                                    <sutram-stack direction="row" align="center" gap="xs">
+                                                        <sutram-tag text="✨ Auto-mapped" intent="success"></sutram-tag>
+                                                        <sutram-btn ?compact=${true} intent="neutral" label="Undo" @click=${(e) => {
                                                             e.stopPropagation();
                                                             const original = this._autoSwaps[file];
                                                             this._rejectedAutoSwaps.add(original);
@@ -1149,23 +1311,19 @@ export class InSetuExtBridge extends InSetuElement {
                                                             BridgeStore.getState().updateGroupFile(file, original);
                                                             window.inSetu.stores.Fs?.getState()?.verifyFiles([original], true);
                                                         }}></sutram-btn>
-                                                    </span>
+                                                    </sutram-stack>
                                                 ` : ''}
-                                            </div>
-                                        </div>
+                                            </sutram-stack>
+                                        </sutram-stack>
                                         ${this._fileVerificationCache[file] === false && !this._autoSwaps[file] ? (() => {
                                             let cands = [];
                                             if (this.vfs && this.vfs.getGlobalManifest) {
                                                 const mFiles = this.vfs.getGlobalManifest().filter(f => !f.endsWith('.gitkeep'));
-                                                // Strip OS attachment duplicate suffixes like " (1)", " (2)"
                                                 const cleanFile = file.replace(/\s*\(\d+\)(?=\.[^.\/]+$|$)/, '').trim();
                                                 const cleanFileLower = cleanFile.toLowerCase();
                                                 const basename = new window.inSetu.utils.InSetuURI(cleanFile).basename.toLowerCase();
 
-                                                // 1. Try matching the exact fragment (e.g. "c/file.py" matches "a/b/c/file.py")
                                                 cands = mFiles.filter(f => f.toLowerCase().endsWith(cleanFileLower));
-
-                                                // 2. Fall back to matching the exact basename
                                                 if (cands.length === 0) {
                                                     cands = mFiles.filter(f => f.toLowerCase().endsWith('/' + basename) || f.toLowerCase() === basename);
                                                 }
@@ -1173,19 +1331,21 @@ export class InSetuExtBridge extends InSetuElement {
                                             }
                                             if (cands.length > 0) {
                                                 return html`
-                                                    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 6px;">
-                                                        <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold;">Suggested Matches:</span>
+                                                    <sutram-surface variant="ghost" border="top" padding="xs" gap="xs">
+                                                        <sutram-label text="Suggested Matches:"></sutram-label>
                                                         ${cands.map(c => html`
-                                                            <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border);">
-                                                                <span style="font-family: monospace; font-size: 0.8rem; color: var(--text); word-break: break-all;">${c}</span>
-                                                                <sutram-btn intent="success" label="Swap" style="--btn-padding: 4px 8px; margin: 0;" @click=${(e) => {
-                                                                    e.stopPropagation();
-                                                                    BridgeStore.getState().updateGroupFile(file, c);
-                                                                    window.inSetu.stores.Fs?.getState()?.verifyFiles([c], true);
-                                                                }}></sutram-btn>
-                                                            </div>
+                                                            <sutram-surface variant="inset" padding="xs">
+                                                                <sutram-stack direction="row" justify="between" align="center" gap="sm">
+                                                                    <code>${c}</code>
+                                                                    <sutram-btn ?compact=${true} intent="success" label="Swap" @click=${(e) => {
+                                                                        e.stopPropagation();
+                                                                        BridgeStore.getState().updateGroupFile(file, c);
+                                                                        window.inSetu.stores.Fs?.getState()?.verifyFiles([c], true);
+                                                                    }}></sutram-btn>
+                                                                </sutram-stack>
+                                                            </sutram-surface>
                                                         `)}
-                                                    </div>
+                                                    </sutram-surface>
                                                 `;
                                             }
                                             return '';
@@ -1231,38 +1391,34 @@ export class InSetuExtBridge extends InSetuElement {
                                         </sutram-card>
                                     `})}
                                 </sutram-card-group>
-                            </div>
+                            </sutram-surface>
                         `;})}
+                        </sutram-stack>
                     `}
-                </div>
-                <!-- CONSOLE VIEW -->
-                <sutram-scroll-view style=${`display: ${this.viewMode === 'console' ? 'flex' : 'none'}; background: var(--bg);`} @click=${this._handleConsoleClick}>${this._renderTelemetry()}
-                </sutram-scroll-view>
-                <!-- FOOTER -->
-                <div class="bridge-footer">
-                    ${this.cells.length > 0 && this.viewMode === 'input' ? html`
-                        <div class="bridge-footer-heal-row">
-                            <sutram-btn
-                                intent=${this.autoHeal ? "highlight" : "neutral"}
-                                ?active=${this.autoHeal}
-                                icon="sparkles"
-                                label=${this.autoHeal ? "Auto-Heal: ON (Fast Tier)" : "Auto-Heal: OFF"}
-                                title="Defer overlapping/failed patches, apply valid chunks in memory first, and heal failed chunks with the Fast LLM tier"
-                                style="flex: 1; width: 100%; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem;"
-                                @click=${() => BridgeStore.setState({ autoHeal: !this.autoHeal })}>
-                            </sutram-btn>
-                        </div>
-                    ` : ''}
-                    <div class="bridge-footer-main-row">
+                ` : html`
+                    <div @click=${{ handleEvent: (e) => this._handleConsoleClick(e), capture: true }}>${this._renderTelemetry()}</div>
+                `}
+
+                <sutram-surface slot="footer" variant="tinted" intent="highlight" border="top" padding="sm" gap="sm">
+                    <sutram-action-bar collapse="sm" align="between">
                         <sutram-btn
                             intent="highlight"
                             icon="bridge"
                             title="Toggle Yomama Menu (Active: Bridge)"
-                            style="margin: 0; flex-shrink: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem;"
                             @click=${() => BridgeStore.getState().toggleDrawer()}>
                         </sutram-btn>
+                        ${this.cells.length > 0 && this.viewMode === 'input' ? html`
+                            <sutram-btn
+                                intent=${this.autoHeal ? "highlight" : "neutral"}
+                                ?active=${this.autoHeal}
+                                icon="sparkles"
+                                label=${this.autoHeal ? "AI Auto-Repair: ON" : "AI Auto-Repair: OFF"}
+                                title="Automatically repair failed anchors or syntax errors in parallel per-file using the Fast LLM tier"
+                                @click=${() => BridgeStore.setState({ autoHeal: !this.autoHeal })}>
+                            </sutram-btn>
+                        ` : ''}
                         ${this.cells.length === 0 && this.viewMode === 'input' ? html`
-                            <sutram-btn intent="highlight" icon="clipboard-paste" label="Paste from Clipboard" style="flex: 1; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem; width: 100%;" @click=${async () => {
+                            <sutram-btn intent="highlight" icon="clipboard-paste" label="Paste from Clipboard" ?grow=${true} @click=${async () => {
                                 if (!navigator.clipboard || !navigator.clipboard.readText) {
                                     alert("Clipboard API requires a secure context (HTTPS or localhost).\\n\\nPlease press Ctrl+V (or Cmd+V) anywhere on this screen to paste.");
                                     return;
@@ -1275,17 +1431,21 @@ export class InSetuExtBridge extends InSetuElement {
                                 }
                             }}></sutram-btn>
                         ` : this.viewMode === 'input' ? html`
-                            <sutram-btn intent="danger" icon="trash-2" label="Clear" style="flex: 1; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem; width: 100%;" @click=${() => { BridgeStore.getState().clearPayload(); }}></sutram-btn>
-                            <sutram-async-btn icon="flask-conical" label="Test" intent="warning" style="flex: 1; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem; width: 100%;" .onClick=${this._getSyncAction(true)}></sutram-async-btn>
-                            <sutram-async-btn icon="zap" label="Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem; width: 100%;" .onClick=${this._getSyncAction(false)}></sutram-async-btn>
+                            <sutram-btn intent="danger" icon="trash-2" label="Clear" ?grow=${true} @click=${() => { BridgeStore.getState().clearPayload(); }}></sutram-btn>
+                            <sutram-async-btn icon="check-circle" label="Verify (Dry Run)" intent="warning" ?grow=${true} .onClick=${this._getSyncAction(true)}></sutram-async-btn>
+                            <sutram-async-btn icon="zap" label="Commit Patches" intent="success" ?grow=${true} .onClick=${this._getSyncAction(false)}></sutram-async-btn>
                         ` : html`
-                            <sutram-btn intent="neutral" icon="arrow-left" label="Back to Edit" style="flex: 1; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem; width: 100%;" @click=${() => { BridgeStore.setState({ viewMode: 'input' }); }}></sutram-btn>${this.telemetry && this.telemetry.can_commit && this.telemetry.mode !== 'live' ? html`
-                                <sutram-async-btn icon="check-circle-2" label="Apply Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem; width: 100%;" .onClick=${this._getSyncAction(false, true, { force: true, ignore_syntax: true, ignore_syntax_errors: true, confirmed_candidates: Object.fromEntries(BridgeStore.getState().getActiveFiles().map(f => [f, f])) })}></sutram-async-btn>
+                            <sutram-btn intent="neutral" icon="arrow-left" label="Back to Staging" ?grow=${true} @click=${() => { BridgeStore.setState({ viewMode: 'input' }); }}></sutram-btn>
+                            ${this.telemetry && !this.telemetry.can_commit && this.telemetry.mode !== 'live' ? html`
+                                <sutram-async-btn icon="refresh-cw" label="Re-Verify" intent="warning" ?grow=${true} .onClick=${this._getSyncAction(true)}></sutram-async-btn>
+                            ` : ''}
+                            ${this.telemetry && this.telemetry.can_commit && this.telemetry.mode !== 'live' ? html`
+                                <sutram-async-btn icon="zap" label="Commit Patches" intent="success" ?grow=${true} .onClick=${this._getSyncAction(false)}></sutram-async-btn>
                             ` : ''}
                         `}
-                    </div>
-                </div>
-            </div>
+                    </sutram-action-bar>
+                </sutram-surface>
+            </sutram-view>
         `;
     }
 
@@ -1300,84 +1460,50 @@ export class InSetuExtBridge extends InSetuElement {
         const currentSurfaceId = this.activeSurface || 'bridge';
         const activeSurfaceSpec = surfaces.find(s => (s.rawId || s.id.split(':').pop()) === currentSurfaceId || s.id === currentSurfaceId);
         const activeIntent = activeSurfaceSpec?.intent || 'highlight';
+        const navItems = surfaces.map(s => {
+            const rawId = s.rawId || s.id.split(':').pop();
+            return {
+                id: rawId,
+                rawId,
+                label: s.label,
+                icon: s.icon || 'component',
+                intent: s.intent || 'highlight',
+                badge: (rawId === 'bridge' && this.cells.length > 0) ? this.cells.length : null
+            };
+        });
 
         return html`
-            <div class="yomama-shell" style="--surface-accent: var(--intent-${activeIntent});" @paste=${e => {
-                const text = e.clipboardData?.getData('text') || '';
-                if (text && (
-                    text.includes('<<<<<<< FILE:') ||
-                    text.includes('<<<<<<< RELOCATE') ||
-                    text.includes('<<<<<<< RENAME') ||
-                    text.includes('<<<<<<< MOVE_FILE') ||
-                    text.includes('<<<<<<< ARCHIVE_FILE') ||
-                    text.includes('<<<<<<< DELETE_FILE')
-                )) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    BridgeStore.getState().parseAndAppendCells(text);
-                }
-            }}>
-                <div class="yomama-drawer-backdrop ${this.drawerOpen ? 'open-mobile' : ''}"
-                    @click=${() => BridgeStore.setState({ drawerOpen: false })}>
-                </div>
-                <div class="yomama-drawer ${this.drawerOpen ? 'open-mobile' : ''} ${this.drawerCollapsedDesktop ? 'collapsed-desktop' : ''}" style="overflow: hidden;">
-                    ${drawerWidgets.length > 0 ? html`
-                        <div style="flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;">
-                            ${drawerWidgets.map(w => this._getOrMountNode(this._drawerNodes, w.component))}
-                        </div>
-                        <hr style="border: none; border-top: 1px solid var(--border); margin: 6px 0; width: 100%; flex-shrink: 0;">
-                    ` : html`<div style="flex: 1;"></div>`}
-
-                    <div style="display: flex; flex-direction: column; gap: 4px; flex-shrink: 0;">
-                        <div style="font-size: 0.7rem; font-weight: 800; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--surface-accent, var(--intent-highlight)); padding: 4px 8px; display: flex; align-items: center; justify-content: space-between;">
-                            <span>Yomama Surfaces</span>
-                            <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--surface-accent, var(--intent-highlight));"></span>
-                        </div>
-                        ${surfaces.map(s => {
-                            const rawId = s.rawId || s.id.split(':').pop();
-                            const isActive = currentSurfaceId === rawId || currentSurfaceId === s.id;
-                            const isBridgeSurface = rawId === 'bridge';
-                            const itemIntent = s.intent || 'highlight';
-                            const itemColor = `var(--intent-${itemIntent})`;
-                            return html`
-                                <div class="drawer-nav-item ${isActive ? 'active' : ''}"
-                                    style="--item-accent: ${itemColor};"
-                                    @click=${() => BridgeStore.getState().setActiveSurface(rawId)}>
-                                    <span style="display: flex; align-items: center; gap: 8px;">
-                                        <yv-icon name=${s.icon || 'component'} style="width: 15px; height: 15px; color: ${itemColor}; opacity: ${isActive ? '1' : '0.75'};"></yv-icon>
-                                        <span>${s.label}</span>
-                                    </span>
-                                    ${isBridgeSurface && this.cells.length > 0 ? html`
-                                        <span class="drawer-badge" style="background: ${itemColor};">${this.cells.length}</span>
-                                    ` : html`
-                                        <span style="width: 6px; height: 6px; border-radius: 50%; background: ${itemColor}; opacity: ${isActive ? '1' : '0.35'};"></span>
-                                    `}
-                                </div>
-                            `;
-                        })}
-                    </div>
-                </div>
-
-                <div class="yomama-stage">
-                    ${currentSurfaceId === 'bridge'
-                        ? this._renderBridgeSurface(groupedCells)
-                        : surfaces.map(s => {
-                            const rawId = s.rawId || s.id.split(':').pop();
-                            if (rawId === 'bridge' || !s.component) return '';
-                            const isVisible = currentSurfaceId === rawId || currentSurfaceId === s.id;
-                            return html`
-                                <div style="display: ${isVisible ? 'flex' : 'none'}; flex: 1; flex-direction: column; min-height: 0; height: 100%; width: 100%; overflow: hidden;">
-                                    ${this._getOrMountNode(this._surfaceNodes, s.component)}
-                                </div>
-                            `;
-                        })}
-                </div>
-            </div>
+            <sutram-sidebar-layout
+                .intent=${activeIntent}
+                ?drawerOpen=${this.drawerOpen}
+                ?collapsed=${this.drawerCollapsedDesktop}
+                navTitle="Yomama Surfaces"
+                .navItems=${navItems}
+                .activeNavId=${currentSurfaceId}
+                @sutram-drawer-closed=${() => BridgeStore.setState({ drawerOpen: false })}
+                @sutram-nav-selected=${(e) => BridgeStore.getState().setActiveSurface(e.detail.id)}>
+                ${drawerWidgets.map(w => html`<div slot="sidebar" style="display: contents;">${this.mountDynamicSlot(w.component)}</div>`)}
+                ${currentSurfaceId === 'bridge'
+                    ? this._renderBridgeSurface(groupedCells)
+                    : surfaces.map(s => {
+                        const rawId = s.rawId || s.id.split(':').pop();
+                        if (rawId === 'bridge' || !s.component) return '';
+                        const isVisible = currentSurfaceId === rawId || currentSurfaceId === s.id;
+                        return html`
+                            <div style="display: ${isVisible ? 'flex' : 'none'}; flex: 1; flex-direction: column; min-height: 0; height: 100%; width: 100%; overflow: hidden;">
+                                <sutram-view ?flush=${true} ?noScroll=${true}>
+                                    ${this.mountDynamicSlot(s.component)}
+                                </sutram-view>
+                            </div>
+                        `;
+                    })}
+            </sutram-sidebar-layout>
         `;
     }
 }
 customElements.define('insetu-ext-bridge', InSetuExtBridge);
 export class InSetuBridgeDiffProjection extends InSetuElement {
+    static get extensionName() { return 'bridge'; }
     static properties = {
         caption: { type: String },
         diffContent: { type: String },
@@ -1385,17 +1511,7 @@ export class InSetuBridgeDiffProjection extends InSetuElement {
         replaceStr: { type: String },
         suggestedFilename: { type: String }
     };
-    static styles = [sharedStyles, css`
-        :host {
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-            width: 100%;
-            overflow: hidden;
-            background: var(--bg);
-            box-sizing: border-box;
-        }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.caption = '';
@@ -1408,13 +1524,15 @@ export class InSetuBridgeDiffProjection extends InSetuElement {
         const filename = this.suggestedFilename || `diff_${Date.now()}.diff`;
         const rawPayload = this.diffContent || `<<<<<<< SEARCH\n${this.searchStr}\n=======\n${this.replaceStr}\n>>>>>>> REPLACE`;
         return html`
-            <div style="height: 38px; padding: 0 10px; background: var(--bg-deep); border-bottom: 1px solid var(--border); display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-shrink: 0;">
-                <sutram-entity-actions
-                    .entityType=${'text_blob'}
-                    .entityData=${{ textContent: rawPayload, suggestedFilename: filename }}>
-                </sutram-entity-actions>
-            </div>
-            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0;">
+            <sutram-view ?flush=${true} ?noScroll=${true}>
+                <sutram-surface slot="header" variant="inset" border="bottom" padding="xs">
+                    <sutram-stack direction="row" justify="end" align="center">
+                        <sutram-entity-actions
+                            .entityType=${'text_blob'}
+                            .entityData=${{ textContent: rawPayload, suggestedFilename: filename }}>
+                        </sutram-entity-actions>
+                    </sutram-stack>
+                </sutram-surface>
                 <sutram-diff-viewer
                     .diffText=${this.diffContent}
                     .searchStr=${this.searchStr}
@@ -1422,22 +1540,21 @@ export class InSetuBridgeDiffProjection extends InSetuElement {
                     leftTitle="Original"
                     rightTitle="Patch">
                 </sutram-diff-viewer>
-            </div>
+            </sutram-view>
         `;
     }
 }
 customElements.define('insetu-bridge-diff-projection', InSetuBridgeDiffProjection);
 
 export class InSetuBridgeEditProjection extends InSetuElement {
+    static get extensionName() { return 'bridge'; }
     static properties = {
         editCellId: { type: String },
         editCellOriginalFile: { type: String },
         cells: { type: Array },
         _previewDiff: { type: Boolean }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         const st = BridgeStore.getState();
@@ -1459,7 +1576,6 @@ export class InSetuBridgeEditProjection extends InSetuElement {
                 this.editCellId = editCellId;
                 this.editCellOriginalFile = editCellOriginalFile;
                 this.cells = cells;
-                this.requestUpdate();
             }
         );
     }
@@ -1525,7 +1641,7 @@ export class InSetuBridgeEditProjection extends InSetuElement {
         const total = this.cells.length;
         const { searchStr, replaceStr } = this._previewDiff ? this._extractCurrentBlocks() : { searchStr: '', replaceStr: '' };
         return html`
-            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; height: 100%; width: 100%;">
+            <sutram-view ?flush=${true} ?noScroll=${true}>
                 ${this._previewDiff ? html`
                     <sutram-diff-viewer
                         .searchStr=${searchStr}
@@ -1535,36 +1651,37 @@ export class InSetuBridgeEditProjection extends InSetuElement {
                     </sutram-diff-viewer>
                 ` : html`
                     <insetu-editor-projection 
-                        style="flex: 1; min-height: 0; height: 100%; width: 100%;"
                         .filepath=${`yomama://${this.editCellId}`} 
                         data-sub-id=${`yomama://${this.editCellId}`}>
                     </insetu-editor-projection>
                 `}
-            </div>
-            <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-shrink: 0; flex-wrap: wrap;">
-                <div style="display: flex; gap: 8px; align-items: center;">
-                    <sutram-btn intent="danger" icon="x" label="Cancel" style="margin: 0;" @click=${() => {
-                        if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('bridge:edit-cell');
-                    }}></sutram-btn>
-                    <sutram-btn intent="highlight" icon="${this._previewDiff ? 'edit-3' : 'columns'}" label="${this._previewDiff ? 'Raw Editor' : 'Diff View'}" style="margin: 0;" @click=${() => {
-                        this._previewDiff = !this._previewDiff;
-                    }}></sutram-btn>
-                    <sutram-btn intent="warning" icon="refresh-cw" label="Swap S/R" style="margin: 0;" @click=${() => {
-                        this.dispatch('insetu:bridge:cell-swap', { id: this.editCellId });
-                    }}></sutram-btn>
-                </div>
-                ${total > 1 ? html`
-                    <div style="display: flex; align-items: center; gap: 6px;">
-                        <sutram-btn size="sm" intent="neutral" icon="chevron-left" label="Prev" ?disabled=${currentIndex <= 0} @click=${() => this._navigateChunk(-1)}></sutram-btn>
-                        <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted);">${currentIndex + 1} / ${total}</span>
-                        <sutram-btn size="sm" intent="neutral" icon="chevron-right" label="Next" ?disabled=${currentIndex >= total - 1} @click=${() => this._navigateChunk(1)}></sutram-btn>
-                    </div>
-                ` : ''}
-                <sutram-btn intent="success" icon="check" label="Save Patch" style="flex: 1; margin: 0;" @click=${() => {
-                    this._commitCurrentBuffer();
-                    if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('bridge:edit-cell');
-                }}></sutram-btn>
-            </div>
+                <sutram-surface slot="footer" variant="panel" border="top" padding="sm">
+                    <sutram-action-bar collapse="sm" align="between">
+                        <sutram-stack direction="row" align="center" gap="sm">
+                            <sutram-btn intent="danger" icon="x" label="Cancel" @click=${() => {
+                                if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('bridge:edit-cell');
+                            }}></sutram-btn>
+                            <sutram-btn intent="highlight" icon="${this._previewDiff ? 'edit-3' : 'columns'}" label="${this._previewDiff ? 'Raw Editor' : 'Diff View'}" @click=${() => {
+                                this._previewDiff = !this._previewDiff;
+                            }}></sutram-btn>
+                            <sutram-btn intent="warning" icon="refresh-cw" label="Swap S/R" @click=${() => {
+                                this.dispatch('insetu:bridge:cell-swap', { id: this.editCellId });
+                            }}></sutram-btn>
+                        </sutram-stack>
+                        ${total > 1 ? html`
+                            <sutram-stack direction="row" align="center" gap="xs">
+                                <sutram-btn ?compact=${true} intent="neutral" icon="chevron-left" label="Prev" ?disabled=${currentIndex <= 0} @click=${() => this._navigateChunk(-1)}></sutram-btn>
+                                <sutram-tag text="${currentIndex + 1} / ${total}"></sutram-tag>
+                                <sutram-btn ?compact=${true} intent="neutral" icon="chevron-right" label="Next" ?disabled=${currentIndex >= total - 1} @click=${() => this._navigateChunk(1)}></sutram-btn>
+                            </sutram-stack>
+                        ` : ''}
+                        <sutram-btn intent="success" icon="check" label="Save Patch" ?grow=${true} @click=${() => {
+                            this._commitCurrentBuffer();
+                            if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('bridge:edit-cell');
+                        }}></sutram-btn>
+                    </sutram-action-bar>
+                </sutram-surface>
+            </sutram-view>
         `;
     }
 }
@@ -1574,9 +1691,7 @@ export class InSetuExtBridgeActions extends InSetuElement {
     static properties = {
         _pinnedRepos: { type: Object }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; align-items: stretch; height: 100%; }
-    `];
+    static styles = [sharedStyles];
     connectedCallback() {
         super.connectedCallback();
         this._pinnedRepos = window.inSetu.stores.App.getState().pinnedRepos;
@@ -1585,7 +1700,6 @@ export class InSetuExtBridgeActions extends InSetuElement {
             state => state.pinnedRepos,
             (pinnedRepos) => {
                 this._pinnedRepos = pinnedRepos;
-                this.requestUpdate();
             }
         );
     }
@@ -1600,14 +1714,12 @@ export class InSetuExtBridgeActions extends InSetuElement {
             hasF = true;
         }
         return html`
-            <sutram-filter-dropdown .filterText=${btnText} .hasFilters=${hasF} style="height: 100%; display: flex; align-items: stretch;">
-                <div style="min-width: 200px;">
-                    <insetu-repo-filter
-                        .repos=${this.ecosystem.allRepos}
-                        .activeRepos=${Array.from(currentPins)}
-                        @repo-filter-changed=${(e) => window.inSetu.stores.App.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                    </insetu-repo-filter>
-                </div>
+            <sutram-filter-dropdown .filterText=${btnText} .hasFilters=${hasF}>
+                <insetu-repo-filter
+                    .repos=${this.ecosystem.allRepos}
+                    .activeRepos=${Array.from(currentPins)}
+                    @repo-filter-changed=${(e) => window.inSetu.stores.App.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                </insetu-repo-filter>
             </sutram-filter-dropdown>
         `;
     }
@@ -1624,9 +1736,7 @@ export class InSetuExtBridgeHistory extends InSetuElement {
         _viewMode: { type: String },
         _renderLimit: { type: Number }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); box-sizing: border-box; }
-    `];
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -1708,29 +1818,30 @@ export class InSetuExtBridgeHistory extends InSetuElement {
         const sortedFiles = Object.entries(groupedFiles).sort((a, b) => b[1].latest_ts - a[1].latest_ts);
 
         return html`
-            <sutram-toolbar
-                searchPlaceholder="Fuzzy search receipts..."
-                .searchQuery=${this.searchQuery}
-                @search-changed=${(e) => this.searchQuery = e.detail.value}
-                .enableFilterDropdown=${true}
-                .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
-                <insetu-repo-filter
-                    slot="filters"
-                    .repos=${this.ecosystem.allRepos}
-                    .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
-                    @repo-filter-changed=${(e) => window.inSetu.stores.App.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                </insetu-repo-filter>
-            </sutram-toolbar>
-            <sutram-scroll-view style="gap: 15px;">
-                ${this.historyRecords.length === 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin: 0;">No ledger receipts available.</p>` : ''}
-                ${repoFilteredRecords.length === 0 && this.historyRecords.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin: 0;">No ledger receipts match criteria.</p>` : ''}
+            <sutram-view>
+                <sutram-toolbar
+                    slot="toolbar"
+                    searchPlaceholder="Fuzzy search receipts..."
+                    .searchQuery=${this.searchQuery}
+                    @search-changed=${(e) => this.searchQuery = e.detail.value}
+                    .enableFilterDropdown=${true}
+                    .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
+                    <insetu-repo-filter
+                        slot="filters"
+                        .repos=${this.ecosystem.allRepos}
+                        .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
+                        @repo-filter-changed=${(e) => window.inSetu.stores.App.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                    </insetu-repo-filter>
+                </sutram-toolbar>
+                <sutram-stack direction="col" gap="md">
+                    ${this.historyRecords.length === 0 ? html`<sutram-empty-state text="No ledger receipts available."></sutram-empty-state>` : ''}
+                    ${repoFilteredRecords.length === 0 && this.historyRecords.length > 0 ? html`<sutram-empty-state text="No ledger receipts match criteria."></sutram-empty-state>` : ''}
 
                 ${this._viewMode === 'transaction' ? sortedTxs.slice(0, this._renderLimit).map(([txId, txData]) => {
                     const repos = Array.from(new Set(txData.records.map(r => r.repo || r.filepath?.split('/')[0]).filter(Boolean)));
                     const repoStr = repos.length > 0 ? ' in ' + repos.join(', ') : '';
                     const countStr = txData.records.length + (txData.records.length !== 1 ? ' files' : ' file') + ' modified' + repoStr;
                     return html`
-                    <div style="padding-bottom: 15px; width: 100%; box-sizing: border-box;">
                         <sutram-card-group ?stacked=${true} ?accordion=${true}>
                             <sutram-card
                                 .titleText=${"Tx: " + (txId || 'Unknown')}
@@ -1739,10 +1850,9 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                                 icon="git-merge"
                                 intent="highlight"
                                 entityType="yomama-turn"
-                                .entityData=${{ transaction_id: txId, records: txData.records }}
-                                style="display: block;">
+                                .entityData=${{ transaction_id: txId, records: txData.records }}>
                             </sutram-card>
-                            ${txData.records.map((record, idx) => {
+                            ${txData.records.map((record) => {
                                 let chunks = record.chunks || record.patches;
                                 if (!chunks && record.chunks_json) {
                                     try { chunks = JSON.parse(record.chunks_json); } catch(e){}
@@ -1767,19 +1877,16 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                                         if (window.inSetu.vfs.viewSourceFile) {
                                             window.inSetu.vfs.viewSourceFile(record.filepath, true);
                                         }
-                                    }}
-                                    style="display: block;">
+                                    }}>
                                 </sutram-card>
                                 `;
                             })}
                         </sutram-card-group>
-                    </div>
                     `;
                 }) : sortedFiles.slice(0, this._renderLimit).map(([filepath, fileData]) => {
                     const filename = new window.inSetu.utils.InSetuURI(filepath).basename;
                     const repo = fileData.records[0]?.repo || '';
                     return html`
-                    <div style="padding-bottom: 15px; width: 100%; box-sizing: border-box;">
                         <sutram-card-group ?stacked=${true} ?accordion=${true}>
                             <sutram-card
                                 .titleText=${filename}
@@ -1793,8 +1900,7 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                                     if (window.inSetu.vfs.viewSourceFile) {
                                         window.inSetu.vfs.viewSourceFile(filepath, true);
                                     }
-                                }}
-                                style="display: block;">
+                                }}>
                             </sutram-card>
                             ${fileData.records.map((record, idx) => {
                                 let chunks = record.chunks || record.patches;
@@ -1821,42 +1927,41 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                                         if (window.inSetu.vfs.viewSourceFile) {
                                             window.inSetu.vfs.viewSourceFile(record.filepath, true);
                                         }
-                                    }}
-                                    style="display: block;">
+                                    }}>
                                 </sutram-card>
                                 `;
                             })}
                         </sutram-card-group>
-                    </div>
                     `;
                 })}
                 ${((this._viewMode === 'transaction' && sortedTxs.length > this._renderLimit) || (this._viewMode !== 'transaction' && sortedFiles.length > this._renderLimit)) ? html`
                     <div id="history-sentinel" style="height: 20px; width: 100%;"></div>
                 ` : ''}
-            </sutram-scroll-view>
-            <div style="padding: 12px 16px; gap: 10px; border-top: 2px solid color-mix(in srgb, var(--intent-success) 55%, var(--border)); background: color-mix(in srgb, var(--intent-success) 6%, var(--input-bg)); display: flex; align-items: stretch; justify-content: space-between; flex-shrink: 0; width: 100%; box-sizing: border-box;">
-                <sutram-btn
-                    intent="success"
-                    icon="history"
-                    title="Toggle Yomama Menu (Active: Receipts)"
-                    style="margin: 0; flex-shrink: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem;"
-                    @click=${() => BridgeStore.getState().toggleDrawer()}>
-                </sutram-btn>
-                <sutram-btn
-                    intent="neutral"
-                    icon=${isTx ? 'folder-kanban' : 'file-text'}
-                    label=${isTx ? 'Group By File' : 'Group By Turn'}
-                    style="flex: 1; margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem;"
-                    @click=${() => BridgeStore.setState({ historyViewMode: isTx ? 'file' : 'transaction' })}>
-                </sutram-btn>
-                <sutram-btn
-                    intent="success"
-                    icon="refresh-cw"
-                    label="Refresh"
-                    style="margin: 0; --btn-padding: 10px 14px; --btn-font-size: 0.9rem;"
-                    @click=${() => BridgeStore.getState().fetchHistory()}>
-                </sutram-btn>
-            </div>
+                </sutram-stack>
+                <sutram-surface slot="footer" variant="tinted" intent="success" border="top" padding="sm">
+                    <sutram-action-bar collapse="sm" align="between">
+                        <sutram-btn
+                            intent="success"
+                            icon="history"
+                            title="Toggle Yomama Menu (Active: Receipts)"
+                            @click=${() => BridgeStore.getState().toggleDrawer()}>
+                        </sutram-btn>
+                        <sutram-btn
+                            intent="neutral"
+                            icon=${isTx ? 'folder-kanban' : 'file-text'}
+                            label=${isTx ? 'Group By File' : 'Group By Turn'}
+                            ?grow=${true}
+                            @click=${() => BridgeStore.setState({ historyViewMode: isTx ? 'file' : 'transaction' })}>
+                        </sutram-btn>
+                        <sutram-btn
+                            intent="success"
+                            icon="refresh-cw"
+                            label="Refresh"
+                            @click=${() => BridgeStore.getState().fetchHistory()}>
+                        </sutram-btn>
+                    </sutram-action-bar>
+                </sutram-surface>
+            </sutram-view>
         `;
     }
 }

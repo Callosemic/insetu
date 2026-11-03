@@ -10,7 +10,7 @@ import json
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from insetu.core.utils_core import parse_blocks
+from insetu.core.bridge.parser import parse_blocks
 from .plan import (
     PlanDocument,
     PlanSprint,

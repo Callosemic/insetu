@@ -130,7 +130,21 @@ def parse_test_tail_output(output_text: str, exit_code: int = 0) -> TestDiagnost
     failure_lines = [
         line.strip()
         for line in lines
-        if any(tok in line for tok in ("FAIL:", "ERROR:", "FAILED ", "AssertionError:", "❌ [VIOLATION:"))
+        if any(
+            tok in line
+            for tok in (
+                "FAIL:",
+                "ERROR:",
+                "FAILED ",
+                "--- FAIL:",
+                "panicked at",
+                "AssertionError",
+                "TypeError:",
+                "ReferenceError:",
+                "SyntaxError:",
+                "[VIOLATION:",
+            )
+        )
     ]
 
     failures: List[TestFailureItem] = []

@@ -6,17 +6,16 @@ from insetu.core.sdk import (
     InSetuExtension,
     get_registered_capabilities,
     extract_template_variables,
-    interpolate_template_variables,
 )
 from insetu.core.utils_core import (
     InSetuURI,
     is_extension_enabled,
     parse_frontmatter,
-    resolve_macro_includes,
     typeddict_to_openapi,
 )
-from insetu.core.prompts.engine_prompts import provide_available_prompts
 from insetu.core.agent.orchestrator import list_available_routines, execute_declarative_routine
+from insetu.core.prompts.engine_prompts import read_prompt_with_cascade, resolve_prompt_text
+from insetu.core.topology.engine_topology import resolve_repo_code_index_uri
 
 MCP_PROTOCOL_VERSION = "2025-03-26"
 
@@ -27,7 +26,7 @@ mcp_bp = InSetuExtension(
     description="Model Context Protocol (MCP 2025-03-26) JSON-RPC 2.0 gateway exposing tools, resources, and prompts.",
     core=True,
 )
-__depends__ = ['system', 'fs', 'gather', 'prompts', 'cartographer', 'bridge']
+__depends__ = ['system', 'fs', 'gather', 'prompts', 'cartographer', 'bridge', 'agent']
 
 
 class McpJsonRpcPayload(TypedDict, total=False):
@@ -135,7 +134,7 @@ def _build_mcp_resources_list(ctx) -> List[Dict[str, Any]]:
         r_dir = repo_cfg.get("repo_dir")
         if not r_dir:
             continue
-        idx_uri = f"vfs://{r_dir}/docs/CODE_INDEX.md" if repo_cfg.get("is_core_chassis") else f"vfs://{r_dir}/CODE_INDEX.md"
+        idx_uri = resolve_repo_code_index_uri(ctx, r_dir, repo_cfg)
         if ctx.resolve_path(idx_uri, must_exist=True):
             seen_uris.add(idx_uri)
             resources.append({
@@ -161,7 +160,7 @@ def _build_mcp_resources_list(ctx) -> List[Dict[str, Any]]:
 
     return resources
 def _build_mcp_prompts_list(ctx) -> List[Dict[str, Any]]:
-    prompt_uris = provide_available_prompts(workspace_id=ctx.workspace_id)
+    prompt_uris = ctx.emit_merge_list('request_available_prompts') or []
     prompts_out: List[Dict[str, Any]] = []
     for p_uri in sorted(prompt_uris):
         if p_uri.endswith((".gitkeep", ".keep")):
@@ -182,29 +181,21 @@ def _build_mcp_prompts_list(ctx) -> List[Dict[str, Any]]:
 
 
 def _render_mcp_prompt(ctx, prompt_name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    target_uri = str(InSetuURI.from_external_input(prompt_name, default_scheme="ctx"))
-    if not target_uri.startswith(("ctx://", "vfs://", "ws://")):
-        target_uri = f"ctx://prompts/{prompt_name.lstrip('/')}"
-    raw_content = ctx.vfs.read(target_uri)
-    if raw_content is None and not target_uri.startswith("ctx://prompts/"):
-        alt_uri = f"ctx://prompts/{prompt_name.lstrip('/')}"
-        raw_content = ctx.vfs.read(alt_uri)
-        if raw_content is not None:
-            target_uri = alt_uri
+    target_uri = InSetuURI.canonicalize(prompt_name, default_prefix="ctx://prompts/")
+    raw_content = read_prompt_with_cascade(ctx, target_uri)
     if raw_content is None:
         raise KeyError(f"Prompt '{prompt_name}' not found.")
 
-    yaml_meta, main_body, _ = parse_frontmatter(raw_content)
-
-    def _read_prompt(target_req: str):
-        raw_inc = ctx.vfs.read(str(InSetuURI(target_req)))
-        if raw_inc is None:
-            return None
-        _, inc_body, _ = parse_frontmatter(raw_inc)
-        return inc_body
-    pattern = r'\{\{\s*include_prompt\??\s*:\s*([^\s{}]+)\s*(?:\{([\s\S]*?)\})?\s*\}\}'
-    expanded = resolve_macro_includes(main_body, target_uri, pattern, _read_prompt, workspace_id=ctx.workspace_id)
-    expanded = interpolate_template_variables(expanded, arguments or {})
+    yaml_meta, _, _ = parse_frontmatter(raw_content)
+    args_dict = dict(arguments or {})
+    expanded = resolve_prompt_text(
+        ctx,
+        target_uri=target_uri,
+        raw_content=raw_content,
+        repo=str(args_dict.get("repo") or "").strip() or None,
+        extra_context={"inputs": args_dict, "global": args_dict},
+        interpolate_vars=True,
+    ) or ""
     return {
         "description": (yaml_meta.get("description") if isinstance(yaml_meta, dict) else None) or f"Resolved prompt {target_uri}",
         "messages": [

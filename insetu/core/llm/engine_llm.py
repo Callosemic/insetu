@@ -9,17 +9,15 @@ from pathlib import Path
 from typing import TypedDict, List, Dict, Any, Generator, Optional, Union, Tuple
 from flask import Response, stream_with_context
 from insetu.core.sdk import InSetuExtension, SettingsManager, slugify, atomic_write_text
-from insetu.core.agent.schemas import validate_schema_response as _registry_validate_schema
 from insetu.core.utils_core import (
     child_env,
     execute_binary,
-    parse_blocks,
-    encrypt_secret,
-    decrypt_secret,
-    get_tenant_control_dir,
+    fetch_url,
     get_domain_cache_path,
+    get_repeater_secret,
     load_json_config,
     save_json_config,
+    set_repeater_secret,
 )
 
 _PROVIDER_SEMAPHORES: Dict[Tuple[str, int], threading.BoundedSemaphore] = {}
@@ -415,41 +413,6 @@ class LlmDecidePayload(TypedDict, total=False):
     profile_id: Optional[str]
 
 
-def _get_endpoint_secret_key(workspace_id: str, endpoint_id: str) -> str:
-    """Reads and decrypts an endpoint-specific API key from the tenant or default secrets.json vault."""
-    if not endpoint_id:
-        return ""
-    sec_field = f"endpoint_key__{endpoint_id}"
-    for wid in (workspace_id, "default"):
-        try:
-            sec_path = Path(get_tenant_control_dir(wid)) / "secrets.json"
-            if sec_path.exists():
-                raw = load_json_config(sec_path.as_posix(), {})
-                enc_val = (raw.get("llm") or {}).get(sec_field, "")
-                if enc_val:
-                    dec = decrypt_secret(enc_val)
-                    if dec:
-                        return dec
-        except Exception:
-            continue
-    return ""
-
-
-def _set_endpoint_secret_key(workspace_id: str, endpoint_id: str, plain_api_key: str) -> None:
-    """Encrypts and stores an endpoint-specific API key inside the default daemon secrets.json vault."""
-    if not endpoint_id:
-        return
-    sec_field = f"endpoint_key__{endpoint_id}"
-    sec_path = Path(get_tenant_control_dir("default")) / "secrets.json"
-    raw = load_json_config(sec_path.as_posix(), {})
-    llm_sec = raw.setdefault("llm", {})
-    if plain_api_key and plain_api_key.strip():
-        llm_sec[sec_field] = encrypt_secret(plain_api_key.strip())
-    else:
-        llm_sec.pop(sec_field, None)
-    save_json_config(sec_path.as_posix(), raw, workspace_id="default")
-
-
 def _synthesize_legacy_pool_and_profile(ctx) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Synthesizes a default compute endpoint and profile from legacy single-provider settings when no pool is saved yet."""
     prov = ctx.settings.get("provider", "anthropic") or "anthropic"
@@ -518,7 +481,7 @@ def get_compute_pool_and_profiles(ctx) -> Dict[str, Any]:
     endpoints = list(raw_endpoints) if isinstance(raw_endpoints, list) and len(raw_endpoints) > 0 else legacy_eps
     for ep in endpoints:
         if isinstance(ep, dict) and ep.get("id") and not ep.get("is_legacy_bridge"):
-            ep["has_api_key"] = bool(_get_endpoint_secret_key(ctx.workspace_id, ep["id"]))
+            ep["has_api_key"] = bool(get_repeater_secret("llm", ctx.workspace_id, "compute_endpoints", ep["id"], "api_key", scope="daemon"))
 
     profiles = list(raw_profiles) if isinstance(raw_profiles, list) and len(raw_profiles) > 0 else legacy_profs
     active_id = str(ctx.settings.get("active_profile_id") or "default").strip()
@@ -529,6 +492,7 @@ def get_compute_pool_and_profiles(ctx) -> Dict[str, Any]:
         "endpoints": endpoints,
         "profiles": profiles,
         "active_profile_id": active_id,
+        "driver_tier_defaults": DRIVER_TIER_DEFAULTS,
     }
 
 
@@ -621,7 +585,7 @@ def _resolve_tier_execution_target(ctx, tier: Optional[str] = None, profile_id: 
         if ep.get("is_legacy_bridge"):
             api_key = ctx.settings.get("api_key", "")
         else:
-            api_key = _get_endpoint_secret_key(ctx.workspace_id, ep_id) or ctx.settings.get("api_key", "")
+            api_key = get_repeater_secret("llm", ctx.workspace_id, "compute_endpoints", ep_id, "api_key", scope="daemon") or ctx.settings.get("api_key", "")
         base_url = str(ep.get("base_url") or ("https://openrouter.ai/api/v1" if prov == "openrouter" else "http://127.0.0.1:11434/v1"))
         max_p = int(ep.get("max_parallel", 4) or 4)
 
@@ -691,6 +655,7 @@ def validate_output_schema(raw_text: str, output_schema: Union[str, Dict[str, An
     """
     if not output_schema:
         return True, raw_text, ""
+    from insetu.core.agent.schemas import validate_schema_response as _registry_validate_schema
     return _registry_validate_schema(output_schema, raw_text or "")
 def _stream_anthropic(api_key: str, model: str, messages: list, system_prompt: str) -> Generator[str, None, None]:
     url = "https://api.anthropic.com/v1/messages"
@@ -934,38 +899,44 @@ def _run_decisions_inference(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key.strip()}",
     }
-    req = urllib.request.Request(url, headers=headers, data=json.dumps(payload).encode("utf-8"))
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            resp_data = json.loads(resp.read().decode("utf-8"))
-            answers = resp_data.get("answers") or {}
-            scores = {
-                k: (float(v.get("noul", 0.0)) if isinstance(v, dict) else float(v or 0.0))
-                for k, v in answers.items()
-            }
-            best_key = max(scores, key=scores.get) if scores else next(iter(questions.keys()), "CLEAN")
-            best_score = scores.get(best_key, 0.5)
+        resp = fetch_url(
+            url,
+            method="POST",
+            headers=headers,
+            data=json.dumps(payload).encode("utf-8"),
+            timeout=20.0,
+            allow_private=True,
+        )
+        resp_data = resp.json()
+        answers = resp_data.get("answers") or {}
+        scores = {
+            k: (float(v.get("noul", 0.0)) if isinstance(v, dict) else float(v or 0.0))
+            for k, v in answers.items()
+        }
+        best_key = max(scores, key=scores.get) if scores else next(iter(questions.keys()), "CLEAN")
+        best_score = scores.get(best_key, 0.5)
 
-            if schema_name == "intent_classification":
-                return json.dumps({"intent": best_key, "confidence": best_score, "scores": scores}), None
-            if schema_name == "debt_ratchet_verdict":
-                verdict = "REFACTOR" if best_key == "REFACTOR" and best_score >= 0.5 else "CLEAN"
-                return json.dumps({
-                    "verdict": verdict,
-                    "confidence": best_score,
-                    "summary": "Flagged for surgical cleanup." if verdict == "REFACTOR" else "No technical debt detected.",
-                    "scores": scores,
-                }), None
-            if "relevant" in questions and len(questions) == 1:
-                noul_val = scores.get("relevant", 0.5)
-                return json.dumps({"relevant": noul_val >= 0.5, "score": noul_val, "answers": answers}), None
+        if schema_name == "intent_classification":
+            return json.dumps({"intent": best_key, "confidence": best_score, "scores": scores}), None
+        if schema_name == "debt_ratchet_verdict":
+            verdict = "REFACTOR" if best_key == "REFACTOR" and best_score >= 0.5 else "CLEAN"
             return json.dumps({
-                "selected": best_key,
-                "verdict": best_key,
+                "verdict": verdict,
                 "confidence": best_score,
+                "summary": "Flagged for surgical cleanup." if verdict == "REFACTOR" else "No technical debt detected.",
                 "scores": scores,
-                "answers": answers,
             }), None
+        if "relevant" in questions and len(questions) == 1:
+            noul_val = scores.get("relevant", 0.5)
+            return json.dumps({"relevant": noul_val >= 0.5, "score": noul_val, "answers": answers}), None
+        return json.dumps({
+            "selected": best_key,
+            "verdict": best_key,
+            "confidence": best_score,
+            "scores": scores,
+            "answers": answers,
+        }), None
     except Exception as e:
         return None, f"Decisions API error ({url}): {str(e)}"
 def _run_single_inference(
@@ -1147,13 +1118,18 @@ def api_llm_transcribe(ctx):
                 ],
             }]
         }
-        req = urllib.request.Request(url, headers={"Content-Type": "application/json"}, data=json.dumps(payload).encode("utf-8"))
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                resp_data = json.loads(resp.read().decode("utf-8"))
-                parts = resp_data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-                transcript = "".join(p.get("text", "") for p in parts).strip()
-                return {"status": "success", "text": transcript, "provider": provider}
+            resp = fetch_url(
+                url,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+                data=json.dumps(payload).encode("utf-8"),
+                timeout=30.0,
+            )
+            resp_data = resp.json()
+            parts = resp_data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            transcript = "".join(p.get("text", "") for p in parts).strip()
+            return {"status": "success", "text": transcript, "provider": provider}
         except Exception as e:
             return {"error": f"Audio transcription failed: {str(e)}"}, 500
 
@@ -1214,7 +1190,7 @@ def api_llm_profiles(ctx):
     if isinstance(data.get("endpoint_keys"), dict):
         for ep_id, raw_key in data["endpoint_keys"].items():
             if isinstance(raw_key, str) and not raw_key.startswith("****"):
-                _set_endpoint_secret_key(ctx.workspace_id, slugify(ep_id), raw_key)
+                set_repeater_secret("llm", ctx.workspace_id, "compute_endpoints", slugify(ep_id), "api_key", raw_key, scope="daemon")
 
     if isinstance(data.get("endpoints"), list):
         clean_eps = []
@@ -1225,7 +1201,7 @@ def api_llm_profiles(ctx):
             if not eid:
                 continue
             if isinstance(ep.get("api_key"), str) and ep["api_key"].strip() and not ep["api_key"].startswith("****"):
-                _set_endpoint_secret_key(ctx.workspace_id, eid, ep["api_key"])
+                set_repeater_secret("llm", ctx.workspace_id, "compute_endpoints", eid, "api_key", ep["api_key"], scope="daemon")
             raw_custom = ep.get("custom_models") if ep.get("custom_models") is not None else (ep.get("models") or [])
             if isinstance(raw_custom, str):
                 raw_custom = [m.strip() for m in raw_custom.split(",") if m.strip()]
@@ -1296,105 +1272,105 @@ def _harvest_external_model_catalog(ctx) -> Dict[str, Any]:
 
     # 1. Harvest OpenRouter Public Model Feed (Zero auth required)
     try:
-        req = urllib.request.Request(
+        resp = fetch_url(
             PUBLIC_CATALOG_SOURCES["openrouter"],
             headers={"Accept": "application/json", "User-Agent": "inSetu-Developer-OS/2.0"},
+            timeout=10.0,
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            or_data = json.loads(resp.read().decode("utf-8"))
-            for item in (or_data.get("data") or []):
-                if not isinstance(item, dict) or not item.get("id"):
-                    continue
-                mid = str(item["id"])
-                pricing = item.get("pricing") or {}
-                prompt_per_tok = float(pricing.get("prompt") or 0.0)
-                comp_per_tok = float(pricing.get("completion") or 0.0)
-                lower_id = mid.lower()
-                is_dec = lower_id.startswith(("typesafe/jev", "nace-ai/drex", "liquid/d1"))
-                in_cost_1m = round(prompt_per_tok * 1_000_000, 4)
-                cat_str = "decision" if is_dec else "generative"
-                catalog_by_id[mid] = {
-                    "id": mid,
-                    "name": item.get("name") or mid,
-                    "provider": _model_provider_prefix(mid, "openrouter"),
-                    "context_length": int(item.get("context_length") or 0),
-                    "input_cost_per_1m": in_cost_1m,
-                    "output_cost_per_1m": round(comp_per_tok * 1_000_000, 4),
-                    "category": cat_str,
-                    "recommended_tier": _infer_model_cognitive_tier(mid, in_cost_1m, cat_str),
-                    "source": "openrouter",
-                }
+        or_data = resp.json()
+        for item in (or_data.get("data") or []):
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            mid = str(item["id"])
+            pricing = item.get("pricing") or {}
+            prompt_per_tok = float(pricing.get("prompt") or 0.0)
+            comp_per_tok = float(pricing.get("completion") or 0.0)
+            lower_id = mid.lower()
+            is_dec = lower_id.startswith(("typesafe/jev", "nace-ai/drex", "liquid/d1"))
+            in_cost_1m = round(prompt_per_tok * 1_000_000, 4)
+            cat_str = "decision" if is_dec else "generative"
+            catalog_by_id[mid] = {
+                "id": mid,
+                "name": item.get("name") or mid,
+                "provider": _model_provider_prefix(mid, "openrouter"),
+                "context_length": int(item.get("context_length") or 0),
+                "input_cost_per_1m": in_cost_1m,
+                "output_cost_per_1m": round(comp_per_tok * 1_000_000, 4),
+                "category": cat_str,
+                "recommended_tier": _infer_model_cognitive_tier(mid, in_cost_1m, cat_str),
+                "source": "openrouter",
+            }
     except Exception:
         pass
     # 1b. Harvest Models.dev Open Catalog (Covers direct Anthropic, Gemini, OpenAI, and TypeSafe Jev models)
     try:
-        req = urllib.request.Request(
+        resp = fetch_url(
             PUBLIC_CATALOG_SOURCES["models_dev"],
             headers={"Accept": "application/json", "User-Agent": "inSetu-Developer-OS/2.0"},
+            timeout=8.0,
         )
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            mdev_data = json.loads(resp.read().decode("utf-8"))
-            if isinstance(mdev_data, dict):
-                for prov_key, prov_obj in mdev_data.items():
-                    if not isinstance(prov_obj, dict):
+        mdev_data = resp.json()
+        if isinstance(mdev_data, dict):
+            for prov_key, prov_obj in mdev_data.items():
+                if not isinstance(prov_obj, dict):
+                    continue
+                models_dict = prov_obj.get("models") if isinstance(prov_obj.get("models"), dict) else {}
+                for m_key, m_info in models_dict.items():
+                    if not isinstance(m_info, dict):
                         continue
-                    models_dict = prov_obj.get("models") if isinstance(prov_obj.get("models"), dict) else {}
-                    for m_key, m_info in models_dict.items():
-                        if not isinstance(m_info, dict):
-                            continue
-                        full_id = f"{prov_key}/{m_key}" if "/" not in m_key else m_key
-                        if full_id in catalog_by_id:
-                            continue
-                        cost_obj = m_info.get("cost") or {}
-                        in_cost = float(cost_obj.get("input") or 0.0)
-                        out_cost = float(cost_obj.get("output") or 0.0)
-                        limit_obj = m_info.get("limit") or {}
-                        ctx_len = int(limit_obj.get("context") or 0)
-                        lower_id = full_id.lower()
-                        is_dec = lower_id.startswith(("typesafe/jev", "nace-ai/drex", "liquid/d1"))
-                        in_cost_round = round(in_cost, 4)
-                        cat_str = "decision" if is_dec else "generative"
-                        catalog_by_id[full_id] = {
-                            "id": full_id,
-                            "name": m_info.get("name") or full_id,
-                            "provider": prov_key,
-                            "context_length": ctx_len,
-                            "input_cost_per_1m": in_cost_round,
-                            "output_cost_per_1m": round(out_cost, 4),
-                            "category": cat_str,
-                            "recommended_tier": _infer_model_cognitive_tier(full_id, in_cost_round, cat_str),
-                            "source": "models.dev",
-                        }
+                    full_id = f"{prov_key}/{m_key}" if "/" not in m_key else m_key
+                    if full_id in catalog_by_id:
+                        continue
+                    cost_obj = m_info.get("cost") or {}
+                    in_cost = float(cost_obj.get("input") or 0.0)
+                    out_cost = float(cost_obj.get("output") or 0.0)
+                    limit_obj = m_info.get("limit") or {}
+                    ctx_len = int(limit_obj.get("context") or 0)
+                    lower_id = full_id.lower()
+                    is_dec = lower_id.startswith(("typesafe/jev", "nace-ai/drex", "liquid/d1"))
+                    in_cost_round = round(in_cost, 4)
+                    cat_str = "decision" if is_dec else "generative"
+                    catalog_by_id[full_id] = {
+                        "id": full_id,
+                        "name": m_info.get("name") or full_id,
+                        "provider": prov_key,
+                        "context_length": ctx_len,
+                        "input_cost_per_1m": in_cost_round,
+                        "output_cost_per_1m": round(out_cost, 4),
+                        "category": cat_str,
+                        "recommended_tier": _infer_model_cognitive_tier(full_id, in_cost_round, cat_str),
+                        "source": "models.dev",
+                    }
     except Exception:
         pass
 
     # 1c. Harvest LiteLLM Pricing & Context Map Fallback
     try:
-        req = urllib.request.Request(
+        resp = fetch_url(
             PUBLIC_CATALOG_SOURCES["litellm"],
             headers={"Accept": "application/json", "User-Agent": "inSetu-Developer-OS/2.0"},
+            timeout=8.0,
         )
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            lite_data = json.loads(resp.read().decode("utf-8"))
-            if isinstance(lite_data, dict):
-                for m_key, m_info in lite_data.items():
-                    if m_key == "sample_spec" or not isinstance(m_info, dict) or m_key in catalog_by_id:
-                        continue
-                    in_tok = float(m_info.get("input_cost_per_token") or 0.0)
-                    out_tok = float(m_info.get("output_cost_per_token") or 0.0)
-                    prov_name = str(m_info.get("litellm_provider") or _model_provider_prefix(m_key, "cloud"))
-                    in_cost_1m = round(in_tok * 1_000_000, 4)
-                    catalog_by_id[m_key] = {
-                        "id": m_key,
-                        "name": m_key,
-                        "provider": prov_name,
-                        "context_length": int(m_info.get("max_input_tokens") or m_info.get("max_tokens") or 0),
-                        "input_cost_per_1m": in_cost_1m,
-                        "output_cost_per_1m": round(out_tok * 1_000_000, 4),
-                        "category": "generative",
-                        "recommended_tier": _infer_model_cognitive_tier(m_key, in_cost_1m, "generative"),
-                        "source": "litellm",
-                    }
+        lite_data = resp.json()
+        if isinstance(lite_data, dict):
+            for m_key, m_info in lite_data.items():
+                if m_key == "sample_spec" or not isinstance(m_info, dict) or m_key in catalog_by_id:
+                    continue
+                in_tok = float(m_info.get("input_cost_per_token") or 0.0)
+                out_tok = float(m_info.get("output_cost_per_token") or 0.0)
+                prov_name = str(m_info.get("litellm_provider") or _model_provider_prefix(m_key, "cloud"))
+                in_cost_1m = round(in_tok * 1_000_000, 4)
+                catalog_by_id[m_key] = {
+                    "id": m_key,
+                    "name": m_key,
+                    "provider": prov_name,
+                    "context_length": int(m_info.get("max_input_tokens") or m_info.get("max_tokens") or 0),
+                    "input_cost_per_1m": in_cost_1m,
+                    "output_cost_per_1m": round(out_tok * 1_000_000, 4),
+                    "category": "generative",
+                    "recommended_tier": _infer_model_cognitive_tier(m_key, in_cost_1m, "generative"),
+                    "source": "litellm",
+                }
     except Exception:
         pass
 
@@ -1408,26 +1384,30 @@ def _harvest_external_model_catalog(ctx) -> Dict[str, Any]:
             continue
         try:
             models_url = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
-            req = urllib.request.Request(models_url, headers={"Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=2.5) as resp:
-                m_data = json.loads(resp.read().decode("utf-8"))
-                discovered = []
-                for m_item in (m_data.get("data") or []):
-                    m_id = m_item.get("id") if isinstance(m_item, dict) else str(m_item)
-                    if m_id:
-                        discovered.append(m_id)
-                        full_key = f"{ep['id']}::{m_id}"
-                        catalog_by_id[full_key] = {
-                            "id": m_id,
-                            "name": f"{m_id} ({ep.get('label') or ep['id']})",
-                            "provider": ep["id"],
-                            "context_length": 0,
-                            "input_cost_per_1m": 0.0,
-                            "output_cost_per_1m": 0.0,
-                            "category": "local",
-                            "recommended_tier": _infer_model_cognitive_tier(m_id, 0.0, "local"),
-                            "source": ep["id"],
-                        }
+            resp = fetch_url(
+                models_url,
+                headers={"Accept": "application/json"},
+                timeout=2.5,
+                allow_private=True,
+            )
+            m_data = resp.json()
+            discovered = []
+            for m_item in (m_data.get("data") or []):
+                m_id = m_item.get("id") if isinstance(m_item, dict) else str(m_item)
+                if m_id:
+                    discovered.append(m_id)
+                    full_key = f"{ep['id']}::{m_id}"
+                    catalog_by_id[full_key] = {
+                        "id": m_id,
+                        "name": f"{m_id} ({ep.get('label') or ep['id']})",
+                        "provider": ep["id"],
+                        "context_length": 0,
+                        "input_cost_per_1m": 0.0,
+                        "output_cost_per_1m": 0.0,
+                        "category": "local",
+                        "recommended_tier": _infer_model_cognitive_tier(m_id, 0.0, "local"),
+                        "source": ep["id"],
+                    }
         except Exception:
             continue
 

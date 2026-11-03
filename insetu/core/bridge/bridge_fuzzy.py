@@ -5,12 +5,13 @@ import base64
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from insetu.core.utils_core import (
-    _get_base_step_and_diffs,
     load_yaml_string,
     dump_yaml_string,
     parse_frontmatter,
+    three_way_merge_text,
     update_frontmatter,
 )
+from .parser import get_base_step_and_diffs as _get_base_step_and_diffs
 # ==============================================================================
 # CHATBOT & LLM TRANSPORT ARTIFACT HEALERS
 # ==============================================================================
@@ -30,16 +31,17 @@ def heal_chevron_meltdown(text):
 clean_chevron_meltdown = heal_chevron_meltdown
 
 
+_MATH_SPAN_RE = re.compile(r'(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)')
+
+
 def heal_latex_vert(text):
-    """Replaces Gemini LaTeX math-mode pipe escapes (\\vert{}) back into '|' strictly when bounded by $ ... $."""
+    """Replaces Gemini LaTeX math-mode pipe escapes (\\vert{}) back into '|' strictly within $...$ or $$...$$ spans."""
     if "\\vert" not in text or text.count("$") < 2:
         return text
-    first_dollar = text.find("$")
-    last_dollar = text.rfind("$")
-    if first_dollar >= last_dollar:
-        return text
-    middle = text[first_dollar + 1:last_dollar].replace("\\vert{}", "|").replace("\\vert", "|")
-    return text[:first_dollar + 1] + middle + text[last_dollar:]
+    return _MATH_SPAN_RE.sub(
+        lambda m: m.group(1).replace("\\vert{}", "|").replace("\\vert", "|"),
+        text,
+    )
 
 
 def heal_citation_artifacts(text):
@@ -296,7 +298,6 @@ def apply_block_in_memory(content, block, silent=False):
         search_str = raw_search
         replace_str = heal_llm_block_artifacts(raw_replace, reference_content=content)
     if replace_str != raw_replace:
-        block["replace"] = replace_str
         if not silent:
             print("  └─ 🛡️  Artifact Heal: Auto-repaired chatbot artifacts in REPLACE block.")
     if not search_str.strip():
@@ -326,7 +327,6 @@ def apply_block_in_memory(content, block, silent=False):
                 search_match = healed_match
                 search_str = healed_search_str
                 search_lines = healed_search_lines
-                block["search"] = search_str
                 if not silent:
                     print("  └─ 🛡️  Artifact Heal: Auto-repaired chatbot artifacts in SEARCH block.")
     if not search_match:
@@ -420,9 +420,8 @@ def apply_block_in_memory(content, block, silent=False):
                 matched_f += 1
             f_absorb_idx += 1
 
-        search_lines.extend(file_lines[tail_f_idx:f_absorb_idx])
+        search_lines = list(search_lines) + file_lines[tail_f_idx:f_absorb_idx]
         actual_span += (f_absorb_idx - tail_f_idx)
-        block["search"] = "\n".join(search_lines)
         if not silent: 
             print(f"  └─ 🛡️  Atomic Heal: Expanded SEARCH block to absorb {best_overlap} hallucinated trailing lines.")
 
@@ -481,6 +480,101 @@ def apply_block_in_memory(content, block, silent=False):
         if not silent: print("  └─ [ℹ️] Idempotency: Patch resulted in no changes to the file. Skipping chunk.")
         return True, content, "idempotent"
     return True, final_content, "success"
+
+
+def rebase_overlapping_block_in_memory(
+    original_content: Optional[str],
+    current_content: str,
+    block: Dict[str, Any],
+    silent: bool = True,
+) -> Tuple[bool, str, str]:
+    """
+    Tier 2 Deterministic Overlap Rebaser:
+    When a patch block fails to anchor in `current_content` (A) because an earlier patch in the same
+    batch mutated shared boundary context lines, checks if the block anchors against `original_content` (O):
+    1. Context-Edge Shrinking: Trims unchanged top/bottom sandwich padding lines (search == replace)
+        if the core mutated hunk + surviving context still anchors uniquely in `current_content`.
+    2. In-Memory 3-Way Rebase (O -> A vs. O -> B): Applies the block to `original_content` (O) to produce (B),
+        and runs a deterministic 3-way line merge `three_way_merge_text(O, A, B)`.
+    Returns (ok, merged_content, status_str).
+    """
+    if not original_content or original_content == current_content:
+        return False, current_content, "error"
+
+    orig_norm = original_content.replace("\r\n", "\n").replace("\xa0", " ")
+    curr_norm = current_content.replace("\r\n", "\n").replace("\xa0", " ")
+
+    # Verify the block was indeed written against original_content (O)
+    ok_orig, target_b_content, orig_status = apply_block_in_memory(orig_norm, dict(block), silent=True)
+    if not ok_orig or orig_status in ("genesis", "error") or str(orig_status).startswith("ambiguous:"):
+        return False, current_content, "error"
+    if orig_status in ("no_op", "idempotent"):
+        return True, current_content, orig_status
+
+    # Mechanism 1: Context-Edge Shrinking (trimming overlapped unchanged sandwich context lines)
+    search_str = normalize_patch_payload(block.get("search", ""), reference_content=orig_norm)
+    replace_str = normalize_patch_payload(block.get("replace", ""), reference_content=orig_norm)
+    s_lines = search_str.split("\n")
+    r_lines = replace_str.split("\n")
+
+    prefix_len = 0
+    while (
+        prefix_len < len(s_lines)
+        and prefix_len < len(r_lines)
+        and s_lines[prefix_len].strip() == r_lines[prefix_len].strip()
+    ):
+        prefix_len += 1
+
+    suffix_len = 0
+    while (
+        suffix_len < (len(s_lines) - prefix_len)
+        and suffix_len < (len(r_lines) - prefix_len)
+        and s_lines[len(s_lines) - 1 - suffix_len].strip() == r_lines[len(r_lines) - 1 - suffix_len].strip()
+    ):
+        suffix_len += 1
+
+    if prefix_len > 0 or suffix_len > 0:
+        curr_lines = curr_norm.split("\n")
+        for trim_top in range(0, prefix_len + 1):
+            for trim_bot in range(0, suffix_len + 1):
+                if trim_top == 0 and trim_bot == 0:
+                    continue
+                s_end = len(s_lines) - trim_bot if trim_bot > 0 else len(s_lines)
+                r_end = len(r_lines) - trim_bot if trim_bot > 0 else len(r_lines)
+                shrunk_s = s_lines[trim_top:s_end]
+                shrunk_r = r_lines[trim_top:r_end]
+                non_empty_s = [l for l in shrunk_s if l.strip()]
+                if len(non_empty_s) < 2 and sum(len(l.strip()) for l in non_empty_s) < 18:
+                    continue
+                matches = find_all_block_anchors(curr_lines, shrunk_s, allow_boundary_partial=False)
+                if len(matches) == 1:
+                    shrunk_block = {
+                        **block,
+                        "search": "\n".join(shrunk_s),
+                        "replace": "\n".join(shrunk_r),
+                        "_pre_normalized": True,
+                    }
+                    ok_shrunk, shrunk_out, shrunk_stat = apply_block_in_memory(curr_norm, shrunk_block, silent=True)
+                    if ok_shrunk and shrunk_stat == "success":
+                        if not silent:
+                            print("  └─ 🛡️  Overlap Rebase: Trimmed overlapped sandwich padding and anchored cleanly.")
+                        return True, shrunk_out, "overlap_rebased"
+
+    # Mechanism 2: Deterministic 3-Way Line Merge (O -> A vs. O -> B)
+    merge_res = three_way_merge_text(orig_norm, curr_norm, target_b_content)
+    if isinstance(merge_res, tuple):
+        merged_ok, merged_text = merge_res
+    elif isinstance(merge_res, dict):
+        merged_ok = bool(merge_res.get("clean"))
+        merged_text = str(merge_res.get("merged") or "")
+    else:
+        merged_ok, merged_text = False, ""
+    if merged_ok and merged_text != curr_norm:
+        if not silent:
+            print("  └─ 🛡️  Overlap Rebase: Merged concurrent patch hunks via 3-way buffer rebase.")
+        return True, merged_text, "overlap_rebased"
+
+    return False, current_content, "overlapping_conflict"
 
 
 def _find_soft_wrap_span(content: str, needle: str) -> Optional[Tuple[int, int]]:
