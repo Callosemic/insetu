@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { InSetuElement, sharedStyles, resolveDirectoryState, SutramWorker, SutramCard } from '/static/extensions/system/insetu_sdk.js';
 export function buildUriFileTree(uris, rootScope = '') {
     const normScope = (rootScope || 'vfs://').trim();
@@ -13,16 +13,27 @@ export function buildUriFileTree(uris, rootScope = '') {
         let schemePrefix = '';
         let relSegmentsStr = '';
 
-        if (!isSchemeOnlyScope && cleanScope && rawUri.startsWith(cleanScope + '/')) {
-            schemePrefix = cleanScope + '/';
-            relSegmentsStr = rawUri.slice(schemePrefix.length);
-        } else if (!isSchemeOnlyScope && cleanScope && rawUri === cleanScope) {
-            return;
-        } else {
-            const match = rawUri.match(/^([a-zA-Z0-9_-]+:\/\/)(.*)$/);
-            if (!match) return;
-            schemePrefix = match[1];
-            relSegmentsStr = match[2];
+        let repoPromptsPrefix = null;
+        if (cleanScope === 'ctx://prompts') {
+            const repoPromptMatch = rawUri.match(/^vfs:\/\/([^/]+)\/\.insetu-data\/prompts\/(.+)$/);
+            if (repoPromptMatch) {
+                const [, repoName, repoRel] = repoPromptMatch;
+                repoPromptsPrefix = `vfs://${repoName}/.insetu-data/prompts`;
+                relSegmentsStr = `${repoName}/${repoRel}`;
+            }
+        }
+        if (repoPromptsPrefix === null) {
+            if (!isSchemeOnlyScope && cleanScope && rawUri.startsWith(cleanScope + '/')) {
+                schemePrefix = cleanScope + '/';
+                relSegmentsStr = rawUri.slice(schemePrefix.length);
+            } else if (!isSchemeOnlyScope && cleanScope && rawUri === cleanScope) {
+                return;
+            } else {
+                const match = rawUri.match(/^([a-zA-Z0-9_-]+:\/\/)(.*)$/);
+                if (!match) return;
+                schemePrefix = match[1];
+                relSegmentsStr = match[2];
+            }
         }
 
         const parts = relSegmentsStr.split('/').filter(Boolean);
@@ -35,7 +46,9 @@ export function buildUriFileTree(uris, rootScope = '') {
             const part = parts[i];
             currentTreePath.push(part);
             const isLast = (i === parts.length - 1);
-            const nodeCanonicalUri = `${schemePrefix}${parts.slice(0, i + 1).join('/')}`;
+            const nodeCanonicalUri = repoPromptsPrefix
+                ? (i === 0 ? repoPromptsPrefix : `${repoPromptsPrefix}/${parts.slice(1, i + 1).join('/')}`)
+                : `${schemePrefix}${parts.slice(0, i + 1).join('/')}`;
             if (isLast) {
                 const isSource = !rawUri.startsWith('ctx://contexts/') && !rawUri.startsWith('ctx://diffs/') && !rawUri.startsWith('ctx://workflows/');
                 cursor.children[part] = {
@@ -56,6 +69,9 @@ export function buildUriFileTree(uris, rootScope = '') {
                         canonicalUri: nodeCanonicalUri,
                         treePath: [...currentTreePath]
                     };
+                } else if (repoPromptsPrefix && cursor.children[part].canonicalUri?.startsWith('ctx://prompts/')) {
+                    cursor.children[part].fullPath = nodeCanonicalUri;
+                    cursor.children[part].canonicalUri = nodeCanonicalUri;
                 }
                 cursor = cursor.children[part];
             }
@@ -66,6 +82,7 @@ export function buildUriFileTree(uris, rootScope = '') {
 }
 
 export class InSetuFileTree extends InSetuElement {
+    static get extensionName() { return 'fs'; }
     static properties = {
         files: { type: Array },
         currentPath: { type: Array },
@@ -82,22 +99,7 @@ export class InSetuFileTree extends InSetuElement {
         _deletedMutations: { type: Object },
         _gitModifiedFiles: { type: Object }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; min-height: 0; width: 100%; container-type: inline-size; }
-        .toolbar-row {    
-            display: flex; align-items: center; gap: 10px; padding: 5px 20px; height: 44px; box-sizing: border-box; 
-        }
-        @container (max-width: 50rem) {
-            .toolbar-row { padding: 5px 10px; }
-        }
-        .file-list-container {
-            flex: 1; display: flex; flex-direction: column; min-height: 0;
-            --tree-item-px: 12px;
-        }
-        @container (max-width: 480px) {
-            .file-list-container { --tree-item-px: 0px; }
-        }
-    `];
+    static styles = [sharedStyles];
 constructor() {
         super();
         this.files = [];
@@ -167,8 +169,12 @@ constructor() {
         const baseFiles = (this.files || [])
             .filter(f => f && typeof f === 'string')
             .map(f => f.includes('://') ? f : `vfs://${f.replace(/^\/+/, '')}`);
+        const isPromptsRoot = rootScope.replace(/\/+$/, '') === 'ctx://prompts';
         const pendingFiles = Array.from(this._pendingMutations || [])
-            .filter(f => f && typeof f === 'string' && f.startsWith(rootScope));
+            .filter(f => f && typeof f === 'string' && (
+                f.startsWith(rootScope) ||
+                (isPromptsRoot && /^vfs:\/\/[^/]+\/\.insetu-data\/prompts\//.test(f))
+            ));
         let mergedFiles = Array.from(new Set([...baseFiles, ...pendingFiles]));
         if (this._deletedMutations && this._deletedMutations.size > 0) {
             const deletedSet = this._deletedMutations;
@@ -202,7 +208,7 @@ constructor() {
     }
     render() {
         if (this.files.length === 0) {
-            return html`<p style="padding: 20px; color: var(--text-muted); font-style: italic;">No files found.</p>`;
+            return html`<sutram-empty-state text="No files found."></sutram-empty-state>`;
         }
         const isSearching = this.enableSearch && this._searchQuery;
 
@@ -225,61 +231,70 @@ constructor() {
         const activePath = this.currentPath || [];
 
         return html`
-            ${this.enableSearch ? html`
-                <sutram-toolbar
-                    searchPlaceholder=${this.searchPlaceholder}
-                    .searchQuery=${this._searchQuery || ''}
-                    @search-changed=${(e) => this._searchQuery = e.detail.value}
-                    ?bottomBorder=${(!isSearching && activePath.length > 0 && !this.hidePath)}>
-                    ${(!isSearching && activePath.length > 0 && !this.hidePath) ? html`
-                        <div slot="bottom-row" class="toolbar-row" style="background: var(--input-bg); border-top: 1px solid var(--border); overflow: hidden;">
-                            <sutram-btn intent="neutral" icon="corner-left-up" label="Up" @click=${() => this._setPath(activePath.slice(0, -1))} style="margin-right: 8px;"></sutram-btn>
-                            <sutram-scrub-track style="flex: 1; min-width: 0; font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem;">
+            <sutram-view ?flush=${true} ?noScroll=${true}>
+                ${this.enableSearch ? html`
+                    <sutram-toolbar
+                        slot="toolbar"
+                        searchPlaceholder=${this.searchPlaceholder}
+                        .searchQuery=${this._searchQuery || ''}
+                        @search-changed=${(e) => this._searchQuery = e.detail.value}
+                        ?flush=${(!isSearching && activePath.length > 0 && !this.hidePath)}>
+                        ${(!isSearching && activePath.length > 0 && !this.hidePath) ? html`
+                            <sutram-surface slot="bottom-row" variant="panel" border="top" padding="xs">
+                                <sutram-stack direction="row" align="center" gap="sm">
+                                    <sutram-btn intent="neutral" ?compact=${true} icon="corner-left-up" label="Up" @click=${() => this._setPath(activePath.slice(0, -1))}></sutram-btn>
+                                    <sutram-scrub-track ?grow=${true} ?monospace=${true}>
+                                        /${activePath.join('/')}
+                                    </sutram-scrub-track>
+                                </sutram-stack>
+                            </sutram-surface>
+                        ` : ''}
+                    </sutram-toolbar>
+                ` : ((!isSearching && activePath.length > 0 && !this.hidePath) ? html`
+                    <sutram-surface slot="toolbar" variant="panel" border="bottom" padding="xs">
+                        <sutram-stack direction="row" align="center" gap="sm">
+                            <sutram-btn intent="neutral" ?compact=${true} icon="corner-left-up" label="Up" @click=${() => this._setPath(activePath.slice(0, -1))}></sutram-btn>
+                            <sutram-scrub-track ?grow=${true} ?monospace=${true}>
                                 /${activePath.join('/')}
                             </sutram-scrub-track>
-                        </div>
-                    ` : ''}
-                </sutram-toolbar>
-            ` : ((!isSearching && activePath.length > 0 && !this.hidePath) ? html`
-                <div class="toolbar-row" style="background: var(--input-bg); border-bottom: 1px solid var(--border); overflow: hidden;">
-                    <sutram-btn intent="neutral" icon="corner-left-up" label="Up" @click=${() => this._setPath(activePath.slice(0, -1))} style="margin-right: 8px;"></sutram-btn>
-                    <sutram-scrub-track style="flex: 1; min-width: 0; font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem;">
-                        /${activePath.join('/')}
-                    </sutram-scrub-track>
-                </div>
-            ` : '')}
-            <div class="file-list-container">
+                        </sutram-stack>
+                    </sutram-surface>
+                ` : '')}
                 ${isSearching ? html`
                     <sutram-virtual-list
                         .items=${flatResults}
                         .renderItem=${fullFilepath => {
                             if (!fullFilepath || typeof fullFilepath !== 'string') return html``;
                             const parsed = new this.utils.InSetuURI(fullFilepath);
+                            const isRepoPromptFile = /^vfs:\/\/[^/]+\/\.insetu-data\/prompts\//.test(fullFilepath);
                             const isGitMod = this._gitModifiedFiles.has(fullFilepath);
-                            const cardSuffix = parsed.isSharedMount ? `🌐 ${parsed.volume}` : (parsed.isUserTemplate ? 'User Template' : (parsed.isReadOnlyTemplate ? 'Template' : (isGitMod ? 'M' : '')));
+                            const cardSuffix = parsed.isSharedMount
+                                ? `🌐 ${parsed.volume}`
+                                : (parsed.isUserTemplate
+                                    ? 'User Template'
+                                    : (parsed.isReadOnlyTemplate
+                                        ? 'Template'
+                                        : (isRepoPromptFile ? `📦 ${parsed.repo}` : (isGitMod ? 'M' : ''))));
                             return html`
-                                <div style="width: 100%; box-sizing: border-box; padding: 0 var(--tree-item-px) 8px var(--tree-item-px);">
-                                    <sutram-card
-                                        style="margin-bottom: 0;"
-                                        .filename=${fullFilepath}
-                                        .detailText=${fullFilepath}
-                                        .detailSuffix=${cardSuffix}
-                                        .titleText=${parsed.filename}
-                                        descriptionText=""
-                                        intent=${(parsed.isSharedMount || parsed.isTemplate || isGitMod) ? 'highlight' : 'primary'}
-                                        icon=${parsed.isSharedMount ? 'globe' : (parsed.isReadOnlyTemplate ? 'book-open' : (this._pendingMutations.has(fullFilepath) ? 'cloud-upload' : 'file-code-2'))}
-                                        .entityType=${this.entityType || 'file'}
-                                        .entityData=${{ filepath: fullFilepath, isSource: parsed.isSource, isFS: parsed.isEditable, isTemplate: parsed.isTemplate, git_modified: isGitMod }}
-                                        @card-clicked=${(e) => {
-                                            e.stopPropagation();
-                                            this.dispatchEvent(new CustomEvent('card-clicked', {
-                                                detail: { filename: fullFilepath, isSource: parsed.isSource, isFS: parsed.isEditable },
-                                                bubbles: true,
-                                                composed: true
-                                            }));
-                                        }}>
-                                    </sutram-card>
-                                </div>
+                                <sutram-card
+                                    .filename=${fullFilepath}
+                                    .detailText=${fullFilepath}
+                                    .detailSuffix=${cardSuffix}
+                                    .titleText=${parsed.filename}
+                                    descriptionText=""
+                                    intent=${isRepoPromptFile ? 'success' : ((parsed.isSharedMount || parsed.isTemplate || isGitMod) ? 'highlight' : 'primary')}
+                                    icon=${parsed.isSharedMount ? 'globe' : (parsed.isReadOnlyTemplate ? 'book-open' : (this._pendingMutations.has(fullFilepath) ? 'cloud-upload' : 'file-code-2'))}
+                                    .entityType=${this.entityType || 'file'}
+                                    .entityData=${{ filepath: fullFilepath, isSource: parsed.isSource, isFS: parsed.isEditable, isTemplate: parsed.isTemplate, git_modified: isGitMod }}
+                                    @card-clicked=${(e) => {
+                                        e.stopPropagation();
+                                        this.dispatchEvent(new CustomEvent('card-clicked', {
+                                            detail: { filename: fullFilepath, isSource: parsed.isSource, isFS: parsed.isEditable },
+                                            bubbles: true,
+                                            composed: true
+                                        }));
+                                    }}>
+                                </sutram-card>
                             `;
                         }}>
                     </sutram-virtual-list>
@@ -294,6 +309,8 @@ constructor() {
                             const displayName = node.name || parsed.basename || fullTarget;
                             const isUserTemplateRoot = fullTarget.endsWith('/.templates/user');
                             const isReadOnlyTemplateNode = !parsed.isUserTemplate && !isUserTemplateRoot && fullTarget.includes('/.templates');
+                            const isRepoPromptRoot = isDirNode && /^vfs:\/\/[^/]+\/\.insetu-data\/prompts\/?$/.test(fullTarget);
+                            const isRepoPromptNode = /^vfs:\/\/[^/]+\/\.insetu-data\/prompts(?:\/|$)/.test(fullTarget);
 
                             const nextPath = isDirNode
                                 ? (Array.isArray(node.treePath) ? node.treePath : node.fullPath.split('/').filter(Boolean))
@@ -304,53 +321,59 @@ constructor() {
 
                             const isGitMod = !isDirNode && this._gitModifiedFiles.has(fullTarget);
                             const isPending = !isDirNode && this._pendingMutations.has(fullTarget);
+                            const repoMountUri = isRepoPromptRoot ? `vfs://${parsed.repo}/.insetu-data/prompts` : '';
                             const cardDetailText = isDirNode ? '' : fullTarget;
                             const cardSuffix = isDirNode
                                 ? ''
-                                : (parsed.isSharedMount ? `🌐 ${parsed.volume}` : (parsed.isUserTemplate ? 'User Template' : (isReadOnlyTemplateNode ? 'Template' : (isGitMod ? 'M' : ''))));
+                                : (parsed.isSharedMount
+                                    ? `🌐 ${parsed.volume}`
+                                    : (parsed.isUserTemplate
+                                        ? 'User Template'
+                                        : (isReadOnlyTemplateNode
+                                            ? 'Template'
+                                            : (isGitMod ? 'M' : ''))));
                             const cardIcon = isDirNode
-                                ? (isUserTemplateRoot ? 'user' : (isReadOnlyTemplateNode ? 'library' : (isSharedDirRoot ? 'globe' : 'folder')))
+                                ? (isRepoPromptRoot ? 'folder-symlink' : (isUserTemplateRoot ? 'user' : (isReadOnlyTemplateNode ? 'library' : (isSharedDirRoot ? 'globe' : 'folder'))))
                                 : (parsed.isSharedMount ? 'globe' : (isReadOnlyTemplateNode ? 'book-open' : (isPending ? 'cloud-upload' : 'file-code-2')));
                             const cardIntent = isDirNode
-                                ? ((isReadOnlyTemplateNode || isUserTemplateRoot || isSharedDirRoot) ? 'highlight' : 'warning')
-                                : ((parsed.isSharedMount || isReadOnlyTemplateNode || parsed.isUserTemplate || isGitMod) ? 'highlight' : 'primary');
+                                ? (isRepoPromptNode ? 'success' : ((isReadOnlyTemplateNode || isUserTemplateRoot || isSharedDirRoot) ? 'highlight' : 'warning'))
+                                : (isRepoPromptNode ? 'success' : ((parsed.isSharedMount || isReadOnlyTemplateNode || parsed.isUserTemplate || isGitMod) ? 'highlight' : 'primary'));
+                            const isProtectedVirtualMount = isReadOnlyTemplateNode || isRepoPromptRoot;
                             const cardEntityType = isDirNode ? 'folder' : (this.entityType || 'file');
                             const cardEntityData = isDirNode
-                                ? { id: cardFilename, filepath: cardFilename, folderpath: cleanDirUri, titleText: displayName, isDir: !isReadOnlyTemplateNode, isSkeleton: isReadOnlyTemplateNode, isTemplate: isReadOnlyTemplateNode || parsed.isUserTemplate }
+                                ? { id: cardFilename, filepath: cardFilename, folderpath: cleanDirUri, titleText: displayName, isDir: !isProtectedVirtualMount, isSkeleton: isProtectedVirtualMount, isTemplate: isReadOnlyTemplateNode || parsed.isUserTemplate }
                                 : { filepath: fullTarget, titleText: displayName, isSource: parsed.isSource, isFS: parsed.isEditable, isTemplate: isReadOnlyTemplateNode || parsed.isUserTemplate, git_modified: isGitMod, is_dirty: isPending };
 
                             return html`
-                                <div style="width: 100%; box-sizing: border-box; padding: 0 var(--tree-item-px) 8px var(--tree-item-px);">
-                                    <sutram-card
-                                        style="margin-bottom: 0;"
-                                        .filename=${cardFilename}
-                                        .titleText=${displayName}
-                                        .detailText=${cardDetailText}
-                                        .detailSuffix=${cardSuffix}
-                                        .descriptionText=${''}
-                                        .icon=${cardIcon}
-                                        .intent=${cardIntent}
-                                        .entityType=${cardEntityType}
-                                        .entityData=${cardEntityData}
-                                        @card-clicked=${(e) => {
-                                            e.stopPropagation();
-                                            if (isDirNode) {
-                                                this._setPath(nextPath);
-                                            } else {
-                                                this.dispatchEvent(new CustomEvent('card-clicked', {
-                                                    detail: { filename: fullTarget, isSource: parsed.isSource, isFS: parsed.isEditable },
-                                                    bubbles: true,
-                                                    composed: true
-                                                }));
-                                            }
-                                        }}>
-                                    </sutram-card>
-                                </div>
+                                <sutram-card
+                                    .filename=${cardFilename}
+                                    .titleText=${displayName}
+                                    .detailText=${cardDetailText}
+                                    .detailSuffix=${cardSuffix}
+                                    .descriptionText=${''}
+                                    .icon=${cardIcon}
+                                    .intent=${cardIntent}
+                                    .entityType=${cardEntityType}
+                                    .entityData=${cardEntityData}
+                                    title=${repoMountUri ? `Linked Repository Prompts (${repoMountUri})` : ''}
+                                    @card-clicked=${(e) => {
+                                        e.stopPropagation();
+                                        if (isDirNode) {
+                                            this._setPath(nextPath);
+                                        } else {
+                                            this.dispatchEvent(new CustomEvent('card-clicked', {
+                                                detail: { filename: fullTarget, isSource: parsed.isSource, isFS: parsed.isEditable },
+                                                bubbles: true,
+                                                composed: true
+                                            }));
+                                        }
+                                    }}>
+                                </sutram-card>
                             `;
                         }}>
                     </sutram-virtual-list>
                 `}
-            </div>
+            </sutram-view>
         `;
     }
 }

@@ -260,6 +260,16 @@ class TemplateOverlayVFSDriver(DefaultVFSDriver):
 class InSetuContext(_BaseExtensionContext):
     """Tier 2 Developer OS Extension Context with dual-root Manifest, RAG compilation, and Frontmatter helpers."""
 
+    def call(self, capability_id: str, wait: bool = True, **kwargs) -> Any:
+        res = super().call(capability_id, wait=wait, **kwargs)
+        if isinstance(res, tuple) and len(res) >= 2 and isinstance(res[1], int):
+            body, status_code = res[0], res[1]
+            if status_code >= 400:
+                err_msg = body.get("error") if isinstance(body, dict) else str(body)
+                raise RuntimeError(err_msg or f"Capability '{capability_id}' failed with status {status_code}")
+            return body
+        return res
+
     @property
     def db(self):
         db_wrapper = super().db
@@ -419,6 +429,19 @@ class InSetuContext(_BaseExtensionContext):
 # Export ExtensionContext alias pointing to InSetuContext for backward compatibility
 ExtensionContext = InSetuContext
 
+_MOUNTABLE_DATA_DOMAINS: Dict[str, str] = {}
+
+
+def get_mountable_data_domains() -> List[Dict[str, str]]:
+    """Returns options for all registered extensions that own a 'data'-tier VFS volume, plus the '*' wildcard."""
+    options = [
+        {"value": ext_name, "label": label}
+        for ext_name, label in sorted(_MOUNTABLE_DATA_DOMAINS.items())
+    ]
+    options.append({"value": "*", "label": "* (All Domains)"})
+    return options
+
+
 # Canonical bidirectional map between Python import specifiers and PyPI package names
 EXTERNAL_DEP_SPEC_MAP: Dict[str, Tuple[str, str]] = {
     "bs4": ("bs4", "beautifulsoup4"),
@@ -482,6 +505,10 @@ class InSetuExtension(AkasaExtension):
         if self.volumes:
             self._validate_volume_layout()
             self._register_declarative_volumes()
+            for vol_name, vol_spec in self.volumes.items():
+                if vol_spec.get("tier", "data") == "data" and vol_name != "settings":
+                    label_prefix = vol_name if vol_name != name else name
+                    _MOUNTABLE_DATA_DOMAINS[name] = f"{label_prefix} (.insetu/data/{name})"
 
     def _validate_volume_layout(self) -> None:
         """Ensures no two declared volumes resolve to the same <tier>/<ext_name>[/<subdir>] directory."""

@@ -1,44 +1,11 @@
 // insetu/insetu/static/js/core/sdk.js
 // Tier 1A: inSetu Local OS SDK Wrapper (Single-File Frontend Membrane)
-import * as _SutramNS from 'sutram';
+export * from 'sutram';
 import {
     SutramElement,
-    SutramContextMixin,
     createSutramStore,
     StoreRegistry,
     ExtensionRegistry as SutramRegistry,
-    bindStoreInput,
-    StatusStore,
-    ToastStore,
-    SelectionStore,
-    EnvironmentStore,
-    LayoutStore,
-    canUseMultiWindowPopout,
-    SutramDB,
-    OfflineHttpProvider,
-    NetworkHysteresisManager,
-    OutboxReconciler,
-    bootSutramServiceWorker,
-    purgeSutramCaches,
-    createJobPoller,
-    initShortcutRouter,
-    SutramProjectionCompiler,
-    SutramProjectionPool,
-    sharedStyles,
-    REQUIRED_CHASSIS_PRIMITIVES,
-    validateChassisContract,
-    SutramUIAdapter,
-    SutramAppShell,
-    SutramCard,
-    SutramEditor,
-    SutramProjectionWindowControls,
-    SutramModal,
-    SutramAsyncBtn,
-    SutramBtn,
-    SutramInput,
-    SutramSelect,
-    SutramTextarea,
-    SutramToggle,
     fuzzyFilterObjects,
     normalizeAccentText,
     slugify,
@@ -49,8 +16,6 @@ import {
     nativeShareFiles,
     shallowEqual,
     copyRichHtml,
-    copyToClipboard,
-    copyRawText,
     threeWayMergeText,
     HostPath,
     truncateFilename,
@@ -58,199 +23,9 @@ import {
     compileDagWavefronts,
     extractTemplateVariables as _sutramExtractTemplateVariables,
     interpolateTemplateVariables as _sutramInterpolateTemplateVariables,
-    buildFileTree,
-    resolveDirectoryState,
-    downloadFile,
-    downloadBlob,
-    bindGhostDrag,
-    SutramWorker,
     getEventPath,
-    getEventTarget,
-    getDeepElementFromPoint
+    getEventTarget
 } from 'sutram';
-import { html, css } from 'lit';
-
-// Fallback definitions if the vendorized 'sutram' bundle in /static/vendor/sutram has not been synced yet
-const SutramCombobox = _SutramNS.SutramCombobox || class FallbackSutramCombobox extends SutramElement {
-    static properties = {
-        label: { type: String },
-        value: { type: String },
-        placeholder: { type: String },
-        options: { type: Array },
-        disabled: { type: Boolean, reflect: true },
-        flush: { type: Boolean, reflect: true },
-        inline: { type: Boolean, reflect: true },
-        _open: { type: Boolean, state: true },
-        _highlightedIndex: { type: Number, state: true },
-        _filterText: { type: String, state: true }
-    };
-    static styles = [sharedStyles, css`
-        :host { display: block; margin-bottom: 15px; font-family: inherit; position: relative; width: 100%; box-sizing: border-box; }
-        :host([flush]), :host([inline]) { margin-bottom: 0 !important; }
-        .combo-label { display: block; font-size: 0.78rem; font-weight: 700; color: var(--text-muted); margin-bottom: 4px; }
-        .combo-wrap { position: relative; display: flex; align-items: center; width: 100%; }
-        .combo-input { width: 100%; background: var(--bg-input, var(--input-bg)); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 8px 30px 8px 10px; font-size: 0.85rem; font-family: var(--font-mono, inherit); box-sizing: border-box; outline: none; }
-        .combo-input:focus { border-color: var(--intent-primary); }
-        .combo-chevron { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; display: flex; align-items: center; justify-content: center; }
-        .combo-menu { position: absolute; top: calc(100% + 4px); left: 0; right: 0; max-height: 220px; overflow-y: auto; background: var(--pane-bg, var(--bg)); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--overlay-shadow, 0 10px 25px rgba(0,0,0,0.45)); z-index: 3500; padding: 4px; display: flex; flex-direction: column; gap: 2px; }
-        .combo-option { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 4px; cursor: pointer; font-size: 0.82rem; color: var(--text); text-align: left; background: transparent; border: none; width: 100%; box-sizing: border-box; }
-        .combo-option:hover, .combo-option.highlighted { background: color-mix(in srgb, var(--intent-primary) 18%, var(--input-bg)); }
-        .combo-option-main { font-family: var(--font-mono, inherit); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .combo-option-badge { font-size: 0.7rem; font-family: var(--font-mono, monospace); color: var(--text-muted); background: var(--bg); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; flex-shrink: 0; }
-    `];
-    constructor() {
-        super();
-        this.label = '';
-        this.value = '';
-        this.placeholder = '';
-        this.options = [];
-        this.disabled = false;
-        this.flush = false;
-        this.inline = false;
-        this._open = false;
-        this._highlightedIndex = -1;
-        this._filterText = null;
-    }
-    connectedCallback() {
-        super.connectedCallback();
-        this.registerOutsideClick(() => { if (this._open) { this._open = false; this._filterText = null; } });
-    }
-    _getNormalizedOptions() {
-        return (this.options || []).map(opt => typeof opt === 'object' && opt !== null
-            ? { value: String(opt.value !== undefined ? opt.value : (opt.id || opt.label || '')), label: String(opt.label || opt.name || opt.value || ''), badge: opt.badge || opt.detail || '' }
-            : { value: String(opt), label: String(opt), badge: '' });
-    }
-    _getFilteredOptions() {
-        const all = this._getNormalizedOptions();
-        const q = (this._filterText !== null ? this._filterText : '').trim().toLowerCase();
-        if (!q) return all.slice(0, 60);
-        return all.filter(o => o.value.toLowerCase().includes(q) || o.label.toLowerCase().includes(q) || (o.badge && o.badge.toLowerCase().includes(q))).slice(0, 60);
-    }
-    _commitValue(nextVal, closeMenu = true) {
-        this.value = nextVal;
-        if (closeMenu) { this._open = false; this._filterText = null; this._highlightedIndex = -1; }
-        this.dispatchEvent(new CustomEvent('sutram-input-changed', { detail: { value: nextVal }, bubbles: true, composed: true }));
-    }
-    render() {
-        const filtered = this._open ? this._getFilteredOptions() : [];
-        return html`
-            ${this.label ? html`<label class="combo-label">${this.label}</label>` : ''}
-            <div class="combo-wrap">
-                <input class="combo-input" type="text" .value=${this.value ?? ''} placeholder=${this.placeholder || ''} ?disabled=${this.disabled}
-                    @focus=${() => { if (!this.disabled) { this._open = true; this._filterText = ''; } }}
-                    @input=${(e) => { this._filterText = e.target.value; this._open = true; this._commitValue(e.target.value, false); }}
-                />
-                <button type="button" class="combo-chevron" tabindex="-1" ?disabled=${this.disabled} @click=${(e) => { e.stopPropagation(); if (!this.disabled) { this._open = !this._open; this._filterText = ''; } }}>
-                    <yv-icon name="chevron-down" style="width: 14px; height: 14px;"></yv-icon>
-                </button>
-            </div>
-            ${this._open && filtered.length > 0 ? html`
-                <div class="combo-menu">
-                    ${filtered.map(opt => html`
-                        <button type="button" class="combo-option" @pointerdown=${(e) => { e.preventDefault(); e.stopPropagation(); this._commitValue(opt.value, true); }}>
-                            <span class="combo-option-main">${opt.label}</span>
-                            ${opt.badge ? html`<span class="combo-option-badge">${opt.badge}</span>` : ''}
-                        </button>
-                    `)}
-                </div>
-            ` : ''}
-        `;
-    }
-};
-if (!customElements.get('sutram-combobox')) customElements.define('sutram-combobox', SutramCombobox);
-
-const SutramTargetBinding = _SutramNS.SutramTargetBinding || class FallbackSutramTargetBinding extends SutramElement {
-    static properties = {
-        label: { type: String },
-        value: { type: Object },
-        endpoints: { type: Array },
-        models: { type: Array },
-        endpointKey: { type: String },
-        modelKey: { type: String },
-        endpointPlaceholder: { type: String },
-        modelPlaceholder: { type: String },
-        allowEmptyEndpoint: { type: Boolean },
-        disabled: { type: Boolean, reflect: true },
-        flush: { type: Boolean, reflect: true }
-    };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; gap: 4px; width: 100%; box-sizing: border-box; }
-        .binding-label { font-size: 0.78rem; font-weight: 700; color: var(--text-muted); }
-        .binding-grid { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(180px, 1.5fr); gap: 8px; align-items: start; }
-    `];
-    constructor() {
-        super();
-        this.label = '';
-        this.value = { endpoint: '', model: '' };
-        this.endpoints = [];
-        this.models = [];
-        this.endpointKey = 'endpoint';
-        this.modelKey = 'model';
-        this.endpointPlaceholder = 'Select endpoint...';
-        this.modelPlaceholder = 'Select or type model...';
-        this.allowEmptyEndpoint = false;
-        this.disabled = false;
-        this.flush = false;
-    }
-    _normalizeValue() {
-        const epKey = this.endpointKey || 'endpoint';
-        const modKey = this.modelKey || 'model';
-        const raw = this.value;
-        if (typeof raw === 'string') {
-            if (raw.includes('::')) {
-                const [ep, mod] = raw.split('::');
-                return { [epKey]: ep.trim(), [modKey]: mod.trim() };
-            }
-            return { [epKey]: '', [modKey]: raw.trim() };
-        }
-        if (raw && typeof raw === 'object') {
-            return { [epKey]: String(raw[epKey] || raw.endpoint_id || ''), [modKey]: String(raw[modKey] || '') };
-        }
-        return { [epKey]: '', [modKey]: '' };
-    }
-    _emitBinding(nextObj) {
-        this.value = nextObj;
-        this.dispatchEvent(new CustomEvent('sutram-input-changed', { detail: { value: nextObj }, bubbles: true, composed: true }));
-    }
-    render() {
-        const epKey = this.endpointKey || 'endpoint';
-        const modKey = this.modelKey || 'model';
-        const cur = this._normalizeValue();
-        const epOptions = [];
-        if (this.allowEmptyEndpoint) {
-            epOptions.push({ value: '', label: this.endpointPlaceholder || 'Fallback / None' });
-        }
-        (this.endpoints || []).forEach(ep => {
-            if (typeof ep === 'object' && ep !== null) {
-                const val = String(ep.value !== undefined ? ep.value : (ep.id || ''));
-                const lbl = String(ep.label || ep.title || val);
-                if (val) epOptions.push({ value: val, label: lbl });
-            } else if (ep) {
-                epOptions.push({ value: String(ep), label: String(ep) });
-            }
-        });
-        const selectedEp = cur[epKey] || (!this.allowEmptyEndpoint && epOptions[0]?.value) || '';
-        const candidateModels = typeof this.models === 'function' ? this.models(selectedEp) : (Array.isArray(this.models) ? this.models : []);
-        return html`
-            ${this.label ? html`<span class="binding-label">${this.label}</span>` : ''}
-            <div class="binding-grid">
-                <sutram-select ?flush=${true} ?disabled=${this.disabled} .value=${selectedEp} .options=${epOptions}
-                    @sutram-input-changed=${(e) => {
-                        const nextEp = e.detail.value;
-                        const nextModels = typeof this.models === 'function' ? this.models(nextEp) : (this.models || []);
-                        const firstMod = nextModels[0] ? (typeof nextModels[0] === 'object' ? nextModels[0].value : nextModels[0]) : '';
-                        const nextMod = nextEp ? (cur[modKey] || firstMod || '') : '';
-                        this._emitBinding({ [epKey]: nextEp, [modKey]: nextMod });
-                    }}>
-                </sutram-select>
-                <sutram-combobox ?flush=${true} ?disabled=${this.disabled || (!selectedEp && this.allowEmptyEndpoint)} .value=${cur[modKey] || ''} .placeholder=${this.modelPlaceholder || 'Select or type model...'} .options=${candidateModels}
-                    @sutram-input-changed=${(e) => this._emitBinding({ [epKey]: selectedEp, [modKey]: e.detail.value })}>
-                </sutram-combobox>
-            </div>
-        `;
-    }
-};
-if (!customElements.get('sutram-target-binding')) customElements.define('sutram-target-binding', SutramTargetBinding);
 import * as jsYaml from '/static/vendor/js-yaml/js-yaml.min.js';
 const INSETU_RESERVED_MACROS = Object.freeze([
     'UNTIL', 'triple', 'inputs', 'nodes', 'item', 'loop', 'global',
@@ -299,74 +74,13 @@ export function cleanCodeArtifacts(text) {
     return result;
 }
 
-export {
-    SutramRegistry as ExtensionRegistry,
-    StoreRegistry,
-    bindStoreInput,
-    StatusStore,
-    ToastStore,
-    SelectionStore,
-    EnvironmentStore,
-    LayoutStore,
-    canUseMultiWindowPopout,
-    SutramDB,
-    OfflineHttpProvider,
-    NetworkHysteresisManager,
-    OutboxReconciler,
-    bootSutramServiceWorker,
-    purgeSutramCaches,
-    createJobPoller,
-    initShortcutRouter,
-    SutramProjectionCompiler,
-    SutramProjectionPool,
-    sharedStyles,
-    REQUIRED_CHASSIS_PRIMITIVES,
-    validateChassisContract,
-    SutramUIAdapter,
-    SutramAppShell,
-    SutramCard,
-    SutramEditor,
-    SutramProjectionWindowControls,
-    SutramModal,
-    SutramAsyncBtn,
-    SutramBtn,
-    SutramInput,
-    SutramSelect,
-    SutramTextarea,
-    SutramToggle,
-    SutramCombobox,
-    SutramTargetBinding,
-    fuzzyFilterObjects,
-    normalizeAccentText,
-    slugify,
-    debounce,
-    coalescedAsync,
-    formatDate,
-    timeAgo,
-    nativeShareFiles,
-    shallowEqual,
-    copyRichHtml,
-    copyToClipboard,
-    copyRawText,
-    threeWayMergeText,
-    HostPath,
-    truncateFilename,
-    clone,
-    compileDagWavefronts,
-    buildFileTree,
-    resolveDirectoryState,
-    downloadFile,
-    downloadBlob,
-    bindGhostDrag,
-    SutramWorker,
-    getEventPath,
-    getEventTarget,
-    getDeepElementFromPoint
-};
-
 export function createExtensionStore(name, initialState, persistenceSchema = {}) {
     const getWs = () => window.inSetu.utils.getActiveWorkspace();
     const store = createSutramStore(name, initialState, persistenceSchema, getWs, 'insetu');
+    Object.defineProperty(store, 'api', {
+        get: () => window.inSetu.api,
+        configurable: true
+    });
     window.inSetu = window.inSetu || {};
     window.inSetu.stores = window.inSetu.stores || {};
     window.inSetu.stores[name] = store;
@@ -578,6 +292,20 @@ window.inSetu.utils = window.inSetu.utils || {};
 window.inSetu.utils.BucketAddress = BucketAddress;
 window.inSetu.utils.InSetuURI = InSetuURI;
 window.inSetu.utils.canonicalizeURI = (raw, defaultScheme = 'vfs') => InSetuURI.canonicalize(raw, defaultScheme);
+window.inSetu.utils.openFilePicker = function({ multiple = true, accept = '', onSelect = null } = {}) {
+    if (typeof document === 'undefined') return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = Boolean(multiple);
+    if (accept) input.accept = accept;
+    input.onchange = (e) => {
+        const files = e.target?.files;
+        if (files && files.length > 0 && typeof onSelect === 'function') {
+            onSelect(files);
+        }
+    };
+    input.click();
+};
 window.inSetu.utils.syncExtensionDependencyMeta = function(configResponseData) {
     const depMeta = {};
     (configResponseData?.meta?.available_extensions || []).forEach(ext => {
@@ -697,7 +425,7 @@ export class InSetuElement extends SutramElement {
                 onProgress: (msg) => this.setStatus(`⏳ ${msg}`, null),
                 onComplete: async (statusData) => {
                     try {
-                        const cRes = await window.inSetu.api.workspace.get('system/config?t=' + Date.now(), { cache: 'no-store' });
+                        const cRes = await window.inSetu.api.get('system/config?t=' + Date.now(), { cache: 'no-store' });
                         if (cRes.ok) {
                             const data = await cRes.json();
                             window.inSetu.utils.syncExtensionDependencyMeta(data);
@@ -706,7 +434,7 @@ export class InSetuElement extends SutramElement {
                     const artifact = statusData?.artifact || {};
                     if (artifact.requires_reboot) {
                         this.setStatus(`✅ Packages installed for '${name}'. Rebooting daemon...`, 3000);
-                        await window.inSetu.api.workspace.post('system/reboot', {});
+                        await window.inSetu.api.post('system/reboot', {});
                         if (window.inSetu?.sys?.waitForDaemonReboot) {
                             window.inSetu.sys.waitForDaemonReboot();
                         } else {
@@ -771,44 +499,9 @@ export class InSetuElement extends SutramElement {
     get api() {
         return {
             request: (url, options = {}) => window.inSetu.api.request(url, options, this.workspaceId),
-            system: {
-                get: (path, options = {}) => window.inSetu.api.system.get(path, options),
-                post: (path, payload, options = {}) => window.inSetu.api.system.post(path, payload, options),
-                delete: (path, options = {}) => window.inSetu.api.system.delete(path, options)
-            },
-            workspace: {
-                get: (path, options = {}) => window.inSetu.api.workspace.get(path, options),
-                post: (path, payload, options = {}) => window.inSetu.api.workspace.post(path, payload, options),
-                delete: (path, options = {}) => window.inSetu.api.workspace.delete(path, options)
-            },
             pollJob: (jobId, options = {}) => window.inSetu.utils.pollJob(jobId, options),
             bindJobAction: (path, payloadGenerator, pollOptions = {}) => {
-                return async (e) => {
-                    const payload = typeof payloadGenerator === 'function' ? await payloadGenerator(e) : payloadGenerator;
-                    if (pollOptions.closeWindowId && window.Sutram?.stores?.Layout) {
-                        window.Sutram.stores.Layout.getState().closeWindow(pollOptions.closeWindowId);
-                    }
-                    const res = await this.api.post(path, payload);
-                    if (!res.ok) {
-                        const err = await res.json().catch(() => ({}));
-                        throw new Error(err.error || "Request failed.");
-                    }
-                    const data = await res.json();
-
-                    return new Promise((resolve, reject) => {
-                        this.api.pollJob(data.job_id, {
-                            ...pollOptions,
-                            onComplete: (statusData) => {
-                                if (pollOptions.onComplete) pollOptions.onComplete(statusData);
-                                resolve(statusData);
-                            },
-                            onError: (err) => {
-                                if (pollOptions.onError) pollOptions.onError(err);
-                                reject(err);
-                            }
-                        });
-                    });
-                };
+                return window.inSetu.api.bindJobAction(this.api._resolveScopedPath(path), payloadGenerator, pollOptions);
             },
             _resolveScopedPath: (path) => {
                 const cleanPath = String(path || '').replace(/^\/+/, '');
@@ -832,19 +525,19 @@ export class InSetuElement extends SutramElement {
                 if (!window.inSetu.isCore(this.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(this.extName)) {
                     return Promise.resolve(new Response(JSON.stringify({ error: "Extension disabled" }), { status: 403 }));
                 }
-                return window.inSetu.api.workspace.get(this.api._resolveScopedPath(path), options);
+                return window.inSetu.api.get(this.api._resolveScopedPath(path), options);
             },
             post: (path, payload, options = {}) => {
                 if (!window.inSetu.isCore(this.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(this.extName)) {
                     return Promise.resolve(new Response(JSON.stringify({ error: "Extension disabled" }), { status: 403 }));
                 }
-                return window.inSetu.api.workspace.post(this.api._resolveScopedPath(path), payload, options);
+                return window.inSetu.api.post(this.api._resolveScopedPath(path), payload, options);
             },
             delete: (path, options = {}) => {
                 if (!window.inSetu.isCore(this.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(this.extName)) {
                     return Promise.resolve(new Response(JSON.stringify({ error: "Extension disabled" }), { status: 403 }));
                 }
-                return window.inSetu.api.workspace.delete(this.api._resolveScopedPath(path), options);
+                return window.inSetu.api.delete(this.api._resolveScopedPath(path), options);
             },
             fetchImmutableText: async (path, options = {}) => {
                 return window.inSetu.api.fetchImmutableText(path, options, this.workspaceId);
@@ -933,10 +626,14 @@ export class InSetuElement extends SutramElement {
         });
         const appStore = window.inSetu?.stores?.App;
         if (appStore) {
+            const isLocked = () => Boolean(
+                window.Sutram?.storeRegistry?.isTransitioning?.() ||
+                appStore.getState().isSwappingWorkspace
+            );
             this.subscribe(appStore, state => state.activeWorkspace, (ws) => {
                 if (this.workspaceId !== ws) {
                     this.workspaceId = ws;
-                    if (!appStore.getState().isSwappingWorkspace) {
+                    if (!isLocked()) {
                         this._runWorkspaceHydration(ws);
                     }
                 }
@@ -949,7 +646,7 @@ export class InSetuElement extends SutramElement {
                 this.workspaceId = currentWs;
                 const mountEpoch = this._scopeEpoch;
                 this.registerTimeout(() => {
-                    if (this._scopeEpoch === mountEpoch && !appStore.getState().isSwappingWorkspace) {
+                    if (this._scopeEpoch === mountEpoch && !isLocked()) {
                         this._runWorkspaceHydration(currentWs);
                     }
                 }, 0);
@@ -992,7 +689,7 @@ export class InSetuElement extends SutramElement {
 }
 window.inSetu = window.inSetu || {};
 // Pre-seed foundational OS chassis modules to protect against offline cache misses or backend latency
-const _baseCore = ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline', 'llm', 'agent', 'prompts', 'mcp'];
+const _baseCore = ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline', 'llm', 'agent', 'prompts', 'mcp', 'remote'];
 window.inSetu.CORE_MODULES = window.inSetu.CORE_MODULES && window.inSetu.CORE_MODULES.size > 0 
     ? window.inSetu.CORE_MODULES 
     : new Set(window.CORE_MODULES || _baseCore);
@@ -1073,36 +770,7 @@ if (window.Sutram?.storeRegistry?.setScopeProvider) {
     window.Sutram.storeRegistry.setScopeProvider(() => window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default');
 }
 window.ExtensionRegistry.executeJobAction = (route, payloadGenerator, pollOptions = {}) => {
-    return async (e) => {
-        const payload = typeof payloadGenerator === 'function' ? await payloadGenerator(e) : (payloadGenerator || {});
-        if (pollOptions.closeWindowId && window.Sutram?.stores?.Layout) {
-            window.Sutram.stores.Layout.getState().closeWindow(pollOptions.closeWindowId);
-        }
-        const cleanRoute = String(route || '').replace(/^\/+/, '');
-        const res = await window.inSetu.api.workspace.post(cleanRoute, payload);
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.error || `HTTP ${res.status}`);
-        }
-        const data = await res.json();
-        if (!data.job_id) {
-            if (pollOptions.onComplete) pollOptions.onComplete(data);
-            return data;
-        }
-        return new Promise((resolve, reject) => {
-            window.inSetu.utils.pollJob(data.job_id, {
-                ...pollOptions,
-                onComplete: (statusData) => {
-                    if (pollOptions.onComplete) pollOptions.onComplete(statusData);
-                    resolve(statusData);
-                },
-                onError: (err) => {
-                    if (pollOptions.onError) pollOptions.onError(err);
-                    reject(err);
-                }
-            });
-        });
-    };
+    return window.inSetu.api.bindJobAction(route, payloadGenerator, pollOptions);
 };
 window.inSetu.extensions.InSetuElement = InSetuElement;
 window.inSetu.extensions.createExtensionStore = createExtensionStore;
@@ -1131,14 +799,41 @@ window.ExtensionRegistry.getLayoutSlots = function() {
     try {
         const slots = _baseGetLayoutSlots() || [];
         const active = window.ACTIVE_EXTENSIONS;
+        const quarantined = window.inSetu?.stores?.App?.getState()?.quarantinedModules || {};
 
-        // Filter out slots from explicitly deactivated workspace extensions
-        return slots.filter(s => {
+        const validSlots = slots.filter(s => {
             if (!s.extName) return true;
+            if (quarantined[s.extName]) return false;
             if (window.inSetu.isCore(s.extName)) return true;
-            if (!active) return true; // Allow if strictly undefined/uninitialized
+            if (!active) return true;
             return active.includes(s.extName);
         });
+
+        // Preserve pinned LayoutStore tabs for quarantined modules via non-destructive placeholder slots
+        const existingIds = new Set(validSlots.map(s => s.id));
+        const layoutCols = window.Sutram?.stores?.Layout?.getState()?.columns || {};
+        Object.entries(layoutCols).forEach(([colId, colObj]) => {
+            (colObj?.pinned || []).forEach(p => {
+                if (!p || !p.id || existingIds.has(p.id)) return;
+                const extCand = p.extName || (p.id.includes(':') ? p.id.split(':')[0] : p.id);
+                if (extCand && quarantined[extCand]) {
+                    existingIds.add(p.id);
+                    validSlots.push({
+                        slot: 'slots:sub-navigation',
+                        id: p.id,
+                        rawId: p.rawId || p.id.split(':').pop(),
+                        label: `⚠️ ${p.label || extCand}`,
+                        icon: 'shield-alert',
+                        intent: 'danger',
+                        extName: extCand,
+                        targetParent: p.targetParent || colId,
+                        component: 'insetu-quarantined-slot-placeholder'
+                    });
+                }
+            });
+        });
+
+        return validSlots;
     } catch (e) {
         console.error("Error in getLayoutSlots:", e);
         return [];
@@ -1172,7 +867,7 @@ window.ExtensionRegistry.utils = {
         setTimeout(async () => {
             if (this._verifyTokens[key] !== currentToken) return;
             try {
-                const res = await window.inSetu.api.workspace.get(`fs/exists?file=${encodeURIComponent(filepath)}`);
+                const res = await window.inSetu.api.get(`fs/exists?file=${encodeURIComponent(filepath)}`);
                 if (res.ok && this._verifyTokens[key] === currentToken) {
                     const data = await res.json();
                     callback(data.exists, filepath);
@@ -1351,27 +1046,19 @@ window.ExtensionRegistry.registerExtension('system', {
             const slots = window.ExtensionRegistry?.getLayoutSlots?.() || [];
             const primarySlot = slots.find(s => s.slot === 'slots:primary-navigation' && (s.id === id || s.rawId === id));
             if (primarySlot && (primarySlot.icon || primarySlot.intent)) {
-                const intentColorMap = {
-                    primary: 'var(--intent-primary)',
-                    highlight: 'var(--intent-highlight)',
-                    warning: 'var(--intent-warning)',
-                    danger: 'var(--intent-danger)',
-                    success: 'var(--intent-success)',
-                    neutral: 'var(--text-muted)'
-                };
                 return {
-                    color: intentColorMap[primarySlot.intent] || 'var(--intent-primary)',
+                    intent: primarySlot.intent || 'primary',
                     icon: primarySlot.icon || 'folder'
                 };
             }
             const coreTabMap = {
-                'context': { color: 'var(--intent-primary)', icon: 'folder-code' },
-                'edit': { color: 'var(--intent-highlight)', icon: 'edit-3' },
-                'diagnostics': { color: 'var(--intent-warning)', icon: 'activity' },
-                'tasks': { color: 'var(--intent-warning)', icon: 'check-square' },
-                'ctrl': { color: 'var(--intent-danger)', icon: 'terminal' },
-                'offline': { color: 'var(--text-muted)', icon: 'wifi-off' },
-                'library': { color: 'var(--intent-highlight)', icon: 'book-open' }
+                'context': { intent: 'primary', icon: 'folder-code' },
+                'edit': { intent: 'highlight', icon: 'edit-3' },
+                'diagnostics': { intent: 'warning', icon: 'activity' },
+                'tasks': { intent: 'warning', icon: 'check-square' },
+                'ctrl': { intent: 'danger', icon: 'terminal' },
+                'offline': { intent: 'neutral', icon: 'wifi-off' },
+                'library': { intent: 'highlight', icon: 'book-open' }
             };
             return coreTabMap[id] || null;
         },

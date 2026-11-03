@@ -78,14 +78,12 @@ _ZERO_WIDTH_RE = re.compile(r'[\u200b\u200c\u200d\u2060\ufeff]')
 def _preclean_web_chat_artifacts(raw_text: str) -> str:
     """
     Normalizes web-chat LLM copy-paste artifacts before lexing:
-    1. Expands anti-meltdown macros (<<<<<<<, =======, ```).
-    2. Strips zero-width invisible characters and CRLF / non-breaking spaces inside markers.
-    3. Heals multi-line blockquote chevron meltdown (`> > > REPLACE\\n>\\n>` -> `>>>>>>> REPLACE`).
+    1. Strips zero-width invisible characters and CRLF / non-breaking spaces inside markers.
+    2. Heals multi-line blockquote chevron meltdown (`> > > REPLACE\\n>\\n>` -> `>>>>>>> REPLACE`).
+    Note: {{ymm:...}} transport macros are intentionally NOT expanded before lexing so escaped
+    markers inside patch bodies can never be mistaken for outer structural block boundaries.
     """
     text = raw_text.replace('\r\n', '\n').replace('\xa0', ' ')
-    text = re.sub(r'\{\{\s*ymm:(.)[x*](\d+)\s*\}\}', lambda m: m.group(1) * int(m.group(2)), text)
-    text = re.sub(r'\{\{\s*([<=>`~])\s*\*\s*(\d+)\s*\}\}', lambda m: m.group(1) * int(m.group(2)), text)
-    text = re.sub(r'\{\{\s*triple(.)\s*\}\}', lambda m: m.group(1) * 3, text)
     text = re.sub(
         r'^[ \t\u200b-\u200d\ufeff]*(?:>[ \t]*)+REPLACE[ \t]*(?:\n[ \t]*(?:>[ \t]*)+$)*',
         '>>>>>>> REPLACE',

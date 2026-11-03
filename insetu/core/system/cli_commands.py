@@ -311,21 +311,37 @@ WantedBy=default.target
         print(f"Unknown service action: {action}. Use install|uninstall|start|stop|restart|status.")
 
 
-def scaffold_extension(ext_name):
-    """Scaffolds a new bundled extension directory from default templates."""
+def scaffold_extension(ext_name, bundled=False):
+    """Scaffolds a new extension from the default templates.
+
+    By default it goes to the workspace's .insetu/extensions/<name>/, outside the installed package, where insetu runs
+    it once a person approves its files. bundled=True (`insetu create-extension <name> --bundled`) writes into the
+    package's own extensions/ folder instead, for working on insetu itself from a source checkout.
+    """
     if not re.match(r'^[a-z0-9_]+$', ext_name):
         print("Error: Extension name must be lowercase, alphanumeric, and underscores only.")
         return
 
     root_dir = Path(__file__).resolve().parent.parent.parent
-    ext_dir = root_dir / "extensions" / ext_name
+    if bundled:
+        ext_dir = root_dir / "extensions" / ext_name
+    else:
+        from insetu.core.utils_core import (
+            get_workspace_extension_reserved_names as _get_workspace_extension_reserved_names,
+            get_workspace_extensions_root as _get_workspace_extensions_root,
+        )
+        if ext_name in _get_workspace_extension_reserved_names():
+            print(f"Error: '{ext_name}' is the name of a built-in module or extension. Choose another name.")
+            return
+        ext_dir = _get_workspace_extensions_root() / ext_name
 
     if ext_dir.exists():
         print(f"Error: Extension '{ext_name}' already exists.")
         return
 
     ext_dir.mkdir(parents=True, exist_ok=True)
-    (ext_dir / "__init__.py").write_text("")
+    if bundled:
+        (ext_dir / "__init__.py").write_text("")
     (ext_dir / "vendor.json").write_text('{\n    "imports": {},\n    "python": {}\n}\n')
 
     cap_name = "".join(word.capitalize() for word in ext_name.split('_'))
@@ -349,8 +365,13 @@ def scaffold_extension(ext_name):
 
     print(f"Successfully scaffolded '{ext_name}' at {ext_dir.as_posix()}")
     print("Next Steps:")
-    print(f"1. Enable '{ext_name}' in your workspace config.json")
-    print("2. Restart the daemon to mount the new routes.")
+    if bundled:
+        print(f"1. Enable '{ext_name}' in your workspace config.json")
+        print("2. Restart the daemon to mount the new routes.")
+    else:
+        print("1. Edit the files (in insetu itself if you like).")
+        print("2. Restart insetu, open the banner's Review Files, then Approve & Restart. Every later edit needs a new approval.")
+        print(f"3. Enable '{ext_name}' for a workspace in Settings (or its config.json 'extensions').")
 
 
 def check_daemon_alive(port):

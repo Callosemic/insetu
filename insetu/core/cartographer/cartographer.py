@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, TypedDict
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import (
+    VFSTransaction,
     get_repo_path,
     load_config,
     build_tree_dict,
@@ -16,9 +17,14 @@ from insetu.core.utils_core import (
     InSetuURI,
     parse_frontmatter,
 )
-from insetu.core.topology.engine_topology import get_valid_workspace_files, get_topology_files_for_repo
+from insetu.core.topology.engine_topology import (
+    get_topology_files_for_repo,
+    get_valid_workspace_files,
+    resolve_repo_code_index_uri,
+)
 from insetu.core.languages import (
     SUPPORTED_SYMBOL_EXTENSIONS,
+    describe_directory,
     describe_source_file,
     extract_file_symbols,
     extract_symbol_source_slice,
@@ -74,10 +80,18 @@ cartographer_bp = InSetuExtension(
     schema=CARTOGRAPHER_SCHEMA,
     settings_schema=CARTOGRAPHER_SETTINGS_SCHEMA,
 )
+__depends__ = ['topology']
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
 _CARTOGRAPHER_SIG_CACHE = {}
 _CARTOGRAPHER_CACHE_LOCK = threading.Lock()
 _CARTOGRAPHER_SYMBOL_CACHE: Dict[Tuple[str, str], Tuple[str, List[Dict[str, Any]]]] = {}
+
+# file_descriptions sources. CODE_INDEX.md is the source of truth; these rows are its working memory.
+DESCRIPTION_SOURCE_GENESIS = "genesis_comment"   # first sentence of the patch COMMENT that created the file
+DESCRIPTION_SOURCE_INDEX = "code_index"          # mirror of the index text for a path that is currently in the topology
+DESCRIPTION_SOURCE_ORPHAN = "code_index_orphan"  # index text kept for a path that left the topology
+# How long the text of a path that left the topology is kept, so it comes back if the path does.
+ORPHANED_DESCRIPTION_TTL_SECONDS = 90 * 24 * 3600
 
 
 
@@ -98,6 +112,11 @@ def _record_genesis_descriptions(ctx, descriptions: Optional[Dict[str, str]] = N
         rows,
     )
     ctx.db.commit()
+
+
+@cartographer_bp.on('ensure_cartography_fresh')
+def _handle_ensure_cartography_fresh(target_repos=None, workspace_id=None, **kwargs):
+    map_repositories(workspace_id, silent=True, target_repos=target_repos)
 
 
 @cartographer_bp.on('register_compilation_steps')
@@ -165,8 +184,8 @@ def extract_existing_comments(index_path, repo_path=None, vfs_content=None):
 
     raw_index = vfs_content
     if raw_index is None and os.path.exists(index_path):
-        with open(index_path, "r", encoding="utf-8") as f:
-            raw_index = f.read()
+        with VFSTransaction() as vfs:
+            raw_index = vfs.read(str(index_path), is_absolute_artifact=True)
     live_comments = parse_text_for_comments(raw_index) if raw_index else {}
     git_comments = {}
     if repo_path and (not live_comments or "[comment required]" in (raw_index or "")):
@@ -367,10 +386,10 @@ def _background_enrich(ctx, repo: Optional[str] = None, job_id: Optional[str] = 
             continue
         ctx.jobs.update_progress(f"Enriching undocumented symbols for {r_dir}...")
         r_cfg = next((c for c in ctx.config.get("target_repos", []) if c.get("repo_dir") == r_dir), {})
-        logical_index_path = f"vfs://{r_dir}/docs/CODE_INDEX.md" if r_cfg.get("is_core_chassis") else f"vfs://{r_dir}/CODE_INDEX.md"
+        logical_index_path = resolve_repo_code_index_uri(ctx, r_dir, r_cfg)
         index_text = ctx.vfs.read(logical_index_path) or ""
         repo_path = Path(get_repo_path(r_dir, ctx.workspace_id)).resolve()
-        index_phys = (repo_path / "docs" / "CODE_INDEX.md") if r_cfg.get("is_core_chassis") else (repo_path / "CODE_INDEX.md")
+        index_phys = repo_path / InSetuURI(logical_index_path).path
         comments = extract_existing_comments(index_phys, repo_path, vfs_content=index_text)
 
         pending_prompts = {}
@@ -427,6 +446,56 @@ def _background_enrich(ctx, repo: Optional[str] = None, job_id: Optional[str] = 
     return {"message": f"Enriched {enriched_total} symbol(s).", "artifact": {"enriched_count": enriched_total}}
 
 
+def _remember_index_descriptions(ctx, repo_dir, present_files, present_dirs, comments, stored_descriptions):
+    """Mirrors the resolved index text of every present path into file_descriptions and keeps the text of paths that left.
+
+    The rows are working memory for CODE_INDEX.md, never a second source of truth:
+    - a present path with text is stored as DESCRIPTION_SOURCE_INDEX;
+    - a present path without text loses its row, because the index no longer describes it;
+    - a stored path that left the topology becomes DESCRIPTION_SOURCE_ORPHAN, so its text can come back with it;
+    - orphans older than ORPHANED_DESCRIPTION_TTL_SECONDS are dropped.
+    """
+    placeholders = ("[comment required]", "[managed file]")
+    now_ts = time.time()
+    present = {}
+    for rel_f in present_files:
+        present[f"vfs://{repo_dir}/{rel_f}"] = comments.get(rel_f)
+    for rel_d in present_dirs:
+        present[f"vfs://{repo_dir}/{rel_d}/"] = comments.get(f"{rel_d}/") or comments.get(rel_d)
+    upserts, deletes = [], []
+    for uri, desc in present.items():
+        stored = stored_descriptions.get(uri)
+        if desc and desc not in placeholders:
+            if stored != (desc, DESCRIPTION_SOURCE_INDEX):
+                upserts.append((uri, desc, DESCRIPTION_SOURCE_INDEX, now_ts))
+        elif stored and stored[1] != DESCRIPTION_SOURCE_GENESIS:
+            deletes.append((uri,))
+    try:
+        orphan_rows = ctx.db.execute(
+            "SELECT file_uri, description, source, updated_at FROM file_descriptions WHERE file_uri LIKE ?",
+            (f"vfs://{repo_dir}/%",),
+        ).fetchall()
+        for row in orphan_rows:
+            uri = row["file_uri"]
+            if uri in present:
+                continue
+            if row["source"] == DESCRIPTION_SOURCE_INDEX:
+                upserts.append((uri, row["description"], DESCRIPTION_SOURCE_ORPHAN, now_ts))
+            elif row["source"] == DESCRIPTION_SOURCE_ORPHAN and now_ts - float(row["updated_at"] or 0) > ORPHANED_DESCRIPTION_TTL_SECONDS:
+                deletes.append((uri,))
+        if upserts:
+            ctx.db.executemany(
+                "INSERT OR REPLACE INTO file_descriptions (file_uri, description, source, updated_at) VALUES (?, ?, ?, ?)",
+                upserts,
+            )
+        if deletes:
+            ctx.db.executemany("DELETE FROM file_descriptions WHERE file_uri = ?", deletes)
+        if upserts or deletes:
+            ctx.db.commit()
+    except Exception as exc:
+        print(f"⚠️ [Cartographer] Could not remember index descriptions for {repo_dir}: {exc}")
+
+
 def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_comments=None):
     if not silent: print(f"\n{'-'*50}\n🚀 inSetu: Mapping Repository Topologies\n{'-'*50}")
     ctx = cartographer_bp.get_context(workspace_id)
@@ -438,12 +507,12 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
         if target_repos and repo_dir not in target_repos: return
         repo_path = Path(get_repo_path(repo_dir, workspace_id)).resolve()
 
-        index_path = (repo_path / "docs" / "CODE_INDEX.md") if config.get("is_core_chassis") else (repo_path / "CODE_INDEX.md")
+        logical_index_path = resolve_repo_code_index_uri(ctx, repo_dir, config)
+        index_path = repo_path / InSetuURI(logical_index_path).path
         if not repo_path.exists():
             if not silent: print(f"⚠️  Skipping {repo_dir}: Directory not found.")
             return
         if not silent: print(f"🗺️  Cartographing {repo_dir}...")
-        logical_index_path = f"vfs://{repo_dir}/docs/CODE_INDEX.md" if config.get("is_core_chassis") else f"vfs://{repo_dir}/CODE_INDEX.md"
         valid_uris = get_topology_files_for_repo(workspace_id, repo_dir)
 
         if not valid_uris: return
@@ -460,57 +529,62 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
         if isinstance(extra_comments, dict) and isinstance(extra_comments.get(repo_dir), dict):
             comments.update(extra_comments[repo_dir])
 
-        # Tier 2 Markdown Frontmatter & Heading Fallback for undocumented .md files (Routines, Prompts, ADRs)
-        for rel_f in filtered_files:
-            if _is_path_managed(rel_f, managed_dirs):
-                continue
-            if Path(rel_f).suffix.lower() != ".md":
-                continue
-            if rel_f in comments or Path(rel_f).name in comments:
-                continue
-            f_text = ctx.vfs.read(f"vfs://{repo_dir}/{rel_f}") or ""
-            md_desc = ""
-            if f_text.strip():
-                fm_data, body_text, _ = parse_frontmatter(f_text)
-                if isinstance(fm_data, dict):
-                    md_desc = _first_sentence(str(fm_data.get("description") or fm_data.get("title") or ""))
-                if not md_desc and body_text:
-                    for raw_l in body_text.splitlines():
-                        clean_l = raw_l.strip()
-                        if clean_l.startswith("#"):
-                            md_desc = _first_sentence(clean_l.lstrip("#").strip())
-                            if md_desc:
-                                break
-            if not md_desc and "adrs/" in rel_f:
-                stem = re.sub(r'^\d+-', '', Path(rel_f).stem).replace('-', ' ').strip()
-                if stem:
-                    md_desc = f"ADR: {stem[:1].upper() + stem[1:]}."
-            if md_desc:
-                comments[rel_f] = md_desc
-
-        # Tier 2 fallbacks for files the index does not describe yet (hand-written index text always wins):
-        # 2a. the first sentence of the Yomama genesis patch COMMENT that created the file;
-        # 2b. for .py/.js/.ts files, the module docstring or leading file comment.
+        # Tier 2 fallbacks for files and directories the index does not describe yet (hand-written index text always wins):
+        # 2a. index text remembered for a path that left the topology and has come back (an unmounted and remounted
+        #     volume, a file moved away and back), so its description survives the round trip;
+        # 2b. the first sentence of the Yomama genesis patch COMMENT that created the file;
+        # 2c. polyglot self-description from module docstrings, leading comments, frontmatter, or manifest metadata.
+        # A remembered row for a path that never left is not a fallback: if the index lost its text, a person removed it.
+        index_loaded = bool((live_vfs_index or "").strip()) or index_path.exists()
         try:
-            genesis_rows = ctx.db.execute(
-                "SELECT file_uri, description FROM file_descriptions WHERE file_uri LIKE ?",
+            stored_rows = ctx.db.execute(
+                "SELECT file_uri, description, source FROM file_descriptions WHERE file_uri LIKE ?",
                 (f"vfs://{repo_dir}/%",),
             ).fetchall()
-            genesis_descriptions = {r["file_uri"]: r["description"] for r in genesis_rows}
-        except Exception:
-            genesis_descriptions = {}
+            stored_descriptions = {r["file_uri"]: (r["description"], r["source"]) for r in stored_rows}
+        except Exception as exc:
+            print(f"⚠️ [Cartographer] Could not read remembered descriptions for {repo_dir}: {exc}")
+            stored_descriptions = {}
+        restorable_sources = {DESCRIPTION_SOURCE_GENESIS, DESCRIPTION_SOURCE_ORPHAN}
+        if not index_loaded:
+            restorable_sources.add(DESCRIPTION_SOURCE_INDEX)
+        genesis_descriptions = {
+            uri: desc for uri, (desc, source) in stored_descriptions.items() if source in restorable_sources and desc
+        }
+
+        filtered_set = set(filtered_files)
+        seen_dirs = set()
         for rel_f in filtered_files:
+            parts = rel_f.split("/")
+            for idx in range(1, len(parts)):
+                seen_dirs.add("/".join(parts[:idx]))
             if rel_f in comments or _is_path_managed(rel_f, managed_dirs):
                 continue
             genesis_desc = genesis_descriptions.get(f"vfs://{repo_dir}/{rel_f}")
             if genesis_desc:
                 comments[rel_f] = genesis_desc
                 continue
-            if Path(rel_f).suffix.lower() not in SUPPORTED_SYMBOL_EXTENSIONS:
-                continue
             src_desc = describe_source_file(rel_f, ctx.vfs.read(f"vfs://{repo_dir}/{rel_f}") or "")
             if src_desc:
                 comments[rel_f] = src_desc
+
+        for rel_d in sorted(seen_dirs):
+            d_key = f"{rel_d}/"
+            if d_key in comments or rel_d in comments or Path(rel_d).name in comments or f"{Path(rel_d).name}/" in comments:
+                continue
+            if _is_path_managed(rel_d, managed_dirs):
+                continue
+            dir_desc = (
+                genesis_descriptions.get(f"vfs://{repo_dir}/{d_key}")
+                or genesis_descriptions.get(f"vfs://{repo_dir}/{rel_d}")
+                or describe_directory(rel_d, filtered_set, lambda rel_p: ctx.vfs.read(f"vfs://{repo_dir}/{rel_p}"))
+            )
+            if dir_desc:
+                comments[d_key] = dir_desc
+                comments[rel_d] = dir_desc
+
+        if index_loaded:
+            _remember_index_descriptions(ctx, repo_dir, filtered_files, seen_dirs, comments, stored_descriptions)
 
         symbol_map: Dict[str, List[Dict[str, Any]]] = {}
         symbol_sig_parts = []
@@ -649,14 +723,14 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
                 pass
 
         cache_key = (workspace_id or "default", repo_dir)
-        pre_sig = (tuple(filtered_files), hash(live_vfs_index), tuple(managed_dirs), tuple(symbol_sig_parts), bool(extra_comments))
+        comments_sig = tuple(sorted((k, v) for k, v in comments.items() if k in filtered_set or k.rstrip("/") in seen_dirs))
+        pre_sig = (tuple(filtered_files), hash(live_vfs_index), tuple(managed_dirs), tuple(symbol_sig_parts), comments_sig, bool(extra_comments))
         with _CARTOGRAPHER_CACHE_LOCK:
             if live_vfs_index is not None and not extra_comments and _CARTOGRAPHER_SIG_CACHE.get(cache_key) == pre_sig:
                 return
 
         tree_dict = build_tree_dict(filtered_files)
-        if config.get("is_core_chassis"):
-            os.makedirs(Path(index_path).parent, exist_ok=True)
+        os.makedirs(Path(index_path).parent, exist_ok=True)
 
         header = f"# {config.get('title', repo_dir)} Code Index\n\nThis index serves as the architectural map. It outlines the core directories and their operational purpose to maintain a clear mental model of the ecosystem, preventing cognitive overload and logic drift.\n\n```text\n{repo_dir}/\n"
         tree_lines = render_ascii_tree(tree_dict, comments, managed_dirs, symbol_map=symbol_map)
@@ -664,7 +738,7 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
         rendered_index = header + "\n".join(tree_lines) + footer
         if rendered_index != live_vfs_index:
             ctx.vfs.save(logical_index_path, rendered_index, data={"ignore_ledger": True})
-        post_sig = (tuple(filtered_files), hash(rendered_index), tuple(managed_dirs), tuple(symbol_sig_parts), False)
+        post_sig = (tuple(filtered_files), hash(rendered_index), tuple(managed_dirs), tuple(symbol_sig_parts), comments_sig, False)
         with _CARTOGRAPHER_CACHE_LOCK:
             _CARTOGRAPHER_SIG_CACHE[cache_key] = post_sig
 

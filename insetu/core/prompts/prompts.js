@@ -1,5 +1,5 @@
 // prompts.js - Tier 2 Core Prompt Library & Virtual Module Templates
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
@@ -27,19 +27,10 @@ const syncPromptsState = window.inSetu.utils.coalescedAsync(async (forceRewarm =
             } else if (forceRewarm) {
                 PromptsStore.setState({ warmedPromptUrls: warmedSet });
             }
-            const gatherStore = window.inSetu?.stores?.Gather;
-            if (gatherStore && typeof gatherStore.setState === 'function') {
-                const currentOpts = gatherStore.getState().gatherOptions || {};
-                if (JSON.stringify(currentOpts.prompts) !== JSON.stringify(cleanPrompts)) {
-                    gatherStore.setState(state => ({
-                        gatherOptions: {
-                            ...(state?.gatherOptions || {}),
-                            prompts: cleanPrompts,
-                            profileDir: data.profile_dir || ".insetu/data/prompts"
-                        }
-                    }));
-                }
-            }
+            window.inSetu.events?.emit('insetu:prompts-synced', {
+                prompts: cleanPrompts,
+                profileDir: data.profile_dir || ".insetu/data/prompts"
+            });
         }
     } catch (e) {
         console.warn("Headless prompt sync failed:", e);
@@ -73,9 +64,7 @@ export class InSetuExtPrompts extends InSetuElement {
         searchQuery: { type: String },
         browsePath: { type: Array }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.loading = false;
@@ -99,7 +88,6 @@ export class InSetuExtPrompts extends InSetuElement {
                 this.prompts = prompts;
                 this.loading = loading;
                 this.searchQuery = searchQuery;
-                this.requestUpdate();
             }
         );
         this.subscribe(
@@ -111,7 +99,6 @@ export class InSetuExtPrompts extends InSetuElement {
             },
             (browsePath) => {
                 this.browsePath = browsePath;
-                this.requestUpdate();
             }
         );
         this.browsePath = AppStore.getState().getBrowsePath ? AppStore.getState().getBrowsePath(this._getSubKey()) : [];
@@ -134,7 +121,11 @@ export class InSetuExtPrompts extends InSetuElement {
             else e.inSetuResponses.push(rawPrompts);
         });
         this.registerGlobalListener('insetu:global-manifest-whitelist', window, (e) => {
-            e.inSetuResponses.push(['ctx://prompts/']);
+            const allRepos = AppStore?.getState?.()?.allRepos || [];
+            e.inSetuResponses.push([
+                'ctx://prompts/',
+                ...allRepos.map(r => `vfs://${r}/.insetu-data/prompts/`)
+            ]);
         });
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
@@ -183,10 +174,13 @@ export class InSetuExtPrompts extends InSetuElement {
     }
     render() {
         return html`
-            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0; position: relative;">
-                ${this.loading ? html`<div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;"><sutram-spinner text="Loading prompts..."></sutram-spinner></div>` : ''}
+            <sutram-view ?flush=${true} ?noScroll=${true}>
+                ${this.loading ? html`
+                    <sutram-surface slot="header" variant="panel" border="bottom" padding="sm">
+                        <sutram-spinner text="Loading prompts..."></sutram-spinner>
+                    </sutram-surface>
+                ` : ''}
                 <insetu-file-tree    
-                    style="flex: 1; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};"
                     .files=${this.prompts} 
                     stripPrefix="ctx://prompts/"
                     basePath="ctx://prompts/"
@@ -203,7 +197,7 @@ export class InSetuExtPrompts extends InSetuElement {
                     }}
                     @path-changed=${(e) => AppStore.getState().setBrowsePath(e.detail.path || [], this._getSubKey())}>
                 </insetu-file-tree>
-            </div>
+            </sutram-view>
         `;
     }
 }
@@ -215,9 +209,14 @@ function _buildPromptsMenuActions(slotCfg = {}) {
     }
     const subKey = slotCfg?.id || 'prompts:prompts';
     const browseParts = AppStore.getState().getBrowsePath ? AppStore.getState().getBrowsePath(subKey) : [];
+    const allRepos = AppStore.getState().allRepos || [];
+    const isInsideRepoPrompts = browseParts.length > 0 && allRepos.includes(browseParts[0]);
     const isInsideUserTemplates = browseParts[0] === '.templates' && browseParts[1] === 'user';
     const cpPath = isInsideUserTemplates ? browseParts : browseParts.filter(p => p !== '.templates');
-    const prefix = cpPath.length > 0 ? "ctx://prompts/" + cpPath.join('/') + "/" : "ctx://prompts/";
+    const repoSubPath = isInsideRepoPrompts && browseParts.length > 1 ? browseParts.slice(1).join('/') + '/' : '';
+    const prefix = isInsideRepoPrompts
+        ? `vfs://${browseParts[0]}/.insetu-data/prompts/${repoSubPath}`
+        : (cpPath.length > 0 ? "ctx://prompts/" + cpPath.join('/') + "/" : "ctx://prompts/");
     return [
         {
             label: 'New Folder',
@@ -257,16 +256,18 @@ window.addEventListener('insetu:can-preview-file', (e) => {
 
 window.addEventListener('insetu:resolve-buffer-preview', (e) => {
     const { filepath, content, isDirty } = e.detail || {};
-    const hasIncludeMacro = typeof content === 'string' && /\{\{\s*(?:include_prompt\??\s*:|macro_[a-zA-Z0-9_]+|[a-zA-Z0-9_]+\s*\|)/.test(content);
+    const hasIncludeMacro = window.inSetu?.vfs?.hasMacroSyntax
+        ? window.inSetu.vfs.hasMacroSyntax(content)
+        : (typeof content === 'string' && content.includes('{{'));
     if (filepath && (isPromptPath(filepath) || hasIncludeMacro)) {
         e.inSetuResponses.push((async () => {
             if (isDirty && typeof content === 'string') {
                 try {
-                    const postRes = await window.inSetu.api.workspace.post('prompts/resolve', { filepath, content });
+                    const postRes = await window.inSetu.api.post('prompts/resolve', { filepath, content });
                     if (postRes.ok) return await postRes.text();
                 } catch (_) {}
             }
-            const getRes = await window.inSetu.api.workspace.get(`prompts/resolve?file=${encodeURIComponent(filepath)}&t=${Date.now()}`, { cache: 'no-store' });
+            const getRes = await window.inSetu.api.get(`prompts/resolve?file=${encodeURIComponent(filepath)}&t=${Date.now()}`, { cache: 'no-store' });
             return getRes.ok ? await getRes.text() : (content ?? '');
         })());
     }

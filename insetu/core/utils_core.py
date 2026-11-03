@@ -171,6 +171,22 @@ class InSetuURI(AkasaURI):
         return self.scheme == 'ctx' and self.volume == 'diffs'
 
     @property
+    def is_user_template(self) -> bool:
+        norm = str(self).replace('\\', '/')
+        return '/.templates/user/' in norm or norm.endswith('/.templates/user')
+
+    @property
+    def is_readonly_template(self) -> bool:
+        if self.is_user_template:
+            return False
+        norm = str(self).replace('\\', '/')
+        return '/.templates/' in norm or norm.endswith('/.templates')
+
+    @property
+    def is_template(self) -> bool:
+        return self.is_user_template or self.is_readonly_template
+
+    @property
     def parent_uri(self) -> 'InSetuURI':
         scheme = self.scheme or 'vfs'
         clean_path = (self.path or '').strip('/')
@@ -441,12 +457,12 @@ def parse_frontmatter(content):
     if not content:
         return {}, "", None
 
-    yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
+    yaml_match = re.search(r'^\s*---[ \t]*\n(?:([\s\S]*?)\n)?[ \t]*---(?=\s*\n|\s*$)', content)
     yaml_data = {}
     body = content
 
     if yaml_match:
-        raw_yaml = yaml_match.group(1)
+        raw_yaml = yaml_match.group(1) or ""
         body = content[yaml_match.end():].strip()
 
         if raw_yaml.strip():
@@ -642,8 +658,14 @@ def _collapse_omitted_optional_includes(rendered: str) -> str:
     return cleaned.replace(_OPTIONAL_OMITTED_SENTINEL, '')
 
 
-def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth=0, workspace_id=None):
+_DEFAULT_INCLUDE_PROMPT_RE = r'\{\{\s*include_prompt\??\s*:\s*([^\s{}]+)\s*(?:\{([\s\S]*?)\})?\s*\}\}'
+
+
+def resolve_macro_includes(text, current_filepath, pattern=_DEFAULT_INCLUDE_PROMPT_RE, read_callback=None, depth=0, workspace_id=None):
     """Expands {{include_prompt: ...}} and optional {{include_prompt?: ...}} macros recursively (depth 5), with macro parameters."""
+    if callable(pattern) and read_callback is None:
+        read_callback = pattern
+        pattern = _DEFAULT_INCLUDE_PROMPT_RE
     if depth > 5:
         return text + "\n[!] INCLUSION DEPTH LIMIT EXCEEDED"
     if not text:
@@ -666,10 +688,15 @@ def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth
                     rel_parts.append(p)
             joined_rel = '/'.join(rel_parts)
             return f"{base_prefix}/{joined_rel}".rstrip('/') if joined_rel else base_prefix
-        if cur_uri.scheme == "ctx" and cur_uri.volume == "prompts":
+        if (cur_uri.scheme == "ctx" and cur_uri.volume == "prompts") or "/.insetu-data/prompts/" in str(cur_uri):
             clean_rel = include_path.lstrip("/")
-            if clean_rel.startswith("prompts/"):
-                clean_rel = clean_rel[len("prompts/"):].lstrip("/")
+            for strip_p in (".insetu-data/prompts/", ".insetu/data/prompts/", "prompts/"):
+                if clean_rel.startswith(strip_p):
+                    clean_rel = clean_rel[len(strip_p):].lstrip("/")
+            if cur_uri.scheme == "vfs" and cur_uri.repo:
+                first_seg = clean_rel.split("/", 1)[0]
+                if first_seg != cur_uri.repo and not clean_rel.startswith(".templates/"):
+                    return f"ctx://prompts/{cur_uri.repo}/{clean_rel}"
             return f"ctx://prompts/{clean_rel}"
         return include_path
 
@@ -681,11 +708,19 @@ def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth
                 clean_key = raw_key[len('macro_'):] if raw_key.startswith('macro_') else raw_key
                 macro_pattern = r'\{\{\s*(?:macro_)?' + re.escape(clean_key) + r'(?:\s*\|[^{}]*)?\s*\}\}'
                 inc_content = re.sub(macro_pattern, lambda _, v=val: v, inc_content)
-        # Resolve any remaining {{ macro_name | default_value }} placeholders to their default_value
+        # Resolve remaining {{ macro_name | literal_default }} placeholders unless the fallback is a multi-step chain or references a runtime namespace (sys.*, global.*, inputs.*, nodes.*)
+        def _resolve_static_default(m: re.Match) -> str:
+            fallback_expr = m.group(1).strip()
+            if "|" in fallback_expr or any(
+                fallback_expr.startswith(ns) for ns in ("sys.", "global.", "inputs.", "nodes.")
+            ):
+                return m.group(0)
+            return fallback_expr
+
         inc_content = re.sub(
             r'\{\{\s*(?:macro_)?[a-zA-Z0-9_]+\s*\|\s*([^{}]*?)\s*\}\}',
-            lambda m: m.group(1).strip(),
-            inc_content
+            _resolve_static_default,
+            inc_content,
         )
         return resolve_macro_includes(inc_content, target_path, pattern, read_callback, depth + 1, workspace_id=workspace_id)
 
@@ -732,276 +767,124 @@ def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth
     return re.sub(pattern, replacer, text)
 
 
-def _get_base_step_and_diffs(lines):
-    """Analyzes a block of code to find its true structural base indentation unit (LCD > 1)."""
-    indents = sorted(list(set(len(line) - len(line.lstrip()) for line in lines if line.strip())))
-    if len(indents) > 1:
-        diffs = [indents[k+1] - indents[k] for k in range(len(indents)-1)]
-        valid_diffs = [d for d in diffs if d > 1]
+_CHAINED_MUSTACHE_RE = re.compile(r'\{\{\s*([^{}]+?)\s*\}\}')
 
-        if valid_diffs:
-            best_step = 4
-            min_error = float('inf')
 
-            for S in [4, 2, 3, 8]:
-                error = 0
-                has_base_jump = False
-
-                for d in valid_diffs:
-                    k = max(1, int(round(d / S)))
-                    if k == 1:
-                        has_base_jump = True
-                    error += abs(d - (k * S))
-
-                if not has_base_jump:
-                    error += 1000 
-
-                if error < min_error:
-                    min_error = error
-                    best_step = S
-
-            return best_step, diffs
-    return 4, []
-def _parse_kv_directive_lines(lines: List[str]) -> Dict[str, str]:
-    directives: Dict[str, str] = {}
-    for raw_line in lines:
-        s = raw_line.strip()
-        if not s or ":" not in s:
-            continue
-        k, v = s.split(":", 1)
-        directives[k.strip().upper()] = v.strip()
-    return directives
-def _project_textedit_search_replace(raw_textedit: str) -> Tuple[str, str]:
+def resolve_context_var_path(path_expr: str, context: Dict[str, Any], ctx=None) -> Any:
     """
-    Projects a <<<<<<< TEXTEDIT body containing inline {{-delete}} and {{+insert}} spans
-    into (search_str, replace_str) for 100% compatibility with bridge_ledger, /undo, and diff viewers.
+    Resolves a dotted variable reference ('sys.repo_title', 'global.mode', 'nodes.step.text', 'inputs.scope')
+    against a routine or prompt context dictionary, hydrating vaulted scratch `_uri` entries when needed.
     """
-    search_projected = re.sub(r'\{\{\+([\s\S]*?)\}\}', '', raw_textedit)
-    search_projected = re.sub(r'\{\{-([\s\S]*?)\}\}', lambda m: m.group(1), search_projected)
-    replace_projected = re.sub(r'\{\{-([\s\S]*?)\}\}', '', raw_textedit)
-    replace_projected = re.sub(r'\{\{\+([\s\S]*?)\}\}', lambda m: m.group(1), replace_projected)
-    return search_projected, replace_projected
+    if not isinstance(context, dict):
+        return None
+    clean_expr = str(path_expr or "").strip()
+    if clean_expr.startswith("{{") and clean_expr.endswith("}}"):
+        clean_expr = clean_expr[2:-2].strip()
+    if clean_expr.startswith("nodes."):
+        clean_expr = clean_expr[len("nodes."):]
+    elif clean_expr.startswith("inputs.") and "inputs" not in context and "global" in context:
+        clean_expr = "global." + clean_expr[len("inputs."):]
 
+    parts = [p for p in clean_expr.split(".") if p]
+    if not parts:
+        return None
 
-def parse_blocks(text):
-    files = {}
-    current_file = None
-    current_id = None
-    state = "OUTSIDE"
-    current_type = "exact"
-    comment_lines, search_lines, replace_lines, ast_lines = [], [], [], []
-    first_markers = [
-        idx for idx in (
-            text.find("<<<<<<< FILE:"),
-            text.find("<<<<<<< COMMENT"),
-            text.find("<<<<<<< RELOCATE"),
-            text.find("<<<<<<< RENAME"),
-            text.find("<<<<<<< TEXTEDIT"),
-            text.find("<<<<<<< JSON_PATCH"),
-            text.find("<<<<<<< MOVE_FILE"),
-            text.find("<<<<<<< ARCHIVE_FILE"),
-            text.find("<<<<<<< DELETE_FILE"),
-        ) if idx != -1
-    ]
-    if first_markers:
-        text = text[min(first_markers):]
-
-    text = re.sub(
-        r'^[ \t\xa0]*(?:>[ \t\xa0]*)+REPLACE[ \t\xa0]*(?:\n[ \t\xa0]*(?:>[ \t\xa0]*)+$)*',
-        '>>>>>>> REPLACE',
-        text,
-        flags=re.MULTILINE
-    )
-    text = re.sub(
-        r'^[ \t\xa0]*(?:>[ \t\xa0]*)+EXECUTE[ \t\xa0]*(?:\n[ \t\xa0]*(?:>[ \t\xa0]*)+$)*',
-        '>>>>>>> EXECUTE',
-        text,
-        flags=re.MULTILINE
-    )
-
-    def _flush_directive_block():
-        nonlocal comment_lines, ast_lines, current_id, state
-        if state in ("RELOCATE", "RENAME", "MOVE_FILE", "ARCHIVE_FILE", "DELETE_FILE"):
-            kv = _parse_kv_directive_lines(ast_lines)
-            if state == "RELOCATE":
-                raw_src = kv.get("FROM") or current_file or ""
-                raw_dst = kv.get("TO") or ""
-                src_file = str(InSetuURI.from_external_input(raw_src)) if raw_src else ""
-                dst_file = str(InSetuURI.from_external_input(raw_dst)) if raw_dst else ""
-                sym_name = kv.get("SYMBOL") or ""
-                if src_file:
-                    files.setdefault(src_file, []).append({
-                        "id": current_id,
-                        "type": "relocate",
-                        "comment": "\n".join(comment_lines).strip(),
-                        "symbol": sym_name,
-                        "source_uri": src_file,
-                        "target_uri": dst_file,
-                        "raw_directive": "\n".join(ast_lines),
-                        "search": "",
-                        "replace": "",
-                    })
-            elif state == "RENAME":
-                scope_val = kv.get("SCOPE") or current_file or "vfs://"
-                target_sym = kv.get("TARGET") or ""
-                replace_sym = kv.get("REPLACE_WITH") or ""
-                files.setdefault(scope_val, []).append({
-                    "id": current_id,
-                    "type": "rename",
-                    "comment": "\n".join(comment_lines).strip(),
-                    "target_symbol": target_sym,
-                    "new_symbol": replace_sym,
-                    "scope_prefix": scope_val,
-                    "raw_directive": "\n".join(ast_lines),
-                    "search": "",
-                    "replace": "",
-                })
-            elif state == "MOVE_FILE":
-                raw_src = kv.get("FROM") or kv.get("FILE") or current_file or ""
-                raw_dst = kv.get("TO") or kv.get("DEST") or ""
-                src_file = str(InSetuURI.from_external_input(raw_src)) if raw_src else ""
-                dst_file = str(InSetuURI.from_external_input(raw_dst)) if raw_dst else ""
-                if src_file:
-                    files.setdefault(src_file, []).append({
-                        "id": current_id,
-                        "type": "move_file",
-                        "comment": "\n".join(comment_lines).strip(),
-                        "source_uri": src_file,
-                        "target_uri": dst_file,
-                        "raw_directive": "\n".join(ast_lines),
-                        "search": "",
-                        "replace": "",
-                    })
-            elif state == "ARCHIVE_FILE":
-                raw_target = kv.get("FILE") or kv.get("FROM") or current_file or ""
-                target_uri = str(InSetuURI.from_external_input(raw_target)) if raw_target else ""
-                if target_uri:
-                    files.setdefault(target_uri, []).append({
-                        "id": current_id,
-                        "type": "archive_file",
-                        "comment": "\n".join(comment_lines).strip(),
-                        "source_uri": target_uri,
-                        "raw_directive": "\n".join(ast_lines),
-                        "search": "",
-                        "replace": "",
-                    })
-            elif state == "DELETE_FILE":
-                raw_target = kv.get("FILE") or kv.get("FROM") or current_file or ""
-                target_uri = str(InSetuURI.from_external_input(raw_target)) if raw_target else ""
-                if target_uri:
-                    files.setdefault(target_uri, []).append({
-                        "id": current_id,
-                        "type": "delete_file",
-                        "comment": "\n".join(comment_lines).strip(),
-                        "source_uri": target_uri,
-                        "raw_directive": "\n".join(ast_lines),
-                        "search": "",
-                        "replace": "",
-                    })
-        elif state == "JSON_PATCH" and current_file:
-            raw_json_body = "\n".join(ast_lines).strip()
-            files.setdefault(current_file, []).append({
-                "id": current_id,
-                "type": "json_patch",
-                "comment": "\n".join(comment_lines).strip(),
-                "patch_body": raw_json_body,
-                "raw_directive": raw_json_body,
-                "search": "",
-                "replace": raw_json_body,
-            })
-        elif state == "TEXTEDIT" and current_file:
-            raw_te = "\n".join(ast_lines)
-            s_proj, r_proj = _project_textedit_search_replace(raw_te)
-            files.setdefault(current_file, []).append({
-                "id": current_id,
-                "type": "textedit",
-                "comment": "\n".join(comment_lines).strip(),
-                "raw_textedit": raw_te,
-                "search": s_proj,
-                "replace": r_proj,
-            })
-        comment_lines = []
-        ast_lines = []
-        current_id = None
-        state = "OUTSIDE"
-
-    lines = text.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
-    for line in lines:
-        stripped = line.strip()
-        if line.startswith("<<<<<<< FILE:"):
-            raw_file_target = line.replace("<<<<<<< FILE:", "").strip()
-            current_file = str(InSetuURI.from_external_input(raw_file_target)) if raw_file_target else ""
-            if current_file not in files:
-                files[current_file] = []
-            current_id = None
-            state = "OUTSIDE"
-        elif line.startswith("<<<<<<< ID:"):
-            current_id = line.replace("<<<<<<< ID:", "").strip()
-        elif stripped.startswith("<<<<<<< COMMENT"):
-            state = "COMMENT"
-            comment_lines = []
-        elif stripped.startswith("<<<<<<< RELOCATE"):
-            state = "RELOCATE"
-            ast_lines = []
-        elif stripped.startswith("<<<<<<< RENAME"):
-            state = "RENAME"
-            ast_lines = []
-        elif stripped.startswith("<<<<<<< MOVE_FILE"):
-            state = "MOVE_FILE"
-            ast_lines = []
-        elif stripped.startswith("<<<<<<< ARCHIVE_FILE"):
-            state = "ARCHIVE_FILE"
-            ast_lines = []
-        elif stripped.startswith("<<<<<<< DELETE_FILE"):
-            state = "DELETE_FILE"
-            ast_lines = []
-        elif stripped.startswith("<<<<<<< TEXTEDIT"):
-            state = "TEXTEDIT"
-            ast_lines = []
-        elif stripped.startswith("<<<<<<< JSON_PATCH"):
-            state = "JSON_PATCH"
-            ast_lines = []
-        elif line.startswith("<<<<<<< SEARCH"):
-            state = "SEARCH"
-            search_lines = []
-            current_type = "regex" if "REGEX" in line else "exact"
-        elif line.startswith("======="):
-            if state == "SEARCH":
-                state = "REPLACE"
-                replace_lines = []
-            elif state in ("OUTSIDE", "COMMENT") and current_file:
-                print(f"  [~] Warning: Missing '<<<<<<< SEARCH' tag detected for {current_file}. Auto-healing as a genesis patch.")
-                state = "REPLACE"
-                search_lines = []
-                replace_lines = []
-        elif stripped == ">>>>>>> EXECUTE":
-            _flush_directive_block()
-        elif line.startswith(">>>>>>> REPLACE"):
-            if state in ("TEXTEDIT", "JSON_PATCH", "RELOCATE", "RENAME", "MOVE_FILE", "ARCHIVE_FILE", "DELETE_FILE"):
-                _flush_directive_block()
-            elif state == "REPLACE" and current_file:
-                files[current_file].append({
-                    "id": current_id,
-                    "type": current_type,
-                    "comment": "\n".join(comment_lines).strip(),
-                    "search": "\n".join(search_lines),
-                    "replace": "\n".join(replace_lines)
-                })
-                comment_lines = []
-                current_id = None
-                state = "OUTSIDE"
+    def _walk(start_obj: Any, segs: List[str]) -> Any:
+        cur = start_obj
+        for p in segs:
+            if isinstance(cur, dict):
+                if p in ("text", "content") and p not in cur and cur.get("_uri"):
+                    scratch_uri = str(cur["_uri"])
+                    is_abs = not ("://" in scratch_uri)
+                    active_ctx = ctx or context.get("_ctx")
+                    try:
+                        if active_ctx is not None:
+                            hydrated = active_ctx.vfs.read(scratch_uri, is_absolute_artifact=is_abs)
+                        else:
+                            with VFSTransaction(sniff_tenant_id() or "default") as vfs:
+                                hydrated = vfs.read(scratch_uri, is_absolute_artifact=is_abs)
+                        if hydrated is not None:
+                            cur[p] = hydrated
+                            return hydrated
+                    except Exception:
+                        pass
+                cur = cur.get(p)
             else:
-                state = "OUTSIDE"
-        else:
-            if state == "COMMENT":
-                comment_lines.append(line)
-            elif state in ("RELOCATE", "RENAME", "MOVE_FILE", "ARCHIVE_FILE", "DELETE_FILE", "TEXTEDIT", "JSON_PATCH"):
-                ast_lines.append(line)
-            elif state == "SEARCH":
-                search_lines.append(line)
-            elif state == "REPLACE":
-                replace_lines.append(line)
-    return files
+                return None
+        return cur
+
+    val = _walk(context, parts)
+    if val is None and len(parts) == 1:
+        for ns in ("inputs", "global", "sys"):
+            ns_dict = context.get(ns)
+            if isinstance(ns_dict, dict) and parts[0] in ns_dict:
+                val = ns_dict.get(parts[0])
+                if val is not None:
+                    break
+    if isinstance(val, dict) and "text" in val and not clean_expr.endswith((".text", ".parsed", ".items", ".result", ".status")):
+        val = val.get("text")
+    if isinstance(val, list):
+        return ", ".join(str(x) for x in val if x) if val else None
+    return val
+
+
+def interpolate_mustache_chain(template_str: str, context: Dict[str, Any], ctx=None) -> str:
+    """
+    Single Source of Truth evaluator for `{{ var | sys.fallback | literal }}` placeholders across
+    both standalone Prompt resolution (`prompts/resolve`) and Agent DAG routines (`orchestrator.py`).
+    """
+    if not template_str:
+        return ""
+    text = str(template_str)
+    inputs_map = (context.get("inputs") if isinstance(context, dict) else None) or {}
+
+    def _replace_tag(m: re.Match) -> str:
+        inner = m.group(1).strip()
+        if any(inner.startswith(p) for p in ("include_prompt", "ymm:", "triple", "UNTIL", "+", "-")):
+            return m.group(0)
+        segments = [seg.strip() for seg in inner.split("|") if seg.strip()]
+        if not segments:
+            return m.group(0)
+        for idx, seg in enumerate(segments):
+            clean_seg = seg[6:].strip() if seg.startswith("macro_") else seg
+            if clean_seg in inputs_map and inputs_map[clean_seg] not in (None, "", []):
+                return str(inputs_map[clean_seg]).replace("\\n", "\n")
+            looked_up = resolve_context_var_path(clean_seg, context, ctx=ctx)
+            if looked_up not in (None, "", []):
+                return str(looked_up).replace("\\n", "\n")
+            if idx == len(segments) - 1 and idx > 0 and not clean_seg.startswith(("sys.", "global.", "inputs.", "nodes.")):
+                return seg.strip('\'"').replace("\\n", "\n")
+        if len(segments) == 1 and segments[0].startswith("sys."):
+            return ""
+        return m.group(0) if len(segments) == 1 else ""
+
+    for _ in range(2):
+        next_text = _CHAINED_MUSTACHE_RE.sub(_replace_tag, text)
+        if next_text == text:
+            break
+        text = next_text
+
+    protected_tokens: List[str] = []
+
+    def _shield_literal_macros(m: re.Match) -> str:
+        inner = m.group(1).strip()
+        if inner.startswith(("ymm:", "+", "-")) or "ymm:" in inner:
+            idx = len(protected_tokens)
+            protected_tokens.append(m.group(0))
+            return f"\x00__YMM_LIT_{idx}__\x00"
+        return m.group(0)
+
+    shielded = _CHAINED_MUSTACHE_RE.sub(_shield_literal_macros, text)
+    interpolated = interpolate_template_variables(
+        shielded,
+        values=inputs_map,
+        resolver=lambda expr: resolve_context_var_path(expr, context, ctx=ctx),
+    )
+    for idx, tok in enumerate(protected_tokens):
+        interpolated = interpolated.replace(f"\x00__YMM_LIT_{idx}__\x00", tok)
+    return interpolated
+
+
 def clean_date_str(val):
     """Safely normalizes varied date inputs into a standard ISO format."""
     if val is None:
@@ -1184,7 +1067,7 @@ def start_filesystem_observer(**kwargs):
                 return
 
             filename = Path(src_path).name
-            if filename.startswith('.') or filename.endswith('~') or filename.upper() == 'CODE_INDEX.MD' or filename == 'manifest.json': return
+            if (filename.startswith('.') and filename != '.gitignore') or filename.endswith('~') or filename.upper() == 'CODE_INDEX.MD' or filename == 'manifest.json': return
             if filename.endswith(('.db', '.db-wal', '.db-shm', '.db-journal')): return
 
             op = op_override or ('delete' if event.event_type == 'deleted' else 'save')
@@ -1532,24 +1415,99 @@ def get_sister_repos(workspace_id=None):
     return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir")]
 
 
+def get_repeater_secret(
+    ext_name: str,
+    workspace_id: str,
+    repeater_id: str,
+    item_id: str,
+    subfield_id: str = "api_key",
+    *,
+    scope: str,
+) -> str:
+    """
+    SSOT reader for encrypted repeater item secrets stored in .insetu/secrets.json.
+    Checks the canonical '{repeater_id}__{item_id}__{subfield_id}' key (and legacy 'endpoint_key__{item_id}' for llm).
+    Reads only where set_repeater_secret writes for the same scope: daemon secrets from the default workspace,
+    workspace secrets from that workspace alone, so one workspace never reads another's secrets.
+    """
+    if not ext_name or not item_id:
+        return ""
+    canonical_key = f"{repeater_id}__{item_id}__{subfield_id}"
+    candidate_keys = [canonical_key]
+    if ext_name == "llm" and subfield_id == "api_key":
+        candidate_keys.append(f"endpoint_key__{item_id}")
+
+    target_wid = "default" if scope == "daemon" else (workspace_id or "default")
+    # load_json_config reads through the VFS write cache, so a secret saved moments ago is found before it is flushed.
+    sec_path = Path(get_tenant_control_dir(target_wid)) / "secrets.json"
+    ext_sec = load_json_config(sec_path.as_posix(), {}).get(ext_name) or {}
+    for k in candidate_keys:
+        enc_val = ext_sec.get(k, "")
+        if enc_val:
+            dec = decrypt_secret(enc_val)
+            if dec:
+                return dec
+    return ""
+
+
+def set_repeater_secret(
+    ext_name: str,
+    workspace_id: str,
+    repeater_id: str,
+    item_id: str,
+    subfield_id: str,
+    plain_secret: str,
+    *,
+    scope: str,
+) -> None:
+    """
+    SSOT writer for encrypted repeater item secrets in .insetu/secrets.json.
+    Stores under the canonical '{repeater_id}__{item_id}__{subfield_id}' key and cleans up legacy keys when cleared.
+    """
+    if not ext_name or not item_id:
+        return
+    target_wid = "default" if scope == "daemon" else (workspace_id or "default")
+    canonical_key = f"{repeater_id}__{item_id}__{subfield_id}"
+    legacy_key = f"endpoint_key__{item_id}" if (ext_name == "llm" and subfield_id == "api_key") else None
+
+    sec_path = Path(get_tenant_control_dir(target_wid)) / "secrets.json"
+    raw = load_json_config(sec_path.as_posix(), {})
+    ext_sec = raw.setdefault(ext_name, {})
+    clean_val = (plain_secret or "").strip()
+    if clean_val:
+        enc = encrypt_secret(clean_val)
+        ext_sec[canonical_key] = enc
+        if legacy_key:
+            ext_sec[legacy_key] = enc
+    else:
+        ext_sec.pop(canonical_key, None)
+        if legacy_key:
+            ext_sec.pop(legacy_key, None)
+    save_json_config(sec_path.as_posix(), raw, workspace_id=target_wid)
+
+
 def _command_signature(kind: str, repo: str, command: str) -> str:
     """Approval key for one exact command. Test-runner keys keep their original 'repo:hash' form."""
     digest = hashlib.sha256((command or "").strip().encode("utf-8")).hexdigest()[:16]
     return f"{repo}:{digest}" if kind == "test" else f"{kind}:{repo}:{digest}"
 
 
+def _load_host_approvals() -> Tuple[str, Dict[str, Any]]:
+    """host.json, where every human approval lives (commands, workspace extensions): (its path, its data)."""
+    host_path = get_daemon_host_config_path()
+    return host_path, load_json_config(host_path, {})
+
+
 def get_approved_commands(workspace_id: str) -> set:
     """Returns the approved command signatures for workspace_id from host.json (P5)."""
-    host_path = get_daemon_host_config_path()
-    host_data = load_json_config(host_path, {})
+    _, host_data = _load_host_approvals()
     return set(host_data.get("approved_test_commands", {}).get(workspace_id, []))
 
 
 def approve_command(workspace_id: str, kind: str, repo: str, command: str) -> str:
     """Records a person's approval of one exact command of a kind ('test', 'preview') for a repository. Call only from human-only routes."""
     sig = _command_signature(kind, repo, command)
-    host_path = get_daemon_host_config_path()
-    host_data = load_json_config(host_path, {})
+    host_path, host_data = _load_host_approvals()
     approved = set(host_data.setdefault("approved_test_commands", {}).get(workspace_id, []))
     approved.add(sig)
     host_data["approved_test_commands"][workspace_id] = sorted(approved)
@@ -1590,6 +1548,187 @@ def is_test_command_approved(
     if not clean_cmd or clean_cmd == clean_default:
         return True
     return is_command_approved(workspace_id, "test", repo, clean_cmd)
+
+
+# Workspace extensions (S8). Extensions a person builds live in <workspace root>/.insetu/extensions/<name>/.
+# Anyone (a person, the bridge, an agent) may write them; insetu only runs one whose exact files a person approved.
+WORKSPACE_EXTENSION_NAME_PATTERN = re.compile(r"^[a-z0-9_]+$")
+WORKSPACE_EXTENSION_MAX_BYTES = 20 * 1024 * 1024
+_WORKSPACE_EXTENSION_SNAPSHOT_CACHE: Dict[str, Tuple[tuple, Dict[str, Any]]] = {}
+_WORKSPACE_EXTENSION_SNAPSHOT_LOCK = threading.Lock()
+
+
+def get_workspace_extension_reserved_names() -> frozenset:
+    """Names a workspace extension cannot take: every bundled extension and core module, plus config, sdk, languages."""
+    package_dir = Path(__file__).resolve().parent.parent
+    names = {"config", "sdk", "languages", *CORE_MODULES_TUPLE}
+    for sub in ("extensions", "core"):
+        folder = package_dir / sub
+        if folder.is_dir():
+            names.update(item for item in os.listdir(folder) if not item.startswith("__") and (folder / item).is_dir())
+    return frozenset(names)
+
+
+def get_workspace_extensions_root() -> Path:
+    """The one folder workspace extensions load from: .insetu/extensions/ under the default workspace root.
+
+    Always the default workspace, never the tenant of the current request: extensions belong to the daemon.
+    """
+    _, ws_root = get_workspace_physics("default")
+    return Path(ws_root).joinpath(".insetu", "extensions")
+
+
+def snapshot_workspace_extension(ext_dir: Path, with_contents: bool = False) -> Dict[str, Any]:
+    """Hashes every file of one workspace extension.
+
+    Returns {"fingerprint", "files": {relative path: sha256}, "error"} and, with with_contents, the bytes that were
+    hashed under "contents", so a caller can run exactly what it checked. A symbolic link anywhere in the folder makes
+    the extension invalid (its target could change without changing the fingerprint), as does going over
+    WORKSPACE_EXTENSION_MAX_BYTES. __pycache__ folders and .pyc files are build output and are skipped.
+    """
+    ext_dir = Path(ext_dir)
+    files: Dict[str, str] = {}
+    contents: Dict[str, bytes] = {}
+    total = 0
+    if ext_dir.is_symlink() or not ext_dir.is_dir():
+        return {"fingerprint": None, "files": {}, "error": "Not a folder (or a symbolic link)."}
+    for dirpath, dirnames, filenames in os.walk(ext_dir, followlinks=False):
+        dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+        for d in dirnames:
+            if Path(dirpath, d).is_symlink():
+                rel = Path(dirpath, d).relative_to(ext_dir).as_posix()
+                return {"fingerprint": None, "files": {}, "error": f"Contains a symbolic link: {rel}"}
+        for name in sorted(filenames):
+            full = Path(dirpath, name)
+            rel = full.relative_to(ext_dir).as_posix()
+            if full.is_symlink():
+                return {"fingerprint": None, "files": {}, "error": f"Contains a symbolic link: {rel}"}
+            if name.endswith(".pyc"):
+                continue
+            data = full.read_bytes()
+            total += len(data)
+            if total > WORKSPACE_EXTENSION_MAX_BYTES:
+                return {"fingerprint": None, "files": {}, "error": f"Larger than {WORKSPACE_EXTENSION_MAX_BYTES // (1024 * 1024)} MB."}
+            files[rel] = hashlib.sha256(data).hexdigest()
+            if with_contents:
+                contents[rel] = data
+    digest = hashlib.sha256()
+    for rel in sorted(files):
+        digest.update(f"{rel}\0{files[rel]}\n".encode("utf-8"))
+    result: Dict[str, Any] = {"fingerprint": digest.hexdigest(), "files": files, "error": None}
+    if with_contents:
+        result["contents"] = contents
+    return result
+
+
+def current_workspace_extension_fingerprint(ext_dir: Path) -> Optional[str]:
+    """The extension's fingerprint now, rehashed only when a file's size or mtime changed (for per-request checks)."""
+    ext_dir = Path(ext_dir)
+    try:
+        stat_key = []
+        for dirpath, dirnames, filenames in os.walk(ext_dir, followlinks=False):
+            dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+            for name in sorted(filenames + [d for d in dirnames if Path(dirpath, d).is_symlink()]):
+                entry = Path(dirpath, name)
+                st = entry.lstat()
+                stat_key.append((entry.relative_to(ext_dir).as_posix(), st.st_size, st.st_mtime_ns, st.st_mode))
+        key = tuple(stat_key)
+    except OSError:
+        return None
+    cache_id = ext_dir.as_posix()
+    with _WORKSPACE_EXTENSION_SNAPSHOT_LOCK:
+        cached = _WORKSPACE_EXTENSION_SNAPSHOT_CACHE.get(cache_id)
+        if cached and cached[0] == key:
+            return cached[1].get("fingerprint")
+    snap = snapshot_workspace_extension(ext_dir)
+    with _WORKSPACE_EXTENSION_SNAPSHOT_LOCK:
+        _WORKSPACE_EXTENSION_SNAPSHOT_CACHE[cache_id] = (key, snap)
+    return snap.get("fingerprint")
+
+
+def get_workspace_extension_approvals() -> Dict[str, Dict[str, Any]]:
+    """Approved workspace extensions from host.json: {name: {"fingerprint", "files", "approved_at"}}."""
+    _, host_data = _load_host_approvals()
+    approvals = host_data.get("approved_workspace_extensions", {})
+    return approvals if isinstance(approvals, dict) else {}
+
+
+def approve_workspace_extension(name: str, snapshot: Dict[str, Any]) -> str:
+    """Records a person's approval of one extension's exact files. Call only from human-only routes."""
+    if not WORKSPACE_EXTENSION_NAME_PATTERN.match(name or "") or not snapshot.get("fingerprint"):
+        raise ValueError("A valid extension name and fingerprint are required.")
+    host_path, host_data = _load_host_approvals()
+    approvals = host_data.setdefault("approved_workspace_extensions", {})
+    approvals[name] = {"fingerprint": snapshot["fingerprint"], "files": dict(snapshot.get("files") or {}), "approved_at": time.time()}
+    save_json_config(host_path, host_data, workspace_id="default")
+    return snapshot["fingerprint"]
+
+
+def revoke_workspace_extension(name: str) -> bool:
+    """Removes a person's approval for one extension; it stops loading at the next restart."""
+    host_path, host_data = _load_host_approvals()
+    approvals = host_data.get("approved_workspace_extensions", {})
+    if not isinstance(approvals, dict) or name not in approvals:
+        return False
+    approvals.pop(name, None)
+    save_json_config(host_path, host_data, workspace_id="default")
+    return True
+
+
+def describe_workspace_extension(name: str, snapshot: Dict[str, Any], approval: Optional[Dict[str, Any]], reserved: bool = False) -> Dict[str, Any]:
+    """Status of one workspace extension for the review screen: approved, changed, unapproved, or invalid.
+
+    file_changes lists what differs from the approved files (added, changed, removed), so a person reviews only that.
+    """
+    entry: Dict[str, Any] = {"id": name, "fingerprint": snapshot.get("fingerprint"), "files": sorted((snapshot.get("files") or {}).keys())}
+    if reserved:
+        entry.update(status="invalid", reason=f"'{name}' is the name of a built-in module or extension, which a workspace extension cannot replace.")
+        return entry
+    if snapshot.get("error"):
+        entry.update(status="invalid", reason=snapshot["error"])
+        return entry
+    if f"engine_{name}.py" not in (snapshot.get("files") or {}):
+        entry.update(status="invalid", reason=f"Missing engine_{name}.py.")
+        return entry
+    approved_files = dict((approval or {}).get("files") or {})
+    current_files = snapshot.get("files") or {}
+    changes = []
+    for rel in sorted(set(approved_files) | set(current_files)):
+        if rel not in approved_files:
+            changes.append({"path": rel, "change": "added"})
+        elif rel not in current_files:
+            changes.append({"path": rel, "change": "removed"})
+        elif approved_files[rel] != current_files[rel]:
+            changes.append({"path": rel, "change": "changed"})
+    if not approval:
+        entry.update(status="unapproved", reason="Not approved yet.", file_changes=changes)
+    elif approval.get("fingerprint") == snapshot.get("fingerprint"):
+        entry.update(status="approved", file_changes=[])
+    else:
+        entry.update(status="changed", reason="Files changed since they were approved.", file_changes=changes)
+    return entry
+
+
+def scan_workspace_extensions(reserved_names=None, with_contents: bool = False) -> Dict[str, Dict[str, Any]]:
+    """Every folder in .insetu/extensions/ with its status; with_contents adds the "snapshot" for approved ones."""
+    if reserved_names is None:
+        reserved_names = get_workspace_extension_reserved_names()
+    root = get_workspace_extensions_root()
+    found: Dict[str, Dict[str, Any]] = {}
+    if not root.is_dir():
+        return found
+    approvals = get_workspace_extension_approvals()
+    for item in sorted(os.listdir(root)):
+        cand = root / item
+        if item.startswith((".", "__")) or not WORKSPACE_EXTENSION_NAME_PATTERN.match(item) or not (cand.is_dir() or cand.is_symlink()):
+            continue
+        snap = snapshot_workspace_extension(cand, with_contents=with_contents)
+        entry = describe_workspace_extension(item, snap, approvals.get(item), reserved=item in reserved_names)
+        entry["dir"] = cand.as_posix()
+        if with_contents and entry["status"] == "approved":
+            entry["snapshot"] = snap
+        found[item] = entry
+    return found
 
 
 # Child process environments (S3). Every process insetu starts gets its environment from child_env().
@@ -1903,8 +2042,6 @@ def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kw
         return []
 
     files = []
-    repo_files_cache = {}
-    all_ledger_files_cache = None
     with VFSTransaction(workspace_id) as vfs:
         for item in items:
             if isinstance(item, dict):
@@ -1939,43 +2076,10 @@ def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kw
                 else:
                     is_folder = uri.is_dir_physical(workspace_id)
             if is_folder:
-                matched_folder_files = []
-                if gather_only and (not uri.scheme or uri.scheme == 'vfs'):
-                    repo_dir = uri.repo
-                    folder_rel_path = uri.path.strip('/')
-                    if repo_dir:
-                        if repo_dir not in repo_files_cache:
-                            from insetu.core.topology.engine_topology import get_topology_files_for_repo as _get_topology_files_for_repo
-                            g_list = _get_topology_files_for_repo(workspace_id, repo_dir)
-                            if not g_list:
-                                repo_path = get_repo_path(repo_dir, workspace_id)
-                                if os.path.exists(repo_path):
-                                    cfg = load_config(workspace_id)
-                                    target_configs = cfg.get("target_repos", [])
-                                    repo_cfg = next((c for c in target_configs if c and c.get("repo_dir") == repo_dir), None)
-                                    if repo_cfg:
-                                        from insetu.core.topology.engine_topology import get_valid_workspace_files as _get_valid_workspace_files
-                                        rel_valid = _get_valid_workspace_files(repo_path, repo_cfg, workspace_id)
-                                        g_list = [f"vfs://{repo_dir}/{f}" for f in rel_valid]
-                            repo_files_cache[repo_dir] = g_list
-                        gather_files = repo_files_cache[repo_dir]
-                    else:
-                        if all_ledger_files_cache is None:
-                            conn = get_connection("topology", workspace_id=workspace_id)
-                            rows = conn.execute("SELECT filepath FROM topology_ledger").fetchall()
-                            all_ledger_files_cache = [r['filepath'] for r in rows]
-                        gather_files = all_ledger_files_cache
-
-                    for g_file in gather_files:
-                        g_uri = InSetuURI(g_file)
-                        if g_uri.basename in ('.gitkeep', '.keep'):
-                            continue
-                        g_rel_path = g_uri.path
-                        if not folder_rel_path or g_rel_path == folder_rel_path or g_rel_path.startswith(folder_rel_path + '/'):
-                            matched_folder_files.append(str(g_uri))
-
-                if matched_folder_files:
-                    files.extend(matched_folder_files)
+                if not uri.scheme or uri.scheme == 'vfs':
+                    from insetu.core.topology.engine_topology import clamp_uris_to_topology as _clamp_uris_to_topology
+                    folder_uri = f"{str(uri).rstrip('/')}/"
+                    files.extend(_clamp_uris_to_topology(workspace_id, [folder_uri], expand_dirs=True, gather_only=bool(gather_only)))
                 else:
                     target_walk = str(uri).rstrip('/')
                     for f in vfs.walk(target_walk):
@@ -1986,6 +2090,9 @@ def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kw
                 if uri.scheme == 'ctx':
                     chunks = hooks.emit_first('resolve_payload_chunks', uri=str(uri), workspace_id=workspace_id, default=[str(uri)])
                     files.extend(chunks)
+                elif not uri.scheme or uri.scheme == 'vfs':
+                    from insetu.core.topology.engine_topology import clamp_uris_to_topology as _clamp_uris_to_topology
+                    files.extend(_clamp_uris_to_topology(workspace_id, [str(uri)], expand_dirs=False, gather_only=bool(gather_only)))
                 else:
                     files.append(str(uri))
 

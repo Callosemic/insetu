@@ -30,13 +30,6 @@ fs_bp = InSetuExtension(
 __depends__ = []
 
 
-def _is_readonly_template_path(filepath: str) -> bool:
-    if not filepath:
-        return False
-    norm = str(filepath).replace('\\', '/')
-    if '/.templates/user/' in norm or norm.endswith('/.templates/user') or norm.startswith(('.templates/user/', 'ctx://prompts/.templates/user/')):
-        return False
-    return '/.templates/' in norm or norm.startswith(('.templates/', 'ctx://prompts/.templates/'))
 class FileTargetPayload(TypedDict):
     file: str
 _TEXT_MIME_PREFIXES = ('text/', 'application/json', 'application/javascript', 'application/xml', 'application/x-yaml', 'application/toml')
@@ -210,7 +203,9 @@ def api_fs_move(ctx):
         dest_path = str(data.get("dest_path") or "").strip()
         if not filepath or not dest_path:
                 return {"error": "Filepath and destination required"}, 400
-        if _is_readonly_template_path(filepath) or _is_readonly_template_path(dest_path):
+        src_uri_obj = InSetuURI.from_external_input(filepath)
+        dst_uri_obj = InSetuURI.from_external_input(dest_path)
+        if src_uri_obj.is_readonly_template or dst_uri_obj.is_readonly_template:
                 return {"error": "403 Forbidden: Built-in module templates are read-only. Fork the template to your workspace prompts to edit it."}, 403
         src_uri = str(InSetuURI(filepath))
         dst_uri = str(InSetuURI(dest_path))
@@ -237,7 +232,7 @@ def api_fs_archive(ctx):
         filepath = str(data.get("filepath") or "").strip()
         if not filepath:
                 return {"error": "Filepath required"}, 400
-        if _is_readonly_template_path(filepath):
+        if InSetuURI.from_external_input(filepath).is_readonly_template:
                 return {"error": "403 Forbidden: Built-in module templates are read-only."}, 403
         uri = InSetuURI(filepath)
 
@@ -273,7 +268,7 @@ def api_fs_delete(ctx):
         filepath = str(data.get("filepath") or "").strip()
         if not filepath:
                 return {"error": "Filepath required"}, 400
-        if _is_readonly_template_path(filepath):
+        if InSetuURI.from_external_input(filepath).is_readonly_template:
                 return {"error": "403 Forbidden: Built-in module templates are read-only."}, 403
         target_uri = str(InSetuURI(filepath))
         res, code = ctx.vfs.delete(target_uri)
@@ -309,7 +304,8 @@ def api_fs_bulk(ctx):
             fp = (item.get("filepath") or "").strip()
             if not fp or act not in ("move", "archive", "delete"):
                 continue
-            if _is_readonly_template_path(fp) or _is_readonly_template_path(item.get("dest_path", "")):
+            dest_cand = item.get("dest_path", "")
+            if InSetuURI.from_external_input(fp).is_readonly_template or (dest_cand and InSetuURI.from_external_input(dest_cand).is_readonly_template):
                 continue
             src_uri_obj = InSetuURI(fp)
             src_uri = str(src_uri_obj)
@@ -448,7 +444,7 @@ def api_fs_save(ctx):
         filepath, content = str(data.get("filepath") or "").strip(), data.get("content", "")
         if not filepath: 
                 return {"error": "Filepath is required"}, 400
-        if _is_readonly_template_path(filepath):
+        if InSetuURI.from_external_input(filepath).is_readonly_template:
                 return {"error": "403 Forbidden: Built-in module templates are read-only. Fork the template to your workspace prompts to edit it."}, 403
         filepath = str(InSetuURI(filepath))
         base_hash = data.get("base_hash")

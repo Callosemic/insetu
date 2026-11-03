@@ -2,16 +2,126 @@ import { LitElement, html, css } from 'lit';
 import { InSetuElement, sharedStyles, SutramEditor, SutramProjectionWindowControls } from '/static/extensions/system/insetu_sdk.js';
 import { AppStore } from '/static/extensions/system/store.js';
 
+// The manifest's built-in entries, used until languages.json arrives so the first paint is highlighted.
+// test_editor_vendorize.py checks that this table matches the manifest's built-in entries exactly.
+const _BUILTIN_FALLBACK_LANGUAGES = {
+    python: { label: 'Python', kind: 'builtin', export: 'python', extensions: ['py', 'pyi'] },
+    javascript: { label: 'JavaScript', kind: 'builtin', export: 'javascript', options: { jsx: true }, extensions: ['js', 'mjs', 'cjs', 'jsx'] },
+    typescript: { label: 'TypeScript', kind: 'builtin', export: 'javascript', options: { typescript: true, jsx: true }, extensions: ['ts', 'mts', 'cts', 'tsx'] },
+    json: { label: 'JSON', kind: 'builtin', export: 'json', extensions: ['json', 'jsonl'] },
+    yaml: { label: 'YAML', kind: 'builtin', export: 'yaml', extensions: ['yaml', 'yml'] },
+    html: { label: 'HTML', kind: 'builtin', export: 'htmlLang', extensions: ['html', 'htm'] },
+    css: { label: 'CSS', kind: 'builtin', export: 'cssLang', extensions: ['css'] },
+    markdown: { label: 'Markdown', kind: 'builtin', export: 'markdown', extensions: ['md', 'markdown'] }
+};
+
+let _languageCatalog = { ..._BUILTIN_FALLBACK_LANGUAGES };
+let _filenameToMode = new Map();
+let _extToMode = new Map();
+
+function _rebuildLanguageLookupTables(languagesObj) {
+    _languageCatalog = { ..._BUILTIN_FALLBACK_LANGUAGES, ...(languagesObj || {}) };
+    const nextFilenames = new Map();
+    const nextExts = new Map();
+    for (const [modeId, spec] of Object.entries(_languageCatalog)) {
+        if (!spec || typeof spec !== 'object') continue;
+        for (const fn of (spec.filenames || [])) {
+            const cleanFn = String(fn || '').trim().toLowerCase();
+            if (cleanFn && !nextFilenames.has(cleanFn)) {
+                nextFilenames.set(cleanFn, modeId);
+            }
+        }
+        for (const ext of (spec.extensions || [])) {
+            const cleanExt = String(ext || '').trim().replace(/^\./, '').toLowerCase();
+            if (cleanExt && !nextExts.has(cleanExt)) {
+                nextExts.set(cleanExt, modeId);
+            }
+        }
+    }
+    _filenameToMode = nextFilenames;
+    _extToMode = nextExts;
+}
+
+_rebuildLanguageLookupTables(_BUILTIN_FALLBACK_LANGUAGES);
+
+function _refreshOpenBufferModes() {
+    // Buffers opened before the manifest arrived were resolved against the fallback table; re-resolve them.
+    const fsStore = (typeof window !== 'undefined') ? window.inSetu?.stores?.Fs : null;
+    const buffers = fsStore?.getState()?.activeBuffers;
+    if (!buffers) return;
+    for (const [path, buf] of Object.entries(buffers)) {
+        if (!buf || buf.isMemoryOnly) continue;
+        const { mode } = resolveEditorMode(path);
+        if (mode && buf.codeMode !== mode) {
+            fsStore.getState().updateBuffer(path, { codeMode: mode });
+        }
+    }
+}
+
+async function _hydrateEditorLanguageManifest() {
+    try {
+        if (window.inSetu?.api?.request) {
+            const staticRes = await window.inSetu.api.request('/static/vendor/codemirror/languages.json');
+            if (staticRes && staticRes.ok) {
+                const staticData = await staticRes.json();
+                if (staticData && typeof staticData.languages === 'object') {
+                    _rebuildLanguageLookupTables(staticData.languages);
+                    _refreshOpenBufferModes();
+                }
+            }
+        }
+    } catch (_) {}
+
+    try {
+        if (window.inSetu?.api?.get) {
+            const mergedRes = await window.inSetu.api.get('editor/languages');
+            if (mergedRes && mergedRes.ok) {
+                const mergedData = await mergedRes.json();
+                if (mergedData && typeof mergedData.languages === 'object') {
+                    _rebuildLanguageLookupTables(mergedData.languages);
+                    _refreshOpenBufferModes();
+                }
+            }
+        }
+    } catch (_) {}
+}
+
+if (typeof window !== 'undefined') {
+    queueMicrotask(() => { _hydrateEditorLanguageManifest(); });
+    window.addEventListener('insetu:soft-refresh', () => { _hydrateEditorLanguageManifest(); });
+}
+
+/** Replaces the language lookup tables with a manifest's languages (used by tests and hosts that preload it). */
+export function setEditorLanguageManifest(languagesObj) {
+    _rebuildLanguageLookupTables(languagesObj);
+}
+
 export function resolveEditorMode(filename) {
-    if (!filename) return { ext: '', mode: null, isSupported: false, isMarkdown: false };
-    const ext = filename.split('.').pop().toLowerCase();
-    const modeMap = {
-        'md': 'markdown', 'py': 'python', 'js': 'javascript',
-        'json': 'javascript', 'sh': 'shell', 'ts': 'javascript',
-        'rs': 'rust', 'go': 'go', 'yaml': 'yaml', 'yml': 'yaml',
-        'html': 'html', 'htm': 'html', 'css': 'css'
-    };
-    return { ext, mode: modeMap[ext], isSupported: !!modeMap[ext], isMarkdown: ext === 'md' };
+    if (!filename || typeof filename !== 'string') {
+        return { ext: '', mode: 'plaintext', isMarkdown: false };
+    }
+    const norm = filename.replace(/\\/g, '/').replace(/\/+$/, '');
+    const slashIdx = norm.lastIndexOf('/');
+    const baseName = (typeof window !== 'undefined' && window.inSetu?.utils?.InSetuURI)
+        ? new window.inSetu.utils.InSetuURI(filename).basename
+        : (slashIdx >= 0 ? norm.slice(slashIdx + 1) : norm);
+    const lowerBase = String(baseName || '').toLowerCase();
+    const dotIdx = lowerBase.lastIndexOf('.');
+    const ext = dotIdx > 0 ? lowerBase.slice(dotIdx + 1) : '';
+
+    // 1. Exact filename match wins over extension match (e.g. Dockerfile, .bashrc, CMakeLists.txt)
+    if (lowerBase && _filenameToMode.has(lowerBase)) {
+        const mode = _filenameToMode.get(lowerBase);
+        return { ext, mode, isMarkdown: mode === 'markdown' };
+    }
+
+    // 2. Extension match
+    if (ext && _extToMode.has(ext)) {
+        const mode = _extToMode.get(ext);
+        return { ext, mode, isMarkdown: mode === 'markdown' };
+    }
+
+    return { ext, mode: 'plaintext', isMarkdown: false };
 }
 export function getActiveEditorPath() {
     const layout = window.Sutram?.stores?.Layout?.getState();
@@ -98,11 +208,19 @@ export function insertLinkToEditor(path, name) {
     window.inSetu.stores.Fs?.getState()?.setModal('linkInsert', { open: false });
 }
 async function vendorizeEditorLanguage(lang) {
-    if (window.inSetu?.api?.workspace?.post) {
-        const res = await window.inSetu.api.workspace.post('editor/vendorize', { mode: lang });
+    if (window.inSetu?.api?.post) {
+        const res = await window.inSetu.api.post('editor/vendorize', { mode: lang });
         if (res.ok) {
             const data = await res.json();
-            return data.path;
+            const url = data.url || data.path || '';
+            if (!url) return null;
+            return {
+                url,
+                path: data.path || url,
+                kind: data.kind || 'lezer',
+                export: data.export || lang,
+                options: data.options || {}
+            };
         }
     }
     return null;

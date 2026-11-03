@@ -1,7 +1,12 @@
-import { LitElement, html, css } from 'lit';
-import { InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
+import { html } from 'lit';
+import {
+    InSetuElement,
+    sharedStyles,
+    SutramProjectionWindowControls
+} from '/static/extensions/system/insetu_sdk.js';
 
 export class InSetuJobTracker extends InSetuElement {
+    static get extensionName() { return 'system'; }
     static properties = {
         jobId: { type: String },
         interval: { type: Number },
@@ -59,17 +64,27 @@ export class InSetuJobTracker extends InSetuElement {
     }
     render() {
         if (this._status === 'idle' || this._status === 'completed') return html``;
-        if (this._status === 'failed') return html`<div style="color: var(--intent-danger); font-weight: bold; margin-top: 10px; display: flex; align-items: center; gap: 6px;"><yv-icon name="alert-triangle" style="width: 14px; height: 14px;"></yv-icon><span>Error: ${this._error}</span></div>`;
-        return html`<div style="margin-top: 10px;"><sutram-spinner .text=${this._message || 'Processing...'}></sutram-spinner></div>`;
+        if (this._status === 'failed') {
+            return html`
+                <sutram-surface variant="tinted" intent="danger" padding="xs">
+                    <sutram-stack direction="row" align="center" gap="xs">
+                        <sutram-icon name="alert-triangle" size="sm" intent="danger"></sutram-icon>
+                        <strong>Error: ${this._error}</strong>
+                    </sutram-stack>
+                </sutram-surface>
+            `;
+        }
+        return html`<sutram-spinner .text=${this._message || 'Processing...'}></sutram-spinner>`;
     }
 }
 customElements.define('insetu-job-tracker', InSetuJobTracker);
 export class InSetuRebootOverlay extends InSetuElement {
+    static get extensionName() { return 'system'; }
     static properties = { 
         isRebooting: { type: Boolean },
         rebootType: { type: String }
     };
-    static styles = css`:host { display: block; }`;
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -91,53 +106,230 @@ export class InSetuRebootOverlay extends InSetuElement {
         if (!this.isRebooting) return html``;
         const isPanic = this.rebootType === 'panic';
         return html`
-            <div style="position:fixed; top:0; left:0; width:100vw; height:100dvh; background:var(--modal-backdrop, rgba(15,23,42,0.95)); z-index:999999; display:flex; flex-direction:column; align-items:center; justify-content:center; color:${isPanic ? 'var(--intent-danger)' : 'var(--intent-primary)'}; font-family:monospace; backdrop-filter:blur(5px);">
-                <h2 style="display: flex; align-items: center; gap: 10px;">
-                    <yv-icon name="${isPanic ? 'alert-triangle' : 'refresh-cw'}" style="width: 24px; height: 24px;"></yv-icon>
-                    <span>${isPanic ? 'Initiating Kernel Panic...' : 'Rebooting inSetu OS...'}</span>
-                </h2>
-                <p style="color:var(--text-muted);">${isPanic ? 'Awaiting Lifeboat FS binding...' : 'Awaiting kernel binding...'}</p>
-            </div>
+            <sutram-view ?zen=${true} ?noScroll=${true}>
+                <sutram-stack direction="col" align="center" justify="center" gap="sm" ?flex=${true}>
+                    <sutram-stack direction="row" align="center" gap="sm">
+                        <sutram-icon name=${isPanic ? 'alert-triangle' : 'refresh-cw'} size="xl" intent=${isPanic ? 'danger' : 'primary'}></sutram-icon>
+                        <h2>${isPanic ? 'Initiating Kernel Panic...' : 'Rebooting inSetu OS...'}</h2>
+                    </sutram-stack>
+                    <sutram-label ?monospace=${true} .text=${isPanic ? 'Awaiting Lifeboat FS binding...' : 'Awaiting kernel binding...'}></sutram-label>
+                </sutram-stack>
+            </sutram-view>
         `;
     }
 }
 customElements.define('insetu-reboot-overlay', InSetuRebootOverlay);
 
 export class InSetConfigBanner extends InSetuElement {
-    static properties = { configMissing: { type: Boolean } };
-    static styles = css`:host { display: block; }`;
+    static get extensionName() { return 'system'; }
+    static properties = {
+        configMissing: { type: Boolean },
+        quarantinedModules: { type: Object },
+        workspaceExtensions: { type: Object },
+        degradedCore: { type: Boolean },
+        _dismissedQuarantine: { type: Boolean, state: true },
+        _dismissedExtensions: { type: Boolean, state: true },
+        _extensionReview: { type: Array, state: true },
+        _extensionBusy: { type: Boolean, state: true }
+    };
+    static styles = [sharedStyles];
 
     constructor() {
         super();
         this.configMissing = false;
+        this.quarantinedModules = {};
+        this.workspaceExtensions = {};
+        this.degradedCore = false;
+        this._dismissedQuarantine = false;
+        this._dismissedExtensions = false;
+        this._extensionReview = null;
+        this._extensionBusy = false;
+    }
+    connectedCallback() {
+        super.connectedCallback();
+        const select = state => ({
+            configMissing: !!state.configMissing,
+            quarantinedModules: state.quarantinedModules || {},
+            workspaceExtensions: state.workspaceExtensions || {},
+            degradedCore: !!state.degradedCore
+        });
+        const apply = ({ configMissing, quarantinedModules, workspaceExtensions, degradedCore }) => {
+            this.configMissing = configMissing;
+            this.quarantinedModules = quarantinedModules;
+            this.workspaceExtensions = workspaceExtensions;
+            this.degradedCore = degradedCore;
+        };
+        this.subscribe(window.inSetu.stores.App, select, apply);
+        // The subscription only reports later changes; boot state (topology) may already be in the store.
+        apply(select(window.inSetu.stores.App.getState()));
+    }
+    _inspectQuarantineReport() {
+        const entries = Object.values(this.quarantinedModules || {});
+        if (entries.length === 0) return;
+        const lines = entries.map(e => (
+            `=== [${(e.tier || 'mod').toUpperCase()}] ${e.id} (${e.status}) ===\n` +
+            `Reason: ${e.reason || 'Unknown'}\n` +
+            (e.traceback ? `\nTraceback:\n${e.traceback}\n` : '')
+        ));
+        if (window.inSetu?.ui?.viewTextBlob) {
+            window.inSetu.ui.viewTextBlob('Degraded Boot: Quarantined Modules Report', lines.join('\n\n'), 'quarantined_modules_report.txt');
+        }
+    }
+    _pendingWorkspaceExtensions() {
+        // Approved extensions that failed to load are reported by the quarantine banner instead.
+        const quarantined = this.quarantinedModules || {};
+        return Object.values(this.workspaceExtensions || {}).filter(e => !quarantined[e.id] && (e.status !== 'approved' || !e.loaded));
+    }
+    async _reviewWorkspaceExtensions() {
+        // The fingerprints approved later are the ones in this report, so a person approves exactly what they read.
+        this._extensionBusy = true;
+        try {
+            const data = await this.api.getJson('system/extensions/workspace');
+            const review = (data.extensions || []).filter(e => e.status !== 'approved' || !e.loaded);
+            this._extensionReview = review;
+            const lines = review.map(e => {
+                const changes = (e.file_changes || []).map(c => `  ${c.change.padEnd(8)} ${c.path}`).join('\n');
+                return `=== ${e.id} (${e.status}) ===\n` +
+                    (e.reason ? `${e.reason}\n` : '') +
+                    (e.status === 'approved' ? 'Approved; loads at the next restart.\n' : '') +
+                    (changes ? `Files to review in .insetu/extensions/${e.id}/:\n${changes}\n` : '') +
+                    (e.fingerprint ? `Fingerprint: ${e.fingerprint}\n` : '');
+            });
+            if (window.inSetu?.ui?.viewTextBlob) {
+                window.inSetu.ui.viewTextBlob('Workspace Extensions Awaiting Approval', lines.join('\n') || 'Nothing to review.', 'workspace_extensions_review.txt');
+            }
+        } catch (err) {
+            this.setStatus(`❌ Could not load workspace extensions: ${err.message}`, 5000);
+        } finally {
+            this._extensionBusy = false;
+        }
+    }
+    async _approveWorkspaceExtension(entry) {
+        this._extensionBusy = true;
+        try {
+            await this.api.postJson('system/extensions/workspace/approve', { name: entry.id, fingerprint: entry.fingerprint });
+            this.setStatus(`✅ Approved '${entry.id}'. Restarting...`, 3000);
+            await this._restartDaemon();
+        } catch (err) {
+            this._extensionReview = null;
+            this.setStatus(`❌ ${err.message}`, 6000);
+        } finally {
+            this._extensionBusy = false;
+        }
+    }
+    async _restartDaemon() {
+        await this.api.post('system/reboot', {});
+        if (window.inSetu?.sys?.waitForDaemonReboot) {
+            window.inSetu.sys.waitForDaemonReboot();
+        } else {
+            setTimeout(() => window.location.reload(), 2500);
+        }
+    }
+    _renderWorkspaceExtensionBanner(pending) {
+        const names = pending.map(e => e.id).join(', ');
+        const reviewed = (this._extensionReview || []).filter(e => e.fingerprint && (e.status === 'unapproved' || e.status === 'changed'));
+        const restartOnly = pending.every(e => e.status === 'approved');
+        return html`
+            <sutram-surface variant="banner" intent="warning">
+                <sutram-stack direction="row" align="center" justify="center" gap="sm" ?wrap=${true}>
+                    <sutram-icon name="shield-alert" size="md" intent="warning"></sutram-icon>
+                    <strong>${restartOnly ? `Restart to load approved workspace extensions [${names}].` : `Workspace extensions not running until you approve them: [${names}].`}</strong>
+                    ${restartOnly
+                        ? html`<sutram-btn ?compact=${true} intent="warning" label="Restart" ?disabled=${this._extensionBusy} @click=${() => this._restartDaemon()}></sutram-btn>`
+                        : html`<sutram-btn ?compact=${true} intent="warning" label="Review Files" ?disabled=${this._extensionBusy} @click=${() => this._reviewWorkspaceExtensions()}></sutram-btn>`}
+                    ${reviewed.map(e => html`
+                        <sutram-btn ?compact=${true} intent="danger" label=${`Approve ${e.id} & Restart`} ?disabled=${this._extensionBusy} @click=${() => this._approveWorkspaceExtension(e)}></sutram-btn>
+                    `)}
+                    <sutram-btn ?compact=${true} intent="neutral" label="Dismiss" @click=${() => { this._dismissedExtensions = true; }}></sutram-btn>
+                </sutram-stack>
+            </sutram-surface>
+        `;
+    }
+    render() {
+        const pendingExtensions = this._pendingWorkspaceExtensions();
+        const qEntries = Object.values(this.quarantinedModules || {});
+        const primaryFaults = qEntries.filter(e => e.status === 'quarantined' || e.status === 'quarantined_js');
+        if (qEntries.length > 0 && !this._dismissedQuarantine) {
+            const names = (primaryFaults.length > 0 ? primaryFaults : qEntries).map(e => e.id).join(', ');
+            return html`
+                <sutram-surface variant="banner" intent="danger">
+                    <sutram-stack direction="row" align="center" justify="center" gap="sm" ?wrap=${true}>
+                        <sutram-icon name="shield-alert" size="md" intent="danger"></sutram-icon>
+                        <strong>
+                            Degraded Boot: Quarantined [${names}]${this.degradedCore ? ' (Tier 3 extensions paused; Core Editor & Bridge active)' : ''}.
+                        </strong>
+                        <sutram-btn ?compact=${true} intent="danger" label="Inspect Traceback" @click=${() => this._inspectQuarantineReport()}></sutram-btn>
+                        <sutram-btn ?compact=${true} intent="neutral" label="Dismiss" @click=${() => { this._dismissedQuarantine = true; }}></sutram-btn>
+                    </sutram-stack>
+                </sutram-surface>
+            `;
+        }
+        if (pendingExtensions.length > 0 && !this._dismissedExtensions) {
+            return this._renderWorkspaceExtensionBanner(pendingExtensions);
+        }
+        if (!this.configMissing) return html``;
+        return html`
+            <sutram-surface variant="banner" intent="warning">
+                <sutram-stack direction="row" align="center" justify="center" gap="sm" ?wrap=${true}>
+                    <sutram-icon name="alert-triangle" size="md" intent="warning"></sutram-icon>
+                    <strong>Configuration file missing. Operating in empty fallback state.</strong>
+                    <sutram-btn ?compact=${true} intent="neutral" label="Dismiss" @click=${() => window.inSetu.stores.App.setState({ configMissing: false })}></sutram-btn>
+                </sutram-stack>
+            </sutram-surface>
+        `;
+    }
+}
+customElements.define('insetu-config-banner', InSetConfigBanner);
+
+export class InSetuQuarantinedSlotPlaceholder extends InSetuElement {
+    static get extensionName() { return 'system'; }
+    static properties = {
+        quarantinedModules: { type: Object }
+    };
+    static styles = [sharedStyles];
+    constructor() {
+        super();
+        this.quarantinedModules = {};
     }
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(
             window.inSetu.stores.App,
-            state => !!state.configMissing,
-            (configMissing) => {
-                this.configMissing = configMissing;
+            state => state.quarantinedModules || {},
+            (quarantinedModules) => {
+                this.quarantinedModules = quarantinedModules;
             }
         );
     }
     render() {
-        if (!this.configMissing) return html``;
+        const subId = this.dataset?.subId || '';
+        const modId = (this.dataset?.ext) || (subId.includes(':') ? subId.split(':')[0] : subId);
+        const entry = (this.quarantinedModules || {})[modId] || Object.values(this.quarantinedModules || {})[0] || {};
         return html`
-            <div style="background: var(--intent-warning); color: var(--bg-deep); padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem; display: flex; align-items: center; justify-content: center; gap: 8px;">
-                <yv-icon name="alert-triangle" style="width: 16px; height: 16px;"></yv-icon>
-                <span>Configuration file missing. Operating in empty fallback state.</span>
-                <span style="cursor:pointer; text-decoration:underline; margin-left:15px; opacity:0.8;" @click=${() => window.inSetu.stores.App.setState({ configMissing: false })}>Dismiss</span>
-            </div>
+            <sutram-view ?compact=${true}>
+                <sutram-surface variant="tinted" intent="danger" padding="lg" gap="md">
+                    <sutram-stack direction="col" align="center" gap="sm">
+                        <sutram-icon name="shield-alert" size="xl" intent="danger"></sutram-icon>
+                        <h3>Module Quarantined: ${entry.id || modId || 'Extension'}</h3>
+                        <sutram-label .text=${entry.reason || 'This module is temporarily paused in Degraded Mode. Your pinned tab layout is preserved.'}></sutram-label>
+                    </sutram-stack>
+                    ${entry.traceback ? html`<pre>${entry.traceback}</pre>` : ''}
+                </sutram-surface>
+            </sutram-view>
         `;
     }
 }
-customElements.define('insetu-config-banner', InSetConfigBanner);
+if (!customElements.get('insetu-quarantined-slot-placeholder')) {
+    customElements.define('insetu-quarantined-slot-placeholder', InSetuQuarantinedSlotPlaceholder);
+}
 window.inSetu.ui = window.inSetu.ui || {};
 window.inSetu.ui.viewTextBlob = (title, content, suggestedFilename = '') => {
     const filename = suggestedFilename || ('blob_' + Date.now() + '.txt');
     const virtualUri = `virtual://${filename}`;
     const fsStore = window.inSetu?.stores?.Fs;
+    const modeInfo = window.inSetu?.editor?.resolveEditorMode
+        ? window.inSetu.editor.resolveEditorMode(filename)
+        : { ext: 'txt', mode: filename.endsWith('.md') ? 'markdown' : 'plaintext', isMarkdown: filename.endsWith('.md') };
     if (fsStore) {
         fsStore.getState().openBuffer(virtualUri, {
             filename: virtualUri,
@@ -148,40 +340,20 @@ window.inSetu.ui.viewTextBlob = (title, content, suggestedFilename = '') => {
             isFS: false,
             forceEdit: true,
             isMemoryOnly: true,
-            isMarkdown: filename.endsWith('.md'),
-            isSupportedEditor: true,
-            ext: filename.split('.').pop() || 'txt',
-            codeMode: filename.endsWith('.md') ? 'markdown' : 'javascript'
+            isMarkdown: Boolean(modeInfo.isMarkdown),
+            ext: modeInfo.ext || 'txt',
+            codeMode: modeInfo.mode || 'plaintext'
         });
     }
     if (window.inSetu?.vfs?.routeToSpatialGrid) {
         window.inSetu.vfs.routeToSpatialGrid(virtualUri, title || filename);
     }
 };
-export class InSetuSpinner extends LitElement {
-    static properties = { text: { type: String } };
-    static styles = css`
-        :host { display: block; margin: 15px 0; }
-        .spinner-container { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text-muted, #888); font-style: italic; font-size: 0.9rem; }
-        .loader { border: 2px solid var(--border, #444); border-top: 2px solid var(--intent-primary, #3b82f6); border-radius: 50%; width: 16px; height: 16px; animation: spin 1s linear infinite; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    `;
-    render() { return html`<div class="spinner-container"><div class="loader"></div><span>${this.text || ''}<slot></slot></span></div>`; }
-}
-if (!customElements.get('insetu-spinner')) customElements.define('insetu-spinner', InSetuSpinner);
+export class InSetuProjectionWindowControls extends SutramProjectionWindowControls {}
+if (!customElements.get('insetu-projection-window-controls')) customElements.define('insetu-projection-window-controls', InSetuProjectionWindowControls);
 
-export class InSetuEmptyState extends LitElement {
-    static properties = { icon: { type: String }, text: { type: String } };
-    static styles = css`
-        :host { display: block; padding: 20px; }
-        .empty-container { display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted, #888); text-align: center; gap: 8px; }
-        .icon { font-size: 2rem; opacity: 0.8; margin-bottom: 5px; }
-        .text { font-style: italic; font-size: 0.95rem; }
-    `;
-    render() { return html`<div class="empty-container">${this.icon ? html`<div class="icon">${this.icon}</div>` : ''}<div class="text">${this.text || ''}<slot></slot></div></div>`; }
-}
-if (!customElements.get('insetu-empty-state')) customElements.define('insetu-empty-state', InSetuEmptyState);
 export class InSetuHostDirPicker extends InSetuElement {
+    static get extensionName() { return 'system'; }
     static properties = {
         titleText: { type: String },
         confirmLabel: { type: String },
@@ -190,25 +362,7 @@ export class InSetuHostDirPicker extends InSetuElement {
         _dirs: { type: Array },
         _loading: { type: Boolean }
     };
-    static styles = [sharedStyles, css`
-        :host { display: block; width: 100%; box-sizing: border-box; }
-        .picker-card {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            padding: 14px 16px;
-            background: var(--input-bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-        }
-        .picker-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-    `];
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -228,7 +382,7 @@ export class InSetuHostDirPicker extends InSetuElement {
     async _loadHostDirs(path = '') {
         this._loading = true;
         try {
-            const res = await window.inSetu.api.workspace.get(`system/fs/list_local?path=${encodeURIComponent(path)}`);
+            const res = await this.api.get(`system/fs/list_local?path=${encodeURIComponent(path)}`);
             if (res.ok) {
                 const data = await res.json();
                 this._currentPath = data.current || '';
@@ -263,32 +417,35 @@ export class InSetuHostDirPicker extends InSetuElement {
 
     render() {
         return html`
-            <div class="picker-card">
-                <div class="picker-header">
-                    <span style="font-weight: bold; font-size: 0.95rem; color: var(--text);">${this.titleText}</span>
-                    <div style="display: flex; gap: 8px;">
-                        <sutram-btn size="sm" intent="neutral" icon="x" label="Cancel" @click=${() => this._emitCancel()}></sutram-btn>
-                        <sutram-btn size="sm" intent="success" icon="check-circle-2" label=${this.confirmLabel} @click=${() => this._emitConfirm()}></sutram-btn>
-                    </div>
-                </div>
-                <div style="display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
-                    <sutram-btn size="sm" intent="neutral" icon="corner-left-up" label="Parent Dir" @click=${() => this._goUpDir()}></sutram-btn>
-                    <sutram-scrub-track style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-primary); flex: 1;">${this._currentPath}</sutram-scrub-track>
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow-y: auto;">
+            <sutram-surface variant="panel" padding="md" gap="md">
+                <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                    <strong>${this.titleText}</strong>
+                    <sutram-stack direction="row" gap="sm">
+                        <sutram-btn ?compact=${true} intent="neutral" icon="x" label="Cancel" @click=${() => this._emitCancel()}></sutram-btn>
+                        <sutram-btn ?compact=${true} intent="success" icon="check-circle-2" label=${this.confirmLabel} @click=${() => this._emitConfirm()}></sutram-btn>
+                    </sutram-stack>
+                </sutram-stack>
+                <sutram-surface variant="ghost" border="bottom" padding="xs">
+                    <sutram-stack direction="row" align="center" gap="sm">
+                        <sutram-btn ?compact=${true} intent="neutral" icon="corner-left-up" label="Parent Dir" @click=${() => this._goUpDir()}></sutram-btn>
+                        <sutram-scrub-track ?grow=${true} ?monospace=${true}>${this._currentPath}</sutram-scrub-track>
+                    </sutram-stack>
+                </sutram-surface>
+                <sutram-stack direction="col" gap="xs" ?scrollable=${true}>
                     ${this._loading
                         ? html`<sutram-spinner text="Loading directories..."></sutram-spinner>`
                         : (this._dirs.length === 0
-                            ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No subdirectories found.</div>`
+                            ? html`<sutram-empty-state text="No subdirectories found."></sutram-empty-state>`
                             : this._dirs.map(d => html`
-                                <div class="yv-interactive-row" style="padding: 8px 12px; cursor: pointer; display: flex; align-items: center; border-radius: 4px;"
-                                    @click=${() => this._selectDir(d)}>
-                                    <yv-icon name="folder" style="width: 16px; height: 16px; color: var(--intent-warning); margin-right: 8px;"></yv-icon>
-                                    <span style="font-weight: bold; font-size: 0.9rem;">${d}</span>
-                                </div>
+                                <sutram-surface variant="inset" padding="xs" ?interactive=${true} @click=${() => this._selectDir(d)}>
+                                    <sutram-stack direction="row" align="center" gap="sm">
+                                        <sutram-icon name="folder" size="md" intent="warning"></sutram-icon>
+                                        <strong>${d}</strong>
+                                    </sutram-stack>
+                                </sutram-surface>
                             `))}
-                </div>
-            </div>
+                </sutram-stack>
+            </sutram-surface>
         `;
     }
 }

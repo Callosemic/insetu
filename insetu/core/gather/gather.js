@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { AppStore, SelectionStore } from '/static/extensions/system/store.js';
 import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 let compilePromise = null;
@@ -21,7 +21,7 @@ export const executeCompile = async (onProgress = null, forceFull = false, start
             const payload = { force_full: forceFull };
             if (startStep) payload.start_step = startStep;
             if (targetRepos) payload.target_repos = targetRepos;
-            const response = await window.inSetu.api.system.post('pipeline/submit', payload);
+            const response = await window.inSetu.api.post('system/pipeline/submit', payload);
             let data = {};
             try {
                 data = await response.json();
@@ -56,7 +56,7 @@ export const executeCompile = async (onProgress = null, forceFull = false, start
             }
             // OS-Level Hydration: Automatically update global manifest on success
             if (result && result.status !== 'error') {
-                const mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
+                const mRes = await window.inSetu.api.get('system/manifest?t=' + Date.now());
                 if (mRes.ok) {
                     const rawManifest = await mRes.json();
                     AppStore.setState({ manifest: { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} } });
@@ -92,7 +92,7 @@ export const GatherStore = createExtensionStore('Gather', {
     domainColors: {},
     fetchSettings: async () => {
         try {
-            const res = await window.inSetu.api.workspace.get('gather/settings?t=' + Date.now());
+            const res = await window.inSetu.api.get('gather/settings?t=' + Date.now());
             if (res.ok) {
                 const data = await res.json();
                 if (data.domain_colors) GatherStore.setState({ domainColors: data.domain_colors });
@@ -111,6 +111,21 @@ window.inSetu.stores = window.inSetu.stores || {};
 window.inSetu.stores.Gather = GatherStore;
 window.addEventListener('insetu-gather-settings-changed', () => {
     GatherStore.getState().fetchSettings();
+});
+
+window.addEventListener('insetu:prompts-synced', (e) => {
+    const { prompts, profileDir } = e.detail || {};
+    if (!Array.isArray(prompts)) return;
+    const currentOpts = GatherStore.getState().gatherOptions || {};
+    if (JSON.stringify(currentOpts.prompts) !== JSON.stringify(prompts)) {
+        GatherStore.setState(state => ({
+            gatherOptions: {
+                ...(state?.gatherOptions || {}),
+                prompts,
+                profileDir: profileDir || ".insetu/data/prompts"
+            }
+        }));
+    }
 });
 
 window.addEventListener('insetu:ensure-fresh-artifact', (e) => {
@@ -257,7 +272,7 @@ const packSelectionPayload = async (items) => {
     if (_lastPackItemsHash === itemsHash && _lastPackSelection) {
         return _lastPackSelection;
     }
-    const res = await window.inSetu.api.workspace.post('gather/pack_selection', { items: payloadItems });
+    const res = await window.inSetu.api.post('gather/pack_selection', { items: payloadItems });
     if (!res.ok) throw new Error("Failed to queue compilation.");
     const data = await res.json();
     if (data.job_id === 'offline_queue') {
@@ -294,27 +309,19 @@ const packSelectionPayload = async (items) => {
     });
 };
 export class InSetuExtGather extends InSetuElement {
+    static get extensionName() { return 'gather'; }
     static properties = {
         loading: { type: Boolean },
         manifestFiles: { type: Array },
         searchQuery: { type: String },
-        pinnedRepos: { type: Object },
-        allRepos: { type: Array },
         activeModules: { type: Array },
         pendingModules: { type: Array },
         isPipelineActive: { type: Boolean },
         categoryOrder: { type: Array },
         hiddenOutputs: { type: Array },
-        _showFilters: { type: Boolean },
-        _expandedCats: { type: Object },
-        _syncState: { type: String }
+        _expandedCats: { type: Object }
     };
-    static styles = [
-        sharedStyles,
-        css`
-            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-        `
-    ];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.loading = false;
@@ -323,13 +330,11 @@ export class InSetuExtGather extends InSetuElement {
         this.categoryOrder = [];
         this.hiddenOutputs = [];
         this._expandedCats = {};
-        this._syncState = 'synced';
     }
     onWorkspaceLoad(workspaceId) {
         GatherStore.getState().fetchSettings();
         const aState = AppStore.getState();
         this.manifestFiles = aState.derivedCtxKeys || Object.keys(aState.manifest?.ctx || {});
-        this.requestUpdate();
     }
     connectedCallback() {
         super.connectedCallback();
@@ -367,10 +372,6 @@ export class InSetuExtGather extends InSetuElement {
         );
         this.subscribe(AppStore, state => state.gatherForceRefreshTick, (tick) => {
             if (tick) this.loadContext(false);
-        });
-        this.registerGlobalListener('sutram-sync-status', window, (e) => {
-            this._syncState = e.detail.state;
-            this.requestUpdate();
         });
         const handleGatherCompleted = async () => {
             try {
@@ -464,142 +465,140 @@ export class InSetuExtGather extends InSetuElement {
             searchFields: f => `${f.repoDir || ''} ${f.finalTitle} ${f.finalCat} ${f.finalDesc}`
         });
         return html`
-            <sutram-toolbar
-                searchPlaceholder="Fuzzy search contexts..."
-                .searchQuery=${this.searchQuery}
-                @search-changed=${(e) => GatherStore.getState().setSearchQuery(e.detail.value)}
-                .enableFilterDropdown=${true}
-                .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
-                <insetu-repo-filter
-                    slot="filters"
-                    .repos=${this.ecosystem.allRepos}
-                    .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
-                    @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                </insetu-repo-filter>
-            </sutram-toolbar>
-            <sutram-scroll-view>
+            <sutram-view>
+                <sutram-toolbar
+                    slot="toolbar"
+                    searchPlaceholder="Fuzzy search contexts..."
+                    .searchQuery=${this.searchQuery}
+                    @search-changed=${(e) => GatherStore.getState().setSearchQuery(e.detail.value)}
+                    .enableFilterDropdown=${true}
+                    .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
+                    <insetu-repo-filter
+                        slot="filters"
+                        .repos=${this.ecosystem.allRepos}
+                        .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
+                        @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                    </insetu-repo-filter>
+                </sutram-toolbar>
                 ${(() => {
                     const groups = {};
-                        filteredFiles.forEach(f => {
-                            if (!groups[f.finalCat]) groups[f.finalCat] = [];
-                            groups[f.finalCat].push(f);
-                        });
+                    filteredFiles.forEach(f => {
+                        if (!groups[f.finalCat]) groups[f.finalCat] = [];
+                        groups[f.finalCat].push(f);
+                    });
 
-                        const sortedCats = Object.keys(groups).sort((a, b) => {
-                            if (a === 'Quickpacks') return -1;
-                            if (b === 'Quickpacks') return 1;
+                    const sortedCats = Object.keys(groups).sort((a, b) => {
+                        if (a === 'Quickpacks') return -1;
+                        if (b === 'Quickpacks') return 1;
 
-                            const isHiddenA = a === 'Hidden Context' || a === 'Tracker Issues' || (hiddenOutputs && hiddenOutputs.includes(a));
-                            const isHiddenB = b === 'Hidden Context' || b === 'Tracker Issues' || (hiddenOutputs && hiddenOutputs.includes(b));
+                        const isHiddenA = a === 'Hidden Context' || a === 'Tracker Issues' || (hiddenOutputs && hiddenOutputs.includes(a));
+                        const isHiddenB = b === 'Hidden Context' || b === 'Tracker Issues' || (hiddenOutputs && hiddenOutputs.includes(b));
 
-                            if (isHiddenA && !isHiddenB) return 1;
-                            if (!isHiddenA && isHiddenB) return -1;
+                        if (isHiddenA && !isHiddenB) return 1;
+                        if (!isHiddenA && isHiddenB) return -1;
 
-                            const idxA = categoryOrder.indexOf(a);
-                            const idxB = categoryOrder.indexOf(b);
-                            if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-                            if (idxA !== -1) return -1;
-                            if (idxB !== -1) return 1;
-                            return a.localeCompare(b);
-                        });
+                        const idxA = categoryOrder.indexOf(a);
+                        const idxB = categoryOrder.indexOf(b);
+                        if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+                        if (idxA !== -1) return -1;
+                        if (idxB !== -1) return 1;
+                        return a.localeCompare(b);
+                    });
 
-                        return sortedCats.map(cat => {
-                            const isAutoCollapsed = cat === 'Hidden Context' || cat === 'Tracker Issues' || (hiddenOutputs && hiddenOutputs.includes(cat));
-                            const isOpen = this._expandedCats[cat] ?? !isAutoCollapsed;
-                            return html`
-                                <sutram-collapsible 
-                                    titleText=${cat} 
-                                    intent="neutral" 
-                                    .open=${isOpen}
-                                    @sutram-collapsible-toggled=${(e) => {
-                                        this._expandedCats = { ...this._expandedCats, [cat]: e.detail.open };
-                                        this.requestUpdate();
-                                    }}>
-                                    ${cat === 'Quickpacks' ? html`
-                                        <sutram-async-btn slot="actions" label="Clear" intent="danger" size="sm" .onClick=${async () => {
-                                            try {
-                                                _lastPackSelection = null;
-                                                _lastPackItemsHash = '';
-                                                const res = await window.inSetu.api.workspace.post('gather/clear_quickpacks', {});
-                                                if (res.ok) {
-                                                    const data = await res.json();
-                                                    if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
-                                                        await window.inSetu.sys.refreshManifest();
-                                                    }
-                                                    if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message, 2000);
+                    return sortedCats.map(cat => {
+                        const isAutoCollapsed = cat === 'Hidden Context' || cat === 'Tracker Issues' || (hiddenOutputs && hiddenOutputs.includes(cat));
+                        const isOpen = this._expandedCats[cat] ?? !isAutoCollapsed;
+                        return html`
+                            <sutram-collapsible 
+                                titleText=${cat} 
+                                intent="neutral" 
+                                .open=${isOpen}
+                                @sutram-collapsible-toggled=${(e) => {
+                                    this._expandedCats = { ...this._expandedCats, [cat]: e.detail.open };
+                                }}>
+                                ${cat === 'Quickpacks' ? html`
+                                    <sutram-async-btn slot="actions" label="Clear" intent="danger" ?compact=${true} .onClick=${async () => {
+                                        try {
+                                            _lastPackSelection = null;
+                                            _lastPackItemsHash = '';
+                                            const res = await this.api.post('gather/clear_quickpacks', {});
+                                            if (res.ok) {
+                                                const data = await res.json();
+                                                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
+                                                    await window.inSetu.sys.refreshManifest();
                                                 }
-                                            } catch(e) {
-                                                console.error("Failed to clear quickpacks: " + e.message);
+                                                if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message, 2000);
                                             }
-                                        }}></sutram-async-btn>
-                                    ` : ''}
-                                        <div style="display: flex; flex-direction: column; width: 100%;">
-                                            ${isOpen ? groups[cat].map(f => {
-                                                    const isDirty = (() => {
-                                                        const manifestObj = AppStore.getState().manifest?.ctx?.[f.filename];
-                                                        const addr = window.inSetu.utils.BucketAddress.fromFilepath(f.filename, manifestObj?.meta);
-                                                        const dirtySet = AppStore.getState().dirtyBuckets || new Set();
-                                                        return dirtySet.has(String(addr.key).toLowerCase()) || dirtySet.has(addr.key);
-                                                    })();
-                                                    const isLocked = f.isSkeleton || (isGatherLoading && isDirty);
-                                                    let baseIntent = 'primary';
-                                                    const dColors = GatherStore.getState().domainColors || {};
-                                                    const testStr = `${f.finalTitle || ''} ${f.finalCat || ''}`.toLowerCase();
-                                                    for (const [intent, keywords] of Object.entries(dColors)) {
-                                                        if (Array.isArray(keywords)) {
-                                                            if (keywords.some(kw => testStr.includes(kw.toLowerCase()))) {
-                                                                baseIntent = intent;
-                                                                break;
-                                                            }
-                                                        }
+                                        } catch(e) {
+                                            console.error("Failed to clear quickpacks: " + e.message);
+                                        }
+                                    }}></sutram-async-btn>
+                                ` : ''}
+                                <sutram-stack direction="col" gap="none">
+                                    ${isOpen ? groups[cat].map(f => {
+                                        const isDirty = (() => {
+                                            const manifestObj = AppStore.getState().manifest?.ctx?.[f.filename];
+                                            const addr = window.inSetu.utils.BucketAddress.fromFilepath(f.filename, manifestObj?.meta);
+                                            const dirtySet = AppStore.getState().dirtyBuckets || new Set();
+                                            return dirtySet.has(String(addr.key).toLowerCase()) || dirtySet.has(addr.key);
+                                        })();
+                                        const isLocked = f.isSkeleton || (isGatherLoading && isDirty);
+                                        let baseIntent = 'primary';
+                                        const dColors = GatherStore.getState().domainColors || {};
+                                        const testStr = `${f.finalTitle || ''} ${f.finalCat || ''}`.toLowerCase();
+                                        for (const [intent, keywords] of Object.entries(dColors)) {
+                                            if (Array.isArray(keywords)) {
+                                                if (keywords.some(kw => testStr.includes(kw.toLowerCase()))) {
+                                                    baseIntent = intent;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if (f.finalCat === 'Quickpacks') baseIntent = 'warning';
+                                        const isQuickpack = f.finalCat === 'Quickpacks';
+                                        const activeIntent = isDirty ? "warning" : baseIntent;
+                                        let displayIcon = isQuickpack ? "zap" :
+                                            (isLocked ? "loader" : 
+                                            (isDirty ? "construction" : "package"));
+                                        return html`
+                                            <sutram-card
+                                                ?stale=${isLocked}
+                                                .filename=${f.filename}
+                                                .titleText=${f.finalTitle || (f.filename.includes('/') ? f.filename.split('/').pop() : f.filename)}
+                                                .descriptionText=${f.finalDesc || ''}
+                                                .statusText=${f.isSkeleton ? 'Pending Compilation...' : ''}
+                                                .detailPrefix=${f.repoDir ? `[${f.repoDir}] ` : ''}
+                                                .detailText=${f.filename.includes('/') ? f.filename.split('/').pop() : f.filename}
+                                                .detailSuffix=${f.sizeStr ? ` | ${f.sizeStr}` : ''}
+                                                .icon=${displayIcon}
+                                                intent=${activeIntent}
+                                                entityType="file:context"
+                                                .entityData=${{ 
+                                                    filepath: f.filename, 
+                                                    repoDir: f.repoDir, 
+                                                    isFS: false, 
+                                                    isSkeleton: f.isSkeleton,
+                                                    needs_recompile: isDirty,
+                                                    suppress: ['file-edit'],
+                                                    chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, f.filename) : [f.filename]
+                                                }}
+                                                @card-clicked=${() => {
+                                                    if (f.isSkeleton) return;
+                                                    if (this.vfs?.viewInWindow) {
+                                                        this.vfs.viewInWindow(f.filename);
+                                                    } else if (this.vfs?.viewAndCopy) {
+                                                        this.vfs.viewAndCopy(f.filename);
                                                     }
-                                                    if (f.finalCat === 'Quickpacks') baseIntent = 'warning';
-                                                    const isQuickpack = f.finalCat === 'Quickpacks';
-                                                    const activeIntent = isDirty ? "warning" : baseIntent;
-                                                    let displayIcon = isQuickpack ? "zap" :
-                                                        (isLocked ? "loader" : 
-                                                        (isDirty ? "construction" : "package"));
-                                                    return html`
-                                                    <div style="padding-bottom: 12px;">
-                                                        <sutram-card
-                                                            style="margin-bottom: 0;"
-                                                            ?stale=${isLocked}
-                                                            .filename=${f.filename}
-                                                            .titleText=${f.finalTitle || (f.filename.includes('/') ? f.filename.split('/').pop() : f.filename)}
-                                                            .descriptionText=${f.finalDesc || ''}
-                                                            .statusText=${f.isSkeleton ? 'Pending Compilation...' : ''}
-                                                            .detailPrefix=${f.repoDir ? `[${f.repoDir}] ` : ''}
-                                                            .detailText=${f.filename.includes('/') ? f.filename.split('/').pop() : f.filename}
-                                                            .detailSuffix=${f.sizeStr ? ` | ${f.sizeStr}` : ''}
-                                                            .icon=${displayIcon}
-                                                            intent=${activeIntent}
-                                                            entityType="file:context"
-                                                            .entityData=${{ 
-                                                                filepath: f.filename, 
-                                                                repoDir: f.repoDir, 
-                                                                isFS: false, 
-                                                                isSkeleton: f.isSkeleton,
-                                                                needs_recompile: isDirty,
-                                                                suppress: ['file-edit'],
-                                                                chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, f.filename) : [f.filename]
-                                                            }}
-                                                            @card-clicked=${() => {
-                                                                if (f.isSkeleton) return;
-                                                                if (window.inSetu?.vfs?.viewInWindow) {
-                                                                    window.inSetu.vfs.viewInWindow(f.filename);
-                                                                } else if (window.inSetu?.vfs?.viewAndCopy) {
-                                                                    window.inSetu.vfs.viewAndCopy(f.filename);
-                                                                }
-                                                            }}>
-                                                        </sutram-card>
-                                                    </div>
-                                                `;}) : ''}
-                                        </div>
-                                </sutram-collapsible>
-                            `;
-                        });
-                    })()}
-            </sutram-scroll-view>
+                                                }}>
+                                            </sutram-card>
+                                        `;
+                                    }) : ''}
+                                </sutram-stack>
+                            </sutram-collapsible>
+                        `;
+                    });
+                })()}
+            </sutram-view>
         `;
     }
 }

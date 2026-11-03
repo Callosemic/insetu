@@ -78,11 +78,11 @@ GATHER_SETTINGS_SCHEMA = [
         "type": "intent_map",
         "scope": "workspace",
         "default": {
-            "primary": ["sutram"],
+            "primary": ["core", "workspace"],
             "success": [],
             "warning": ["quickpack"],
             "danger": [],
-            "highlight": ["doc", "yenvui"],
+            "highlight": ["doc"],
             "neutral": []
         },
         "description": "Map semantic intent colors to arrays of title keywords.",
@@ -104,7 +104,70 @@ gather_bp = InSetuExtension(
         }
     },
 )
-__depends__ = []
+__depends__ = ['topology']
+def _split_oversized_block(block: str, budget_bytes: int) -> List[str]:
+    """Splits one block into pieces of at most budget_bytes (UTF-8), cutting after a newline where it can."""
+    pieces = []
+    i = 0
+    block_len = len(block)
+    budget_bytes = max(1, int(budget_bytes))
+    while i < block_len:
+        window = block[i:i + budget_bytes]
+        excess = len(window.encode('utf-8')) - budget_bytes
+        while excess > 0:
+            # Multi-byte characters: shrink the window until it fits the byte budget.
+            window = window[:max(1, len(window) - max(1, excess // 4))]
+            excess = len(window.encode('utf-8')) - budget_bytes
+        if i + len(window) >= block_len:
+            pieces.append(block[i:])
+            break
+        split_index = window.rfind('\n')
+        # Failsafe: no newline in the window (e.g., minified JS), so cut at the window edge.
+        split_index = len(window) if split_index == -1 else split_index + 1
+        pieces.append(block[i:i + split_index])
+        i += split_index
+    return pieces
+
+
+def _pack_blocks_into_bins(stamped_header: str, text_blocks, max_bytes) -> List[Dict[str, Any]]:
+    """Packs text blocks into parts of at most max_bytes (when max_bytes is larger than the header), each starting with the header.
+
+    Whole blocks are self-contained, so they go into the first part with room. The pieces of a block that had to be
+    split go into consecutive new parts, and every part but the last piece's is closed to other blocks, so reading
+    the parts in order always reads the split block in one run.
+    """
+    bins = [{"size": len(stamped_header.encode('utf-8')), "parts": [stamped_header], "closed": False}]
+
+    def open_bin():
+        new_header = stamped_header + f"=== (CONTINUED - PART {len(bins) + 1}) ===\n\n"
+        bins.append({"size": len(new_header.encode('utf-8')), "parts": [new_header], "closed": False})
+        return bins[-1]
+
+    for block in text_blocks:
+        block_bytes = len(block.encode('utf-8'))
+        if max_bytes == float('inf') or block_bytes <= max_bytes:
+            target = next((b for b in bins if not b["closed"] and b["size"] + block_bytes <= max_bytes), None) or open_bin()
+            target["parts"].append(block)
+            target["size"] += block_bytes
+            continue
+        # Leave room for the part header so no part grows past max_bytes.
+        header_room = len((stamped_header + "=== (CONTINUED - PART 999999) ===\n\n").encode('utf-8'))
+        pieces = _split_oversized_block(block, max(1, max_bytes - header_room))
+        for idx, piece in enumerate(pieces):
+            target = open_bin()
+            target["parts"].append(piece)
+            target["size"] += len(piece.encode('utf-8'))
+            target["closed"] = idx < len(pieces) - 1
+    if len(bins) > 1 and len(bins[0]["parts"]) == 1:
+        # Every block was split, so the first part holds only the header; drop it and renumber the rest.
+        bins.pop(0)
+        for num, b in enumerate(bins, start=1):
+            first = b["parts"][0]
+            b["parts"][0] = stamped_header if num == 1 else stamped_header + f"=== (CONTINUED - PART {num}) ===\n\n"
+            b["size"] += len(b["parts"][0].encode('utf-8')) - len(first.encode('utf-8'))
+    return bins
+
+
 def compile_context_payload(workspace_id, output_dir, base_uri, header_block, text_blocks, files, meta, max_kb=None, is_ephemeral=False):
     """Universal compiler for all system contexts (Gather, Git, Flow)."""
     ctx = gather_bp.get_context(workspace_id)
@@ -144,53 +207,7 @@ def compile_context_payload(workspace_id, output_dir, base_uri, header_block, te
     stamp = f"Generated: {timestamp_str}\n\n"
     stamped_header = stamp + header_block
 
-    header_bytes = len(stamped_header.encode('utf-8'))
-    bins = [{"size": header_bytes, "parts": [stamped_header]}]
-
-    for block in text_blocks:
-        # Safe chunking: Only encode/split if max_bytes is finite
-        if max_bytes != float('inf') and len(block.encode('utf-8')) > max_bytes:
-            split_blocks = []
-            chunk_size = int(max_bytes * 0.95)
-            i = 0
-            block_len = len(block)
-
-            while i < block_len:
-                if block_len - i <= chunk_size:
-                    split_blocks.append(block[i:])
-                    break
-
-                window = block[i:i+chunk_size]
-                split_index = window.rfind('\n')
-
-                if split_index == -1:
-                    # Failsafe: No newline found (e.g., minified JS). Fallback to hard slice.
-                    split_index = chunk_size
-                else:
-                    split_index += 1
-
-                split_blocks.append(block[i:i+split_index])
-                i += split_index
-        else:
-            split_blocks = [block]
-
-        for s_block in split_blocks:
-            s_block_bytes = len(s_block.encode('utf-8'))
-            placed = False
-
-            for b in bins:
-                if b["size"] + s_block_bytes <= max_bytes:
-                    b["parts"].append(s_block)
-                    b["size"] += s_block_bytes
-                    placed = True
-                    break
-            if not placed:
-                new_idx = len(bins) + 1
-                new_header = stamped_header + f"=== (CONTINUED - PART {new_idx}) ===\n\n"
-                bins.append({
-                    "size": len(new_header.encode('utf-8')) + s_block_bytes,
-                    "parts": [new_header, s_block]
-                })
+    bins = _pack_blocks_into_bins(stamped_header, text_blocks, max_bytes)
     chunk_sizes = []
     total_bins = len(bins)
     if total_bins > 1 and ctx.resolve_path(base_uri, must_exist=True, allow_heal=False):

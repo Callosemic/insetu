@@ -1,4 +1,5 @@
 from pathlib import Path
+import ast
 import os
 import gc
 import re
@@ -17,6 +18,7 @@ from flask import jsonify
 from insetu.core.sdk import (
     InSetuExtension,
     SettingsManager,
+    get_mountable_data_domains,
     get_registered_settings_schemas,
     hooks,
     set_mount_authorizer,
@@ -40,11 +42,15 @@ from insetu.core.utils_core import (
     execute_vfs_delete,
     normalize_repo_domains,
     heal_manifest_entry_domain,
-    encrypt_secret,
-    decrypt_secret,
+    get_repeater_secret,
+    set_repeater_secret,
     slugify,
+    scan_workspace_extensions,
+    approve_workspace_extension,
+    revoke_workspace_extension,
+    snapshot_workspace_extension,
 )
-import insetu.core.system.legacy  # Mount one-off migration hooks
+import insetu.core.system.legacy as _system_legacy  # noqa: F401 - Mounts one-off boot migration hooks
 
 
 def _authorize_inter_workspace_mount(target_ws: str, subscriber_ws: str, domain: str, rel_path: str = "") -> bool:
@@ -159,12 +165,7 @@ SYSTEM_SETTINGS_SCHEMA = [
                 "label": "Target Domain",
                 "type": "select",
                 "default": "prompts",
-                "options": [
-                    {"value": "prompts", "label": "prompts (.insetu/data/prompts)"},
-                    {"value": "agent", "label": "routines (.insetu/data/agent)"},
-                    {"value": "notes", "label": "notes (.insetu/data/notes)"},
-                    {"value": "*", "label": "* (All Domains)"}
-                ]
+                "options": get_mountable_data_domains,
             }
         ]
     },
@@ -193,6 +194,7 @@ system_bp = InSetuExtension(
         }
     },
 )
+__depends__ = []
 def vault_repeater_secrets_for_schema(ext_name: str, workspace_id: Optional[str] = None) -> None:
     """
     Universal Repeater Secret Vaulting:
@@ -219,13 +221,8 @@ def vault_repeater_secrets_for_schema(ext_name: str, workspace_id: Optional[str]
         if not isinstance(items, list) or not items:
             continue
 
-        target_sec_wid = "default" if rep.get("scope") == "daemon" else wid
-        sec_path = Path(get_tenant_control_dir(target_sec_wid)) / "secrets.json"
-        sec_data = load_json_config(sec_path.as_posix(), {})
-        ext_sec = sec_data.setdefault(ext_name, {})
-
+        rep_scope = str(rep.get("scope") or "workspace")
         mutated = False
-        sec_mutated = False
         clean_items = []
         title_key = rep.get("item_title_key") or "title"
 
@@ -236,27 +233,19 @@ def vault_repeater_secrets_for_schema(ext_name: str, workspace_id: Optional[str]
             item_id = slugify(str(item_copy.get("id") or item_copy.get(title_key) or f"item_{idx + 1}"))
             item_copy["id"] = item_id
             for sf_id in secure_subfields:
-                vault_key = f"{rep_id}__{item_id}__{sf_id}"
-                legacy_llm_key = f"endpoint_key__{item_id}" if (ext_name == "llm" and sf_id == "api_key") else None
                 raw_val = str(item_copy.get(sf_id) or "").strip()
                 if raw_val and not raw_val.startswith("****"):
-                    enc_str = encrypt_secret(raw_val)
-                    ext_sec[vault_key] = enc_str
-                    if legacy_llm_key:
-                        ext_sec[legacy_llm_key] = enc_str
+                    set_repeater_secret(ext_name, wid, rep_id, item_id, sf_id, raw_val, scope=rep_scope)
                     item_copy[sf_id] = "********"
                     item_copy[f"has_{sf_id}"] = True
                     mutated = True
-                    sec_mutated = True
-                elif ext_sec.get(vault_key) or (legacy_llm_key and ext_sec.get(legacy_llm_key)):
+                elif get_repeater_secret(ext_name, wid, rep_id, item_id, sf_id, scope=rep_scope):
                     if item_copy.get(sf_id) != "********":
                         item_copy[sf_id] = "********"
                         mutated = True
                     item_copy[f"has_{sf_id}"] = True
             clean_items.append(item_copy)
 
-        if sec_mutated:
-            save_json_config(sec_path.as_posix(), sec_data, workspace_id=target_sec_wid)
         if mutated:
             settings.update({rep_id: clean_items})
 
@@ -651,17 +640,15 @@ def get_system_config(workspace_id):
                             available_ids.add(ext_name)
                             title = ext_name.replace('_', ' ').title()
                             desc = ""
-                            # Extract metadata from the mounted extension via unified resolver
-                            mod, bp_obj, err = _resolve_extension_module_and_bp(ext_name, include_error=True)
+                            mod, bp_obj, err = _inspect_or_resolve_extension_meta(ext_name, item_path)
                             missing_exts = []
                             missing_bins = []
                             if err:
                                     title = f"⚠️ {title} (Broken)"
                                     desc = f"Failed to load: {err}"
-                            elif mod:
-                                    if bp_obj:
-                                            title = getattr(bp_obj, 'title', title)
-                                            desc = getattr(bp_obj, 'description', desc)
+                            elif bp_obj:
+                                    title = getattr(bp_obj, 'title', None) or title
+                                    desc = getattr(bp_obj, 'description', None) or desc
                                     raw_deps = list(getattr(bp_obj, 'external_dependencies', None) or [])
                                     seen_pkgs = set()
                                     for dep in raw_deps:
@@ -681,19 +668,47 @@ def get_system_config(workspace_id):
                                             if not shutil.which(binary):
                                                     missing_bins.append(binary)
                             available.append({"id": ext_name, "title": title, "description": desc, "missing_externals": missing_exts, "missing_binaries": missing_bins})
-            from flask import current_app as _current_app
-            evaluated_schemas = get_registered_settings_schemas(workspace_id)
-            mounted_extensions = [ext for ext in data.get("extensions", []) if ext == "config" or ext in _current_app.blueprints]
+    def _sanitize_schema_for_json(node: Any) -> Any:
+        if callable(node):
+            try:
+                return node()
+            except Exception:
+                return []
+        if isinstance(node, list):
+            return [_sanitize_schema_for_json(item) for item in node]
+        if isinstance(node, dict):
+            return {k: _sanitize_schema_for_json(v) for k, v in node.items()}
+        return node
 
-            return {
-                "config": data,
-                "meta": {
-                    "mounted_extensions": mounted_extensions,
-                    "available_extensions": sorted(available, key=lambda x: x.get('title') or ""),
-                    "settings_schemas": evaluated_schemas,
-                    "core_modules": list(core_modules_set)
-                }
-            }
+    from flask import current_app as _current_app
+    # Approved workspace extensions that are running can be enabled per workspace like bundled ones.
+    for ws_ext in sorted(getattr(_current_app, "_loaded_workspace_extensions", {})):
+        if ws_ext in available_ids:
+            continue
+        ws_bp = getattr(sys.modules.get(f"insetu.extensions.{ws_ext}.engine_{ws_ext}"), f"{ws_ext}_bp", None)
+        available_ids.add(ws_ext)
+        available.append({
+            "id": ws_ext,
+            "title": f"{getattr(ws_bp, 'title', None) or ws_ext.replace('_', ' ').title()} (workspace)",
+            "description": getattr(ws_bp, 'description', None) or "Approved extension from .insetu/extensions/.",
+            "missing_externals": [],
+            "missing_binaries": [],
+        })
+    evaluated_schemas = _sanitize_schema_for_json(get_registered_settings_schemas(workspace_id))
+    mounted_extensions = [ext for ext in data.get("extensions", []) if ext == "config" or ext in _current_app.blueprints]
+
+    quarantined_modules = getattr(_current_app, "_quarantined_modules", {})
+    return {
+        "config": data,
+        "meta": {
+            "mounted_extensions": mounted_extensions,
+            "available_extensions": sorted(available, key=lambda x: x.get('title') or ""),
+            "settings_schemas": evaluated_schemas,
+            "core_modules": list(core_modules_set),
+            "quarantined_modules": quarantined_modules,
+            "degraded_core": bool(getattr(_current_app, "_degraded_core", False)),
+        }
+    }
 def save_system_config(workspace_id, payload):
     cfg_path, _ = get_workspace_physics(workspace_id)
     existing_cfg = load_json_config(cfg_path, {})
@@ -722,6 +737,50 @@ def save_system_config(workspace_id, payload):
 
     # Emits a globally decoupled config invalidation event
     hooks.emit('config_mutated', workspace_id=workspace_id)
+class _StaticExtMeta:
+    def __init__(self, title=None, description="", external_dependencies=None, external_binaries=None):
+        self.title = title
+        self.description = description
+        self.external_dependencies = external_dependencies or []
+        self.external_binaries = external_binaries or []
+
+
+def _inspect_or_resolve_extension_meta(ext_name: str, item_path: str):
+    """Returns (mod, bp_or_meta, err) using sys.modules if already loaded, or side-effect-free AST inspection if unmounted."""
+    mod = (
+        sys.modules.get(f"insetu.extensions.{ext_name}.engine_{ext_name}")
+        or sys.modules.get(f"insetu.extensions.engine_{ext_name}")
+        or sys.modules.get(f"insetu.engine_{ext_name}")
+    )
+    if mod is not None:
+        return mod, getattr(mod, f"{ext_name}_bp", None), None
+
+    engine_py = Path(item_path) / f"engine_{ext_name}.py" if os.path.isdir(item_path) else Path(item_path)
+    if not engine_py.is_file():
+        return None, None, None
+    try:
+        tree = ast.parse(engine_py.read_text(encoding="utf-8"), filename=engine_py.as_posix())
+        title = None
+        description = ""
+        ext_deps = []
+        ext_bins = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) == "InSetuExtension":
+                for kw in node.keywords:
+                    if kw.arg == "title" and isinstance(kw.value, ast.Constant):
+                        title = kw.value.value
+                    elif kw.arg == "description" and isinstance(kw.value, ast.Constant):
+                        description = kw.value.value
+                    elif kw.arg == "external_dependencies" and isinstance(kw.value, (ast.List, ast.Tuple)):
+                        ext_deps = [e.value for e in kw.value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+                    elif kw.arg == "external_binaries" and isinstance(kw.value, (ast.List, ast.Tuple)):
+                        ext_bins = [e.value for e in kw.value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+                break
+        return None, _StaticExtMeta(title=title, description=description, external_dependencies=ext_deps, external_binaries=ext_bins), None
+    except Exception as e:
+        return None, None, str(e)
+
+
 def _resolve_extension_module_and_bp(ext_name: str, include_error: bool = False):
     """Resolves (module, InSetuExtension_instance[, error_str]) for a given extension name without hardcoding domain names."""
     if not ext_name or not re.match(r'^[a-z0-9_]+$', ext_name):
@@ -834,6 +893,64 @@ def api_system_install_extension_deps(ctx):
     return {"status": "accepted", "job_id": job_id, "packages": allowed}, 202
 
 
+class WorkspaceExtensionApprovePayload(TypedDict):
+    name: str
+    fingerprint: str
+
+
+class WorkspaceExtensionRevokePayload(TypedDict):
+    name: str
+
+
+def _workspace_extensions_report():
+    from flask import current_app as _current_app
+    loaded = getattr(_current_app, "_loaded_workspace_extensions", {})
+    quarantined = getattr(_current_app, "_quarantined_modules", {})
+    report = []
+    for name, entry in scan_workspace_extensions().items():
+        entry.pop("dir", None)
+        entry["loaded"] = name in loaded
+        entry["running_fingerprint"] = loaded.get(name)
+        entry["restart_needed"] = (entry["status"] == "approved") != entry["loaded"] or (
+            entry["loaded"] and loaded.get(name) != entry.get("fingerprint")
+        )
+        if name in quarantined:
+            entry["quarantine_reason"] = quarantined[name].get("reason")
+        report.append(entry)
+    return report
+
+
+@system_bp.route('extensions/workspace', methods=['GET'], docstring="[sync] Lists the extensions in .insetu/extensions/ with their approval status and the files changed since approval.")
+def api_workspace_extensions(ctx):
+    return {"status": "success", "extensions": _workspace_extensions_report()}
+
+
+@system_bp.route('extensions/workspace/approve', methods=['POST'], request_schema=WorkspaceExtensionApprovePayload, mcp_expose=False, docstring="[sync] Records a person's approval of a workspace extension's exact files; it loads at the next restart. Human-only: hidden from MCP and banned in routines (S8).")
+def api_workspace_extension_approve(ctx):
+    """Approves the files a person reviewed: the fingerprint they saw must still match the folder, or nothing is approved."""
+    data = ctx.payload or {}
+    name = str(data.get("name") or "").strip()
+    seen = str(data.get("fingerprint") or "").strip()
+    entry = scan_workspace_extensions().get(name)
+    if not entry:
+        return {"status": "error", "error": f"No workspace extension named '{name}'."}, 404
+    if entry["status"] == "invalid":
+        return {"status": "error", "error": entry.get("reason") or "This extension cannot be loaded."}, 400
+    snapshot = snapshot_workspace_extension(Path(entry["dir"]))
+    if not seen or snapshot.get("fingerprint") != seen:
+        return {"status": "error", "error": "The extension's files changed after you reviewed them. Review them again before approving."}, 409
+    approve_workspace_extension(name, snapshot)
+    return {"status": "approved", "name": name, "fingerprint": snapshot["fingerprint"], "requires_reboot": True}
+
+
+@system_bp.route('extensions/workspace/revoke', methods=['POST'], request_schema=WorkspaceExtensionRevokePayload, mcp_expose=False, docstring="[sync] Removes a person's approval of a workspace extension; it stops loading at the next restart. Human-only (S8).")
+def api_workspace_extension_revoke(ctx):
+    name = str((ctx.payload or {}).get("name") or "").strip()
+    if not revoke_workspace_extension(name):
+        return {"status": "error", "error": f"'{name}' is not approved."}, 404
+    return {"status": "revoked", "name": name, "requires_reboot": True}
+
+
 @system_bp.route('reboot', methods=['POST'], docstring="[sync] Clean in-place process replacement to restart the OS daemon.")
 def api_system_reboot(ctx):
     """Clean in-place process replacement to restart the OS daemon."""
@@ -907,6 +1024,8 @@ def api_system_topology(ctx):
                             if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
                                 if module not in b["meta_map"]:
                                     b["meta_map"][module] = {"title": module.replace('_', ' ').title()}
+        from flask import current_app as _current_app
+        quarantined_modules = getattr(_current_app, "_quarantined_modules", {})
         return {
             "repos": _get_sister_repos(ctx.workspace_id),
             "port": int(os.environ.get("INSETU_PORT", cfg.get("port", 5005))),
@@ -916,7 +1035,13 @@ def api_system_topology(ctx):
             "category_order": cfg.get("category_order", []),
             "tab_order": cfg.get("tab_order", ["context", "edit", "tasks", "ctrl", "library"]),
             "hidden_outputs": cfg.get("hidden_outputs", ["ctx://contexts/context_prompt.md", "ctx://diffs/context_prompt_diffs.txt"]),
-            "config_missing": not os.path.exists(cfg_path)
+            "config_missing": not os.path.exists(cfg_path),
+            "quarantined_modules": quarantined_modules,
+            "degraded_core": bool(getattr(_current_app, "_degraded_core", False)),
+            "workspace_extensions": {
+                name: {k: entry.get(k) for k in ("id", "status", "reason", "loaded")}
+                for name, entry in getattr(_current_app, "_workspace_extensions", {}).items()
+            },
         }
     except Exception as e:
         print(f"Topology Route Error: {traceback.format_exc()}")

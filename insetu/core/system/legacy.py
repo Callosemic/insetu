@@ -16,7 +16,7 @@ from insetu.core.utils_core import (
     save_json_config,
 )
 
-LEGACY_MIGRATION_VERSION = 2
+LEGACY_MIGRATION_VERSION = 3
 def move_tree_contents(src_dir: Path, dst_dir: Path):
     """Recursively merges files from src_dir into dst_dir and removes empty source directories."""
     if not src_dir.exists() or not src_dir.is_dir():
@@ -183,6 +183,23 @@ def migrate_physical_sandboxes(**kwargs):
                 migrate_legacy_sqlite_paths(
                     ws_id, "tracker", "tracker_tickets", "filepath", "/.tracker/", "/.insetu-data/tracker/"
                 )
+
+            # 7. Migrate legacy workspace .insetu/data/prompts/<repo_dir> folders into <repo>/.insetu-data/prompts
+            for repo_cfg in (raw_cfg.get("target_repos") or []):
+                if not isinstance(repo_cfg, dict):
+                    continue
+                r_dir = repo_cfg.get("repo_dir")
+                if not r_dir:
+                    continue
+                p_path = repo_cfg.get("physical_path")
+                r_path = Path(os.path.abspath(os.path.expanduser(p_path))) if p_path else Path(ws_root).joinpath(r_dir).resolve()
+                if not r_path.exists() or not r_path.is_dir():
+                    continue
+                dest_repo_prompts = r_path.joinpath(".insetu-data", "prompts")
+                for legacy_prompts_root in (data_root_dir.joinpath("prompts"), base_dir.joinpath("prompts")):
+                    src_repo_prompts = legacy_prompts_root.joinpath(r_dir)
+                    if src_repo_prompts.exists() and src_repo_prompts.is_dir():
+                        move_tree_contents(src_repo_prompts, dest_repo_prompts)
         except Exception:
             pass
 

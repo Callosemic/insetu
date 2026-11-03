@@ -20,6 +20,12 @@ from insetu.core.sdk import (
     set_workspace_router,
     thread_safe_cache,
 )
+from insetu.core.languages import (
+    SUPPORTED_SYMBOL_EXTENSIONS,
+    extract_file_symbols,
+    extract_symbol_source_slice,
+    get_language_provider,
+)
 from insetu.core.utils_core import (
     get_repo_path,
     execute_binary,
@@ -34,6 +40,14 @@ from insetu.core.utils_core import (
     execute_vfs_save,
     resolve_physical_path,
 )
+
+_TARGET_REPOS_KEY = "target_repos"
+
+
+def _target_repo_configs(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The workspace's mounted repository configurations (the one place topology reads target_repos)."""
+    return [r for r in (cfg.get(_TARGET_REPOS_KEY) or []) if isinstance(r, dict)]
+
 
 TOPOLOGY_SETTINGS_SCHEMA = [
     {
@@ -201,7 +215,7 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
     hooks.emit('vfs_manifest_mutated', workspace_id=workspace_id)
     ctx = topology_bp.get_context(workspace_id)
     conn = ctx.db
-    target_configs = ctx.config.get("target_repos", [])
+    target_configs = _target_repo_configs(ctx.config)
     active_repo_dirs = [c.get("repo_dir") for c in target_configs if c.get("repo_dir")]
 
     if target_repos:
@@ -241,6 +255,10 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
                     "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp, git_status) VALUES (?, ?, ?, ?, ?)",
                     rows_to_insert
                 )
+    if not target_repos:
+        # A full scan matches the current configuration, so later config_mutated events diff against it.
+        with _SIEVE_FINGERPRINT_LOCK:
+            _SIEVE_CONFIG_FINGERPRINTS[workspace_id or "default"] = _sieve_config_fingerprints(ctx.config, workspace_id)
     # Re-invalidate after the transaction commits so no reader keeps the pre-scan ledger cached.
     hook_request_vfs_manifest.invalidate(workspace_id=workspace_id)
     return True
@@ -276,6 +294,14 @@ def hook_request_vfs_manifest(workspace_id=None, **kwargs):
         return manifest
     except Exception:
         return {}
+def _ensure_sieve_reconciled(workspace_id: Optional[str] = None) -> None:
+    wid = workspace_id or "default"
+    with _SIEVE_FINGERPRINT_LOCK:
+        is_cold = wid not in _SIEVE_CONFIG_FINGERPRINTS
+    if is_cold:
+        reconcile_topology_on_config_mutated(workspace_id=wid)
+
+
 def get_omniscient_workspace_files(workspace_id, allowed_repos):
     """Fast SQL replacement for the old os.walk bridge optimization."""
     resolve_topology_buffer(workspace_id)
@@ -284,12 +310,120 @@ def get_omniscient_workspace_files(workspace_id, allowed_repos):
     placeholders = ','.join(['?'] * len(allowed_repos))
     rows = ctx.db.execute(f"SELECT filepath FROM topology_ledger WHERE repo IN ({placeholders})", tuple(allowed_repos)).fetchall()
     return [(InSetuURI(r['filepath']).basename, str(InSetuURI(r['filepath']))) for r in rows]
+
+
 def get_topology_files_for_repo(workspace_id, repo_dir):
     """SSOT accessor returning canonical vfs://<repo>/<path> URIs from topology_ledger."""
     resolve_topology_buffer(workspace_id)
     ctx = topology_bp.get_context(workspace_id)
     rows = ctx.db.execute("SELECT filepath FROM topology_ledger WHERE repo = ?", (repo_dir,)).fetchall()
     return [str(InSetuURI(r['filepath'])) for r in rows]
+
+
+def clamp_uris_to_topology(
+    workspace_id: Optional[str],
+    candidate_uris,
+    expand_dirs: bool = False,
+    gather_only: bool = False,
+) -> List[str]:
+    """
+    Clamps and optionally expands candidate URIs against topology_ledger:
+    - Non-vfs:// URIs (ctx://, ws://) pass through unchanged.
+    - vfs://<repo>/<path> file URIs are retained only if present in topology_ledger for <repo>.
+    - vfs://<repo>/<dir>/ prefixes (when expand_dirs=True) expand to all tracked files in topology_ledger under that prefix.
+    - When gather_only=True, files in '_dropped' or buckets with exclude_from_context=True are omitted.
+    """
+    if not candidate_uris:
+        return []
+    wid = workspace_id or "default"
+    resolve_topology_buffer(wid)
+    ctx = topology_bp.get_context(wid)
+    live_cfg = ctx.config
+    mounted_repos = {r.get("repo_dir"): r for r in _target_repo_configs(live_cfg) if r.get("repo_dir")}
+    repo_files_cache: Dict[str, List[str]] = {}
+    repo_set_cache: Dict[str, set] = {}
+
+    def _excluded_buckets_for_repo(r_cfg: Optional[dict]) -> set:
+        if not gather_only or not r_cfg:
+            return {"_dropped"} if gather_only else set()
+        if r_cfg.get("exclude_from_context"):
+            return {"*"}
+        excluded = {"_dropped"}
+        for b in (r_cfg.get("sub_buckets") or []):
+            if isinstance(b, dict) and b.get("exclude_from_context") and b.get("id"):
+                excluded.add(b["id"])
+        return excluded
+
+    def _get_repo_tracked(r_dir: str) -> Tuple[List[str], set]:
+        if r_dir not in repo_files_cache:
+            r_cfg = mounted_repos.get(r_dir)
+            excluded_b = _excluded_buckets_for_repo(r_cfg)
+            if "*" in excluded_b:
+                repo_files_cache[r_dir] = []
+                repo_set_cache[r_dir] = set()
+                return [], set()
+            rows = ctx.db.execute("SELECT filepath, bucket_id FROM topology_ledger WHERE repo = ?", (r_dir,)).fetchall()
+            tracked_list = [
+                str(InSetuURI(r["filepath"]))
+                for r in rows
+                if not excluded_b or (r["bucket_id"] or "main") not in excluded_b
+            ]
+            if not rows and r_cfg:
+                r_path = get_repo_path(r_dir, wid)
+                if r_path and os.path.exists(r_path):
+                    rel_valid = get_valid_workspace_files(r_path, r_cfg, wid)
+                    sub_b = r_cfg.get("sub_buckets", [])
+                    for f in rel_valid:
+                        b, mod = resolve_file_bucket(f, sub_b, repo_dir=r_dir)
+                        b_id = mod if (b and mod) else (b.get("id") if b else "main")
+                        if not excluded_b or b_id not in excluded_b:
+                            tracked_list.append(f"vfs://{r_dir}/{f}")
+            repo_files_cache[r_dir] = tracked_list
+            repo_set_cache[r_dir] = set(tracked_list)
+        return repo_files_cache[r_dir], repo_set_cache[r_dir]
+
+    out: List[str] = []
+    seen = set()
+
+    def _append(u_str: str):
+        if u_str and u_str not in seen:
+            seen.add(u_str)
+            out.append(u_str)
+
+    for raw in candidate_uris:
+        if not raw:
+            continue
+        raw_str = str(raw).strip()
+        if not raw_str:
+            continue
+        is_explicit_dir = raw_str.endswith("/") and not raw_str.endswith("://")
+        uri = InSetuURI(raw_str)
+        if uri.scheme and uri.scheme != "vfs":
+            _append(str(uri))
+            continue
+        r_dir = uri.repo
+        rel_p = (uri.path or "").strip("/")
+        if not r_dir:
+            if expand_dirs:
+                for mr in mounted_repos:
+                    t_list, _ = _get_repo_tracked(mr)
+                    for tf in t_list:
+                        if not tf.endswith(("/.gitkeep", "/.keep")):
+                            _append(tf)
+            continue
+        t_list, t_set = _get_repo_tracked(r_dir)
+        canon_u = str(uri).rstrip("/")
+        if not is_explicit_dir and canon_u in t_set:
+            _append(canon_u)
+            continue
+        if expand_dirs and (is_explicit_dir or not rel_p or any(tf.startswith(f"{canon_u}/") for tf in t_list)):
+            prefix = f"vfs://{r_dir}/" if not rel_p else f"vfs://{r_dir}/{rel_p}/"
+            for tf in t_list:
+                if tf.endswith(("/.gitkeep", "/.keep")):
+                    continue
+                if tf == canon_u or tf.startswith(prefix):
+                    _append(tf)
+    return out
 _TOPOLOGY_RAM_QUEUE = queue.Queue()
 _TOPOLOGY_SLEW_THREAD = None
 def _topology_slew_limiter_loop():
@@ -310,7 +444,10 @@ def _topology_slew_limiter_loop():
                 if ws_id not in ws_groups:
                     ws_groups[ws_id] = []
                 ws_groups[ws_id].append(ev)
+            active_ws_ids = set(get_all_workspace_ids())
             for ws_id, events in ws_groups.items():
+                if (ws_id or "default") not in active_ws_ids:
+                    continue
                 folded = fold_vfs_events(events)
                 if not folded:
                     continue
@@ -432,6 +569,117 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
 
         op = m.get("operation", "save")
         _TOPOLOGY_RAM_QUEUE.put_nowait((workspace_id, {"filepath": norm_path, "operation": op}))
+def _reconcile_repo_ledger_with_sieve(conn, workspace_id: Optional[str], repo_dir: str, repo_cfg: dict, live_cfg: dict) -> Tuple[int, List[str]]:
+    """
+    Reconciles a repository's topology_ledger rows against get_valid_workspace_files() when
+    sieve rules (.gitignore or config_mutated) change. Evicts newly ignored/excluded rows and
+    inserts newly tracked files so topology_ledger matches force_topology_scan() exactly.
+    """
+    repo_path = get_repo_path(repo_dir, workspace_id)
+    if not repo_path or not os.path.exists(repo_path):
+        return 0, []
+    valid_rels = set(get_valid_workspace_files(repo_path, repo_cfg, workspace_id))
+    valid_uris = {f"vfs://{repo_dir}/{rel}": rel for rel in valid_rels}
+    existing_rows = conn.execute(
+        "SELECT filepath, bucket_id FROM topology_ledger WHERE repo = ?",
+        (repo_dir,),
+    ).fetchall()
+    existing_map = {r["filepath"]: r["bucket_id"] for r in existing_rows}
+
+    to_delete = [fp for fp in existing_map if fp not in valid_uris]
+    to_add = [rel for uri, rel in valid_uris.items() if uri not in existing_map]
+    touched_buckets = set()
+
+    if to_delete:
+        for fp in to_delete:
+            touched_buckets.add(f"{repo_dir}::{existing_map[fp]}")
+        conn.executemany(
+            "DELETE FROM topology_ledger WHERE filepath = ?",
+            [(fp,) for fp in to_delete],
+        )
+
+    if to_add:
+        repo_base_obj = Path(repo_path)
+        git_status_map = _get_repo_git_status_map(repo_path)
+        sub_buckets = repo_cfg.get("sub_buckets", [])
+        now_ts = time.time()
+        rows_to_insert = []
+        for rel in to_add:
+            b, module = resolve_file_bucket(rel, sub_buckets, repo_dir=repo_dir)
+            bucket_id = module if (b and module) else (b.get("id") if b else "main")
+            filepath = f"vfs://{repo_dir}/{rel}"
+            g_status = git_status_map.get(rel, "")
+            file_ts = now_ts
+            try:
+                file_ts = (repo_base_obj / rel).stat().st_mtime
+            except Exception:
+                file_ts = now_ts
+            rows_to_insert.append((filepath, repo_dir, bucket_id, max(float(file_ts), now_ts), g_status))
+            touched_buckets.add(f"{repo_dir}::{bucket_id}")
+        conn.executemany(
+            "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp, git_status) VALUES (?, ?, ?, ?, ?)",
+            rows_to_insert,
+        )
+
+    return len(to_delete) + len(to_add), sorted(touched_buckets)
+
+
+# Per-workspace fingerprint of the configuration the sieve reads, so ordinary settings saves (which also
+# emit config_mutated) do not re-walk every repository.
+_SIEVE_CONFIG_FINGERPRINTS: Dict[str, Dict[str, str]] = {}
+_SIEVE_FINGERPRINT_LOCK = threading.Lock()
+
+
+def _sieve_config_fingerprints(cfg: Dict[str, Any], workspace_id: Optional[str] = None) -> Dict[str, str]:
+    """Fingerprints each repository's sieve configuration, workspace-level keys, and .gitignore/.git/info/exclude mtimes."""
+    workspace_part = json.dumps({k: v for k, v in cfg.items() if k != _TARGET_REPOS_KEY}, sort_keys=True, default=str)
+    fingerprints: Dict[str, str] = {}
+    for r in _target_repo_configs(cfg):
+        r_dir = r.get("repo_dir")
+        if not r_dir:
+            continue
+        gi_stamp = ""
+        try:
+            r_path = get_repo_path(r_dir, workspace_id)
+            if r_path:
+                rp = Path(r_path)
+                for rel_ignore in (".gitignore", ".git/info/exclude"):
+                    ip = rp / rel_ignore
+                    if ip.is_file():
+                        st = ip.stat()
+                        gi_stamp += f"|{rel_ignore}:{st.st_mtime_ns}:{st.st_size}"
+        except Exception:
+            pass
+        fingerprints[str(r_dir)] = json.dumps(r, sort_keys=True, default=str) + workspace_part + gi_stamp
+    return fingerprints
+
+
+@topology_bp.on('config_mutated', priority=20)
+def reconcile_topology_on_config_mutated(workspace_id=None, **kwargs):
+    """Reconciles topology_ledger for repositories whose sieve configuration changed (exts, ignores, mounts)."""
+    wid = workspace_id or "default"
+    # This hook runs before akasa's own config-cache invalidation (priority 50), so drop this workspace's copy first.
+    load_config.invalidate(workspace_id=wid)
+    ctx = topology_bp.get_context(wid)
+    live_cfg = ctx.config
+    current = _sieve_config_fingerprints(live_cfg, wid)
+    with _SIEVE_FINGERPRINT_LOCK:
+        previous = _SIEVE_CONFIG_FINGERPRINTS.get(wid)
+        _SIEVE_CONFIG_FINGERPRINTS[wid] = current
+    # With no fingerprint from a full scan yet, every repository is reconciled once.
+    changed_repos = [r_dir for r_dir, fp in current.items() if previous is None or previous.get(r_dir) != fp]
+    if not changed_repos:
+        return
+    repo_cfgs = {r.get("repo_dir"): r for r in _target_repo_configs(live_cfg)}
+    total_changes = 0
+    with ctx.db as conn:
+        for r_dir in changed_repos:
+            changed, _ = _reconcile_repo_ledger_with_sieve(conn, wid, r_dir, repo_cfgs[r_dir], live_cfg)
+            total_changes += changed
+    if total_changes:
+        hook_request_vfs_manifest.invalidate(workspace_id=wid)
+
+
 def _git_ignored_paths(repo_path, rel_paths, repo_cfg, live_cfg):
     """
     Returns the subset of repo-relative paths that git ignores (.gitignore, .git/info/exclude,
@@ -466,6 +714,7 @@ def _git_ignored_paths(repo_path, rel_paths, repo_cfg, live_cfg):
 
 def resolve_topology_buffer(workspace_id):
     """Processes any pending events in topology_event_buffer, updates topology_ledger, and emits topology_resolved."""
+    _ensure_sieve_reconciled(workspace_id)
     ctx = topology_bp.get_context(workspace_id)
     conn = ctx.db
     events = conn.execute("SELECT id, filepath, mutation_type FROM topology_event_buffer ORDER BY timestamp ASC").fetchall()
@@ -480,8 +729,7 @@ def resolve_topology_buffer(workspace_id):
 
     dirty_buckets = set()
     dirty_repos = set()
-    target_repos = ctx.config.get("target_repos", [])
-    target_repos_map = {r.get("repo_dir"): r for r in target_repos if r and r.get("repo_dir")}
+    target_repos_map = {r.get("repo_dir"): r for r in _target_repo_configs(ctx.config) if r.get("repo_dir")}
 
     final_events = []
     # Safely expand directories without iterating over a mutating list
@@ -515,10 +763,11 @@ def resolve_topology_buffer(workspace_id):
         if op == "save" and is_dir and rel_path.strip('/'):
             repo_cfg = target_repos_map.get(repo_dir)
             if repo_cfg:
-                # Let the VFS walk the logical directory, natively handling all exclusions and slashes
                 logical_target = f"vfs://{repo_dir}/{rel_path.strip('/')}"
                 for vfs_fp in ctx.vfs.walk(logical_target):
-                    final_events.append({"filepath": vfs_fp, "mutation_type": "save"})
+                    walk_rel = InSetuURI(vfs_fp).path
+                    if is_file_tracked_by_sieve(walk_rel, repo_cfg, ctx.config, repo_dir=repo_dir):
+                        final_events.append({"filepath": vfs_fp, "mutation_type": "save"})
         else:
             final_events.append({"filepath": raw_fp, "mutation_type": op})
 
@@ -541,6 +790,7 @@ def resolve_topology_buffer(workspace_id):
         r_dir: _git_ignored_paths(get_repo_path(r_dir, workspace_id), rels, target_repos_map.get(r_dir), live_cfg)
         for r_dir, rels in ignore_candidates.items()
     }
+    rule_changed_repos = set()
 
     for e in final_events:
         raw_fp = e["filepath"]
@@ -582,7 +832,15 @@ def resolve_topology_buffer(workspace_id):
         else:
             repo_cfg = target_repos_map.get(repo_dir)
             rel_to_repo = rel_path
+            if Path(rel_to_repo).name in (".gitignore", "exclude") and repo_dir in target_repos_map:
+                rule_changed_repos.add(repo_dir)
             if repo_cfg and not is_file_tracked_by_sieve(rel_to_repo, repo_cfg, ctx.config, repo_dir=repo_dir):
+                affected = conn.execute("SELECT bucket_id FROM topology_ledger WHERE filepath = ?", (filepath,)).fetchall()
+                if affected:
+                    conn.execute("DELETE FROM topology_ledger WHERE filepath = ?", (filepath,))
+                    dirty_repos.add(repo_dir)
+                    for row in affected:
+                        dirty_buckets.add(f"{repo_dir}::{row['bucket_id']}")
                 continue
             if rel_to_repo in git_ignored.get(repo_dir, ()):
                 # Ignored by git: never ledger it, and evict a row an older build may have added.
@@ -619,6 +877,15 @@ def resolve_topology_buffer(workspace_id):
                 )
                 dirty_repos.add(repo_dir)
                 dirty_buckets.add(f"{repo_dir}::{bucket_id}")
+    # If .gitignore or .git/info/exclude changed in any repo, reconcile existing ledger rows against the updated rules
+    for r_dir in rule_changed_repos:
+        r_cfg = target_repos_map.get(r_dir)
+        if r_cfg:
+            changed_cnt, rec_buckets = _reconcile_repo_ledger_with_sieve(conn, workspace_id, r_dir, r_cfg, live_cfg)
+            if changed_cnt:
+                dirty_repos.add(r_dir)
+                dirty_buckets.update(rec_buckets)
+
     # Refresh git_status across any touched repositories without overwriting file mtime timestamps
     status_updates = []
     for touched_repo in dirty_repos:
@@ -654,7 +921,7 @@ def mount_topology_volumes_dynamically(cfg, workspace_id=None, **kwargs):
     """Dynamically remounts VFS volumes whenever the configuration changes."""
     _, ws_root = get_workspace_physics(workspace_id)
     mount_volume(workspace_id, 'vfs', '', ws_root)
-    for repo_cfg in cfg.get("target_repos", []):
+    for repo_cfg in _target_repo_configs(cfg):
         repo_dir = repo_cfg.get("repo_dir")
         if repo_dir:
             p_path = repo_cfg.get("physical_path")
@@ -1053,7 +1320,7 @@ def resolve_owning_workspaces(event_name, **kwargs):
                 _, ws_root = get_workspace_physics(ws_id)
                 abs_ws_root = Path(ws_root).resolve().as_posix()
                 cfg = load_config(ws_id)
-                target_repos = cfg.get("target_repos", [])
+                target_repos = _target_repo_configs(cfg)
 
                 if abs_target.startswith(abs_ws_root + '/') or abs_target == abs_ws_root:
                     owning_workspaces.add(ws_id)
@@ -1083,19 +1350,20 @@ def api_topology_overview(ctx):
     cfg = ctx.config
     repos_summary = []
     overview_lines = ["=== WORKSPACE TOPOLOGY OVERVIEW ==="]
-    for r_cfg in cfg.get("target_repos", []):
+    for r_cfg in _target_repo_configs(cfg):
         r_dir = r_cfg.get("repo_dir")
         if not r_dir:
             continue
         buckets = [b.get("id") for b in r_cfg.get("sub_buckets", []) if b.get("id") and not b.get("is_system")]
-        code_idx = ctx.vfs.read(f"vfs://{r_dir}/CODE_INDEX.md") or ""
-        idx_preview = "\n".join(code_idx.splitlines()[:80]) if code_idx else "[No CODE_INDEX.md generated]"
+        idx_uri = resolve_repo_code_index_uri(ctx, r_dir, r_cfg)
+        code_idx = (ctx.vfs.read(idx_uri) or "").strip()
+        idx_full = code_idx if code_idx else "[No CODE_INDEX.md generated]"
         repos_summary.append({
             "repo": r_dir,
             "domain": r_cfg.get("domain", "Workspaces"),
             "buckets": buckets,
         })
-        overview_lines.append(f"\n## Repository: {r_dir} (Buckets: {', '.join(buckets) if buckets else 'main'})\n{idx_preview}")
+        overview_lines.append(f"\n## Repository: {r_dir} (Buckets: {', '.join(buckets) if buckets else 'main'})\n{idx_full}")
 
     return {
         "repos": repos_summary,
@@ -1153,6 +1421,13 @@ CORE_LANDMARK_KINDS: List[Dict[str, Any]] = [
         "shape": "files",
         "output": "contract_files",
         "defaults": ["docs/*contract*.md", "*contract*.md", "README.md"],
+    },
+    {
+        "id": "models",
+        "label": "Mental Models & Subsystem Invariants",
+        "shape": "files",
+        "output": "model_files",
+        "defaults": ["docs/models/*.md", "docs/*mental_model*.md", "*mental_model*.md"],
     },
     {
         "id": "adrs",
@@ -1421,7 +1696,7 @@ def resolve_repo_landmarks(ctx, repo: Optional[str] = None) -> Dict[str, Any]:
     kinds, kind_notices = get_landmark_kinds(ctx.workspace_id)
     empty = {k["output"]: _empty_landmark_value(k) for k in kinds}
     cfg = ctx.config
-    target_repos = cfg.get("target_repos") or []
+    target_repos = _target_repo_configs(cfg)
     repo_cfg = None
     if repo:
         repo_cfg = next((r for r in target_repos if isinstance(r, dict) and r.get("repo_dir") == repo), None)
@@ -1489,12 +1764,148 @@ def resolve_repo_landmarks(ctx, repo: Optional[str] = None) -> Dict[str, Any]:
     return {"repo_name": repo_dir, "repo_title": repo_title, "landmarks": resolved, "notices": notices}
 
 
+def resolve_repo_code_index_uri(ctx, repo_dir: str, repo_cfg: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Resolves the canonical VFS URI for a repository's CODE_INDEX.md:
+    1. Explicit `index_path` in repo_cfg (or legacy `is_core_chassis` alias -> 'docs/CODE_INDEX.md').
+    2. `vfs://<repo>/docs/CODE_INDEX.md` if it already exists and root `CODE_INDEX.md` does not.
+    3. Default `vfs://<repo>/CODE_INDEX.md`.
+    """
+    if repo_cfg is None:
+        repo_cfg = next((r for r in _target_repo_configs(ctx.config) if r.get("repo_dir") == repo_dir), {}) or {}
+    custom_rel = str(repo_cfg.get("index_path") or "").strip().lstrip("/")
+    if custom_rel and _is_confined_repo_rel_spec(custom_rel):
+        return f"vfs://{repo_dir}/{custom_rel}"
+    if repo_cfg.get("is_core_chassis"):
+        return f"vfs://{repo_dir}/docs/CODE_INDEX.md"
+    root_uri = f"vfs://{repo_dir}/CODE_INDEX.md"
+    docs_uri = f"vfs://{repo_dir}/docs/CODE_INDEX.md"
+    if not ctx.resolve_path(root_uri, must_exist=True, allow_heal=False) and ctx.resolve_path(docs_uri, must_exist=True, allow_heal=False):
+        return docs_uri
+    return root_uri
+
+
+def infer_target_repo(
+    ctx,
+    explicit_repo: Optional[str] = None,
+    candidate_uris: Optional[List[str]] = None,
+) -> Optional[str]:
+    """
+    Resolves the target repository directory deterministically from:
+    1. An explicit `repo` name (parameter or frontmatter `repo:`).
+    2. A canonical `vfs://<repo>/...` URI (including `vfs://<repo>/.insetu-data/prompts/...`).
+    3. A compiled `ctx://contexts/<repo>_...` or `ctx://diffs/<repo>_...` artifact URI.
+    """
+    repos_cfg = _target_repo_configs(ctx.config)
+    known_repo_dirs = [r.get("repo_dir") for r in repos_cfg if r.get("repo_dir")]
+    if not known_repo_dirs:
+        return explicit_repo or None
+
+    clean_explicit = str(explicit_repo or "").strip()
+    if clean_explicit and clean_explicit in known_repo_dirs:
+        return clean_explicit
+
+    sorted_known = sorted(known_repo_dirs, key=len, reverse=True)
+    for raw_item in (candidate_uris or []):
+        inc_str = str(raw_item or "").strip()
+        if not inc_str:
+            continue
+        try:
+            u_inc = InSetuURI.from_external_input(inc_str)
+            if u_inc.scheme == "vfs" and u_inc.repo in known_repo_dirs:
+                return u_inc.repo
+            if u_inc.scheme == "ctx" and u_inc.volume == "prompts" and u_inc.path:
+                first_seg = u_inc.path.strip("/").split("/", 1)[0]
+                if first_seg in known_repo_dirs:
+                    return first_seg
+            if u_inc.scheme == "ctx" and u_inc.volume in ("contexts", "diffs"):
+                base_inc = u_inc.basename.lower()
+                for kr in sorted_known:
+                    norm_kr = kr.lower().replace("-", "_")
+                    if base_inc.startswith((f"{kr.lower()}_", f"{norm_kr}_")):
+                        return kr
+        except Exception:
+            continue
+    return clean_explicit or None
+
+
+DEFAULT_GUARDRAIL_RULES = (
+    "- **Single Source of Truth (SSOT) & DRY Centralization:** Ensure shared logic, schemas, and configurations exist in one canonical place without duplicate helpers.\n"
+    "- **Architectural & Module Boundaries:** Verify that changes respect module layers, public interfaces, and dependency direction without abstraction leaks.\n"
+    "- **State & Concurrency Hygiene:** Ensure state mutations are deterministic, properly synchronized, and free of race conditions or resource leaks.\n"
+    "- **Security & Input Validation:** Verify that external inputs, paths, and credentials are validated and confined at system boundaries."
+)
+
+
+def build_sys_landmarks_context(
+    ctx,
+    repo_hint: Optional[str] = None,
+    candidate_uris: Optional[List[str]] = None,
+    extra_inputs: Optional[Dict[str, Any]] = None,
+    prior_sys: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Single Source of Truth builder for the `sys.*` template variable dictionary.
+    Used by both `engine_prompts.py` (`prompts/resolve`) and `orchestrator.py` (`execute_declarative_routine`).
+    """
+    extra = dict(extra_inputs or {})
+    repos_cfg = _target_repo_configs(ctx.config)
+    resolved_repo = infer_target_repo(
+        ctx,
+        explicit_repo=repo_hint or extra.get("repo"),
+        candidate_uris=candidate_uris,
+    )
+    primary_repo_cfg = (
+        next((r for r in repos_cfg if r.get("repo_dir") == resolved_repo), None)
+        if resolved_repo else None
+    ) or (repos_cfg[0] if repos_cfg else {})
+
+    primary_repo_name = primary_repo_cfg.get("repo_dir") or resolved_repo or "workspace"
+    primary_repo_title = primary_repo_cfg.get("title") or primary_repo_name
+    primary_repo_desc = primary_repo_cfg.get("description") or ""
+
+    landmarks_info = resolve_repo_landmarks(ctx, repo=primary_repo_name if primary_repo_name != "workspace" else None)
+    raw_landmarks = landmarks_info.get("landmarks") or {}
+    std_list = list(raw_landmarks.get("standards_files") or [])
+    contract_list = list(raw_landmarks.get("contract_files") or [])
+    model_list = list(raw_landmarks.get("model_files") or [])
+    fitness_list = list(raw_landmarks.get("fitness_dirs") or [])
+    test_list = list(raw_landmarks.get("test_dirs") or [])
+
+    adr_dir_val = str(raw_landmarks.get("adr_dir") or f"vfs://{primary_repo_name}/docs/adrs")
+    tracker_dir_val = str(raw_landmarks.get("tracker_dir") or f"vfs://{primary_repo_name}/.insetu-data/tracker")
+    combined_contracts = list(dict.fromkeys(std_list + contract_list + model_list))
+    contract_stack_md = (
+        "\n".join(f"  - `{c}`" for c in combined_contracts)
+        if combined_contracts
+        else f"  - `vfs://{primary_repo_name}/CODE_INDEX.md`"
+    )
+    standards_doc_str = ", ".join(f"`{s}`" for s in std_list) if std_list else f"`vfs://{primary_repo_name}/CODE_INDEX.md`"
+    hardening_targets = list(dict.fromkeys(fitness_list + test_list))
+    hardening_str = ", ".join(f"`{h}`" for h in hardening_targets) if hardening_targets else f"`vfs://{primary_repo_name}/tests/`"
+
+    return {
+        **(prior_sys or {}),
+        **raw_landmarks,
+        "repo_name": landmarks_info.get("repo_name") or primary_repo_name,
+        "repo_title": str(extra.get("project_name") or landmarks_info.get("repo_title") or primary_repo_title),
+        "repo_description": primary_repo_desc,
+        "standards_doc": str(extra.get("standards_doc") or standards_doc_str),
+        "contract_stack": str(extra.get("contract_stack") or contract_stack_md),
+        "adr_dir": str(extra.get("adr_dir") or adr_dir_val),
+        "tracker_dir": tracker_dir_val,
+        "tracker_closed_dir": str(extra.get("tracker_closed_dir") or f"{tracker_dir_val.rstrip('/')}/epics/closed"),
+        "guardrail_rules": str(extra.get("guardrail_rules") or DEFAULT_GUARDRAIL_RULES),
+        "hardening_target": str(extra.get("hardening_target") or hardening_str),
+        "directives": str((prior_sys or {}).get("directives") or extra.get("directives") or ""),
+        "active_bucket": f"{primary_repo_name}::main",
+    }
+
+
 def discover_constitution_files(ctx) -> List[str]:
     """Returns the standards files to auto-pin (Tier 0) across mounted repositories, from each repository's landmarks."""
     constitution: List[str] = []
-    for r_cfg in (ctx.config.get("target_repos") or []):
-        if not isinstance(r_cfg, dict):
-            continue
+    for r_cfg in _target_repo_configs(ctx.config):
         r_dir = r_cfg.get("repo_dir")
         if not r_dir:
             continue
@@ -1529,11 +1940,6 @@ class AuditUpkeepPayload(TypedDict, total=False):
 @topology_bp.route('audit_upkeep', methods=['GET', 'POST'], request_schema=AuditUpkeepPayload, docstring="[sync] Deterministically audits workspace documentation/symbol drift, oversized God-object decomposition candidates, and test suite relevance.")
 def api_topology_audit_upkeep(ctx):
     """Deterministically audits workspace documentation/symbol drift, God-object candidates, and test relevance."""
-    from insetu.core.cartographer.cartographer import (
-        extract_file_symbols as _extract_file_symbols,
-        extract_symbol_source_slice as _extract_symbol_source_slice,
-        map_repositories as _map_repositories,
-    )
     data = ctx.payload or {}
     raw_scope = str(data.get("scope") or "all").strip().lower()
     if raw_scope in ("doc", "docs", "documentation", "index"):
@@ -1547,7 +1953,7 @@ def api_topology_audit_upkeep(ctx):
 
     min_lines = int(data.get("god_object_min_lines") or 550)
     min_symbols = int(data.get("god_object_min_symbols") or 15)
-    target_configs = ctx.config.get("target_repos", [])
+    target_configs = _target_repo_configs(ctx.config)
     requested_repo = str(data.get("repo") or "").strip()
     active_repos = [
         c.get("repo_dir")
@@ -1555,9 +1961,9 @@ def api_topology_audit_upkeep(ctx):
         if c.get("repo_dir") and (not requested_repo or c.get("repo_dir") == requested_repo)
     ]
 
-    # Ensure Cartographer symbol_ledger is fresh before reading drift state
+    # Request Cartographer symbol_ledger refresh via decoupled hook before reading drift state
     try:
-        _map_repositories(ctx.workspace_id, silent=True, target_repos=active_repos or None)
+        ctx.emit('ensure_cartography_fresh', target_repos=active_repos or None)
         ctx.sync_vfs_barrier()
     except Exception:
         pass
@@ -1580,7 +1986,7 @@ def api_topology_audit_upkeep(ctx):
             r_dir = r_cfg.get("repo_dir")
             if not r_dir or (active_repos and r_dir not in active_repos):
                 continue
-            idx_uri = f"vfs://{r_dir}/docs/CODE_INDEX.md" if r_cfg.get("is_core_chassis") else f"vfs://{r_dir}/CODE_INDEX.md"
+            idx_uri = resolve_repo_code_index_uri(ctx, r_dir, r_cfg)
             idx_text = ctx.vfs.read(idx_uri) or ""
             if idx_text:
                 for line_no, line in enumerate(idx_text.splitlines(), start=1):
@@ -1607,7 +2013,7 @@ def api_topology_audit_upkeep(ctx):
                 fp = r["filepath"]
                 if r["status"] == "stale" and len(stale_comments) < 20:
                     f_content = ctx.vfs.read(fp) or ""
-                    slice_info = _extract_symbol_source_slice(fp, f_content, r["symbol_name"]) if f_content else None
+                    slice_info = extract_symbol_source_slice(fp, f_content, r["symbol_name"]) if f_content else None
                     stale_comments.append({
                         "filepath": fp,
                         "symbol_name": r["symbol_name"],
@@ -1637,23 +2043,43 @@ def api_topology_audit_upkeep(ctx):
                         broken_doc_targets.append({"doc_file": f_uri, "broken_ref": str(ref_uri)})
                         _add_target(f_uri)
 
-    # --- PILLAR 2: ZERO-LOGIC GOD-OBJECT DECOMPOSITION CANDIDATES ---
-    all_defined_py_symbols = set()
+    # Resolve each repository's test/fitness landmark prefixes once via resolve_repo_landmarks
+    repo_test_prefixes: Dict[str, Tuple[str, ...]] = {}
     for r_dir in active_repos:
-        for f_uri in get_topology_files_for_repo(ctx.workspace_id, r_dir):
+        lm_info = resolve_repo_landmarks(ctx, repo=r_dir).get("landmarks") or {}
+        raw_t_uris = list(lm_info.get("test_dirs") or []) + list(lm_info.get("fitness_dirs") or [])
+        prefixes = [u.rstrip("/") for u in raw_t_uris if isinstance(u, str) and u]
+        if not prefixes:
+            prefixes = [f"vfs://{r_dir}/tests", f"vfs://{r_dir}/test"]
+        repo_test_prefixes[r_dir] = tuple(prefixes)
+
+    def _is_repo_test_uri(r_dir: str, f_uri: str) -> bool:
+        for pref in repo_test_prefixes.get(r_dir, ()):
+            if f_uri == pref or f_uri.startswith(f"{pref}/"):
+                return True
+        return False
+
+    # --- PILLAR 2: ZERO-LOGIC GOD-OBJECT DECOMPOSITION CANDIDATES ---
+    repo_tracked_sets: Dict[str, set] = {}
+    source_symbols_by_uri: Dict[str, List[str]] = {}
+    for r_dir in active_repos:
+        tracked_in_repo = get_topology_files_for_repo(ctx.workspace_id, r_dir)
+        repo_tracked_sets[r_dir] = set(tracked_in_repo)
+        for f_uri in tracked_in_repo:
             rel_p = InSetuURI(f_uri).path
             ext = Path(rel_p).suffix.lower()
-            if ext not in (".py", ".js", ".mjs", ".ts", ".tsx"):
+            if ext not in SUPPORTED_SYMBOL_EXTENSIONS:
                 continue
             content = ctx.vfs.read(f_uri)
             if not content:
                 continue
-            syms = _extract_file_symbols(rel_p, content) or []
-            for s in syms:
-                all_defined_py_symbols.add(s["name"])
+            syms = extract_file_symbols(rel_p, content) or []
+            is_test_f = _is_repo_test_uri(r_dir, f_uri)
+            if not is_test_f and "/vendor/" not in f_uri:
+                source_symbols_by_uri[f_uri] = [s["name"] for s in syms if s.get("name")]
 
             if scope in ("all", "modularize"):
-                if "/tests/" in f_uri or rel_p.startswith("tests/") or "/vendor/" in f_uri:
+                if is_test_f or "/vendor/" in f_uri:
                     continue
                 line_count = len(content.splitlines())
                 if line_count >= min_lines or len(syms) >= min_symbols:
@@ -1679,61 +2105,66 @@ def api_topology_audit_upkeep(ctx):
         for go in god_objects[:2]:
             _add_target(go["filepath"])
 
-    # --- PILLAR 3: TEST SUITE RELEVANCE ---
+    # --- PILLAR 3: TEST SUITE RELEVANCE (Generic Landmark & Language-Provider Driven) ---
     if scope in ("all", "tests"):
-        import ast as _ast
-        test_files_content: List[Tuple[str, str]] = []
         for r_dir in active_repos:
-            for f_uri in get_topology_files_for_repo(ctx.workspace_id, r_dir):
-                rel_p = InSetuURI(f_uri).path
-                if (rel_p.startswith("tests/") or "/tests/" in f_uri) and f_uri.endswith(".py"):
-                    t_text = ctx.vfs.read(f_uri) or ""
-                    if t_text:
-                        test_files_content.append((f_uri, t_text))
-                        try:
-                            t_tree = _ast.parse(t_text)
-                            for node in _ast.walk(t_tree):
-                                if isinstance(node, _ast.ImportFrom) and node.module and node.module.startswith("insetu."):
-                                    mod_rel = node.module.replace(".", "/")
-                                    cand_py = f"vfs://{r_dir}/{mod_rel}.py"
-                                    cand_init = f"vfs://{r_dir}/{mod_rel}/__init__.py"
-                                    cand_nested = f"vfs://{r_dir}/insetu/{mod_rel}.py"
-                                    cand_nested_init = f"vfs://{r_dir}/insetu/{mod_rel}/__init__.py"
-                                    resolved_mod_uri = next(
-                                        (
-                                            c for c in (cand_py, cand_init, cand_nested, cand_nested_init)
-                                            if ctx.resolve_path(c, must_exist=True, allow_heal=False)
-                                        ),
-                                        None,
-                                    )
-                                    if resolved_mod_uri and resolved_mod_uri.endswith(".py"):
-                                        mod_src = ctx.vfs.read(resolved_mod_uri) or ""
-                                        for alias in node.names:
-                                            imp_name = alias.name
-                                            if imp_name != "*" and not re.search(rf'\b{re.escape(imp_name)}\b', mod_src):
-                                                stale_test_imports.append({
-                                                    "test_file": f_uri,
-                                                    "line": node.lineno,
-                                                    "module": node.module,
-                                                    "missing_symbol": imp_name,
-                                                })
-                                                _add_target(f_uri)
-                        except Exception:
-                            pass
-
-        combined_tests = "\n".join(t_text for _, t_text in test_files_content)
-        if combined_tests:
-            for cap_id, spec in sorted(ctx.get_registered_capabilities().items()):
-                action = spec.get("action") or ""
-                if action in ("settings", "settings.schema"):
+            tracked_set = repo_tracked_sets.get(r_dir, set())
+            test_texts: List[str] = []
+            for f_uri in sorted(tracked_set):
+                if not _is_repo_test_uri(r_dir, f_uri):
                     continue
-                slash_form = cap_id.replace(".", "/")
-                if cap_id not in combined_tests and slash_form not in combined_tests and action not in combined_tests:
-                    untested_capabilities.append({
-                        "capability": cap_id,
-                        "ext_name": spec.get("ext_name", ""),
-                        "rule": spec.get("rule", ""),
-                    })
+                provider = get_language_provider(f_uri)
+                if not provider:
+                    continue
+                t_text = ctx.vfs.read(f_uri) or ""
+                if not t_text:
+                    continue
+                test_texts.append(t_text)
+                for imp in provider.imports(f_uri, t_text):
+                    mod_name = str(imp.get("module") or "").strip()
+                    if not mod_name or not imp.get("is_from"):
+                        continue
+                    mod_rel = mod_name.lstrip(".").replace(".", "/")
+                    if not mod_rel:
+                        continue
+                    candidates = (
+                        f"vfs://{r_dir}/{mod_rel}.py",
+                        f"vfs://{r_dir}/{mod_rel}/__init__.py",
+                        f"vfs://{r_dir}/{r_dir}/{mod_rel}.py",
+                        f"vfs://{r_dir}/{r_dir}/{mod_rel}/__init__.py",
+                        f"vfs://{r_dir}/src/{mod_rel}.py",
+                        f"vfs://{r_dir}/{mod_rel}.js",
+                        f"vfs://{r_dir}/{mod_rel}.ts",
+                    )
+                    resolved_mod_uri = next((c for c in candidates if c in tracked_set), None)
+                    if not resolved_mod_uri:
+                        continue
+                    mod_src = ctx.vfs.read(resolved_mod_uri) or ""
+                    for imp_name in (imp.get("names") or []):
+                        clean_sym = str(imp_name or "").strip()
+                        if clean_sym and clean_sym != "*" and not re.search(rf'\b{re.escape(clean_sym)}\b', mod_src):
+                            stale_test_imports.append({
+                                "test_file": f_uri,
+                                "line": imp.get("line", 1),
+                                "module": mod_name,
+                                "missing_symbol": clean_sym,
+                            })
+                            _add_target(f_uri)
+
+            combined_repo_tests = "\n".join(test_texts)
+            if combined_repo_tests:
+                for src_uri, sym_names in sorted(source_symbols_by_uri.items()):
+                    if not src_uri.startswith(f"vfs://{r_dir}/") or not sym_names:
+                        continue
+                    stem = Path(InSetuURI(src_uri).path).stem
+                    if stem.startswith("__"):
+                        continue
+                    if stem not in combined_repo_tests and not any(s in combined_repo_tests for s in sym_names):
+                        untested_capabilities.append({
+                            "filepath": src_uri,
+                            "repo": r_dir,
+                            "symbols": sym_names[:5],
+                        })
 
     summary_counts = {
         "missing_comments": len(missing_comments),

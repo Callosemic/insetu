@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 import { AppStore } from '/static/extensions/system/store.js';
 
@@ -36,6 +36,7 @@ function _buildDefaultItemFromSchema(itemSchema = [], index = 1) {
 }
 
 export class InSetuSchemaRepeater extends InSetuElement {
+    static get extensionName() { return 'system'; }
     static properties = {
         field: { type: Object },
         items: { type: Array },
@@ -44,37 +45,7 @@ export class InSetuSchemaRepeater extends InSetuElement {
         optionResolver: { attribute: false },
         _expandedMap: { type: Object }
     };
-    static styles = [sharedStyles, css`
-        :host { display: block; width: 100%; box-sizing: border-box; }
-        .repeater-shell {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            padding: 14px 16px;
-            background: var(--input-bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-        }
-        .repeater-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        .record-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 12px;
-            width: 100%;
-        }
-        .record-grid > * {
-            min-width: 0;
-        }
-        .record-grid > .full-span {
-            grid-column: 1 / -1;
-        }
-    `];
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -262,7 +233,6 @@ export class InSetuSchemaRepeater extends InSetuElement {
                     ?flush=${true}
                     .label=${subField.label || subField.id}
                     .monospace=${true}
-                    .minRows=${subField.rows || 2}
                     .placeholder=${subField.placeholder || ''}
                     .value=${Array.isArray(value) ? value.join('\n') : String(value ?? '')}
                     @sutram-input-changed=${e => onChange(e.detail.value)}>
@@ -273,7 +243,7 @@ export class InSetuSchemaRepeater extends InSetuElement {
             ? (Array.isArray(value) ? value.join(', ') : String(value ?? ''))
             : String(value ?? '');
         return html`
-            <div style="display: flex; flex-direction: column; gap: 4px;">
+            <sutram-stack direction="col" gap="xs">
                 <sutram-input
                     ?flush=${true}
                     .label=${subField.label || subField.id}
@@ -283,18 +253,18 @@ export class InSetuSchemaRepeater extends InSetuElement {
                     @sutram-input-changed=${e => onChange(e.detail.value)}>
                 </sutram-input>
                 ${datalistId && Array.isArray(this.datalistOptions) && this.datalistOptions.length > 0 ? html`
-                    <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                    <sutram-stack direction="row" gap="xs" ?wrap=${true}>
                         ${this.datalistOptions.slice(0, 6).map(opt => html`
-                            <span
-                                style="font-family: var(--font-mono); font-size: 0.68rem; padding: 1px 6px; border-radius: 4px; background: var(--bg); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer;"
-                                title=${opt.detail || opt.value}
-                                @click=${() => onChange(opt.value)}>
-                                ${opt.label || opt.value}
-                            </span>
+                            <sutram-pill
+                                pillId=${opt.value}
+                                labelText=${opt.label || opt.value}
+                                ?compact=${true}
+                                @sutram-pill-toggled=${() => onChange(opt.value)}>
+                            </sutram-pill>
                         `)}
-                    </div>
+                    </sutram-stack>
                 ` : ''}
-            </div>
+            </sutram-stack>
         `;
     }
 
@@ -309,31 +279,30 @@ export class InSetuSchemaRepeater extends InSetuElement {
         const boundsLabel = maxItems < Infinity ? `${list.length} / ${maxItems}` : `${list.length}`;
 
         return html`
-            <div class="repeater-shell">
-                <div class="repeater-header">
-                    <div style="display: flex; flex-direction: column; gap: 2px;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-weight: 700; font-size: 0.92rem; color: var(--text);">${f.label || f.id}</span>
+            <sutram-surface variant="panel" padding="md" gap="md">
+                <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                    <sutram-stack direction="col" gap="xs">
+                        <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
+                            <strong>${f.label || f.id}</strong>
                             <sutram-tag text="${boundsLabel} items (min ${minItems})" intent="highlight"></sutram-tag>
                             <sutram-tag text=${f.scope || 'workspace'} intent="neutral"></sutram-tag>
-                        </div>
-                        ${f.description ? html`<span style="font-size: 0.78rem; color: var(--text-muted);">${f.description}</span>` : ''}
-                    </div>
+                        </sutram-stack>
+                        ${f.description ? html`<sutram-label .text=${f.description}></sutram-label>` : ''}
+                    </sutram-stack>
                     <sutram-btn
-                        size="sm"
+                        ?compact=${true}
                         intent="primary"
                         icon="plus"
                         label=${f.add_label || `Add ${f.item_label || 'Item'}`}
                         ?disabled=${!canAdd}
-                        style="margin: 0;"
                         @click=${() => this._addItem()}>
                     </sutram-btn>
-                </div>
+                </sutram-stack>
 
                 ${list.length === 0 ? html`
                     <sutram-empty-state text=${f.empty_text || 'No items configured yet.'}></sutram-empty-state>
                 ` : html`
-                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <sutram-stack direction="col" gap="sm">
                         ${list.map((item, idx) => {
                             const titleKey = f.item_title_key || 'title';
                             const subKey = f.item_subtitle_key !== undefined ? f.item_subtitle_key : 'id';
@@ -349,32 +318,31 @@ export class InSetuSchemaRepeater extends InSetuElement {
                                         e.stopPropagation();
                                         this._expandedMap = { ...this._expandedMap, [idx]: e.detail.open };
                                     }}>
-                                    <div slot="actions" style="display: flex; gap: 6px; align-items: center;">
+                                    <sutram-stack slot="actions" direction="row" align="center" gap="xs">
                                         ${typeof f.item_actions === 'function' ? f.item_actions(item, idx, (patch) => {
                                             const current = Array.isArray(this.items) ? [...this.items] : [];
                                             current[idx] = { ...(current[idx] || {}), ...patch };
                                             this._emitChange(current);
                                         }) : ''}
                                         ${list.length > 1 ? html`
-                                            <sutram-btn size="sm" intent="neutral" icon="chevron-up" ?disabled=${idx === 0} style="margin: 0; --btn-padding: 3px 6px;" @click=${e => { e.stopPropagation(); this._moveItem(idx, -1); }}></sutram-btn>
-                                            <sutram-btn size="sm" intent="neutral" icon="chevron-down" ?disabled=${idx === list.length - 1} style="margin: 0; --btn-padding: 3px 6px;" @click=${e => { e.stopPropagation(); this._moveItem(idx, 1); }}></sutram-btn>
+                                            <sutram-btn ?compact=${true} intent="neutral" icon="chevron-up" ?disabled=${idx === 0} @click=${e => { e.stopPropagation(); this._moveItem(idx, -1); }}></sutram-btn>
+                                            <sutram-btn ?compact=${true} intent="neutral" icon="chevron-down" ?disabled=${idx === list.length - 1} @click=${e => { e.stopPropagation(); this._moveItem(idx, 1); }}></sutram-btn>
                                         ` : ''}
                                         <sutram-btn
-                                            size="sm"
+                                            ?compact=${true}
                                             intent="danger"
                                             icon="trash-2"
                                             label="Remove"
                                             ?disabled=${!canRemove}
                                             title=${!canRemove ? `Minimum of ${minItems} item(s) required` : 'Remove item'}
-                                            style="margin: 0;"
                                             @click=${e => { e.stopPropagation(); this._removeItem(idx); }}>
                                         </sutram-btn>
-                                    </div>
+                                    </sutram-stack>
 
-                                    <div style="display: flex; flex-direction: column; gap: 12px; padding-top: 6px;">
-                                        <div class="record-grid">
+                                    <sutram-stack direction="col" gap="md">
+                                        <sutram-stack direction="grid" gap="md">
                                             ${itemSchema.filter(sf => sf.type !== 'hidden' && sf.type !== 'record' && sf.type !== 'repeater' && sf.type !== 'custom' && _evaluateFieldCondition(sf.show_if, item, this.rootFormData)).map(sf => html`
-                                                <div style="display: flex; flex-direction: column; gap: 4px;">
+                                                <sutram-stack direction="col" gap="xs">
                                                     ${this._renderLeafInput(
                                                         sf,
                                                         item?.[sf.id],
@@ -382,46 +350,46 @@ export class InSetuSchemaRepeater extends InSetuElement {
                                                         sf.options_source ? `${f.id}_${idx}_${sf.id}` : '',
                                                         item
                                                     )}
-                                                    ${sf.description ? html`<span style="font-size: 0.72rem; color: var(--text-muted);">${sf.description}</span>` : ''}
-                                                </div>
+                                                    ${sf.description ? html`<sutram-label .text=${sf.description}></sutram-label>` : ''}
+                                                </sutram-stack>
                                             `)}
-                                        </div>
+                                        </sutram-stack>
 
                                         ${itemSchema.filter(sf => sf.type === 'custom' && typeof sf.custom_render === 'function' && _evaluateFieldCondition(sf.show_if, item, this.rootFormData)).map(customField => html`
-                                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                            <sutram-stack direction="col" gap="xs">
                                                 ${customField.custom_render(item, idx, (patch) => {
                                                     const current = Array.isArray(this.items) ? [...this.items] : [];
                                                     current[idx] = { ...(current[idx] || {}), ...patch };
                                                     this._emitChange(current);
                                                 })}
-                                            </div>
+                                            </sutram-stack>
                                         `)}
 
                                         ${itemSchema.filter(sf => sf.type === 'record' && _evaluateFieldCondition(sf.show_if, item, this.rootFormData)).map(recField => html`
-                                            <div style="padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; gap: 10px;">
-                                                <span style="font-size: 0.8rem; font-weight: bold; color: var(--intent-primary);">${recField.label || recField.id}</span>
-                                                <div class="record-grid">
+                                            <sutram-surface variant="inset" padding="md" gap="sm">
+                                                <strong>${recField.label || recField.id}</strong>
+                                                <sutram-stack direction="grid" gap="md">
                                                     ${(recField.fields || []).filter(cf => _evaluateFieldCondition(cf.show_if, item?.[recField.id] || {}, item)).map(cf => html`
-                                                        <div class="${cf.type === 'target_binding' || cf.type === 'textarea' ? 'full-span' : ''}" style="display: flex; flex-direction: column; gap: 4px; min-width: 0;">
+                                                        <sutram-stack direction="col" gap="xs" ?spanFull=${cf.type === 'target_binding' || cf.type === 'textarea'}>
                                                             ${this._renderLeafInput(
                                                                 cf,
                                                                 (item?.[recField.id] || {})[cf.id],
                                                                 val => this._updateNestedRecordField(idx, recField, cf, val),
                                                                 cf.options_source ? `${f.id}_${idx}_${recField.id}_${cf.id}` : ''
                                                             )}
-                                                            ${cf.description ? html`<span style="font-size: 0.7rem; color: var(--text-muted);">${cf.description}</span>` : ''}
-                                                        </div>
+                                                            ${cf.description ? html`<sutram-label .text=${cf.description}></sutram-label>` : ''}
+                                                        </sutram-stack>
                                                     `)}
-                                                </div>
-                                            </div>
+                                                </sutram-stack>
+                                            </sutram-surface>
                                         `)}
-                                    </div>
+                                    </sutram-stack>
                                 </sutram-collapsible>
                             `;
                         })}
-                    </div>
+                    </sutram-stack>
                 `}
-            </div>
+            </sutram-surface>
         `;
     }
 }
@@ -430,6 +398,7 @@ if (!customElements.get('insetu-schema-repeater')) {
 }
 
 export class InSetuSystemSettings extends InSetuElement {
+    static get extensionName() { return 'system'; }
     static properties = {
         menuOpen: { type: Boolean },
         modalOpen: { type: Boolean },
@@ -442,11 +411,6 @@ export class InSetuSystemSettings extends InSetuElement {
         _mountsLoading: { type: Boolean },
         _sharedMounts: { type: Array },
         _exportSharedDomains: { type: Object },
-        _newMountWs: { type: String },
-        _newMountDomain: { type: String },
-        _newExportDomain: { type: String },
-        _newExportWildcard: { type: Boolean },
-        _newExportAllowed: { type: Array },
         _docsStatus: { type: Array },
         workspaces: { type: Object },
         currentTheme: { type: String },
@@ -460,35 +424,7 @@ export class InSetuSystemSettings extends InSetuElement {
         _newWsId: { type: String },
         _newWsRoot: { type: String }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; align-items: stretch; height: 100%; }
-        .hub-breadcrumb-bar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            padding: 10px 20px;
-            background: var(--input-bg);
-            border-bottom: 1px solid var(--border);
-            position: sticky;
-            top: 0;
-            z-index: 20;
-        }
-        .hub-section-title {
-            font-size: 0.75rem;
-            font-weight: 800;
-            font-family: var(--font-mono);
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: var(--intent-primary);
-            margin: 16px 0 8px 0;
-            padding-bottom: 4px;
-            border-bottom: 1px solid color-mix(in srgb, var(--intent-primary) 25%, transparent);
-        }
-        .hub-section-title:first-child {
-            margin-top: 4px;
-        }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.menuOpen = false;
@@ -511,14 +447,7 @@ export class InSetuSystemSettings extends InSetuElement {
         this._exportSharedDomains = {};
         this._exportRepeaterItems = [];
         this._llmCatalogMap = {};
-        this._driverTierDefaults = {
-            anthropic: { decision: 'claude-3-5-haiku-latest', fast: 'claude-3-5-haiku-latest', standard: 'claude-3-5-sonnet-latest', thinking: 'claude-3-7-sonnet-latest', frontier: 'claude-3-7-sonnet-latest' },
-            gemini: { decision: 'gemini-2.5-flash-lite', fast: 'gemini-2.5-flash-lite', standard: 'gemini-2.5-flash', thinking: 'gemini-2.5-pro', frontier: 'gemini-2.5-pro' },
-            openrouter: { decision: 'typesafe/jev-binary-v1', fast: 'google/gemini-2.5-flash-lite', standard: 'anthropic/claude-3.5-sonnet', thinking: 'anthropic/claude-3.7-sonnet', frontier: 'anthropic/claude-3.7-sonnet:thinking' },
-            decisions: { decision: 'typesafe/jev-binary-v1', fast: 'typesafe/jev-binary-v1', standard: 'nace-ai/drex-1', thinking: 'nace-ai/drex-1', frontier: 'nace-ai/drex-1' },
-            claude_cli: { decision: 'claude-3-5-haiku-latest', fast: 'claude-3-5-haiku-latest', standard: 'claude-3-5-sonnet-latest', thinking: 'claude-3-7-sonnet-latest', frontier: 'claude-3-7-sonnet-latest' },
-            web_chat: { decision: 'web-chat-fast', fast: 'web-chat-fast', standard: 'web-chat-standard', thinking: 'web-chat-thinking', frontier: 'web-chat-frontier' }
-        };
+        this._driverTierDefaults = {};
         this._topologyEditingRepo = false;
         this._topologyRepoTitle = '';
         this._topologyIsNewRepo = false;
@@ -530,7 +459,7 @@ export class InSetuSystemSettings extends InSetuElement {
         this._mountsLoading = true;
         this.requestUpdate();
         try {
-            const res = await this.api.workspace.get('system/settings?t=' + Date.now());
+            const res = await this.api.get('system/settings?t=' + Date.now());
             if (res.ok) {
                 const data = await res.json();
                 this._sharedMounts = Array.isArray(data.shared_mounts) ? [...data.shared_mounts] : [];
@@ -566,7 +495,7 @@ export class InSetuSystemSettings extends InSetuElement {
         });
         this._exportSharedDomains = nextExports;
         try {
-            const res = await this.api.workspace.post('system/settings', {
+            const res = await this.api.post('system/settings', {
                 shared_mounts: this._sharedMounts || [],
                 export_shared_domains: this._exportSharedDomains || {}
             });
@@ -602,7 +531,7 @@ export class InSetuSystemSettings extends InSetuElement {
                 this._selectedRepo = targetRepo;
             }
             const qs = targetRepo ? ('?repo=' + encodeURIComponent(targetRepo) + '&t=' + Date.now()) : ('?t=' + Date.now());
-            const res = await window.inSetu.api.workspace.get(extName + '/settings' + qs);
+            const res = await this.api.get(extName + '/settings' + qs);
             if (res.ok) {
                 const data = await res.json();
                 const merged = { ...data };
@@ -628,12 +557,24 @@ export class InSetuSystemSettings extends InSetuElement {
         }
         this._activeView = 'ext:' + extName;
         await this._fetchExtSettings(extName, this._selectedRepo);
-        if (extName === 'llm' && Object.keys(this._llmCatalogMap || {}).length === 0) {
+        if (extName === 'llm') {
             try {
-                const catRes = await this.api.workspace.get('llm/catalog');
-                if (catRes.ok) {
+                const [profRes, catRes] = await Promise.all([
+                    this.api.get('llm/profiles'),
+                    Object.keys(this._llmCatalogMap || {}).length === 0 ? this.api.get('llm/catalog') : Promise.resolve(null)
+                ]);
+                if (profRes && profRes.ok) {
+                    const profData = await profRes.json();
+                    if (profData?.driver_tier_defaults && typeof profData.driver_tier_defaults === 'object') {
+                        this._driverTierDefaults = { ...this._driverTierDefaults, ...profData.driver_tier_defaults };
+                    }
+                }
+                if (catRes && catRes.ok) {
                     const catData = await catRes.json();
                     this._ingestLlmCatalogPayload(catData);
+                } else {
+                    this._healProfileTiersForEndpoints();
+                    this.requestUpdate();
                 }
             } catch (_) {}
         }
@@ -752,9 +693,6 @@ export class InSetuSystemSettings extends InSetuElement {
     }
     _renderCustomActionComponent(tagName) {
         if (!tagName) return html``;
-        if (tagName === 'insetu-ext-tracker-settings') {
-            return html`<insetu-ext-tracker-settings id="hub-custom-action-panel" ?embedded=${true}></insetu-ext-tracker-settings>`;
-        }
         const Ctor = typeof customElements !== 'undefined' ? customElements.get(tagName) : null;
         if (Ctor) {
             if (!this._customActionNodes) this._customActionNodes = new Map();
@@ -888,8 +826,9 @@ export class InSetuSystemSettings extends InSetuElement {
         });
         this.registerGlobalListener('sutram-settings-custom-action', this, (e) => {
             const act = e.detail?.action;
+            const parentExt = e.detail?.extName || act?.extName || (this._activeView?.startsWith('ext:') ? this._activeView.slice(4) : null);
             if (act && (typeof act.render === 'function' || act.component)) {
-                this._activeCustomAction = act;
+                this._activeCustomAction = parentExt ? { ...act, extName: parentExt } : act;
                 this._activeView = `action:${act.id}`;
                 this.requestUpdate();
             } else {
@@ -940,7 +879,7 @@ export class InSetuSystemSettings extends InSetuElement {
             this._selectedRepo = allRepos[0];
         }
         try {
-            const res = await window.inSetu.api.workspace.get('system/config?t=' + Date.now(), { cache: 'no-store' });
+            const res = await this.api.get('system/config?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
                 const data = await res.json();
                 this._sysConfigForm = data.config || {};
@@ -999,13 +938,13 @@ export class InSetuSystemSettings extends InSetuElement {
     }
     async _saveActiveExtensions() {
         try {
-            const res = await window.inSetu.api.workspace.post('system/config', this._sysConfigForm);
+            const res = await this.api.post('system/config', this._sysConfigForm);
             if (res.ok) {
                 const data = await res.json();
                 if (data.requires_reboot) {
                     this.setStatus("Reboot required. Restarting...", 3000, true);
                     AppStore.setState({ isRebooting: true, rebootType: 'reboot' });
-                    await window.inSetu.api.workspace.post('system/reboot', {});
+                    await this.api.post('system/reboot', {});
                     if (window.inSetu?.sys?.waitForDaemonReboot) {
                         window.inSetu.sys.waitForDaemonReboot();
                     } else {
@@ -1031,15 +970,19 @@ export class InSetuSystemSettings extends InSetuElement {
             })
             : [{ value: 'default', label: 'default' }];
 
-        const domainOptions = [
-            { value: 'prompts', label: 'prompts (.insetu/data/prompts)' },
-            { value: 'agent', label: 'routines (.insetu/data/agent)' },
-            { value: 'notes', label: 'notes (.insetu/data/notes)' },
-            { value: '*', label: '* (All Domains)' }
-        ];
+        const sysSchema = window.inSetu.serverSchemas?.system || window.inSetu.settingsSchemas?.system || [];
+        const mountsField = sysSchema.find(f => f && f.id === 'shared_mounts');
+        const schemaDomainField = (mountsField?.item_schema || []).find(sf => sf && sf.id === 'domain');
+        const domainOptions = (Array.isArray(schemaDomainField?.options) && schemaDomainField.options.length > 0)
+            ? schemaDomainField.options
+            : [
+                { value: 'prompts', label: 'prompts (.insetu/data/prompts)' },
+                { value: 'agent', label: 'routines (.insetu/data/agent)' },
+                { value: '*', label: '* (All Domains)' }
+            ];
 
         if (this._mountsLoading) {
-            return html`<div style="padding: 20px;"><sutram-spinner text="Loading mount configurations..."></sutram-spinner></div>`;
+            return html`<sutram-surface variant="ghost" padding="lg"><sutram-spinner text="Loading mount configurations..."></sutram-spinner></sutram-surface>`;
         }
 
         const subscriberSchema = {
@@ -1086,7 +1029,7 @@ export class InSetuSystemSettings extends InSetuElement {
         };
 
         return html`
-            <div style="display: flex; flex-direction: column; gap: 15px;">
+            <sutram-stack direction="col" gap="md">
                 <insetu-schema-repeater
                     .field=${subscriberSchema}
                     .items=${this._sharedMounts || []}
@@ -1097,12 +1040,12 @@ export class InSetuSystemSettings extends InSetuElement {
                     .items=${this._exportRepeaterItems || []}
                     @insetu-repeater-changed=${e => { this._exportRepeaterItems = e.detail.value; this.requestUpdate(); }}>
                 </insetu-schema-repeater>
-            </div>
+            </sutram-stack>
         `;
     }
     async _loadWorkspacesManifest() {
         try {
-            const res = await window.inSetu.api.workspace.get('system/workspaces?t=' + Date.now(), { cache: 'no-store' });
+            const res = await this.api.get('system/workspaces?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
                 const data = await res.json();
                 this.workspaces = data.workspaces || {};
@@ -1121,7 +1064,7 @@ export class InSetuSystemSettings extends InSetuElement {
             alert("Workspace ID and Root Directory Path are required.");
             throw new Error("Validation failed");
         }
-        const res = await window.inSetu.api.workspace.post('system/workspaces/create', { id: wsId, workspace_root: wsRoot });
+        const res = await this.api.post('system/workspaces/create', { id: wsId, workspace_root: wsRoot });
         if (res.ok) {
             this._newWsId = '';
             this._newWsRoot = '';
@@ -1139,7 +1082,7 @@ export class InSetuSystemSettings extends InSetuElement {
         if (wsId === 'default') return;
         if (!confirm(`⚠️ Are you sure you want to permanently remove workspace "${wsId}" from the system routing index?`)) return;
         try {
-            const res = await window.inSetu.api.workspace.post('system/workspaces/delete', { id: wsId });
+            const res = await this.api.post('system/workspaces/delete', { id: wsId });
             if (res.ok) {
                 const activeWs = window.inSetu.utils.getActiveWorkspace();
                 await this._loadWorkspacesManifest();
@@ -1176,9 +1119,9 @@ export class InSetuSystemSettings extends InSetuElement {
         }
 
         return html`
-            <div style="display: flex; flex-direction: column; gap: 16px;">
+            <sutram-stack direction="col" gap="md">
                 <sutram-collapsible titleText="Provision New Isolated Workspace" intent="success" ?open=${true}>
-                    <div style="display: flex; flex-direction: column; gap: 12px; padding-top: 4px;">
+                    <sutram-stack direction="col" gap="md">
                         <sutram-field-card
                             label="Workspace Unique ID"
                             description="Alphanumeric slug used in URL routing (#/<workspace_id>/...) and X-Workspace-ID headers."
@@ -1190,18 +1133,18 @@ export class InSetuSystemSettings extends InSetuElement {
                             label="Workspace Root Directory Path"
                             description="Physical host directory where this workspace's .insetu/ control plane and repositories reside."
                             scope="daemon">
-                            <div style="display: flex; gap: 8px; align-items: center;">
-                                <sutram-input placeholder="e.g. ~/Documents/GuitarRepertoire" .value=${this._newWsRoot} @sutram-input-changed=${e => this._newWsRoot = e.detail.value} ?flush=${true} style="flex: 1; margin: 0;"></sutram-input>
-                                <sutram-btn intent="highlight" label="Browse..." icon="folder" style="margin: 0;" @click=${() => { this._showHostBrowser = true; }}></sutram-btn>
-                            </div>
+                            <sutram-stack direction="row" gap="sm" align="center">
+                                <sutram-input placeholder="e.g. ~/Documents/GuitarRepertoire" .value=${this._newWsRoot} @sutram-input-changed=${e => this._newWsRoot = e.detail.value} ?flush=${true} ?grow=${true}></sutram-input>
+                                <sutram-btn intent="highlight" label="Browse..." icon="folder" @click=${() => { this._showHostBrowser = true; }}></sutram-btn>
+                            </sutram-stack>
                         </sutram-field-card>
 
-                        <sutram-async-btn icon="plus" label="Provision & Mount Isolated Workspace" intent="success" style="width: 100%; display: block;" .onClick=${(e) => this._handleCreateWorkspace(e)}></sutram-async-btn>
-                    </div>
+                        <sutram-async-btn icon="plus" label="Provision & Mount Isolated Workspace" intent="success" ?fullWidth=${true} .onClick=${(e) => this._handleCreateWorkspace(e)}></sutram-async-btn>
+                    </sutram-stack>
                 </sutram-collapsible>
 
                 <sutram-collapsible titleText="Registered Workspaces Index (${Object.keys(this.workspaces || {}).length})" intent="primary" ?open=${true}>
-                    <div style="display: flex; flex-direction: column; gap: 8px; padding-top: 4px;">
+                    <sutram-stack direction="col" gap="sm">
                         ${Object.entries(this.workspaces || {}).map(([wsId, wsMeta]) => {
                             const isActive = wsId === activeWs;
                             const wsTitle = wsMeta?.title || wsId;
@@ -1213,9 +1156,9 @@ export class InSetuSystemSettings extends InSetuElement {
                                     icon=${wsId === 'default' ? 'landmark' : 'layers'}
                                     intent=${isActive ? 'success' : 'neutral'}
                                     ?disableSelection=${true}>
-                                    <div slot="header-actions" style="display: flex; gap: 8px; align-items: center;">
+                                    <sutram-stack slot="header-actions" direction="row" gap="sm" align="center">
                                         ${!isActive ? html`
-                                            <sutram-btn size="sm" intent="primary" icon="arrow-right" label="Switch Active" @click=${(e) => {
+                                            <sutram-btn ?compact=${true} intent="primary" icon="arrow-right" label="Switch Active" @click=${(e) => {
                                                 e.stopPropagation();
                                                 this.modalOpen = false;
                                                 this._activeView = null;
@@ -1225,18 +1168,18 @@ export class InSetuSystemSettings extends InSetuElement {
                                             }}></sutram-btn>
                                         ` : ''}
                                         ${wsId !== 'default' ? html`
-                                            <sutram-btn size="sm" intent="danger" icon="trash-2" label="Remove" @click=${(e) => {
+                                            <sutram-btn ?compact=${true} intent="danger" icon="trash-2" label="Remove" @click=${(e) => {
                                                 e.stopPropagation();
                                                 this._handleDeleteWorkspace(wsId);
                                             }}></sutram-btn>
                                         ` : html`<sutram-tag text="System Protected" intent="neutral"></sutram-tag>`}
-                                    </div>
+                                    </sutram-stack>
                                 </sutram-card>
                             `;
                         })}
-                    </div>
+                    </sutram-stack>
                 </sutram-collapsible>
-            </div>
+            </sutram-stack>
         `;
     }
     _renderActiveDrillDownBody(activeExtModule, activeCustomAction, allRepos) {
@@ -1283,17 +1226,10 @@ export class InSetuSystemSettings extends InSetuElement {
                 ? ep.models
                 : String(ep.custom_models || ep.models || '').split(',').map(s => s.trim()).filter(Boolean));
 
-        const DRIVER_CURATED_DEFAULTS = {
-            anthropic: ['claude-3-7-sonnet-latest', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'],
-            gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
-            claude_cli: ['claude-3-7-sonnet-latest', 'claude-3-5-sonnet-latest'],
-            decisions: ['typesafe/jev-binary-v1', 'nace-ai/drex-1'],
-            web_chat: ['web-chat-frontier', 'web-chat-thinking', 'web-chat-standard', 'web-chat-fast']
-        };
-
         const targetTier = String(subField?.id || 'standard').toLowerCase();
         const driverTierMap = (this._driverTierDefaults || {})[driver] || {};
         const recommendedDefaultForTier = driverTierMap[targetTier] || '';
+        const curatedFromDefaults = Array.from(new Set(Object.values(driverTierMap).filter(Boolean)));
 
         const seen = new Set();
         const tierMatchedOptions = [];
@@ -1338,7 +1274,7 @@ export class InSetuSystemSettings extends InSetuElement {
         if (recommendedDefaultForTier) {
             addModelOption(recommendedDefaultForTier, null, '', true);
         }
-        (DRIVER_CURATED_DEFAULTS[driver] || []).forEach(m => addModelOption(m));
+        curatedFromDefaults.forEach(m => addModelOption(m));
 
         Object.values(this._llmCatalogMap || {}).forEach(entry => {
             if (!entry || !entry.id) return;
@@ -1433,10 +1369,8 @@ export class InSetuSystemSettings extends InSetuElement {
     _renderManageExtensionsDrillDown() {
         const mountedList = this._sysConfigMeta?.mounted_extensions || [];
         return html`
-            <div style="display: flex; flex-direction: column; gap: 10px;">
-                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0 0 6px 0;">
-                    Enable or disable optional domain extensions for this workspace. Extensions already mounted in RAM apply with a zero-downtime soft refresh; newly activated extensions will automatically reboot the daemon.
-                </p>
+            <sutram-stack direction="col" gap="sm">
+                <sutram-label text="Enable or disable optional domain extensions for this workspace. Extensions already mounted in RAM apply with a zero-downtime soft refresh; newly activated extensions will automatically reboot the daemon."></sutram-label>
                 ${(this._sysConfigMeta?.available_extensions || []).map(ext => {
                     const isConfig = ext.id === 'config';
                     const isChecked = (this._sysConfigForm.extensions || []).includes(ext.id) || isConfig;
@@ -1445,51 +1379,50 @@ export class InSetuSystemSettings extends InSetuElement {
                     const missingBins = ext.missing_binaries || [];
                     const hasMissingDeps = missingPy.length > 0 || missingBins.length > 0;
                     return html`
-                        <div style="display: flex; align-items: flex-start; gap: 12px; background: var(--input-bg); padding: 14px 16px; border: 1px solid ${hasMissingDeps && isChecked ? 'var(--intent-warning)' : 'var(--border)'}; border-radius: 8px;">
-                            <sutram-toggle .checked=${isChecked} ?disabled=${isConfig} @sutram-input-changed=${(e) => { const current = this._sysConfigForm.extensions || []; const newExts = e.detail.value ? (current.includes(ext.id) ? current : [...current, ext.id]) : current.filter(x => x !== ext.id); this._sysConfigForm = { ...this._sysConfigForm, extensions: newExts }; this.requestUpdate(); }} ?flush=${true} style="margin-top: 2px;"></sutram-toggle>
-                            <div style="display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
-                                    <span style="font-size: 0.95rem; color: ${isConfig ? 'var(--text-muted)' : 'var(--text)'}; font-weight: bold; margin: 0;">
-                                        ${ext.title} <span style="font-weight: normal; color: var(--text-muted); font-size: 0.8rem; font-family: var(--font-mono);">(${ext.id})</span>
-                                    </span>
-                                    <div style="display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap;">
-                                        ${hasMissingDeps ? html`<sutram-tag text="Missing Deps" intent="danger"></sutram-tag>` : ''}
-                                        ${isMounted
-                                            ? html`<sutram-tag text="Mounted in RAM" intent="success"></sutram-tag>`
-                                            : html`<sutram-tag text="Requires Reboot" intent="warning"></sutram-tag>`}
-                                        <sutram-tag text="workspace" intent="primary"></sutram-tag>
-                                    </div>
-                                </div>
-                                ${ext.description ? html`
-                                    <span style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.35;">
-                                        ${ext.description}
-                                    </span>
-                                ` : ''}
-                                ${missingPy.length > 0 ? html`
-                                    <div style="font-size: 0.75rem; color: var(--intent-warning); font-family: var(--font-mono); background: var(--bg); padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border); margin-top: 4px; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
-                                        <span>Missing Python packages: <strong>pip install ${missingPy.join(' ')}</strong></span>
-                                        <sutram-async-btn
-                                            size="sm"
-                                            intent="primary"
-                                            icon="download"
-                                            label="Install Now"
-                                            style="margin: 0;"
-                                            .onClick=${this.installExtensionDependencies(ext.id, async () => {
-                                                await this._openSettings('sys:extensions');
-                                            })}>
-                                        </sutram-async-btn>
-                                    </div>
-                                ` : ''}
-                                ${missingBins.length > 0 ? html`
-                                    <div style="font-size: 0.75rem; color: var(--intent-danger); font-family: var(--font-mono); background: var(--bg); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); margin-top: 4px;">
-                                        Missing system binaries in PATH: <strong>${missingBins.join(', ')}</strong>
-                                    </div>
-                                ` : ''}
-                            </div>
-                        </div>
+                        <sutram-surface variant=${hasMissingDeps && isChecked ? 'tinted' : 'panel'} intent=${hasMissingDeps && isChecked ? 'warning' : 'neutral'} padding="md">
+                            <sutram-stack direction="row" align="start" gap="md">
+                                <sutram-toggle .checked=${isChecked} ?disabled=${isConfig} @sutram-input-changed=${(e) => { const current = this._sysConfigForm.extensions || []; const newExts = e.detail.value ? (current.includes(ext.id) ? current : [...current, ext.id]) : current.filter(x => x !== ext.id); this._sysConfigForm = { ...this._sysConfigForm, extensions: newExts }; this.requestUpdate(); }} ?flush=${true}></sutram-toggle>
+                                <sutram-stack direction="col" gap="xs" ?flex=${true}>
+                                    <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                                        <strong>
+                                            ${ext.title} <code>(${ext.id})</code>
+                                        </strong>
+                                        <sutram-stack direction="row" gap="xs" align="center" ?wrap=${true}>
+                                            ${hasMissingDeps ? html`<sutram-tag text="Missing Deps" intent="danger"></sutram-tag>` : ''}
+                                            ${isMounted
+                                                ? html`<sutram-tag text="Mounted in RAM" intent="success"></sutram-tag>`
+                                                : html`<sutram-tag text="Requires Reboot" intent="warning"></sutram-tag>`}
+                                            <sutram-tag text="workspace" intent="primary"></sutram-tag>
+                                        </sutram-stack>
+                                    </sutram-stack>
+                                    ${ext.description ? html`<sutram-label .text=${ext.description}></sutram-label>` : ''}
+                                    ${missingPy.length > 0 ? html`
+                                        <sutram-surface variant="inset" padding="xs">
+                                            <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                                                <span>Missing Python packages: <code>pip install ${missingPy.join(' ')}</code></span>
+                                                <sutram-async-btn
+                                                    ?compact=${true}
+                                                    intent="primary"
+                                                    icon="download"
+                                                    label="Install Now"
+                                                    .onClick=${this.installExtensionDependencies(ext.id, async () => {
+                                                        await this._openSettings('sys:extensions');
+                                                    })}>
+                                                </sutram-async-btn>
+                                            </sutram-stack>
+                                        </sutram-surface>
+                                    ` : ''}
+                                    ${missingBins.length > 0 ? html`
+                                        <sutram-surface variant="tinted" intent="danger" padding="xs">
+                                            <span>Missing system binaries in PATH: <code>${missingBins.join(', ')}</code></span>
+                                        </sutram-surface>
+                                    ` : ''}
+                                </sutram-stack>
+                            </sutram-stack>
+                        </sutram-surface>
                     `;
                 })}
-            </div>
+            </sutram-stack>
         `;
     }
 
@@ -1530,59 +1463,53 @@ export class InSetuSystemSettings extends InSetuElement {
         }
 
         return html`
-            <div style="position: relative; display: flex; align-items: stretch; height: 100%;">
-                <button class="system-action-btn" @click=${() => this.menuOpen = !this.menuOpen} title="System Menu">
-                    <yv-icon name="settings" style="width: 16px; height: 16px;"></yv-icon>
+            <sutram-dropdown align="right" direction="down" .open=${this.menuOpen}>
+                <button slot="trigger" class="system-action-btn" title="System Menu">
+                    <sutram-icon name="settings" size="md"></sutram-icon>
                 </button>
-                ${this.menuOpen ? html`
-                    <div style="position: absolute; top: 100%; right: 0; margin-top: 5px; background: var(--pane-bg); background: color-mix(in srgb, var(--pane-bg) 95%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--overlay-shadow); width: 280px; z-index: 2000; max-height: calc(100dvh - 85px); overflow-y: auto; box-sizing: border-box; padding: 15px; display: flex; flex-direction: column; gap: 18px;">
-                        <div style="display: flex; flex-direction: column; gap: 6px;">
-                            <div style="display: flex; align-items: center; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--intent-primary); border-bottom: 1px solid color-mix(in srgb, var(--intent-primary) 30%, transparent); padding: 0 14px 4px 14px;">System</div>
-                            <div style="display: flex; flex-direction: column; gap: 4px;">
-                                <sutram-btn intent="highlight" variant="tinted" class="yv-interactive-row" icon="settings-2" label="Settings Hub" @click=${() => this._openSettings()} style="width: 100%; --btn-padding: 8px 14px; --btn-font-size: 0.85rem; margin: 0; font-family: var(--font-mono, monospace);"></sutram-btn>
-                                <sutram-btn intent="highlight" variant="tinted" class="yv-interactive-row" icon="book" label="Documentation" @click=${() => this._openDocsModal()} style="width: 100%; --btn-padding: 8px 14px; --btn-font-size: 0.85rem; margin: 0; font-family: var(--font-mono, monospace);"></sutram-btn>
-                                <sutram-btn intent="danger" variant="tinted" class="yv-interactive-row" icon="refresh-cw" label="Force UI Refresh" @click=${() => { this.menuOpen = false; if(window.inSetu.sys.fullRefresh) window.inSetu.sys.fullRefresh(); }} style="width: 100%; --btn-padding: 8px 14px; --btn-font-size: 0.85rem; margin: 0; font-family: var(--font-mono, monospace);"></sutram-btn>
-                            </div>
-                        </div>
+                <sutram-stack slot="content" direction="col" gap="compact" padding="xs">
+                    <sutram-stack direction="col" gap="xs">
+                        <sutram-label text="SYSTEM"></sutram-label>
+                        <sutram-btn intent="highlight" variant="tinted" icon="settings-2" label="Settings Hub" ?fullWidth=${true} @click=${() => this._openSettings()}></sutram-btn>
+                        <sutram-btn intent="highlight" variant="tinted" icon="book" label="Documentation" ?fullWidth=${true} @click=${() => this._openDocsModal()}></sutram-btn>
+                        <sutram-btn intent="danger" variant="tinted" icon="refresh-cw" label="Force UI Refresh" ?fullWidth=${true} @click=${() => { this.menuOpen = false; if(window.inSetu.sys.fullRefresh) window.inSetu.sys.fullRefresh(); }}></sutram-btn>
+                    </sutram-stack>
 
-                        <div style="display: flex; flex-direction: column; gap: 6px;">
-                            <div style="display: flex; align-items: center; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); border-bottom: 1px solid var(--border); padding: 0 14px 4px 14px;">Workspace</div>
-                            <div style="display: flex; flex-direction: column; gap: 4px;">
-                                <sutram-btn intent="success" variant="tinted" ?active=${true} icon="package" .label=${html`<span>${this.workspaces[activeWs]?.title || activeWs}</span><yv-icon name="check" style="width: 14px; height: 14px; margin-left: 6px;"></yv-icon>`} style="width: 100%; --btn-padding: 8px 14px; --btn-font-size: 0.85rem; margin: 0; font-family: var(--font-mono, monospace);"></sutram-btn>
-                                ${Object.entries(this.workspaces).filter(([key, _]) => key !== activeWs).map(([key, ws]) => html`
-                                    <sutram-btn intent="success" variant="tinted" class="yv-interactive-row" icon="layout-grid" label=${ws.title || key} style="width: 100%; --btn-padding: 8px 14px; --btn-font-size: 0.85rem; margin: 0; font-family: var(--font-mono, monospace);"
-                                        @click=${(e) => {  
-                                            e.stopPropagation(); 
-                                            this.menuOpen = false; 
-                                            if (window.inSetu.sys.executeWorkspaceSwap) {
-                                                window.inSetu.sys.executeWorkspaceSwap(key, ws.title);
-                                            }
-                                        }}>
-                                    </sutram-btn>
-                                `)}
-                            </div>
-                        </div>
+                    <sutram-stack direction="col" gap="xs">
+                        <sutram-label text="WORKSPACE"></sutram-label>
+                        <sutram-btn intent="success" variant="tinted" ?active=${true} icon="package" label="${this.workspaces[activeWs]?.title || activeWs} ✓" ?fullWidth=${true}></sutram-btn>
+                        ${Object.entries(this.workspaces).filter(([key, _]) => key !== activeWs).map(([key, ws]) => html`
+                            <sutram-btn intent="success" variant="tinted" icon="layout-grid" label=${ws.title || key} ?fullWidth=${true}
+                                @click=${(e) => {  
+                                    e.stopPropagation(); 
+                                    this.menuOpen = false; 
+                                    if (window.inSetu.sys.executeWorkspaceSwap) {
+                                        window.inSetu.sys.executeWorkspaceSwap(key, ws.title);
+                                    }
+                                }}>
+                            </sutram-btn>
+                        `)}
+                    </sutram-stack>
 
-                        <div style="display: flex; flex-direction: column; gap: 6px;">
-                            <div style="display: flex; align-items: center; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); border-bottom: 1px solid var(--border); padding: 0 14px 4px 14px;">Display Theme</div>
-                            <div style="display: flex; gap: 4px;">
-                                <sutram-btn intent="${this.currentTheme === 'dark' ? 'warning' : 'neutral'}" variant="tinted" class="yv-interactive-row" ?active=${this.currentTheme === 'dark'} style="flex: 1; justify-content: center; --btn-padding: 8px; margin: 0; font-family: var(--font-mono, monospace); font-size: 0.8rem;" @click=${() => this._setTheme('dark')} .label=${html`<div style="display: flex; flex-direction: column; align-items: center; gap: 6px;"><yv-icon name="moon" style="width: 16px; height: 16px; color: ${this.currentTheme === 'dark' ? 'var(--intent-warning)' : 'var(--text-muted)'};"></yv-icon>Dark</div>`}></sutram-btn>
-                                <sutram-btn intent="${this.currentTheme === 'light' ? 'warning' : 'neutral'}" variant="tinted" class="yv-interactive-row" ?active=${this.currentTheme === 'light'} style="flex: 1; justify-content: center; --btn-padding: 8px; margin: 0; font-family: var(--font-mono, monospace); font-size: 0.8rem;" @click=${() => this._setTheme('light')} .label=${html`<div style="display: flex; flex-direction: column; align-items: center; gap: 6px;"><yv-icon name="sun" style="width: 16px; height: 16px; color: ${this.currentTheme === 'light' ? 'var(--intent-warning)' : 'var(--text-muted)'};"></yv-icon>Light</div>`}></sutram-btn>
-                                <sutram-btn intent="${this.currentTheme === 'e-ink' ? 'warning' : 'neutral'}" variant="tinted" class="yv-interactive-row" ?active=${this.currentTheme === 'e-ink'} style="flex: 1; justify-content: center; --btn-padding: 8px; margin: 0; font-family: var(--font-mono, monospace); font-size: 0.8rem;" @click=${() => this._setTheme('e-ink')} .label=${html`<div style="display: flex; flex-direction: column; align-items: center; gap: 6px;"><yv-icon name="book-open" style="width: 16px; height: 16px; color: ${this.currentTheme === 'e-ink' ? 'var(--intent-warning)' : 'var(--text-muted)'};"></yv-icon>E-Ink</div>`}></sutram-btn>
-                            </div>
-                        </div>
+                    <sutram-stack direction="col" gap="xs">
+                        <sutram-label text="DISPLAY THEME"></sutram-label>
+                        <sutram-stack direction="row" gap="xs">
+                            <sutram-btn intent="${this.currentTheme === 'dark' ? 'warning' : 'neutral'}" variant="tinted" ?active=${this.currentTheme === 'dark'} ?grow=${true} @click=${() => this._setTheme('dark')} .label=${html`<sutram-stack direction="col" align="center" gap="xs"><sutram-icon name="moon" size="md" intent="${this.currentTheme === 'dark' ? 'warning' : 'muted'}"></sutram-icon><span>Dark</span></sutram-stack>`}></sutram-btn>
+                            <sutram-btn intent="${this.currentTheme === 'light' ? 'warning' : 'neutral'}" variant="tinted" ?active=${this.currentTheme === 'light'} ?grow=${true} @click=${() => this._setTheme('light')} .label=${html`<sutram-stack direction="col" align="center" gap="xs"><sutram-icon name="sun" size="md" intent="${this.currentTheme === 'light' ? 'warning' : 'muted'}"></sutram-icon><span>Light</span></sutram-stack>`}></sutram-btn>
+                            <sutram-btn intent="${this.currentTheme === 'e-ink' ? 'warning' : 'neutral'}" variant="tinted" ?active=${this.currentTheme === 'e-ink'} ?grow=${true} @click=${() => this._setTheme('e-ink')} .label=${html`<sutram-stack direction="col" align="center" gap="xs"><sutram-icon name="book-open" size="md" intent="${this.currentTheme === 'e-ink' ? 'warning' : 'muted'}"></sutram-icon><span>E-Ink</span></sutram-stack>`}></sutram-btn>
+                        </sutram-stack>
+                    </sutram-stack>
 
-                        <div style="display: flex; flex-direction: column; gap: 6px;">
-                            <div style="display: flex; align-items: center; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); border-bottom: 1px solid var(--border); padding: 0 14px 4px 14px;">Viewport Grid</div>
-                            <div style="display: flex; gap: 4px;">
-                                <sutram-btn intent="${this.layoutCapacity === 1 ? 'primary' : 'neutral'}" variant="tinted" class="yv-interactive-row" ?active=${this.layoutCapacity === 1} style="flex: 1; justify-content: center; --btn-padding: 8px; margin: 0; font-family: var(--font-mono, monospace); font-size: 0.8rem;" @click=${() => this._setLayoutCapacity(1)} .label=${html`<div style="display: flex; flex-direction: column; align-items: center; gap: 6px;"><yv-icon name="smartphone" style="width: 16px; height: 16px; color: ${this.layoutCapacity === 1 ? 'var(--intent-primary)' : 'var(--text-muted)'};"></yv-icon>1-Col</div>`}></sutram-btn>
-                                <sutram-btn intent="${this.layoutCapacity === 2 ? 'primary' : 'neutral'}" variant="tinted" class="yv-interactive-row" ?active=${this.layoutCapacity === 2} style="flex: 1; justify-content: center; --btn-padding: 8px; margin: 0; font-family: var(--font-mono, monospace); font-size: 0.8rem;" @click=${() => this._setLayoutCapacity(2)} .label=${html`<div style="display: flex; flex-direction: column; align-items: center; gap: 6px;"><yv-icon name="tablet" style="width: 16px; height: 16px; color: ${this.layoutCapacity === 2 ? 'var(--intent-primary)' : 'var(--text-muted)'};"></yv-icon>2-Col</div>`}></sutram-btn>
-                                <sutram-btn intent="${this.layoutCapacity === 3 ? 'primary' : 'neutral'}" variant="tinted" class="yv-interactive-row" ?active=${this.layoutCapacity === 3} style="flex: 1; justify-content: center; --btn-padding: 8px; margin: 0; font-family: var(--font-mono, monospace); font-size: 0.8rem;" @click=${() => this._setLayoutCapacity(3)} .label=${html`<div style="display: flex; flex-direction: column; align-items: center; gap: 6px;"><yv-icon name="monitor" style="width: 16px; height: 16px; color: ${this.layoutCapacity === 3 ? 'var(--intent-primary)' : 'var(--text-muted)'};"></yv-icon>3-Col</div>`}></sutram-btn>
-                            </div>
-                        </div>
-                    </div>
-                ` : ''}
-            </div>
+                    <sutram-stack direction="col" gap="xs">
+                        <sutram-label text="VIEWPORT GRID"></sutram-label>
+                        <sutram-stack direction="row" gap="xs">
+                            <sutram-btn intent="${this.layoutCapacity === 1 ? 'primary' : 'neutral'}" variant="tinted" ?active=${this.layoutCapacity === 1} ?grow=${true} @click=${() => this._setLayoutCapacity(1)} .label=${html`<sutram-stack direction="col" align="center" gap="xs"><sutram-icon name="smartphone" size="md" intent="${this.layoutCapacity === 1 ? 'primary' : 'muted'}"></sutram-icon><span>1-Col</span></sutram-stack>`}></sutram-btn>
+                            <sutram-btn intent="${this.layoutCapacity === 2 ? 'primary' : 'neutral'}" variant="tinted" ?active=${this.layoutCapacity === 2} ?grow=${true} @click=${() => this._setLayoutCapacity(2)} .label=${html`<sutram-stack direction="col" align="center" gap="xs"><sutram-icon name="tablet" size="md" intent="${this.layoutCapacity === 2 ? 'primary' : 'muted'}"></sutram-icon><span>2-Col</span></sutram-stack>`}></sutram-btn>
+                            <sutram-btn intent="${this.layoutCapacity === 3 ? 'primary' : 'neutral'}" variant="tinted" ?active=${this.layoutCapacity === 3} ?grow=${true} @click=${() => this._setLayoutCapacity(3)} .label=${html`<sutram-stack direction="col" align="center" gap="xs"><sutram-icon name="monitor" size="md" intent="${this.layoutCapacity === 3 ? 'primary' : 'muted'}"></sutram-icon><span>3-Col</span></sutram-stack>`}></sutram-btn>
+                        </sutram-stack>
+                    </sutram-stack>
+                </sutram-stack>
+            </sutram-dropdown>
 
             ${this.modalOpen ? html`
             <sutram-modal 
@@ -1591,41 +1518,40 @@ export class InSetuSystemSettings extends InSetuElement {
                 ?flush=${true}
                 titleText="OS Settings Hub" 
                 @sutram-modal-closed=${(e) => { if (e.target !== e.currentTarget) return; this.modalOpen = false; this._activeView = null; }}>
-                <div slot="body" style="display: flex; flex-direction: column;">
+                <sutram-stack slot="body" direction="col" gap="none">
                     ${this._activeView ? html`
-                        <div class="hub-breadcrumb-bar">
-                            <sutram-btn
-                                intent="neutral"
-                                size="sm"
-                                icon="corner-left-up"
-                                label=${(this._activeView === 'sys:topology' && this._topologyEditingRepo)
-                                    ? 'Workspace Topology'
-                                    : (activeCustomAction?.extName ? `Back to ${activeCustomAction.extName.charAt(0).toUpperCase() + activeCustomAction.extName.slice(1)}` : 'All Settings')}
-                                style="margin: 0;"
-                                @click=${() => {
-                                    if (this._activeView === 'sys:topology' && this._topologyEditingRepo) {
-                                        const topEl = this.shadowRoot.querySelector('#hub-topology-editor');
-                                        if (topEl) topEl._cancelRepoEditor();
-                                    } else if (activeCustomAction?.extName) {
-                                        const parentExt = activeCustomAction.extName;
-                                        this._activeCustomAction = null;
-                                        this._drillIntoExtension(parentExt);
-                                    } else {
-                                        this._showHostBrowser = false;
-                                        this._activeCustomAction = null;
-                                        this._activeView = null;
-                                    }
-                                }}>
-                            </sutram-btn>
-                            <span style="font-weight: bold; font-size: 0.95rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                                ${drillHeaderTitle}
-                            </span>
-                        </div>
-                        <div style="padding: 20px; display: flex; flex-direction: column; gap: 15px;">
+                        <sutram-surface variant="panel" border="bottom" padding="sm">
+                            <sutram-stack direction="row" justify="between" align="center" gap="sm">
+                                <sutram-btn
+                                    intent="neutral"
+                                    ?compact=${true}
+                                    icon="corner-left-up"
+                                    label=${(this._activeView === 'sys:topology' && this._topologyEditingRepo)
+                                        ? 'Workspace Topology'
+                                        : (activeCustomAction?.extName ? `Back to ${activeCustomAction.extName.charAt(0).toUpperCase() + activeCustomAction.extName.slice(1)}` : 'All Settings')}
+                                    @click=${() => {
+                                        if (this._activeView === 'sys:topology' && this._topologyEditingRepo) {
+                                            const topEl = this.shadowRoot.querySelector('#hub-topology-editor');
+                                            if (topEl) topEl._cancelRepoEditor();
+                                        } else if (activeCustomAction?.extName) {
+                                            const parentExt = activeCustomAction.extName;
+                                            this._activeCustomAction = null;
+                                            this._drillIntoExtension(parentExt);
+                                        } else {
+                                            this._showHostBrowser = false;
+                                            this._activeCustomAction = null;
+                                            this._activeView = null;
+                                        }
+                                    }}>
+                                </sutram-btn>
+                                <sutram-label intent="neutral" ?truncate=${true} .text=${drillHeaderTitle}></sutram-label>
+                            </sutram-stack>
+                        </sutram-surface>
+                        <sutram-surface variant="ghost" padding="lg" gap="md">
                             ${this._renderActiveDrillDownBody(activeExtModule, activeCustomAction, allRepos)}
-                        </div>
+                        </sutram-surface>
                     ` : html`
-                        <div style="padding: 12px 20px; background: var(--input-bg); border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; position: sticky; top: 0; z-index: 20;">
+                        <sutram-surface variant="panel" border="bottom" padding="md" gap="sm">
                             <sutram-search-bar
                                 placeholder="Search settings (e.g. port, api key, watchdog, color)..."
                                 .value=${this._searchQuery}
@@ -1639,38 +1565,35 @@ export class InSetuSystemSettings extends InSetuElement {
                                 }}>
                             </sutram-search-bar>
                             ${!q ? html`
-                                <sutram-scrub-track style="--scrub-gap: 6px;">
-                                    <div style="display: flex; gap: 6px; align-items: center;">
+                                <sutram-scrub-track>
+                                    <sutram-stack direction="row" align="center" gap="xs">
                                         <sutram-pill pillId="ALL" labelText="All" ?active=${this._categoryFilter === 'ALL'} @sutram-pill-toggled=${() => this._categoryFilter = 'ALL'}></sutram-pill>
                                         <sutram-pill pillId="SYSTEM" labelText="System & Workspace" ?active=${this._categoryFilter === 'SYSTEM'} @sutram-pill-toggled=${() => this._categoryFilter = 'SYSTEM'}></sutram-pill>
                                         <sutram-pill pillId="CORE" labelText="Core Engines" ?active=${this._categoryFilter === 'CORE'} @sutram-pill-toggled=${() => this._categoryFilter = 'CORE'}></sutram-pill>
                                         <sutram-pill pillId="EXT" labelText="Extensions" ?active=${this._categoryFilter === 'EXT'} @sutram-pill-toggled=${() => this._categoryFilter = 'EXT'}></sutram-pill>
-                                    </div>
+                                    </sutram-stack>
                                 </sutram-scrub-track>
                             ` : ''}
-                        </div>
+                        </sutram-surface>
 
-                        <div style="padding: 16px 20px 24px 20px; display: flex; flex-direction: column; gap: 8px;">
+                        <sutram-surface variant="ghost" padding="lg" gap="md">
                             ${q ? html`
                                 ${allModules.filter(m => {
                                     const matchesTitle = [m.title, m.id, m.description].filter(Boolean).join(' ').toLowerCase().includes(q);
                                     const matchesField = (m.schema || []).some(f => f && f.type !== 'hidden' && [f.label, f.title, f.id, f.description].filter(Boolean).join(' ').toLowerCase().includes(q));
                                     return matchesTitle || matchesField;
-                                }).map(m => {
-                                    const moduleMatchesDirectly = [m.title, m.id].filter(Boolean).join(' ').toLowerCase().includes(q);
-                                    return html`
-                                        <div style="margin-bottom: 16px;">
-                                            <div class="hub-section-title" style="display: flex; justify-content: space-between; align-items: center;">
-                                                <span>${m.title}</span>
-                                                <sutram-btn size="sm" intent="neutral" label="Open Module" icon="arrow-right" @click=${() => { this._searchQuery = ''; this._drillIntoExtension(m.id); }}></sutram-btn>
-                                            </div>
-                                            ${this._renderGenericExtensionDrillDown(m, allRepos)}
-                                        </div>
-                                    `;
-                                })}
+                                }).map(m => html`
+                                    <sutram-stack direction="col" gap="sm">
+                                        <sutram-stack direction="row" justify="between" align="center">
+                                            <h4>${m.title}</h4>
+                                            <sutram-btn ?compact=${true} intent="neutral" label="Open Module" icon="arrow-right" @click=${() => { this._searchQuery = ''; this._drillIntoExtension(m.id); }}></sutram-btn>
+                                        </sutram-stack>
+                                        ${this._renderGenericExtensionDrillDown(m, allRepos)}
+                                    </sutram-stack>
+                                `)}
                             ` : html`
                                 ${(this._categoryFilter === 'ALL' || this._categoryFilter === 'SYSTEM') ? html`
-                                    <div class="hub-section-title">System & Workspace</div>
+                                    <sutram-label text="SYSTEM & WORKSPACE"></sutram-label>
                                     <sutram-card-group>
                                         ${coreList.filter(m => m.id === 'system').map(sysMod => html`
                                             <sutram-card
@@ -1729,7 +1652,7 @@ export class InSetuSystemSettings extends InSetuElement {
                                 ` : ''}
 
                                 ${(this._categoryFilter === 'ALL' || this._categoryFilter === 'CORE') ? html`
-                                    <div class="hub-section-title">Core Engines</div>
+                                    <sutram-label text="CORE ENGINES"></sutram-label>
                                     <sutram-card-group>
                                         ${coreList.filter(m => m.id !== 'system').map(mod => html`
                                             <sutram-card
@@ -1763,11 +1686,9 @@ export class InSetuSystemSettings extends InSetuElement {
                                 ` : ''}
 
                                 ${(this._categoryFilter === 'ALL' || this._categoryFilter === 'EXT') ? html`
-                                    <div class="hub-section-title">Active Extensions</div>
+                                    <sutram-label text="ACTIVE EXTENSIONS"></sutram-label>
                                     ${extList.length === 0 ? html`
-                                        <span style="color: var(--text-muted); font-style: italic; font-size: 0.85rem; padding: 6px 0;">
-                                            No configurable domain extensions active in this workspace.
-                                        </span>
+                                        <sutram-empty-state text="No configurable domain extensions active in this workspace."></sutram-empty-state>
                                     ` : html`
                                         <sutram-card-group>
                                             ${extList.map(mod => html`
@@ -1799,9 +1720,9 @@ export class InSetuSystemSettings extends InSetuElement {
                                     `}
                                 ` : ''}
                             `}
-                        </div>
+                        </sutram-surface>
                     `}
-                </div>
+                </sutram-stack>
                 ${this._activeView ? html`
                     <sutram-btn
                         slot="footer"
@@ -1891,8 +1812,7 @@ export class InSetuSystemSettings extends InSetuElement {
                         slot="footer"
                         variant="footer"
                         .entityType=${'system_control'} 
-                        .entityData=${{}}
-                        style="width: 100%; display: flex; gap: 10px;">
+                        .entityData=${{}}>
                     </sutram-entity-actions>
                 `}
             </sutram-modal>
@@ -1903,52 +1823,55 @@ export class InSetuSystemSettings extends InSetuElement {
                 titleText="Documentation Hub"  
                 ?fullscreen=${true} 
                 @sutram-modal-closed=${() => this.docsModalOpen = false}>${!this._docsStatus ? html`
-                    <div style="padding: 20px;"><sutram-spinner text="Scanning for documentation..."></sutram-spinner></div>
+                    <sutram-surface variant="ghost" padding="lg"><sutram-spinner text="Scanning for documentation..."></sutram-spinner></sutram-surface>
                 ` : html`
-                    <div style="display: contents;">
-                        <div>
-                            <h4 style="margin: 0 0 10px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 5px;">Primary OS</h4>
-                            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">
+                    <sutram-stack slot="body" direction="col" gap="lg">
+                        <sutram-stack direction="col" gap="sm">
+                            <h4>Primary OS</h4>
+                            <sutram-stack direction="grid" gap="sm">
                                 ${this._docsStatus.filter(d => d.type === 'root').map(doc => html`
-                                    <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
-                                        <span style="font-weight: bold; color: var(--text);">${doc.title}</span>${doc.exists ? html`
-                                            <sutram-btn intent="success" label="Read" @click=${() => this._readDoc(doc)}></sutram-btn>
-                                        ` : html`
-                                            <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
-                                        `}
-                                    </div>
+                                    <sutram-surface variant="panel" padding="sm">
+                                        <sutram-stack direction="row" justify="between" align="center" gap="sm">
+                                            <strong>${doc.title}</strong>
+                                            ${doc.exists
+                                                ? html`<sutram-btn ?compact=${true} intent="success" label="Read" @click=${() => this._readDoc(doc)}></sutram-btn>`
+                                                : html`<sutram-label text="No README"></sutram-label>`}
+                                        </sutram-stack>
+                                    </sutram-surface>
                                 `)}
-                            </div>
-                        </div>
-                        <div>
-                            <h4 style="margin: 0 0 10px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 5px;">Core Modules</h4>
-                            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">
+                            </sutram-stack>
+                        </sutram-stack>
+                        <sutram-stack direction="col" gap="sm">
+                            <h4>Core Modules</h4>
+                            <sutram-stack direction="grid" gap="sm">
                                 ${this._docsStatus.filter(d => d.type === 'core').map(doc => html`
-                                    <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
-                                        <span style="font-weight: bold; color: var(--text);">${doc.title}</span>${doc.exists ? html`
-                                            <sutram-btn intent="primary" label="Read" @click=${() => this._readDoc(doc)}></sutram-btn>
-                                        ` : html`
-                                            <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
-                                        `}
-                                    </div>
+                                    <sutram-surface variant="panel" padding="sm">
+                                        <sutram-stack direction="row" justify="between" align="center" gap="sm">
+                                            <strong>${doc.title}</strong>
+                                            ${doc.exists
+                                                ? html`<sutram-btn ?compact=${true} intent="primary" label="Read" @click=${() => this._readDoc(doc)}></sutram-btn>`
+                                                : html`<sutram-label text="No README"></sutram-label>`}
+                                        </sutram-stack>
+                                    </sutram-surface>
                                 `)}
-                            </div>
-                        </div>
-                        <div>
-                            <h4 style="margin: 0 0 10px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 5px;">Extensions</h4>
-                            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">
+                            </sutram-stack>
+                        </sutram-stack>
+                        <sutram-stack direction="col" gap="sm">
+                            <h4>Extensions</h4>
+                            <sutram-stack direction="grid" gap="sm">
                                 ${this._docsStatus.filter(d => d.type === 'ext').map(doc => html`
-                                    <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
-                                        <span style="font-weight: bold; color: var(--text);">${doc.title}</span>${doc.exists ? html`
-                                            <sutram-btn intent="highlight" label="Read" @click=${() => this._readDoc(doc)}></sutram-btn>
-                                        ` : html`
-                                            <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
-                                        `}
-                                    </div>
+                                    <sutram-surface variant="panel" padding="sm">
+                                        <sutram-stack direction="row" justify="between" align="center" gap="sm">
+                                            <strong>${doc.title}</strong>
+                                            ${doc.exists
+                                                ? html`<sutram-btn ?compact=${true} intent="highlight" label="Read" @click=${() => this._readDoc(doc)}></sutram-btn>`
+                                                : html`<sutram-label text="No README"></sutram-label>`}
+                                        </sutram-stack>
+                                    </sutram-surface>
                                 `)}
-                            </div>
-                        </div>
-                    </div>
+                            </sutram-stack>
+                        </sutram-stack>
+                    </sutram-stack>
                 `}
             </sutram-modal>
             ` : ''}
@@ -1964,7 +1887,7 @@ window.addEventListener('sutram-settings-action', async (e) => {
     const cleanEndpoint = rawEndpoint.startsWith('/') ? rawEndpoint.substring(1) : rawEndpoint;
 
     try {
-        const res = await window.inSetu.api.workspace.post(cleanEndpoint, {});
+        const res = await window.inSetu.api.post(cleanEndpoint, {});
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             throw new Error(err.error || "Action request failed.");
@@ -2035,7 +1958,7 @@ window.addEventListener('sutram-settings-save', async (e) => {
         }
 
         const qs = repo ? ('?repo=' + encodeURIComponent(repo)) : '';
-        const res = await window.inSetu.api.workspace.post(extName + '/settings' + qs, payload);
+        const res = await window.inSetu.api.post(extName + '/settings' + qs, payload);
         if (res.ok) {
             const resData = await res.json().catch(() => ({}));
             if (btn && origText) btn.innerText = origText;

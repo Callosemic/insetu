@@ -209,11 +209,11 @@ window.inSetu.api = {
 
         return res;
     },
-    workspace: async function(path, options = {}) {
+    _dispatchScoped: async function(path, options = {}) {
         const activeWs = window.inSetu.utils.getActiveWorkspace();
         const cleanPath = path.startsWith('/') ? path.substring(1) : path;
         const extName = cleanPath.split('/')[0];
-        const isCore = window.inSetu?.CORE_MODULES ? window.inSetu.CORE_MODULES.has(extName) : ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline', 'llm', 'agent', 'prompts', 'mcp'].includes(extName);
+        const isCore = Boolean(window.inSetu?.isCore ? window.inSetu.isCore(extName) : window.inSetu?.CORE_MODULES?.has(extName));
         if (extName && !isCore && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extName)) {
             return new Response(JSON.stringify({ error: `Extension '${extName}' is disabled in workspace '${activeWs}'.` }), { status: 403, statusText: "Forbidden" });
         }
@@ -221,19 +221,18 @@ window.inSetu.api = {
         const fullUrl = `/api/${activeWs}/${cleanPath}`;
         return this.request(fullUrl, options, activeWs);
     },
-    system: async function(path, options = {}) {
-        const cleanPath = path.startsWith('/') ? path.substring(1) : path;
-        return this.workspace(`system/${cleanPath}`, options);
-    },
 
     get: function(path, options = {}) {
-        return this.workspace(path, { ...options, method: 'GET' });
+        return this._dispatchScoped(path, { ...options, method: 'GET' });
     },
     post: function(path, payload, options = {}) {
         const isFD = payload instanceof FormData;
         const headers = isFD ? { ...(options.headers || {}) } : { 'Content-Type': 'application/json', ...(options.headers || {}) };
         const body = isFD ? payload : JSON.stringify(payload);
-        return this.workspace(path, { ...options, method: 'POST', headers, body });
+        return this._dispatchScoped(path, { ...options, method: 'POST', headers, body });
+    },
+    delete: function(path, options = {}) {
+        return this._dispatchScoped(path, { ...options, method: 'DELETE' });
     },
     getJson: async function(path, options = {}) {
         const res = await this.get(path, options);
@@ -253,6 +252,38 @@ window.inSetu.api = {
     pollJob: function(jobId, options = {}) {
         return window.inSetu.utils.pollJob(jobId, options);
     },
+    bindJobAction: function(path, payloadGenerator, pollOptions = {}) {
+        return async (e) => {
+            const payload = typeof payloadGenerator === 'function' ? await payloadGenerator(e) : (payloadGenerator || {});
+            if (pollOptions.closeWindowId && window.Sutram?.stores?.Layout) {
+                window.Sutram.stores.Layout.getState().closeWindow(pollOptions.closeWindowId);
+            }
+            const cleanRoute = String(path || '').replace(/^\/+/, '');
+            const res = await window.inSetu.api.post(cleanRoute, payload);
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || `HTTP ${res.status}`);
+            }
+            const data = await res.json();
+            if (!data.job_id) {
+                if (pollOptions.onComplete) pollOptions.onComplete(data);
+                return data;
+            }
+            return new Promise((resolve, reject) => {
+                window.inSetu.api.pollJob(data.job_id, {
+                    ...pollOptions,
+                    onComplete: (statusData) => {
+                        if (pollOptions.onComplete) pollOptions.onComplete(statusData);
+                        resolve(statusData);
+                    },
+                    onError: (err) => {
+                        if (pollOptions.onError) pollOptions.onError(err);
+                        reject(err);
+                    }
+                });
+            });
+        };
+    },
     keepalivePost: function(path, payload, workspaceId = null) {
         const ws = workspaceId || (window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default');
         const cleanPath = path.startsWith('/') ? path.substring(1) : path;
@@ -266,23 +297,7 @@ window.inSetu.api = {
         }).catch(() => {});
     }
 };
-window.inSetu.api.delete = function(path, options = {}) {
-    return this.workspace(path, { ...options, method: 'DELETE' });
-};
 
-window.inSetu.api.workspace.get = window.inSetu.api.get.bind(window.inSetu.api);
-window.inSetu.api.workspace.post = window.inSetu.api.post.bind(window.inSetu.api);
-window.inSetu.api.workspace.delete = window.inSetu.api.delete.bind(window.inSetu.api);
-
-window.inSetu.api.system.get = function(path, options = {}) {
-    return window.inSetu.api.workspace.get(`system/${path.replace(/^\/+/, '')}`, options);
-};
-window.inSetu.api.system.post = function(path, payload, options = {}) {
-    return window.inSetu.api.workspace.post(`system/${path.replace(/^\/+/, '')}`, payload, options);
-};
-window.inSetu.api.system.delete = function(path, options = {}) {
-    return window.inSetu.api.workspace.delete(`system/${path.replace(/^\/+/, '')}`, options);
-};
 // Phase E: Network Hysteresis, Outbox Reconciliation & SSE Pipeline
 class SSEPipeline {
     constructor() {

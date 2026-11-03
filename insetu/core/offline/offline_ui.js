@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { InSetuElement, createExtensionStore, sharedStyles, SutramDB } from '/static/extensions/system/insetu_sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
@@ -84,9 +84,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
         storageQuota: { type: Number },
         storagePersisted: { type: Boolean }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; overflow-y: auto; padding: 20px; box-sizing: border-box; background: var(--bg); container-type: inline-size; }
-    `];
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -197,121 +195,116 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
         const usagePct = this.storageQuota > 0 ? Math.min(100, (this.storageUsage / this.storageQuota) * 100).toFixed(1) : 0;
 
         return html`
-            <div style="max-width: 1200px; margin: 0 auto; width: 100%;">
-                <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <h3 style="margin: 0; color: var(--text);">Offline Ledger (IndexedDB)</h3>
-                        <span style="font-size: 0.85rem; color: var(--text-muted);">Inspect the VFS blob cache and pending mutation outbox.</span>
-                    </div>
-                    <sutram-btn intent="primary" label="Refresh" style="--btn-padding: 6px 12px; margin: 0;" @click=${() => this.onForceRefresh()}></sutram-btn>
-                </div>
+            <sutram-view
+                size="wide"
+                titleText="Offline Ledger (IndexedDB)"
+                descriptionText="Inspect the VFS blob cache and pending mutation outbox.">
+                <sutram-btn slot="header-actions" ?compact=${true} intent="primary" icon="refresh-cw" label="Refresh" @click=${() => this.onForceRefresh()}></sutram-btn>
+                <sutram-stack direction="col" gap="lg">
 
-                <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 15px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; justify-content: space-between;">
-                    <div style="display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 250px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <span style="font-weight: bold; font-size: 0.95rem; color: var(--text);">Browser Storage Quota</span>
-                            <span style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-muted);">${usageMB} MB / ${quotaMB} MB</span>
-                        </div>
-                        <div style="width: 100%; height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; border: 1px solid var(--border);">
-                            <div style="width: ${usagePct}%; height: 100%; background: ${usagePct > 90 ? 'var(--intent-danger)' : (usagePct > 75 ? 'var(--intent-warning)' : 'var(--intent-success)')}; transition: width 0.3s ease;"></div>
-                        </div>
-                    </div>
-                    <div style="display: flex; align-items: center; gap: 10px;">
-                        <div style="display: flex; align-items: center; gap: 6px; font-size: 0.85rem; font-weight: bold; padding: 6px 12px; border-radius: 4px; background: ${this.storagePersisted ? 'var(--intent-success)' : 'var(--bg)'}; color: ${this.storagePersisted ? 'white' : 'var(--text-muted)'}; border: 1px solid ${this.storagePersisted ? 'var(--intent-success)' : 'var(--border)'};">
-                            <yv-icon name="${this.storagePersisted ? 'lock' : 'alert-triangle'}" style="width: 14px; height: 14px;"></yv-icon>
-                            <span>${this.storagePersisted ? 'Persisted (Safe from Eviction)' : 'Best Effort (At risk of eviction)'}</span>
-                        </div>
-                        ${!this.storagePersisted ? html`
-                            <sutram-btn intent="highlight" label="Request Rights" style="margin: 0; font-weight: bold;" @click=${this._requestPersistentStorage}></sutram-btn>
+                    <sutram-surface variant="panel" padding="md">
+                        <sutram-stack direction="row" justify="between" align="center" gap="md" ?wrap=${true}>
+                            <sutram-stack direction="col" gap="xs" ?flex=${true}>
+                                <sutram-stack direction="row" justify="between" align="center">
+                                    <strong>Browser Storage Quota</strong>
+                                    <sutram-tag text="${usageMB} MB / ${quotaMB} MB"></sutram-tag>
+                                </sutram-stack>
+                                <div style="width: 100%; height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; border: 1px solid var(--border);">
+                                    <div style="width: ${usagePct}%; height: 100%; background: ${usagePct > 90 ? 'var(--intent-danger)' : (usagePct > 75 ? 'var(--intent-warning)' : 'var(--intent-success)')}; transition: width 0.3s ease;"></div>
+                                </div>
+                            </sutram-stack>
+                            <sutram-stack direction="row" align="center" gap="sm">
+                                <sutram-tag
+                                    intent=${this.storagePersisted ? 'success' : 'warning'}
+                                    text=${this.storagePersisted ? 'Persisted (Safe from Eviction)' : 'Best Effort (At risk of eviction)'}>
+                                </sutram-tag>
+                                ${!this.storagePersisted ? html`
+                                    <sutram-btn intent="highlight" ?compact=${true} label="Request Rights" @click=${this._requestPersistentStorage}></sutram-btn>
+                                ` : ''}
+                            </sutram-stack>
+                        </sutram-stack>
+                    </sutram-surface>
+
+                    ${this.loading ? html`<sutram-spinner text="Reading IndexedDB..."></sutram-spinner>` : ''}
+                    <sutram-card-group>
+                        <sutram-card
+                            titleText="Outbox Mutations (${this.outboxItems.length})"
+                            descriptionText="Pending API transactions waiting for network reconnection."
+                            icon="cloud-lightning"
+                            intent="warning"
+                            ?disableSelection=${true}>
+                            <sutram-stack direction="col" gap="sm">
+                                ${this.outboxItems.length === 0 ? html`
+                                    <sutram-stack direction="row" align="center" gap="xs">
+                                        <sutram-icon name="check-circle-2" size="sm" intent="success"></sutram-icon>
+                                        <sutram-label text="Outbox is empty. All mutations are synced."></sutram-label>
+                                    </sutram-stack>
+                                ` : this.outboxItems.map(item => html`
+                                    <sutram-surface variant="inset" padding="sm" gap="xs">
+                                        <sutram-stack direction="row" justify="between" align="center">
+                                            <strong>${item.method} ${item.path.split('/api/')[1] || item.path}</strong>
+                                            <sutram-label .text=${this.utils.formatDate(item.timestamp)}></sutram-label>
+                                        </sutram-stack>
+                                        <pre>${item.bodyString ? (item.bodyString.startsWith('{') || item.bodyString.startsWith('[') ? JSON.stringify(JSON.parse(item.bodyString), null, 2) : item.bodyString) : 'Empty Payload'}</pre>
+                                    </sutram-surface>
+                                `)}
+                            </sutram-stack>
+                        </sutram-card>
+                        ${this.deadLetters.length > 0 ? html`
+                        <sutram-card
+                            titleText="Dead Letter Queue (${this.deadLetters.length})"
+                            descriptionText="Failed offline transactions (Poison Pills)."
+                            icon="skull"
+                            intent="danger"
+                            ?disableSelection=${true}>
+                            <sutram-stack direction="col" gap="sm">
+                                ${this.deadLetters.map(item => html`
+                                    <sutram-surface variant="tinted" intent="danger" padding="sm" gap="xs">
+                                        <sutram-stack direction="row" justify="between" align="center">
+                                            <strong>${item.method} ${item.path.split('/api/')[1] || item.path} (HTTP ${item.error_status})</strong>
+                                            <sutram-label .text=${this.utils.formatDate(item.failed_at)}></sutram-label>
+                                        </sutram-stack>
+                                        <pre>${item.bodyString ? (item.bodyString.startsWith('{') || item.bodyString.startsWith('[') ? JSON.stringify(JSON.parse(item.bodyString), null, 2) : item.bodyString) : 'Empty Payload'}</pre>
+                                        <sutram-stack direction="row" gap="sm">
+                                            <sutram-btn intent="warning" ?compact=${true} label="Retry" @click=${() => this._retryDeadLetter(item)}></sutram-btn>
+                                            <sutram-btn intent="danger" ?compact=${true} label="Discard" @click=${() => this._discardDeadLetter(item)}></sutram-btn>
+                                        </sutram-stack>
+                                    </sutram-surface>
+                                `)}
+                            </sutram-stack>
+                        </sutram-card>
                         ` : ''}
-                    </div>
-                </div>
-
-                ${this.loading ? html`<sutram-spinner text="Reading IndexedDB..."></sutram-spinner>` : ''}
-                <div style="display: flex; flex-direction: column; opacity: ${this.loading ? '0.5' : '1'}; transition: opacity 0.2s ease;">
-                <sutram-card-group>
-                    <sutram-card
-                        titleText="Outbox Mutations (${this.outboxItems.length})"
-                        descriptionText="Pending API transactions waiting for network reconnection."
-                        icon="cloud-lightning"
-                        intent="warning"
-                        ?disableSelection=${true}
-                        style="margin-bottom: 20px;">
-                        <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-                            ${this.outboxItems.length === 0 ? html`
-                                <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem; display: flex; align-items: center; gap: 6px;">
-                                    <yv-icon name="check-circle-2" style="width: 14px; height: 14px;"></yv-icon> Outbox is empty. All mutations are synced.
+                        <sutram-card
+                            titleText="VFS Blob Cache (${this.cachedBlobs.length})"
+                            descriptionText="Stale-While-Revalidate GET requests mirrored for offline viewing."
+                            icon="hard-drive"
+                            intent="primary"
+                            ?disableSelection=${true}>
+                            <sutram-stack direction="col" gap="sm">
+                                <sutram-search-bar 
+                                    placeholder="Filter cache keys..." 
+                                    .value=${this.searchQuery} 
+                                    @search-changed=${e => this.searchQuery = e.detail.value}>
+                                </sutram-search-bar>
+                                <div style="height: 400px; display: flex; flex-direction: column;">
+                                    ${filteredBlobs.length === 0 ? html`
+                                        <sutram-empty-state text="No cached blobs found."></sutram-empty-state>
+                                    ` : html`
+                                        <sutram-virtual-list
+                                            .items=${filteredBlobs}
+                                            .renderItem=${key => html`
+                                                <sutram-surface variant="inset" padding="xs">
+                                                    <code>${key}</code>
+                                                </sutram-surface>
+                                            `}>
+                                        </sutram-virtual-list>
+                                    `}
                                 </div>
-                            ` : this.outboxItems.map(item => html`
-                                <div style="background: var(--bg); border-radius: 4px; border: 1px solid var(--border); padding: 10px;">
-                                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
-                                        <span style="font-weight: bold; color: var(--text);">${item.method} ${item.path.split('/api/')[1] || item.path}</span>
-                                        <span style="font-size: 0.75rem; color: var(--text-muted);">${this.utils.formatDate(item.timestamp)}</span>
-                                    </div>
-                                    <pre style="margin: 0; font-size: 0.75rem; padding: 6px; max-height: 100px; overflow-y: auto;">${item.bodyString ? (item.bodyString.startsWith('{') || item.bodyString.startsWith('[') ? JSON.stringify(JSON.parse(item.bodyString), null, 2) : item.bodyString) : 'Empty Payload'}</pre>
-                                </div>
-                            `)}
-                        </div>
-                    </sutram-card>
-                    ${this.deadLetters.length > 0 ? html`
-                    <sutram-card
-                        titleText="Dead Letter Queue (${this.deadLetters.length})"
-                        descriptionText="Failed offline transactions (Poison Pills)."
-                        icon="skull"
-                        intent="danger"
-                        ?disableSelection=${true}
-                        style="margin-bottom: 20px;">
-                        <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-                            ${this.deadLetters.map(item => html`
-                                <div style="background: var(--bg); border-radius: 4px; border: 1px solid var(--intent-danger); padding: 10px;">
-                                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
-                                        <span style="font-weight: bold; color: var(--intent-danger);">${item.method} ${item.path.split('/api/')[1] || item.path} (HTTP ${item.error_status})</span>
-                                        <span style="font-size: 0.75rem; color: var(--text-muted);">${this.utils.formatDate(item.failed_at)}</span>
-                                    </div>
-                                    <pre style="margin: 0; font-size: 0.75rem; padding: 6px; max-height: 100px; overflow-y: auto;">${item.bodyString ? (item.bodyString.startsWith('{') || item.bodyString.startsWith('[') ? JSON.stringify(JSON.parse(item.bodyString), null, 2) : item.bodyString) : 'Empty Payload'}</pre>
-                                    <div style="display: flex; gap: 8px; margin-top: 8px;">
-                                        <sutram-btn intent="warning" label="Retry" style="--btn-padding: 6px 12px; margin: 0; color: var(--bg-deep);" @click=${() => this._retryDeadLetter(item)}></sutram-btn>
-                                        <sutram-btn intent="danger" label="Discard" style="--btn-padding: 6px 12px; margin: 0;" @click=${() => this._discardDeadLetter(item)}></sutram-btn>
-                                    </div>
-                                </div>
-                            `)}
-                        </div>
-                    </sutram-card>
-                    ` : ''}
-                    <sutram-card
-                        titleText="VFS Blob Cache (${this.cachedBlobs.length})"
-                        descriptionText="Stale-While-Revalidate GET requests mirrored for offline viewing."
-                        icon="hard-drive"
-                        intent="primary"
-                        ?disableSelection=${true}>
-                        <sutram-search-bar 
-                            placeholder="Filter cache keys..." 
-                            .value=${this.searchQuery} 
-                            @search-changed=${e => this.searchQuery = e.detail.value}
-                            style="margin-top: 10px; margin-bottom: 10px;">
-                        </sutram-search-bar>
-                        <div style="display: flex; flex-direction: column; gap: 4px; height: 400px;">
-                            ${filteredBlobs.length === 0 ? html`
-                                <div style="color: var(--text-muted); font-style: italic; font-size: 0.9rem;">
-                                    No cached blobs found.
-                                </div>
-                            ` : html`
-                                <sutram-virtual-list
-                                    .items=${filteredBlobs}
-                                    .renderItem=${key => html`
-                                        <div style="width: 100%; box-sizing: border-box; padding-bottom: 4px;">
-                                            <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); padding: 6px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; word-break: break-all;">
-                                                ${key}
-                                            </div>
-                                        </div>
-                                    `}>
-                                </sutram-virtual-list>
-                            `}
-                        </div>
-                    </sutram-card>
-                </sutram-card-group>
-                </div>
-            </div>
+                            </sutram-stack>
+                        </sutram-card>
+                    </sutram-card-group>
+                </sutram-stack>
+            </sutram-view>
         `;
     }
 }
@@ -323,9 +316,7 @@ export class InSetuCoreOfflineLog extends InSetuElement {
         logs: { type: Array },
         searchQuery: { type: String }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; overflow-y: auto; padding: 20px; box-sizing: border-box; background: var(--bg); }
-    `];
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -347,11 +338,11 @@ export class InSetuCoreOfflineLog extends InSetuElement {
     onWorkspaceLoad() { this.requestUpdate(); }
     onForceRefresh() { this.setStatus("Refreshed Telemetry Log", 1500); this.requestUpdate(); }
 
-    _getIntentColor(type) {
-        if (type === 'success') return 'var(--intent-success)';
-        if (type === 'warning') return 'var(--intent-warning)';
-        if (type === 'error') return 'var(--intent-danger)';
-        return 'var(--intent-primary)';
+    _getIntentName(type) {
+        if (type === 'success') return 'success';
+        if (type === 'warning') return 'warning';
+        if (type === 'error') return 'danger';
+        return 'primary';
     }
 
     render() {
@@ -360,51 +351,41 @@ export class InSetuCoreOfflineLog extends InSetuElement {
             : this.logs;
 
         return html`
-            <div style="max-width: 1200px; margin: 0 auto; width: 100%;">
-                <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <h3 style="margin: 0; color: var(--text);">Offline Telemetry Log (${this.logs.length}/100)</h3>
-                        <span style="font-size: 0.85rem; color: var(--text-muted);">Real-time inspection of caching, reads, outbox mutations, and sync events.</span>
-                    </div>
-                    <div style="display: flex; gap: 8px;">
-                        <sutram-btn intent="danger" label="Clear Logs" @click=${() => OfflineStore.getState().clearLogs()}></sutram-btn>
-                    </div>
-                </div>
+            <sutram-view
+                size="wide"
+                titleText="Offline Telemetry Log (${this.logs.length}/100)"
+                descriptionText="Real-time inspection of caching, reads, outbox mutations, and sync events.">
+                <sutram-btn slot="header-actions" ?compact=${true} intent="danger" icon="trash-2" label="Clear Logs" @click=${() => OfflineStore.getState().clearLogs()}></sutram-btn>
+                <sutram-stack direction="col" gap="md">
 
-                <sutram-search-bar
-                    placeholder="Filter telemetry logs..."
-                    .value=${this.searchQuery}
-                    @search-changed=${e => this.searchQuery = e.detail.value}
-                    style="margin-bottom: 15px;">
-                </sutram-search-bar>
+                    <sutram-search-bar
+                        placeholder="Filter telemetry logs..."
+                        .value=${this.searchQuery}
+                        @search-changed=${e => this.searchQuery = e.detail.value}>
+                    </sutram-search-bar>
 
-                <div style="display: flex; flex-direction: column; gap: 8px;">
-                    ${filtered.length === 0 ? html`
-                        <div style="color: var(--text-muted); font-style: italic; padding: 20px 0; text-align: center;">
-                            No telemetry entries logged yet. Perform file opens, offline edits, or pre-caching to observe events.
-                        </div>
-                    ` : filtered.map(log => {
-                        const timeStr = new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
-                        const color = this._getIntentColor(log.type);
-                        return html`
-                            <div style="background: var(--input-bg); border: 1px solid var(--border); border-left: 4px solid ${color}; border-radius: 4px; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px;">
-                                <div style="display: flex; justify-content: space-between; align-items: center;">
-                                    <div style="display: flex; align-items: center; gap: 10px;">
-                                        <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted);">${timeStr}</span>
-                                        <span style="font-size: 0.7rem; font-weight: bold; text-transform: uppercase; padding: 2px 6px; border-radius: 3px; background: var(--bg); color: ${color}; border: 1px solid ${color};">
-                                            ${log.type}
-                                        </span>
-                                        <span style="font-weight: bold; font-size: 0.9rem; color: var(--text);">${log.message}</span>
-                                    </div>
-                                </div>
-                                ${log.details ? html`
-                                    <pre style="margin: 0; font-size: 0.75rem; background: var(--bg); padding: 8px; border-radius: 4px; overflow-x: auto; max-height: 150px; color: var(--text-muted); border: 1px solid var(--border);">${typeof log.details === 'string' ? log.details : JSON.stringify(log.details, null, 2)}</pre>
-                                ` : ''}
-                            </div>
-                        `;
-                    })}
-                </div>
-            </div>
+                    <sutram-stack direction="col" gap="sm">
+                        ${filtered.length === 0 ? html`
+                            <sutram-empty-state text="No telemetry entries logged yet. Perform file opens, offline edits, or pre-caching to observe events."></sutram-empty-state>
+                        ` : filtered.map(log => {
+                            const timeStr = new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
+                            const intent = this._getIntentName(log.type);
+                            return html`
+                                <sutram-surface variant="panel" .intent=${intent} border="left" padding="sm" gap="xs">
+                                    <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
+                                        <sutram-label .text=${timeStr}></sutram-label>
+                                        <sutram-tag .text=${log.type.toUpperCase()} .intent=${intent}></sutram-tag>
+                                        <strong>${log.message}</strong>
+                                    </sutram-stack>
+                                    ${log.details ? html`
+                                        <pre>${typeof log.details === 'string' ? log.details : JSON.stringify(log.details, null, 2)}</pre>
+                                    ` : ''}
+                                </sutram-surface>
+                            `;
+                        })}
+                    </sutram-stack>
+                </sutram-stack>
+            </sutram-view>
         `;
     }
 }

@@ -1,4 +1,4 @@
-import { LitElement, html, css } from 'lit';
+import { LitElement, html } from 'lit';
 import {
     InSetuElement,
     createExtensionStore,
@@ -132,7 +132,7 @@ export function isBufferReadOnly(buf) {
 }
 
 export function hasMacroSyntax(text) {
-    return typeof text === 'string' && /\{\{\s*(?:include_prompt\??\s*:|macro_[a-zA-Z0-9_]+|[a-zA-Z0-9_]+\s*\|)/.test(text);
+    return typeof text === 'string' && /\{\{\s*(?:include_prompt\??\s*:|macro_[a-zA-Z0-9_]+|sys\.[a-zA-Z0-9_]+|[a-zA-Z0-9_.]+\s*\|)/.test(text);
 }
 export function canPreviewFileMacros(filepath, content = '') {
     if (hasMacroSyntax(content)) return true;
@@ -372,7 +372,7 @@ Object.defineProperty(window.inSetu.vfs, 'shareTextCache', {
     configurable: true
 });
 
-function injectTextToBuffer(filepath, text, isSupportedEditor, isMarkdown, isFS, forceAllowEdit = false) {
+function injectTextToBuffer(filepath, text, isMarkdown, isFS, forceAllowEdit = false) {
     const TRUNCATE_LIMIT = 200000;
     let content = text;
     let isTruncated = false;
@@ -663,41 +663,12 @@ export function updateManifestState(mutations) {
         } else if (m.operation === 'save') {
             if (isRelocatedSave) return;
 
-            let alreadyInManifest = false;
             Object.entries(newManifest.vfs).forEach(([bKey, obj]) => {
                 if (obj && Array.isArray(obj.files) && obj.files.includes(normPath)) {
-                    alreadyInManifest = true;
                     newManifest.vfs[bKey] = { ...obj, source_ts: nowSec };
                     changed = true;
                 }
             });
-            if (!alreadyInManifest && normPath.startsWith('vfs://')) {
-                const parsed = new window.inSetu.utils.InSetuURI(normPath);
-                const repoDir = parsed.repo || 'global';
-                let added = false;
-                for (const key of Object.keys(newManifest.vfs)) {
-                    if (key.startsWith(repoDir + '::')) {
-                        newManifest.vfs[key] = {
-                            ...newManifest.vfs[key],
-                            source_ts: nowSec,
-                            files: [...(newManifest.vfs[key].files || []), normPath]
-                        };
-                        changed = true;
-                        added = true;
-                        break;
-                    }
-                }
-                if (!added) {
-                    const firstKey = Object.keys(newManifest.vfs)[0] || `${repoDir}::main`;
-                    newManifest.vfs[firstKey] = {
-                        ...newManifest.vfs[firstKey],
-                        source_ts: nowSec,
-                        meta: newManifest.vfs[firstKey]?.meta || { type: "vfs_bucket", repo: repoDir, bucket_id: "main" },
-                        files: [...(newManifest.vfs[firstKey]?.files || []), normPath]
-                    };
-                    changed = true;
-                }
-            }
         }
     });
 
@@ -913,7 +884,7 @@ export async function reconcileBufferWithDisk(filepath) {
     const startBaseHash = curBuf.baseHash || null;
     recSet.add(normPath);
     try {
-        const r = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(normPath)}`, {
+        const r = await window.inSetu.api.get(`fs/fetch?file=${encodeURIComponent(normPath)}`, {
             headers: { 'Cache-Control': 'no-cache' }
         });
         if (!r.ok) return;
@@ -1171,20 +1142,11 @@ async function executeMove() {
 }
 
 export class InSetuMoveFileProjection extends InSetuElement {
+    static get extensionName() { return 'fs'; }
     static properties = {
         moveState: { type: Object }
     };
-    static styles = [sharedStyles, css`
-        :host {
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-            width: 100%;
-            overflow: hidden;
-            background: var(--bg);
-            box-sizing: border-box;
-        }
-    `];
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -1205,27 +1167,27 @@ export class InSetuMoveFileProjection extends InSetuElement {
     render() {
         const m = this.moveState || {};
         return html`
-            <div style="padding: 12px 15px; display: flex; flex-direction: column; gap: 8px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0;">
-                <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 6px; word-break: break-all;">
-                    <yv-icon name="file-code-2" style="width: 14px; height: 14px; color: var(--intent-primary); flex-shrink: 0;"></yv-icon>
-                    <span>Source: <strong style="font-family: var(--font-mono); color: var(--text);">${m.currentFile || ''}</strong></span>
-                </div>
-                <sutram-input
-                    label="Destination Path"
-                    ?flush=${true}
-                    .value=${m.destPath || ''}
-                    placeholder="path/to/destination/file.ext"
-                    style="font-family: var(--font-mono); --bg-input: var(--bg);"
-                    @sutram-input-changed=${e => {
-                        const uri = new window.inSetu.utils.InSetuURI(e.detail.value);
-                        const parts = uri.pathSegments;
-                        parts.pop();
-                        FsStore.getState().setModal('move', { destPath: uri.toString(), initialParts: parts });
-                    }}>
-                </sutram-input>
-            </div>
+            <sutram-view ?flush=${true} ?noScroll=${true}>
+                <sutram-surface slot="header" variant="panel" border="bottom" padding="md" gap="sm">
+                    <sutram-stack direction="row" align="center" gap="xs">
+                        <sutram-icon name="file-code-2" size="sm" intent="primary"></sutram-icon>
+                        <sutram-label text="Source:"></sutram-label>
+                        <code>${m.currentFile || ''}</code>
+                    </sutram-stack>
+                    <sutram-input
+                        label="Destination Path"
+                        ?flush=${true}
+                        .value=${m.destPath || ''}
+                        placeholder="path/to/destination/file.ext"
+                        @sutram-input-changed=${e => {
+                            const uri = new window.inSetu.utils.InSetuURI(e.detail.value);
+                            const parts = uri.pathSegments;
+                            parts.pop();
+                            FsStore.getState().setModal('move', { destPath: uri.toString(), initialParts: parts });
+                        }}>
+                    </sutram-input>
+                </sutram-surface>
 
-            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden;">
                 <insetu-file-tree
                     basePath=""
                     .files=${getGlobalManifest()}
@@ -1244,14 +1206,12 @@ export class InSetuMoveFileProjection extends InSetuElement {
                         });
                     }}>
                 </insetu-file-tree>
-            </div>
 
-            <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; gap: 10px; flex-shrink: 0;">
                 <sutram-btn
+                    slot="footer"
                     intent="neutral"
                     icon="x"
                     label="Cancel"
-                    style="flex: 1; margin: 0;"
                     @click=${() => {
                         FsStore.getState().setModal('move', { open: false });
                         if (window.Sutram?.stores?.Layout) {
@@ -1260,13 +1220,13 @@ export class InSetuMoveFileProjection extends InSetuElement {
                     }}>
                 </sutram-btn>
                 <sutram-async-btn
+                    slot="footer"
                     intent="primary"
                     icon="truck"
                     label="Move File"
-                    style="flex: 2; margin: 0;"
                     .onClick=${executeMove}>
                 </sutram-async-btn>
-            </div>
+            </sutram-view>
         `;
     }
 }
@@ -1284,25 +1244,6 @@ export async function deleteEmptyFolder(dirPath) {
             refreshActiveFileViews(normPath, null);
         }
     });
-}
-export function createFileCard(fileInfo, container) {
-    const card = document.createElement('sutram-card');
-    card.filename = fileInfo.filename;
-    card.titleText = fileInfo.displayName || fileInfo.filename;
-    card.descriptionText = fileInfo.description || '';
-    card.detailText = fileInfo.sizeStr ? `${fileInfo.filename} | ${fileInfo.sizeStr}` : fileInfo.filename;
-    card.icon = fileInfo.isSource ? 'file-code-2' : 'package';
-    card.intent = fileInfo.isSource ? 'primary' : 'highlight';
-
-    card.entityType = fileInfo.isSource ? 'file' : 'file:context';
-    card.entityData = { filepath: fileInfo.filename, repoDir: fileInfo.repoDir, isFS: fileInfo.isFS };
-
-    card.addEventListener('card-clicked', () => {
-        if (fileInfo.isSource) viewSourceFile(fileInfo.filename, fileInfo.isFS);
-        else viewAndCopy(fileInfo.filename);
-    });
-
-    container.appendChild(card);
 }
 export const getGlobalManifest = () => {
     const state = AppStore.getState();
@@ -1336,16 +1277,14 @@ export const getGlobalManifest = () => {
     return allFiles.filter(isAllowed);
 };
 export class InSetuVFSExplorer extends InSetuElement {
+        static get extensionName() { return 'fs'; }
         static properties = {
                 searchQuery: { type: String },
                 manifestFiles: { type: Array },
                 browsePath: { type: Array },
                 loading: { type: Boolean }
         };
-        static styles = [sharedStyles, css`
-                :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-                .vfs-body { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0; }
-        `];
+        static styles = [sharedStyles];
         constructor() {
                 super();
                 this.searchQuery = '';
@@ -1413,13 +1352,16 @@ export class InSetuVFSExplorer extends InSetuElement {
         }
         render() {
             if (this.manifestFiles.length === 0 && !this.loading) {
-                return html`<p style="padding: 15px; color: var(--text-muted);">No repositories configured.</p>`;
+                return html`<sutram-empty-state text="No repositories configured."></sutram-empty-state>`;
             }
             return html`
-                <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative;">
-                    ${this.loading ? html`<div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;"><sutram-spinner text="Refreshing file system..."></sutram-spinner></div>` : ''}
+                <sutram-view ?flush=${true} ?noScroll=${true}>
+                    ${this.loading ? html`
+                        <sutram-surface slot="header" variant="panel" border="bottom" padding="sm">
+                            <sutram-spinner text="Refreshing file system..."></sutram-spinner>
+                        </sutram-surface>
+                    ` : ''}
                     <insetu-file-tree    
-                        style="flex: 1; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};"
                         @card-clicked=${(e) => { if(e.detail.isSource && window.inSetu.vfs.viewSourceFile) window.inSetu.vfs.viewSourceFile(e.detail.filename, true); }}
                         basePath=""
                         .files=${this.manifestFiles}
@@ -1430,7 +1372,7 @@ export class InSetuVFSExplorer extends InSetuElement {
                         entityType="file"
                         @path-changed=${this._handlePathChange}>
                     </insetu-file-tree>
-                </div>
+                </sutram-view>
             `;
         }
 }
@@ -2233,7 +2175,7 @@ async function openNewFolderModal(overridePath = null) {
     let domain = 'Workspaces';
     if (isRoot) {
         try {
-            const res = await window.inSetu.api.workspace.get('gather/repos/template');
+            const res = await window.inSetu.api.get('gather/repos/template');
             if (res.ok) {
                 const tpl = await res.json();
                 exts = tpl.exts.join(', ');
@@ -2293,7 +2235,7 @@ async function saveNewFolder() {
         loadingText: "Creating...",
         onSuccess: async () => {
             if (isNewRepo) {
-                const rRes = await window.inSetu.api.workspace.get('system/topology?t=' + Date.now());
+                const rRes = await window.inSetu.api.get('system/topology?t=' + Date.now());
                 if (rRes.ok) {
                     const d = await rRes.json();
                     AppStore.setState({ allRepos: d.repos, targetConfigs: d.target_repos || [] });
@@ -2320,7 +2262,7 @@ export async function hydrateVfsBuffer(filepath, { isFS = null, forceReload = fa
     }
     const parsedUri = new window.inSetu.utils.InSetuURI(normPath);
     const effectiveIsFS = parsedUri.isReadOnly ? false : Boolean(isFS !== null ? isFS : parsedUri.isEditable);
-    const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(normPath);
+    const { ext, mode: codeMode, isMarkdown } = resolveEditorMode(normPath);
 
     if (forceReload || !existing) {
         fsState.openBuffer(normPath, {
@@ -2336,7 +2278,6 @@ export async function hydrateVfsBuffer(filepath, { isFS = null, forceReload = fa
             previewContent: null,
             previewLoading: Boolean(previewMode),
             isMarkdown,
-            isSupportedEditor,
             ext,
             codeMode
         });
@@ -2387,9 +2328,9 @@ export async function hydrateVfsBuffer(filepath, { isFS = null, forceReload = fa
                 saveStatus: 'idle',
                 docHandle: null
             });
-            injectTextToBuffer(normPath, text, isSupportedEditor, isMarkdown, effectiveIsFS);
+            injectTextToBuffer(normPath, text, isMarkdown, effectiveIsFS);
         } catch (e) {
-            injectTextToBuffer(normPath, "Error loading file content.", isSupportedEditor, isMarkdown, effectiveIsFS);
+            injectTextToBuffer(normPath, "Error loading file content.", isMarkdown, effectiveIsFS);
         } finally {
             delete FsStore.getState().hydratingPromises[normPath];
         }
@@ -2520,16 +2461,16 @@ export function openVirtualFile(filename, content) {
         forceEdit: true,
         isMemoryOnly: true,
         isMarkdown: true,
-        isSupportedEditor: true,
         ext: 'md',
         codeMode: 'markdown'
     });
 
     routeToSpatialGrid(virtualUri, filename);
     closeBrowseModal();
-    injectTextToBuffer(virtualUri, content, true, true, false, true);
+    injectTextToBuffer(virtualUri, content, true, false, true);
 }
 export class InSetuEditorProjection extends InSetuElement {
+    static get extensionName() { return 'fs'; }
     static properties = {
         filepath: { type: String },
         frontmatterMode: { type: Boolean },
@@ -2544,53 +2485,7 @@ export class InSetuEditorProjection extends InSetuElement {
         zenMode: { type: Boolean, reflect: true, attribute: 'zen-mode' }
     };
 
-    static styles = [sharedStyles, css`
-        :host([zen-mode]) {
-            position: fixed !important; inset: 0 !important;
-            width: 100% !important; height: 100% !important;
-            z-index: 99999 !important; background: var(--bg-deep, #05070a) !important;
-            margin: 0 !important; max-width: none !important; max-height: none !important;
-            border: none !important; padding: 0 !important; box-sizing: border-box !important;
-        }
-        .zen-exit-btn {
-            position: fixed; top: 20px; right: 20px; z-index: 100000;
-            background: var(--input-bg); color: var(--text-muted); border: 1px solid var(--border); border-radius: 50%;
-            width: 44px; height: 44px; display: none; align-items: center; justify-content: center;
-            cursor: pointer; opacity: 0.1; transition: opacity 0.3s ease, color 0.3s ease;
-            pointer-events: auto;
-        }
-        @media (hover: none) {
-            .zen-exit-btn { opacity: 0.6; }
-        }
-        :host([zen-mode]) .zen-exit-btn { display: flex; }
-        :host([zen-mode]) .zen-exit-btn:hover { opacity: 1; color: var(--intent-danger); border-color: var(--intent-danger); }
-        :host { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; width: 100%; background: var(--bg); overflow: hidden; container-type: inline-size; }
-        .editor-header {
-            display: flex; justify-content: space-between; align-items: center; 
-            padding: 6px 15px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0;
-            gap: 10px;
-        }
-        .action-bar-scroll {
-            display: flex; gap: 8px; align-items: center; flex: 1; min-width: 0;
-            overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap; white-space: nowrap;
-        }
-        .action-bar-scroll::-webkit-scrollbar { display: none; }
-        .meta-btn {
-            background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 4px;
-            padding: 4px 8px; cursor: pointer; font-weight: bold; display: inline-flex; align-items: center;
-            gap: 4px; font-size: 0.82rem; transition: background 0.2s; margin: 0; flex-shrink: 0;
-        }
-        .meta-btn:hover { background: var(--bg); }
-        .meta-btn.active { background: var(--bg); border-color: var(--intent-primary); color: var(--intent-primary); }
-        @container (max-width: 480px) {
-            .meta-btn-text { display: none; }
-            .meta-btn { padding: 4px 6px; }
-        }
-        .editor-footer {
-            padding: 10px 15px; gap: 10px; border-top: 1px solid var(--border); 
-            background: var(--input-bg); display: flex; flex-shrink: 0; width: 100%; box-sizing: border-box;
-        }
-    `];
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -2747,7 +2642,7 @@ export class InSetuEditorProjection extends InSetuElement {
         }
         if (this._buffer && this._buffer.isFS) {
             try {
-                await window.inSetu.api.workspace.post('editor/preference', {
+                await this.api.post('editor/preference', {
                     filepath: this._normPath(),
                     writing_mode: this._writingMode
                 });
@@ -2766,13 +2661,6 @@ export class InSetuEditorProjection extends InSetuElement {
                 if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
                 else if (document.documentElement.webkitRequestFullscreen) await document.documentElement.webkitRequestFullscreen();
             } catch(e) {}
-            this._escListener = (e) => {
-                if (e.key === 'Escape') {
-                    e.preventDefault();
-                    this._toggleZenMode();
-                }
-            };
-            window.addEventListener('keydown', this._escListener);
         } else {
             if (typeof this.hidePopover === 'function') {
                 if (this.matches(':popover-open')) {
@@ -2784,10 +2672,6 @@ export class InSetuEditorProjection extends InSetuElement {
                 if (document.exitFullscreen && document.fullscreenElement) await document.exitFullscreen();
                 else if (document.webkitExitFullscreen && document.webkitFullscreenElement) document.webkitExitFullscreen();
             } catch(e) {}
-            if (this._escListener) {
-                window.removeEventListener('keydown', this._escListener);
-                this._escListener = null;
-            }
         }
     }
     onWorkspaceLoad(workspaceId) {
@@ -2869,6 +2753,12 @@ export class InSetuEditorProjection extends InSetuElement {
                 this._toggleZenMode();
             }
         });
+        this.registerGlobalListener('keydown', window, (e) => {
+            if (this.zenMode && e.key === 'Escape') {
+                e.preventDefault();
+                this._toggleZenMode();
+            }
+        });
         this.registerGlobalListener('insetu:editor:toggle-preview', window, (e) => {
             const normTarget = e.detail?.filepath ? normalizeVfsURI(e.detail.filepath) : '';
             if (normTarget === this._normPath() || e.detail?.filepath === this.filepath || e.detail?.filepath === this.dataset.subId) {
@@ -2918,7 +2808,7 @@ export class InSetuEditorProjection extends InSetuElement {
                 const m = this._buffer;
                 if (!m || m.previewMode) return;
                 const cmEditor = this.shadowRoot.querySelector('insetu-markdown-editor');
-                if (m.isSupportedEditor && cmEditor) {
+                if (cmEditor) {
                     cmEditor.insertAtCursor(e.detail.text);
                 } else if (this.frontmatterMode) {
                     this._bodyContent = this._bodyContent + "\n" + e.detail.text;
@@ -2972,7 +2862,7 @@ export class InSetuEditorProjection extends InSetuElement {
     async _loadPreference(filename) {
         if (!filename) return;
         try {
-            const res = await window.inSetu.api.workspace.get(`editor/preference?file=${encodeURIComponent(filename)}`);
+            const res = await this.api.get(`editor/preference?file=${encodeURIComponent(filename)}`);
             if (res.ok) {
                 const data = await res.json();
                 if (data.writing_mode !== undefined && data.writing_mode !== null) {
@@ -2985,7 +2875,7 @@ export class InSetuEditorProjection extends InSetuElement {
 
     render() {
         if (!this._buffer || this._buffer.content === 'Loading...') {
-            return html`<div style="padding: 20px;"><sutram-spinner text="Loading file..."></sutram-spinner></div>`;
+            return html`<sutram-view><sutram-spinner text="Loading file..."></sutram-spinner></sutram-view>`;
         }
         const m = this._buffer;
         const isPreview = Boolean(m.previewMode);
@@ -2996,151 +2886,134 @@ export class InSetuEditorProjection extends InSetuElement {
         const editorTextValue = isPreview ? (m.previewContent ?? rawSourceText) : rawSourceText;
         const supportsMacroPreview = canPreviewFileMacros(m.filename, m.content || '');
         return html`
-            <div style="display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); position: relative;">
-                <div style="padding: 8px 15px 6px 15px; background: var(--bg); flex-shrink: 0; display: ${this._hasTitleSlot ? 'block' : 'none'};">
-                    <slot name="title-control" @slotchange=${(e) => { this._hasTitleSlot = e.target.assignedNodes({ flatten: true }).length > 0; }}></slot>
-                </div>
-
-                <div class="editor-header">
-                    <div class="action-bar-scroll">
-                        <slot name="action-bar-extra"></slot>
-                        <sutram-entity-actions   
-                            variant="menu-bar"
-                            .entityType=${'file:editor'} 
-                            .entityData=${{ 
-                                filepath: m.filename, 
-                                isFS: m.isFS,
-                                isMarkdown: m.isMarkdown,
-                                writingMode: this._writingMode,
-                                previewMode: isPreview,
-                                supportsMacroPreview,
-                                isSkeleton: false,
-                                isDirty: this.isDirty,
-                                transientContent: editorTextValue,
-                                suppress: ['file-edit', 'file-preview'],
-                                chunks: window.inSetu?.vfs?.getChunks ? window.inSetu.vfs.getChunks(m.filename) : [m.filename]
-                            }}>
-                        </sutram-entity-actions>
+            <sutram-view ?flush=${true} ?noScroll=${true} ?zen=${this.zenMode} @sutram-view-exit-zen=${() => this._toggleZenMode()}>
+                <div slot="header">
+                    <div style="padding: 8px 15px 6px 15px; display: ${this._hasTitleSlot ? 'block' : 'none'};">
+                        <slot name="title-control" @slotchange=${(e) => { this._hasTitleSlot = e.target.assignedNodes({ flatten: true }).length > 0; }}></slot>
                     </div>
-                    <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
-                        <insetu-projection-window-controls 
-                            .filepath=${m.filename}
-                            .beforeAction=${async () => { if (this.isDirty) await this._handleSave(); }}>
-                        </insetu-projection-window-controls>
-                        ${hasDetectedFrontmatter ? html`
-                            <button class="meta-btn ${this._metadataExpanded ? 'active' : ''}"
-                                @click=${() => {
-                                    const nextExpanded = !this._metadataExpanded;
-                                    if (!this._alwaysFrontmatter) {
-                                        if (nextExpanded && !this.frontmatterMode) {
-                                            this._lastEmittedYamlJson = null;
-                                            this.frontmatterMode = true;
-                                            FsStore.getState().enableFrontmatterMode(this._normPath(), true);
-                                            this._syncFromBuffer(FsStore.getState().activeBuffers[this._normPath()], false);
-                                        } else if (!nextExpanded && this.frontmatterMode) {
-                                            this._syncFrontmatterToBuffer(false);
-                                            this.frontmatterMode = false;
-                                            FsStore.getState().enableFrontmatterMode(this._normPath(), false);
-                                        }
-                                    }
-                                    this._metadataExpanded = nextExpanded;
-                                }}
-                                title="Toggle Frontmatter Metadata">
-                                <yv-icon name="settings" style="width: 14px; height: 14px;"></yv-icon>
-                                <span class="meta-btn-text"> Metadata</span>
-                                <span style="font-size: 0.7rem; margin-left: 2px;">${this._metadataExpanded ? '▲' : '▼'}</span>
-                            </button>
-                        ` : ''}
-                    </div>
-                </div>
+                    <sutram-surface variant="panel" border="bottom" padding="xs">
+                        <sutram-action-bar collapse="sm" align="between" ?nowrap=${true}>
+                            <sutram-stack direction="row" align="center" gap="sm" ?flex=${true}>
+                                <slot name="action-bar-extra"></slot>
+                                <sutram-entity-actions   
+                                    variant="menu-bar"
+                                    .entityType=${'file:editor'} 
+                                    .entityData=${{ 
+                                        filepath: m.filename, 
+                                        isFS: m.isFS,
+                                        isMarkdown: m.isMarkdown,
+                                        writingMode: this._writingMode,
+                                        previewMode: isPreview,
+                                        supportsMacroPreview,
+                                        isSkeleton: false,
+                                        isDirty: this.isDirty,
+                                        transientContent: editorTextValue,
+                                        suppress: ['file-edit', 'file-preview'],
+                                        chunks: window.inSetu?.vfs?.getChunks ? window.inSetu.vfs.getChunks(m.filename) : [m.filename]
+                                    }}>
+                                </sutram-entity-actions>
+                            </sutram-stack>
+                            <sutram-stack direction="row" align="center" gap="xs">
+                                <insetu-projection-window-controls 
+                                    .filepath=${m.filename}
+                                    .beforeAction=${async () => { if (this.isDirty) await this._handleSave(); }}>
+                                </insetu-projection-window-controls>
+                                ${hasDetectedFrontmatter ? html`
+                                    <sutram-btn
+                                        ?compact=${true}
+                                        intent=${this._metadataExpanded ? 'primary' : 'neutral'}
+                                        ?active=${this._metadataExpanded}
+                                        icon="settings"
+                                        label="Metadata ${this._metadataExpanded ? '▲' : '▼'}"
+                                        @click=${() => {
+                                            const nextExpanded = !this._metadataExpanded;
+                                            if (!this._alwaysFrontmatter) {
+                                                if (nextExpanded && !this.frontmatterMode) {
+                                                    this._lastEmittedYamlJson = null;
+                                                    this.frontmatterMode = true;
+                                                    FsStore.getState().enableFrontmatterMode(this._normPath(), true);
+                                                    this._syncFromBuffer(FsStore.getState().activeBuffers[this._normPath()], false);
+                                                } else if (!nextExpanded && this.frontmatterMode) {
+                                                    this._syncFrontmatterToBuffer(false);
+                                                    this.frontmatterMode = false;
+                                                    FsStore.getState().enableFrontmatterMode(this._normPath(), false);
+                                                }
+                                            }
+                                            this._metadataExpanded = nextExpanded;
+                                        }}>
+                                    </sutram-btn>
+                                ` : ''}
+                            </sutram-stack>
+                        </sutram-action-bar>
+                    </sutram-surface>
 
-                ${this._metadataExpanded && hasDetectedFrontmatter ? html`
-                    <div style="padding: 8px 15px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0;">
-                        <slot name="metadata-controls">
-                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                ${Object.keys(this._yamlData || {}).map(k => html`
-                                    <div style="flex: 1; min-width: 150px;">
+                    ${this._metadataExpanded && hasDetectedFrontmatter ? html`
+                        <sutram-surface variant="panel" border="bottom" padding="sm">
+                            <slot name="metadata-controls">
+                                <sutram-stack direction="grid" ?compact=${true}>
+                                    ${Object.keys(this._yamlData || {}).map(k => html`
                                         <sutram-input ?flush=${true} label=${k} .value=${String(this._yamlData[k] ?? '')} @sutram-input-changed=${e => {
                                             this._yamlData = { ...this._yamlData, [k]: e.detail.value };
                                             this._syncFrontmatterToBuffer(true);
                                         }}></sutram-input>
-                                    </div>
-                                `)}
-                            </div>
-                        </slot>
-                    </div>
-                ` : ''}
-                ${isPreview ? html`
-                    <div style="display: flex; background: color-mix(in srgb, var(--intent-highlight) 18%, var(--input-bg)); color: var(--text); padding: 8px 16px; font-size: 0.85rem; font-weight: bold; justify-content: space-between; align-items: center; flex-shrink: 0; border-bottom: 1px solid var(--intent-highlight); gap: 10px;">
-                        <span style="display: flex; align-items: center; gap: 8px;">
-                            <yv-icon name="eye" style="width: 16px; height: 16px; color: var(--intent-highlight); flex-shrink: 0;"></yv-icon>
-                            <span>${m.previewLoading ? 'Resolving macro preview...' : 'Macro-Expanded Preview (Read-Only)'}</span>
-                        </span>
-                        <sutram-btn size="sm" icon="${m.isFS ? 'edit-3' : 'code'}" label="${m.isFS ? 'Edit Raw Source' : 'View Raw Source'}" intent="highlight" @click=${() => FsStore.getState().toggleBufferPreview(this._normPath(), false)} style="margin: 0;"></sutram-btn>
-                    </div>
-                ` : ''}
-                ${m.isTruncated ? html`
-                    <div style="display: flex; background: var(--intent-warning); color: var(--bg-deep); padding: 8px 20px; font-weight: bold; justify-content: space-between; align-items: center; flex-shrink: 0; border-bottom: 1px solid var(--border);">
-                        <span>⚠️ Only showing the first 200kb of <b>${kbSize}kb</b>.</span>
-                        <sutram-btn label="Show All" intent="neutral" @click=${() => window.inSetu.stores.Fs?.getState()?.updateBuffer(this._normPath(), { content: m.fullText, originalContent: m.fullText, isTruncated: false })} style="margin: 0; --btn-padding: 4px 8px;"></sutram-btn>
-                    </div>
-                ` : ''}
+                                    `)}
+                                </sutram-stack>
+                            </slot>
+                        </sutram-surface>
+                    ` : ''}
 
-                <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; position: relative;"
-                    @focusin=${() => this._editorFocused = true}
-                    @focusout=${() => { if (!this.shadowRoot.activeElement) this._editorFocused = false; }}>${m.isSupportedEditor ? html`
-                        <insetu-markdown-editor 
-                            .value=${editorTextValue} 
-                            .language=${m.codeMode} 
-                            .readOnly=${shouldBeReadOnly}
-                            ?writingMode=${this._writingMode}
-                            @editor-selection=${(e) => { this._transientCursorPos = e.detail?.cursor ?? 0; }}
-                            @editor-scroll=${(e) => { this._transientScrollTop = e.detail?.top ?? 0; }}
-                            @content-changed=${(e) => {
-                                if (this._buffer?.previewMode) return;
-                                if (this.frontmatterMode) {
-                                    this._bodyContent = e.detail.value;
-                                    this._syncFrontmatterToBuffer(true);
-                                } else {
-                                    window.inSetu.stores.Fs?.getState()?.updateBuffer(this._normPath(), { content: e.detail.value }, { userEdit: true });
-                                    this._triggerDebouncedAutoSave();
-                                }
-                            }}>
-                        </insetu-markdown-editor>
-                    ` : html`
-                        <sutram-textarea
-                            style="flex: 1; margin: 0;"
-                            .value=${editorTextValue}
-                            .monospace=${true}
-                            ?disabled=${shouldBeReadOnly}
-                            ?flush=${true}
-                            @sutram-input-changed=${(e) => {
-                                if (this._buffer?.previewMode) return;
-                                window.inSetu.stores.Fs?.getState()?.updateBuffer(this._normPath(), { content: e.detail.value }, { userEdit: true });
-                                this._triggerDebouncedAutoSave();
-                            }}>
-                        </sutram-textarea>
-                    `}
+                    ${isPreview ? html`
+                        <sutram-surface variant="tinted" intent="highlight" border="bottom" padding="xs">
+                            <sutram-stack direction="row" justify="between" align="center" gap="sm">
+                                <sutram-stack direction="row" align="center" gap="sm">
+                                    <sutram-icon name="eye" size="md" intent="highlight"></sutram-icon>
+                                    <strong>${m.previewLoading ? 'Resolving macro preview...' : 'Macro-Expanded Preview (Read-Only)'}</strong>
+                                </sutram-stack>
+                                <sutram-btn ?compact=${true} icon="${m.isFS ? 'edit-3' : 'code'}" label="${m.isFS ? 'Edit Raw Source' : 'View Raw Source'}" intent="highlight" @click=${() => FsStore.getState().toggleBufferPreview(this._normPath(), false)}></sutram-btn>
+                            </sutram-stack>
+                        </sutram-surface>
+                    ` : ''}
+
+                    ${m.isTruncated ? html`
+                        <sutram-surface variant="tinted" intent="warning" border="bottom" padding="xs">
+                            <sutram-stack direction="row" justify="between" align="center" gap="sm">
+                                <span>⚠️ Only showing the first 200kb of <b>${kbSize}kb</b>.</span>
+                                <sutram-btn ?compact=${true} label="Show All" intent="neutral" @click=${() => window.inSetu.stores.Fs?.getState()?.updateBuffer(this._normPath(), { content: m.fullText, originalContent: m.fullText, isTruncated: false })}></sutram-btn>
+                            </sutram-stack>
+                        </sutram-surface>
+                    ` : ''}
                 </div>
+
+                <insetu-markdown-editor 
+                    @focusin=${() => this._editorFocused = true}
+                    @focusout=${() => { if (!this.shadowRoot.activeElement) this._editorFocused = false; }}
+                    .value=${editorTextValue} 
+                    .language=${m.codeMode || 'plaintext'} 
+                    .readOnly=${shouldBeReadOnly}
+                    ?writingMode=${this._writingMode}
+                    @editor-selection=${(e) => { this._transientCursorPos = e.detail?.cursor ?? 0; }}
+                    @editor-scroll=${(e) => { this._transientScrollTop = e.detail?.top ?? 0; }}
+                    @content-changed=${(e) => {
+                        if (this._buffer?.previewMode) return;
+                        if (this.frontmatterMode) {
+                            this._bodyContent = e.detail.value;
+                            this._syncFrontmatterToBuffer(true);
+                        } else {
+                            window.inSetu.stores.Fs?.getState()?.updateBuffer(this._normPath(), { content: e.detail.value }, { userEdit: true });
+                            this._triggerDebouncedAutoSave();
+                        }
+                    }}>
+                </insetu-markdown-editor>
+
                 ${this.isDirty && !this._hasTitleSlot ? html`
-                    <div class="editor-footer">
-                        <sutram-async-btn label="Save Changes" intent="warning" style="width: 100%; display: block;" .onClick=${() => this._handleSave()}></sutram-async-btn>
-                    </div>
+                    <sutram-async-btn slot="footer" label="Save Changes" icon="save" intent="warning" .onClick=${() => this._handleSave()}></sutram-async-btn>
                 ` : ''}
-                <button class="zen-exit-btn" title="Exit Focus Mode (Esc)" 
-                    @pointerdown=${(e) => { e.preventDefault(); e.stopPropagation(); this._toggleZenMode(); }}
-                    @click=${(e) => { e.preventDefault(); e.stopPropagation(); this._toggleZenMode(); }}>
-                    <yv-icon name="minimize-2" style="width: 20px; height: 20px; pointer-events: none;"></yv-icon>
-                </button>
-            </div>
+            </sutram-view>
         `;
     }
 
     disconnectedCallback() {
         super.disconnectedCallback();
-        if (this._escListener) {
-            window.removeEventListener('keydown', this._escListener);
-        }
         if (this._autoSaveTimer) {
             clearTimeout(this._autoSaveTimer);
         }
@@ -3205,6 +3078,7 @@ export function openPartsModal(filepath) {
         });
     }
 }
+window.inSetu.vfs.hasMacroSyntax = hasMacroSyntax;
 window.inSetu.vfs.resolveEntityExportTarget = resolveEntityExportTarget;
 window.inSetu.vfs.resolveFileFetchUrl = resolveFileFetchUrl;
 window.inSetu.vfs.renameFileTracking = renameFileTracking;
@@ -3237,7 +3111,6 @@ window.inSetu.ui.openFolderBrowser = openFolderBrowser;
 window.inSetu.ui.openBrowseModal = openBrowseModal;
 window.inSetu.ui.closeBrowseModal = closeBrowseModal;
 window.inSetu.ui.openLinkModal = openLinkModal;
-window.inSetu.ui.createFileCard = createFileCard;
 window.inSetu.ui.saveNewFile = saveNewFile;
 window.inSetu.ui.checkFileExtension = checkFileExtension;
 window.addEventListener('insetu:vfs:view-parts', (e) => {
@@ -3262,29 +3135,25 @@ window.addEventListener('sutram-evict-projection', (e) => {
 });
 
 export async function uploadFileToWorkspace(targetDir) {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.multiple = true;
-    input.onchange = async (e) => {
-        const files = e.target.files;
-        if (!files || files.length === 0) return;
-
-        const formData = new FormData();
-        for (let i = 0; i < files.length; i++) {
-            formData.append('file', files[i]);
-        }
-        formData.append('dest_dir', targetDir || '');
-        const loadingMsg = files.length > 1 ? `Uploading ${files.length} files...` : `Uploading ${files[0].name}...`;
-        await window.inSetu.sys.executeWorkspaceMutation('fs/upload', formData, {
-            loadingText: loadingMsg,
-            onSuccess: (data) => {
-                if (data && Array.isArray(data.filepaths)) {
-                    updateManifestState(data.filepaths.map(fp => ({ filepath: fp, operation: 'save' })));
-                }
+    window.inSetu.utils.openFilePicker({
+        multiple: true,
+        onSelect: async (files) => {
+            const formData = new FormData();
+            for (let i = 0; i < files.length; i++) {
+                formData.append('file', files[i]);
             }
-        });
-    };
-    input.click();
+            formData.append('dest_dir', targetDir || '');
+            const loadingMsg = files.length > 1 ? `Uploading ${files.length} files...` : `Uploading ${files[0].name}...`;
+            await window.inSetu.sys.executeWorkspaceMutation('fs/upload', formData, {
+                loadingText: loadingMsg,
+                onSuccess: (data) => {
+                    if (data && Array.isArray(data.filepaths)) {
+                        updateManifestState(data.filepaths.map(fp => ({ filepath: fp, operation: 'save' })));
+                    }
+                }
+            });
+        }
+    });
 }
 export function openLinkModal(initialQuery = '', initialTab = 'filename') {
     FsStore.getState().setModal('linkInsert', { 
@@ -3338,7 +3207,7 @@ export async function executeDeepLinkSearch(overrideQuery = null) {
     }
     FsStore.getState().setModal('linkInsert', { deepSearchLoading: true, searchResults: [] });
     try {
-        const res = await window.inSetu.api.workspace.post('fs/search', { q: query });
+        const res = await window.inSetu.api.post('fs/search', { q: query });
         if (!res.ok) throw new Error("Search failed");
         const data = await res.json();
         if (res.status === 202) {
@@ -3370,14 +3239,12 @@ function executeLinkSearch(query) {
     FsStore.getState().setModal('linkInsert', { searchResults: results });
 }
 export class InSetuNewFileProjection extends InSetuElement {
+    static get extensionName() { return 'fs'; }
     static properties = { newFileState: { type: Object } };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.newFileState = FsStore.getState().modals?.newFile || {};
-        this._cachedActionNodes = new Map();
     }
     connectedCallback() {
         super.connectedCallback();
@@ -3390,65 +3257,57 @@ export class InSetuNewFileProjection extends InSetuElement {
             }
         );
     }
-    _getActionNode(componentTag) {
-        if (!this._cachedActionNodes.has(componentTag)) {
-            this._cachedActionNodes.set(componentTag, document.createElement(componentTag));
-        }
-        return this._cachedActionNodes.get(componentTag);
-    }
     render() {
         const nf = this.newFileState || {};
         const extWarning = getFileExtensionWarning(nf.fileName || '', nf.basePath || '');
         const actions = window.ExtensionRegistry?.getLayoutSlots?.().filter(s => s.slot === 'modal:new-file:actions') || [];
         return html`
-            <div style="padding: 12px 15px; display: flex; flex-direction: column; gap: 8px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0;">
-                <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 6px; word-break: break-all;">
-                    <yv-icon name="folder" style="width: 14px; height: 14px; color: var(--intent-highlight); flex-shrink: 0;"></yv-icon>
-                    <span>Directory: <strong style="font-family: var(--font-mono); color: var(--intent-highlight);">/${nf.basePath || ''}</strong></span>
-                </div>
-                <sutram-input
-                    label="Filename"
-                    ?flush=${true}
-                    placeholder="Filename (e.g. my-prompt.md)..."
-                    .value=${nf.fileName || ''}
-                    style="font-family: var(--font-mono); --bg-input: var(--bg);"
-                    @sutram-input-changed=${e => {
-                        FsStore.getState().setModal('newFile', { fileName: e.detail.value });
-                    }}>
-                </sutram-input>
-                ${extWarning ? html`
-                    <div style="color: var(--intent-warning); font-size: 0.8rem; font-weight: bold; margin-top: 2px; display: flex; align-items: center; gap: 6px;">
-                        <yv-icon name="alert-triangle" style="width: 14px; height: 14px; flex-shrink: 0;"></yv-icon>
-                        <span>${extWarning}</span>
-                    </div>
-                ` : ''}
-
-                ${actions.map(act => html`<div style="display: contents;" data-ext="${act.extName}">${this._getActionNode(act.component)}</div>`)}
-            </div>
-            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg);">
+            <sutram-view ?flush=${true} ?noScroll=${true}>
+                <sutram-surface slot="header" variant="panel" border="bottom" padding="md" gap="sm">
+                    <sutram-stack direction="row" align="center" gap="xs">
+                        <sutram-icon name="folder" size="sm" intent="highlight"></sutram-icon>
+                        <sutram-label text="Directory:"></sutram-label>
+                        <code>/${nf.basePath || ''}</code>
+                    </sutram-stack>
+                    <sutram-input
+                        label="Filename"
+                        ?flush=${true}
+                        placeholder="Filename (e.g. my-prompt.md)..."
+                        .value=${nf.fileName || ''}
+                        @sutram-input-changed=${e => {
+                            FsStore.getState().setModal('newFile', { fileName: e.detail.value });
+                        }}>
+                    </sutram-input>
+                    ${extWarning ? html`
+                        <sutram-surface variant="tinted" intent="warning" padding="xs">
+                            <sutram-stack direction="row" align="center" gap="xs">
+                                <sutram-icon name="alert-triangle" size="sm" intent="warning"></sutram-icon>
+                                <span>${extWarning}</span>
+                            </sutram-stack>
+                        </sutram-surface>
+                    ` : ''}
+                    ${actions.map(act => html`<div style="display: contents;" data-ext="${act.extName}">${this.mountDynamicSlot(act.component)}</div>`)}
+                </sutram-surface>
                 <insetu-markdown-editor
                     .value=${nf.content || ''}
                     .language=${resolveEditorMode(nf.fileName || '').mode || 'markdown'}
                     @content-changed=${e => FsStore.getState().setModal('newFile', { content: e.detail.value })}>
                 </insetu-markdown-editor>
-            </div>
-            <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; gap: 10px; flex-shrink: 0;">
-                <sutram-btn intent="neutral" icon="x" label="Cancel" style="flex: 1; margin: 0;" @click=${() => {
+                <sutram-btn slot="footer" intent="neutral" icon="x" label="Cancel" @click=${() => {
                     FsStore.getState().setModal('newFile', { open: false });
                     if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('vfs:new-file');
                 }}></sutram-btn>
-                <sutram-async-btn intent="primary" icon="save" label="Create & Save File" style="flex: 2; margin: 0;" .onClick=${saveNewFile}></sutram-async-btn>
-            </div>
+                <sutram-async-btn slot="footer" intent="primary" icon="save" label="Create & Save File" .onClick=${saveNewFile}></sutram-async-btn>
+            </sutram-view>
         `;
     }
 }
 customElements.define('insetu-new-file-projection', InSetuNewFileProjection);
 
 export class InSetuNewFolderProjection extends InSetuElement {
+    static get extensionName() { return 'fs'; }
     static properties = { newFolderState: { type: Object } };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.newFolderState = FsStore.getState().modals?.newFolder || {};
@@ -3467,47 +3326,44 @@ export class InSetuNewFolderProjection extends InSetuElement {
     render() {
         const nf = this.newFolderState || {};
         return html`
-            <sutram-scroll-view padding="15px" style="gap: 12px;">
-                <div style="font-size: 0.85rem; color: var(--text-muted); display: flex; align-items: center; gap: 6px; word-break: break-all;">
-                    <yv-icon name="folder" style="width: 14px; height: 14px; color: var(--intent-highlight); flex-shrink: 0;"></yv-icon>
-                    <span>Base Path: <strong style="font-family: var(--font-mono); color: var(--intent-highlight);">/${nf.basePath || ''}</strong></span>
-                </div>
-                <sutram-input
-                    label="Directory Name"
-                    placeholder="Directory name..."
-                    .value=${nf.folderName || ''}
-                    @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { folderName: e.detail.value })}>
-                </sutram-input>
-                ${nf.basePath === '' ? html`
-                    <div style="display: flex; flex-direction: column; gap: 12px; background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
-                        <h4 style="margin: 0; color: var(--intent-primary);">Repository Configuration</h4>
-                        <sutram-input label="Repository Title" placeholder="e.g., Core API" .value=${nf.repoTitle || ''} ?flush=${true} @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { repoTitle: e.detail.value })}></sutram-input>
-                        <sutram-input label="Domain Category" placeholder="e.g., Workspaces" .value=${nf.repoDomain || ''} ?flush=${true} @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { repoDomain: e.detail.value })}></sutram-input>
-                        <sutram-input label="Description" placeholder="Short summary..." .value=${nf.repoDesc || ''} ?flush=${true} @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { repoDesc: e.detail.value })}></sutram-input>
-                        <sutram-input label="Tracked Extensions" placeholder="e.g., .py, .json, .md" .value=${nf.repoExts || ''} ?flush=${true} style="font-family: var(--font-mono);" @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { repoExts: e.detail.value })}></sutram-input>
-                    </div>
-                ` : ''}
-            </sutram-scroll-view>
-            <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; gap: 10px; flex-shrink: 0;">
-                <sutram-btn intent="neutral" icon="x" label="Cancel" style="flex: 1; margin: 0;" @click=${() => {
+            <sutram-view>
+                <sutram-stack direction="col" gap="md">
+                    <sutram-stack direction="row" align="center" gap="xs">
+                        <sutram-icon name="folder" size="sm" intent="highlight"></sutram-icon>
+                        <sutram-label text="Base Path:"></sutram-label>
+                        <code>/${nf.basePath || ''}</code>
+                    </sutram-stack>
+                    <sutram-input
+                        label="Directory Name"
+                        placeholder="Directory name..."
+                        .value=${nf.folderName || ''}
+                        @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { folderName: e.detail.value })}>
+                    </sutram-input>
+                    ${nf.basePath === '' ? html`
+                        <sutram-surface variant="panel" padding="md" gap="md">
+                            <h4>Repository Configuration</h4>
+                            <sutram-input label="Repository Title" placeholder="e.g., Core API" .value=${nf.repoTitle || ''} ?flush=${true} @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { repoTitle: e.detail.value })}></sutram-input>
+                            <sutram-input label="Domain Category" placeholder="e.g., Workspaces" .value=${nf.repoDomain || ''} ?flush=${true} @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { repoDomain: e.detail.value })}></sutram-input>
+                            <sutram-input label="Description" placeholder="Short summary..." .value=${nf.repoDesc || ''} ?flush=${true} @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { repoDesc: e.detail.value })}></sutram-input>
+                            <sutram-input label="Tracked Extensions" placeholder="e.g., .py, .json, .md" .value=${nf.repoExts || ''} ?flush=${true} @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { repoExts: e.detail.value })}></sutram-input>
+                        </sutram-surface>
+                    ` : ''}
+                </sutram-stack>
+                <sutram-btn slot="footer" intent="neutral" icon="x" label="Cancel" @click=${() => {
                     FsStore.getState().setModal('newFolder', { open: false });
                     if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('vfs:new-folder');
                 }}></sutram-btn>
-                <sutram-async-btn intent="primary" icon="${nf.basePath === '' ? 'package' : 'folder-plus'}" label="${nf.basePath === '' ? 'Initialize Repository' : 'Create Folder'}" style="flex: 2; margin: 0;" .onClick=${saveNewFolder}></sutram-async-btn>
-            </div>
+                <sutram-async-btn slot="footer" intent="primary" icon="${nf.basePath === '' ? 'package' : 'folder-plus'}" label="${nf.basePath === '' ? 'Initialize Repository' : 'Create Folder'}" .onClick=${saveNewFolder}></sutram-async-btn>
+            </sutram-view>
         `;
     }
 }
 customElements.define('insetu-new-folder-projection', InSetuNewFolderProjection);
 
 export class InSetuLinkInsertProjection extends InSetuElement {
+    static get extensionName() { return 'fs'; }
     static properties = { linkState: { type: Object } };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
-        .sub-tabs { display: flex; gap: 2px; margin: 0; padding: 0 15px; overflow-x: auto; align-items: center; height: 40px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0; }
-        .sub-tab { cursor: pointer; padding: 0 6px; margin-right: 12px; font-size: 0.85rem; font-weight: bold; color: var(--text-muted); white-space: nowrap; height: 100%; display: flex; align-items: center; border-bottom: 2px solid transparent; box-sizing: border-box; }
-        .sub-tab.active { color: var(--text); border-bottom: 2px solid var(--intent-primary); }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.linkState = FsStore.getState().modals?.linkInsert || {};
@@ -3526,66 +3382,63 @@ export class InSetuLinkInsertProjection extends InSetuElement {
     render() {
         const li = this.linkState || {};
         return html`
-            <div class="sub-tabs">
-                <div class="sub-tab ${li.activeTab === 'filename' ? 'active' : ''}" @click=${() => switchLinkTab('filename')}>Filename</div>
-                <div class="sub-tab ${li.activeTab === 'deep' ? 'active' : ''}" @click=${() => switchLinkTab('deep')}>Deep Search</div>
-            </div>
-            <div style="padding: 10px 15px; display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--border); background: var(--bg); flex-shrink: 0;">
-                <sutram-input
-                    placeholder="Search files..."
-                    ?flush=${true}
-                    style="flex: 1; margin: 0;"
-                    .value=${li.searchQuery || ''}
-                    @sutram-input-changed=${e => onLinkSearchInput(e.detail.value)}>
-                </sutram-input>
-                ${li.activeTab === 'deep' ? html`
-                    <sutram-btn label="${li.deepSearchLoading ? 'Searching...' : 'Search'}" icon="search" @click=${() => executeDeepLinkSearch()} intent="highlight" style="margin: 0;" ?disabled=${li.deepSearchLoading}></sutram-btn>
-                ` : ''}
-            </div>
-            <sutram-scroll-view padding="12px" style="gap: 6px;">
-                ${li.deepSearchLoading ? html`<sutram-spinner text="Searching file contents across workspace..."></sutram-spinner>` : ''}
-                ${(!li.deepSearchLoading && (!li.searchResults || li.searchResults.length === 0)) ? html`
-                    <span style="color:var(--text-muted); font-style:italic; padding: 10px;">
-                        ${(!li.searchQuery) ? 'Type to search...' : 'No files found.'}
-                    </span>
-                ` : ''}
-                ${(li.searchResults || []).map(item => {
-                    const name = new window.inSetu.utils.InSetuURI(item.path).basename;
-                    return html`
-                        <sutram-card
-                            .filename=${item.path}
-                            .titleText=${name}
-                            .detailText=${item.path}
-                            .descriptionText=${item.snippet ? '"...' + item.snippet.replace(/</g, '&lt;') + '"' : ''}
-                            icon="file-text"
-                            intent="primary"
-                            ?disableSelection=${true}
-                            @card-clicked=${() => {
-                                insertLinkToEditor(item.path, name);
-                                if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('vfs:link-insert');
-                            }}>
-                            ${item.score !== undefined ? html`
-                                <span slot="header-tags" style="font-size: 0.7rem; color: var(--intent-success); border: 1px solid var(--intent-success); padding: 2px 6px; border-radius: 10px;">
-                                    Score: ${item.score}
-                                </span>
-                            ` : ''}
-                        </sutram-card>
-                    `;
-                })}
-            </sutram-scroll-view>
+            <sutram-view>
+                <sutram-surface slot="header" variant="panel" border="bottom" padding="sm" gap="sm">
+                    <sutram-stack direction="row" gap="xs">
+                        <sutram-pill pillId="filename" labelText="Filename" ?active=${li.activeTab === 'filename'} @sutram-pill-toggled=${() => switchLinkTab('filename')}></sutram-pill>
+                        <sutram-pill pillId="deep" labelText="Deep Search" ?active=${li.activeTab === 'deep'} @sutram-pill-toggled=${() => switchLinkTab('deep')}></sutram-pill>
+                    </sutram-stack>
+                    <sutram-stack direction="row" align="center" gap="sm">
+                        <sutram-input
+                            placeholder="Search files..."
+                            ?flush=${true}
+                            ?grow=${true}
+                            .value=${li.searchQuery || ''}
+                            @sutram-input-changed=${e => onLinkSearchInput(e.detail.value)}>
+                        </sutram-input>
+                        ${li.activeTab === 'deep' ? html`
+                            <sutram-btn label="${li.deepSearchLoading ? 'Searching...' : 'Search'}" icon="search" @click=${() => executeDeepLinkSearch()} intent="highlight" ?disabled=${li.deepSearchLoading}></sutram-btn>
+                        ` : ''}
+                    </sutram-stack>
+                </sutram-surface>
+                <sutram-stack direction="col" gap="xs">
+                    ${li.deepSearchLoading ? html`<sutram-spinner text="Searching file contents across workspace..."></sutram-spinner>` : ''}
+                    ${(!li.deepSearchLoading && (!li.searchResults || li.searchResults.length === 0)) ? html`
+                        <sutram-empty-state text=${(!li.searchQuery) ? 'Type to search...' : 'No files found.'}></sutram-empty-state>
+                    ` : ''}
+                    ${(li.searchResults || []).map(item => {
+                        const name = new window.inSetu.utils.InSetuURI(item.path).basename;
+                        return html`
+                            <sutram-card
+                                .filename=${item.path}
+                                .titleText=${name}
+                                .detailText=${item.path}
+                                .detailSuffix=${item.score !== undefined ? `Score: ${item.score}` : ''}
+                                .descriptionText=${item.snippet ? '"...' + item.snippet.replace(/</g, '&lt;') + '"' : ''}
+                                icon="file-text"
+                                intent="primary"
+                                ?disableSelection=${true}
+                                @card-clicked=${() => {
+                                    insertLinkToEditor(item.path, name);
+                                    if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('vfs:link-insert');
+                                }}>
+                            </sutram-card>
+                        `;
+                    })}
+                </sutram-stack>
+            </sutram-view>
         `;
     }
 }
 customElements.define('insetu-link-insert-projection', InSetuLinkInsertProjection);
 export class InSetuBrowserProjection extends InSetuElement {
+    static get extensionName() { return 'fs'; }
     static properties = {
         browserModal: { type: Object },
         browserConfig: { type: Object },
         browserPath: { type: Array }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         const bModal = FsStore.getState().modals?.browser || {};
@@ -3619,33 +3472,37 @@ export class InSetuBrowserProjection extends InSetuElement {
         const manifest = b.manifest || [];
 
         return html`
-            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden;">
+            <sutram-view ?flush=${true} ?noScroll=${!isParts}>
                 ${isParts ? html`
-                    <sutram-scroll-view padding="0">
+                    <sutram-stack direction="col" gap="none">
                         ${manifest.length > 0 ? html`
-                            <div style="display: flex; align-items: center; gap: 10px; background: var(--input-bg); border-bottom: 1px solid var(--border); padding: 15px 20px; flex-shrink: 0;">
-                                <yv-icon name="package" style="width: 18px; height: 18px; color: var(--intent-highlight); flex-shrink: 0;"></yv-icon>
-                                <span style="font-weight: bold; color: var(--intent-highlight); word-break: break-all;">${manifest[0].includes('/') ? manifest[0].split('/').pop() : manifest[0]}</span>
-                            </div>
+                            <sutram-surface variant="panel" border="bottom" padding="md">
+                                <sutram-stack direction="row" align="center" gap="sm">
+                                    <sutram-icon name="package" size="md" intent="highlight"></sutram-icon>
+                                    <strong>${manifest[0].includes('/') ? manifest[0].split('/').pop() : manifest[0]}</strong>
+                                </sutram-stack>
+                            </sutram-surface>
                             ${manifest.map((f, idx) => {
                                 const fetchUrl = `${resolveFileFetchUrl(f, false)}&download=1`;
                                 const partMatch = f.match(/_part(\d+)/i);
                                 const displayTitle = partMatch ? `Part ${partMatch[1]}` : `Part ${idx + 1}`;
                                 return html`
-                                    <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg); border-bottom: 1px solid var(--border); padding: 12px 20px;">
-                                        <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
-                                            <yv-icon name="puzzle" style="width: 18px; height: 18px; color: var(--text-muted); flex-shrink: 0;"></yv-icon>
-                                            <span style="font-weight: bold; color: var(--text);">${displayTitle}</span>
-                                        </div>
-                                        <div style="display: flex; gap: 8px; flex-shrink: 0;">
-                                            <sutram-async-btn label="View" icon="eye" intent="neutral" size="sm" .onClick=${async () => { if (window.inSetu.vfs.viewAndCopy) window.inSetu.vfs.viewAndCopy(f); }}></sutram-async-btn>
-                                            <sutram-async-btn label="Download" icon="download" intent="primary" size="sm" .onClick=${async () => { await window.inSetu.vfs.fetchAndDownloadState(f, fetchUrl); }}></sutram-async-btn>
-                                        </div>
-                                    </div>
+                                    <sutram-surface variant="inset" border="bottom" padding="md">
+                                        <sutram-stack direction="row" justify="between" align="center" gap="sm">
+                                            <sutram-stack direction="row" align="center" gap="sm">
+                                                <sutram-icon name="puzzle" size="md" intent="muted"></sutram-icon>
+                                                <strong>${displayTitle}</strong>
+                                            </sutram-stack>
+                                            <sutram-stack direction="row" gap="sm">
+                                                <sutram-async-btn label="View" icon="eye" intent="neutral" ?compact=${true} .onClick=${async () => { if (window.inSetu.vfs.viewAndCopy) window.inSetu.vfs.viewAndCopy(f); }}></sutram-async-btn>
+                                                <sutram-async-btn label="Download" icon="download" intent="primary" ?compact=${true} .onClick=${async () => { await window.inSetu.vfs.fetchAndDownloadState(f, fetchUrl); }}></sutram-async-btn>
+                                            </sutram-stack>
+                                        </sutram-stack>
+                                    </sutram-surface>
                                 `;
                             })}
                         ` : ''}
-                    </sutram-scroll-view>
+                    </sutram-stack>
                 ` : html`
                     <insetu-file-tree 
                         basePath=""
@@ -3659,36 +3516,41 @@ export class InSetuBrowserProjection extends InSetuElement {
                         @card-clicked=${e => _handleBrowserCardClick(e.detail)}>
                     </insetu-file-tree>
                 `}
-            </div>
-            ${isParts ? html`
-                <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; gap: 10px; flex-shrink: 0;">
-                    <sutram-async-btn label="Download All" icon="download" intent="primary" style="flex: 1; margin: 0;" .onClick=${async () => {
-                        for (const f of manifest) {
-                            await window.inSetu.vfs.fetchAndDownloadState(f, `${resolveFileFetchUrl(f, false)}&download=1`);
-                            await new Promise(r => setTimeout(r, 300));
-                        }
-                    }}></sutram-async-btn>
-                    ${!!navigator.share && !!navigator.canShare ? html`
-                        <sutram-async-btn label="Share All" icon="share" intent="neutral" style="flex: 1; margin: 0;" .onClick=${async () => {
-                            if (manifest.length > 0) {
-                                const firstFile = manifest[0];
-                                const cleanFirst = new window.inSetu.utils.InSetuURI(firstFile).basename || firstFile;
-                                await shareFiles(cleanFirst, manifest, false);
-                            }
-                        }}></sutram-async-btn>
-                    ` : ''}
-                </div>
-            ` : (this.browserConfig?.mode === 'folder' ? html`
-                <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; gap: 10px; flex-shrink: 0;">
-                    <sutram-btn intent="neutral" icon="x" label="Cancel" style="flex: 1; margin: 0;" @click=${closeBrowseModal}></sutram-btn>
-                    <sutram-async-btn label="Select This Folder" icon="check-circle-2" intent="success" style="flex: 2; margin: 0;" .onClick=${confirmFolderSelection}></sutram-async-btn>
-                </div>
-            ` : '')}
+                ${isParts ? html`
+                    <sutram-surface slot="footer" variant="panel" border="top" padding="sm">
+                        <sutram-stack direction="row" gap="sm">
+                            <sutram-async-btn label="Download All" icon="download" intent="primary" ?grow=${true} .onClick=${async () => {
+                                for (const f of manifest) {
+                                    await window.inSetu.vfs.fetchAndDownloadState(f, `${resolveFileFetchUrl(f, false)}&download=1`);
+                                    await new Promise(r => setTimeout(r, 300));
+                                }
+                            }}></sutram-async-btn>
+                            ${!!navigator.share && !!navigator.canShare ? html`
+                                <sutram-async-btn label="Share All" icon="share" intent="neutral" ?grow=${true} .onClick=${async () => {
+                                    if (manifest.length > 0) {
+                                        const firstFile = manifest[0];
+                                        const cleanFirst = new window.inSetu.utils.InSetuURI(firstFile).basename || firstFile;
+                                        await shareFiles(cleanFirst, manifest, false);
+                                    }
+                                }}></sutram-async-btn>
+                            ` : ''}
+                        </sutram-stack>
+                    </sutram-surface>
+                ` : (this.browserConfig?.mode === 'folder' ? html`
+                    <sutram-surface slot="footer" variant="panel" border="top" padding="sm">
+                        <sutram-stack direction="row" gap="sm">
+                            <sutram-btn intent="neutral" icon="x" label="Cancel" ?grow=${true} @click=${closeBrowseModal}></sutram-btn>
+                            <sutram-async-btn label="Select This Folder" icon="check-circle-2" intent="success" ?grow=${true} .onClick=${confirmFolderSelection}></sutram-async-btn>
+                        </sutram-stack>
+                    </sutram-surface>
+                ` : '')}
+            </sutram-view>
         `;
     }
 }
 customElements.define('insetu-browser-projection', InSetuBrowserProjection);
 export class InSetuFileDiffProjection extends InSetuElement {
+    static get extensionName() { return 'fs'; }
     static properties = {
         filepath: { type: String },
         compareFilepath: { type: String },
@@ -3699,17 +3561,7 @@ export class InSetuFileDiffProjection extends InSetuElement {
         _isUntracked: { type: Boolean },
         _hasUnsavedBuffer: { type: Boolean }
     };
-    static styles = [sharedStyles, css`
-        :host {
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-            width: 100%;
-            overflow: hidden;
-            background: var(--bg);
-            box-sizing: border-box;
-        }
-    `];
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -3815,7 +3667,7 @@ export class InSetuFileDiffProjection extends InSetuElement {
         if (buf && buf.isFS && buf.content !== undefined && buf.content !== 'Loading...') {
             return { text: buf.content, isDirty: buf.content !== buf.originalContent };
         }
-        const res = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(normFp)}`);
+        const res = await this.api.get(`fs/fetch?file=${encodeURIComponent(normFp)}`);
         if (!res.ok) {
             throw new Error(`Failed to fetch '${normFp}' (HTTP ${res.status})`);
         }
@@ -3837,7 +3689,7 @@ export class InSetuFileDiffProjection extends InSetuElement {
                 this._hasUnsavedBuffer = rightRes.isDirty;
             } else {
                 const normFp = normalizeVfsURI(this.filepath);
-                const res = await window.inSetu.api.workspace.get(`fs/git_diff?file=${encodeURIComponent(normFp)}`);
+                const res = await this.api.get(`fs/git_diff?file=${encodeURIComponent(normFp)}`);
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
                     throw new Error(err.error || `HTTP ${res.status}`);
@@ -3864,10 +3716,10 @@ export class InSetuFileDiffProjection extends InSetuElement {
 
     render() {
         if (this._loading) {
-            return html`<div style="padding: 20px;"><sutram-spinner text="${this.compareFilepath ? 'Comparing selected files...' : 'Comparing against Git HEAD...'}"></sutram-spinner></div>`;
+            return html`<sutram-view><sutram-spinner text="${this.compareFilepath ? 'Comparing selected files...' : 'Comparing against Git HEAD...'}"></sutram-spinner></sutram-view>`;
         }
         if (this._error) {
-            return html`<div style="padding: 20px; color: var(--intent-danger); font-family: var(--font-mono);">Error: ${this._error}</div>`;
+            return html`<sutram-view><sutram-surface variant="tinted" intent="danger" padding="md"><sutram-label ?monospace=${true} intent="danger" .text=${`Error: ${this._error}`}></sutram-label></sutram-surface></sutram-view>`;
         }
         const isPairMode = Boolean(this.compareFilepath);
         const leftLabel = isPairMode
@@ -3878,28 +3730,30 @@ export class InSetuFileDiffProjection extends InSetuElement {
             : (this._hasUnsavedBuffer ? 'Working Buffer (Unsaved Edits)' : 'Working Tree (Disk)');
 
         return html`
-            <div style="padding: 8px 15px; background: var(--input-bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-shrink: 0; flex-wrap: wrap;">
-                <span style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                    ${isPairMode
-                        ? `${normalizeVfsURI(this.filepath)}  ↔${normalizeVfsURI(this.compareFilepath)}`
-                        : normalizeVfsURI(this.filepath)}
-                </span>
-                <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0;">
-                    <sutram-btn size="sm" intent="neutral" icon="refresh-cw" label="Refresh" @click=${() => this._fetchDiff()}></sutram-btn>
-                    <sutram-btn size="sm" intent="primary" icon="edit-3" label="${isPairMode ? 'Edit Left' : 'Open Editor'}" @click=${() => viewSourceFile(this.filepath, true)}></sutram-btn>
-                    ${isPairMode ? html`
-                        <sutram-btn size="sm" intent="highlight" icon="edit-3" label="Edit Right" @click=${() => viewSourceFile(this.compareFilepath, true)}></sutram-btn>
-                    ` : ''}
-                </div>
-            </div>
-            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0;">
+            <sutram-view ?flush=${true} ?noScroll=${true}>
+                <sutram-surface slot="header" variant="panel" border="bottom" padding="xs">
+                    <sutram-action-bar collapse="sm" align="between">
+                        <code>
+                            ${isPairMode
+                                ? `${normalizeVfsURI(this.filepath)} ↔ ${normalizeVfsURI(this.compareFilepath)}`
+                                : normalizeVfsURI(this.filepath)}
+                        </code>
+                        <sutram-stack direction="row" align="center" gap="sm">
+                            <sutram-btn ?compact=${true} intent="neutral" icon="refresh-cw" label="Refresh" @click=${() => this._fetchDiff()}></sutram-btn>
+                            <sutram-btn ?compact=${true} intent="primary" icon="edit-3" label="${isPairMode ? 'Edit Left' : 'Open Editor'}" @click=${() => viewSourceFile(this.filepath, true)}></sutram-btn>
+                            ${isPairMode ? html`
+                                <sutram-btn ?compact=${true} intent="highlight" icon="edit-3" label="Edit Right" @click=${() => viewSourceFile(this.compareFilepath, true)}></sutram-btn>
+                            ` : ''}
+                        </sutram-stack>
+                    </sutram-action-bar>
+                </sutram-surface>
                 <sutram-diff-viewer
                     .searchStr=${this._headContent}
                     .replaceStr=${this._workingContent}
                     .leftTitle=${leftLabel}
                     .rightTitle=${rightLabel}>
                 </sutram-diff-viewer>
-            </div>
+            </sutram-view>
         `;
     }
 }

@@ -1,9 +1,11 @@
 from pathlib import Path
 import os
 import re
-from typing import TypedDict, List
+from typing import TypedDict, List, Optional, Dict, Any
 from insetu.core.sdk import InSetuExtension, ExtensionContext, TemplateOverlayVFSDriver
+from insetu.core.topology.engine_topology import build_sys_landmarks_context
 from insetu.core.utils_core import (
+    interpolate_mustache_chain,
     resolve_macro_includes,
     parse_frontmatter,
     InSetuURI,
@@ -40,7 +42,7 @@ prompts_bp = InSetuExtension(
         }
     },
 )
-__depends__ = []
+__depends__ = ['topology']
 
 
 @prompts_bp.on('mutate_workspace_config')
@@ -63,7 +65,16 @@ def migrate_legacy_prompt_macros_on_boot(workspace_id=None, **kwargs):
     try:
         ctx = prompts_bp.get_context(workspace_id)
         pattern = re.compile(r'(\{\{\s*include_prompt\s*:\s*)([^\s{};,\'"]+)')
-        for prompt_uri in ctx.vfs.walk("ctx://prompts", exts=['.md', '.txt']):
+        target_roots = ["ctx://prompts"] + [
+            f"vfs://{r.get('repo_dir')}/.insetu-data/prompts"
+            for r in (ctx.config.get("target_repos") or [])
+            if isinstance(r, dict) and r.get("repo_dir")
+        ]
+        candidate_uris = [
+            u for root in target_roots
+            for u in ctx.vfs.walk(root, exts=['.md', '.txt'])
+        ]
+        for prompt_uri in candidate_uris:
             if "/.templates/" in prompt_uri and "/.templates/user/" not in prompt_uri:
                 continue
             content = ctx.vfs.read(prompt_uri)
@@ -122,8 +133,11 @@ def provide_available_prompts(workspace_id=None, **kwargs):
         r_dir = repo_cfg.get("repo_dir")
         if r_dir:
             repo_prompt_root = f"vfs://{r_dir}/.insetu-data/prompts"
-            for r_rel_path in ctx.vfs.walk(repo_prompt_root, exts=['.md', '.txt', '.gitkeep', '.keep']):
-                prompts.append(r_rel_path)
+            found_repo_prompts = list(ctx.vfs.walk(repo_prompt_root, exts=['.md', '.txt', '.gitkeep', '.keep']))
+            if found_repo_prompts:
+                prompts.extend(found_repo_prompts)
+            else:
+                prompts.append(f"{repo_prompt_root}/.gitkeep")
     for _, ws_prompt_uri in ctx.iter_shared_mount_files(domain="prompts", exts=['.md', '.txt', '.gitkeep', '.keep']):
         prompts.append(ws_prompt_uri)
 
@@ -137,6 +151,108 @@ class PromptResolveQuery(TypedDict, total=False):
     file: str
     filepath: str
     content: str
+    repo: str
+
+
+def read_prompt_with_cascade(ctx, uri_str: str) -> Optional[str]:
+    """
+    Single Source of Truth prompt reader evaluating the 3-Tier Override Cascade:
+    1. Exact URI or Workspace Override (`ctx://prompts/<rel>`)
+    2. Global User Template (`ctx://prompts/.templates/user/<rel>`)
+    3. Active Core & Extension Module Templates (`ctx://prompts/.templates/<mod>/<rel>`)
+    4. Case-insensitive disk fallback across tenant prompt directories.
+    """
+    if not uri_str:
+        return None
+    u_obj = InSetuURI.from_external_input(uri_str, default_scheme="ctx")
+    canon_str = InSetuURI.canonicalize(str(u_obj), default_prefix="ctx://prompts/")
+    u_obj = InSetuURI(canon_str)
+    rel_p = (u_obj.path or "").lstrip("/")
+
+    if u_obj.scheme == "ctx" and u_obj.volume == "prompts" and not rel_p.startswith(".templates/"):
+        first_seg, sep, rest_rel = rel_p.partition("/")
+        known_repos = {
+            r.get("repo_dir")
+            for r in (ctx.config.get("target_repos") or [])
+            if isinstance(r, dict) and r.get("repo_dir")
+        }
+        repo_cands: List[str] = []
+        fallback_rel = rel_p
+        if sep and rest_rel and first_seg in known_repos:
+            repo_cands.append(f"vfs://{first_seg}/.insetu-data/prompts/{rest_rel}")
+            fallback_rel = rest_rel
+        for cand_uri in (
+            *repo_cands,
+            f"ctx://prompts/{rel_p}",
+            *([f"ctx://prompts/{fallback_rel}"] if fallback_rel != rel_p else []),
+            f"ctx://prompts/.templates/user/{rel_p}",
+            *([f"ctx://prompts/.templates/user/{fallback_rel}"] if fallback_rel != rel_p else []),
+            *(f"ctx://prompts/.templates/{mod_name}/{fallback_rel}" for mod_name in ctx.get_active_modules()),
+        ):
+            val = ctx.vfs.read(cand_uri)
+            if val is not None:
+                return val
+    else:
+        for cand_uri in (str(u_obj), str(u_obj).lower()):
+            val = ctx.vfs.read(cand_uri)
+            if val is not None:
+                return val
+
+    if rel_p:
+        target_lower = rel_p.lower()
+        target_name_lower = Path(rel_p).name.lower()
+        for avail_uri in provide_available_prompts(workspace_id=ctx.workspace_id):
+            avail_lower = avail_uri.lower()
+            if avail_lower.endswith(f"/{target_lower}") or avail_lower.endswith(f"/{target_name_lower}"):
+                val = ctx.vfs.read(avail_uri)
+                if val is not None:
+                    return val
+    return None
+
+
+def resolve_prompt_text(
+    ctx,
+    target_uri: str = "ctx://prompts/preview.md",
+    raw_content: Optional[str] = None,
+    repo: Optional[str] = None,
+    extra_context: Optional[Dict[str, Any]] = None,
+    interpolate_vars: bool = True,
+) -> Optional[str]:
+    """
+    Expands `{{include_prompt: ...}}` macros and interpolates `{{ var | sys.* | default }}`
+    against the target repository's `sys.*` landmarks and any caller-supplied `extra_context`.
+    """
+    canon_uri = str(InSetuURI.from_external_input(target_uri, default_scheme="ctx")) if target_uri else "ctx://prompts/preview.md"
+    content = raw_content if raw_content is not None else read_prompt_with_cascade(ctx, canon_uri)
+    if content is None:
+        return None
+
+    yaml_meta, main_body, _ = parse_frontmatter(content)
+
+    def _read_included_body(target_req: str) -> Optional[str]:
+        raw_inc = read_prompt_with_cascade(ctx, str(InSetuURI.from_external_input(target_req, default_scheme="ctx")))
+        if raw_inc is None:
+            return None
+        _, inc_body, _ = parse_frontmatter(raw_inc)
+        return inc_body
+
+    expanded = resolve_macro_includes(main_body, canon_uri, read_callback=_read_included_body, workspace_id=ctx.workspace_id)
+    if not interpolate_vars:
+        return expanded
+
+    fm_meta = yaml_meta if isinstance(yaml_meta, dict) else {}
+    fm_repo = str(fm_meta.get("repo") or "").strip() or None
+    base_ctx = dict(extra_context or {})
+    if "sys" not in base_ctx or not isinstance(base_ctx.get("sys"), dict):
+        base_ctx["sys"] = build_sys_landmarks_context(
+            ctx,
+            repo_hint=repo or fm_repo,
+            candidate_uris=[canon_uri],
+            extra_inputs={**fm_meta, **(base_ctx.get("inputs") or {})},
+        )
+    return interpolate_mustache_chain(expanded, base_ctx, ctx=ctx)
+
+
 @prompts_bp.route('list', methods=['GET'], response_schema=PromptsListResponse, docstring="[sync] Lists all available workspace, repository, virtual module template, and mounted prompts.")
 def api_prompts_list(ctx):
     """Provides a list of available prompts (including virtual .templates) for the UI."""
@@ -145,46 +261,28 @@ def api_prompts_list(ctx):
         "prompts": prompts,
         "profile_dir": Path(ctx.paths["config_path"]).parent.as_posix()
     }
-@prompts_bp.route('resolve', methods=['GET', 'POST'], request_schema=PromptResolveQuery, docstring="[sync] Fetches a canonical prompt URI (or evaluates an unsaved POST buffer) and recursively resolves {{include_prompt: ...}} macros.")
+
+
+@prompts_bp.route('resolve', methods=['GET', 'POST'], request_schema=PromptResolveQuery, docstring="[sync] Fetches a canonical prompt URI (or evaluates an unsaved POST buffer), recursively resolves {{include_prompt: ...}} macros, and interpolates {{ sys.* }} repository landmarks.")
 def api_prompts_resolve(ctx):
-    """Fetches a canonical prompt URI or live POST buffer and recursively resolves {{include_prompt: ...}} macros."""
+    """Fetches a canonical prompt URI or live POST buffer and resolves {{include_prompt: ...}} and {{ sys.* }} macros."""
     data = ctx.payload or {}
     filename = str(data.get('file') or data.get('filepath') or '').strip()
     live_content = data.get('content')
+    repo_hint = str(data.get('repo') or '').strip() or None
 
     if not filename and live_content is None:
         return {"error": "File required"}, 400
-    def _read_with_cascade(uri_str: str):
-        u_obj = InSetuURI(uri_str)
-        rel_p = (u_obj.path or "").lstrip("/")
-        if u_obj.scheme == "ctx" and u_obj.volume == "prompts" and not rel_p.startswith(".templates/"):
-            val = ctx.vfs.read(f"ctx://prompts/{rel_p}")
-            if val is not None:
-                return val
-            val = ctx.vfs.read(f"ctx://prompts/.templates/user/{rel_p}")
-            if val is not None:
-                return val
-            for mod_name in ctx.get_active_modules():
-                val = ctx.vfs.read(f"ctx://prompts/.templates/{mod_name}/{rel_p}")
-                if val is not None:
-                    return val
-            return None
-        return ctx.vfs.read(str(u_obj))
 
-    target_uri = str(InSetuURI(filename)) if filename else "ctx://prompts/preview.md"
-    content = live_content if live_content is not None else _read_with_cascade(target_uri)
-    if content is not None:
-        _, main_body, _ = parse_frontmatter(content)
-
-        def read_prompt(target_req):
-            raw_inc = _read_with_cascade(str(InSetuURI(target_req)))
-            if raw_inc is None:
-                return None
-            _, inc_body, _ = parse_frontmatter(raw_inc)
-            return inc_body
-
-        pattern = r'\{\{\s*include_prompt\??\s*:\s*([^\s{}]+)\s*(?:\{([\s\S]*?)\})?\s*\}\}'
-        resolved_content = resolve_macro_includes(main_body, target_uri, pattern, read_prompt, workspace_id=ctx.workspace_id)
+    target_uri = str(InSetuURI.from_external_input(filename, default_scheme="ctx")) if filename else "ctx://prompts/preview.md"
+    resolved_content = resolve_prompt_text(
+        ctx,
+        target_uri=target_uri,
+        raw_content=live_content,
+        repo=repo_hint,
+        interpolate_vars=True,
+    )
+    if resolved_content is not None:
         return resolved_content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
     return "Prompt not found.", 404

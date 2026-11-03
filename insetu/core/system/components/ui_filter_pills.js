@@ -1,4 +1,4 @@
-import { LitElement, html, css } from 'lit';
+import { LitElement, html } from 'lit';
 import { sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 
 export class InSetuRepoFilter extends LitElement {
@@ -8,13 +8,7 @@ export class InSetuRepoFilter extends LitElement {
         activeRepos: { type: Array },
         extraRepos: { type: Array }
     };
-    static styles = [
-        sharedStyles,
-        css`
-            .wrap { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-            .label { font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap; user-select: none; }
-        `
-    ];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.label = 'Repos:';
@@ -51,19 +45,21 @@ export class InSetuRepoFilter extends LitElement {
         const visibleRepos = this.repos || [];
         const visibleExtra = this.extraRepos || [];
         return html`
-            <div class="wrap">
-                ${this.label ? html`<span class="label" style="display: inline-flex; align-items: center; gap: 4px;"><yv-icon name="pin" style="width: 14px; height: 14px; color: var(--intent-primary);"></yv-icon>${this.label}</span>` : ''}
-
-                <div @sutram-pill-toggled=${this._handleRepoToggle} style="display: contents;">
-                    <sutram-pill pillId="ALL" labelText="All" ?active=${activeRepoSet.has('ALL')}></sutram-pill>
-                    ${visibleExtra.map(ex => html`
-                        <sutram-pill pillId=${ex.id} labelText=${ex.label} ?active=${activeRepoSet.has(ex.id)}></sutram-pill>
-                    `)}
-                    ${visibleRepos.map(repo => html`
-                        <sutram-pill pillId=${repo} labelText=${repo} ?active=${activeRepoSet.has(repo)}></sutram-pill>
-                    `)}
-                </div>
-            </div>
+            <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true} @sutram-pill-toggled=${this._handleRepoToggle}>
+                ${this.label ? html`
+                    <sutram-stack direction="row" align="center" gap="xs">
+                        <sutram-icon name="pin" size="sm" intent="primary"></sutram-icon>
+                        <sutram-label .text=${this.label}></sutram-label>
+                    </sutram-stack>
+                ` : ''}
+                <sutram-pill pillId="ALL" labelText="All" ?active=${activeRepoSet.has('ALL')}></sutram-pill>
+                ${visibleExtra.map(ex => html`
+                    <sutram-pill pillId=${ex.id} labelText=${ex.label} ?active=${activeRepoSet.has(ex.id)}></sutram-pill>
+                `)}
+                ${visibleRepos.map(repo => html`
+                    <sutram-pill pillId=${repo} labelText=${repo} ?active=${activeRepoSet.has(repo)}></sutram-pill>
+                `)}
+            </sutram-stack>
         `;
     }
 }

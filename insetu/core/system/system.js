@@ -137,20 +137,47 @@ async function bootExtensions() {
         return;
     }
 
-    // Batch 1: Core OS Chassis Modules
-    const coreUrls = CORE_UI_SCRIPTS;
+    const appState = AppStore.getState();
+    const quarantinedMap = { ...(appState.quarantinedModules || {}) };
 
-    // Batch 2: Feature Extensions
+    // Batch 1: Core OS Chassis Modules (Skip any core bundle whose backend module is quarantined)
+    const coreUrls = CORE_UI_SCRIPTS.filter(url => {
+        const modName = url.split('/')[3] || '';
+        return !quarantinedMap[modName];
+    });
+
+    // Batch 2: Feature Extensions (Skipped if quarantined on backend)
     const extensionUrls = activeExts
-        .filter(ext => !(window.inSetu?.isCore && window.inSetu.isCore(ext)))
+        .filter(ext => !(window.inSetu?.isCore && window.inSetu.isCore(ext)) && !quarantinedMap[ext])
         .map(ext => `/static/extensions/${ext}/ext_${ext}.js`);
 
-    if (window.ExtensionRegistry && typeof window.ExtensionRegistry.loadBatches === 'function') {
-        await window.ExtensionRegistry.loadBatches([
-            coreComponents,
-            coreUrls,
-            extensionUrls
-        ]);
+    const loadBatchResilient = async (urls, tierLabel) => {
+        await Promise.all((urls || []).map(async (url) => {
+            try {
+                await import(url);
+            } catch (err) {
+                const modId = url.split('/').slice(-2, -1)[0] || url.split('/').pop().replace(/^ext_|\.js$/g, '');
+                console.error(`⚠️ [Frontend Fault Quarantine] Failed to import ${url}:`, err);
+                quarantinedMap[modId] = {
+                    id: modId,
+                    tier: tierLabel,
+                    status: 'quarantined_js',
+                    reason: `Frontend JS Error: ${err?.message || String(err)}`,
+                    traceback: err?.stack || String(err)
+                };
+                if (window.ExtensionRegistry?.executeUnload) {
+                    try { window.ExtensionRegistry.executeUnload(modId); } catch (_) {}
+                }
+            }
+        }));
+    };
+
+    await loadBatchResilient(coreComponents, 'core');
+    await loadBatchResilient(coreUrls, 'core');
+    await loadBatchResilient(extensionUrls, 'ext');
+
+    if (Object.keys(quarantinedMap).length > 0) {
+        AppStore.setState({ quarantinedModules: quarantinedMap });
     }
 
     // Automatically map schemas to the System Settings menu
@@ -177,7 +204,7 @@ async function checkManifestVersion() {
     }
     wm.lastPolledTs = nowMs;
     try {
-        const deltaRes = await window.inSetu.api.workspace.get(`system/deltas?since=${wm.lastManifestSyncTs}`, { 
+        const deltaRes = await window.inSetu.api.get(`system/deltas?since=${wm.lastManifestSyncTs}`, { 
             signal: AbortSignal.timeout(8000) 
         });
 
@@ -228,7 +255,7 @@ async function checkManifestVersion() {
                         continue;
                     }
                     // Surgical Fetch: Fetch repo tree
-                    const treeRes = await window.inSetu.api.workspace.get(`topology/vfs?repo=${encodeURIComponent(repo)}`);
+                    const treeRes = await window.inSetu.api.get(`topology/vfs?repo=${encodeURIComponent(repo)}`);
                     if (window.inSetu.utils.getActiveWorkspace() !== activeWs) return;
                     if (treeRes.ok) {
                         const treeData = await treeRes.json();
@@ -261,7 +288,7 @@ async function checkManifestVersion() {
                         return { warmingQueue: filtered };
                     });
                 } else if (localCtxSignatures[path] !== ts) {
-                    const entryRes = await window.inSetu.api.workspace.get(`gather/manifest/entry?path=${encodeURIComponent(path)}`);
+                    const entryRes = await window.inSetu.api.get(`gather/manifest/entry?path=${encodeURIComponent(path)}`);
                     if (window.inSetu.utils.getActiveWorkspace() !== activeWs) return;
                     if (entryRes.ok) {
                         const entryData = await entryRes.json();
@@ -363,11 +390,7 @@ async function checkManifestVersion() {
 
                 chunk.forEach((p, index) => {
                     setTimeout(() => {
-                        if (window.inSetu?.api?.request) {
-                            window.inSetu.api.request(p, { priority: 'low', onlyIfMissing: true }, activeWs).catch(() => {});
-                        } else {
-                            fetch(p, { priority: 'low' }).catch(() => {});
-                        }
+                        window.inSetu?.api?.request?.(p, { priority: 'low', onlyIfMissing: true }, activeWs).catch(() => {});
                     }, index * staggerMs);
                 });
 
@@ -587,7 +610,7 @@ async function executeSecurityHandshake() {
             return new Promise((resolve) => {
                 document.body.innerHTML = `
                     <div style="font-family:var(--font-mono, monospace); background:var(--bg-deep, #0f172a); color:var(--text, #f8fafc); padding:20px; text-align:center; height:100dvh; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; align-items:center;">
-                        <h2 style="color:var(--intent-success, #10b981); margin-top:0; display:flex; align-items:center; gap:8px;"><yv-icon name="key" style="width:22px; height:22px;"></yv-icon><span>inSetu Security Gate</span></h2>
+                        <h2 style="color:var(--intent-success, #10b981); margin-top:0; display:flex; align-items:center; gap:8px;"><sutram-icon name="key" size="lg" intent="success"></sutram-icon><span>inSetu Security Gate</span></h2>
                         <p style="color:var(--text-muted, #94a3b8); margin-bottom:20px;">Enter the persistent 'auth_token' defined in your config.json:</p>
                         <input type="password" id="auth-token-input" style="padding:12px; font-size:1.1rem; border-radius:4px; border:1px solid var(--border, #334155); background:var(--input-bg, #1e293b); color:var(--text, #ffffff); margin-bottom:15px; width:100%; max-width:300px; text-align:center;" />
                         <button id="auth-submit-btn" style="background:var(--intent-primary, #3b82f6); color:var(--text-light, #ffffff); border:none; padding:12px 20px; border-radius:4px; font-size:1.1rem; font-weight:bold; cursor:pointer; width:100%; max-width:300px;">Authenticate</button>
@@ -837,26 +860,13 @@ export async function executeBootSequence(options = {}) {
             updateBootProgress("Loading Offline Topology...");
             const topStr = window.inSetu.utils.getScopedStorage('offline_topology');
             if (topStr) {
-                const d = JSON.parse(topStr);
-                const tabOrder = d.tab_order || [];
-                AppStore.setState({ 
-                    allRepos: d.repos,
-                    targetConfigs: d.target_repos || [],
-                    virtualContexts: d.virtual_contexts || [],
-                    categoryOrder: d.category_order || [],
-                    hiddenOutputs: d.hidden_outputs || [],
-                    configMissing: !!d.config_missing,
-                    tabOrder: tabOrder
-                });
-                if (window.ExtensionRegistry?.setTabOrder && tabOrder.length > 0) {
-                    window.ExtensionRegistry.setTabOrder(tabOrder);
-                }
+                _applyTopologyPayload(JSON.parse(topStr));
             }
         } catch(e) { console.warn("Offline Topology Hydration Failed", e); }
         try {
             updateBootProgress("Loading Offline Manifest...");
             // Pull the file manifest from the IDB cache interceptor
-            let mRes = await window.inSetu.api.workspace.get('system/manifest'); 
+            let mRes = await window.inSetu.api.get('system/manifest'); 
             if (mRes.ok) {
                 AppStore.setState({ manifest: await mRes.json() });
                 window.inSetu?.offlineLog?.(`[BOOT] Loaded cached VFS manifest`, 'success');
@@ -877,7 +887,7 @@ export async function executeBootSequence(options = {}) {
         try {
             console.log("[BOOT] Fetching system configuration...");
             updateBootProgress("Fetching system config...");
-            const cRes = await window.inSetu.api.workspace.get('system/config?t=' + Date.now(), { cache: 'no-store' });
+            const cRes = await window.inSetu.api.get('system/config?t=' + Date.now(), { cache: 'no-store' });
             console.log("[BOOT] System configuration fetched. OK:", cRes.ok);
             if (cRes.ok) {
                 const data = await cRes.json();
@@ -1265,30 +1275,38 @@ function _reconcileExtensionsAndSettings(previousExts = [], nextExts = []) {
     }
 }
 
+function _applyTopologyPayload(d, extraState = {}) {
+    if (!d || typeof d !== 'object') return;
+    const tabOrder = d.tab_order || [];
+    AppStore.setState({
+        ...extraState,
+        allRepos: d.repos,
+        targetConfigs: d.target_repos || [],
+        virtualContexts: d.virtual_contexts || [],
+        categoryOrder: d.category_order || [],
+        hiddenOutputs: d.hidden_outputs || [],
+        configMissing: !!d.config_missing,
+        quarantinedModules: d.quarantined_modules || {},
+        workspaceExtensions: d.workspace_extensions || {},
+        degradedCore: Boolean(d.degraded_core),
+        tabOrder: tabOrder
+    });
+    if (window.ExtensionRegistry?.setTabOrder && tabOrder.length > 0) {
+        window.ExtensionRegistry.setTabOrder(tabOrder);
+    }
+}
+
 async function _hydrateWorkspaceEnvironment(targetWs, previousExts = []) {
     // 1. Hydrate Topology
-    const rRes = await window.inSetu.api.workspace.get('system/topology?t=' + Date.now());
+    const rRes = await window.inSetu.api.get('system/topology?t=' + Date.now());
     if (rRes.ok) {
         const d = await rRes.json();
         window.inSetu.utils.setScopedStorage('offline_topology', JSON.stringify(d), targetWs);
-        const tabOrder = d.tab_order || [];
-        AppStore.setState({
-            activeWorkspace: targetWs,
-            allRepos: d.repos,
-            targetConfigs: d.target_repos || [],
-            virtualContexts: d.virtual_contexts || [],
-            categoryOrder: d.category_order || [],
-            hiddenOutputs: d.hidden_outputs || [],
-            configMissing: !!d.config_missing,
-            tabOrder: tabOrder
-        });
-        if (window.ExtensionRegistry?.setTabOrder && tabOrder.length > 0) {
-            window.ExtensionRegistry.setTabOrder(tabOrder);
-        }
+        _applyTopologyPayload(d, { activeWorkspace: targetWs });
     }
 
     // 2. Hydrate Config, Boot Newly Enabled Extensions & Unload Disabled Extensions
-    const cRes = await window.inSetu.api.workspace.get('system/config?t=' + Date.now(), { cache: 'no-store' });
+    const cRes = await window.inSetu.api.get('system/config?t=' + Date.now(), { cache: 'no-store' });
     if (cRes.ok) {
         const data = await cRes.json();
         window.inSetu.utils.setScopedStorage('offline_config', JSON.stringify(data), targetWs);
@@ -1329,7 +1347,7 @@ async function _hydrateWorkspaceEnvironment(targetWs, previousExts = []) {
 
     // 4. Hydrate Manifest
     AppStore.setState({ manifest: { vfs: {}, ctx: {} } });
-    const mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
+    const mRes = await window.inSetu.api.get('system/manifest?t=' + Date.now());
     const rawManifest = mRes.ok ? await mRes.json() : null;
     const manifestData = { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} };
     const appState = AppStore.getState();
@@ -1379,7 +1397,7 @@ export const SessionOrchestrator = {
             } catch (_) {}
 
             try {
-                await window.inSetu.api.workspace.post('system/workspaces', { active_workspace: targetWs });
+                await window.inSetu.api.post('system/workspaces', { active_workspace: targetWs });
             } catch (_) {}
 
             if (oldWs && window.inSetu.api?.abortWorkspace) {
@@ -1509,7 +1527,7 @@ async function executeWorkspaceSwap(key, title = null, targetHash = null) {
 async function loadWorkspaces() {
     try {
         console.log("[TELEMETRY] Requesting workspaces...");
-        const res = await window.inSetu.api.workspace.get('system/workspaces?t=' + Date.now(), { cache: 'no-store' });
+        const res = await window.inSetu.api.get('system/workspaces?t=' + Date.now(), { cache: 'no-store' });
         if (!res.ok) {
             console.warn(`[TELEMETRY] loadWorkspaces failed with status: ${res.status}`);
             return;
@@ -1591,7 +1609,7 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
         }
         const isFormData = payload instanceof FormData;
         const reqOptions = isFormData ? { ...options, headers: { ...(options.headers || {}) } } : { ...options };
-        const res = await window.inSetu.api.workspace.post(cleanPath, payload, reqOptions);
+        const res = await window.inSetu.api.post(cleanPath, payload, reqOptions);
 
         if (!res.ok) {
             let errMsg = res.statusText;
@@ -1674,7 +1692,7 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
 }
 export const refreshManifest = window.inSetu.utils.coalescedAsync(async () => {
     try {
-        const res = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
+        const res = await window.inSetu.api.get('system/manifest?t=' + Date.now());
         if (res.ok) {
             const rawManifest = await res.json();
             const nextVfs = rawManifest?.vfs || {};
@@ -1775,29 +1793,17 @@ async function initializeWorkspaceTopology() {
     // 1. Fetch Repository Configurations
     try {
         console.log("[TELEMETRY] Requesting topology...");
-        const rRes = await window.inSetu.api.workspace.get('system/topology');
+        const rRes = await window.inSetu.api.get('system/topology');
         if (rRes.ok) {
             const d = await rRes.json();
             console.log("[TELEMETRY] Topology loaded successfully.");
             window.inSetu.utils.setScopedStorage('offline_topology', JSON.stringify(d));
-            const tabOrder = d.tab_order || [];
-            AppStore.setState({ 
-                allRepos: d.repos,
-                targetConfigs: d.target_repos || [],
-                virtualContexts: d.virtual_contexts || [],
-                categoryOrder: d.category_order || [],
-                hiddenOutputs: d.hidden_outputs || [],
-                configMissing: !!d.config_missing,
-                tabOrder: tabOrder
-            });
-            if (window.ExtensionRegistry?.setTabOrder && tabOrder.length > 0) {
-                window.ExtensionRegistry.setTabOrder(tabOrder);
-            }
+            _applyTopologyPayload(d);
         }
 } catch(e) { console.error("Topology fetch failed:", e); }
     // 2. Auto-Hydrate Manifest
     try {
-        let mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
+        let mRes = await window.inSetu.api.get('system/manifest?t=' + Date.now());
         let rawManifest = mRes.ok ? await mRes.json() : null;
         let manifestData = { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} };
         const isEmptyManifest = Object.keys(manifestData.vfs).length === 0 && Object.keys(manifestData.ctx).length === 0;

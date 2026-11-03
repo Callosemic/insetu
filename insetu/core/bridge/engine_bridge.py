@@ -3,12 +3,12 @@ import json
 import time
 import hashlib
 import zlib
-import difflib
 import traceback
 from typing import TypedDict, Literal, List, Dict, Optional, Any, Union, Tuple
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import approve_test_command, InSetuURI, get_sister_repos, get_workspace_physics
 # Import the extracted math & validation logic
+from insetu.core.languages import format_interleaved_file_diff
 from .parser import parse_blocks
 from .bridge_fuzzy import apply_block_in_memory, apply_textedit_in_memory, apply_json_patch_in_memory
 from .bridge_vfs import execute_bridge_sync, _process_sync_transaction
@@ -475,17 +475,15 @@ def bridge_turn_diff(ctx):
         else:
             base_content = ""
 
-        current_content = ctx.vfs.read(fp) or ""
-        udiff = "\n".join(
-            difflib.unified_diff(
-                base_content.splitlines(),
-                current_content.splitlines(),
-                fromfile=f"a/{fp}",
-                tofile=f"b/{fp}",
-                lineterm="",
-            )
-        )
-        diff_blocks.append(f"=== FILE: {fp} ===\n{udiff}\n\n--- CURRENT FILE CONTENT: {fp} ---\n{current_content}")
+        current_content = ctx.vfs.read(fp)
+        if current_content is None:
+            diff_blocks.append(f"=== DELETED FILE: {fp} ===")
+            continue
+        if not base_content.strip():
+            diff_blocks.append(f"=== NEW FILE: {fp} ===\n{current_content}")
+            continue
+        interleaved = format_interleaved_file_diff(fp, base_content, current_content)
+        diff_blocks.append(f"=== MODIFIED FILE (INTERLEAVED AST DIFF): {fp} ===\n{interleaved}")
 
     return {
         "transaction_ids": tx_ids,

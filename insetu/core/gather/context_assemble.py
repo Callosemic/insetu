@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
 
 from insetu.core.sdk import InSetuURI
 from insetu.core.topology.engine_topology import (
+    clamp_uris_to_topology,
     discover_constitution_files,
     get_topology_files_for_repo,
 )
@@ -110,7 +111,42 @@ def get_affinity_neighbors(ctx, seed_files: List[str], top_k: int = 5) -> List[s
             scores[peer] = scores.get(peer, 0.0) + effective
 
     sorted_peers = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    return [p[0] for p in sorted_peers[:top_k]]
+    candidate_peers = [p[0] for p in sorted_peers]
+    if not candidate_peers:
+        return []
+    # Clamp on read without deleting SQLite rows so temporary branch switches or filter edits never wipe learned weights.
+    valid_peers = set(clamp_uris_to_topology(ctx.workspace_id, candidate_peers, expand_dirs=False))
+    return [p for p in candidate_peers if p in valid_peers][:top_k]
+
+
+def prune_stale_affinity_edges(ctx, grace_period_seconds: float = 14 * 86400.0) -> int:
+    """
+    Garbage-collects affinity_edges rows only after they have been inactive longer than
+    grace_period_seconds AND are untracked by topology_ledger.
+    """
+    conn = ctx.get_db("vfs_index")
+    cutoff = time.time() - max(0.0, float(grace_period_seconds))
+    try:
+        rows = conn.execute(
+            "SELECT file_a, file_b FROM affinity_edges WHERE last_updated_at < ?",
+            (cutoff,),
+        ).fetchall()
+    except Exception:
+        return 0
+    if not rows:
+        return 0
+    candidates = list({r["file_a"] for r in rows} | {r["file_b"] for r in rows})
+    valid_set = set(clamp_uris_to_topology(ctx.workspace_id, candidates, expand_dirs=False))
+    dead_uris = [u for u in candidates if u not in valid_set]
+    if not dead_uris:
+        return 0
+    ph = ",".join(["?"] * len(dead_uris))
+    cur = conn.execute(
+        f"DELETE FROM affinity_edges WHERE last_updated_at < ? AND (file_a IN ({ph}) OR file_b IN ({ph}))",
+        (cutoff, *dead_uris, *dead_uris),
+    )
+    conn.commit()
+    return int(cur.rowcount or 0)
 
 
 # --- Security Scrubbing ---
@@ -167,7 +203,11 @@ def assemble_blast_radius(
     3. Downstream callers (export impact radius via Cartographer / search).
     4. Topological bucket siblings & Hebbian affinity edges.
     """
-    clean_edits = list(dict.fromkeys(str(InSetuURI(f)) for f in edit_targets if f))
+    clean_edits = clamp_uris_to_topology(
+        ctx.workspace_id,
+        list(dict.fromkeys(str(InSetuURI(f)) for f in edit_targets if f)),
+        expand_dirs=True,
+    )
     reference_map: Dict[str, Set[str]] = {}
 
     # Layer 2: Upstream Callees (AST imports)
@@ -184,14 +224,10 @@ def assemble_blast_radius(
             if not mod_path or mod_path.startswith("."):
                 uri_obj = InSetuURI(ef)
                 cand_uri = uri_obj.parent_uri.join(mod_path.lstrip("./"))
-                if not cand_uri.exists(ctx.workspace_id):
-                    for ext in (".py", ".js", ".ts", ".rs"):
-                        trial = InSetuURI(f"{cand_uri}{ext}")
-                        if trial.exists(ctx.workspace_id):
-                            cand_uri = trial
-                            break
-                if cand_uri.exists(ctx.workspace_id):
-                    target_str = str(cand_uri)
+                trials = [str(cand_uri)] + [f"{cand_uri}{ext}" for ext in (".py", ".js", ".ts", ".rs")]
+                matched_trials = clamp_uris_to_topology(ctx.workspace_id, trials, expand_dirs=False)
+                if matched_trials:
+                    target_str = matched_trials[0]
                     if target_str not in clean_edits:
                         reference_map.setdefault(target_str, set()).update(names)
 
@@ -224,10 +260,11 @@ def assemble_blast_radius(
         if peer not in clean_edits and peer not in reference_map:
             reference_map.setdefault(peer, set())
 
+    valid_ref_uris = set(clamp_uris_to_topology(ctx.workspace_id, list(reference_map.keys()), expand_dirs=False))
     ref_targets = [
         {"filepath": fp, "symbols": sorted(syms)}
         for fp, syms in reference_map.items()
-        if ctx.vfs.read(fp) is not None
+        if fp in valid_ref_uris and ctx.vfs.read(fp) is not None
     ][:MAX_RAG_FILES_PER_HOP]
 
     return clean_edits, ref_targets
@@ -322,13 +359,20 @@ def assemble_context_payload(
     else:
         clean_edits, ref_targets = assemble_blast_radius(ctx, clean_edits, user_message, history_summary)
 
-    # Merge explicit reference_files into ref_targets
+    # Merge explicit reference_files into ref_targets (clamped strictly to tracked topology_ledger files)
+    clean_edits = clamp_uris_to_topology(ctx.workspace_id, clean_edits, expand_dirs=True)
+    clamped_explicit_refs = clamp_uris_to_topology(
+        ctx.workspace_id,
+        [str(InSetuURI(r)) for r in (reference_files or []) if r],
+        expand_dirs=True,
+    )
     existing_refs = {r["filepath"] for r in ref_targets}
-    for exp_ref in (reference_files or []):
-        norm_ref = str(InSetuURI(exp_ref))
+    for norm_ref in clamped_explicit_refs:
         if norm_ref not in clean_edits and norm_ref not in existing_refs and ctx.vfs.read(norm_ref) is not None:
             ref_targets.append({"filepath": norm_ref, "symbols": []})
             existing_refs.add(norm_ref)
+    valid_ref_set = set(clamp_uris_to_topology(ctx.workspace_id, [r["filepath"] for r in ref_targets], expand_dirs=False))
+    ref_targets = [r for r in ref_targets if r["filepath"] in valid_ref_set]
     ref_targets.sort(key=lambda r: r["filepath"])
 
     tier0_constitution = (

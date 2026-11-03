@@ -41,6 +41,10 @@ export const AppStore = createExtensionStore('App', {
     activeModules: [],
     pendingModules: [],
     extensionDependencyMeta: {},
+    quarantinedModules: {},
+    workspaceExtensions: {},
+    degradedCore: false,
+    activeCoreJs: null,
     syncWatermarks: {
         lastManifestSyncTs: 0,
         lastPolledTs: 0,
@@ -127,7 +131,8 @@ export const AppStore = createExtensionStore('App', {
     }
     // resetState is injected by the factory automatically
 }, {
-    localSync: ['pinnedRepos', 'tabBrowsePaths']
+    localSync: ['pinnedRepos', 'tabBrowsePaths'],
+    preserveOnSwitch: ['authToken', 'workspaces', 'isSwappingWorkspace', 'swapPhase']
 });
 window.inSetu.stores.App = AppStore;
 // Memoized VFS & CTX Manifest Derivation (computes once per manifest/targetConfigs change)
