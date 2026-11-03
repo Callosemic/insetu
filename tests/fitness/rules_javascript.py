@@ -139,8 +139,9 @@ def check_javascript_files():
     local_fetch_wrapper_pattern = re.compile(r'(const|let|var)\s+apiFetch\s*=')
     imperative_dom_create_pattern = re.compile(r'document\.createElement\(')
     raw_fetch_pattern = re.compile(r'\bfetch\s*\(')
+    unmanaged_while_poll_pattern = re.compile(r'while\s*\(\s*(?:true|1)\s*\)[\s\S]{0,200}?\b(?:await\s+new\s+Promise|system/jobs)\b')
     legacy_insetu_fetch_pattern = re.compile(r'window\.inSetu\.fetch\s*\(')
-    legacy_api_routing_pattern = re.compile(r'\bapi\.(?:workspace|system)\s*\(')
+    legacy_api_routing_pattern = re.compile(r'\bapi\.(?:workspace|system)\b')
     manual_unsub_pattern = re.compile(r'this\._unsub[a-zA-Z0-9_]*\s*=')
     zustand_create_store_pattern = re.compile(r'\bcreateStore\s*\(')
     zustand_direct_import_pattern = re.compile(r'from\s+[\'"]https://esm\.sh/zustand(?:/[^\'"]*)?[\'"]')
@@ -159,6 +160,9 @@ def check_javascript_files():
     dom_content_loaded_registration_pattern = re.compile(r'DOMContentLoaded[\'"]\s*,\s*(?:\(\)\s*=>|function\s*\(\)\s*)\s*\{[\s\S]*?ExtensionRegistry\.registerExtension')
     banned_cdn_import_pattern = re.compile(r'(?:from\s+|import\(\s*)[\'"]https?://(esm\.sh|cdn\.jsdelivr\.net|unpkg\.com)')
     banned_yenvui_tag_pattern = re.compile(r'<\/?yenvui-')
+    banned_yv_icon_tag_pattern = re.compile(r'<\/?yv-icon\b')
+    banned_legacy_insetu_primitive_pattern = re.compile(r'<\/?insetu-(?:spinner|empty-state)\b')
+    custom_css_block_pattern = re.compile(r'static\s+styles\s*=\s*\[[^\]]*\bcss`')
     sutram_subdir_pattern = re.compile(r'from\s+[\'"][^\'"]*vendor/sutram/(?!js/)[^\'"]*[\'"]')
     sutram_membrane_leak_pattern = re.compile(r'(?:from\s+|import\s+)[\'"](?:[^\'"]*vendor/(?:sutram|yenvui)/[^\'"]*|sutram(?:-chassis)?)[\'"]')
     raw_dialog_pattern = re.compile(r'<dialog\b')
@@ -246,8 +250,9 @@ def check_javascript_files():
     insetu_uri_class_pattern = re.compile(r'export\s+class\s+InSetuURI\b([\s\S]*?)^}', re.MULTILINE)
     insetu_uri_store_coupling_pattern = re.compile(r'\b(?:AppStore|derivedVfsFiles|stores\.App)\b')
     manual_entity_chunks_prop_pattern = re.compile(r'\.entityData=\$\{\{[\s\S]{0,400}?\bchunks\s*:')
+    duplicate_core_modules_list_pattern = re.compile(r'\[\s*[\'"]bridge[\'"]\s*,\s*[\'"]gather[\'"]\s*,\s*[\'"]cartographer[\'"]')
     unprefixed_api_route_pattern = re.compile(
-        r'\b(?:this\.api|window\.inSetu\.api(?:\.workspace)?)\.(?:get|post|delete|getJson|postJson|deleteJson|bindJobAction)\(\s*([\'`"])([^\'`"$?\s]+)(?:\?[^\'`"]*)?\1'
+        r'\b(?:this\.api|window\.inSetu\.api)\.(?:get|post|delete|getJson|postJson|deleteJson|bindJobAction)\(\s*([\'`"])([^\'`"$?\s]+)(?:\?[^\'`"]*)?\1'
     )
     known_api_modules = {
         "bridge", "gather", "cartographer", "config", "editor", "fs", "system",
@@ -327,13 +332,13 @@ def check_javascript_files():
                     )
                 ) @api_call
             ''')
-            allowed_verbs = {"get", "post", "delete", "getJson", "postJson", "deleteJson", "fetchImmutableText", "bindJobAction", "pollJob", "request", "workspace", "system"}
+            allowed_verbs = {"get", "post", "delete", "getJson", "postJson", "deleteJson", "fetchImmutableText", "bindJobAction", "pollJob", "request"}
             for match in _QueryCursor(api_query).matches(tree.root_node):
                 for node in match[1].get("verb", []):
                     verb_name = full_content.encode('utf8')[node.start_byte:node.end_byte].decode('utf8')
                     line_n = node.start_point[0] + 1
                     if verb_name not in allowed_verbs and file not in ["api.js", "sdk.js", "insetu_sdk.js"]:
-                        report_violation("APPROVED_API_VERB_MANDATE", filepath, line_n, f"Unapproved method '.{verb_name}' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).")
+                        report_violation("APPROVED_API_VERB_MANDATE", filepath, line_n, f"Unapproved method '.{verb_name}' called on this.api. Use flat canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request).")
                     if verb_name == "pollJob" and is_extension and file != "ext_tracker.js":
                         print(f"⚠️ [WARNING: BIND_JOB_ACTION_PREFERENCE] {file}:{line_n}\n   ↳ Imperative this.api.pollJob detected. Prefer declarative this.api.bindJobAction when possible.")
             # Debounce Mandate (clearTimeout)
@@ -438,6 +443,13 @@ def check_javascript_files():
                 filepath,
                 1,
                 "Extension components are forbidden from invoking ExtensionRegistry.executeUnload() directly. Extension unloading is managed exclusively by SessionOrchestrator."
+            )
+        if file != "insetu_sdk.js" and duplicate_core_modules_list_pattern.search(full_content):
+            report_violation(
+                "DUPLICATE_CORE_MODULES_LIST_BAN",
+                filepath,
+                1,
+                "Hardcoded core modules array detected outside insetu_sdk.js. Use window.inSetu.isCore(extName) instead."
             )
         if file != "store.js" and imperative_dirty_set_mutation_pattern.search(full_content):
             report_violation(
@@ -567,8 +579,17 @@ def check_javascript_files():
                 )
         if file in ["ext_tracker.js", "ext_research.js", "ext_config.js"] and "document.getElementById" in full_content:
             report_violation("GRADUATED_COMP_DOM_READ", filepath, 1, "Graduated components are forbidden from using document.getElementById (DOM Read Ban). Bind to reactive Lit properties instead.")
-        if is_extension and "extends InSetuElement" in full_content and "static get extensionName()" not in full_content:
-            report_violation("EXTENSION_NAME_GETTER_MANDATE", filepath, 1, "Components extending InSetuElement must define 'static get extensionName()' to ensure deterministic API routing.")
+        if (is_extension or is_core_js) and "extends InSetuElement" in full_content:
+            class_decl_re = re.compile(r'\bclass\s+([A-Za-z0-9_]+)\s+extends\s+InSetuElement\b')
+            class_matches = list(class_decl_re.finditer(full_content))
+            for idx, cm in enumerate(class_matches):
+                cls_name = cm.group(1)
+                cls_start = cm.start()
+                cls_end = class_matches[idx + 1].start() if idx + 1 < len(class_matches) else len(full_content)
+                cls_body = full_content[cls_start:cls_end]
+                if "static get extensionName()" not in cls_body:
+                    line_no = full_content[:cls_start].count("\n") + 1
+                    report_violation("EXTENSION_NAME_GETTER_MANDATE", filepath, line_no, f"Component '{cls_name}' extending InSetuElement must define 'static get extensionName()' to ensure deterministic API routing.")
         if is_extension:
             classes_extending = re.findall(r'class\s+([A-Za-z0-9_]+)\s+extends\s+(?:InSetuElement|LitElement)\b', full_content)
             for cls_name in classes_extending:
@@ -587,6 +608,15 @@ def check_javascript_files():
                         report_violation("DROPDOWN_CLICK_OUTSIDE_VIOLATION", filepath, 1, "Manual click listener detected for dropdown/filter management. Migrate to <insetu-filter-dropdown>.")
         if "localStorage.setItem('insetu_pinned_repos'" in full_content or 'localStorage.setItem("insetu_pinned_repos"' in full_content:
             report_violation("GLOBAL_LOCALSTORAGE_TENANT_LEAK", filepath, 1, "Un-suffixed localStorage write pattern detected. Force workspace-scoping (e.g., insetu_pinned_repos_${ws}).")
+        if (is_core_js or is_extension) and file not in ("ui_editor.js", "ext_term.js"):
+            for m in custom_css_block_pattern.finditer(full_content):
+                line_num = full_content[:m.start()].count('\n') + 1
+                report_violation(
+                    "CUSTOM_COMPONENT_CSS_BAN",
+                    filepath,
+                    line_num,
+                    f"Custom css`...` block detected in '{file}'. Core modules and extensions must use 'static styles = [sharedStyles];' and compose Sutram Lego primitives."
+                )
 
         # --- 3. LINE-BY-LINE REGEX SCANNER ---
         for i, line in enumerate(lines):
@@ -616,8 +646,8 @@ def check_javascript_files():
 
                 if is_extension and floating_global_pattern.match(line.strip()):
                     report_violation("UDF_STATE_BLEED", filepath, line_num, "Floating global state detected. Migrate variable into the centralized Zustand AppStore.")
-                if file not in ["api.js", "sdk.js"] and re.search(r'\bthis\.api\.(?!(?:get|post|delete|getJson|postJson|deleteJson|fetchImmutableText|bindJobAction|pollJob|request|workspace|system)\b)\w+', line):
-                    report_violation("APPROVED_API_VERB_MANDATE", filepath, line_num, "Unapproved method called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).")
+                if file not in ["api.js", "sdk.js", "insetu_sdk.js"] and re.search(r'\bthis\.api\.(?!(?:get|post|delete|getJson|postJson|deleteJson|fetchImmutableText|bindJobAction|pollJob|request)\b)\w+', line):
+                    report_violation("APPROVED_API_VERB_MANDATE", filepath, line_num, "Unapproved method called on this.api. Use flat canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request).")
                 if is_extension and raw_poll_job_pattern.search(line) and file != "ext_tracker.js":
                     print(f"⚠️ [WARNING: BIND_JOB_ACTION_PREFERENCE] {file}:{line_num}\n   ↳ Imperative this.api.pollJob detected. Prefer declarative this.api.bindJobAction when possible.")
 
@@ -629,8 +659,23 @@ def check_javascript_files():
             if is_lit_component and re.search(r'\.innerHTML\s*=', line):
                 report_violation("LIT_INNER_HTML_BAN", filepath, line_num, "Direct '.innerHTML=' assignment in Lit component detected. Render text nodes declaratively using Lit interpolation to prevent XSS.")
 
-            if re.search(r'<sutram-card\b[^>]*\bintentColor=["\']var\(--intent-', line):
-                report_violation("SUTRAM_CARD_INTENT_TOKEN_MANDATE", filepath, line_num, "Deprecated intentColor='var(--intent-*)' detected on <sutram-card>. Use declarative intent='primary|warning|danger|neutral|highlight' token property instead.")
+            stripped_line = strip_lit_expressions(line)
+            if re.search(r'<(?:sutram-card|sutram-column)\b[^>]*\bintentColor=', stripped_line):
+                report_violation("SUTRAM_CARD_INTENT_TOKEN_MANDATE", filepath, line_num, "Deprecated intentColor detected on <sutram-card> or <sutram-column>. Use declarative intent='primary|success|warning|danger|neutral|highlight' token property instead.")
+
+            if re.search(r'<sutram-[a-z0-9-]+\b[^>]*\bstyle\s*=', stripped_line):
+                report_violation("SUTRAM_INLINE_STYLE_BAN", filepath, line_num, "Inline style='...' attribute detected on a <sutram-*> element. Use semantic properties (?grow, ?fullWidth, ?compact, ?flush, size, columns, width, alignSelf) instead.")
+
+            if re.search(r'<sutram-(?:stack|view|modal|toolbar|surface|textarea|label|composer)\b[^>]*\b(?:minColWidth|maxWidth|max-width|bottomBorder|minRows|maxHeight|borderless|preWrap|strikethrough|radius|minHeight|min-height|position|width|alignSelf|align-self)\b|\.(?:minColWidth|maxWidth|bottomBorder|minRows|maxHeight)\s*=', stripped_line):
+                report_violation("SUTRAM_SEMANTIC_PROP_MANDATE", filepath, line_num, "Banned presentational property detected on <sutram-*>. Use semantic variant='banner|dropzone|bubble|ghost', size='compact|normal|wide|full', ?multiline, ?invalid, or ?flush=${true}.")
+
+            if re.search(
+                r'<sutram-(?:view|modal|btn|async-btn)\b[^>]*\bsize=["\'](?:xs|sm|md|lg|xl)["\']'
+                r'|<sutram-stack\b[^>]*\bcolumns=["\'](?:xs|sm|md|lg)["\']'
+                r'|<sutram-pill\b[^>]*\?small=',
+                stripped_line
+            ):
+                report_violation("UNIFIED_SCALE_TOKEN_MANDATE", filepath, line_num, "Legacy T-shirt scale token (xs/sm/md/lg/xl or ?small) detected. Migrate to 'none | compact | normal | wide | full' or '?compact=${true}'.")
 
             if raw_layout_ban_pattern.search(line):
                 report_violation("RAW_LAYOUT_BAN", filepath, line_num, "Raw layout class '.file-card' detected. Migrate to <insetu-card> or <yenvui-card> primitives.")
@@ -664,6 +709,8 @@ def check_javascript_files():
 
             if (is_extension or file == "store.js") and raw_fetch_pattern.search(line):
                 report_violation("EXPLICIT_API_MANDATE", filepath, line_num, "Raw fetch() detected. Route through the explicit window.inSetu.api SDK (ADR 0016).")
+            if unmanaged_while_poll_pattern.search(line) and file not in ("physics.js", "sutram_sdk.js"):
+                report_violation("UNMANAGED_WHILE_POLL_BAN", filepath, line_num, "Unmanaged 'while(true)' polling loop detected. Use 'window.inSetu.utils.pollJob' or 'this.api.bindJobAction' instead.")
 
             if is_extension and re.search(r'from\s+[\'"]\.\./(app|fs|store)\.js[\'"]', line):
                 report_violation("CHASSIS_IMPORT_BAN", filepath, line_num, "Direct import from core chassis file detected in extension. Use SDK domain getters (this.vfs, this.sys, this.ui) instead (ADR 0024).")
@@ -675,8 +722,8 @@ def check_javascript_files():
                 report_violation("DRY_UTILITY_VIOLATION", filepath, line_num, "Manual clipboard or blob download stream manipulation detected. Utilize centralized core utilities (fetchAndCopy, this.utils.copyToClipboard, this.utils.copyRawText, or fetchAndDownloadState) instead.")
             if is_extension and legacy_insetu_fetch_pattern.search(line):
                 report_violation("EXPLICIT_API_MANDATE", filepath, line_num, "Legacy window.inSetu.fetch() detected. Route through the explicit window.inSetu.api SDK (ADR 0016).")
-            if file not in ["api.js", "sdk.js"] and legacy_api_routing_pattern.search(line):
-                report_violation("SEMANTIC_API_ROUTING_MANDATE", filepath, line_num, "Direct invocation of api.workspace() or api.system() detected. Route through the semantic .get() or .post() chains instead.")
+            if file not in ["api.js"] and legacy_api_routing_pattern.search(line):
+                report_violation("SEMANTIC_API_ROUTING_MANDATE", filepath, line_num, "Legacy 'api.workspace' or 'api.system' access detected. Use flat canonical methods: api.get('<ext>/<route>'), api.post('<ext>/<route>', payload), or api.delete('<ext>/<route>').")
             if direct_browse_path_setstate_pattern.search(line):
                 report_violation("CANONICAL_BROWSE_PATH_MANDATE", filepath, line_num, "Deprecated globalBrowsePath or currentBrowsePath usage detected (RFC 0108). Use AppStore.getState().getBrowsePath(subId) / setBrowsePath(pathArray, subId) or FsStore.modals.browser.currentPath.")
             if legacy_frontmatter_pubsub_pattern.search(line):
@@ -700,6 +747,10 @@ def check_javascript_files():
                 report_violation("BANNED_CDN_IMPORT", filepath, line_num, "Hardcoded CDN import detected. Extensions must utilize vendor.json and local vendor subdirectories.")
             if banned_yenvui_tag_pattern.search(line):
                 report_violation("BANNED_YENVUI_TAG_BAN", filepath, line_num, "Deprecated '<yenvui-' custom element tag detected. Migrate entirely to vendorized 'sutram-' primitives.")
+            if banned_yv_icon_tag_pattern.search(line):
+                report_violation("BANNED_YV_ICON_TAG_BAN", filepath, line_num, "Direct '<yv-icon>' chassis tag detected. Use '<sutram-icon>' or semantic icon='...' properties instead.")
+            if banned_legacy_insetu_primitive_pattern.search(line):
+                report_violation("LEGACY_INSETU_PRIMITIVE_TAG_BAN", filepath, line_num, "Deprecated '<insetu-spinner>' or '<insetu-empty-state>' tag detected. Use '<sutram-spinner>' or '<sutram-empty-state>' instead.")
 
             if is_extension and lit_element_class_pattern.search(line):
                 report_violation("SDK_ELEMENT_MANDATE", filepath, line_num, "Extension component extends native LitElement. Use InSetuElement instead to enable managed lifecycles.")

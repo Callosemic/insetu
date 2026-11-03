@@ -1,3 +1,4 @@
+import builtins
 import os
 import re
 import ast
@@ -23,16 +24,15 @@ SETTINGS_ACCESS_RATCHET: Dict[str, Tuple[int, str]] = {
     "insetu/cli.py": (3, "Boot floor: profile scaffolding before the app is imported."),
     "insetu/fallback_bridge.py": (3, "Boot floor: the stdlib-only lifeboat reads workspaces.json, config.json and host.json."),
     # Legacy seams, removed by later P13 phases
-    "insetu/core/utils_core.py": (23, "Phase 3/4: helper seam (get_repo_path, get_sister_repos, command approvals in host.json, sanitize_workspace_config)."),
+    "insetu/core/utils_core.py": (20, "Phase 3/4: helper seam (get_repo_path, get_sister_repos, command approvals in host.json, sanitize_workspace_config)."),
     "insetu/core/system/engine_system.py": (19, "Phase 3/4: the config route and the 3-tier cascade migration bridge."),
     "insetu/core/system/cli_commands.py": (5, "Phase 3/4: CLI init, service and mcp commands that read load_config and write config.json, host.json and workspace.settings.json."),
     "insetu/core/system/legacy.py": (2, "Phase 6: one-shot boot migration of legacy config.json keys."),
-    "insetu/core/topology/engine_topology.py": (10, "Phase 3: the topology engine's own target_repos and load_config queries."),
+    "insetu/core/topology/engine_topology.py": (3, "Phase 3: the topology engine's target_repos accessor and two load_config reads."),
     "insetu/core/gather/engine_gather.py": (4, "Phase 3: gather declarations and the compiler reading target_repos."),
     "insetu/core/cartographer/cartographer.py": (3, "Phase 3: map_repositories reading target_repos."),
-    "insetu/core/prompts/engine_prompts.py": (2, "Phase 3: prompt config mutation and repository prompt discovery."),
+    "insetu/core/prompts/engine_prompts.py": (1, "Phase 3: prompt config mutation hook."),
     "insetu/core/agent/engine_agent.py": (3, "Phase 3: plan and test-command helpers reading target_repos."),
-    "insetu/core/agent/orchestrator.py": (1, "Phase 3: the orchestrator's primary repository lookup."),
     "insetu/core/bridge/bridge_test.py": (1, "Phase 3: the test runner resolving its repository config."),
     "insetu/core/bridge/bridge_vfs.py": (1, "Phase 4: the control-plane filename write guard, until protected targets replace it."),
     "insetu/core/mcp/engine_mcp.py": (1, "Phase 3: the MCP resource list iterating target_repos."),
@@ -278,6 +278,51 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 for alias in stmt.names:
                     self.top_level_imports.add(f"{module}.{alias.name}" if module else alias.name)
                     self.top_level_imports.add(alias.asname or alias.name)
+
+        # UNDEFINED_TYPE_ANNOTATION_BAN: Verify that all identifiers referenced in parameter,
+        # return, or variable type annotations (including nested closures) are bound in module/local scope.
+        bound_names = set(dir(builtins)) | {"__file__", "__name__", "__doc__", "__package__", "__annotations__"}
+        for n in ast.walk(node):
+            if isinstance(n, ast.Import):
+                for alias in n.names:
+                    bound_names.add((alias.asname or alias.name).split(".")[0])
+            elif isinstance(n, ast.ImportFrom):
+                for alias in n.names:
+                    bound_names.add(alias.asname or alias.name)
+            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                bound_names.add(n.name)
+            elif isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                bound_names.add(n.id)
+            elif isinstance(n, ast.arg):
+                bound_names.add(n.arg)
+
+        annotation_exprs = []
+        for n in ast.walk(node):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if n.returns:
+                    annotation_exprs.append((n.lineno, n.returns))
+                for a in (
+                    list(n.args.posonlyargs)
+                    + list(n.args.args)
+                    + list(n.args.kwonlyargs)
+                    + ([n.args.vararg] if n.args.vararg else [])
+                    + ([n.args.kwarg] if n.args.kwarg else [])
+                ):
+                    if a and a.annotation:
+                        annotation_exprs.append((a.lineno, a.annotation))
+            elif isinstance(n, ast.AnnAssign) and n.annotation:
+                annotation_exprs.append((n.lineno, n.annotation))
+
+        for ann_lineno, ann_node in annotation_exprs:
+            for sub in ast.walk(ann_node):
+                if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load) and sub.id not in bound_names:
+                    report_violation(
+                        "UNDEFINED_TYPE_ANNOTATION_BAN",
+                        self.filepath,
+                        ann_lineno,
+                        f"Unimported or undefined symbol '{sub.id}' referenced in type annotation. Import '{sub.id}' at the top of the file."
+                    )
+
         self.generic_visit(node)
 
     def visit_Dict(self, node):
@@ -349,6 +394,18 @@ class BackendFitnessVisitor(ast.NodeVisitor):
 
         self.generic_visit(node)
     def visit_Subscript(self, node):
+        if (
+            not self.is_test
+            and isinstance(node.ctx, ast.Store)
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value in ("_ledger_search", "_ledger_replace")
+        ):
+            report_violation(
+                "PATCH_PAYLOAD_MUTATION_BAN",
+                self.filepath,
+                node.lineno,
+                f"Mutating '{node.slice.value}' on a parsed patch block violates the Yomama Bridge Patch Payload Immutability invariant. Record transitions in file_transitions instead."
+            )
         if self.filename not in ('extension.py', 'engine_hooks.py', 'engine_gather.py', 'utils_core.py', 'engine_fs.py'):
             if isinstance(node.value, ast.Name) and node.value.id in self.selection_item_vars:
                 if isinstance(node.slice, ast.Constant) and node.slice.value in ('filepath', 'folderpath'):
@@ -581,8 +638,33 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'from_any':
             report_violation("BANNED_URI_FROM_ANY_COERCION", self.filepath, node.lineno, "InSetuURI.from_any() is banned. All internal paths must be canonical scheme:// URIs passed to InSetuURI(uri).")
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'from_external_input':
-            if self.filename not in ("utils_core.py", "bridge_vfs.py", "bridge_ast.py", "engine_fs.py", "cartographer.py", "engine_mcp.py") and not self.is_test:
-                report_violation("EXTERNAL_URI_COERCION_BOUNDARY_VIOLATION", self.filepath, node.lineno, "InSetuURI.from_external_input() is restricted to external ingress boundaries (bridge_vfs.py, bridge_ast.py, engine_fs.py, cartographer.py, engine_mcp.py, utils_core.py). Use strict InSetuURI(uri) internally.")
+            if self.filename not in ("utils_core.py", "parser.py", "bridge_vfs.py", "bridge_ast.py", "engine_fs.py", "cartographer.py", "engine_mcp.py") and not self.is_test:
+                report_violation("EXTERNAL_URI_COERCION_BOUNDARY_VIOLATION", self.filepath, node.lineno, "InSetuURI.from_external_input() is restricted to external ingress boundaries (parser.py, bridge_vfs.py, bridge_ast.py, engine_fs.py, cartographer.py, engine_mcp.py, utils_core.py). Use strict InSetuURI(uri) internally.")
+
+        # Two-View VFS Mandate: Ban unconfined vfs.walk() on vfs://<repo> source trees outside engine_topology.py and .insetu-data/
+        if (
+            not self.is_test
+            and self.filename not in ("engine_topology.py", "vfs.py")
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "walk"
+            and len(node.args) >= 1
+        ):
+            first_arg = node.args[0]
+            arg_str = None
+            if isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
+                arg_str = first_arg.value
+            elif isinstance(first_arg, ast.JoinedStr):
+                arg_str = "".join(
+                    part.value for part in first_arg.values
+                    if isinstance(part, ast.Constant) and isinstance(part.value, str)
+                )
+            if arg_str and arg_str.startswith("vfs://") and ".insetu-data" not in arg_str:
+                report_violation(
+                    "UNCONFINED_VFS_REPO_WALK_BAN",
+                    self.filepath,
+                    node.lineno,
+                    f"Raw vfs.walk('{arg_str}') on repository source tree outside engine_topology.py bypasses the Topology Sieve. Query get_topology_files_for_repo() or clamp_uris_to_topology() instead."
+                )
 
         if self.is_test:
             self.generic_visit(node)
@@ -747,6 +829,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 self.filepath,
                 node.lineno,
                 f"Legacy/duplicate template helper '{node.name}()' is banned. Use 'extract_template_variables' and 'interpolate_template_variables' from 'insetu.core.sdk' with '{{{{ ... }}}}' syntax."
+            )
+        if not self.is_test and node.name in ("_is_readonly_template_path", "_get_endpoint_secret_key", "_set_endpoint_secret_key"):
+            report_violation(
+                "LEGACY_DUPLICATE_HELPER_BAN",
+                self.filepath,
+                node.lineno,
+                f"Retired duplicate helper '{node.name}()' detected. Use 'InSetuURI.is_readonly_template' or 'get_repeater_secret'/'set_repeater_secret' from 'insetu.core.utils_core'."
             )
         if (
             not self.is_test
@@ -975,6 +1064,16 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 self.filepath,
                 node.lineno,
                 "Importing '_cwd' by value freezes the working directory at import time. Use get_daemon_cwd() / set_daemon_cwd() instead."
+            )
+        if node.module in ("insetu.core.utils_core", "insetu.core.sdk") and any(
+            alias.name in ("parse_blocks", "_get_base_step_and_diffs", "get_base_step_and_diffs")
+            for alias in node.names
+        ):
+            report_violation(
+                "LEGACY_UTILS_PARSE_BLOCKS_IMPORT_BAN",
+                self.filepath,
+                node.lineno,
+                f"Importing Yomama parser symbol from '{node.module}' is banned. Import directly from 'insetu.core.bridge.parser' instead."
             )
         if node.module in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth'):
             report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{node.module}'. Import from 'akasa.{node.module.split('.')[-1]}' instead.")
