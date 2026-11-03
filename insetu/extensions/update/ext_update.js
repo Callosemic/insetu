@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { createExtensionStore, InSetuElement, sharedStyles, debounce } from '/static/extensions/system/insetu_sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
@@ -512,9 +512,7 @@ export class InSetuExtUpdate extends InSetuElement {
         latestBuildArtifact: { type: String },
         isPrerelease: { type: Boolean }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow-y: auto; background: var(--bg); box-sizing: border-box; padding: 20px; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.targetRepo = '';
@@ -610,7 +608,6 @@ this.subscribe(
         if (!this.targetRepo && allRepos.length > 0) {
             UpdateStore.setState({ targetRepo: allRepos[0] });
         }
-        this.requestUpdate();
     }
 );
 
@@ -664,45 +661,49 @@ this.subscribe(
 
     render() {
         return html`
-            <div style="display: flex; flex-direction: column; height: 100%;">
+            <sutram-view>
+                <sutram-stack direction="col" gap="md">
                 ${this.missingDependencies.length > 0 ? html`
-                    <div style="background: var(--input-bg); border: 1px solid var(--intent-warning); border-radius: 4px; padding: 12px 15px; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
-                        <div style="display: flex; align-items: flex-start; gap: 10px;">
-                            <yv-icon name="alert-triangle" style="width: 18px; height: 18px; color: var(--intent-warning); flex-shrink: 0; margin-top: 2px;"></yv-icon>
-                            <div style="display: flex; flex-direction: column; gap: 4px;">
-                                <span style="font-weight: bold; color: var(--intent-warning); font-size: 0.95rem;">Missing Dependencies</span>
-                                <span style="font-size: 0.85rem; color: var(--text);">Install required Python packages into the active daemon environment:</span>
-                                <code style="background: var(--bg); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); user-select: all; margin-top: 4px;">pip install ${this.missingDependencies.join(' ')}</code>
-                            </div>
-                        </div>
-                        <sutram-async-btn
-                            size="sm"
-                            intent="primary"
-                            icon="download"
-                            label="Install Missing Packages"
-                            style="margin: 0;"
-                            .onClick=${this.installExtensionDependencies('update', async () => {
-                                await UpdateStore.getState().checkDependencies();
-                                if (this.targetRepo) UpdateStore.getState().fetchRepoStatus(this.targetRepo);
-                            })}>
-                        </sutram-async-btn>
-                    </div>
+                    <sutram-surface variant="tinted" intent="warning" padding="md">
+                        <sutram-stack direction="row" justify="between" align="center" gap="md" ?wrap=${true}>
+                            <sutram-stack direction="row" align="start" gap="sm">
+                                <sutram-icon name="alert-triangle" size="md" intent="warning"></sutram-icon>
+                                <sutram-stack direction="col" gap="xs">
+                                    <strong>Missing Dependencies</strong>
+                                    <sutram-label text="Install required Python packages into the active daemon environment:"></sutram-label>
+                                    <code>pip install ${this.missingDependencies.join(' ')}</code>
+                                </sutram-stack>
+                            </sutram-stack>
+                            <sutram-async-btn
+                                ?compact=${true}
+                                intent="primary"
+                                icon="download"
+                                label="Install Missing Packages"
+                                .onClick=${this.installExtensionDependencies('update', async () => {
+                                    await UpdateStore.getState().checkDependencies();
+                                    if (this.targetRepo) UpdateStore.getState().fetchRepoStatus(this.targetRepo);
+                                })}>
+                            </sutram-async-btn>
+                        </sutram-stack>
+                    </sutram-surface>
                 ` : ''}
                 ${this.missingBinaries.length > 0 ? html`
-                    <div style="background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 4px; padding: 12px 15px; margin-bottom: 15px; display: flex; align-items: flex-start; gap: 10px;">
-                        <yv-icon name="alert-octagon" style="width: 18px; height: 18px; color: var(--intent-danger); flex-shrink: 0; margin-top: 2px;"></yv-icon>
-                        <div style="display: flex; flex-direction: column; gap: 4px;">
-                            <span style="font-weight: bold; color: var(--intent-danger); font-size: 0.95rem;">Missing System Binaries</span>
-                            <span style="font-size: 0.85rem; color: var(--text);">The following required system binaries are missing from your host environment:</span>
-                            <code style="background: var(--bg); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); user-select: all; margin-top: 4px;">${this.missingBinaries.join(', ')}</code>
-                        </div>
-                    </div>
+                    <sutram-surface variant="tinted" intent="danger" padding="md">
+                        <sutram-stack direction="row" align="start" gap="sm">
+                            <sutram-icon name="alert-octagon" size="md" intent="danger"></sutram-icon>
+                            <sutram-stack direction="col" gap="xs">
+                                <strong>Missing System Binaries</strong>
+                                <sutram-label text="The following required system binaries are missing from your host environment:"></sutram-label>
+                                <code>${this.missingBinaries.join(', ')}</code>
+                            </sutram-stack>
+                        </sutram-stack>
+                    </sutram-surface>
                 ` : ''}
-                <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
-                    <h3 style="margin: 0; color: var(--text);">Semantic Update</h3>
-                    <span style="font-size: 0.85rem; color: var(--text-muted);">Automated semantic versioning and package distribution pipeline.</span>
-                </div>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom: 20px;">
+                <sutram-surface variant="ghost" border="bottom" padding="sm">
+                    <h3>Semantic Update</h3>
+                    <sutram-label text="Automated semantic versioning and package distribution pipeline."></sutram-label>
+                </sutram-surface>
+                <sutram-stack direction="grid" gap="md">
                     ${(() => {
                         const withToml = this.allRepos.filter(r => this.eligibleRepos[r]);
                         const withoutToml = this.allRepos.filter(r => !this.eligibleRepos[r]);
@@ -711,38 +712,21 @@ this.subscribe(
                             ...(withToml.length > 0 && withoutToml.length > 0 ? [{ value: '---', label: '──────────' }] : []),
                             ...withoutToml.map(r => ({ value: r, label: r }))
                         ];
-
-                        // Force a complete component remount when the eligibility matrix hydrates
-                        // by serving physically distinct template references to the Lit engine.
-                        if (Object.keys(this.eligibleRepos).length === 0) {
-                            return html`
-                                <sutram-select 
-                                    label="Target Repository"
-                                    style="margin-bottom: 0;"
-                                    .value=${this.targetRepo}
-                                    .options=${options}
-                                    @sutram-input-changed=${e => {
-                                        if (e.detail.value !== '---') UpdateStore.setState({ targetRepo: e.detail.value });
-                                    }}>
-                                </sutram-select>
-                            `;
-                        } else {
-                            return html`
-                                <sutram-select 
-                                    label="Target Repository"
-                                    style="margin-bottom: 0;"
-                                    .value=${this.targetRepo}
-                                    .options=${options}
-                                    @sutram-input-changed=${e => {
-                                        if (e.detail.value !== '---') UpdateStore.setState({ targetRepo: e.detail.value });
-                                    }}>
-                                </sutram-select>
-                            `;
-                        }
+                        return html`
+                            <sutram-select 
+                                label="Target Repository"
+                                ?flush=${true}
+                                .value=${this.targetRepo}
+                                .options=${options}
+                                @sutram-input-changed=${e => {
+                                    if (e.detail.value !== '---') UpdateStore.setState({ targetRepo: e.detail.value });
+                                }}>
+                            </sutram-select>
+                        `;
                     })()}
                     <sutram-select 
                         label="Distribution Target"
-                        style="margin-bottom: 0;"
+                        ?flush=${true}
                         .value=${this.distributionTarget}
                         .options=${[
                             { value: 'python_pypi', label: 'Python (PyPI + VCS)' },
@@ -755,17 +739,16 @@ this.subscribe(
                             }
                         }}>
                     </sutram-select>
-                </div>
-                <div style="padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 15px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div style="display: flex; flex-direction: column;">
-                            <span style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Current Version</span>
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <span style="font-family: var(--font-mono); font-size: 1.1rem; color: ${this.repoLoading ? 'var(--text-muted)' : (this.repoVersion ? 'var(--intent-primary)' : 'var(--text-muted)')}; font-weight: bold;">
-                                    ${this.repoLoading ? 'refreshing repo state...' : (this.repoVersion ? `v${this.repoVersion}` : 'Unversioned')}
-                                </span>
+                </sutram-stack>
+
+                <sutram-surface variant="panel" padding="md" gap="md">
+                    <sutram-stack direction="row" justify="between" align="center">
+                        <sutram-stack direction="col" gap="xs">
+                            <sutram-label text="Current Version"></sutram-label>
+                            <sutram-stack direction="row" align="center" gap="sm">
+                                <code>${this.repoLoading ? 'refreshing repo state...' : (this.repoVersion ? `v${this.repoVersion}` : 'Unversioned')}</code>
                                 ${!this.repoLoading && this.repoConfigured ? html`
-                                    <sutram-btn size="sm" variant="tinted" intent="warning" label="Force Override" title="Force version override" style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.72rem;"
+                                    <sutram-btn ?compact=${true} variant="tinted" intent="warning" label="Force Override" title="Force version override"
                                         @click=${() => {
                                             const newVer = prompt("Force version override to (e.g., 0.5.0):", this.repoVersion || "0.1.0");
                                             if (newVer) {
@@ -774,11 +757,11 @@ this.subscribe(
                                         }}>
                                     </sutram-btn>
                                 ` : ''}
-                            </div>
+                            </sutram-stack>
                             ${!this.repoLoading && this.repoConfigured && !this.hasRelease ? html`
-                                <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 6px;">
-                                    <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic;">Local version configured, but no Git release tag has been established.</span>
-                                    <sutram-btn size="sm" intent="primary" icon="tag" label="Tag and Sync Initial Version" style="align-self: flex-start;"
+                                <sutram-stack direction="col" align="start" gap="xs">
+                                    <sutram-label text="Local version configured, but no Git release tag has been established."></sutram-label>
+                                    <sutram-btn ?compact=${true} intent="primary" icon="tag" label="Tag and Sync Initial Version"
                                         @click=${() => {
                                             const ver = this.repoVersion || "0.1.0";
                                             if (confirm(`Establish and tag initial baseline release v${ver}?`)) {
@@ -786,51 +769,56 @@ this.subscribe(
                                             }
                                         }}>
                                     </sutram-btn>
-                                </div>
+                                </sutram-stack>
                             ` : ''}
                             ${!this.repoLoading && this.repoConfigured && this.hasPendingBump ? html`
-                                <div style="margin-top: 10px; background: var(--bg); border: 1px solid var(--intent-success); border-radius: 4px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px;">
-                                    <span style="font-size: 0.85rem; color: var(--intent-success); font-weight: bold; display: flex; align-items: center; gap: 6px;">
-                                        <yv-icon name="rocket" style="width: 14px; height: 14px;"></yv-icon> <strong>Ready to Version & Update:</strong> Next Version is <code style="font-family: var(--font-mono); color: var(--text);">v${this.nextVersion}</code>
-                                    </span>
-                                    <sutram-async-btn 
-                                        icon="zap"
-                                        label="Bump to v${this.nextVersion}" 
-                                        intent="success" 
-                                        style="margin: 0; --btn-padding: 4px 10px; --btn-font-size: 0.8rem;"
-                                        .onClick=${async () => await UpdateStore.getState().previewBump(this.targetRepo)}>
-                                    </sutram-async-btn>
-                                </div>
+                                <sutram-surface variant="tinted" intent="success" padding="sm">
+                                    <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                                        <sutram-stack direction="row" align="center" gap="xs">
+                                            <sutram-icon name="rocket" size="sm" intent="success"></sutram-icon>
+                                            <strong>Ready to Version & Update: Next Version is <code>v${this.nextVersion}</code></strong>
+                                        </sutram-stack>
+                                        <sutram-async-btn 
+                                            ?compact=${true}
+                                            icon="zap"
+                                            label="Bump to v${this.nextVersion}" 
+                                            intent="success" 
+                                            .onClick=${async () => await UpdateStore.getState().previewBump(this.targetRepo)}>
+                                        </sutram-async-btn>
+                                    </sutram-stack>
+                                </sutram-surface>
                             ` : ''}
-                        </div>
+                        </sutram-stack>
                         ${!this.repoLoading && this.repoConfigured ? html`
-                            <span style="font-size: 0.75rem; color: var(--intent-success); border: 1px solid var(--intent-success); padding: 2px 6px; border-radius: 10px; font-weight: bold; display: inline-flex; align-items: center; gap: 4px;">
-                                <yv-icon name="check-circle-2" style="width: 12px; height: 12px;"></yv-icon> Configured
-                            </span>
+                            <sutram-tag text="✓ Configured" intent="success"></sutram-tag>
                         ` : ''}
-                    </div>
+                    </sutram-stack>
                     ${!this.repoLoading && !this.isClean && this.repoConfigured ? html`
-                        <div style="background: var(--bg); border: 1px dashed var(--intent-warning); border-radius: 4px; padding: 8px 12px; margin-top: 10px; color: var(--intent-warning); font-size: 0.85rem; font-weight: bold; display: flex; align-items: center; justify-content: center; gap: 6px;">
-                            <yv-icon name="alert-triangle" style="width: 14px; height: 14px; flex-shrink: 0;"></yv-icon>
-                            <span>Working tree is not clean. Commit changes before releasing.</span>
-                        </div>
+                        <sutram-surface variant="tinted" intent="warning" padding="xs">
+                            <sutram-stack direction="row" align="center" justify="center" gap="xs">
+                                <sutram-icon name="alert-triangle" size="sm" intent="warning"></sutram-icon>
+                                <strong>Working tree is not clean. Commit changes before releasing.</strong>
+                            </sutram-stack>
+                        </sutram-surface>
                     ` : ''}
                     ${!this.repoLoading && !this.hasPyproject ? html`
-                        <div style="background: var(--bg); border: 1px dashed var(--intent-warning); border-radius: 4px; padding: 8px 12px; margin-bottom: 10px; color: var(--intent-warning); font-size: 0.85rem; font-weight: bold; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px;">
-                            <span>Missing pyproject.toml in this repository.</span>
-                            <sutram-btn size="sm" intent="warning" icon="file-plus" label="Create Basic TOML and Tag"
-                                @click=${() => {
-                                    const initVer = prompt("Enter initial semantic version (e.g., 0.1.0):", "0.1.0");
-                                    if (initVer) {
-                                        UpdateStore.getState().createDummyToml(this.targetRepo, initVer.trim());
-                                    }
-                                }}>
-                            </sutram-btn>
-                            <span style="font-size: 0.7rem; font-weight: normal; font-style: italic; opacity: 0.9;">The TOML file will be initialized with Python build disabled to accommodate versioning for all project types. This action will also instantly create a Git tag to establish your baseline version. Update manually as needed.</span>
-                        </div>
+                        <sutram-surface variant="tinted" intent="warning" padding="sm" gap="xs">
+                            <sutram-stack direction="col" align="center" gap="xs">
+                                <strong>Missing pyproject.toml in this repository.</strong>
+                                <sutram-btn ?compact=${true} intent="warning" icon="file-plus" label="Create Basic TOML and Tag"
+                                    @click=${() => {
+                                        const initVer = prompt("Enter initial semantic version (e.g., 0.1.0):", "0.1.0");
+                                        if (initVer) {
+                                            UpdateStore.getState().createDummyToml(this.targetRepo, initVer.trim());
+                                        }
+                                    }}>
+                                </sutram-btn>
+                                <sutram-label text="The TOML file will be initialized with Python build disabled to accommodate versioning for all project types. This action will also instantly create a Git tag to establish your baseline version."></sutram-label>
+                            </sutram-stack>
+                        </sutram-surface>
                     ` : ''}
                     ${!this.repoLoading && !this.repoConfigured ? html`
-                        <sutram-btn size="sm" intent="success" icon="sparkles" label="Initialize Semantic Versioning" style="width: 100%; margin: 0;"
+                        <sutram-btn ?compact=${true} intent="success" icon="sparkles" label="Initialize Semantic Versioning" ?fullWidth=${true}
                             ?disabled=${!this.hasPyproject}
                             @click=${() => {
                                 const initVer = prompt("Enter initial semantic version (e.g., 0.1.0):", "0.1.0");
@@ -840,38 +828,45 @@ this.subscribe(
                             }}>
                         </sutram-btn>
                     ` : ''}
-                </div>
+                </sutram-surface>
+
                 ${!this.repoLoading && this.repoConfigured ? html`
-                    <div style="padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 12px;">
-                        <div style="display: flex; flex-direction: column; gap: 4px;">
-                            <div style="display: flex; align-items: center; gap: 8px; opacity: ${!this.isClean ? '0.6' : '1'};">
-                                <sutram-toggle .checked=${this.repoVcsRelease} ?disabled=${!this.isClean} ?flush=${true}
-                                    @sutram-input-changed=${(e) => {
-                                        UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, e.detail.value, this.repoPrereleaseToken);
-                                    }}></sutram-toggle>
-                                <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Release via GitHub API (<code>vcs_release</code>)</span>
-                            </div>
+                    <sutram-surface variant="panel" padding="md" gap="md">
+                        <sutram-stack direction="col" gap="xs">
+                            <sutram-toggle
+                                label="Release via GitHub API (vcs_release)"
+                                .checked=${this.repoVcsRelease}
+                                ?disabled=${!this.isClean}
+                                ?flush=${true}
+                                @sutram-input-changed=${(e) => {
+                                    UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, e.detail.value, this.repoPrereleaseToken);
+                                }}>
+                            </sutram-toggle>
                             ${this.repoVcsRelease && !this.hasToken ? html`
-                                <div style="color: var(--intent-warning); font-size: 0.75rem; margin-left: 24px; display: flex; align-items: center; gap: 6px;">
-                                    <yv-icon name="alert-triangle" style="width: 12px; height: 12px; flex-shrink: 0;"></yv-icon>
-                                    <span>No GitHub API token detected in secrets or environment. Local tag/push will succeed, but API release card creation will fail.</span>
-                                </div>
+                                <sutram-stack direction="row" align="center" gap="xs">
+                                    <sutram-icon name="alert-triangle" size="sm" intent="warning"></sutram-icon>
+                                    <sutram-label text="No GitHub API token detected in secrets or environment. Local tag/push will succeed, but API release card creation will fail."></sutram-label>
+                                </sutram-stack>
                             ` : ''}
-                        </div>
-                        <div style="display: flex; flex-direction: column; gap: 6px;">
-                            <div style="display: flex; align-items: center; gap: 8px; opacity: ${!this.isClean ? '0.6' : '1'};">
-                                <sutram-toggle .checked=${!!this.repoBuildCommand} ?disabled=${!this.isClean} ?flush=${true}
-                                    @sutram-input-changed=${(e) => {
-                                        const enabled = e.detail.value;
-                                        const cmd = enabled ? (this.repoBuildCommand || 'python -m build') : '';
-                                        UpdateStore.getState().updateTomlConfig(this.targetRepo, cmd, this.repoVcsRelease, this.repoPrereleaseToken);
-                                    }}></sutram-toggle>
-                                <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Trigger Build Command on Bump</span>
-                            </div>
+                        </sutram-stack>
+
+                        <sutram-stack direction="col" gap="xs">
+                            <sutram-toggle
+                                label="Trigger Build Command on Bump"
+                                .checked=${!!this.repoBuildCommand}
+                                ?disabled=${!this.isClean}
+                                ?flush=${true}
+                                @sutram-input-changed=${(e) => {
+                                    const enabled = e.detail.value;
+                                    const cmd = enabled ? (this.repoBuildCommand || 'python -m build') : '';
+                                    UpdateStore.getState().updateTomlConfig(this.targetRepo, cmd, this.repoVcsRelease, this.repoPrereleaseToken);
+                                }}>
+                            </sutram-toggle>
                             ${this.repoBuildCommand ? html`
-                                <div style="display: flex; gap: 8px; margin-left: 24px; margin-top: 4px; opacity: ${!this.isClean ? '0.6' : '1'};">
+                                <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
                                     <sutram-input 
-                                        style="flex: 1; margin-bottom: 0; --bg-input: var(--bg);"
+                                        ?flush=${true}
+                                        ?grow=${true}
                                         .value=${this.repoBuildCommand}
                                         ?disabled=${!this.isClean}
                                         placeholder="e.g., python -m build"
@@ -880,45 +875,46 @@ this.subscribe(
                                         }}>
                                     </sutram-input>
                                     <sutram-async-btn 
+                                        ?compact=${true}
                                         icon="save"
                                         label="Save" 
                                         intent="success" 
                                         ?disabled=${!this.isClean}
-                                        style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
                                         .onClick=${async () => {
                                             await UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, this.repoVcsRelease, this.repoPrereleaseToken);
                                         }}>
                                     </sutram-async-btn>
                                     <sutram-async-btn 
+                                        ?compact=${true}
                                         icon="play"
                                         label="Run Manually" 
                                         intent="neutral" 
-                                        style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
                                         .onClick=${async () => {
                                             await UpdateStore.getState().runManualBuild(this.targetRepo, this.repoBuildCommand);
                                         }}>
                                     </sutram-async-btn>
-                                </div>
+                                </sutram-stack>
                             ` : ''}
-                            <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 24px;">Executed by Semantic Release before tagging. Changes are committed to <code>pyproject.toml</code> natively.</span>
-                        </div>
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; border-top: 1px dashed var(--border); padding-top: 10px; margin-top: 4px;">
-                            <sutram-select
-                                label="Commit Parser Convention"
-                                ?flush=${true}
-                                ?disabled=${!this.isClean}
-                                .value=${this.repoCommitParser || 'conventional'}
-                                .options=${[
-                                    { value: 'conventional', label: 'Conventional Commits (Angular)' },
-                                    { value: 'emoji', label: 'Emoji (Gitmoji)' },
-                                    { value: 'scipy', label: 'SciPy' }
-                                ]}
-                                @sutram-input-changed=${(e) => {
-                                    UpdateStore.setState({ repoCommitParser: e.detail.value });
-                                    UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, this.repoVcsRelease, this.repoPrereleaseToken, e.detail.value);
-                                }}>
-                            </sutram-select>
-                            <div style="display: flex; align-items: center; padding-top: 18px;">
+                            <sutram-label text="Executed by Semantic Release before tagging. Changes are committed to pyproject.toml natively."></sutram-label>
+                        </sutram-stack>
+
+                        <sutram-surface variant="ghost" border="top" padding="xs">
+                            <sutram-stack direction="grid" gap="md">
+                                <sutram-select
+                                    label="Commit Parser Convention"
+                                    ?flush=${true}
+                                    ?disabled=${!this.isClean}
+                                    .value=${this.repoCommitParser || 'conventional'}
+                                    .options=${[
+                                        { value: 'conventional', label: 'Conventional Commits (Angular)' },
+                                        { value: 'emoji', label: 'Emoji (Gitmoji)' },
+                                        { value: 'scipy', label: 'SciPy' }
+                                    ]}
+                                    @sutram-input-changed=${(e) => {
+                                        UpdateStore.setState({ repoCommitParser: e.detail.value });
+                                        UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, this.repoVcsRelease, this.repoPrereleaseToken, e.detail.value);
+                                    }}>
+                                </sutram-select>
                                 <sutram-toggle
                                     label="Auto-Publish after Bump"
                                     ?flush=${true}
@@ -927,14 +923,14 @@ this.subscribe(
                                         UpdateStore.getState().toggleAutoPublish(this.targetRepo, e.detail.value);
                                     }}>
                                 </sutram-toggle>
-                            </div>
-                        </div>
+                            </sutram-stack>
+                        </sutram-surface>
 
-                        <div style="display: flex; flex-direction: column; gap: 6px; border-top: 1px dashed var(--border); padding-top: 10px; margin-top: 4px;">
-                            <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Default Pre-release Token (<code>prerelease_token</code>)</span>
-                            <div style="display: flex; gap: 8px; opacity: ${!this.isClean ? '0.6' : '1'}; align-items: center;">
+                        <sutram-surface variant="ghost" border="top" padding="xs" gap="xs">
+                            <strong>Default Pre-release Token (<code>prerelease_token</code>)</strong>
+                            <sutram-stack direction="row" align="center" gap="sm">
                                 <sutram-input 
-                                    style="width: 180px; margin-bottom: 0; --bg-input: var(--bg);"
+                                    ?flush=${true}
                                     .value=${this.repoPrereleaseToken || 'rc'}
                                     ?disabled=${!this.isClean}
                                     placeholder="e.g., rc, beta, alpha"
@@ -943,25 +939,26 @@ this.subscribe(
                                     }}>
                                 </sutram-input>
                                 <sutram-async-btn 
+                                    ?compact=${true}
                                     icon="save"
                                     label="Save Token" 
                                     intent="success" 
                                     ?disabled=${!this.isClean}
-                                    style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
                                     .onClick=${async () => {
                                         await UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, this.repoVcsRelease, this.repoPrereleaseToken);
                                     }}>
                                 </sutram-async-btn>
-                            </div>
-                            <span style="font-size: 0.75rem; color: var(--text-muted);">Token identifier used when Pre-release Mode is toggled ON (e.g., <code>beta</code> produces <code>v1.0.0-beta.1</code>).</span>
-                        </div>
-                    </div>
+                            </sutram-stack>
+                            <sutram-label text="Token identifier used when Pre-release Mode is toggled ON (e.g., beta produces v1.0.0-beta.1)."></sutram-label>
+                        </sutram-surface>
+                    </sutram-surface>
 
-                    <div style="padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 15px;">
+                    <sutram-surface variant="panel" padding="md">
+                        <sutram-stack direction="grid" gap="md">
                         <!-- Step 1 Column -->
-                        <div style="flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px;">
+                        <sutram-stack direction="col" gap="xs">
                             <sutram-async-btn 
-                                style="width: 100%;" 
+                                ?fullWidth=${true} 
                                 icon="package"
                                 label="${this.hasPendingBump ? 'Step 1: Bump to v' + this.nextVersion : 'Step 1: Bump & Tag'}" 
                                 intent="${this.hasPendingBump ? 'success' : 'primary'}" 
@@ -973,21 +970,20 @@ this.subscribe(
                                 ?disabled=${!this.repoConfigured || !this.isClean}
                                 ?flush=${true}
                                 @sutram-input-changed=${e => UpdateStore.setState({ isPrerelease: e.detail.value })} 
-                                label="Pre-release Mode (e.g., -${this.repoPrereleaseToken || 'rc'}.1)"
-                                style="margin-top: 4px;">
+                                label="Pre-release Mode (e.g., -${this.repoPrereleaseToken || 'rc'}.1)">
                             </sutram-toggle>
                             <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3; margin-top: 4px;">
                                 <strong>Phase 1 (Code & Git Preparation):</strong>
-                                <ol style="margin: 4px 0 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px;">
+                                <ol style="margin: 4px 0 0 0; padding-left: 18px;">
                                     <li>Analyzes commit logs (<code>feat:</code>, <code>fix:</code>) to pick next version.</li>
                                     <li>Updates version in <code>pyproject.toml</code> & generates <code>CHANGELOG.md</code>.</li>
                                     <li>Triggers build command (e.g. <code>python -m build</code>) to make wheels.</li>
                                     <li>Commits, tags (<code>vX.Y.Z</code>), and pushes directly to GitHub via SSH.</li>
                                 </ol>
                             </div>
-                        </div>
+                        </sutram-stack>
                         <!-- Step 2 Column -->
-                        <div style="flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px;">
+                        <sutram-stack direction="col" gap="xs">
                             ${(() => {
                                 let buildMismatch = false;
                                 if (this.distributionTarget === 'python_pypi' && this.repoBuildCommand && this.repoVersion) {
@@ -1006,17 +1002,16 @@ this.subscribe(
                                 }
                                 const isFirstReleasePhase = this.distributionTarget === 'python_pypi' ? !this.pypiPackageExists : !this.hasRelease;
                                 const step2Disabled = !this.repoConfigured || (isFirstReleasePhase && !this.isClean) || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken) || this.distributionTarget === 'disabled' || buildMismatch;
-                                const buildLabel = this.latestBuildArtifact ? html`<span style="font-size: 0.75rem; color: var(--intent-success); font-family: var(--font-mono); justify-content: center; display: flex; align-items: center; gap: 6px; margin-top: 4px;"><yv-icon name="package" style="width: 12px; height: 12px;"></yv-icon> Active Artifact: ${this.latestBuildArtifact}</span>` : '';
-                                const mismatchLabel = buildMismatch ? html`<span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block; margin-top: 4px;">Build artifact missing or version mismatch. Ensure Step 1 succeeded.</span>` : '';
+                                const buildLabel = this.latestBuildArtifact ? html`<sutram-stack direction="row" align="center" justify="center" gap="xs"><sutram-icon name="package" size="sm" intent="success"></sutram-icon><code>Active Artifact: ${this.latestBuildArtifact}</code></sutram-stack>` : '';
+                                const mismatchLabel = buildMismatch ? html`<sutram-label text="Build artifact missing or version mismatch. Ensure Step 1 succeeded."></sutram-label>` : '';
                                 if (isFirstReleasePhase) {
                                     return html`
                                         <sutram-async-btn 
-                                            style="width: 100%;" 
+                                            ?fullWidth=${true} 
                                             icon="${this.distributionTarget === 'python_pypi' ? 'send' : 'tag'}"
                                             label="${this.distributionTarget === 'python_pypi' ? 'Publish v' + (this.repoVersion || '0.1.0') + ' to PyPI' : 'Release v' + (this.repoVersion || '0.1.0') + ' to VCS'}" 
                                             intent="highlight" 
                                             ?disabled=${step2Disabled}
-                                            .disabled=${step2Disabled}
                                             .onClick=${async () => {
                                                 if (step2Disabled) return;
                                                 await UpdateStore.getState().previewFirstRelease(this.targetRepo);
@@ -1028,12 +1023,11 @@ this.subscribe(
                                 } else {
                                     return html`
                                         <sutram-async-btn 
-                                            style="width: 100%;" 
+                                            ?fullWidth=${true} 
                                             icon="${this.distributionTarget === 'disabled' ? 'ban' : 'send'}"
                                             label="${this.distributionTarget === 'python_pypi' ? 'Step 2: Publish Release' : (this.distributionTarget === 'disabled' ? 'Publishing Disabled' : 'Step 2: Push VCS Release')}" 
                                             intent="highlight" 
                                             ?disabled=${step2Disabled}
-                                            .disabled=${step2Disabled}
                                             .onClick=${async () => {
                                                 if (step2Disabled) return;
                                                 await UpdateStore.getState().previewPublish(this.targetRepo);
@@ -1045,16 +1039,18 @@ this.subscribe(
                                 }
                             })()}
                             ${this.distributionTarget === 'python_pypi' && !this.hasPypiToken ? html`
-                                <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 4px;">
-                                    <yv-icon name="alert-triangle" style="width: 12px; height: 12px; flex-shrink: 0;"></yv-icon>
-                                    <span>API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings.</span>
-                                </span>
+                                <sutram-stack direction="row" align="center" justify="center" gap="xs">
+                                    <sutram-icon name="alert-triangle" size="sm" intent="warning"></sutram-icon>
+                                    <sutram-label text="API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings."></sutram-label>
+                                </sutram-stack>
                             ` : ''}
                             ${this.lastPublishTime > 0 && this.distributionTarget === 'python_pypi' && !this.pypiPublished && ((Date.now() / 1000) - this.lastPublishTime < 3600) ? html`
-                                <div style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold; text-align: left; line-height: 1.3; background: var(--bg); padding: 8px 10px; border-radius: 4px; border: 1px solid var(--intent-highlight); margin-top: 2px; display: flex; align-items: center; gap: 6px;">
-                                    <yv-icon name="clock" style="width: 14px; height: 14px; flex-shrink: 0;"></yv-icon>
-                                    <span>Publish dispatched <strong>${this.utils.timeAgo(this.lastPublishTime * 1000)}</strong>. PyPI indexing may take several minutes before it reflects here.</span>
-                                </div>
+                                <sutram-surface variant="tinted" intent="highlight" padding="xs">
+                                    <sutram-stack direction="row" align="center" gap="xs">
+                                        <sutram-icon name="clock" size="sm" intent="highlight"></sutram-icon>
+                                        <span>Publish dispatched <strong>${this.utils.timeAgo(this.lastPublishTime * 1000)}</strong>. PyPI indexing may take several minutes before it reflects here.</span>
+                                    </sutram-stack>
+                                </sutram-surface>
                             ` : ''}
                             <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3; margin-top: 4px;">
                                 ${(this.distributionTarget === 'python_pypi' ? !this.pypiPackageExists : !this.hasRelease) 
@@ -1062,17 +1058,18 @@ this.subscribe(
                                         ? `Initial release pipeline: validates package assets, builds wheels, uploads to PyPI, and establishes v${this.repoVersion || '0.1.0'} baseline.` 
                                         : `Initial release pipeline: establishes v${this.repoVersion || '0.1.0'} Git baseline tags.`)
                                     : html`<strong>Phase 2 (External Distribution):</strong>
-                                        <ol style="margin: 4px 0 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px;">
+                                        <ol style="margin: 4px 0 0 0; padding-left: 18px;">
                                             ${this.distributionTarget === 'python_pypi' ? html`<li>Uploads compiled package files to PyPI.</li>` : ''}
                                             ${this.distributionTarget !== 'disabled' ? html`<li>Mints the official GitHub Release card UI with notes.</li>` : html`<li>External distribution is disabled in settings.</li>`}
                                         </ol>`}
                             </div>
-                        </div>
-                    </div>
+                        </sutram-stack>
+                        </sutram-stack>
+                    </sutram-surface>
                 ` : ''}
                 ${this.lastReleaseLog ? html`
-                    <div style="margin-top: 15px; display: flex; justify-content: flex-end;">
-                        <sutram-btn size="sm" intent="neutral" icon="eye" label="View Last Release Log"
+                    <sutram-stack direction="row" justify="end">
+                        <sutram-btn ?compact=${true} intent="neutral" icon="eye" label="View Last Release Log"
                             @click=${() => {
                                 if (window.Sutram?.stores?.Layout) {
                                     const layout = window.Sutram.stores.Layout.getState();
@@ -1096,9 +1093,10 @@ this.subscribe(
                                 }
                             }}>
                         </sutram-btn>
-                    </div>
+                    </sutram-stack>
                 ` : ''}
-            </div>
+                </sutram-stack>
+            </sutram-view>
         `;
     }
 }

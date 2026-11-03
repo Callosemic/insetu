@@ -16,7 +16,13 @@ from insetu.core.utils_core import (
     InSetuURI,
     get_available_contexts,
 )
-from insetu.core.topology.engine_topology import resolve_file_bucket, topology_bp
+from insetu.core.languages import format_interleaved_file_diff
+from insetu.core.topology.engine_topology import (
+    is_file_tracked_by_sieve,
+    resolve_file_bucket,
+    resolve_topology_buffer,
+    topology_bp,
+)
 from insetu.core.cartographer.cartographer import map_repositories
 def get_headless_git_env():
     """Returns a secure OS environment block pre-configured for non-interactive SSH connections."""
@@ -86,6 +92,53 @@ git_bp = InSetuExtension(
     },
 )
 __depends__ = ['gather']
+def _batch_read_git_head_blobs(git_root: Path, lookup_paths: List[str]) -> Dict[str, str]:
+    """Reads multiple `HEAD:<path>` file contents in a single `git cat-file --batch` subprocess."""
+    unique_paths = list(dict.fromkeys(p for p in lookup_paths if p))
+    if not unique_paths:
+        return {}
+    stdin_payload = "".join(f"HEAD:{p}\n" for p in unique_paths).encode("utf-8")
+    try:
+        proc = execute_binary(
+            ["git", "--no-optional-locks", "cat-file", "--batch"],
+            cwd=str(git_root),
+            input=stdin_payload,
+            capture_output=True,
+            text=False,
+            check=False,
+            env=get_headless_git_env(),
+            timeout=15,
+        )
+        raw_out = proc.stdout or b""
+        raw = raw_out.encode("utf-8", errors="replace") if isinstance(raw_out, str) else raw_out
+        out_map: Dict[str, str] = {}
+        pos = 0
+        raw_len = len(raw)
+        for req_path in unique_paths:
+            nl_idx = raw.find(b"\n", pos)
+            if nl_idx == -1:
+                break
+            header = raw[pos:nl_idx].decode("utf-8", errors="replace")
+            pos = nl_idx + 1
+            if header.endswith(" missing"):
+                continue
+            parts = header.rsplit(" ", 2)
+            if len(parts) < 3:
+                break
+            try:
+                blob_size = int(parts[-1])
+            except ValueError:
+                break
+            blob_bytes = raw[pos : pos + blob_size]
+            pos += blob_size
+            if pos < raw_len and raw[pos : pos + 1] == b"\n":
+                pos += 1
+            out_map[req_path] = blob_bytes.decode("utf-8", errors="replace")
+        return out_map
+    except Exception:
+        return {}
+
+
 @git_bp.on('register_compilation_steps')
 def _register_git_compilation_step(workspace_id=None, **kwargs):
     return [{
@@ -130,6 +183,18 @@ def _background_compile_diffs(
             "state_deltas": {"touched_diffs": list(truly_modified_diffs) if touched_buckets is not None else None}
         }
     }
+def diffable_changes(changed_files: List[tuple], config: Dict[str, Any], live_cfg: Dict[str, Any]) -> List[tuple]:
+    """
+    Keeps the (repo-relative path, status, git path) entries the topology sieve tracks.
+    Diffs follow the sieve exactly (ignore rules, exceptions, force-includes, extensions); a changed file the
+    sieve rejects belongs to the Sweepable State tray, never to a diff bucket.
+    """
+    return [
+        entry for entry in changed_files
+        if is_file_tracked_by_sieve(entry[0], config, live_cfg, repo_dir=config.get("repo_dir"))
+    ]
+
+
 def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None, touched_buckets=None):
     ctx = git_bp.get_context(workspace_id)
     paths = ctx.paths
@@ -162,11 +227,17 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
             git_root_res = execute_git(str(repo_path), ['rev-parse', '--show-toplevel'], check=False)
             git_root = Path(git_root_res.stdout.strip()).resolve() if git_root_res.returncode == 0 else repo_path.resolve()
             changed_files = []
+            rename_head_map: Dict[str, str] = {}
             for line in lines:
                 if len(line) < 3: continue
                 status = line[:2]
-                filepath = line[3:].strip().strip('"')
-                if '->' in filepath: filepath = filepath.split('->')[-1].strip().strip('"')
+                raw_fp = line[3:].strip()
+                if '->' in raw_fp:
+                    old_fp, new_fp = raw_fp.split('->', 1)
+                    filepath = new_fp.strip().strip('"')
+                    rename_head_map[filepath] = old_fp.strip().strip('"')
+                else:
+                    filepath = raw_fp.strip('"')
                 if filepath.endswith('_diffs.txt'): continue
 
                 abs_filepath = git_root / filepath
@@ -177,17 +248,13 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                 if abs_filepath.is_file() or 'D' in status:
                     changed_files.append((rel_to_repo, status, filepath))
 
+            changed_files = diffable_changes(changed_files, config, live_cfg)
             if not changed_files: return None
             sub_buckets = config.get("sub_buckets", [])
             bucketed_files = {}
             bucket_meta = {}
-            ignore_dirs = set(live_cfg.get("ignore_dirs", []) + config.get("repo_ignore_dirs", []))
-            ignore_patterns = live_cfg.get("ignore_patterns", []) + config.get("repo_ignore_patterns", [])
             if sub_buckets:
                 for rel_to_repo, status, orig_filepath in changed_files:
-                    if any(pattern in rel_to_repo for pattern in ignore_patterns): continue
-                    if set(p.lower() for p in rel_to_repo.split('/')).intersection(ignore_dirs): continue
-
                     b, module = resolve_file_bucket(rel_to_repo, sub_buckets, repo_dir=config.get('repo_dir'))
                     if b and b.get("exclude_from_diffs"): continue
                     parent_domain = (config.get("domain") or "").strip() or "Workspaces"
@@ -214,25 +281,30 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     bucketed_files[b_id].append((rel_to_repo, status, orig_filepath))
             else:
                 out_filename = f"ctx://diffs/{safe_r_dir}_diffs.txt"
-                filtered_files = []
-                for rel_to_repo, status, orig_filepath in changed_files:
-                    if any(pattern in rel_to_repo for pattern in ignore_patterns): continue
-                    if set(p.lower() for p in rel_to_repo.split('/')).intersection(ignore_dirs): continue
-                    filtered_files.append((rel_to_repo, status, orig_filepath))
-                if filtered_files:
-                    bucketed_files[out_filename] = filtered_files
-                    bucket_meta[out_filename] = {
-                        "title": config.get("title", safe_r_dir.replace('_', ' ').title()),
-                        "domain": config.get("domain", "Workspaces")
-                    }
+                bucketed_files[out_filename] = list(changed_files)
+                bucket_meta[out_filename] = {
+                    "title": config.get("title", safe_r_dir.replace('_', ' ').title()),
+                    "domain": config.get("domain", "Workspaces")
+                }
+            # Pre-fetch all modified files' HEAD blobs in one `git cat-file --batch` call per repo
+            head_lookup_candidates = [
+                rename_head_map.get(orig_fp, orig_fp)
+                for _, f_stat, orig_fp in changed_files
+                if f_stat.strip() not in ("??", "A") and "D" not in f_stat
+            ]
+            head_content_cache: Dict[str, str] = _batch_read_git_head_blobs(git_root, head_lookup_candidates)
             for out_filename, files_in_bucket in bucketed_files.items():
                 header_lines = []
                 header_lines.append(f"============================================================")
                 header_lines.append(f">>> DIFF SUMMARY :: {len(files_in_bucket)} FILE(S) CHANGED")
                 header_lines.append(f"============================================================")
                 for rel_path, f_status, _ in files_in_bucket:
-                    header_lines.append(f"[{f_status.ljust(2)}] {rel_path}")
-                header_lines.append("\n\n")
+                    header_lines.append(f"[{f_status.ljust(2)}] vfs://{config['repo_dir']}/{rel_path}")
+                header_lines.append(
+                    "\n# FORMAT LEGEND: Modified files use AST-Enclosing Interleaved Diffs.\n"
+                    "#   '  ' = unchanged line on disk | '+ ' = added line on disk | '- ' = removed line (no longer on disk)\n"
+                    "#   When writing Yomama <<<<<<< SEARCH blocks, include ONLY '  ' and '+ ' lines (strip the 2-char prefix).\n\n"
+                )
                 header_str = "\n".join(header_lines)
 
                 # Shadow Cache: Filter out unchanged files based on mtime and size
@@ -254,61 +326,54 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     else:
                         stale_files.append((rel_path, status, orig_filepath, mtime, size))
 
-                files_to_diff = [orig_f for _, s, orig_f, _, _ in stale_files if s != "??"]
-                bulk_diffs = {}
-                if files_to_diff:
-                    try:
-                        # Diff ONLY the stale files to save massive CPU/IO overhead
-                        diff_res = execute_git(str(git_root), ['diff', 'HEAD', '--'] + files_to_diff, check=False)
-                        for chunk in diff_res.stdout.split('diff --git '):
-                            if not chunk.strip(): continue
-                            first_line = chunk.split('\n')[0]
-                            parts = first_line.split(' b/')
-                            if len(parts) == 2:
-                                fname = parts[1].strip().strip('"') 
-                                bulk_diffs[fname] = 'diff --git ' + chunk
-                    except Exception as e:
-                        print(f"Bulk diff error: {e}")
-
                 text_blocks = []
                 for rel_path, status, orig_filepath in files_in_bucket:
                     if orig_filepath in cached_blocks:
                         text_blocks.append(cached_blocks[orig_filepath])
                         continue
 
-                    # Retrieve matching stale file entry to save its metadata
                     stale_entry = next((item for item in stale_files if item[2] == orig_filepath), None)
-                    if not stale_entry: continue
+                    if not stale_entry:
+                        continue
                     _, _, _, mtime, size = stale_entry
 
                     block_lines = []
                     abs_filepath = git_root / orig_filepath
+                    canon_vfs_uri = f"vfs://{config['repo_dir']}/{rel_path}"
+                    clean_status = status.strip()
+
                     if 'D' in status:
-                        block_lines.append(f"============================================================")
-                        block_lines.append(f">>>DELETED FILE :: {config['repo_dir']}/{rel_path} | PREVIOUSLY TRACKED")
-                        block_lines.append(f"============================================================")
-                        block_lines.append(bulk_diffs.get(orig_filepath, "[No diff available or file is binary]"))
+                        block_lines.append("============================================================")
+                        block_lines.append(f">>>DELETED FILE :: {canon_vfs_uri}")
+                        block_lines.append("============================================================\n\n")
+                    elif clean_status in ("??", "A"):
+                        block_lines.append("============================================================")
+                        block_lines.append(f">>>NEW FILE :: {canon_vfs_uri} | ADDED FILE")
+                        block_lines.append("============================================================")
+                        content = ctx.vfs.read(canon_vfs_uri)
+                        block_lines.append(content if content is not None else "[Binary or empty file]")
                         block_lines.append("\n\n")
                     else:
-                        block_lines.append(f"============================================================")
-                        block_lines.append(f">>>NEW FILE :: {config['repo_dir']}/{rel_path} | CURRENT CONTENTS")
-                        block_lines.append(f"============================================================")
-                        try:
-                            content = ctx.vfs.read(f"vfs://{config['repo_dir']}/{rel_path}")
-                            if content: block_lines.append(content)
-                            else: block_lines.append("[Binary or unreadable file]")
-                        except Exception:
-                            block_lines.append("[Binary or unreadable file]")
+                        content = ctx.vfs.read(canon_vfs_uri)
+                        head_lookup_path = rename_head_map.get(orig_filepath, orig_filepath)
+                        if head_lookup_path not in head_content_cache:
+                            head_res = execute_git(str(git_root), ['show', f'HEAD:{head_lookup_path}'], check=False)
+                            head_content_cache[head_lookup_path] = head_res.stdout if head_res.returncode == 0 else ""
+                        base_content = head_content_cache[head_lookup_path]
 
-                        block_lines.append(f"\n============================================================")
-                        block_lines.append(f">>>DIFF :: {config['repo_dir']}/{rel_path} | CHANGES SINCE LAST COMMIT")
-                        block_lines.append(f"============================================================")
-
-                        if status == "??":
-                            block_lines.append("[Untracked file - full content above]")
+                        if content is not None and base_content:
+                            interleaved = format_interleaved_file_diff(canon_vfs_uri, base_content, content)
+                            block_lines.append("============================================================")
+                            block_lines.append(f">>>MODIFIED FILE (INTERLEAVED AST DIFF) :: {canon_vfs_uri}")
+                            block_lines.append("============================================================")
+                            block_lines.append(interleaved or content)
+                            block_lines.append("\n\n")
                         else:
-                            block_lines.append(bulk_diffs.get(orig_filepath, "[No diff available or file is binary]"))
-                        block_lines.append("\n\n")
+                            block_lines.append("============================================================")
+                            block_lines.append(f">>>NEW FILE :: {canon_vfs_uri} | CURRENT CONTENTS")
+                            block_lines.append("============================================================")
+                            block_lines.append(content if content is not None else "[Binary or unreadable file]")
+                            block_lines.append("\n\n")
                     block_text = "\n".join(block_lines)
                     text_blocks.append(block_text)
 
@@ -390,6 +455,7 @@ def _background_sweep_status(ctx):
     ctx.jobs.update_progress("Scanning workspaces for untracked files...")
     ctx.sync_vfs_barrier()
 
+    resolve_topology_buffer(ctx.workspace_id)
     top_ctx = topology_bp.get_context(ctx.workspace_id)
     for c in cfg.get("target_repos", []):
         repo = c.get("repo_dir")

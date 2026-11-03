@@ -339,7 +339,6 @@ export class InSetuExtTerm extends InSetuElement {
             if (this._ctrlLatched || this._shiftLatched) {
                 this._ctrlLatched = false;
                 this._shiftLatched = false;
-                this.requestUpdate();
             }
 
             this._ws.send(finalData);
@@ -441,26 +440,26 @@ export class InSetuExtTerm extends InSetuElement {
         this._contextMenuTransY = localY > (rect.height / 2) ? '-100%' : '0';
 
         this._contextMenuOpen = true;
-        this.requestUpdate();
     }
 
     render() {
         if (!this._hasSock) {
             return html`
-                <div style="padding: 20px; background: var(--input-bg); border: 1px solid var(--intent-warning); border-radius: 6px; color: var(--text); margin: 20px; display: flex; flex-direction: column; gap: 12px;">
-                    <h3 style="margin: 0; color: var(--intent-warning);">⚠️ Missing Backend Dependency</h3>
-                    <p style="margin: 0;">The Terminal extension requires <code>flask-sock</code> for WebSocket PTY streaming.</p>
-                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
-                        <code style="font-family: var(--font-mono); background: var(--bg); padding: 8px 12px; border-radius: 4px; border: 1px solid var(--border);">pip install flask-sock</code>
-                        <sutram-async-btn
-                            intent="primary"
-                            icon="download"
-                            label="Install flask-sock & Reboot"
-                            style="margin: 0;"
-                            .onClick=${this.installExtensionDependencies('term')}>
-                        </sutram-async-btn>
-                    </div>
-                </div>
+                <sutram-view>
+                    <sutram-surface variant="tinted" intent="warning" padding="lg" gap="md">
+                        <h3>⚠️ Missing Backend Dependency</h3>
+                        <sutram-label text="The Terminal extension requires flask-sock for WebSocket PTY streaming."></sutram-label>
+                        <sutram-stack direction="row" align="center" justify="between" gap="md" ?wrap=${true}>
+                            <code>pip install flask-sock</code>
+                            <sutram-async-btn
+                                intent="primary"
+                                icon="download"
+                                label="Install flask-sock & Reboot"
+                                .onClick=${this.installExtensionDependencies('term')}>
+                            </sutram-async-btn>
+                        </sutram-stack>
+                    </sutram-surface>
+                </sutram-view>
             `;
         }
         return html`
@@ -493,8 +492,7 @@ export class InSetuExtTerm extends InSetuElement {
                         @contextmenu=${(e) => e.stopPropagation()}>
                         <sutram-entity-actions
                             .entityType=${'terminal_context'}
-                            .entityData=${{ filepath: 'terminal', term: this }}
-                            style="display: flex; flex-direction: column; gap: 4px; align-items: stretch;">
+                            .entityData=${{ filepath: 'terminal', term: this }}>
                         </sutram-entity-actions>
                     </div>
                 </div>
@@ -511,10 +509,10 @@ window.ExtensionRegistry.registerExtension('term', {
                 { targetEntity: 'virtual_keyboard', id: 'vk-tab', label: 'Tab', icon: '⇥', intent: 'neutral', order: 10, onClick: (data) => { if(data.term) { data.term._sendData('\t'); if(data.term._term) data.term._term.focus(); } } },
                 { targetEntity: 'virtual_keyboard', id: 'vk-ctrl', label: 'Ctrl', icon: '⌃', intent: 'neutral', order: 20, 
                     isActive: (data) => data.ctrlLatched,
-                    onClick: (data) => { if(data.term) { data.term._ctrlLatched = !data.term._ctrlLatched; data.term.requestUpdate(); if(data.term._term) data.term._term.focus(); } } },
+                    onClick: (data) => { if(data.term) { data.term._ctrlLatched = !data.term._ctrlLatched; if(data.term._term) data.term._term.focus(); } } },
                 { targetEntity: 'virtual_keyboard', id: 'vk-shift', label: 'Shift', icon: '⇧', intent: 'neutral', order: 30, 
                     isActive: (data) => data.shiftLatched,
-                    onClick: (data) => { if(data.term) { data.term._shiftLatched = !data.term._shiftLatched; data.term.requestUpdate(); if(data.term._term) data.term._term.focus(); } } },
+                    onClick: (data) => { if(data.term) { data.term._shiftLatched = !data.term._shiftLatched; if(data.term._term) data.term._term.focus(); } } },
                 { targetEntity: 'virtual_keyboard', id: 'vk-up', label: '▲', icon: '', intent: 'neutral', order: 40, onClick: (data) => { if(data.term) { data.term._sendData('\x1b[A'); if(data.term._term) data.term._term.focus(); } } },
                 { targetEntity: 'virtual_keyboard', id: 'vk-down', label: '▼', icon: '', intent: 'neutral', order: 50, onClick: (data) => { if(data.term) { data.term._sendData('\x1b[B'); if(data.term._term) data.term._term.focus(); } } },
                 { targetEntity: 'virtual_keyboard', id: 'vk-left', label: '◀', icon: '', intent: 'neutral', order: 60, onClick: (data) => { if(data.term) { data.term._sendData('\x1b[D'); if(data.term._term) data.term._term.focus(); } } },
@@ -538,7 +536,7 @@ window.ExtensionRegistry.registerExtension('term', {
                             window.inSetu.utils.copyRawText(lines.join('\n').trim(), "✅ Copied last 150 lines");
                         }
                     }
-                    if(el) { el._contextMenuOpen = false; el.requestUpdate(); if(el._term) el._term.focus(); }
+                    if(el) { el._contextMenuOpen = false; if(el._term) el._term.focus(); }
                 } },
                 { targetEntity: 'terminal_context', id: 'tc-paste', label: 'Paste Clipboard', icon: '📝', intent: 'neutral', order: 20, onClick: async (data) => { 
                         const el = data.term;
@@ -548,12 +546,12 @@ window.ExtensionRegistry.registerExtension('term', {
                         } catch(e) { 
                                 if(window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("Clipboard read failed", 3000, true); 
                         }
-                        if(el) { el._contextMenuOpen = false; el.requestUpdate(); if(el._term) el._term.focus(); }
+                        if(el) { el._contextMenuOpen = false; if(el._term) el._term.focus(); }
                 } },
                 { targetEntity: 'terminal_context', id: 'tc-sigint', label: 'Send SIGINT (Ctrl+C)', icon: '🛑', intent: 'danger', order: 30, onClick: (data) => { 
                         const el = data.term;
                         if(el) el._sendData('\x03');
-                        if(el) { el._contextMenuOpen = false; el.requestUpdate(); if(el._term) el._term.focus(); }
+                        if(el) { el._contextMenuOpen = false; if(el._term) el._term.focus(); }
                 } }
         ],
         layoutSlots: [

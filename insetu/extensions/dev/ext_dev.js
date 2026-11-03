@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { InSetuElement, createExtensionStore, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 export const DevStore = createExtensionStore('Dev', {
     thrashingFiles: [],
@@ -18,9 +18,7 @@ export class InSetuExtDevDash extends InSetuElement {
         lastUpdate: { type: String },
         _expandedGraphs: { type: Object }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; overflow: hidden; box-sizing: border-box; background: var(--bg); container-type: inline-size; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.thrashingFiles = [];
@@ -92,164 +90,155 @@ export class InSetuExtDevDash extends InSetuElement {
     }
     render() {
         return html`
-            <sutram-scroll-view>
-                <div style="max-width: 1200px; margin: 0 auto; width: 100%;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <h2 style="margin: 0; color: var(--text);">Developer Dashboard</h2>
-                    <span style="font-size: 0.8rem; color: var(--text-muted);">Last Updated: ${this.lastUpdate || '...'}</span>
-                </div>
-                <sutram-card-group>
-                    <sutram-card
-                        titleText="File Thrashing (Last 1 Hour)"
-                        descriptionText="Files mutated more than 3 times in the past hour."
-                        icon="flame"
-                        intent="danger"
-                        ?disableSelection=${true}
-                        style="margin-bottom: 20px;">
-
-                        <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-                            ${this.thrashingFiles.length === 0 ? html`
-                                <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem; display: flex; align-items: center; gap: 6px;">
-                                    <yv-icon name="check-circle-2" style="width: 14px; height: 14px;"></yv-icon> File system is stable. No thrashing detected.
-                                </div>
-                            ` : this.thrashingFiles.map(f => html`
-                                <div style="display: flex; flex-direction: column; background: var(--bg); border-radius: 4px; border: 1px solid var(--border); overflow: hidden;">
-                                    <div style="display: flex; justify-content: space-between; padding: 8px 12px; cursor: pointer; transition: background 0.2s;"
-                                        onmouseover="this.style.background='var(--input-bg)'"
-                                        onmouseout="this.style.background='transparent'"
+            <sutram-view size="wide" titleText="Developer Dashboard" .descriptionText=${`Last Updated: ${this.lastUpdate || '...'}`}>
+                <sutram-stack direction="col" gap="lg">
+                    <sutram-card-group>
+                        <sutram-card
+                            titleText="File Thrashing (Last 1 Hour)"
+                            descriptionText="Files mutated more than 3 times in the past hour."
+                            icon="flame"
+                            intent="danger"
+                            ?disableSelection=${true}>
+                            <sutram-stack direction="col" gap="sm">
+                                ${this.thrashingFiles.length === 0 ? html`
+                                    <sutram-stack direction="row" align="center" gap="xs">
+                                        <sutram-icon name="check-circle-2" size="sm" intent="success"></sutram-icon>
+                                        <sutram-label text="File system is stable. No thrashing detected."></sutram-label>
+                                    </sutram-stack>
+                                ` : this.thrashingFiles.map(f => html`
+                                    <sutram-surface variant="inset" padding="xs" gap="xs" ?interactive=${true}
                                         @click=${() => {
                                             this._expandedGraphs = { ...this._expandedGraphs, [f.filepath]: !this._expandedGraphs[f.filepath] };
-                                            this.requestUpdate();
                                         }}>
-                                        <div style="display: flex; align-items: center; gap: 8px;">
-                                            <span style="color: var(--text-muted); font-size: 0.7rem;">${this._expandedGraphs[f.filepath] ? '▼' : '▶'}</span>
-                                            <span style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--text); word-break: break-all;">${f.filepath}</span>
-                                        </div>
-                                        <span style="font-weight: bold; color: var(--intent-danger);">${f.peak_mutations} mut/min peak</span>
-                                    </div>
-                                    ${this._expandedGraphs[f.filepath] ? html`
-                                        <div style="padding: 15px; border-top: 1px solid var(--border); background: var(--pane-bg);">
-                                            <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px;">
-                                                <span>60 mins ago</span>
-                                                <span style="font-weight: bold; color: var(--text);">${f.total_mutations} total mutations</span>
-                                                <span>Now</span>
-                                            </div>
-                                            <div style="display: flex; align-items: flex-end; height: 60px; gap: 2px;">
-                                                ${f.history.map(val => {
-                                                    const heightPct = f.peak_mutations > 0 ? Math.max(5, (val / f.peak_mutations) * 100) : 0;
-                                                    return html`
-                                                        <div style="flex: 1; background: ${val >= 3 ? 'var(--intent-danger)' : (val > 0 ? 'var(--intent-primary)' : 'transparent')}; height: ${val > 0 ? heightPct + '%' : '2px'}; opacity: ${val > 0 ? '1' : '0.2'}; border-radius: 2px 2px 0 0;" title="${val} mutations"></div>
-                                                    `;
-                                                })}
-                                            </div>
-                                        </div>
-                                    ` : ''}
-                                </div>
-                            `)}
-                        </div>
-                    </sutram-card>
-                    <sutram-card
-                        titleText="System Error Ledger"
-                        descriptionText="Background worker crashes, VFS write failures, and unhandled exceptions."
-                        icon="alert-triangle"
-                        intent="danger"
-                        ?disableSelection=${true}
-                        style="margin-bottom: 20px;">
-
-                        <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-                            ${this.systemErrors.length === 0 ? html`
-                                <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem; display: flex; align-items: center; gap: 6px;">
-                                    <yv-icon name="check-circle-2" style="width: 14px; height: 14px;"></yv-icon> No system errors recorded.
-                                </div>
-                            ` : this.systemErrors.map(err => html`
-                                <div style="display: flex; flex-direction: column; background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border); user-select: text;">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; flex-wrap: wrap;">
-                                        <div style="display: flex; align-items: center; gap: 8px;">
-                                            <span style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-danger); font-weight: bold;">[${err.source}]${err.error_type}</span>
-                                        </div>
-                                        <div style="display: flex; align-items: center; gap: 8px;">
-                                            <span style="font-size: 0.75rem; color: var(--text-muted);">${this.utils.formatDate(err.timestamp * 1000)}</span>
-                                            <sutram-btn
-                                                size="sm"
-                                                intent="neutral"
-                                                icon="clipboard"
-                                                label="Copy"
-                                                style="margin: 0; --btn-padding: 2px 8px; --btn-font-size: 0.72rem;"
-                                                @click=${() => {
-                                                    const fullErrText = `[${err.source}] ${err.error_type} (${this.utils.formatDate(err.timestamp * 1000)})\nMessage: ${err.message || ''}${err.payload ? `\n\nPayload:\n${err.payload}` : ''}${err.traceback ? `\n\nTraceback:\n${err.traceback}` : ''}`;
-                                                    this.utils.copyRawText(fullErrText, "📋 Error copied to clipboard!");
-                                                }}>
-                                            </sutram-btn>
-                                        </div>
-                                    </div>
-                                    <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); white-space: pre-wrap; background: var(--input-bg); padding: 6px; border-radius: 4px; margin-bottom: 8px; user-select: text;">${err.message}</div>
-                                    ${(err.traceback || err.payload) ? html`
-                                        <sutram-collapsible titleText="🔍 View Details" intent="neutral" style="--title-size: 0.8rem;">
-                                            <div style="display: flex; flex-direction: column; gap: 8px;">
-                                                ${err.payload ? html`
-                                                    <div style="font-weight: bold; font-size: 0.8rem; color: var(--text-muted);">Payload:</div>
-                                                    <pre style="margin: 0; font-size: 0.75rem; background: var(--input-bg); color: var(--text); padding: 8px; border-radius: 4px; border: 1px solid var(--border); overflow-x: auto;">${(() => {
-                                                        if (typeof err.payload !== 'string') return String(err.payload);
-                                                        if (!err.payload.trim().startsWith('{') && !err.payload.trim().startsWith('[')) return err.payload;
-                                                        try { return JSON.stringify(JSON.parse(err.payload), null, 2); } 
-                                                        catch(e) { return err.payload; }
-                                                    })()}</pre>
-                                                ` : ''}
-                                                ${err.traceback ? html`
-                                                    <div style="font-weight: bold; font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Traceback:</div>
-                                                    <pre style="margin: 0; font-size: 0.75rem; background: var(--input-bg); color: var(--text-muted); padding: 8px; border-radius: 4px; border: 1px solid var(--border); overflow-x: auto;">${err.traceback}</pre>
-                                                ` : ''}
-                                            </div>
-                                        </sutram-collapsible>
-                                    ` : ''}
-                                </div>
-                            `)}
-                        </div>
-                    </sutram-card>
-                    <sutram-card
-                        titleText="Bridge Error Ledger"
-                        descriptionText="AST validation and patch diff failures for LLM analysis."
-                        icon="layout"
-                        intent="warning"
-                        ?disableSelection=${true}>
-
-                        <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-                            ${this.bridgeErrors.length === 0 ? html`
-                                <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem; display: flex; align-items: center; gap: 6px;">
-                                    <yv-icon name="check-circle-2" style="width: 14px; height: 14px;"></yv-icon> No bridge errors recorded.
-                                </div>
-                            ` : this.bridgeErrors.map(err => html`
-                                <div style="display: flex; flex-direction: column; background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
-                                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                                        <div style="display: flex; align-items: center; gap: 8px;">
-                                            <span style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-primary); word-break: break-all;">${err.filepath}</span>
-                                            ${err.attempt_count > 1 ? html`<span style="background: var(--intent-warning); color: black; padding: 2px 6px; border-radius: 10px; font-size: 0.7rem; font-weight: bold;">${err.attempt_count}x Attempts</span>` : ''}
-                                        </div>
-                                        <span style="font-size: 0.75rem; color: var(--text-muted);">${this.utils.formatDate(err.timestamp * 1000)}</span>
-                                    </div>
-                                    <div style="font-size: 0.85rem; font-weight: bold; color: var(--intent-warning); margin-bottom: 4px;">[${err.error_type}]</div>
-                                    <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); white-space: pre-wrap; background: var(--input-bg); padding: 6px; border-radius: 4px;">${err.details}</div>
-                                    ${(err.file_content || err.patch_payload) ? html`
-                                        <div style="margin-top: 8px;">
-                                            <sutram-collapsible titleText="🔍 View Full Context" intent="neutral" style="--title-size: 0.8rem;">
-                                                <div style="display: flex; flex-direction: column; gap: 8px;">
-                                                    <div style="font-weight: bold; font-size: 0.8rem; color: var(--text-muted);">Patch Payload:</div>
-                                                    <sutram-textarea readonly style="width: 100%; height: 100px; font-family: var(--font-mono); font-size: 0.75rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px; resize: vertical;" .value=${err.patch_payload ? (typeof err.patch_payload === 'string' && (err.patch_payload.startsWith('{') || err.patch_payload.startsWith('[')) ? JSON.stringify(JSON.parse(err.patch_payload), null, 2) : err.patch_payload) : 'N/A'}></sutram-textarea>
-                                                    <div style="font-weight: bold; font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Target File Content:</div>
-                                                    <sutram-textarea readonly style="width: 100%; height: 150px; font-family: var(--font-mono); font-size: 0.75rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px; resize: vertical;" .value=${err.file_content || 'N/A'}></sutram-textarea>
+                                        <sutram-stack
+                                            direction="row"
+                                            justify="between"
+                                            align="center">
+                                            <sutram-stack direction="row" align="center" gap="sm">
+                                                <sutram-label .text=${this._expandedGraphs[f.filepath] ? '▼' : '▶'}></sutram-label>
+                                                <code>${f.filepath}</code>
+                                            </sutram-stack>
+                                            <sutram-tag text="${f.peak_mutations} mut/min peak" intent="danger"></sutram-tag>
+                                        </sutram-stack>
+                                        ${this._expandedGraphs[f.filepath] ? html`
+                                            <sutram-surface variant="panel" border="top" padding="sm" gap="xs">
+                                                <sutram-stack direction="row" justify="between" align="center">
+                                                    <sutram-label text="60 mins ago"></sutram-label>
+                                                    <strong>${f.total_mutations} total mutations</strong>
+                                                    <sutram-label text="Now"></sutram-label>
+                                                </sutram-stack>
+                                                <div style="display: flex; align-items: flex-end; height: 60px; gap: 2px;">
+                                                    ${f.history.map(val => {
+                                                        const heightPct = f.peak_mutations > 0 ? Math.max(5, (val / f.peak_mutations) * 100) : 0;
+                                                        return html`
+                                                            <div style="flex: 1; background: ${val >= 3 ? 'var(--intent-danger)' : (val > 0 ? 'var(--intent-primary)' : 'transparent')}; height: ${val > 0 ? heightPct + '%' : '2px'}; opacity: ${val > 0 ? '1' : '0.2'}; border-radius: 2px 2px 0 0;" title="${val} mutations"></div>
+                                                        `;
+                                                    })}
                                                 </div>
+                                            </sutram-surface>
+                                        ` : ''}
+                                    </sutram-surface>
+                                `)}
+                            </sutram-stack>
+                        </sutram-card>
+
+                        <sutram-card
+                            titleText="System Error Ledger"
+                            descriptionText="Background worker crashes, VFS write failures, and unhandled exceptions."
+                            icon="alert-triangle"
+                            intent="danger"
+                            ?disableSelection=${true}>
+                            <sutram-stack direction="col" gap="sm">
+                                ${this.systemErrors.length === 0 ? html`
+                                    <sutram-stack direction="row" align="center" gap="xs">
+                                        <sutram-icon name="check-circle-2" size="sm" intent="success"></sutram-icon>
+                                        <sutram-label text="No system errors recorded."></sutram-label>
+                                    </sutram-stack>
+                                ` : this.systemErrors.map(err => html`
+                                    <sutram-surface variant="inset" padding="sm" gap="xs">
+                                        <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                                            <strong>[${err.source}] ${err.error_type}</strong>
+                                            <sutram-stack direction="row" align="center" gap="sm">
+                                                <sutram-label .text=${this.utils.formatDate(err.timestamp * 1000)}></sutram-label>
+                                                <sutram-btn
+                                                    ?compact=${true}
+                                                    intent="neutral"
+                                                    icon="clipboard"
+                                                    label="Copy"
+                                                    @click=${() => {
+                                                        const fullErrText = `[${err.source}] ${err.error_type} (${this.utils.formatDate(err.timestamp * 1000)})\nMessage: ${err.message || ''}${err.payload ? `\n\nPayload:\n${err.payload}` : ''}${err.traceback ? `\n\nTraceback:\n${err.traceback}` : ''}`;
+                                                        this.utils.copyRawText(fullErrText, "📋 Error copied to clipboard!");
+                                                    }}>
+                                                </sutram-btn>
+                                            </sutram-stack>
+                                        </sutram-stack>
+                                        <pre>${err.message}</pre>
+                                        ${(err.traceback || err.payload) ? html`
+                                            <sutram-collapsible titleText="🔍 View Details" intent="neutral">
+                                                <sutram-stack direction="col" gap="sm">
+                                                    ${err.payload ? html`
+                                                        <sutram-label text="Payload:"></sutram-label>
+                                                        <pre>${(() => {
+                                                            if (typeof err.payload !== 'string') return String(err.payload);
+                                                            if (!err.payload.trim().startsWith('{') && !err.payload.trim().startsWith('[')) return err.payload;
+                                                            try { return JSON.stringify(JSON.parse(err.payload), null, 2); } 
+                                                            catch(e) { return err.payload; }
+                                                        })()}</pre>
+                                                    ` : ''}
+                                                    ${err.traceback ? html`
+                                                        <sutram-label text="Traceback:"></sutram-label>
+                                                        <pre>${err.traceback}</pre>
+                                                    ` : ''}
+                                                </sutram-stack>
                                             </sutram-collapsible>
-                                        </div>
-                                    ` : ''}
-                                </div>
-                            `)}
-                        </div>
-                    </sutram-card>
-                </sutram-card-group>
-                    </div>
-                </sutram-scroll-view>
+                                        ` : ''}
+                                    </sutram-surface>
+                                `)}
+                            </sutram-stack>
+                        </sutram-card>
+
+                        <sutram-card
+                            titleText="Bridge Error Ledger"
+                            descriptionText="AST validation and patch diff failures for LLM analysis."
+                            icon="layout"
+                            intent="warning"
+                            ?disableSelection=${true}>
+                            <sutram-stack direction="col" gap="sm">
+                                ${this.bridgeErrors.length === 0 ? html`
+                                    <sutram-stack direction="row" align="center" gap="xs">
+                                        <sutram-icon name="check-circle-2" size="sm" intent="success"></sutram-icon>
+                                        <sutram-label text="No bridge errors recorded."></sutram-label>
+                                    </sutram-stack>
+                                ` : this.bridgeErrors.map(err => html`
+                                    <sutram-surface variant="inset" padding="sm" gap="xs">
+                                        <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                                            <sutram-stack direction="row" align="center" gap="sm">
+                                                <code>${err.filepath}</code>
+                                                ${err.attempt_count > 1 ? html`<sutram-tag text="${err.attempt_count}x Attempts" intent="warning"></sutram-tag>` : ''}
+                                            </sutram-stack>
+                                            <sutram-label .text=${this.utils.formatDate(err.timestamp * 1000)}></sutram-label>
+                                        </sutram-stack>
+                                        <strong>[${err.error_type}]</strong>
+                                        <pre>${err.details}</pre>
+                                        ${(err.file_content || err.patch_payload) ? html`
+                                            <sutram-collapsible titleText="🔍 View Full Context" intent="neutral">
+                                                <sutram-stack direction="col" gap="sm">
+                                                    <sutram-label text="Patch Payload:"></sutram-label>
+                                                    <sutram-textarea readonly ?monospace=${true} .value=${err.patch_payload ? (typeof err.patch_payload === 'string' && (err.patch_payload.startsWith('{') || err.patch_payload.startsWith('[')) ? JSON.stringify(JSON.parse(err.patch_payload), null, 2) : err.patch_payload) : 'N/A'}></sutram-textarea>
+                                                    <sutram-label text="Target File Content:"></sutram-label>
+                                                    <sutram-textarea readonly ?monospace=${true} .value=${err.file_content || 'N/A'}></sutram-textarea>
+                                                </sutram-stack>
+                                            </sutram-collapsible>
+                                        ` : ''}
+                                    </sutram-surface>
+                                `)}
+                            </sutram-stack>
+                        </sutram-card>
+                    </sutram-card-group>
+                </sutram-stack>
+            </sutram-view>
         `;
-}
+    }
 }
 customElements.define('insetu-ext-dev-dash', InSetuExtDevDash);
 export class InSetuExtDevLogs extends InSetuElement {
@@ -258,10 +247,7 @@ export class InSetuExtDevLogs extends InSetuElement {
         backendLogs: { type: String },
         loading: { type: Boolean }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; overflow: hidden; padding: 20px; box-sizing: border-box; background: var(--bg); }
-        pre { flex: 1; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; }
-    `];
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -325,24 +311,21 @@ export class InSetuExtDevLogs extends InSetuElement {
 
     render() {
         return html`
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-shrink: 0;">
-                <div>
-                    <h2 style="margin: 0; color: var(--text);">Daemon Logs</h2>
-                    <span style="font-size: 0.85rem; color: var(--text-muted);">Recent systemd output for insetu.service.</span>
-                </div>
-                <div style="display: flex; gap: 12px; align-items: center;">
-                    ${this.loading ? html`<sutram-spinner style="display:block; margin:0;" text="Fetching..."></sutram-spinner>` : ''}
-                    <sutram-btn icon="copy" label="Copy" intent="neutral" @click=${this.copyLogs} style="margin: 0;"></sutram-btn>
-                    <sutram-async-btn
-                        icon="download"
-                        label="Export Boot Logs"
-                        intent="primary"
-                        style="margin: 0;"
-                        .onClick=${this._getDownloadLogsAction()}>
-                    </sutram-async-btn>
-                </div>
-            </div>
-            <pre style="border: 1px solid var(--border); background: var(--input-bg); border-radius: 4px; padding: 15px; color: var(--text-muted); opacity: ${this.loading ? 0.6 : 1};">${this.backendLogs || 'No logs available.'}</pre>
+            <sutram-view size="wide" titleText="Daemon Logs" descriptionText="Recent systemd output for insetu.service.">
+                ${this.loading ? html`<sutram-spinner slot="header-actions" text="Fetching..."></sutram-spinner>` : ''}
+                <sutram-btn slot="header-actions" ?compact=${true} icon="copy" label="Copy" intent="neutral" @click=${this.copyLogs}></sutram-btn>
+                <sutram-async-btn
+                    slot="header-actions"
+                    ?compact=${true}
+                    icon="download"
+                    label="Export Boot Logs"
+                    intent="primary"
+                    .onClick=${this._getDownloadLogsAction()}>
+                </sutram-async-btn>
+                <sutram-surface variant="panel" padding="md">
+                    <pre>${this.backendLogs || 'No logs available.'}</pre>
+                </sutram-surface>
+            </sutram-view>
         `;
     }
 }
@@ -357,21 +340,7 @@ export class InSetuExtDevSql extends InSetuElement {
         result: { type: Object },
         loading: { type: Boolean }
     };
-    static styles = [
-        sharedStyles,
-        css`
-            :host { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; background: var(--bg); overflow: hidden; }
-            .sql-controls { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
-            .presets { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-            .preset-btn { background: var(--input-bg); border: 1px solid var(--border); color: var(--text); padding: 4px 10px; border-radius: 4px; font-size: 0.8rem; cursor: pointer; font-family: var(--font-mono); }
-            .preset-btn:hover { background: var(--bg); border-color: var(--intent-primary); }
-            .results-table-wrapper { flex: 1; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); }
-            table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); }
-            th { position: sticky; top: 0; background: var(--bg); color: var(--intent-primary); text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border); z-index: 10; white-space: nowrap; }
-            td { padding: 8px 12px; border-bottom: 1px solid var(--border); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-            tr:hover td { background: rgba(255, 255, 255, 0.03); }
-        `
-    ];
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -428,100 +397,94 @@ export class InSetuExtDevSql extends InSetuElement {
             this.selectedDb = dbName;
         }
         this.query = queryStr;
-        this.requestUpdate();
     }
     render() {
         return html`
-            <sutram-scroll-view>
-                <div style="display: flex; flex-direction: column; height: 100%; max-width: 1200px; margin: 0 auto; width: 100%;">
-                    <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <h3 style="margin: 0; color: var(--text);">SQL Console</h3>
-                        <span style="font-size: 0.85rem; color: var(--text-muted);">Execute queries directly against workspace SQLite databases.</span>
-                    </div>
-                </div>
+            <sutram-view size="wide" titleText="SQL Console" descriptionText="Execute queries directly against workspace SQLite databases.">
+                <sutram-stack direction="col" gap="md">
 
-                <div class="sql-controls">
-                    <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
-                        <sutram-select 
-                            label="Target Database" 
-                            .value=${this.selectedDb} 
-                            .options=${this.databases.map(db => ({ value: db, label: `${db}.db` }))} 
-                            @sutram-input-changed=${e => this.selectedDb = e.detail.value}
-                            style="width: 220px;">
-                        </sutram-select>
-                        <div class="presets" style="flex: 1;">
-                            <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold;">Quick Presets:</span>
-                            <sutram-btn size="sm" intent="neutral" label="Topology Ledger" style="margin: 0;" @click=${() => this._applyPreset('SELECT * FROM topology_ledger ORDER BY timestamp DESC LIMIT 20;', 'topology')}></sutram-btn>
-                            <sutram-btn size="sm" intent="neutral" label="Manifest Ledger" style="margin: 0;" @click=${() => this._applyPreset('SELECT * FROM manifest_ledger ORDER BY timestamp DESC LIMIT 20;', 'vfs_index')}></sutram-btn>
-                            <sutram-btn size="sm" intent="neutral" label="VFS Event Log" style="margin: 0;" @click=${() => this._applyPreset('SELECT * FROM vfs_event_log ORDER BY timestamp DESC LIMIT 20;', 'workers')}></sutram-btn>
-                            <sutram-btn size="sm" intent="neutral" label="Immediate Jobs" style="margin: 0;" @click=${() => this._applyPreset('SELECT * FROM immediate_jobs ORDER BY created_at DESC LIMIT 20;', 'workers')}></sutram-btn>
-                            <sutram-btn size="sm" intent="neutral" label="System Errors" style="margin: 0;" @click=${() => this._applyPreset('SELECT * FROM system_errors ORDER BY timestamp DESC LIMIT 20;', 'dev')}></sutram-btn>
-                            <sutram-btn size="sm" intent="neutral" label="Bridge Errors" style="margin: 0;" @click=${() => this._applyPreset('SELECT * FROM bridge_errors ORDER BY timestamp DESC LIMIT 20;', 'dev')}></sutram-btn>
-                        </div>
-                    </div>
+                    <sutram-surface variant="panel" padding="md" gap="md">
+                        <sutram-stack direction="row" align="center" gap="md" ?wrap=${true}>
+                            <sutram-select 
+                                label="Target Database" 
+                                ?flush=${true}
+                                .value=${this.selectedDb} 
+                                .options=${this.databases.map(db => ({ value: db, label: `${db}.db` }))} 
+                                @sutram-input-changed=${e => this.selectedDb = e.detail.value}>
+                            </sutram-select>
+                            <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true} ?flex=${true}>
+                                <sutram-label text="Quick Presets:"></sutram-label>
+                                <sutram-btn ?compact=${true} intent="neutral" label="Topology Ledger" @click=${() => this._applyPreset('SELECT * FROM topology_ledger ORDER BY timestamp DESC LIMIT 20;', 'topology')}></sutram-btn>
+                                <sutram-btn ?compact=${true} intent="neutral" label="Manifest Ledger" @click=${() => this._applyPreset('SELECT * FROM manifest_ledger ORDER BY timestamp DESC LIMIT 20;', 'vfs_index')}></sutram-btn>
+                                <sutram-btn ?compact=${true} intent="neutral" label="VFS Event Log" @click=${() => this._applyPreset('SELECT * FROM vfs_event_log ORDER BY timestamp DESC LIMIT 20;', 'workers')}></sutram-btn>
+                                <sutram-btn ?compact=${true} intent="neutral" label="Immediate Jobs" @click=${() => this._applyPreset('SELECT * FROM immediate_jobs ORDER BY created_at DESC LIMIT 20;', 'workers')}></sutram-btn>
+                                <sutram-btn ?compact=${true} intent="neutral" label="System Errors" @click=${() => this._applyPreset('SELECT * FROM system_errors ORDER BY timestamp DESC LIMIT 20;', 'dev')}></sutram-btn>
+                                <sutram-btn ?compact=${true} intent="neutral" label="Bridge Errors" @click=${() => this._applyPreset('SELECT * FROM bridge_errors ORDER BY timestamp DESC LIMIT 20;', 'dev')}></sutram-btn>
+                            </sutram-stack>
+                        </sutram-stack>
 
-                    <sutram-textarea 
-                        label="SQL Query" 
-                        .value=${this.query} 
-                        ?monospace=${true} 
-                        @sutram-input-changed=${e => this.query = e.detail.value}>
-                    </sutram-textarea>
+                        <sutram-textarea 
+                            label="SQL Query" 
+                            ?flush=${true}
+                            .value=${this.query} 
+                            ?monospace=${true} 
+                            @sutram-input-changed=${e => this.query = e.detail.value}>
+                        </sutram-textarea>
 
-                    <div style="display: flex; justify-content: flex-end;">
-                        <sutram-async-btn 
-                            label="▶ Execute Query" 
-                            intent="primary" 
-                            ?disabled=${this.loading} 
-                            .onClick=${() => this._executeQuery()}>
-                        </sutram-async-btn>
-                    </div>
-                </div>
+                        <sutram-stack direction="row" justify="end">
+                            <sutram-async-btn 
+                                label="▶ Execute Query" 
+                                intent="primary" 
+                                ?disabled=${this.loading} 
+                                .onClick=${() => this._executeQuery()}>
+                            </sutram-async-btn>
+                        </sutram-stack>
+                    </sutram-surface>
 
-                ${this.loading ? html`<sutram-spinner text="Executing query..."></sutram-spinner>` : ''}
+                    ${this.loading ? html`<sutram-spinner text="Executing query..."></sutram-spinner>` : ''}
 
-                ${this.result ? html`
-                    <div style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; font-family: var(--font-mono);">
-                        ${this.result.status === 'success' ? html`
-                            <span style="color: var(--intent-success);">
-                                ✅ ${this.result.type === 'select' ? `${this.result.row_count} row(s) returned` : `${this.result.affected_rows} row(s) affected`} (${this.result.elapsed_ms}ms)
-                            </span>
-                        ` : html`
-                            <span style="color: var(--intent-danger);">❌ Query Error: ${this.result.error}</span>
-                        `}
-                    </div>
-
-                    ${this.result.status === 'success' && this.result.type === 'select' ? html`
-                        <div class="results-table-wrapper">
-                            ${this.result.rows.length === 0 ? html`
-                                <div style="padding: 20px; text-align: center; color: var(--text-muted); font-style: italic;">Query returned 0 rows.</div>
+                    ${this.result ? html`
+                        <sutram-surface variant="tinted" intent=${this.result.status === 'success' ? 'success' : 'danger'} padding="xs">
+                            ${this.result.status === 'success' ? html`
+                                <strong>✅ ${this.result.type === 'select' ? `${this.result.row_count} row(s) returned` : `${this.result.affected_rows} row(s) affected`} (${this.result.elapsed_ms}ms)</strong>
                             ` : html`
-                                <table>
-                                    <thead>
-                                        <tr>
-                                            ${this.result.columns.map(col => html`<th>${col}</th>`)}
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        ${this.result.rows.map(row => html`
-                                            <tr>
-                                                ${this.result.columns.map(col => {
-                                                    const val = row[col];
-                                                    const displayVal = typeof val === 'object' && val !== null ? JSON.stringify(val) : String(val ?? '');
-                                                    return html`<td title="${displayVal}">${displayVal}</td>`;
-                                                })}
-                                            </tr>
-                                        `)}
-                                    </tbody>
-                                </table>
+                                <strong>❌ Query Error: ${this.result.error}</strong>
                             `}
-                        </div>
+                        </sutram-surface>
+
+                        ${this.result.status === 'success' && this.result.type === 'select' ? html`
+                            <sutram-surface variant="panel" padding="sm">
+                                <sutram-scrub-track>
+                                ${this.result.rows.length === 0 ? html`
+                                    <sutram-empty-state text="Query returned 0 rows."></sutram-empty-state>
+                                ` : html`
+                                    <table style="width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.8rem;">
+                                        <thead>
+                                            <tr>
+                                                ${this.result.columns.map(col => html`<th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">${col}</th>`)}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            ${this.result.rows.map(row => html`
+                                                <tr>
+                                                    ${this.result.columns.map(col => {
+                                                        const val = row[col];
+                                                        const displayVal = typeof val === 'object' && val !== null ? JSON.stringify(val) : String(val ?? '');
+                                                        return html`<td style="padding: 8px 12px; border-bottom: 1px solid var(--border); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${displayVal}">${displayVal}</td>`;
+                                                    })}
+                                                </tr>
+                                            `)}
+                                        </tbody>
+                                    </table>
+                                `}
+                                </sutram-scrub-track>
+                            </sutram-surface>
+                        ` : ''}
                     ` : ''}
-                ` : ''}
-                    </div>
-                </sutram-scroll-view>
+                </sutram-stack>
+            </sutram-view>
         `;
-}
+    }
 }
 customElements.define('insetu-ext-dev-sql', InSetuExtDevSql);
 
@@ -531,21 +494,7 @@ export class InSetuExtDevMemory extends InSetuElement {
         memoryData: { type: Object },
         loading: { type: Boolean }
     };
-    static styles = [
-        sharedStyles,
-        css`
-            :host { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; background: var(--bg); overflow: hidden; container-type: inline-size; }
-            .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
-            .stat-card { background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 15px; display: flex; flex-direction: column; gap: 4px; }
-            .stat-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold; letter-spacing: 0.04em; }
-            .stat-value { font-family: var(--font-mono); font-size: 1.15rem; font-weight: bold; color: var(--intent-primary); }
-            .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); }
-            table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); }
-            th { background: var(--bg); color: var(--intent-primary); text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border); white-space: nowrap; }
-            td { padding: 8px 12px; border-bottom: 1px solid var(--border); word-break: break-all; }
-            tr:hover td { background: rgba(255, 255, 255, 0.03); }
-        `
-    ];
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -560,7 +509,6 @@ export class InSetuExtDevMemory extends InSetuElement {
             state => state.memoryTelemetry,
             (memoryTelemetry) => {
                 this.memoryData = memoryTelemetry;
-                this.requestUpdate();
             }
         );
         this.fetchMemory();
@@ -605,128 +553,123 @@ export class InSetuExtDevMemory extends InSetuElement {
         const traceTop = this.memoryData?.tracemalloc_top || [];
 
         return html`
-            <sutram-scroll-view>
-                <div style="max-width: 1200px; margin: 0 auto; width: 100%; display: flex; flex-direction: column; gap: 18px; padding-bottom: 24px;">
-                    <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-                        <div>
-                            <h3 style="margin: 0; color: var(--text);">Backend Memory & Heap Profiler</h3>
-                            <span style="font-size: 0.85rem; color: var(--text-muted);">Live resident set size (RSS), glibc arena footprint, VFS cache occupancy, and Python GC object tables.</span>
-                        </div>
-                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                            <sutram-btn size="sm" icon="refresh-cw" label="Refresh" intent="neutral" @click=${() => this.fetchMemory()}></sutram-btn>
-                            <sutram-async-btn size="sm" icon="sparkles" label="GC + Trim Heap" intent="success" .onClick=${() => this.fetchMemory('trim')}></sutram-async-btn>
-                            <sutram-async-btn
-                                size="sm"
-                                icon=${traceActive ? 'square' : 'activity'}
-                                label=${traceActive ? 'Stop Tracemalloc' : 'Start Tracemalloc'}
-                                intent=${traceActive ? 'danger' : 'highlight'}
-                                .onClick=${() => this.fetchMemory(traceActive ? 'tracemalloc_stop' : 'tracemalloc_start')}>
-                            </sutram-async-btn>
-                        </div>
-                    </div>
-
+            <sutram-view
+                size="wide"
+                titleText="Backend Memory & Heap Profiler"
+                descriptionText="Live resident set size (RSS), glibc arena footprint, VFS cache occupancy, and Python GC object tables.">
+                <sutram-btn slot="header-actions" ?compact=${true} icon="refresh-cw" label="Refresh" intent="neutral" @click=${() => this.fetchMemory()}></sutram-btn>
+                <sutram-async-btn slot="header-actions" ?compact=${true} icon="sparkles" label="GC + Trim Heap" intent="success" .onClick=${() => this.fetchMemory('trim')}></sutram-async-btn>
+                <sutram-async-btn
+                    slot="header-actions"
+                    ?compact=${true}
+                    icon=${traceActive ? 'square' : 'activity'}
+                    label=${traceActive ? 'Stop Tracemalloc' : 'Start Tracemalloc'}
+                    intent=${traceActive ? 'danger' : 'highlight'}
+                    .onClick=${() => this.fetchMemory(traceActive ? 'tracemalloc_stop' : 'tracemalloc_start')}>
+                </sutram-async-btn>
+                <sutram-stack direction="col" gap="lg">
                     ${this.loading && !this.memoryData ? html`<sutram-spinner text="Inspecting backend heap..."></sutram-spinner>` : ''}
 
-                    <div class="stat-grid">
-                        <div class="stat-card">
-                            <span class="stat-label">Resident RAM (VmRSS)</span>
-                            <span class="stat-value" style="color: var(--intent-success);">${this._formatKbToMb(proc.VmRSS)}</span>
-                            <span style="font-size: 0.72rem; color: var(--text-muted);">Physical memory actively in use</span>
-                        </div>
-                        <div class="stat-card">
-                            <span class="stat-label">Heap / Stack Data (VmData)</span>
-                            <span class="stat-value" style="color: var(--intent-warning);">${this._formatKbToMb(proc.VmData)}</span>
-                            <span style="font-size: 0.72rem; color: var(--text-muted);">Virtual heap + thread stack arenas</span>
-                        </div>
-                        <div class="stat-card">
-                            <span class="stat-label">Active OS Threads</span>
-                            <span class="stat-value">${proc.Threads || 'N/A'}</span>
-                            <span style="font-size: 0.72rem; color: var(--text-muted);">Worker pool + Watchdog + WSGI</span>
-                        </div>
-                        <div class="stat-card">
-                            <span class="stat-label">VFS Read Cache</span>
-                            <span class="stat-value" style="color: var(--intent-highlight);">${caches.vfs_read_cache_mb ?? 0} MB</span>
-                            <span style="font-size: 0.72rem; color: var(--text-muted);">${caches.vfs_read_cache_files ?? 0} files cached in RAM</span>
-                        </div>
-                        <div class="stat-card">
-                            <span class="stat-label">JSON Config Cache</span>
-                            <span class="stat-value">${caches.json_config_cache_kb ?? 0} KB</span>
-                            <span style="font-size: 0.72rem; color: var(--text-muted);">${caches.json_config_cache_files ?? 0} config files</span>
-                        </div>
-                    </div>
+                    <sutram-stack direction="grid" ?compact=${true}>
+                        <sutram-surface variant="panel" padding="md" gap="xs">
+                            <sutram-label text="RESIDENT RAM (VMRSS)"></sutram-label>
+                            <h3>${this._formatKbToMb(proc.VmRSS)}</h3>
+                            <sutram-label text="Physical memory actively in use"></sutram-label>
+                        </sutram-surface>
+                        <sutram-surface variant="panel" padding="md" gap="xs">
+                            <sutram-label text="HEAP / STACK DATA (VMDATA)"></sutram-label>
+                            <h3>${this._formatKbToMb(proc.VmData)}</h3>
+                            <sutram-label text="Virtual heap + thread stack arenas"></sutram-label>
+                        </sutram-surface>
+                        <sutram-surface variant="panel" padding="md" gap="xs">
+                            <sutram-label text="ACTIVE OS THREADS"></sutram-label>
+                            <h3>${proc.Threads || 'N/A'}</h3>
+                            <sutram-label text="Worker pool + Watchdog + WSGI"></sutram-label>
+                        </sutram-surface>
+                        <sutram-surface variant="panel" padding="md" gap="xs">
+                            <sutram-label text="VFS READ CACHE"></sutram-label>
+                            <h3>${caches.vfs_read_cache_mb ?? 0} MB</h3>
+                            <sutram-label .text=${`${caches.vfs_read_cache_files ?? 0} files cached in RAM`}></sutram-label>
+                        </sutram-surface>
+                        <sutram-surface variant="panel" padding="md" gap="xs">
+                            <sutram-label text="JSON CONFIG CACHE"></sutram-label>
+                            <h3>${caches.json_config_cache_kb ?? 0} KB</h3>
+                            <sutram-label .text=${`${caches.json_config_cache_files ?? 0} config files`}></sutram-label>
+                        </sutram-surface>
+                    </sutram-stack>
 
                     ${threadsList.length > 0 ? html`
                         <sutram-collapsible titleText="Active OS Threads Breakdown (${proc.Threads || threadsList.reduce((a, b) => a + b.count, 0)})" intent="neutral" ?open=${true}>
-                            <div class="table-wrap">
-                                <table>
+                            <sutram-surface variant="panel" padding="sm">
+                                <table style="width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.8rem;">
                                     <thead>
                                         <tr>
-                                            <th>Thread Class / Pool Prefix</th>
-                                            <th>Active Count</th>
+                                            <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Thread Class / Pool Prefix</th>
+                                            <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Active Count</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         ${threadsList.map(t => html`
                                             <tr>
-                                                <td style="font-weight: bold; color: var(--intent-highlight);">${t.group}</td>
-                                                <td>${t.count}</td>
+                                                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: bold;">${t.group}</td>
+                                                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border);">${t.count}</td>
                                             </tr>
                                         `)}
                                     </tbody>
                                 </table>
-                            </div>
+                            </sutram-surface>
                         </sutram-collapsible>
                     ` : ''}
 
                     <sutram-collapsible titleText="Top Python Object Types in GC" intent="primary" ?open=${true}>
-                        <div class="table-wrap">
-                            <table>
+                        <sutram-surface variant="panel" padding="sm">
+                            <table style="width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.8rem;">
                                 <thead>
                                     <tr>
-                                        <th>Python Type</th>
-                                        <th>Instance Count</th>
-                                        <th>Shallow Size (MB)</th>
+                                        <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Python Type</th>
+                                        <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Instance Count</th>
+                                        <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Shallow Size (MB)</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     ${topObjects.map(obj => html`
                                         <tr>
-                                            <td style="font-weight: bold; color: var(--intent-primary);">${obj.type}</td>
-                                            <td>${obj.count.toLocaleString()}</td>
-                                            <td>${obj.shallow_mb} MB</td>
+                                            <td style="padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: bold;">${obj.type}</td>
+                                            <td style="padding: 8px 12px; border-bottom: 1px solid var(--border);">${obj.count.toLocaleString()}</td>
+                                            <td style="padding: 8px 12px; border-bottom: 1px solid var(--border);">${obj.shallow_mb} MB</td>
                                         </tr>
                                     `)}
                                 </tbody>
                             </table>
-                        </div>
+                        </sutram-surface>
                     </sutram-collapsible>
 
                     ${traceActive ? html`
                         <sutram-collapsible titleText="Tracemalloc Top Line Allocations (Active)" intent="highlight" ?open=${true}>
-                            <div class="table-wrap">
-                                <table>
+                            <sutram-surface variant="panel" padding="sm">
+                                <table style="width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.8rem;">
                                     <thead>
                                         <tr>
-                                            <th>Source File & Line</th>
-                                            <th>Allocations</th>
-                                            <th>Size (MB)</th>
+                                            <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Source File & Line</th>
+                                            <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Allocations</th>
+                                            <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Size (MB)</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         ${traceTop.map(row => html`
                                             <tr>
-                                                <td>${row.location}</td>
-                                                <td>${row.count.toLocaleString()}</td>
-                                                <td style="font-weight: bold; color: var(--intent-highlight);">${row.size_mb} MB</td>
+                                                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border);">${row.location}</td>
+                                                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border);">${row.count.toLocaleString()}</td>
+                                                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: bold;">${row.size_mb} MB</td>
                                             </tr>
                                         `)}
                                     </tbody>
                                 </table>
-                            </div>
+                            </sutram-surface>
                         </sutram-collapsible>
                     ` : ''}
-                </div>
-            </sutram-scroll-view>
+                </sutram-stack>
+            </sutram-view>
         `;
     }
 }

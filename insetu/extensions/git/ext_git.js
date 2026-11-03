@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 
 const AppStore = window.inSetu.stores.App;
@@ -95,9 +95,7 @@ export class InSetuExtGitDiffs extends InSetuElement {
         pendingModules: { type: Array },
         isPipelineActive: { type: Boolean }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.activeDiffJobId = null;
@@ -124,7 +122,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
                 this.activeDiffJobId = slice.activeDiffJobId;
                 this.diffJobError = slice.diffJobError;
                 this.activePushJobId = slice.activePushJobId;
-                this.requestUpdate();
             }
         );
         this.subscribe(
@@ -142,7 +139,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
                 this.isPipelineActive = slice.isPipelineActive;
                 this.categoryOrder = slice.categoryOrder;
                 this.hiddenOutputs = slice.hiddenOutputs;
-                this.requestUpdate();
             }
         );
         const gitState = GitStore.getState();
@@ -315,11 +311,9 @@ disconnectedCallback() {
                     });
                     this.selectedSweepFiles = selections;
                     this.sweepLoading = false;
-                    this.requestUpdate();
                 },
                 onError: (err) => {
                     this.sweepLoading = false;
-                    this.requestUpdate();
                 }
             });
         } catch (err) {
@@ -425,32 +419,32 @@ disconnectedCallback() {
         const isPipelineRunning = (this.activeModules || []).includes('git') || (this.pendingModules || []).includes('git');
         const isGitLoading = this.activeDiffJobId || isPipelineRunning;
         return html`
-            <sutram-toolbar
-                searchPlaceholder="Fuzzy search pending diffs..."
-                .searchQuery=${this.searchQuery}
-                @search-changed=${(e) => this.searchQuery = e.detail.value}
-                .enableFilterDropdown=${true}
-                .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
-                <insetu-repo-filter
-                    slot="filters"
-                    .repos=${this.ecosystem.allRepos}
-                    .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
-                    @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                </insetu-repo-filter>
-            </sutram-toolbar>
-            <sutram-scroll-view>
-            ${this.diffJobError ? html`<div style="color: var(--intent-danger); padding: 10px 0;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
-            <div style="display: flex; flex-direction: column;">
+            <sutram-view>
+                <sutram-toolbar
+                    slot="toolbar"
+                    searchPlaceholder="Fuzzy search pending diffs..."
+                    .searchQuery=${this.searchQuery}
+                    @search-changed=${(e) => this.searchQuery = e.detail.value}
+                    .enableFilterDropdown=${true}
+                    .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
+                    <insetu-repo-filter
+                        slot="filters"
+                        .repos=${this.ecosystem.allRepos}
+                        .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
+                        @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                    </insetu-repo-filter>
+                </sutram-toolbar>
+                ${this.diffJobError ? html`<sutram-surface variant="tinted" intent="danger" padding="sm">Error analyzing diffs: ${this.diffJobError}</sutram-surface>` : ''}
+                <sutram-stack direction="col" gap="md">
                 ${sortedCats.map(catName => html`
                     <sutram-collapsible 
                         titleText=${catName} 
                         intent="neutral" 
                         ?open=${true}>
-                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <sutram-stack direction="col" gap="sm">
                             ${categories[catName].map(f => {
                                 const descText = f.branch ? `Branch: ${f.branch}` : f.description;
                                 const repoStr = f.repoDir ? `[${f.repoDir}] ` : '';
-                                // Extract sizes if previously stuffed into detailText
                                 const sizeStr = (f.detailText && f.detailText.includes(' | ')) ? f.detailText.split(' | ')[1] : "";
                                 const isDirty = (() => {
                                     const dirtySet = AppStore.getState().dirtyBuckets || new Set();
@@ -462,7 +456,7 @@ disconnectedCallback() {
                                 const isLocked = isGitLoading && isDirty;
                                 return html`
                                 <sutram-card
-                                    style="opacity: ${isLocked ? '0.6' : '1'}; pointer-events: ${isLocked ? 'none' : 'auto'}; transition: opacity 0.2s ease;"
+                                    ?stale=${isLocked}
                                     .filename=${f.filename}
                                     .titleText=${f.displayName}
                                     .descriptionText=${descText}
@@ -481,7 +475,7 @@ disconnectedCallback() {
                                     @card-clicked=${() => { if(this.vfs && this.vfs.viewAndCopy) this.vfs.viewAndCopy(f.filename); }}>
                                 </sutram-card>
                             `;})}
-                        </div>
+                        </sutram-stack>
                     </sutram-collapsible>
                 `)}
                 ${!isGitLoading && Object.keys(this.sweepFiles).some(r => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)) ? html`
@@ -489,15 +483,15 @@ disconnectedCallback() {
                         titleText="Sweepable State" 
                         intent="neutral" 
                         ?open=${true}>
-                        <sutram-async-btn slot="actions" icon="send" label="Sweep All" intent="primary" style="margin: 0;" .onClick=${this._getSweepAllAction()}></sutram-async-btn>
-                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <sutram-async-btn slot="actions" ?compact=${true} icon="send" label="Sweep All" intent="primary" .onClick=${this._getSweepAllAction()}></sutram-async-btn>
+                        <sutram-stack direction="col" gap="sm">
                             ${Object.entries(this.sweepFiles).filter(([r, _]) => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)).map(([repo, files]) => {
                                 const isLocked = this.sweepLoading;
                                 const branch = GitStore.getState().reposStatus[repo]?.current;
-                                const descText = branch ? `Branch: ${branch} -${files.length} untracked or excluded files pending.` : `${files.length} untracked or excluded files pending.`;
+                                const descText = branch ? `Branch: ${branch} - ${files.length} untracked or excluded files pending.` : `${files.length} untracked or excluded files pending.`;
                                 return html`
                                 <sutram-card
-                                    style="opacity: ${isLocked ? '0.6' : '1'}; pointer-events: ${isLocked ? 'none' : 'auto'}; transition: opacity 0.2s ease;"
+                                    ?stale=${isLocked}
                                     .filename=${repo}
                                     .titleText=${repo}
                                     .descriptionText=${descText}
@@ -513,46 +507,45 @@ disconnectedCallback() {
                                         const newSet = new Set(this.sweepExpandedRepos);
                                         newSet.has(repo) ? newSet.delete(repo) : newSet.add(repo);
                                         this.sweepExpandedRepos = newSet;
-                                        this.requestUpdate();
                                     }}>
                                 </sutram-card>
                                 ${this.sweepExpandedRepos.has(repo) ? html`
-                                    <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-top: -8px; margin-bottom: 15px; margin-left: 15px;">
+                                    <sutram-surface variant="panel" padding="sm" gap="xs">
                                         ${files.map(f => {
                                             const isChecked = (this.selectedSweepFiles[repo] || []).includes(f.path);
                                             return html`
-                                                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-                                                    <sutram-toggle 
-                                                        .checked=${isChecked}
-                                                        @sutram-input-changed=${(e) => {
-                                                            const checked = e.detail.value;
-                                                            const currentList = this.selectedSweepFiles[repo] || [];
-                                                            this.selectedSweepFiles = {
-                                                                ...this.selectedSweepFiles,
-                                                                [repo]: checked ? [...currentList, f.path] : currentList.filter(p => p !== f.path)
-                                                            };
-                                                            this.requestUpdate();
-                                                        }}>
-                                                    </sutram-toggle>
-                                                    <span style="font-family: monospace; font-size: 0.8rem; color: var(--text-muted);">[${f.status}] ${f.path}</span>
-                                                </div>
+                                                <sutram-toggle 
+                                                    ?flush=${true}
+                                                    .label=${`[${f.status}] ${f.path}`}
+                                                    .checked=${isChecked}
+                                                    @sutram-input-changed=${(e) => {
+                                                        const checked = e.detail.value;
+                                                        const currentList = this.selectedSweepFiles[repo] || [];
+                                                        this.selectedSweepFiles = {
+                                                            ...this.selectedSweepFiles,
+                                                            [repo]: checked ? [...currentList, f.path] : currentList.filter(p => p !== f.path)
+                                                        };
+                                                    }}>
+                                                </sutram-toggle>
                                             `;
                                         })}
-                                    </div>
+                                    </sutram-surface>
                                 ` : ''}
                             `;})}
-                        </div>
+                        </sutram-stack>
                     </sutram-collapsible>
                 ` : ''}
                 ${!isGitLoading && diffFiles.length === 0 && Object.keys(this.sweepFiles).length === 0 && !this.sweepLoading ? html`
-                    <div style="background: var(--input-bg); border: 1px dashed var(--border); border-radius: 6px; padding: 30px 15px; text-align: center; margin: 20px; display: flex; flex-direction: column; align-items: center;">
-                        <yv-icon name="sparkles" style="width: 36px; height: 36px; color: var(--intent-success); margin-bottom: 10px;"></yv-icon>
-                        <h3 style="margin: 0 0 5px 0; color: var(--text);">Working Tree Clean</h3>
-                        <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0;">No diffs or untracked metadata detected.</p>
-                    </div>
+                    <sutram-surface variant="panel" padding="lg">
+                        <sutram-stack direction="col" align="center" gap="xs">
+                            <sutram-icon name="sparkles" size="xl" intent="success"></sutram-icon>
+                            <h3>Working Tree Clean</h3>
+                            <sutram-label text="No diffs or untracked metadata detected."></sutram-label>
+                        </sutram-stack>
+                    </sutram-surface>
                 ` : ''}
-            </sutram-scroll-view>
-            </div>
+                </sutram-stack>
+            </sutram-view>
         `;
     }
 }
@@ -566,9 +559,7 @@ export class InSetuGitPushProjection extends InSetuElement {
         pushChangelogs: { type: Array },
         gitPushMessage: { type: String }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         const st = GitStore.getState();
@@ -595,7 +586,6 @@ export class InSetuGitPushProjection extends InSetuElement {
                 this.currentPushTargets = slice.currentPushTargets;
                 this.pushChangelogs = slice.pushChangelogs;
                 this.gitPushMessage = slice.gitPushMessage;
-                this.requestUpdate();
             }
         );
     }
@@ -629,36 +619,36 @@ export class InSetuGitPushProjection extends InSetuElement {
     render() {
         const selectValue = this.pushChangelogs.some(cl => cl.title === this.gitPushMessage) ? this.gitPushMessage : '';
         return html`
-            <sutram-scroll-view padding="15px" style="gap: 12px;">
-                ${this.currentPushTargets && this.currentPushTargets.length > 1 ? html`
-                    <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-size: 0.8rem;">
-                        <div style="font-weight: bold; color: var(--intent-highlight); margin-bottom: 6px;">Selected Diff Buckets (${this.currentPushTargets.length}):</div>
-                        <div style="display: flex; flex-wrap: wrap; gap: 6px; font-family: var(--font-mono);">
-                            ${this.currentPushTargets.map(t => html`
-                                <span style="background: var(--bg); border: 1px solid var(--border); padding: 2px 8px; border-radius: 4px;">[${t.repo}]${new this.utils.InSetuURI(t.diff_file || '').basename}</span>
-                            `)}
-                        </div>
-                    </div>
-                ` : ''}
-                <sutram-select 
-                    label="Recent Changelogs"
-                    .value=${selectValue}
-                    .options=${[{ value: '', label: '-- Type a custom message below --' }, ...this.pushChangelogs.map(cl => ({ value: cl.title, label: cl.title }))]}
-                    @sutram-input-changed=${(e) => GitStore.setState({ gitPushMessage: e.detail.value })}>
-                </sutram-select>
-                <sutram-textarea  
-                    label="Commit Message"
-                    placeholder="Enter commit message..."
-                    .value=${this.gitPushMessage}
-                    @sutram-input-changed=${(e) => GitStore.setState({ gitPushMessage: e.detail.value })}>
-                </sutram-textarea>
-            </sutram-scroll-view>
-            <div style="padding: 12px 15px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; gap: 10px; flex-shrink: 0;">
-                <sutram-btn intent="neutral" icon="x" label="Cancel" style="flex: 1; margin: 0;" @click=${() => {
+            <sutram-view>
+                <sutram-stack direction="col" gap="md">
+                    ${this.currentPushTargets && this.currentPushTargets.length > 1 ? html`
+                        <sutram-surface variant="panel" padding="sm" gap="xs">
+                            <strong>Selected Diff Buckets (${this.currentPushTargets.length}):</strong>
+                            <sutram-stack direction="row" gap="xs" ?wrap=${true}>
+                                ${this.currentPushTargets.map(t => html`
+                                    <sutram-tag text="[${t.repo}] ${new this.utils.InSetuURI(t.diff_file || '').basename}" intent="highlight"></sutram-tag>
+                                `)}
+                            </sutram-stack>
+                        </sutram-surface>
+                    ` : ''}
+                    <sutram-select 
+                        label="Recent Changelogs"
+                        .value=${selectValue}
+                        .options=${[{ value: '', label: '-- Type a custom message below --' }, ...this.pushChangelogs.map(cl => ({ value: cl.title, label: cl.title }))]}
+                        @sutram-input-changed=${(e) => GitStore.setState({ gitPushMessage: e.detail.value })}>
+                    </sutram-select>
+                    <sutram-textarea  
+                        label="Commit Message"
+                        placeholder="Enter commit message..."
+                        .value=${this.gitPushMessage}
+                        @sutram-input-changed=${(e) => GitStore.setState({ gitPushMessage: e.detail.value })}>
+                    </sutram-textarea>
+                </sutram-stack>
+                <sutram-btn slot="footer" intent="neutral" icon="x" label="Cancel" @click=${() => {
                     if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('git:push');
                 }}></sutram-btn>
-                <sutram-async-btn icon="send" label="Execute Push" intent="primary" style="flex: 2; margin: 0;" .onClick=${this._getPushAction()}></sutram-async-btn>
-            </div>
+                <sutram-async-btn slot="footer" icon="send" label="Execute Push" intent="primary" .onClick=${this._getPushAction()}></sutram-async-btn>
+            </sutram-view>
         `;
     }
 }
@@ -677,9 +667,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
         activePullJobId: { type: String },
         pullMessage: { type: String }
     };
-    static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; overflow: hidden; container-type: inline-size; }
-    `];
+    static styles = [sharedStyles];
     constructor() {
         super();
         this.reposStatus = {};
@@ -716,7 +704,6 @@ export class InSetuExtGitCtrl extends InSetuElement {
                 this.activeRemoteRepo = slice.activeRemoteRepo;
                 this.remoteUrlInput = slice.remoteUrlInput;
                 this.remoteConflict = slice.remoteConflict;
-                this.requestUpdate();
             }
         );
         this.registerGlobalListener('insetu:git:ctrl-init', window, (e) => {
@@ -791,7 +778,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     const closeWin = () => layout.closeWindow('git:preview');
                     const currentStrategy = GitStore.getState().repoStrategies?.[repo] || 'rebase';
                     const extraControls = currentStrategy === 'runtime' ? html`
-                        <div style="background: var(--input-bg); padding: 12px; border-radius: 6px; border: 1px solid var(--border);">
+                        <sutram-surface variant="panel" padding="md">
                             <sutram-select 
                                 label="Reconciliation Strategy"
                                 ?flush=${true}
@@ -803,7 +790,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
                                 ]}
                                 @sutram-input-changed=${(e) => GitStore.setState({ runtimeStrategy: e.detail.value })}>
                             </sutram-select>
-                        </div>
+                        </sutram-surface>
                     ` : null;
                     const executePull = this.api.bindJobAction('git/pull', () => {
                         closeWin();
@@ -908,102 +895,106 @@ export class InSetuExtGitCtrl extends InSetuElement {
 
     render() {
         return html`
-            <sutram-scroll-view padding="15px" style="gap: 15px;">
-                ${this.activePullJobId ? html`<div class="spinner" style="display: block;">${this.pullMessage || 'Pulling from remote...'}</div>` : ''}
+            <sutram-view>
+                <sutram-stack direction="col" gap="md">
+                    ${this.activePullJobId ? html`<sutram-spinner .text=${this.pullMessage || 'Pulling from remote...'}></sutram-spinner>` : ''}
 
-                ${this.ecosystem.allRepos.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic;">No repositories tracked.</div>` : ''}
-                ${this.ecosystem.allRepos.map(repo => {
-                    const status = this.reposStatus[repo] || {};
-                    if (status.is_git === false) {
+                    ${this.ecosystem.allRepos.length === 0 ? html`<sutram-empty-state text="No repositories tracked."></sutram-empty-state>` : ''}
+                    ${this.ecosystem.allRepos.map(repo => {
+                        const status = this.reposStatus[repo] || {};
+                        if (status.is_git === false) {
+                            return html`
+                                <sutram-card 
+                                    titleText=${repo} 
+                                    descriptionText="Not a Git repository." 
+                                    icon="folder" 
+                                    intent="neutral"
+                                    ?disableSelection=${true}
+                                    entityType="repo"
+                                    .entityData=${{ repoDir: repo, isGitCtrl: true, status }}>
+                                </sutram-card>
+                            `;
+                        }
+                        const currentBranch = status.current || 'unknown';
+                        const syncText = status.sync_status ? ` | ${status.sync_status}` : '';
+                        const descText = `Branch: ${currentBranch}${syncText}`;
+                        const conflicts = status.conflicts || [];
+                        const conflictBadge = conflicts.length > 0 ? html`<sutram-tag slot="header-tags" text="${conflicts.length} Conflict${conflicts.length > 1 ? 's' : ''}" intent="danger"></sutram-tag>` : '';
                         return html`
                             <sutram-card 
                                 titleText=${repo} 
-                                descriptionText="Not a Git repository." 
-                                icon="folder" 
-                                intent="neutral"
+                                descriptionText=${descText} 
+                                icon="package" 
+                                intent="${conflicts.length > 0 ? 'danger' : 'neutral'}"
                                 ?disableSelection=${true}
                                 entityType="repo"
-                                .entityData=${{ repoDir: repo, isGitCtrl: true, status }}>
+                                .entityData=${{ repoDir: repo, isGitCtrl: true, status }}>${conflictBadge}
                             </sutram-card>
                         `;
-                    }
-                    const currentBranch = status.current || 'unknown';
-                    const syncText = status.sync_status ? ` | ${status.sync_status}` : '';
-                    const descText = `Branch: ${currentBranch}${syncText}`;
-                    const conflicts = status.conflicts || [];
-                    const conflictBadge = conflicts.length > 0 ? html`<span slot="header-tags" class="task-tag" style="background: var(--intent-danger); color: white; border: 1px solid var(--intent-danger); margin-left: 5px;">${conflicts.length} Conflict${conflicts.length > 1 ? 's' : ''}</span>` : '';
-                    return html`
-                        <sutram-card 
-                            titleText=${repo} 
-                            descriptionText=${descText} 
-                            icon="package" 
-                            intent="${conflicts.length > 0 ? 'danger' : 'neutral'}"
-                            ?disableSelection=${true}
-                            entityType="repo"
-                            .entityData=${{ repoDir: repo, isGitCtrl: true, status }}>${conflictBadge}
-                        </sutram-card>
-                    `;
-                })}
-            </sutram-scroll-view>
+                    })}
+                </sutram-stack>
 
-            ${this.branchModalOpen ? html`
-                <sutram-modal ?open=${true} titleText="Branch Management: ${this.activeRepo}" @sutram-modal-closed=${() => GitStore.setState({ branchModalOpen: false })}>
-                    <div slot="body" style="display: contents;">
-                        <sutram-select 
-                            label="Switch to Existing Branch"
-                            .value=""
-                            .options=${[{ value: '', label: '-- Select Branch --' }, ...(this.reposStatus[this.activeRepo]?.branches || []).map(b => ({ value: b, label: b }))]}
-                            @sutram-input-changed=${(e) => {
-                                if (e.detail.value) this._checkoutBranch(this.activeRepo, e.detail.value, false);
-                            }}>
-                        </sutram-select>
-                        <hr style="border: 0; border-top: 1px solid var(--border); width: 100%; margin: 15px 0;">
-                        <div style="display: flex; gap: 10px; align-items: flex-end;">
-                            <sutram-input label="Create New Branch" placeholder="new-feature-branch" .value=${this.newBranchName} @sutram-input-changed=${e => GitStore.setState({ newBranchName: e.detail.value })} ?flush=${true} style="flex: 1; margin: 0;"></sutram-input>
-                            <sutram-btn intent="success" icon="plus" label="Create & Switch" style="margin: 0;" @click=${() => {
-                                if (this.newBranchName) this._checkoutBranch(this.activeRepo, this.newBranchName, true);
-                            }}></sutram-btn>
-                        </div>
-                    </div>
-                </sutram-modal>
-            ` : ''}
-
-            ${this.remoteModalOpen ? html`
-                <sutram-modal ?open=${true} titleText="Connect Remote: ${this.activeRemoteRepo}" @sutram-modal-closed=${() => GitStore.setState({ remoteModalOpen: false })}>
-                    <div slot="body" style="display: contents;">
-                        ${this.remoteConflict ? html`
-                            <div style="background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 6px; padding: 15px;">
-                                <h4 style="margin: 0 0 10px 0; color: var(--intent-danger); display: flex; align-items: center; gap: 6px;"><yv-icon name="alert-triangle" style="width: 16px; height: 16px;"></yv-icon> Remote Contains Unmerged Work</h4>
-                                <p style="font-size: 0.85rem; color: var(--text); margin: 0 0 10px 0;">The repository you created on GitHub likely has an initial README or License file. Git rejected the push to prevent overwriting it.</p>
-                                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;"><strong>Option 1 (Recommended):</strong> Pull those remote files down and merge them with your local code.<br><strong>Option 2:</strong> Force push your local code, completely overwriting whatever is currently on the remote.</p>
-                            </div>
-                        ` : html`
-                            <div>
-                                <sutram-input label="Remote Git URL" placeholder="git@github.com:user/repo.git" .value=${this.remoteUrlInput} @sutram-input-changed=${e => GitStore.setState({ remoteUrlInput: e.detail.value })}></sutram-input>
-                                <sutram-btn size="sm" intent="neutral" icon="refresh-cw" label="Convert to SSH" style="margin-top: 8px; white-space: nowrap;" @click=${() => {
-                                    const url = (this.remoteUrlInput || '').trim();
-                                    const match = url.match(/^https:\/\/(github\.com|gitlab\.com|bitbucket\.org)\/(.+?)(?:\.git)?\/?$/);
-                                    if (match) {
-                                        GitStore.setState({ remoteUrlInput: 'git@' + match[1] + ':' + match[2] + '.git' });
-                                    } else if (url.startsWith('https://')) {
-                                        alert("Could not auto-convert. Ensure it is a standard GitHub, GitLab, or Bitbucket HTTPS URL.");
-                                    }
+                ${this.branchModalOpen ? html`
+                    <sutram-modal ?open=${true} titleText="Branch Management: ${this.activeRepo}" @sutram-modal-closed=${() => GitStore.setState({ branchModalOpen: false })}>
+                        <sutram-stack slot="body" direction="col" gap="md">
+                            <sutram-select 
+                                label="Switch to Existing Branch"
+                                .value=""
+                                .options=${[{ value: '', label: '-- Select Branch --' }, ...(this.reposStatus[this.activeRepo]?.branches || []).map(b => ({ value: b, label: b }))]}
+                                @sutram-input-changed=${(e) => {
+                                    if (e.detail.value) this._checkoutBranch(this.activeRepo, e.detail.value, false);
+                                }}>
+                            </sutram-select>
+                            <sutram-stack direction="row" align="end" gap="sm">
+                                <sutram-input label="Create New Branch" placeholder="new-feature-branch" .value=${this.newBranchName} @sutram-input-changed=${e => GitStore.setState({ newBranchName: e.detail.value })} ?flush=${true} ?grow=${true}></sutram-input>
+                                <sutram-btn intent="success" icon="plus" label="Create & Switch" @click=${() => {
+                                    if (this.newBranchName) this._checkoutBranch(this.activeRepo, this.newBranchName, true);
                                 }}></sutram-btn>
-                                <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 8px;">We will set this as the 'origin' remote and push the current branch to establish upstream tracking. <b style="color: var(--intent-warning);">Use an SSH URL to avoid headless authentication errors.</b></p>
-                            </div>
-                        `}
-                    </div>
-                    <div slot="footer" style="display: flex; gap: 10px; width: 100%;">
-                        ${this.remoteConflict ? html`
-                            <sutram-async-btn icon="alert-triangle" label="Force Push (Overwrite)" intent="danger" style="flex: 1; margin: 0;" .onClick=${this._getConnectRemoteAction('force')}></sutram-async-btn>
-                            <sutram-async-btn icon="download" label="Pull & Merge" intent="success" style="flex: 1; margin: 0;" .onClick=${this._getConnectRemoteAction('pull')}></sutram-async-btn>
-                        ` : html`
-                            <sutram-btn intent="neutral" icon="x" label="Cancel" style="flex: 1; margin: 0;" @click=${() => GitStore.setState({ remoteModalOpen: false })}></sutram-btn>
-                            <sutram-async-btn icon="cloud" label="Connect & Push" intent="success" style="flex: 2; margin: 0;" .onClick=${this._getConnectRemoteAction()}></sutram-async-btn>
-                        `}
-                    </div>
-                </sutram-modal>
-            ` : ''}
+                            </sutram-stack>
+                        </sutram-stack>
+                    </sutram-modal>
+                ` : ''}
+
+                ${this.remoteModalOpen ? html`
+                    <sutram-modal ?open=${true} titleText="Connect Remote: ${this.activeRemoteRepo}" @sutram-modal-closed=${() => GitStore.setState({ remoteModalOpen: false })}>
+                        <sutram-stack slot="body" direction="col" gap="sm">
+                            ${this.remoteConflict ? html`
+                                <sutram-surface variant="tinted" intent="danger" padding="md" gap="sm">
+                                    <sutram-stack direction="row" align="center" gap="xs">
+                                        <sutram-icon name="alert-triangle" size="md" intent="danger"></sutram-icon>
+                                        <h4>Remote Contains Unmerged Work</h4>
+                                    </sutram-stack>
+                                    <sutram-label text="The repository you created on GitHub likely has an initial README or License file. Git rejected the push to prevent overwriting it."></sutram-label>
+                                    <sutram-label text="Option 1 (Recommended): Pull those remote files down and merge them with your local code. Option 2: Force push your local code, completely overwriting whatever is currently on the remote."></sutram-label>
+                                </sutram-surface>
+                            ` : html`
+                                <sutram-stack direction="col" gap="sm">
+                                    <sutram-input label="Remote Git URL" placeholder="git@github.com:user/repo.git" .value=${this.remoteUrlInput} @sutram-input-changed=${e => GitStore.setState({ remoteUrlInput: e.detail.value })}></sutram-input>
+                                    <sutram-btn ?compact=${true} intent="neutral" icon="refresh-cw" label="Convert to SSH" @click=${() => {
+                                        const url = (this.remoteUrlInput || '').trim();
+                                        const match = url.match(/^https:\/\/(github\.com|gitlab\.com|bitbucket\.org)\/(.+?)(?:\.git)?\/?$/);
+                                        if (match) {
+                                            GitStore.setState({ remoteUrlInput: 'git@' + match[1] + ':' + match[2] + '.git' });
+                                        } else if (url.startsWith('https://')) {
+                                            alert("Could not auto-convert. Ensure it is a standard GitHub, GitLab, or Bitbucket HTTPS URL.");
+                                        }
+                                    }}></sutram-btn>
+                                    <sutram-label text="We will set this as the 'origin' remote and push the current branch to establish upstream tracking. Use an SSH URL to avoid headless authentication errors."></sutram-label>
+                                </sutram-stack>
+                            `}
+                        </sutram-stack>
+                        <sutram-stack slot="footer" direction="row" gap="sm">
+                            ${this.remoteConflict ? html`
+                                <sutram-async-btn icon="alert-triangle" label="Force Push (Overwrite)" intent="danger" ?grow=${true} .onClick=${this._getConnectRemoteAction('force')}></sutram-async-btn>
+                                <sutram-async-btn icon="download" label="Pull & Merge" intent="success" ?grow=${true} .onClick=${this._getConnectRemoteAction('pull')}></sutram-async-btn>
+                            ` : html`
+                                <sutram-btn intent="neutral" icon="x" label="Cancel" ?grow=${true} @click=${() => GitStore.setState({ remoteModalOpen: false })}></sutram-btn>
+                                <sutram-async-btn icon="cloud" label="Connect & Push" intent="success" ?grow=${true} .onClick=${this._getConnectRemoteAction()}></sutram-async-btn>
+                            `}
+                        </sutram-stack>
+                    </sutram-modal>
+                ` : ''}
+            </sutram-view>
         `;
     }
 }

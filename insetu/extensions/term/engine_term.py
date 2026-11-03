@@ -1,10 +1,8 @@
 import os
-import subprocess
 import threading
 import traceback
 import json
-from typing import TypedDict
-from insetu.core.sdk import InSetuExtension, ExtensionContext
+from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import child_env, is_extension_enabled
 try:
     from flask_sock import Sock

@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html } from 'lit';
 import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 
 const SERVER_MODE_OPTIONS = [
@@ -99,158 +99,7 @@ export class InSetuExtPreview extends InSetuElement {
         _draftConfig: { type: Object }
     };
 
-    static styles = [sharedStyles, css`
-        :host {
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-            width: 100%;
-            overflow: hidden;
-            background: var(--bg);
-            box-sizing: border-box;
-            container-type: inline-size;
-        }
-        .preview-toolbar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px;
-            padding: 8px 12px;
-            background: var(--input-bg);
-            border-bottom: 1px solid var(--border);
-            flex-shrink: 0;
-            flex-wrap: wrap;
-        }
-        .toolbar-group {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-            min-width: 0;
-        }
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 4px 10px;
-            border-radius: 999px;
-            font-family: var(--font-mono);
-            font-size: 0.75rem;
-            font-weight: 700;
-            border: 1px solid var(--border);
-            background: var(--bg);
-            white-space: nowrap;
-        }
-        .status-badge.running, .status-badge.external {
-            color: var(--intent-success);
-            border-color: color-mix(in srgb, var(--intent-success) 45%, transparent);
-            background: color-mix(in srgb, var(--intent-success) 12%, transparent);
-        }
-        .status-badge.crashed {
-            color: var(--intent-danger);
-            border-color: color-mix(in srgb, var(--intent-danger) 45%, transparent);
-            background: color-mix(in srgb, var(--intent-danger) 12%, transparent);
-        }
-        .status-badge.stopped {
-            color: var(--text-muted);
-        }
-        .config-drawer {
-            padding: 12px 15px;
-            background: var(--pane-bg);
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            flex-shrink: 0;
-        }
-        .config-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 10px;
-            align-items: end;
-        }
-        .iframe-stage {
-            flex: 1;
-            min-height: 0;
-            width: 100%;
-            position: relative;
-            background: var(--preview-canvas-bg, var(--pane-bg));
-            display: flex;
-            flex-direction: column;
-        }
-        .iframe-stage.empty {
-            background: var(--bg);
-            align-items: center;
-            justify-content: center;
-        }
-        iframe {
-            flex: 1;
-            width: 100%;
-            height: 100%;
-            border: none;
-            background: var(--preview-canvas-bg, var(--pane-bg));
-        }
-        .exposure-bar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            flex-wrap: wrap;
-            padding: 8px 12px;
-            font-size: 0.8rem;
-            border-bottom: 1px solid var(--border);
-            flex-shrink: 0;
-        }
-        .exposure-bar.warning {
-            color: var(--text);
-            background: color-mix(in srgb, var(--intent-warning) 14%, transparent);
-            border-bottom-color: color-mix(in srgb, var(--intent-warning) 45%, transparent);
-        }
-        .exposure-bar.neutral {
-            color: var(--text-muted);
-            background: var(--pane-bg);
-        }
-        .exposure-actions {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        .logs-drawer {
-            flex-shrink: 0;
-            border-top: 1px solid var(--border);
-            background: var(--bg-deep);
-            display: flex;
-            flex-direction: column;
-            max-height: 38%;
-        }
-        .logs-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 6px 12px;
-            background: var(--input-bg);
-            cursor: pointer;
-            user-select: none;
-            font-family: var(--font-mono);
-            font-size: 0.75rem;
-            font-weight: bold;
-            color: var(--text-muted);
-        }
-        .logs-body {
-            padding: 10px 14px;
-            margin: 0;
-            overflow-y: auto;
-            font-family: var(--font-mono);
-            font-size: 0.78rem;
-            line-height: 1.45;
-            color: var(--text);
-            background: var(--bg-deep);
-            white-space: pre-wrap;
-            word-break: break-word;
-            max-height: 220px;
-        }
-    `];
+    static styles = [sharedStyles];
 
     constructor() {
         super();
@@ -469,41 +318,44 @@ export class InSetuExtPreview extends InSetuElement {
         if (!srv || !this.selectedRepo) return '';
         if (this.pendingApproval && this.pendingApproval.repo === this.selectedRepo) {
             return html`
-                <div class="exposure-bar warning">
-                    <span>Approve this custom command before it runs: <code>${this.pendingApproval.command}</code></span>
-                    <div class="exposure-actions">
-                        <sutram-async-btn size="sm" intent="warning" icon="check" label="Approve & Start" .onClick=${() => this._approveAndStart()}></sutram-async-btn>
-                        <sutram-btn size="sm" intent="neutral" label="Cancel" @click=${() => PreviewStore.setState({ pendingApproval: null })}></sutram-btn>
-                    </div>
-                </div>
+                <sutram-surface variant="tinted" intent="warning" border="bottom" padding="xs">
+                    <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                        <span>Approve this custom command before it runs: <code>${this.pendingApproval.command}</code></span>
+                        <sutram-stack direction="row" align="center" gap="sm">
+                            <sutram-async-btn ?compact=${true} intent="warning" icon="check" label="Approve & Start" .onClick=${() => this._approveAndStart()}></sutram-async-btn>
+                            <sutram-btn ?compact=${true} intent="neutral" label="Cancel" @click=${() => PreviewStore.setState({ pendingApproval: null })}></sutram-btn>
+                        </sutram-stack>
+                    </sutram-stack>
+                </sutram-surface>
             `;
         }
         if (isRunning && srv.exposure === 'lan') {
             const until = srv.lan_lease_until ? `until ${this.utils.formatDate(srv.lan_lease_until * 1000)}` : 'until this server stops';
             return html`
-                <div class="exposure-bar warning">
-                    <span>Open to the LAN on port :${srv.port} ${until}. Anyone on your network can reach it.</span>
-                    <div class="exposure-actions">
-                        <sutram-async-btn size="sm" intent="warning" icon="shield" label="Back to Loopback" .onClick=${() => this._closeLan()}></sutram-async-btn>
-                    </div>
-                </div>
+                <sutram-surface variant="tinted" intent="warning" border="bottom" padding="xs">
+                    <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                        <span>Open to the LAN on port :${srv.port} ${until}. Anyone on your network can reach it.</span>
+                        <sutram-async-btn ?compact=${true} intent="warning" icon="shield" label="Back to Loopback" .onClick=${() => this._closeLan()}></sutram-async-btn>
+                    </sutram-stack>
+                </sutram-surface>
             `;
         }
         if (srv.status === 'running' && srv.lan_allowed) {
             return html`
-                <div class="exposure-bar neutral">
-                    <span>Running on loopback. This repository may be opened to the LAN.</span>
-                    <div class="exposure-actions">
-                        <sutram-select
-                            ?flush=${true}
-                            style="width: 190px; margin: 0;"
-                            .value=${this.lanDuration || 'run'}
-                            .options=${LAN_LEASE_OPTIONS}
-                            @sutram-input-changed=${(e) => PreviewStore.setState({ lanDuration: e.detail.value })}>
-                        </sutram-select>
-                        <sutram-async-btn size="sm" intent="warning" icon="wifi" label="Open to LAN" .onClick=${() => this._openToLan()}></sutram-async-btn>
-                    </div>
-                </div>
+                <sutram-surface variant="panel" border="bottom" padding="xs">
+                    <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+                        <sutram-label text="Running on loopback. This repository may be opened to the LAN."></sutram-label>
+                        <sutram-stack direction="row" align="center" gap="sm">
+                            <sutram-select
+                                ?flush=${true}
+                                .value=${this.lanDuration || 'run'}
+                                .options=${LAN_LEASE_OPTIONS}
+                                @sutram-input-changed=${(e) => PreviewStore.setState({ lanDuration: e.detail.value })}>
+                            </sutram-select>
+                            <sutram-async-btn ?compact=${true} intent="warning" icon="wifi" label="Open to LAN" .onClick=${() => this._openToLan()}></sutram-async-btn>
+                        </sutram-stack>
+                    </sutram-stack>
+                </sutram-surface>
             `;
         }
         return '';
@@ -568,258 +420,252 @@ export class InSetuExtPreview extends InSetuElement {
             : 'auto';
 
         return html`
-            <div class="preview-toolbar">
-                <div class="toolbar-group">
-                    <sutram-select
-                        ?flush=${true}
-                        style="width: 165px; margin: 0;"
-                        .value=${activeRepo}
-                        .options=${allRepos.map(r => ({ value: r, label: r }))}
-                        @sutram-input-changed=${(e) => {
-                            const nextRepo = e.detail.value;
-                            PreviewStore.setState({ selectedRepo: nextRepo, subpath: '' });
-                            this._syncDraftFromServer(nextRepo);
-                            PreviewStore.getState().fetchLogs(nextRepo);
-                        }}>
-                    </sutram-select>
+            <sutram-view ?flush=${true} ?noScroll=${true}>
+                <div slot="header">
+                    <sutram-surface variant="panel" border="bottom" padding="xs">
+                        <sutram-action-bar collapse="sm" align="between">
+                            <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
+                                <sutram-select
+                                    ?flush=${true}
+                                    .value=${activeRepo}
+                                    .options=${allRepos.map(r => ({ value: r, label: r }))}
+                                    @sutram-input-changed=${(e) => {
+                                        const nextRepo = e.detail.value;
+                                        PreviewStore.setState({ selectedRepo: nextRepo, subpath: '' });
+                                        this._syncDraftFromServer(nextRepo);
+                                        PreviewStore.getState().fetchLogs(nextRepo);
+                                    }}>
+                                </sutram-select>
 
-                    <sutram-input
-                        ?flush=${true}
-                        style="width: 170px; margin: 0; font-family: var(--font-mono);"
-                        placeholder="subpath (e.g. index.html)"
-                        .value=${this.subpath || ''}
-                        @sutram-input-changed=${(e) => {
-                            PreviewStore.setState({ subpath: e.detail.value, reloadTick: Date.now() });
-                        }}>
-                    </sutram-input>
+                                <sutram-input
+                                    ?flush=${true}
+                                    placeholder="subpath (e.g. index.html)"
+                                    .value=${this.subpath || ''}
+                                    @sutram-input-changed=${(e) => {
+                                        PreviewStore.setState({ subpath: e.detail.value, reloadTick: Date.now() });
+                                    }}>
+                                </sutram-input>
 
-                    <span class="status-badge ${status}">
-                        <yv-icon name="${isRunning ? 'check-circle-2' : (status === 'crashed' ? 'alert-triangle' : 'power')}" style="width: 12px; height: 12px;"></yv-icon>
-                        <span>${status.toUpperCase()}</span>
-                        ${srv?.port ? html`<span>:${srv.port}</span>` : ''}
-                        <span style="opacity: 0.75;">(${modeLabel})</span>
-                    </span>
-                </div>
+                                <sutram-tag
+                                    intent="${isRunning ? 'success' : (status === 'crashed' ? 'danger' : 'neutral')}"
+                                    .text=${`${status.toUpperCase()}${srv?.port ? ` :${srv.port}` : ''} (${modeLabel})`}>
+                                </sutram-tag>
+                            </sutram-stack>
 
-                <div class="toolbar-group">
-                    ${!isRunning ? html`
-                        <sutram-async-btn
-                            size="sm"
-                            intent="success"
-                            icon="play"
-                            label="Start"
-                            .onClick=${() => this._startServer()}>
-                        </sutram-async-btn>
-                    ` : html`
-                        <sutram-async-btn
-                            size="sm"
-                            intent="warning"
-                            icon="rotate-cw"
-                            label="Restart"
-                            .onClick=${() => this._startServer()}>
-                        </sutram-async-btn>
-                        ${status === 'running' ? html`
-                            <sutram-async-btn
-                                size="sm"
-                                intent="danger"
-                                icon="square"
-                                label="Stop"
-                                .onClick=${() => this._stopServer()}>
-                            </sutram-async-btn>
-                        ` : ''}
-                        <sutram-btn
-                            size="sm"
-                            intent="primary"
-                            icon="refresh-cw"
-                            label="Reload"
-                            @click=${() => PreviewStore.setState({ reloadTick: Date.now() })}>
-                        </sutram-btn>
-                    `}
+                            <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true}>
+                                ${!isRunning ? html`
+                                    <sutram-async-btn
+                                        ?compact=${true}
+                                        intent="success"
+                                        icon="play"
+                                        label="Start"
+                                        .onClick=${() => this._startServer()}>
+                                    </sutram-async-btn>
+                                ` : html`
+                                    <sutram-async-btn
+                                        ?compact=${true}
+                                        intent="warning"
+                                        icon="rotate-cw"
+                                        label="Restart"
+                                        .onClick=${() => this._startServer()}>
+                                    </sutram-async-btn>
+                                    ${status === 'running' ? html`
+                                        <sutram-async-btn
+                                            ?compact=${true}
+                                            intent="danger"
+                                            icon="square"
+                                            label="Stop"
+                                            .onClick=${() => this._stopServer()}>
+                                        </sutram-async-btn>
+                                    ` : ''}
+                                    <sutram-btn
+                                        ?compact=${true}
+                                        intent="primary"
+                                        icon="refresh-cw"
+                                        label="Reload"
+                                        @click=${() => PreviewStore.setState({ reloadTick: Date.now() })}>
+                                    </sutram-btn>
+                                `}
 
-                    <sutram-btn
-                        size="sm"
-                        intent="${this.autoReload ? 'highlight' : 'neutral'}"
-                        ?active=${this.autoReload}
-                        icon="zap"
-                        label="Auto"
-                        title="Auto-reload iframe when repository files change"
-                        @click=${() => PreviewStore.setState({ autoReload: !this.autoReload })}>
-                    </sutram-btn>
+                                <sutram-btn
+                                    ?compact=${true}
+                                    intent="${this.autoReload ? 'highlight' : 'neutral'}"
+                                    ?active=${this.autoReload}
+                                    icon="zap"
+                                    label="Auto"
+                                    title="Auto-reload iframe when repository files change"
+                                    @click=${() => PreviewStore.setState({ autoReload: !this.autoReload })}>
+                                </sutram-btn>
 
-                    <sutram-btn
-                        size="sm"
-                        intent="${srv?.auto_start ? 'primary' : 'neutral'}"
-                        ?active=${!!srv?.auto_start}
-                        icon="pin"
-                        label="Boot"
-                        title="Auto-start this server on workspace boot"
-                        @click=${() => this._toggleAutoBoot(!srv?.auto_start)}>
-                    </sutram-btn>
+                                <sutram-btn
+                                    ?compact=${true}
+                                    intent="${srv?.auto_start ? 'primary' : 'neutral'}"
+                                    ?active=${!!srv?.auto_start}
+                                    icon="pin"
+                                    label="Boot"
+                                    title="Auto-start this server on workspace boot"
+                                    @click=${() => this._toggleAutoBoot(!srv?.auto_start)}>
+                                </sutram-btn>
 
-                    <sutram-btn
-                        size="sm"
-                        intent="${this.configOpen ? 'primary' : 'neutral'}"
-                        ?active=${this.configOpen}
-                        icon="sliders"
-                        label="Config"
-                        @click=${() => {
-                            this._syncDraftFromServer(activeRepo);
-                            PreviewStore.setState({ configOpen: !this.configOpen });
-                        }}>
-                    </sutram-btn>
+                                <sutram-btn
+                                    ?compact=${true}
+                                    intent="${this.configOpen ? 'primary' : 'neutral'}"
+                                    ?active=${this.configOpen}
+                                    icon="sliders"
+                                    label="Config"
+                                    @click=${() => {
+                                        this._syncDraftFromServer(activeRepo);
+                                        PreviewStore.setState({ configOpen: !this.configOpen });
+                                    }}>
+                                </sutram-btn>
 
-                    ${isRunning && previewUrl ? html`
-                        <sutram-btn
-                            size="sm"
-                            intent="neutral"
-                            icon="external-link"
-                            label="Open"
-                            title="Open in new browser tab"
-                            @click=${() => window.open(previewUrl, '_blank', 'noopener')}>
-                        </sutram-btn>
+                                ${isRunning && previewUrl ? html`
+                                    <sutram-btn
+                                        ?compact=${true}
+                                        intent="neutral"
+                                        icon="external-link"
+                                        label="Open"
+                                        title="Open in new browser tab"
+                                        @click=${() => window.open(previewUrl, '_blank', 'noopener')}>
+                                    </sutram-btn>
+                                ` : ''}
+                                <insetu-projection-window-controls .filepath=${'preview:preview'}></insetu-projection-window-controls>
+                            </sutram-stack>
+                        </sutram-action-bar>
+                    </sutram-surface>
+
+                    ${this.configOpen && activeRepo ? html`
+                        <sutram-surface variant="panel" border="bottom" padding="md" gap="md">
+                            <sutram-stack direction="grid" ?compact=${true}>
+                                <sutram-select
+                                    label="Server Profile"
+                                    ?flush=${true}
+                                    .value=${this._draftConfig.server_mode || 'auto'}
+                                    .options=${SERVER_MODE_OPTIONS}
+                                    @sutram-input-changed=${(e) => {
+                                        this._draftConfig = { ...this._draftConfig, server_mode: e.detail.value };
+                                    }}>
+                                </sutram-select>
+
+                                <sutram-input
+                                    label="Serve Subdirectory"
+                                    ?flush=${true}
+                                    placeholder="."
+                                    .value=${this._draftConfig.serve_dir || '.'}
+                                    @sutram-input-changed=${(e) => {
+                                        this._draftConfig = { ...this._draftConfig, serve_dir: e.detail.value };
+                                    }}>
+                                </sutram-input>
+
+                                <sutram-input
+                                    label="Sticky Port (0 = Auto)"
+                                    type="number"
+                                    ?flush=${true}
+                                    .value=${String(this._draftConfig.port ?? 0)}
+                                    @sutram-input-changed=${(e) => {
+                                        this._draftConfig = { ...this._draftConfig, port: parseInt(e.detail.value || '0', 10) || 0 };
+                                    }}>
+                                </sutram-input>
+
+                                <sutram-select
+                                    label="Bind Host"
+                                    ?flush=${true}
+                                    .value=${this._draftConfig.bind_host || '127.0.0.1'}
+                                    .options=${[
+                                        { value: '127.0.0.1', label: '127.0.0.1 (Loopback)' },
+                                        { value: '0.0.0.0', label: '0.0.0.0 (May open to LAN)' }
+                                    ]}
+                                    @sutram-input-changed=${(e) => {
+                                        this._draftConfig = { ...this._draftConfig, bind_host: e.detail.value };
+                                    }}>
+                                </sutram-select>
+
+                                <sutram-input
+                                    label="Entry Target / Custom Command"
+                                    ?flush=${true}
+                                    placeholder=${srv?.inferred_target || 'e.g. main:app or npm run dev -- --port {port}'}
+                                    .value=${this._draftConfig.entry_target || ''}
+                                    @sutram-input-changed=${(e) => {
+                                        this._draftConfig = { ...this._draftConfig, entry_target: e.detail.value };
+                                    }}>
+                                </sutram-input>
+                            </sutram-stack>
+
+                            <sutram-stack direction="row" justify="between" align="center" gap="md" ?wrap=${true}>
+                                <sutram-stack direction="row" align="center" gap="md" ?wrap=${true}>
+                                    <sutram-toggle
+                                        label="Bind Tailscale HTTPS Serve"
+                                        ?flush=${true}
+                                        .checked=${!!this._draftConfig.tailscale_https}
+                                        @sutram-input-changed=${(e) => {
+                                            this._draftConfig = { ...this._draftConfig, tailscale_https: e.detail.value };
+                                        }}>
+                                    </sutram-toggle>
+                                    <sutram-toggle
+                                        label="Static Server CORS"
+                                        ?flush=${true}
+                                        .checked=${!!this._draftConfig.static_cors}
+                                        @sutram-input-changed=${(e) => {
+                                            this._draftConfig = { ...this._draftConfig, static_cors: e.detail.value };
+                                        }}>
+                                    </sutram-toggle>
+                                    <sutram-toggle
+                                        label="Auto-Start on Workspace Boot"
+                                        ?flush=${true}
+                                        .checked=${!!this._draftConfig.auto_start}
+                                        @sutram-input-changed=${(e) => {
+                                            this._draftConfig = { ...this._draftConfig, auto_start: e.detail.value };
+                                        }}>
+                                    </sutram-toggle>
+                                </sutram-stack>
+
+                                <sutram-stack direction="row" gap="sm">
+                                    <sutram-async-btn
+                                        ?compact=${true}
+                                        intent="primary"
+                                        icon="save"
+                                        label="Save Profile"
+                                        .onClick=${() => this._saveRepoConfig()}>
+                                    </sutram-async-btn>
+                                    <sutram-async-btn
+                                        ?compact=${true}
+                                        intent="success"
+                                        icon="play"
+                                        label="Save & Start"
+                                        .onClick=${async () => {
+                                            await this._saveRepoConfig();
+                                            await this._startServer();
+                                        }}>
+                                    </sutram-async-btn>
+                                </sutram-stack>
+                            </sutram-stack>
+                        </sutram-surface>
                     ` : ''}
-                    <insetu-projection-window-controls .filepath=${'preview:preview'}></insetu-projection-window-controls>
+
+                    ${this._renderExposureBar(srv, isRunning)}
                 </div>
-            </div>
 
-            ${this.configOpen && activeRepo ? html`
-                <div class="config-drawer">
-                    <div class="config-grid">
-                        <sutram-select
-                            label="Server Profile"
-                            ?flush=${true}
-                            .value=${this._draftConfig.server_mode || 'auto'}
-                            .options=${SERVER_MODE_OPTIONS}
-                            @sutram-input-changed=${(e) => {
-                                this._draftConfig = { ...this._draftConfig, server_mode: e.detail.value };
-                                this.requestUpdate();
-                            }}>
-                        </sutram-select>
-
-                        <sutram-input
-                            label="Serve Subdirectory"
-                            ?flush=${true}
-                            placeholder="."
-                            .value=${this._draftConfig.serve_dir || '.'}
-                            @sutram-input-changed=${(e) => {
-                                this._draftConfig = { ...this._draftConfig, serve_dir: e.detail.value };
-                            }}>
-                        </sutram-input>
-
-                        <sutram-input
-                            label="Sticky Port (0 = Auto)"
-                            type="number"
-                            ?flush=${true}
-                            .value=${String(this._draftConfig.port ?? 0)}
-                            @sutram-input-changed=${(e) => {
-                                this._draftConfig = { ...this._draftConfig, port: parseInt(e.detail.value || '0', 10) || 0 };
-                            }}>
-                        </sutram-input>
-
-                        <sutram-select
-                            label="Bind Host"
-                            ?flush=${true}
-                            .value=${this._draftConfig.bind_host || '127.0.0.1'}
-                            .options=${[
-                                { value: '127.0.0.1', label: '127.0.0.1 (Loopback)' },
-                                { value: '0.0.0.0', label: '0.0.0.0 (May open to LAN)' }
-                            ]}
-                            @sutram-input-changed=${(e) => {
-                                this._draftConfig = { ...this._draftConfig, bind_host: e.detail.value };
-                            }}>
-                        </sutram-select>
-
-                        <sutram-input
-                            label="Entry Target / Custom Command"
-                            ?flush=${true}
-                            placeholder=${srv?.inferred_target || 'e.g. main:app or npm run dev -- --port {port}'}
-                            .value=${this._draftConfig.entry_target || ''}
-                            @sutram-input-changed=${(e) => {
-                                this._draftConfig = { ...this._draftConfig, entry_target: e.detail.value };
-                            }}>
-                        </sutram-input>
-                    </div>
-
-                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding-top: 4px;">
-                        <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
-                            <sutram-toggle
-                                label="Bind Tailscale HTTPS Serve"
-                                ?flush=${true}
-                                .checked=${!!this._draftConfig.tailscale_https}
-                                @sutram-input-changed=${(e) => {
-                                    this._draftConfig = { ...this._draftConfig, tailscale_https: e.detail.value };
-                                }}>
-                            </sutram-toggle>
-                            <sutram-toggle
-                                label="Static Server CORS"
-                                ?flush=${true}
-                                .checked=${!!this._draftConfig.static_cors}
-                                @sutram-input-changed=${(e) => {
-                                    this._draftConfig = { ...this._draftConfig, static_cors: e.detail.value };
-                                }}>
-                            </sutram-toggle>
-                            <sutram-toggle
-                                label="Auto-Start on Workspace Boot"
-                                ?flush=${true}
-                                .checked=${!!this._draftConfig.auto_start}
-                                @sutram-input-changed=${(e) => {
-                                    this._draftConfig = { ...this._draftConfig, auto_start: e.detail.value };
-                                }}>
-                            </sutram-toggle>
-                        </div>
-
-                        <div style="display: flex; gap: 8px;">
-                            <sutram-async-btn
-                                size="sm"
-                                intent="primary"
-                                icon="save"
-                                label="Save Profile"
-                                .onClick=${() => this._saveRepoConfig()}>
-                            </sutram-async-btn>
-                            <sutram-async-btn
-                                size="sm"
-                                intent="success"
-                                icon="play"
-                                label="Save & Start"
-                                .onClick=${async () => {
-                                    await this._saveRepoConfig();
-                                    await this._startServer();
-                                }}>
-                            </sutram-async-btn>
-                        </div>
-                    </div>
-                </div>
-            ` : ''}
-
-            ${this._renderExposureBar(srv, isRunning)}
-
-            <div class="iframe-stage ${isRunning && previewUrl ? '' : 'empty'}">
                 ${isRunning && this._isUnreachableHere(srv) ? html`
-                    <div style="display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 30px; text-align: center; max-width: 460px;">
-                        <yv-icon name="shield" style="width: 44px; height: 44px; color: var(--intent-highlight); opacity: 0.85;"></yv-icon>
-                        <h3 style="margin: 0; color: var(--text);">Only reachable on this machine</h3>
-                        <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted); line-height: 1.5;">
-                            This server only listens on loopback. Turn on Tailscale HTTPS to view it from this device.
-                        </p>
+                    <sutram-stack direction="col" align="center" justify="center" gap="sm" ?flex=${true}>
+                        <sutram-icon name="shield" size="xl" intent="highlight"></sutram-icon>
+                        <h3>Only reachable on this machine</h3>
+                        <sutram-label text="This server only listens on loopback. Turn on Tailscale HTTPS to view it from this device."></sutram-label>
                         <sutram-async-btn intent="primary" icon="lock" label="Turn On Tailscale HTTPS" .onClick=${() => this._enableTailscaleHttps()}></sutram-async-btn>
-                    </div>
+                    </sutram-stack>
                 ` : isRunning && previewUrl ? html`
                     <iframe
+                        style="flex: 1; width: 100%; height: 100%; border: none;"
                         src=${previewUrl}
                         allow="clipboard-read; clipboard-write; fullscreen"
                         title="Live App Preview (${activeRepo})">
                     </iframe>
                 ` : html`
-                    <div style="display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 30px; text-align: center; max-width: 460px;">
-                        <yv-icon name="${status === 'crashed' ? 'alert-triangle' : 'globe'}" style="width: 44px; height: 44px; color: ${status === 'crashed' ? 'var(--intent-danger)' : 'var(--intent-highlight)'}; opacity: 0.85;"></yv-icon>
-                        <h3 style="margin: 0; color: var(--text);">
-                            ${status === 'crashed' ? `Server Crashed (${activeRepo})` : `Preview Server Stopped (${activeRepo || 'No Repo'})`}
-                        </h3>
-                        <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted); line-height: 1.5;">
-                            ${status === 'crashed'
-                                ? 'The development server exited during startup. Inspect the Server Output Logs below for traceback details.'
-                                : `Detected profile: ${modeLabel}. Click Start to launch a dedicated local server instance for '${activeRepo}'.`}
-                        </p>
+                    <sutram-stack direction="col" align="center" justify="center" gap="sm" ?flex=${true}>
+                        <sutram-icon name="${status === 'crashed' ? 'alert-triangle' : 'globe'}" size="xl" intent="${status === 'crashed' ? 'danger' : 'highlight'}"></sutram-icon>
+                        <h3>${status === 'crashed' ? `Server Crashed (${activeRepo})` : `Preview Server Stopped (${activeRepo || 'No Repo'})`}</h3>
+                        <sutram-label .text=${status === 'crashed'
+                            ? 'The development server exited during startup. Inspect the Server Output Logs below for traceback details.'
+                            : `Detected profile: ${modeLabel}. Click Start to launch a dedicated local server instance for '${activeRepo}'.`}></sutram-label>
                         ${activeRepo ? html`
                             <sutram-async-btn
                                 intent="success"
@@ -828,35 +674,39 @@ export class InSetuExtPreview extends InSetuElement {
                                 .onClick=${() => this._startServer()}>
                             </sutram-async-btn>
                         ` : ''}
-                    </div>
+                    </sutram-stack>
                 `}
-            </div>
 
-            <div class="logs-drawer">
-                <div class="logs-header" @click=${() => {
-                    const nextOpen = !this.logsOpen;
-                    PreviewStore.setState({ logsOpen: nextOpen });
-                    if (nextOpen) PreviewStore.getState().fetchLogs();
-                }}>
-                    <span style="display: inline-flex; align-items: center; gap: 6px;">
-                        <yv-icon name="${this.logsOpen ? 'chevron-down' : 'chevron-right'}" style="width: 14px; height: 14px;"></yv-icon>
-                        <yv-icon name="terminal" style="width: 14px; height: 14px; color: var(--intent-highlight);"></yv-icon>
-                        <span>Server Output Logs (${(this.logs || []).length} lines)</span>
-                    </span>
-                    <div style="display: flex; align-items: center; gap: 8px;" @click=${(e) => e.stopPropagation()}>
-                        <sutram-btn
-                            size="sm"
-                            intent="neutral"
-                            icon="refresh-cw"
-                            label="Refresh Logs"
-                            @click=${() => PreviewStore.getState().fetchLogs()}>
-                        </sutram-btn>
-                    </div>
-                </div>
-                ${this.logsOpen ? html`
-                    <pre class="logs-body">${(this.logs && this.logs.length > 0) ? this.logs.join('\n') : 'No output logged yet.'}</pre>
-                ` : ''}
-            </div>
+                <sutram-surface slot="footer" variant="inset" border="top" padding="xs" gap="xs" ?interactive=${true}
+                    @click=${() => {
+                        const nextOpen = !this.logsOpen;
+                        PreviewStore.setState({ logsOpen: nextOpen });
+                        if (nextOpen) PreviewStore.getState().fetchLogs();
+                    }}>
+                    <sutram-stack
+                        direction="row"
+                        justify="between"
+                        align="center">
+                        <sutram-stack direction="row" align="center" gap="xs">
+                            <sutram-icon name="${this.logsOpen ? 'chevron-down' : 'chevron-right'}" size="sm"></sutram-icon>
+                            <sutram-icon name="terminal" size="sm" intent="highlight"></sutram-icon>
+                            <strong>Server Output Logs (${(this.logs || []).length} lines)</strong>
+                        </sutram-stack>
+                        <div @click=${(e) => e.stopPropagation()}>
+                            <sutram-btn
+                                ?compact=${true}
+                                intent="neutral"
+                                icon="refresh-cw"
+                                label="Refresh Logs"
+                                @click=${() => PreviewStore.getState().fetchLogs()}>
+                            </sutram-btn>
+                        </div>
+                    </sutram-stack>
+                    ${this.logsOpen ? html`
+                        <pre style="max-height: 220px; overflow-y: auto; margin: 0;">${(this.logs && this.logs.length > 0) ? this.logs.join('\n') : 'No output logged yet.'}</pre>
+                    ` : ''}
+                </sutram-surface>
+            </sutram-view>
         `;
     }
 }
