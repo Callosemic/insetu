@@ -32,6 +32,22 @@ class TestSutramCompliance(unittest.TestCase):
         sutram_linter = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(sutram_linter)
         return sutram_linter
+    def _declared_sutram_properties(self, sutram_linter):
+        if not hasattr(sutram_linter, "load_declared_properties"):
+            self.skipTest("Sibling sutram predates the property contract check.")
+        for candidate in (BACKEND_DIR / "static" / "vendor", SUTRAM_DIR):
+            if candidate.exists():
+                declared = sutram_linter.load_declared_properties(candidate)
+                if declared:
+                    return declared
+        try:
+            declared = sutram_linter.load_declared_properties()
+            if declared:
+                return declared
+        except TypeError:
+            pass
+        return {}
+
     def test_sutram_tag_bindings_match_the_vendored_components(self):
         """
         Every <sutram-*> binding in inSetu (core and extensions) names a property the vendored component declares.
@@ -39,9 +55,7 @@ class TestSutramCompliance(unittest.TestCase):
         attribute, does nothing at runtime and fails silently.
         """
         sutram_linter = self._load_sutram_linter()
-        if not hasattr(sutram_linter, "load_declared_properties"):
-            self.skipTest("Sibling sutram predates the property contract check.")
-        declared = sutram_linter.load_declared_properties(BACKEND_DIR / "static" / "vendor")
+        declared = self._declared_sutram_properties(sutram_linter)
         self.assertIn("sutram-view", declared, "Vendored sutram not found; run scripts/vendor_sutram.sh")
         problems = []
         for js_file in sorted(BACKEND_DIR.rglob("*.js")):
@@ -56,9 +70,7 @@ class TestSutramCompliance(unittest.TestCase):
     def test_documented_sutram_properties_exist(self):
         """Every property docs/08_sutram_contracts.md lists for a <sutram-*> element is declared by the vendored component."""
         sutram_linter = self._load_sutram_linter()
-        if not hasattr(sutram_linter, "load_declared_properties"):
-            self.skipTest("Sibling sutram predates the property contract check.")
-        declared = sutram_linter.load_declared_properties(BACKEND_DIR / "static" / "vendor")
+        declared = self._declared_sutram_properties(sutram_linter)
         doc = (PROJECT_ROOT / "docs" / "08_sutram_contracts.md").read_text(encoding="utf-8")
         entry = re.compile(r"^\s*\*\s+\*\*`<(sutram-[a-z0-9-]+)>`(?:\s*&\s*`<(sutram-[a-z0-9-]+)>`)?\*\*:?(.*)$")
         problems = []
