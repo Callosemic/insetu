@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.34.0 (2026-11-04)
+
+### Features
+
+- **system**: Four-tier agent directives, repository attestation acceptance, and unified session
+  protocols
+  ([`1a1a832`](https://github.com/Callosemic/insetu/commit/1a1a8324fcb287f0e1b6550cce29eab9daf55499))
+
+
 ## v0.33.0 (2026-11-03)
 
 ### Bug Fixes
