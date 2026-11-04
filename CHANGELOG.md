@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.33.0 (2026-11-03)
+
+### Bug Fixes
+
+- Tests
+  ([`b6af4c1`](https://github.com/Callosemic/insetu/commit/b6af4c142df80114972b439ab64e849682351623))
+
+### Features
+
+- **security**: S8 confirmed protected changes, unified attestation store, recovery smoke test, and
+  last-good lifeboat fallbacks
+  ([`803e09c`](https://github.com/Callosemic/insetu/commit/803e09c67ccc2453629a2a8dcd0a65478acc8555))
+
+
 ## v0.32.1 (2026-11-03)
 
 ### Bug Fixes
