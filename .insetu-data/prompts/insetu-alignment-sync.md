@@ -7,6 +7,6 @@ Structure the summary using these focal points:
 2. CONTEXT GATHERER & PHYSICS: Assess the differential compilation pipeline. Are dynamic sub-buckets cleanly routing to the `manifest.json` without polluting the LLM's context window? Is workspace isolation (tenant physics) holding firm?
 3. SDK & THE METRONOME: Review the separation of concerns. Are extensions respecting the `InSetuExtension` blueprint? Are they utilizing the event bus (`hooks.py`) and background job ledger (`workers.py`) correctly without blocking the Flask event loop?
 4. DEBT & FRICTION: Identify any immediate anti-patterns. Are there DRY violations, UI layout constraints bypassing the declarative factory, or tight coupling sneaking into the core chassis?
-5. THE ACTIVE VECTOR: Cross-reference the active Kanban board (`.tracker/`) against recent diffs to define the exact, pragmatic priority for the current engineering sprint.
+5. THE ACTIVE VECTOR: Cross-reference the active Kanban board (`.insetu-data/tracker/`) against recent diffs to define the exact, pragmatic priority for the current engineering sprint.
 
 PROVIDE ONLY THE ECOSYSTEM ALIGNMENT SYNC WITH NO ADDITIONAL CONVERSATIONAL FLUFF AT THE BEGINNING OR END.
