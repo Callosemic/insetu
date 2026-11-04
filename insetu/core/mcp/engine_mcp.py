@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict, Union
 from insetu.core.sdk import (
     InSetuExtension,
+    execution_frame,
     get_registered_capabilities,
     extract_template_variables,
 )
@@ -290,7 +291,9 @@ def handle_mcp_jsonrpc(ctx, rpc_payload: Dict[str, Any]) -> Optional[Dict[str, A
                     "error": {"code": -32601, "message": f"Unknown tool: '{raw_name}'"},
                 }
             try:
-                call_res = ctx.call(cap_id, wait=True, **tool_args)
+                # MCP clients are machines: mark the call so protected writes are held and approvals refused (S8).
+                with execution_frame(origin="mcp"):
+                    call_res = ctx.call(cap_id, wait=True, **tool_args)
                 text_out = call_res if isinstance(call_res, str) else json.dumps(call_res, indent=2)
                 return {
                     "jsonrpc": "2.0",

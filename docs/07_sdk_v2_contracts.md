@@ -58,6 +58,16 @@ Route handlers (`@my_ext_bp.route('path')`) and background workers (`@my_ext_bp.
 * **`ctx.emit(event_name, **kwargs)`** *(Method)*: Emits a synchronous event, automatically injecting the tenant workspace ID.
 * **`ctx.emit_background(event_name, **kwargs)`** *(Method)*: Emits a background event, automatically injecting the tenant workspace ID.
 
+### 1.3 Security, Recovery & Attestation Interfaces (S8)
+* **`is_protected_vfs_target(filepath, workspace_id=None)`** *(Function)*: Evaluates whether a target URI or relative path matches `INSETU_PROTECTED_VFS_TARGETS` (the CLI, lifeboat, credential store, or control directory stores).
+* **`set_protected_write_handler(handler_fn)`** *(Function)*: Registers the kernel-level hook invoked when an unprivileged write targets a protected VFS path.
+* **`execute_confirmed_protected_write(workspace_id, filepath, content, data=None)`** *(Function)*: Privileged kernel write path bypassing the protected check, strictly confined to `attestations.py` and `protected_changes.py` (`PROTECTED_WRITE_CHOKEPOINT`).
+* **`execution_frame(origin="ui"|"mcp"|"routine"|"agent"|"worker")`** *(Context Manager)*: Binds execution origin metadata to the current asynchronous frame.
+* **`get_current_origin()`** *(Function)*: Returns the execution origin string for the active context frame.
+* **`rotate_session_token(control_dir)`** *(Function)*: Regenerates the durable session token in `<control_dir>/auth/session_token`.
+* **`attest(kind, subject, digest, detail=None, expires_at=None, until_restart=False)`** *(Function)*: Records a person's approval of an exact content digest in `.insetu/attestations.json`. Refuses machine origins (`AttestationRefused`).
+* **`is_attested(kind, subject, digest=None)`** *(Function)*: Queries active, non-expired attestation grants.
+
 **Database & I/O Interfaces:**
 
 * **`ctx.db`** *(DatabaseWrapper)*: Automated SQLite connector keyed securely to the active tenant workspace schema. Exposes `.get_all(table)`, `.insert_or_replace(table, dict)`, `.update(table, data, where_col, where_val)`, `.get_by_id(table, id_val, id_col)`, and `.delete(table, col, val)`.

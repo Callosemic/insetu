@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import TypedDict, Optional, List, Dict, Any, Tuple
 import werkzeug.utils
 from flask import request, send_file
-from insetu.core.sdk import InSetuExtension, hooks
+from insetu.core.sdk import InSetuExtension, hooks, is_protected_vfs_target
+from insetu.core.protected_changes import EDITOR_SOURCE, PROTECTED_FILE_NOTICE, SOURCE_KEY
 from insetu.core.utils_core import (
     InSetuURI,
     get_repo_path,
@@ -131,6 +132,22 @@ class FileGitDiffResponse(TypedDict):
     working_content: str
     is_untracked: bool
     is_modified: bool
+class FileProtectionResponse(TypedDict):
+    file: str
+    protected: bool
+    message: str
+
+
+@fs_bp.route('protected', methods=['GET'], request_schema=FileTargetPayload, response_schema=FileProtectionResponse, docstring="[sync] Reports whether a file is a protected recovery file: agents' changes to it wait for a person's confirmation, and editor saves run a smoke test first (S8).")
+def api_fs_protected(ctx):
+    filename = str(ctx.payload.get('file') or '').strip()
+    if not filename:
+        return {"error": "Filepath required"}, 400
+    uri = str(InSetuURI.from_external_input(filename))
+    protected = is_protected_vfs_target(uri, ctx.workspace_id)
+    return {"file": uri, "protected": protected, "message": PROTECTED_FILE_NOTICE if protected else ""}
+
+
 @fs_bp.route('git_diff', methods=['GET'], request_schema=FileTargetPayload, response_schema=FileGitDiffResponse, docstring="[sync] Returns the git HEAD content and current working tree content for a target VFS file.")
 def api_fs_git_diff(ctx):
     """Retrieves the Git HEAD baseline and current working tree text for a file."""
@@ -441,6 +458,8 @@ def api_fs_save(ctx):
                 del data["is_absolute_artifact"]
         if "ignore_ledger" in data:
                 del data["ignore_ledger"]
+        # S8: tells the protected-write handler this is a person's save from an editor (written after a smoke test), not an agent's write (held).
+        data[SOURCE_KEY] = EDITOR_SOURCE
         filepath, content = str(data.get("filepath") or "").strip(), data.get("content", "")
         if not filepath: 
                 return {"error": "Filepath is required"}, 400
@@ -479,6 +498,9 @@ def api_fs_save(ctx):
                     )
                     return {"error": reason}, 409
         result = ctx.vfs.save(filepath, content, data)
+        if isinstance(result, dict) and result.get("protected") and result.get("status") != "accepted":
+            # Held for confirmation (202), or refused: a failed smoke test (422) or a forbidden change (403).
+            return result, (202 if result.get("status") == "pending_confirmation" else int(result.get("status_code") or 403))
         saved_hash = ctx.vfs.record_ancestor(filepath, content)
         if isinstance(result, dict):
             result["base_hash"] = saved_hash

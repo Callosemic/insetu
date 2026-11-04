@@ -40,6 +40,7 @@ from akasa.types import (
     VFSStorageEngine,
 )
 import akasa as _akasa
+from akasa.auth.credentials import rotate_token as rotate_session_token
 from akasa.auth import (
     ensure_master_key_on_disk,
     encrypt_secret,
@@ -75,6 +76,8 @@ from akasa.utils import (
     get_active_modules,
     set_tenant_resolver,
     resolve_active_tenant,
+    execution_frame,
+    get_current_origin,
     sniff_tenant_id,
     is_subpath,
     resolve_system_artifact_path,
@@ -103,6 +106,9 @@ from akasa.vfs import (
     InterWorkspaceVFSDriver,
     register_driver,
     register_protected_vfs_targets,
+    set_protected_write_handler,
+    execute_confirmed_protected_write,
+    is_protected_vfs_target,
     mount_volume,
     set_mount_authorizer,
     resolve_physical_path,
@@ -134,11 +140,15 @@ reset_kernel_state = _akasa.reset_state
 # The recovery path (S8): the CLI that boots the lifeboat, the lifeboat itself, and the stdlib-only
 # credential store the lifeboat loads by path. The kernel also refuses anything that would shadow
 # them at import time (a same-named package directory, compiled variants, __pycache__ entries).
+# insetu's own records in the control directory: the attestation store (every standing human approval), pending
+# protected changes, the audit log and the last-good copies of recovery files. Only insetu/core/attestations.py and
+# insetu/core/protected_changes.py write them, through the confirmed-write path; no proposal to change them is staged.
+INSETU_CONTROL_STORE_NAMES = ("attestations.json", "pending_changes", "audit", "recovery")
 INSETU_PROTECTED_VFS_TARGETS = (
     ("insetu", "cli.py"),
     ("insetu", "fallback_bridge.py"),
     ("akasa/auth", "credentials.py"),
-)
+) + tuple((".insetu", name) for name in INSETU_CONTROL_STORE_NAMES)
 
 hooks.register_trusted_namespace("insetu.core.")
 hooks.register_extension_namespace("insetu.extensions.")

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from insetu.core.sdk import (
     TemplateOverlayVFSDriver,
+    execution_frame,
     CycleError,
     resolve_dag_wavefronts,
     extract_template_variables,
@@ -54,6 +55,8 @@ ROUTINE_BANNED_CAPABILITIES = frozenset({
     "system.extensions.install_deps",
     "system.extensions.workspace.approve",  # S8: only a person approves code that insetu will run.
     "system.extensions.workspace.revoke",
+    "system.protected.confirm",  # S8: only a person confirms a change to a protected file.
+    "system.protected.discard",
     "system.UpdateConfig",
     "system.CreateWorkspace",
     "system.DeleteWorkspace",
@@ -61,6 +64,7 @@ ROUTINE_BANNED_CAPABILITIES = frozenset({
     "system.RebootServer",
     "system.UpdateHostTopology",
     "hooks.save",
+    "hooks.toggle",  # S8: enabling a rule approves its command.
     "hooks.execute",
     "cronic.schedule",
     "cronic.run_now",
@@ -845,7 +849,17 @@ def clamp_rag_files_to_topology(ctx, candidate_files: List[str], allowed_repos: 
 
 
 
-def execute_declarative_routine(
+def execute_declarative_routine(ctx, **kwargs) -> Dict[str, Any]:
+    """
+    Runs a declarative routine with origin 'routine' (S8): every tool call, file write and job it starts is marked as
+    machine work, so protected files are held for a person and approvals are refused, whoever started the turn.
+    Arguments are those of _execute_declarative_routine_body.
+    """
+    with execution_frame(origin="routine"):
+        return _execute_declarative_routine_body(ctx, **kwargs)
+
+
+def _execute_declarative_routine_body(
     ctx,
     session_id: str = "default",
     user_prompt: str = "",

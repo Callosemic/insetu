@@ -51,9 +51,37 @@ def scaffold_profiles(cwd):
     os.makedirs(Path(base_dir).joinpath("cache", "db").as_posix(), exist_ok=True)
 
 
+LAST_GOOD_LIFEBOAT = (".insetu", "recovery", "last_good", "fallback_bridge.py")
+
+
+def load_recovery_app(cwd):
+    """
+    The lifeboat's run_recovery_app. If the current lifeboat will not import, the last-good copy that insetu kept
+    in .insetu/recovery/last_good/ (S8), loaded by path. Raises when neither is usable.
+    """
+    try:
+        from insetu.fallback_bridge import run_recovery_app as _run_recovery_app
+        return _run_recovery_app
+    except Exception:
+        import traceback as _traceback
+        print("[!] The lifeboat would not import:")
+        print(_traceback.format_exc())
+        last_good = Path(cwd).joinpath(*LAST_GOOD_LIFEBOAT)
+        if not last_good.is_file():
+            print("[!] No last-good lifeboat copy exists.")
+            raise
+        print(f"[!] Booting the last-good lifeboat copy: {last_good.as_posix()}")
+        import importlib.util as _importlib_util
+        spec = _importlib_util.spec_from_file_location("insetu_last_good_lifeboat", last_good.as_posix())
+        module = _importlib_util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module.run_recovery_app
+
+
 def main():
     if len(sys.argv) < 2:
-        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension | mcp]")
+        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension | mcp | auth]")
         sys.exit(1)
 
     command = sys.argv[1]
@@ -61,7 +89,7 @@ def main():
 
     if command in ("-h", "--help", "help"):
         print("inSetu Developer OS CLI")
-        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension | mcp]")
+        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension | mcp | auth]")
         sys.exit(0)
 
     if command == "serve":
@@ -76,8 +104,7 @@ def main():
             print(f"[!] Details:\n{err_details}")
             print("[!] Booting Immutable Recovery OS (Lifeboat FS)...")
             os.environ["INSETU_PANIC_DETAILS"] = err_details
-            from insetu.fallback_bridge import run_recovery_app as _run_recovery_app
-            _run_recovery_app()
+            load_recovery_app(cwd)()
 
     elif command == "init":
         from insetu.core.system.cli_commands import handle_init as _handle_init
@@ -106,6 +133,13 @@ def main():
         from insetu.core.system.cli_commands import handle_service as _handle_service
         _handle_service(sys.argv[2], cwd)
 
+    elif command == "auth":
+        if sys.argv[2:3] != ["rotate"]:
+            print("Usage: insetu auth rotate")
+            sys.exit(1)
+        from insetu.core.system.cli_commands import rotate_session_token_cli as _rotate_session_token_cli
+        _rotate_session_token_cli(cwd)
+
     elif command == "mcp":
         scaffold_profiles(cwd)
         from insetu.core.system.cli_commands import handle_mcp_stdio as _handle_mcp_stdio
@@ -113,7 +147,7 @@ def main():
 
     else:
         print(f"Unknown command: {command}")
-        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension | mcp]")
+        print("Usage: insetu [init | serve | gui | service | shortcut | create-extension | mcp | auth]")
         sys.exit(1)
 
 

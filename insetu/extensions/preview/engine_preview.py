@@ -11,6 +11,7 @@ import threading
 from collections import deque
 from typing import TypedDict, Optional, List, Dict, Any
 from insetu.core.sdk import InSetuExtension
+import insetu.core.attestations as _attestations
 from insetu.core.remote.engine_remote import set_tailscale_https_serve
 from insetu.core.utils_core import (
     approve_command,
@@ -130,6 +131,17 @@ ALLOWED_SERVER_MODES = tuple(
 )
 # LAN exposure is a lease a person grants (S2): for the current server run, or for a fixed time.
 LAN_LEASE_DURATIONS: Dict[str, Optional[int]] = {"run": None, "15m": 15 * 60, "1h": 60 * 60, "8h": 8 * 60 * 60}
+# Leases live in the attestation store (S8). A timed lease survives a daemon restart for its remaining time; a "run"
+# lease ends when that server run ends. Its digest is the launch configuration, so changing it ends the lease.
+LAN_LEASE_KIND = "lan_lease"
+
+
+def _lease_subject(workspace_id: str, repo_dir: str) -> str:
+    return f"{workspace_id}|{repo_dir}"
+
+
+def _lease_digest(effective_mode: str, entry_target: str, serve_dir: str, port: int) -> str:
+    return _attestations.digest_of(effective_mode, entry_target, serve_dir, port)
 APPROVAL_KIND = "preview"
 
 
@@ -541,8 +553,9 @@ def _get_repo_status_snapshot(ctx, repo_dir: str) -> Dict[str, Any]:
 def start_repo_server(ctx, repo_dir: str, overrides: Optional[Dict[str, Any]] = None, lan_lease: Optional[str] = None) -> Dict[str, Any]:
     """
     Starts or restarts a repository's server. It binds loopback unless lan_lease names a duration in
-    LAN_LEASE_DURATIONS, which only the human-only preview.open_lan route passes (S2). Auto-start
-    and every other caller therefore always get loopback.
+    LAN_LEASE_DURATIONS, which only the human-only preview.open_lan route passes (S2), or a timed lease
+    a person granted earlier is still in the attestation store and matches this launch (S8). Every other
+    start, auto-start included, gets loopback.
     """
     overrides = overrides or {}
     _validate_overrides(overrides)
@@ -568,7 +581,15 @@ def start_repo_server(ctx, repo_dir: str, overrides: Optional[Dict[str, Any]] = 
     lan_allowed = (cfg.get("bind_host") or LOOPBACK_HOST) == LAN_HOST
     if lan_lease is not None and not lan_allowed:
         raise ValueError(f"'{repo_dir}' is set to loopback only. Set Bind Host to 0.0.0.0 to allow opening it to the LAN.")
-    bind_host = LAN_HOST if lan_lease is not None else LOOPBACK_HOST
+    lease_subject = _lease_subject(ctx.workspace_id, repo_dir)
+    standing_lease = _attestations.get_attestation(LAN_LEASE_KIND, lease_subject) if lan_lease is None else None
+    if standing_lease and (standing_lease.get("detail") or {}).get("duration") == "run":
+        # Starting the server again starts a new run, which ends a lease granted for the previous one.
+        _attestations.revoke(LAN_LEASE_KIND, lease_subject)
+        standing_lease = None
+    if standing_lease and not lan_allowed:
+        standing_lease = None
+    bind_host = LAN_HOST if (lan_lease is not None or standing_lease) else LOOPBACK_HOST
     entry_target = cfg.get("entry_target") or ""
     tailscale_https = bool(cfg.get("tailscale_https", False))
     static_cors = bool(cfg.get("static_cors", False))
@@ -590,6 +611,23 @@ def start_repo_server(ctx, repo_dir: str, overrides: Optional[Dict[str, Any]] = 
     if port <= 0:
         port = _allocate_free_port(ctx, repo_dir, bind_host=bind_host)
         ctx.settings.set("port", port, repo=repo_dir)
+
+    lease_digest = _lease_digest(effective_mode, entry_target, serve_dir, port)
+    if standing_lease and standing_lease.get("digest") != lease_digest:
+        # The server's command or port changed since the lease was granted, so the lease no longer covers it.
+        _attestations.revoke(LAN_LEASE_KIND, lease_subject)
+        standing_lease = None
+        bind_host = LOOPBACK_HOST
+    if lan_lease is not None:
+        seconds = LAN_LEASE_DURATIONS[lan_lease]
+        standing_lease = _attestations.attest(
+            LAN_LEASE_KIND,
+            lease_subject,
+            lease_digest,
+            {"duration": lan_lease, "port": port, "mode": effective_mode},
+            expires_at=(time.time() + seconds) if seconds else None,
+            until_restart=seconds is None,
+        )
 
     # If an external process is already listening on this port, adopt it without colliding
     if _is_port_listening(port):
@@ -617,6 +655,9 @@ def start_repo_server(ctx, repo_dir: str, overrides: Optional[Dict[str, Any]] = 
     if lan_lease is not None:
         span = "until this server stops" if LAN_LEASE_DURATIONS[lan_lease] is None else f"for {lan_lease}"
         log_deque.append(f"[Preview] Opened to the LAN on {LAN_HOST}:{port} {span} at a person's request.")
+    elif standing_lease:
+        until = standing_lease.get("expires_at")
+        log_deque.append(f"[Preview] Still open to the LAN on {LAN_HOST}:{port} under a lease granted earlier, until {time.strftime('%H:%M', time.localtime(until)) if until else 'this server stops'}.")
 
     proc = ctx.exec.popen(
         cmd,
@@ -659,11 +700,17 @@ def start_repo_server(ctx, repo_dir: str, overrides: Optional[Dict[str, Any]] = 
         "bind_host": bind_host,
         "access_token": access_token,
     }
-    if lan_lease is not None:
-        seconds = LAN_LEASE_DURATIONS[lan_lease]
-        lease = {"duration": lan_lease, "granted_at": time.time(), "until": (time.time() + seconds) if seconds else None, "timer": None}
-        if seconds:
-            timer = threading.Timer(seconds, _expire_lan_lease, args=(ctx.workspace_id, repo_dir, entry))
+    if standing_lease:
+        # The store holds the lease; this mirror is for status display and the timer that ends it.
+        until = standing_lease.get("expires_at")
+        lease = {
+            "duration": (standing_lease.get("detail") or {}).get("duration"),
+            "granted_at": standing_lease.get("approved_at"),
+            "until": until,
+            "timer": None,
+        }
+        if until:
+            timer = threading.Timer(max(0.0, float(until) - time.time()), _expire_lan_lease, args=(ctx.workspace_id, repo_dir, entry))
             timer.daemon = True
             lease["timer"] = timer
             timer.start()
@@ -690,6 +737,7 @@ def _expire_lan_lease(workspace_id: str, repo_dir: str, entry: Dict[str, Any]) -
     with _REGISTRY_LOCK:
         if _PROCESS_REGISTRY.get((workspace_id, repo_dir)) is not entry:
             return  # The server was restarted or stopped since; that already ended the lease.
+    _attestations.revoke(LAN_LEASE_KIND, _lease_subject(workspace_id, repo_dir))
     try:
         ctx = preview_bp.get_context(workspace_id)
         snapshot = start_repo_server(ctx, repo_dir)
@@ -705,6 +753,9 @@ def _expire_lan_lease(workspace_id: str, repo_dir: str, entry: Dict[str, Any]) -
 
 def stop_repo_server(ctx, repo_dir: str) -> Dict[str, Any]:
     key = (ctx.workspace_id, repo_dir)
+    lease = _attestations.get_attestation(LAN_LEASE_KIND, _lease_subject(ctx.workspace_id, repo_dir))
+    if lease and (lease.get("detail") or {}).get("duration") == "run":
+        _attestations.revoke(LAN_LEASE_KIND, _lease_subject(ctx.workspace_id, repo_dir))
     with _REGISTRY_LOCK:
         entry = _PROCESS_REGISTRY.pop(key, None)
     if entry:
@@ -825,6 +876,7 @@ def api_preview_close_lan(ctx):
     repo_dir = str(data.get("repo") or "").strip()
     if not repo_dir:
         return {"error": "Repository name ('repo') is required."}, 400
+    _attestations.revoke(LAN_LEASE_KIND, _lease_subject(ctx.workspace_id, repo_dir))
     try:
         return {"status": "success", "server": start_repo_server(ctx, repo_dir)}
     except PreviewApprovalRequired as e:

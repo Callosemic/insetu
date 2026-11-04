@@ -515,6 +515,25 @@ def _acquire_local_boot_token(port: int) -> str:
         return ""
 
 
+def rotate_session_token_cli(cwd: str) -> str:
+    """
+    `insetu auth rotate`: replaces the durable session token in <cwd>/.insetu/auth/ and prints the new one once.
+    Every browser and device signed in with the old token has to sign in again.
+    """
+    from insetu.core.sdk import rotate_session_token as _rotate_session_token
+
+    control_dir = Path(cwd).joinpath(".insetu")
+    token = _rotate_session_token(control_dir.as_posix())
+    print("🔑 New inSetu session token (shown once; it is also saved in .insetu/auth/session_token):")
+    print(f"   {token}")
+    print("⚠️  Every browser and device signed in with the old token must sign in again with this one.")
+    print("⚠️  If inSetu is running, restart it (`insetu service restart`, or stop and start `insetu serve`).")
+    print("    Until it restarts, the running server keeps accepting the old token.")
+    if os.environ.get("AKASA_BOOT_TOKEN"):
+        print("⚠️  AKASA_BOOT_TOKEN is set in this environment and overrides the saved token wherever it is set.")
+    return token
+
+
 def handle_mcp_stdio(cwd: str, args: list):
     """
     MCP 2025-03-26 Stdio Bridge:

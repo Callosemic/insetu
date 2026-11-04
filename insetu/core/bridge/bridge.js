@@ -1056,6 +1056,9 @@ export class InSetuExtBridge extends InSetuElement {
                     </sutram-stack>
                     <sutram-label .text=${`Total: ${t.summary?.total_patches ?? 0} • Resolved: ${t.summary?.resolved ?? 0} • Skipped: ${t.summary?.auto_skipped ?? 0} • Confirm: ${t.summary?.action_required ?? 0} • Failed: ${t.summary?.failed ?? 0}`}></sutram-label>
                     ${t.heal_error ? html`<sutram-label intent="warning" .text=${`⚠️ AI Auto-Repair Error: ${t.heal_error}`}></sutram-label>` : ''}
+                    ${(t.pending_protected_changes || []).length > 0 ? html`
+                        <sutram-label intent="warning" .text=${`🛡️ Not written yet: ${t.pending_protected_changes.map(c => c.filepath).join(', ')}. Protected files wait for your confirmation (Review Changes in the banner).`}></sutram-label>
+                    ` : ''}
                 </sutram-stack>
 
                 ${batchHasAnyErrors && t.mode !== 'live' ? html`
@@ -1132,12 +1135,13 @@ export class InSetuExtBridge extends InSetuElement {
                                         const resolveFlagLabel = (flagStr) => {
                                             if (flagStr === 'rebased_overlap') return 'Rebased Overlap';
                                             if (flagStr === 'already_applied') return 'Already Applied';
+                                            if (flagStr === 'protected_needs_confirmation') return 'Protected: Waits for Your Confirmation';
                                             return String(flagStr || '').replace(/_/g, ' ');
                                         };
                                         const resolveFlagIntent = (flagStr) => {
                                             const f = String(flagStr || '').toLowerCase();
                                             if (f.includes('syntax') || f.includes('error') || f.includes('delete') || f.includes('destructive')) return 'danger';
-                                            if (f.includes('removal') || f.includes('warn') || f.includes('expansion') || f.includes('overwrite') || f.includes('skip')) return 'warning';
+                                            if (f.startsWith('protected') || f.includes('removal') || f.includes('warn') || f.includes('expansion') || f.includes('overwrite') || f.includes('skip')) return 'warning';
                                             if (f.includes('heal') || f.includes('rebased') || f.includes('create') || f.includes('genesis')) return 'success';
                                             return 'primary';
                                         };

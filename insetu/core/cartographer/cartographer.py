@@ -42,12 +42,12 @@ CARTOGRAPHER_SETTINGS_SCHEMA = [
     {
         "id": "enrich_undocumented_symbols",
         "label": "LLM Symbol Enrichment (Stage 4)",
-        "button_label": "Enrich '[comment required]' Symbols via Fast LLM",
+        "button_label": "Describe Missing and Review [stale?] Symbols via Fast LLM",
         "type": "action",
         "scope": "workspace",
         "intent": "highlight",
         "endpoint": "cartographer/enrich",
-        "description": "Batches undocumented symbol snippets in CODE_INDEX.md into a single fast-tier LLM prompt and writes 1-sentence summaries directly into the index."
+        "description": "One fast-tier LLM call per repository: writes a one-sentence description for each '[comment required]' symbol, and reviews each '[stale?]' description against the changed code, keeping it (and clearing the flag) when it is still accurate or revising only what the code made wrong."
     }
 ]
 CARTOGRAPHER_SCHEMA = {
@@ -92,6 +92,9 @@ DESCRIPTION_SOURCE_INDEX = "code_index"          # mirror of the index text for 
 DESCRIPTION_SOURCE_ORPHAN = "code_index_orphan"  # index text kept for a path that left the topology
 # How long the text of a path that left the topology is kept, so it comes back if the path does.
 ORPHANED_DESCRIPTION_TTL_SECONDS = 90 * 24 * 3600
+# map_repositories never saves a render built from an index that changed while it ran; it maps again, this many times.
+INDEX_CHANGED_DURING_MAP = "index_changed_during_map"
+MAX_INDEX_RACE_RETRIES = 3
 
 
 
@@ -145,7 +148,8 @@ def extract_existing_comments(index_path, repo_path=None, vfs_content=None):
     """Pass 1: Extracts path-scoped and basename comments from VFS content, falling back to Git history only if empty."""
     def parse_text_for_comments(text):
         cmap = {}
-        basename_first_comment = {}
+        basename_comment = {}
+        basename_count = {}
         path_stack = []
         for line in text.splitlines():
             if "#" in line and any(c in line for c in ("├──", "└──", "│")):
@@ -171,15 +175,19 @@ def extract_existing_comments(index_path, repo_path=None, vfs_content=None):
                     )) and comment.endswith("."))
                     or "~~~~" in comment
                 )
+                # Every entry counts toward its name's uniqueness, described or not.
+                basename_count[bare_name] = basename_count.get(bare_name, 0) + 1
                 if comment not in ("[comment required]", "[managed file]") and not is_synthetic_tautology:
                     cmap[rel_path] = comment
                     cmap[f"{rel_path}/"] = comment
-                    basename_first_comment.setdefault(clean_name, comment)
-                    basename_first_comment.setdefault(bare_name, comment)
-                    basename_first_comment.setdefault(f"{bare_name}/", comment)
-        for b_key, b_comment in basename_first_comment.items():
-            if b_key not in cmap:
-                cmap[b_key] = b_comment
+                    basename_comment.setdefault(bare_name, comment)
+        # A bare name (a file or symbol without its path) is a fallback for an entry that moved. It is only kept when
+        # the name appears once in the index: 'def main(argv)', '__init__.py' or 'class Test(unittest.TestCase)' name
+        # many entries, and borrowing one entry's text for another wrote wrong descriptions into the index.
+        for bare_name, b_comment in basename_comment.items():
+            if basename_count.get(bare_name) == 1:
+                for b_key in (bare_name, f"{bare_name}/"):
+                    cmap.setdefault(b_key, b_comment)
         return cmap
 
     raw_index = vfs_content
@@ -369,7 +377,7 @@ class CartographerEnrichPayload(TypedDict, total=False):
     repo: Optional[str]
 
 
-@cartographer_bp.route('enrich', methods=['POST'], request_schema=CartographerEnrichPayload, docstring="Batches undocumented symbol snippets in CODE_INDEX.md into a fast-tier LLM call and injects the generated 1-sentence descriptions.")
+@cartographer_bp.route('enrich', methods=['POST'], request_schema=CartographerEnrichPayload, docstring="Describes '[comment required]' symbols and reviews '[stale?]' descriptions against their changed code in one fast-tier LLM call per repository.")
 def api_cartographer_enrich(ctx):
     data = ctx.payload or {}
     target_repo = str(data.get("repo") or "").strip() or None
@@ -377,14 +385,38 @@ def api_cartographer_enrich(ctx):
     return {"status": "accepted", "job_id": job_id}, 202
 
 
+ENRICH_BATCH_SIZE = 25
+# What the LLM answers for a '[stale?]' description that is still accurate for the changed code.
+ENRICH_KEEP = "KEEP"
+ENRICH_SYSTEM_PROMPT = (
+    "You maintain the descriptions in a code index. Reply with ONLY a JSON object (no markdown fences) mapping each KEY "
+    "to its answer.\n"
+    "- DESCRIBE items: a one-sentence description (under 110 characters) of the symbol's responsibility.\n"
+    "- REVIEW items: the code changed since its description was written. If the description is still accurate, answer "
+    "exactly \"KEEP\". Otherwise answer a revised one-line description that keeps every statement that is still true, "
+    "including intent, constraints and context the code does not show, and changes only what the code made wrong."
+)
+
+
+def _enrich_reply_map(raw_reply: str) -> Dict[str, Any]:
+    cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', (raw_reply or "").strip(), flags=re.MULTILINE).strip()
+    parsed = json.loads(cleaned)
+    return parsed if isinstance(parsed, dict) else {}
+
+
 @cartographer_bp.worker("enrich_task")
 def _background_enrich(ctx, repo: Optional[str] = None, job_id: Optional[str] = None):
+    """
+    Describes '[comment required]' symbols and reviews '[stale?]' ones. A reviewed description the LLM keeps stays word for
+    word and is verified at the current code (as verify_symbols does for a person); a revised one replaces it only if
+    the index still holds the text the LLM reviewed.
+    """
     target_repos = [repo] if repo else [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
-    enriched_total = 0
+    totals = {"described": 0, "kept": 0, "revised": 0}
     for r_dir in target_repos:
         if not r_dir:
             continue
-        ctx.jobs.update_progress(f"Enriching undocumented symbols for {r_dir}...")
+        ctx.jobs.update_progress(f"Describing and reviewing symbols for {r_dir}...")
         r_cfg = next((c for c in ctx.config.get("target_repos", []) if c.get("repo_dir") == r_dir), {})
         logical_index_path = resolve_repo_code_index_uri(ctx, r_dir, r_cfg)
         index_text = ctx.vfs.read(logical_index_path) or ""
@@ -392,58 +424,85 @@ def _background_enrich(ctx, repo: Optional[str] = None, job_id: Optional[str] = 
         index_phys = repo_path / InSetuURI(logical_index_path).path
         comments = extract_existing_comments(index_phys, repo_path, vfs_content=index_text)
 
-        pending_prompts = {}
+        to_describe: Dict[str, str] = {}
+        to_review: Dict[str, Tuple[str, str, str]] = {}  # key -> (index text as reviewed, description, snippet)
+        ledger_keys: Dict[str, str] = {}
         for f_uri in get_topology_files_for_repo(ctx.workspace_id, r_dir):
             rel_p = InSetuURI(f_uri).path
             f_content = ctx.vfs.read(f_uri)
             if not f_content:
                 continue
-            syms = extract_file_symbols(rel_p, f_content) or []
-            for s in syms:
+            for s in extract_file_symbols(rel_p, f_content) or []:
                 sig = s["signature"]
                 key = f"{rel_p}/{sig}"
-                existing_c = comments.get(key) or comments.get(sig) or s.get("docstring") or ""
-                if not existing_c or str(existing_c).strip().startswith("[stale?]"):
-                    pending_prompts[key] = s["snippet"]
-                if len(pending_prompts) >= 25:
+                existing = str(comments.get(key) or comments.get(sig) or s.get("docstring") or "").strip()
+                if not existing:
+                    to_describe[key] = s["snippet"]
+                elif existing.startswith("[stale?]"):
+                    description = re.sub(r'^\[stale\?\]\s*', '', existing).strip()
+                    to_review[key] = (existing, description, s["snippet"])
+                    ledger_keys[key] = f"{f_uri}::{sig}"
+                if len(to_describe) + len(to_review) >= ENRICH_BATCH_SIZE:
                     break
-            if len(pending_prompts) >= 25:
+            if len(to_describe) + len(to_review) >= ENRICH_BATCH_SIZE:
                 break
-
-        if not pending_prompts:
+        if not to_describe and not to_review:
             continue
 
-        prompt_items = "\n\n".join([f"KEY: {k}\n```Code\n{snip}\n```" for k, snip in pending_prompts.items()])
-        sys_msg = (
-            "You are a concise code documentation engine. Return ONLY a valid JSON object mapping each exact KEY "
-            "to a single-sentence summary (under 110 characters) describing its responsibility. No markdown fences."
-        )
+        sections = [f"DESCRIBE\nKEY: {k}\n```Code\n{snip}\n```" for k, snip in to_describe.items()]
+        sections += [
+            f"REVIEW\nKEY: {k}\nCURRENT DESCRIPTION: {desc}\n```Code\n{snip}\n```"
+            for k, (_seen, desc, snip) in to_review.items()
+        ]
         try:
             llm_res = ctx.call(
                 "llm.complete",
-                messages=[{"role": "user", "content": prompt_items}],
-                system=sys_msg,
+                messages=[{"role": "user", "content": "\n\n".join(sections)}],
+                system=ENRICH_SYSTEM_PROMPT,
                 tier="fast",
                 wait=True,
             )
-            raw_reply = (llm_res.get("text", "") if isinstance(llm_res, dict) else str(llm_res)).strip()
-            raw_reply = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw_reply, flags=re.MULTILINE).strip()
-            parsed_map = json.loads(raw_reply)
-            if isinstance(parsed_map, dict):
-                for k, desc in parsed_map.items():
-                    if k in pending_prompts and isinstance(desc, str) and desc.strip():
-                        comments[k] = _first_sentence(desc.strip())
-                        enriched_total += 1
+            reply = _enrich_reply_map(llm_res.get("text", "") if isinstance(llm_res, dict) else str(llm_res))
         except Exception as e:
             print(f"⚠️ [Cartographer Enrich] LLM batch failed for {r_dir}: {e}")
             continue
 
+        generated: Dict[str, Any] = {}
+        keep_keys: List[str] = []
+        for key, answer in reply.items():
+            text = " ".join(str(answer or "").split())
+            if not text:
+                continue
+            if key in to_describe:
+                generated[key] = _first_sentence(text)
+                totals["described"] += 1
+            elif key in to_review:
+                seen, description, _snip = to_review[key]
+                if text.strip('"').upper() == ENRICH_KEEP or text == description:
+                    keep_keys.append(ledger_keys[key])
+                    totals["kept"] += 1
+                else:
+                    # Replaces the description only if the index still holds the text that was reviewed.
+                    generated[key] = {"text": text, "replaces": seen}
+                    totals["revised"] += 1
+        if keep_keys:
+            now_ts = time.time()
+            ctx.db.executemany(
+                "UPDATE symbol_ledger SET verified_hash = body_hash, status = 'verified', updated_at = ? WHERE symbol_key = ?",
+                [(now_ts, k) for k in keep_keys],
+            )
+            ctx.db.commit()
+
         with _CARTOGRAPHER_CACHE_LOCK:
             _CARTOGRAPHER_SIG_CACHE.pop((ctx.workspace_id or "default", r_dir), None)
-        map_repositories(ctx.workspace_id, target_repos=[r_dir], extra_comments={r_dir: comments})
+        map_repositories(ctx.workspace_id, target_repos=[r_dir], extra_comments={r_dir: generated})
 
     ctx.sync_vfs_barrier()
-    return {"message": f"Enriched {enriched_total} symbol(s).", "artifact": {"enriched_count": enriched_total}}
+    enriched_total = sum(totals.values())
+    return {
+        "message": f"Described {totals['described']}, kept {totals['kept']} and revised {totals['revised']} symbol description(s).",
+        "artifact": {"enriched_count": enriched_total, **totals},
+    }
 
 
 def _remember_index_descriptions(ctx, repo_dir, present_files, present_dirs, comments, stored_descriptions):
@@ -527,7 +586,16 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
         live_vfs_index = ctx.vfs.read(logical_index_path)
         comments = extract_existing_comments(index_path, repo_path, vfs_content=live_vfs_index)
         if isinstance(extra_comments, dict) and isinstance(extra_comments.get(repo_dir), dict):
-            comments.update(extra_comments[repo_dir])
+            # Generated text (the LLM enrich pass) never overrides index text written since it was generated. A plain
+            # string fills an entry the index does not describe; {"text", "replaces"} replaces a description only while
+            # the index still holds exactly the text that was reviewed.
+            for key, generated in extra_comments[repo_dir].items():
+                current = comments.get(key)
+                if isinstance(generated, dict):
+                    if generated.get("text") and (not current or current == generated.get("replaces")):
+                        comments[key] = generated["text"]
+                elif generated and not current:
+                    comments[key] = generated
 
         # Tier 2 fallbacks for files and directories the index does not describe yet (hand-written index text always wins):
         # 2a. index text remembered for a path that left the topology and has come back (an unmounted and remounted
@@ -736,6 +804,10 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
         tree_lines = render_ascii_tree(tree_dict, comments, managed_dirs, symbol_map=symbol_map)
         footer = "\n```\n"
         rendered_index = header + "\n".join(tree_lines) + footer
+        if ctx.vfs.read(logical_index_path) != live_vfs_index:
+            # The index changed while this map ran (a person's edit or a bridge commit). This render was built from the
+            # older text and would overwrite theirs, so map again from the new text instead.
+            return INDEX_CHANGED_DURING_MAP
         if rendered_index != live_vfs_index:
             ctx.vfs.save(logical_index_path, rendered_index, data={"ignore_ledger": True})
         post_sig = (tuple(filtered_files), hash(rendered_index), tuple(managed_dirs), tuple(symbol_sig_parts), comments_sig, False)
@@ -748,7 +820,13 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
                 print(f"  └─ ✅ Index updated. ⚠️ {missing} placeholders require attention.")
             else:
                 print(f"  └─ ✅ Index updated. Perfect documentation parity.")
-    ctx.jobs.map_parallel(process_repo, all_configs)
+    def process_repo_until_settled(config):
+        for _attempt in range(MAX_INDEX_RACE_RETRIES):
+            if process_repo(config) != INDEX_CHANGED_DURING_MAP:
+                return
+        print(f"⚠️ [Cartographer] CODE_INDEX.md for {config.get('repo_dir')} kept changing during mapping; left as it is.")
+
+    ctx.jobs.map_parallel(process_repo_until_settled, all_configs)
 
     if not silent: print("\n🎉 Cartography complete!\n")
 

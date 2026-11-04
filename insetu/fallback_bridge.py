@@ -48,9 +48,11 @@ def _credentials_module():
     except (ImportError, ValueError):
         pass
     locations.append(Path(__file__).resolve().parent.parent.parent.joinpath("akasa", "akasa").as_posix())
+    candidates = [Path(loc) / "auth" / "credentials.py" for loc in locations]
+    # S8: if the current credential store will not load, the last copy of it that passed its smoke test.
+    candidates.append(_control_dir() / "recovery" / "last_good" / "credentials.py")
     _CREDENTIALS_MODULE = None
-    for loc in locations:
-        candidate = Path(loc) / "auth" / "credentials.py"
+    for candidate in candidates:
         if not candidate.is_file():
             continue
         try:

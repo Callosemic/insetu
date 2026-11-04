@@ -109,7 +109,7 @@ An extension that adds routes, runs commands, writes files or starts servers is 
     *   ✅ **Gold Standard:** Running only the configured default or a command a person approved through a route declared with `mcp_expose=False` and listed in `ROUTINE_BANNED_CAPABILITIES`.
 *   **File Access**
     *   ❌ **Noncompliant:** `open(path, "w")` or `os.remove(path)` on a path from a request, or reading files outside mounted volumes.
-    *   ✅ **Gold Standard:** `ctx.vfs.save()`, `ctx.vfs.read()` and `ctx.vfs.delete()`, which confine paths to the workspace and refuse protected recovery files.
+    *   ✅ **Gold Standard:** `ctx.vfs.save()`, `ctx.vfs.read()` and `ctx.vfs.delete()`, which confine paths to the workspace and hold changes to protected recovery files for a person's confirmation (the answer is `pending_confirmation`, not `accepted`).
 *   **Network Servers**
     *   ❌ **Noncompliant:** Binding `0.0.0.0` by default or at boot, launching code-running tools with `--no-token`, or sending `Access-Control-Allow-Origin: *` from a server that can read repository files.
     *   ✅ **Gold Standard:** Binding `127.0.0.1`, reaching remote devices through Tailscale HTTPS, and opening to the LAN only through a person's time-limited grant.

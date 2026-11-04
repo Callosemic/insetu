@@ -58,6 +58,8 @@ from insetu.core.sdk import (
     is_core_module,
     load_config,
 )
+import insetu.core.attestations as _attestations
+import insetu.core.protected_changes as _protected_changes
 from insetu.core.utils_core import (
     current_workspace_extension_fingerprint,
     get_workspace_extensions_root,
@@ -74,6 +76,8 @@ configure_kernel(
     tune_os_resources=True,
     protected_vfs_targets=INSETU_PROTECTED_VFS_TARGETS,
 )
+# S8: a change to a protected file is held as a pending change until a person confirms it.
+_protected_changes.install()
 
 # Fire Drill: Intercept the boot sequence to test the Lifeboat FS
 if os.environ.get("INSETU_SIMULATE_PANIC") == "1" or os.path.exists(".panic_lock"):
@@ -155,6 +159,11 @@ def load_workspace_extensions():
 
     # Workspace extensions in .insetu/extensions/ (S8): only one whose exact files a person approved is loaded.
     # The approved bytes are read once, here, and those same bytes are what runs.
+    # Drop approvals that expired or belonged to an earlier daemon run (and move any left in host.json into the store).
+    try:
+        _attestations.prune()
+    except Exception as exc:
+        print(f"⚠️ [Attestations] Could not prune the attestation store: {exc}")
     workspace_extensions = scan_workspace_extensions(with_contents=True)
     workspace_ext_snapshots = {}
     for ws_name, ws_entry in workspace_extensions.items():

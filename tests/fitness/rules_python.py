@@ -24,7 +24,8 @@ SETTINGS_ACCESS_RATCHET: Dict[str, Tuple[int, str]] = {
     "insetu/cli.py": (3, "Boot floor: profile scaffolding before the app is imported."),
     "insetu/fallback_bridge.py": (3, "Boot floor: the stdlib-only lifeboat reads workspaces.json, config.json and host.json."),
     # Legacy seams, removed by later P13 phases
-    "insetu/core/utils_core.py": (20, "Phase 3/4: helper seam (get_repo_path, get_sister_repos, command approvals in host.json, sanitize_workspace_config)."),
+    "insetu/core/utils_core.py": (19, "Phase 3/4: helper seam (get_repo_path, get_sister_repos, sanitize_workspace_config)."),
+    "insetu/core/attestations.py": (1, "S8: one-time move of approvals out of host.json into the attestation store; remove with that migration."),
     "insetu/core/system/engine_system.py": (19, "Phase 3/4: the config route and the 3-tier cascade migration bridge."),
     "insetu/core/system/cli_commands.py": (5, "Phase 3/4: CLI init, service and mcp commands that read load_config and write config.json, host.json and workspace.settings.json."),
     "insetu/core/system/legacy.py": (2, "Phase 6: one-shot boot migration of legacy config.json keys."),
@@ -42,7 +43,6 @@ SETTINGS_ACCESS_RATCHET: Dict[str, Tuple[int, str]] = {
     "insetu/extensions/notes/engine_notes.py": (6, "Phase 3: target_repos."),
     "insetu/extensions/tracker/engine_tracker.py": (8, "Phase 3: target_repos and load_config."),
     "insetu/extensions/preview/engine_preview.py": (1, "Phase 3: target_repos."),
-    "insetu/extensions/hooks/engine_hooks.py": (2, "Phase 3: target_repos and host.json."),
     "insetu/extensions/update/engine_update.py": (1, "Phase 3: target_repos."),
 }
 
@@ -117,6 +117,11 @@ CHILD_ENV_BUILDER_FILES = frozenset({"insetu/core/utils_core.py"})
 RAW_URLOPEN_REVIEWED = {
     "insetu/core/llm/engine_llm.py": "Provider calls (streaming SSE) to endpoints a person configured; moves to fetch_url with P4's provider layer.",
     "insetu/core/system/cli_commands.py": "The CLI talking to its own local daemon on loopback.",
+}
+# S8: only these modules may write past the protected-target check or set the policy for protected writes.
+PROTECTED_WRITE_HOMES = {
+    "execute_confirmed_protected_write": {"insetu/core/attestations.py", "insetu/core/protected_changes.py"},
+    "set_protected_write_handler": {"insetu/core/protected_changes.py"},
 }
 # S4: insetu never loads code from a CDN at runtime.
 REMOTE_CODE_HOSTS = ("esm.sh/", "cdn.jsdelivr.net/", "unpkg.com/", "cdnjs.cloudflare.com/", "cdn.skypack.dev/")
@@ -445,9 +450,22 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 "Raw urlopen(). Use fetch_url() from insetu.core.utils_core, which enforces schemes, timeouts, size caps and the private-address policy (S4)."
             )
 
+    def _check_protected_write_homes(self, node):
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
+        homes = PROTECTED_WRITE_HOMES.get(name)
+        if homes is not None and self.rel_posix not in homes:
+            report_violation(
+                "PROTECTED_WRITE_CHOKEPOINT",
+                self.filepath,
+                node.lineno,
+                f"{name}() outside {', '.join(sorted(homes))}. A change to a protected file goes through the pending-change flow in insetu/core/protected_changes.py, where a person confirms it (S8)."
+            )
+
     def visit_Call(self, node):
         if not self.is_test:
             self._check_child_env_and_fetch(node)
+            self._check_protected_write_homes(node)
         for arg in node.args:
             if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                 if any(m in arg.value for m in ('manifest.json', 'manifest_cache.json')):

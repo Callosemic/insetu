@@ -4,6 +4,7 @@ import {
     sharedStyles,
     SutramProjectionWindowControls
 } from '/static/extensions/system/insetu_sdk.js';
+import { openProtectedChangesReview } from '/static/extensions/system/components/ui_protected_changes.js';
 
 export class InSetuJobTracker extends InSetuElement {
     static get extensionName() { return 'system'; }
@@ -126,8 +127,10 @@ export class InSetConfigBanner extends InSetuElement {
         configMissing: { type: Boolean },
         quarantinedModules: { type: Object },
         workspaceExtensions: { type: Object },
+        protectedChangesPending: { type: Number },
         degradedCore: { type: Boolean },
         _dismissedQuarantine: { type: Boolean, state: true },
+        _dismissedProtected: { type: Boolean, state: true },
         _dismissedExtensions: { type: Boolean, state: true },
         _extensionReview: { type: Array, state: true },
         _extensionBusy: { type: Boolean, state: true }
@@ -139,8 +142,10 @@ export class InSetConfigBanner extends InSetuElement {
         this.configMissing = false;
         this.quarantinedModules = {};
         this.workspaceExtensions = {};
+        this.protectedChangesPending = 0;
         this.degradedCore = false;
         this._dismissedQuarantine = false;
+        this._dismissedProtected = false;
         this._dismissedExtensions = false;
         this._extensionReview = null;
         this._extensionBusy = false;
@@ -151,12 +156,16 @@ export class InSetConfigBanner extends InSetuElement {
             configMissing: !!state.configMissing,
             quarantinedModules: state.quarantinedModules || {},
             workspaceExtensions: state.workspaceExtensions || {},
+            protectedChangesPending: Number(state.protectedChangesPending || 0),
             degradedCore: !!state.degradedCore
         });
-        const apply = ({ configMissing, quarantinedModules, workspaceExtensions, degradedCore }) => {
+        const apply = ({ configMissing, quarantinedModules, workspaceExtensions, protectedChangesPending, degradedCore }) => {
             this.configMissing = configMissing;
             this.quarantinedModules = quarantinedModules;
             this.workspaceExtensions = workspaceExtensions;
+            // A new proposal brings a dismissed banner back.
+            if (protectedChangesPending > this.protectedChangesPending) this._dismissedProtected = false;
+            this.protectedChangesPending = protectedChangesPending;
             this.degradedCore = degradedCore;
         };
         this.subscribe(window.inSetu.stores.App, select, apply);
@@ -245,6 +254,19 @@ export class InSetConfigBanner extends InSetuElement {
             </sutram-surface>
         `;
     }
+    _renderProtectedChangesBanner() {
+        const count = this.protectedChangesPending;
+        return html`
+            <sutram-surface variant="banner" intent="warning">
+                <sutram-stack direction="row" align="center" justify="center" gap="sm" ?wrap=${true}>
+                    <sutram-icon name="shield-alert" size="md" intent="warning"></sutram-icon>
+                    <strong>${count === 1 ? '1 protected change is' : `${count} protected changes are`} waiting for your confirmation.</strong>
+                    <sutram-btn ?compact=${true} intent="warning" label="Review Changes" @click=${() => openProtectedChangesReview()}></sutram-btn>
+                    <sutram-btn ?compact=${true} intent="neutral" label="Dismiss" @click=${() => { this._dismissedProtected = true; }}></sutram-btn>
+                </sutram-stack>
+            </sutram-surface>
+        `;
+    }
     render() {
         const pendingExtensions = this._pendingWorkspaceExtensions();
         const qEntries = Object.values(this.quarantinedModules || {});
@@ -263,6 +285,9 @@ export class InSetConfigBanner extends InSetuElement {
                     </sutram-stack>
                 </sutram-surface>
             `;
+        }
+        if (this.protectedChangesPending > 0 && !this._dismissedProtected) {
+            return this._renderProtectedChangesBanner();
         }
         if (pendingExtensions.length > 0 && !this._dismissedExtensions) {
             return this._renderWorkspaceExtensionBanner(pendingExtensions);

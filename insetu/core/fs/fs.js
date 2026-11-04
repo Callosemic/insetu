@@ -192,7 +192,8 @@ export const FsStore = createExtensionStore('Fs', {
             timers.delete(key);
             const buf = FsStore.getState().activeBuffers?.[key];
             const isDirty = Boolean(buf && buf.isFS && !buf.isTruncated && buf.content !== buf.originalContent && buf.content !== 'Loading...');
-            if (isDirty && window.inSetu?.ui?.saveBufferFile) {
+            // S8: a protected recovery file is saved only when the person saves it, because every save runs a smoke test.
+            if (isDirty && !buf.isProtected && window.inSetu?.ui?.saveBufferFile) {
                 window.inSetu.ui.saveBufferFile(key, true);
             }
         }, delayMs);
@@ -956,7 +957,8 @@ export async function flushAllDirtyBuffers(useKeepalive = false) {
     const buffers = FsStore.getState().activeBuffers || {};
     const promises = [];
     for (const [fp, buf] of Object.entries(buffers)) {
-        if (buf && buf.isFS && !buf.isTruncated && buf.content !== buf.originalContent && buf.content !== 'Loading...') {
+        // Protected recovery files are never flushed in the background (S8): the person saves them explicitly.
+        if (buf && buf.isFS && !buf.isTruncated && !buf.isProtected && buf.content !== buf.originalContent && buf.content !== 'Loading...') {
             const normPath = normalizeVfsURI(fp);
             if (useKeepalive && window.inSetu?.api?.keepalivePost) {
                 let payload;
@@ -2286,6 +2288,10 @@ export async function hydrateVfsBuffer(filepath, { isFS = null, forceReload = fa
     const promise = (async () => {
         try {
             let text = null;
+            // Asked alongside the content fetch, so a protected file opens with its banner and without autosave (S8).
+            const protectionCheck = effectiveIsFS
+                ? window.inSetu.api.getJson(`fs/protected?file=${encodeURIComponent(normPath)}`).catch(() => null)
+                : Promise.resolve(null);
             try {
                 const activeWs = window.inSetu.utils.getActiveWorkspace();
                 const fetchUrl = resolveFileFetchUrl(normPath, effectiveIsFS);
@@ -2322,11 +2328,14 @@ export async function hydrateVfsBuffer(filepath, { isFS = null, forceReload = fa
                 const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
                 initialHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
             } catch(e) {}
+            const protection = await protectionCheck;
             FsStore.getState().updateBuffer(normPath, {
                 baseHash: initialHash,
                 ancestorHashes: initialHash ? [initialHash] : [],
                 saveStatus: 'idle',
-                docHandle: null
+                docHandle: null,
+                isProtected: Boolean(protection?.protected),
+                protectedMessage: protection?.message || ''
             });
             injectTextToBuffer(normPath, text, isMarkdown, effectiveIsFS);
         } catch (e) {
@@ -2970,6 +2979,15 @@ export class InSetuEditorProjection extends InSetuElement {
                                     <strong>${m.previewLoading ? 'Resolving macro preview...' : 'Macro-Expanded Preview (Read-Only)'}</strong>
                                 </sutram-stack>
                                 <sutram-btn ?compact=${true} icon="${m.isFS ? 'edit-3' : 'code'}" label="${m.isFS ? 'Edit Raw Source' : 'View Raw Source'}" intent="highlight" @click=${() => FsStore.getState().toggleBufferPreview(this._normPath(), false)}></sutram-btn>
+                            </sutram-stack>
+                        </sutram-surface>
+                    ` : ''}
+
+                    ${m.isProtected ? html`
+                        <sutram-surface variant="tinted" intent="warning" border="bottom" padding="xs">
+                            <sutram-stack direction="row" align="center" gap="sm">
+                                <sutram-icon name="shield-alert" size="md" intent="warning"></sutram-icon>
+                                <sutram-label .text=${m.protectedMessage || 'Protected recovery file: saving runs a smoke test first.'}></sutram-label>
                             </sutram-stack>
                         </sutram-surface>
                     ` : ''}

@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -42,9 +43,12 @@ def _run_probe(mode):
         [sys.executable, PROBE.as_posix(), mode, out.as_posix()],
         capture_output=True, text=True, timeout=300, env=env,
     )
-    if proc.returncode != 0 or not out.exists():
-        raise RuntimeError(f"route probe ({mode}) failed with exit {proc.returncode}:\n{proc.stdout[-4000:]}\n{proc.stderr[-4000:]}")
-    return json.loads(out.read_text(encoding="utf-8"))
+    try:
+        if proc.returncode != 0 or not out.exists():
+            raise RuntimeError(f"route probe ({mode}) failed with exit {proc.returncode}:\n{proc.stdout[-4000:]}\n{proc.stderr[-4000:]}")
+        return json.loads(out.read_text(encoding="utf-8"))
+    finally:
+        shutil.rmtree(out.parent, ignore_errors=True)
 
 
 class _InventoryCase(unittest.TestCase):

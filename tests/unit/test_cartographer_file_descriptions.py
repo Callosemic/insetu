@@ -4,13 +4,15 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import akasa
 import akasa.utils as akasa_utils
 from akasa.db import apply_declarative_schema
 from akasa.utils import load_config
-from akasa.vfs import sync_vfs_barrier
+from akasa.vfs import execute_vfs_save, sync_vfs_barrier
 from akasa.workers import _init_worker_schema
+import insetu.core.cartographer.cartographer as carto
 from insetu.core.bridge.bridge_vfs import execute_bridge_sync
 from insetu.core.bridge.engine_bridge import BRIDGE_SCHEMA
 from insetu.core.cartographer.cartographer import CARTOGRAPHER_SCHEMA, describe_source_file, map_repositories
@@ -218,6 +220,125 @@ class TestMapRepositoriesFileFallback(unittest.TestCase):
         self._write_index("└── trimmed.py")
         self._remap()
         self.assertIn("# [comment required]", self._index_line("trimmed.py"))
+
+    def _symbol_line(self, filename):
+        lines = (self.repo_dir / "CODE_INDEX.md").read_text(encoding="utf-8").splitlines()
+        idx = next(i for i, line in enumerate(lines) if f"── {filename}" in line)
+        return lines[idx + 1]
+
+    def test_a_shared_symbol_name_never_borrows_another_files_description(self):
+        for name in ("a.py", "b.py"):
+            (self.repo_dir / name).write_text("def main(argv):\n    return 1\n", encoding="utf-8")
+        self._write_index(
+            "├── a.py                            # Runs A.",
+            "│   └── def main(argv)              # Hand-written: runs A.",
+            "└── b.py                            # Runs B.",
+            "    └── def main(argv)              # [comment required]",
+        )
+        (self.repo_dir / "c.py").write_text("def main(argv):\n    return 3\n", encoding="utf-8")
+        self._remap()
+        self.assertIn("# Hand-written: runs A.", self._symbol_line("a.py"))
+        self.assertIn("# [comment required]", self._symbol_line("b.py"))
+        self.assertIn("# [comment required]", self._symbol_line("c.py"))
+
+    def test_an_index_edit_that_lands_during_a_map_is_kept(self):
+        (self.repo_dir / "a.py").write_text("def main(argv):\n    return 1\n", encoding="utf-8")
+        self._write_index("└── a.py                            # Runs A.")
+        self._remap()
+        edited = (self.repo_dir / "CODE_INDEX.md").read_text(encoding="utf-8").replace(
+            "def main(argv)              # [comment required]", "def main(argv)              # Hand-written during the map."
+        )
+        self.assertIn("Hand-written", edited)
+        (self.repo_dir / "new_file.py").write_text("X = 1\n", encoding="utf-8")  # gives the map something to add
+        real_extract = carto.extract_file_symbols
+        landed = []
+
+        def extract_while_a_person_edits(rel_path, text):
+            if not landed:
+                landed.append(True)
+                execute_vfs_save("default", "vfs://alpha/CODE_INDEX.md", edited)
+            return real_extract(rel_path, text)
+
+        carto._CARTOGRAPHER_SYMBOL_CACHE.clear()
+        with patch.object(carto, "extract_file_symbols", extract_while_a_person_edits):
+            self._remap()
+        self.assertIn("# Hand-written during the map.", self._symbol_line("a.py"))
+        self.assertIn("new_file.py", (self.repo_dir / "CODE_INDEX.md").read_text(encoding="utf-8"))
+
+    def test_generated_text_only_fills_gaps(self):
+        (self.repo_dir / "a.py").write_text("def main(argv):\n    return 1\n\n\ndef helper():\n    return 2\n", encoding="utf-8")
+        self._write_index(
+            "└── a.py                            # Runs A.",
+            "    ├── def main(argv)              # Hand-written.",
+            "    └── def helper()                # [comment required]",
+        )
+        force_topology_scan(workspace_id="default")
+        map_repositories("default", silent=True, extra_comments={"alpha": {
+            "a.py/def main(argv)": "Generated text that must not replace the person's.",
+            "a.py/def helper()": "Generated text for the gap.",
+        }})
+        sync_vfs_barrier("default")
+        text = (self.repo_dir / "CODE_INDEX.md").read_text(encoding="utf-8")
+        self.assertIn("def main(argv)              # Hand-written.", text)
+        self.assertIn("def helper()                # Generated text for the gap.", text)
+
+
+    def test_enrich_describes_gaps_and_reviews_stale_descriptions_with_their_text(self):
+        source = "def keep():\n    return 1\n\n\ndef revise():\n    return 1\n\n\ndef gap():\n    return 1\n"
+        (self.repo_dir / "a.py").write_text(source, encoding="utf-8")
+        self._write_index(
+            "└── a.py                            # Runs A.",
+            "    ├── def keep()                  # Returns one; callers rely on that (see ADR 7).",
+            "    ├── def revise()                # Returns one.",
+            "    └── def gap()                   # [comment required]",
+        )
+        self._remap()
+        (self.repo_dir / "a.py").write_text(source.replace("return 1", "return 2"), encoding="utf-8")
+        self._remap()
+        text = (self.repo_dir / "CODE_INDEX.md").read_text(encoding="utf-8")
+        self.assertIn("# [stale?] Returns one; callers rely on that (see ADR 7).", text)
+        prompts = []
+
+        def fake_llm(capability, **kwargs):
+            prompts.append(kwargs["messages"][0]["content"])
+            return {"text": json.dumps({
+                "a.py/def keep()": "KEEP",
+                "a.py/def revise()": "Returns two.",
+                "a.py/def gap()": "Returns two as well.",
+            })}
+
+        ctx = carto.cartographer_bp.get_context("default")
+        with patch.object(ctx, "call", fake_llm):
+            result = carto._background_enrich(ctx, repo="alpha")
+        sync_vfs_barrier("default")
+        self.assertIn("CURRENT DESCRIPTION: Returns one; callers rely on that (see ADR 7).", prompts[0])
+        self.assertEqual((result["artifact"]["described"], result["artifact"]["kept"], result["artifact"]["revised"]), (1, 1, 1))
+        text = (self.repo_dir / "CODE_INDEX.md").read_text(encoding="utf-8")
+        self.assertIn("def keep()                  # Returns one; callers rely on that (see ADR 7).", text, "kept word for word, flag cleared")
+        self.assertIn("def revise()                # Returns two.", text)
+        self.assertIn("def gap()                   # Returns two as well.", text)
+        self.assertNotIn("[stale?]", text)
+
+
+    def test_a_revision_does_not_replace_a_description_a_person_edited_during_the_review(self):
+        (self.repo_dir / "a.py").write_text("def revise():\n    return 1\n", encoding="utf-8")
+        self._write_index("└── a.py                            # Runs A.", "    └── def revise()                # Returns one.")
+        self._remap()
+        (self.repo_dir / "a.py").write_text("def revise():\n    return 2\n", encoding="utf-8")
+        self._remap()
+
+        def fake_llm(capability, **kwargs):
+            edited = (self.repo_dir / "CODE_INDEX.md").read_text(encoding="utf-8").replace(
+                "[stale?] Returns one.", "Returns two, said the person."
+            )
+            execute_vfs_save("default", "vfs://alpha/CODE_INDEX.md", edited)
+            return {"text": json.dumps({"a.py/def revise()": "Returns two, said the LLM."})}
+
+        ctx = carto.cartographer_bp.get_context("default")
+        with patch.object(ctx, "call", fake_llm):
+            carto._background_enrich(ctx, repo="alpha")
+        sync_vfs_barrier("default")
+        self.assertIn("# Returns two, said the person.", self._symbol_line("a.py"))
 
 
 if __name__ == "__main__":

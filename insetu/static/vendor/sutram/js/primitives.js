@@ -335,7 +335,7 @@ import{LitElement as T,html as n,css as w}from"lit";import{SutramElement as S,Su
             </div>
             <slot></slot>
             ${this.description?n`<div class="field-desc">${this.description}</div>`:""}
-        `}}customElements.get("sutram-field-card")||customElements.define("sutram-field-card",SutramFieldCard);export class SutramSettingsForm extends S{static properties={extName:{type:String},schema:{type:Array},formData:{type:Object},repos:{type:Array},selectedRepo:{type:String},filterQuery:{type:String},hideSaveButton:{type:Boolean},_jsonBuffers:{type:Object}};static styles=[$,w`
+        `}}customElements.get("sutram-field-card")||customElements.define("sutram-field-card",SutramFieldCard);export class SutramSettingsForm extends S{static properties={extName:{type:String},schema:{type:Array},optionResolver:{attribute:!1},formData:{type:Object},repos:{type:Array},selectedRepo:{type:String},filterQuery:{type:String},hideSaveButton:{type:Boolean},_jsonBuffers:{type:Object}};static styles=[$,w`
         :host { display: flex; flex-direction: column; gap: 14px; width: 100%; box-sizing: border-box; }
         .intent-grid {
             display: grid;

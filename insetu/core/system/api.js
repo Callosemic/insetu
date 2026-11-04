@@ -367,6 +367,11 @@ class SSEPipeline {
                 window.inSetu.ui.setSyncStatus('synced');
             }
         });
+        // S8: protected changes are daemon-wide (not per workspace), so every tab shows the same count.
+        this.source.addEventListener('protected_changes', (e) => {
+            const data = JSON.parse(e.data);
+            window.inSetu.stores.App.setState({ protectedChangesPending: Number(data.pending || 0) });
+        });
         this.source.addEventListener('topology_resolved', (e) => {
             const data = JSON.parse(e.data);
             bc.postMessage({ type: 'topology_resolved', data });

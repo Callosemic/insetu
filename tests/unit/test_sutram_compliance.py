@@ -32,6 +32,55 @@ class TestSutramCompliance(unittest.TestCase):
         sutram_linter = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(sutram_linter)
         return sutram_linter
+    def test_sutram_tag_bindings_match_the_vendored_components(self):
+        """
+        Every <sutram-*> binding in inSetu (core and extensions) names a property the vendored component declares.
+        A binding to an undeclared property, or a ?camelCase binding whose property reflects to a different
+        attribute, does nothing at runtime and fails silently.
+        """
+        sutram_linter = self._load_sutram_linter()
+        if not hasattr(sutram_linter, "load_declared_properties"):
+            self.skipTest("Sibling sutram predates the property contract check.")
+        declared = sutram_linter.load_declared_properties(BACKEND_DIR / "static" / "vendor")
+        self.assertIn("sutram-view", declared, "Vendored sutram not found; run scripts/vendor_sutram.sh")
+        problems = []
+        for js_file in sorted(BACKEND_DIR.rglob("*.js")):
+            if "vendor" in js_file.parts:
+                continue
+            text = js_file.read_text(encoding="utf-8")
+            for tag, line, _attrs, names in sutram_linter.iter_sutram_tags(text):
+                for binding in sutram_linter.undeclared_bindings(tag, names, declared):
+                    problems.append(f"{js_file.relative_to(BACKEND_DIR).as_posix()}:{line} <{tag}> {binding}")
+        self.assertEqual(problems, [], "Bindings to properties the sutram components do not declare:\n" + "\n".join(problems))
+
+    def test_documented_sutram_properties_exist(self):
+        """Every property docs/08_sutram_contracts.md lists for a <sutram-*> element is declared by the vendored component."""
+        sutram_linter = self._load_sutram_linter()
+        if not hasattr(sutram_linter, "load_declared_properties"):
+            self.skipTest("Sibling sutram predates the property contract check.")
+        declared = sutram_linter.load_declared_properties(BACKEND_DIR / "static" / "vendor")
+        doc = (PROJECT_ROOT / "docs" / "08_sutram_contracts.md").read_text(encoding="utf-8")
+        entry = re.compile(r"^\s*\*\s+\*\*`<(sutram-[a-z0-9-]+)>`(?:\s*&\s*`<(sutram-[a-z0-9-]+)>`)?\*\*:?(.*)$")
+        problems = []
+        for line in doc.splitlines():
+            match = entry.match(line)
+            if not match:
+                continue
+            listed = re.search(r"Properties:\s*(.*?)(?:\.\s+[A-Z][a-z]+:|\.\s*$|$)", match.group(3))
+            if not listed:
+                continue
+            # Allowed values sit in parentheses after a property; only the property names are checked.
+            names_part = re.sub(r"\([^)]*\)", "", listed.group(1))
+            names = [re.sub(r"^[.?]", "", tok) for tok in re.findall(r"`([.?]?[A-Za-z_]\w*)`", names_part)]
+            for tag in filter(None, match.group(1, 2)):
+                props = declared.get(tag)
+                if props is None:
+                    problems.append(f"<{tag}> is documented but not defined")
+                    continue
+                attrs = {a for a in props.values() if a}
+                problems += [f"<{tag}> {n}" for n in names if n not in props and n.lower() not in attrs]
+        self.assertEqual(problems, [], "Documented properties the components do not declare:\n" + "\n".join(problems))
+
     def test_extensions_comply_with_sutram_consumer_linter(self):
         sutram_linter = self._load_sutram_linter()
         ext_dir = BACKEND_DIR / "extensions"

@@ -13,8 +13,9 @@ from unittest.mock import patch
 import akasa
 import akasa.utils as akasa_utils
 from akasa.vfs import mount_volume
+import insetu.core.attestations as _attestations
 from insetu.core.agent import orchestrator
-from insetu.core.sdk import get_registered_capabilities
+from insetu.core.sdk import execution_frame, get_registered_capabilities
 from insetu.core.utils_core import approve_command, is_command_approved
 from insetu.extensions.preview import engine_preview
 from insetu.extensions.preview.engine_preview import (
@@ -137,6 +138,53 @@ class TestLanLease(_PreviewCase):
         self.assertEqual(snap["status"], "running")
         self.assertEqual(snap["effective_bind_host"], "127.0.0.1")
         self.assertTrue(any("expired" in line for line in snap["logs"]))
+
+
+class TestLanLeaseInTheAttestationStore(_PreviewCase):
+    """S8: leases live in the attestation store, survive a daemon restart when timed, and lapse when the server changes."""
+
+    def setUp(self):
+        super().setUp()
+        self.ctx.settings.update({"bind_host": "0.0.0.0"}, repo="demo_app")
+        self.subject = engine_preview._lease_subject("default", "demo_app")
+
+    def test_a_timed_lease_survives_a_daemon_restart(self):
+        start_repo_server(self.ctx, "demo_app", lan_lease="15m")
+        record = _attestations.get_attestation("lan_lease", self.subject)
+        self.assertEqual(record["detail"]["duration"], "15m")
+        cleanup_all_preview_servers()  # what system_shutdown does
+        snap = start_repo_server(self.ctx, "demo_app")
+        self.assertEqual(snap["exposure"], "lan")
+        self.assertAlmostEqual(snap["lan_lease_until"], record["expires_at"], delta=1)
+        self.assertTrue(any("lease granted earlier" in line for line in snap["logs"]))
+
+    def test_a_run_lease_ends_with_the_daemon_run(self):
+        start_repo_server(self.ctx, "demo_app", lan_lease="run")
+        self.assertIsNotNone(_attestations.get_attestation("lan_lease", self.subject))
+        with patch.object(_attestations, "DAEMON_RUN_ID", "a-later-run"):
+            self.assertIsNone(_attestations.get_attestation("lan_lease", self.subject))
+            cleanup_all_preview_servers()
+            self.assertEqual(start_repo_server(self.ctx, "demo_app")["exposure"], "loopback")
+
+    def test_a_lease_lapses_when_the_launch_configuration_changes(self):
+        snap = start_repo_server(self.ctx, "demo_app", lan_lease="1h")
+        new_port = snap["port"] + 1
+        snap = start_repo_server(self.ctx, "demo_app", overrides={"port": new_port})
+        self.assertEqual(snap["exposure"], "loopback")
+        self.assertIsNone(_attestations.get_attestation("lan_lease", self.subject))
+
+    def test_close_lan_and_stop_end_leases(self):
+        start_repo_server(self.ctx, "demo_app", lan_lease="1h")
+        get_registered_capabilities()["preview.close_lan"]["handler"](preview_bp.get_context("default", payload={"repo": "demo_app"}))
+        self.assertIsNone(_attestations.get_attestation("lan_lease", self.subject))
+        start_repo_server(self.ctx, "demo_app", lan_lease="run")
+        engine_preview.stop_repo_server(self.ctx, "demo_app")
+        self.assertIsNone(_attestations.get_attestation("lan_lease", self.subject))
+
+    def test_a_routine_cannot_grant_a_lease(self):
+        with execution_frame(origin="routine"), self.assertRaises(_attestations.AttestationRefused):
+            start_repo_server(self.ctx, "demo_app", lan_lease="15m")
+        self.assertIsNone(_attestations.get_attestation("lan_lease", self.subject))
 
 
 class TestCustomCommandApproval(_PreviewCase):

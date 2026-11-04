@@ -19,6 +19,8 @@ import threading
 
 from typing import Any, Dict, List, Optional, Tuple
 from insetu.core.utils_core import get_workspace_physics, get_sister_repos, InSetuURI
+from insetu.core.sdk import is_protected_vfs_target
+from insetu.core.protected_changes import REFERENCE_KEY as _PROTECTED_REFERENCE_KEY, SOURCE_KEY as _PROTECTED_SOURCE_KEY
 from insetu.core.topology.engine_topology import get_omniscient_workspace_files
 from .parser import compute_block_signature, flatten_parsed_blocks, parse_blocks
 from .bridge_fuzzy import (
@@ -122,15 +124,18 @@ _BANNED_CONTROL_PLANE_FILENAMES = frozenset({
     "workspaces.json",
     "secrets.json",
     "master_key.txt",
+    "attestations.json",
 })
-def _is_banned_bridge_target(uri: InSetuURI, norm_target: str, extra_protected_Substrings: Optional[ list ] = None) -> Optional[str]:
+# Protected files (the recovery path) may be patched or deleted: the change waits for a person's confirmation (S8).
+PROTECTED_CONFIRMATION_FLAG = "protected_needs_confirmation"
+
+
+def _is_banned_bridge_target(uri: InSetuURI, norm_target: str, extra_protected_Substrings: Optional[ list ] = None, allow_protected: bool = True) -> Optional[str]:
     base_lower = (uri.basename or "").lower()
     norm_lower = norm_target.replace("\\", "/").lower()
-    raw_uri_lower = str(uri).replace("\\", "/").lower()
     parts_lower = [p.lower() for p in norm_lower.split("/") if p]
-    # S8 Guarded Write: Refuse agent-originated writes targeting cli.py or fallback_bridge.py
-    if base_lower in ("cli.py", "fallback_bridge.py") and ("insetu" in norm_lower or "insetu" in raw_uri_lower):
-        return "Kernel Guardrail (S8 Guarded Write): Core CLI and Fallback Bridge files cannot be patched dynamically by agent turns."
+    if not allow_protected and is_protected_vfs_target(str(uri)):
+        return "Kernel Guardrail (S8): Protected files cannot be moved, renamed or archived. Change them in place; the change waits for your confirmation."
     # Workspace extensions (.insetu/extensions/) may be written here: insetu only runs files a person approved (S8).
     if base_lower in _BANNED_CONTROL_PLANE_FILENAMES or ".git" in parts_lower or base_lower == ".env" or base_lower.startswith(".env."):
         return f"Security Guardrail: Control-plane and credential file '{uri}' cannot be modified via the Yomama Bridge."
@@ -601,7 +606,10 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             if block_type in ("move_file", "archive_file", "delete_file"):
                 src_uri_obj = InSetuURI.from_external_input(b.get("source_uri") or target_file)
                 src_uri = str(src_uri_obj)
-                src_ban = _is_banned_bridge_target(src_uri_obj, f"{src_uri_obj.repo}/{src_uri_obj.path}".strip("/"), protected_substrings)
+                src_ban = _is_banned_bridge_target(
+                    src_uri_obj, f"{src_uri_obj.repo}/{src_uri_obj.path}".strip("/"), protected_substrings,
+                    allow_protected=block_type == "delete_file",
+                )
                 if src_ban:
                     patch_tel.update({
                         "resolved_file": src_uri,
@@ -676,7 +684,9 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 else:
                     dst_uri_obj = InSetuURI.from_external_input(b.get("target_uri") or "")
                     dst_uri = str(dst_uri_obj)
-                    dst_ban = _is_banned_bridge_target(dst_uri_obj, f"{dst_uri_obj.repo}/{dst_uri_obj.path}".strip("/"), protected_substrings)
+                    dst_ban = _is_banned_bridge_target(
+                        dst_uri_obj, f"{dst_uri_obj.repo}/{dst_uri_obj.path}".strip("/"), protected_substrings, allow_protected=False,
+                    )
                     if dst_ban:
                         patch_tel.update({
                             "resolved_file": dst_uri,
@@ -1268,6 +1278,11 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             }, MAX_FILE_EVAL_CACHE_SIZE)
 
     telemetry["patches"].sort(key=lambda p: p.get("patch_index", 0))
+    # S8: tell the person before committing which files will wait for their confirmation instead of being written.
+    for patch in telemetry["patches"]:
+        flags = list(patch.get("flags") or [])
+        if patch.get("status") == "resolved" and PROTECTED_CONFIRMATION_FLAG not in flags and is_protected_vfs_target(patch.get("resolved_file"), workspace_id):
+            patch["flags"] = flags + [PROTECTED_CONFIRMATION_FLAG]
 
     # Zero-Patch Validation
     if telemetry["summary"]["total_patches"] == 0:
@@ -1295,10 +1310,24 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
         now_ts = time.time()
         ttl_48h = now_ts + 172800.0  # 48-hour TTL for metronome housekeeping
         created_file_comments: Dict[str, str] = {}
+        protected_results: List[Dict[str, Any]] = []
 
         for filepath, final_content in memory_buffers.items():
             orig_content = original_buffers.get(filepath, "")
             if final_content == orig_content:
+                continue
+            if is_protected_vfs_target(filepath, workspace_id):
+                # Nothing is written and nothing enters the ledger: the change is staged for a person to confirm.
+                origin_data = {_PROTECTED_SOURCE_KEY: "bridge", _PROTECTED_REFERENCE_KEY: pid}
+                answer = vfs.delete(filepath, origin_data) if filepath in deleted_targets else vfs.save(filepath, final_content, origin_data)
+                body = answer[0] if isinstance(answer, tuple) else answer
+                body = body if isinstance(body, dict) else {}
+                protected_results.append({
+                    "filepath": filepath,
+                    "status": body.get("status"),
+                    "change_id": body.get("change_id"),
+                    "message": body.get("message"),
+                })
                 continue
 
             disk_hash = disk_hashes.get(filepath, "")
@@ -1363,6 +1392,13 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
 
         db_conn.commit()
         telemetry["status"] = "committed"
+        if protected_results:
+            telemetry["pending_protected_changes"] = protected_results
+            for patch in telemetry["patches"]:
+                result = next((r for r in protected_results if r["filepath"] == patch.get("resolved_file")), None)
+                if result and result["status"] not in ("pending_confirmation", "accepted"):
+                    patch["status"] = "failed"
+                    patch["error_message"] = result.get("message") or "The protected change was refused."
         if created_file_comments:
             # New files carry their genesis COMMENT so the Cartographer can describe them in CODE_INDEX.md
             try:

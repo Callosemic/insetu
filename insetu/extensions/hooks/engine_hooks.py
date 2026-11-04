@@ -9,7 +9,8 @@ import datetime
 from pathlib import Path
 from typing import TypedDict, Optional
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from insetu.core.utils_core import child_env, get_daemon_host_config_path, load_json_config, save_json_config
+from insetu.core.utils_core import child_env
+import insetu.core.attestations as _attestations
 from insetu.core.topology.engine_topology import resolve_file_bucket
 
 HOOKS_SCHEMA = {
@@ -119,6 +120,9 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
 
     # Evaluate rules against touched targets
     for rule in active_rules:
+        if not _is_hook_approved(ctx, rule['id'], rule['command']):
+            print(f"🔒 [Hooks] Skipping rule '{rule['name']}': its command has not been approved by a person.")
+            continue
         r_type = rule['trigger_type']
         r_target = rule['trigger_target']
         should_trigger = False
@@ -145,19 +149,31 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
                 command=rule['command'],
                 job_category="system_background"
             )
+def _hook_signature(rule_id: str, command: str) -> str:
+    """Approval key for one rule running one exact command."""
+    return f"{rule_id}:{hashlib.sha256(command.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _hook_subject(workspace_id: str, rule_id: str) -> str:
+    return f"{workspace_id}|hook:{rule_id}"
+
+
 def _get_approved_hook_ids(ctx) -> set:
-    host_path = get_daemon_host_config_path()
-    host_data = load_json_config(host_path, {})
-    return set(host_data.get("approved_hooks", {}).get(ctx.workspace_id, []))
+    """Signatures of the rules a person approved in this workspace (attestation store, S8)."""
+    prefix = f"{ctx.workspace_id}|hook:"
+    return {r["digest"] for r in _attestations.list_attestations("command") if str(r.get("subject", "")).startswith(prefix)}
+
+
+def _is_hook_approved(ctx, rule_id: str, command: str) -> bool:
+    """True only when a person approved this rule with exactly this command. A rule is never run otherwise."""
+    return _attestations.is_attested("command", _hook_subject(ctx.workspace_id, rule_id), _hook_signature(rule_id, command))
+
 
 def _mark_hook_approved(ctx, rule_id: str, command: str):
-    sig = f"{rule_id}:{hashlib.sha256(command.encode('utf-8')).hexdigest()[:16]}"
-    host_path = get_daemon_host_config_path()
-    host_data = load_json_config(host_path, {})
-    approved = set(host_data.setdefault("approved_hooks", {}).get(ctx.workspace_id, []))
-    approved.add(sig)
-    host_data["approved_hooks"][ctx.workspace_id] = sorted(list(approved))
-    save_json_config(host_path, host_data, workspace_id="default")
+    """Records a person's approval of the rule's command. Refused (AttestationRefused) when a model or MCP client asks."""
+    _attestations.attest(
+        "command", _hook_subject(ctx.workspace_id, rule_id), _hook_signature(rule_id, command), {"kind": "hook", "command": command},
+    )
 
 def _ensure_hooks_hydrated(ctx):
     count = ctx.db.execute("SELECT count(*) FROM hooks_rules").fetchone()[0]
@@ -166,7 +182,7 @@ def _ensure_hooks_hydrated(ctx):
         approved = _get_approved_hook_ids(ctx)
         for r in saved:
             if r.get("id") and r.get("command"):
-                sig = f"{r['id']}:{hashlib.sha256(r['command'].encode('utf-8')).hexdigest()[:16]}"
+                sig = _hook_signature(r["id"], r["command"])
                 is_safe = 1 if (r.get("enabled") and sig in approved) else 0
                 ctx.db.insert_or_replace("hooks_rules", {
                     "id": r["id"],
@@ -180,7 +196,10 @@ def _ensure_hooks_hydrated(ctx):
     elif count > 0 and saved is None:
         for r in ctx.db.get_all("hooks_rules"):
             if r.get("enabled"):
-                _mark_hook_approved(ctx, r["id"], r["command"])
+                try:
+                    _mark_hook_approved(ctx, r["id"], r["command"])
+                except _attestations.AttestationRefused:
+                    pass  # Only a person's request carries rules over as approved.
         _flush_hooks_to_json(ctx)
 
 def _flush_hooks_to_json(ctx):
@@ -199,7 +218,7 @@ class HookSavePayload(TypedDict, total=False):
     command: str
     id: Optional[str]
     enabled: Optional[bool]
-@hooks_bp.route('save', methods=['POST'], request_schema=HookSavePayload, docstring="Creates or updates a local automation rule.")
+@hooks_bp.route('save', methods=['POST'], request_schema=HookSavePayload, mcp_expose=False, docstring="[sync] Creates or updates a local automation rule; saving approves its command. Human-only: hidden from MCP and banned in routines (S8).")
 def save_rule(ctx):
     """Creates or updates a local automation rule."""
     data = ctx.payload or {}
@@ -214,6 +233,10 @@ def save_rule(ctx):
         return {"error": "Rule name and command are required."}, 400
 
     _ensure_hooks_hydrated(ctx)
+    try:
+        _mark_hook_approved(ctx, rule_id, command)
+    except _attestations.AttestationRefused as exc:
+        return {"error": str(exc)}, 403
     ctx.db.insert_or_replace("hooks_rules", {
         "id": rule_id,
         "name": name,
@@ -223,13 +246,12 @@ def save_rule(ctx):
         "enabled": enabled,
         "created_at": now
     })
-    _mark_hook_approved(ctx, rule_id, command)
     _flush_hooks_to_json(ctx)
     return {"status": "success", "id": rule_id}
 class HookTogglePayload(TypedDict):
     id: str
     enabled: bool
-@hooks_bp.route('toggle', methods=['POST'], request_schema=HookTogglePayload, docstring="Enables or disables an automation rule.")
+@hooks_bp.route('toggle', methods=['POST'], request_schema=HookTogglePayload, mcp_expose=False, docstring="[sync] Enables or disables an automation rule; enabling approves its command. Human-only: hidden from MCP and banned in routines (S8).")
 def toggle_rule(ctx):
     """Enables or disables an automation rule."""
     data = ctx.payload or {}
@@ -239,12 +261,15 @@ def toggle_rule(ctx):
         return {"error": "Rule ID required."}, 400
 
     _ensure_hooks_hydrated(ctx)
-    ctx.db.execute("UPDATE hooks_rules SET enabled = ? WHERE id = ?", (enabled, rule_id))
-    ctx.db.commit()
     if enabled:
         row = ctx.db.get_by_id("hooks_rules", rule_id)
         if row:
-            _mark_hook_approved(ctx, rule_id, row["command"])
+            try:
+                _mark_hook_approved(ctx, rule_id, row["command"])
+            except _attestations.AttestationRefused as exc:
+                return {"error": str(exc)}, 403
+    ctx.db.execute("UPDATE hooks_rules SET enabled = ? WHERE id = ?", (enabled, rule_id))
+    ctx.db.commit()
     _flush_hooks_to_json(ctx)
     return {"status": "success"}
 class HookIdPayload(TypedDict):
@@ -260,6 +285,8 @@ def execute_rule_manual(ctx):
     rule = ctx.db.execute("SELECT name, command FROM hooks_rules WHERE id = ?", (rule_id,)).fetchone()
     if not rule:
         return {"error": "Rule not found."}, 404
+    if not _is_hook_approved(ctx, rule_id, rule['command']):
+        return {"error": "This rule's command has not been approved. Save or enable it from the Hooks panel first."}, 403
     job_id = ctx.jobs.submit(
         "execute_rule_task", 
         rule_id=rule_id, 
@@ -278,6 +305,7 @@ def delete_rule(ctx):
 
     _ensure_hooks_hydrated(ctx)
     ctx.db.delete("hooks_rules", "id", rule_id)
+    _attestations.revoke("command", _hook_subject(ctx.workspace_id, rule_id))
     _flush_hooks_to_json(ctx)
     return {"status": "success"}
 @hooks_bp.route('logs', methods=['GET'], docstring="Retrieves logs for executed automation rules.")

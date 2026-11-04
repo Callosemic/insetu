@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sys
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -159,6 +160,9 @@ def main(mode, out_path):
         _akasa.reset_state()
     except Exception:
         pass
+    # Remove the throwaway workspace; os._exit below skips any interpreter-level cleanup.
+    os.chdir(tempfile.gettempdir())
+    shutil.rmtree(root, ignore_errors=True)
     os._exit(0)  # Skip interpreter teardown: background kernel threads must not delay or fail the probe.
 
 

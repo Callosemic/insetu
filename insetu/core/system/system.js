@@ -1288,6 +1288,7 @@ function _applyTopologyPayload(d, extraState = {}) {
         configMissing: !!d.config_missing,
         quarantinedModules: d.quarantined_modules || {},
         workspaceExtensions: d.workspace_extensions || {},
+        protectedChangesPending: Number(d.protected_changes_pending || 0),
         degradedCore: Boolean(d.degraded_core),
         tabOrder: tabOrder
     });

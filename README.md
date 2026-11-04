@@ -198,6 +198,7 @@ pipx inject insetu -e ~/projects/akasa
 | `insetu service <action>` | Manages a `systemd` user service (Linux). |
 | `insetu create-extension <name>` | Scaffolds a new Tier 3 extension. |
 | `insetu mcp [--workspace <id>]` | Runs the MCP stdio bridge for MCP clients. |
+| `insetu auth rotate` | Replaces the session token and prints the new one once. Every device signs in again; restart a running server. |
 
 ### Boot the Workbench (`serve`)
 
@@ -305,6 +306,8 @@ Besides each workspace's `config.json`, the daemon keeps these in `.insetu/` (ol
 * **`host.json`:** daemon-wide options (`port`, `enable_watchdog`, `preload_all_extensions`).
 * **`workspaces.json`:** maps workspace IDs to their `config_path`, for isolated multi-workspace setups. Every API route is scoped by workspace (`/api/<workspace_id>/...`).
 * **`auth/`:** the durable session token (`session_token`), with owner-only permissions.
+* **`attestations.json`:** every standing approval a person made (commands, hooks, workspace extensions, LAN leases).
+* **`pending_changes/`, `audit/`, `recovery/last_good/`:** changes to protected recovery files waiting for your confirmation (Review Changes in the banner), their audit log, and the last version of the lifeboat and credential store that passed its smoke test.
 
 ### Environment variables
 

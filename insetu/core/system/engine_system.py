@@ -51,6 +51,7 @@ from insetu.core.utils_core import (
     snapshot_workspace_extension,
 )
 import insetu.core.system.legacy as _system_legacy  # noqa: F401 - Mounts one-off boot migration hooks
+import insetu.core.protected_changes as _protected_changes
 
 
 def _authorize_inter_workspace_mount(target_ws: str, subscriber_ws: str, domain: str, rel_path: str = "") -> bool:
@@ -668,18 +669,6 @@ def get_system_config(workspace_id):
                                             if not shutil.which(binary):
                                                     missing_bins.append(binary)
                             available.append({"id": ext_name, "title": title, "description": desc, "missing_externals": missing_exts, "missing_binaries": missing_bins})
-    def _sanitize_schema_for_json(node: Any) -> Any:
-        if callable(node):
-            try:
-                return node()
-            except Exception:
-                return []
-        if isinstance(node, list):
-            return [_sanitize_schema_for_json(item) for item in node]
-        if isinstance(node, dict):
-            return {k: _sanitize_schema_for_json(v) for k, v in node.items()}
-        return node
-
     from flask import current_app as _current_app
     # Approved workspace extensions that are running can be enabled per workspace like bundled ones.
     for ws_ext in sorted(getattr(_current_app, "_loaded_workspace_extensions", {})):
@@ -694,7 +683,8 @@ def get_system_config(workspace_id):
             "missing_externals": [],
             "missing_binaries": [],
         })
-    evaluated_schemas = _sanitize_schema_for_json(get_registered_settings_schemas(workspace_id))
+    # akasa materializes callable schemas, options and defaults with the workspace id (akasa >= 0.7).
+    evaluated_schemas = get_registered_settings_schemas(workspace_id)
     mounted_extensions = [ext for ext in data.get("extensions", []) if ext == "config" or ext in _current_app.blueprints]
 
     quarantined_modules = getattr(_current_app, "_quarantined_modules", {})
@@ -951,6 +941,31 @@ def api_workspace_extension_revoke(ctx):
     return {"status": "revoked", "name": name, "requires_reboot": True}
 
 
+class ProtectedChangeConfirmPayload(TypedDict):
+    change_id: str
+    result_hash: str
+
+
+class ProtectedChangeDiscardPayload(TypedDict):
+    change_id: str
+
+
+@system_bp.route('protected/pending', methods=['GET'], docstring="[sync] Lists changes to protected files that wait for a person's confirmation, each with the file as it is now and whether it changed since the proposal (S8).")
+def api_protected_pending(ctx):
+    return {"status": "success", "changes": _protected_changes.list_pending()}
+
+
+@system_bp.route('protected/confirm', methods=['POST'], request_schema=ProtectedChangeConfirmPayload, mcp_expose=False, docstring="[sync] Writes a pending protected change. result_hash must be the hash of the content the person reviewed, and the file must be unchanged since the proposal. Human-only: hidden from MCP and banned in routines (S8).")
+def api_protected_confirm(ctx):
+    data = ctx.payload or {}
+    return _protected_changes.confirm(str(data.get("change_id") or ""), str(data.get("result_hash") or ""))
+
+
+@system_bp.route('protected/discard', methods=['POST'], request_schema=ProtectedChangeDiscardPayload, mcp_expose=False, docstring="[sync] Drops a pending protected change without writing it. Human-only (S8).")
+def api_protected_discard(ctx):
+    return _protected_changes.discard(str((ctx.payload or {}).get("change_id") or ""))
+
+
 @system_bp.route('reboot', methods=['POST'], docstring="[sync] Clean in-place process replacement to restart the OS daemon.")
 def api_system_reboot(ctx):
     """Clean in-place process replacement to restart the OS daemon."""
@@ -1042,6 +1057,7 @@ def api_system_topology(ctx):
                 name: {k: entry.get(k) for k in ("id", "status", "reason", "loaded")}
                 for name, entry in getattr(_current_app, "_workspace_extensions", {}).items()
             },
+            "protected_changes_pending": _protected_changes.count_pending(),
         }
     except Exception as e:
         print(f"Topology Route Error: {traceback.format_exc()}")

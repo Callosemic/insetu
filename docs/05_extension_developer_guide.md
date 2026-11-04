@@ -15,7 +15,7 @@ Bundled extensions live in the package (`insetu/extensions/`). Extensions you bu
 
 Anyone may write these files: you in the Files editor, the Yomama bridge, or an agent. insetu only **runs** an extension whose exact files a person approved (S8):
 
-1. At boot, insetu fingerprints every file in each folder (SHA-256 of each file, `__pycache__` and `.pyc` skipped). An extension loads only if its fingerprint matches the approval recorded in `host.json`, and the bytes that were fingerprinted are the bytes that run.
+1. At boot, insetu fingerprints every file in each folder (SHA-256 of each file, `__pycache__` and `.pyc` skipped). An extension loads only if its fingerprint matches the approval recorded in the attestation store (`.insetu/attestations.json`), and the bytes that were fingerprinted are the bytes that run.
 2. A new or edited extension stays off. The banner shows it as waiting; **Review Files** lists what was added, changed or removed since the last approval, and **Approve & Restart** records the approval and restarts. If the files changed after you reviewed them, the approval is refused and you review again. Once running, it appears in Settings as `<Title> (workspace)` and is enabled per workspace like a bundled extension.
 3. The browser code of a running extension is served only while its files still match what was loaded. Edit any file and it stops being served until you approve the new version and restart.
 4. A folder with a symbolic link, over 20 MB, without `engine_<name>.py`, or named like a bundled extension or core module is never loaded.

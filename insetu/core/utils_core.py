@@ -88,6 +88,7 @@ from insetu.core.sdk import (
     three_way_merge_text,
     typeddict_to_openapi,
 )
+import insetu.core.attestations as _attestations
 
 
 @hooks.on('vfs_resolve_path')
@@ -1492,26 +1493,21 @@ def _command_signature(kind: str, repo: str, command: str) -> str:
     return f"{repo}:{digest}" if kind == "test" else f"{kind}:{repo}:{digest}"
 
 
-def _load_host_approvals() -> Tuple[str, Dict[str, Any]]:
-    """host.json, where every human approval lives (commands, workspace extensions): (its path, its data)."""
-    host_path = get_daemon_host_config_path()
-    return host_path, load_json_config(host_path, {})
+def _command_subject(workspace_id: str, signature: str) -> str:
+    """Attestation subject for one command approval: approvals are per workspace."""
+    return f"{workspace_id}|{signature}"
 
 
 def get_approved_commands(workspace_id: str) -> set:
-    """Returns the approved command signatures for workspace_id from host.json (P5)."""
-    _, host_data = _load_host_approvals()
-    return set(host_data.get("approved_test_commands", {}).get(workspace_id, []))
+    """Returns the approved command signatures for workspace_id from the attestation store (P5, S8)."""
+    prefix = f"{workspace_id}|"
+    return {r["digest"] for r in _attestations.list_attestations("command") if str(r.get("subject", "")).startswith(prefix)}
 
 
 def approve_command(workspace_id: str, kind: str, repo: str, command: str) -> str:
     """Records a person's approval of one exact command of a kind ('test', 'preview') for a repository. Call only from human-only routes."""
     sig = _command_signature(kind, repo, command)
-    host_path, host_data = _load_host_approvals()
-    approved = set(host_data.setdefault("approved_test_commands", {}).get(workspace_id, []))
-    approved.add(sig)
-    host_data["approved_test_commands"][workspace_id] = sorted(approved)
-    save_json_config(host_path, host_data, workspace_id="default")
+    _attestations.attest("command", _command_subject(workspace_id, sig), sig, {"kind": kind, "repo": repo, "command": (command or "").strip()})
     return sig
 
 
@@ -1520,7 +1516,8 @@ def is_command_approved(workspace_id: str, kind: str, repo: str, command: str) -
     clean_cmd = (command or "").strip()
     if not clean_cmd:
         return False
-    return _command_signature(kind, repo, clean_cmd) in get_approved_commands(workspace_id)
+    sig = _command_signature(kind, repo, clean_cmd)
+    return _attestations.is_attested("command", _command_subject(workspace_id, sig), sig)
 
 
 def get_approved_test_commands(workspace_id: str) -> set:
@@ -1647,32 +1644,24 @@ def current_workspace_extension_fingerprint(ext_dir: Path) -> Optional[str]:
 
 
 def get_workspace_extension_approvals() -> Dict[str, Dict[str, Any]]:
-    """Approved workspace extensions from host.json: {name: {"fingerprint", "files", "approved_at"}}."""
-    _, host_data = _load_host_approvals()
-    approvals = host_data.get("approved_workspace_extensions", {})
-    return approvals if isinstance(approvals, dict) else {}
+    """Approved workspace extensions from the attestation store: {name: {"fingerprint", "files", "approved_at"}}."""
+    return {
+        r["subject"]: {"fingerprint": r["digest"], "files": dict((r.get("detail") or {}).get("files") or {}), "approved_at": r.get("approved_at")}
+        for r in _attestations.list_attestations("workspace_extension")
+    }
 
 
 def approve_workspace_extension(name: str, snapshot: Dict[str, Any]) -> str:
     """Records a person's approval of one extension's exact files. Call only from human-only routes."""
     if not WORKSPACE_EXTENSION_NAME_PATTERN.match(name or "") or not snapshot.get("fingerprint"):
         raise ValueError("A valid extension name and fingerprint are required.")
-    host_path, host_data = _load_host_approvals()
-    approvals = host_data.setdefault("approved_workspace_extensions", {})
-    approvals[name] = {"fingerprint": snapshot["fingerprint"], "files": dict(snapshot.get("files") or {}), "approved_at": time.time()}
-    save_json_config(host_path, host_data, workspace_id="default")
+    _attestations.attest("workspace_extension", name, snapshot["fingerprint"], {"files": dict(snapshot.get("files") or {})})
     return snapshot["fingerprint"]
 
 
 def revoke_workspace_extension(name: str) -> bool:
     """Removes a person's approval for one extension; it stops loading at the next restart."""
-    host_path, host_data = _load_host_approvals()
-    approvals = host_data.get("approved_workspace_extensions", {})
-    if not isinstance(approvals, dict) or name not in approvals:
-        return False
-    approvals.pop(name, None)
-    save_json_config(host_path, host_data, workspace_id="default")
-    return True
+    return _attestations.revoke("workspace_extension", name)
 
 
 def describe_workspace_extension(name: str, snapshot: Dict[str, Any], approval: Optional[Dict[str, Any]], reserved: bool = False) -> Dict[str, Any]:

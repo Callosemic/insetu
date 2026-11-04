@@ -43,6 +43,7 @@ export const AppStore = createExtensionStore('App', {
     extensionDependencyMeta: {},
     quarantinedModules: {},
     workspaceExtensions: {},
+    protectedChangesPending: 0,
     degradedCore: false,
     activeCoreJs: null,
     syncWatermarks: {
