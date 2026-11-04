@@ -26,8 +26,15 @@ from insetu.core.sdk import (
     provision_workspace_schemas,
     resolve_external_dependency_spec,
 )
+from insetu.core.directives import (
+    DIRECTIVE_TIERS,
+    ensure_local_settings_gitignored,
+    get_directives,
+    resolve_directive_tier_uri,
+)
 from insetu.core.utils_core import (
     load_config,
+    parse_frontmatter,
     save_json_config,
     load_json_config,
     get_workspace_physics,
@@ -50,6 +57,7 @@ from insetu.core.utils_core import (
     revoke_workspace_extension,
     snapshot_workspace_extension,
 )
+import insetu.core.attestations as _attestations
 import insetu.core.system.legacy as _system_legacy  # noqa: F401 - Mounts one-off boot migration hooks
 import insetu.core.protected_changes as _protected_changes
 
@@ -191,7 +199,10 @@ system_bp = InSetuExtension(
             'scheme': 'ctx',
             'path_key': 'settings_dir',
             'module_subdir': 'settings',
-            'legacy_dirs': ['settings', 'data/settings'],
+            # Settings documents live in <control>/data/settings/, beside their user tier (.templates/user/). Until
+            # P13 Sprint 3 the volume resolved to data/system/; the first mount moves anything written there.
+            'domain': 'settings',
+            'legacy_dirs': ['settings', 'data/system'],
         }
     },
 )
@@ -964,6 +975,95 @@ def api_protected_confirm(ctx):
 @system_bp.route('protected/discard', methods=['POST'], request_schema=ProtectedChangeDiscardPayload, mcp_expose=False, docstring="[sync] Drops a pending protected change without writing it. Human-only (S8).")
 def api_protected_discard(ctx):
     return _protected_changes.discard(str((ctx.payload or {}).get("change_id") or ""))
+
+
+class DirectivesQueryPayload(TypedDict, total=False):
+    repo: str
+
+
+class DirectivesAcceptPayload(TypedDict):
+    repo: str
+    digest: str
+
+
+class DirectivesRevokePayload(TypedDict):
+    repo: str
+
+
+class DirectivesSavePayload(TypedDict, total=False):
+    tier: str
+    repo: str
+    content: str
+
+
+@system_bp.route('directives', methods=['GET'], request_schema=DirectivesQueryPayload, docstring="[sync] Returns the four directive tiers (user, workspace, repo_shared, repo_local), their acceptance status, and any diff against accepted text.")
+def api_directives_get(ctx):
+    """Returns the four directive tiers for a repository (or the first mounted repository when omitted)."""
+    repo = str((ctx.payload or {}).get("repo") or "").strip() or None
+    return get_directives(ctx, repo=repo)
+
+
+@system_bp.route('directives/save', methods=['POST'], request_schema=DirectivesSavePayload, mcp_expose=False, docstring="[sync] Human-only editor save for a directive tier ('user', 'workspace', 'repo_shared', 'repo_local'). Marks the write as an editor save so a person's own edit writes immediately.")
+def api_directives_save(ctx):
+    """Saves a directive tier document from the Settings Hub with EDITOR_SOURCE so UI saves write directly."""
+    data = ctx.payload or {}
+    tier = str(data.get("tier") or "").strip().lower()
+    repo = str(data.get("repo") or "").strip() or None
+    content = str(data.get("content") if data.get("content") is not None else "")
+    if tier not in DIRECTIVE_TIERS:
+        return {"error": f"Invalid directive tier '{tier}'. Expected one of {', '.join(DIRECTIVE_TIERS)}."}, 400
+    target_uri = resolve_directive_tier_uri(tier, repo=repo)
+    if not target_uri:
+        return {"error": f"Tier '{tier}' requires a valid repository name."}, 400
+    if tier == "repo_local" and repo:
+        ensure_local_settings_gitignored(ctx, repo)
+    res = ctx.vfs.save(target_uri, content, data={_protected_changes.SOURCE_KEY: _protected_changes.EDITOR_SOURCE})
+    if isinstance(res, dict) and res.get("protected") and res.get("status") != "accepted":
+        code = 202 if res.get("status") == "pending_confirmation" else int(res.get("status_code") or 403)
+        return res, code
+    return {"status": "success", "uri": target_uri, "directives": get_directives(ctx, repo=repo)}
+
+
+@system_bp.route('directives/accept', methods=['POST'], request_schema=DirectivesAcceptPayload, mcp_expose=False, docstring="[sync] Human-only: accepts a shared repository's directives by exact content digest. Refuses stale digests (409) and machine origins (403).")
+def api_directives_accept(ctx):
+    """Records a person's acceptance of `vfs://<repo>/.insetu-data/settings/agent.md` at the reviewed digest."""
+    data = ctx.payload or {}
+    repo = str(data.get("repo") or "").strip()
+    digest = str(data.get("digest") or "").strip()
+    if not repo or not digest:
+        return {"error": "Both 'repo' and 'digest' are required."}, 400
+
+    uri = resolve_directive_tier_uri("repo_shared", repo=repo)
+    raw_content = ctx.vfs.read(uri) if uri else None
+    if raw_content is None:
+        return {"error": f"No shared repository directives file found at {uri}."}, 404
+
+    _, body, _ = parse_frontmatter(raw_content)
+    clean_body = (body or "").strip()
+    actual_digest = _attestations.digest_of(clean_body)
+    if actual_digest != digest:
+        return {
+            "error": "The repository directives file changed after you reviewed it. Review the updated text before accepting.",
+            "expected_digest": actual_digest,
+        }, 409
+
+    subject = f"{ctx.workspace_id}|{repo}"
+    try:
+        _attestations.attest("repo_directive", subject, digest, detail={"repo": repo, "body": clean_body})
+    except _attestations.AttestationRefused as exc:
+        return {"error": str(exc)}, 403
+    return {"status": "accepted", "repo": repo, "digest": digest, "directives": get_directives(ctx, repo=repo)}
+
+
+@system_bp.route('directives/revoke', methods=['POST'], request_schema=DirectivesRevokePayload, mcp_expose=False, docstring="[sync] Human-only: revokes acceptance of a shared repository's directives.")
+def api_directives_revoke(ctx):
+    """Revokes a person's acceptance of a repository's shared directives."""
+    repo = str((ctx.payload or {}).get("repo") or "").strip()
+    if not repo:
+        return {"error": "repo is required."}, 400
+    subject = f"{ctx.workspace_id}|{repo}"
+    revoked = _attestations.revoke("repo_directive", subject)
+    return {"status": "revoked" if revoked else "noop", "repo": repo, "directives": get_directives(ctx, repo=repo)}
 
 
 @system_bp.route('reboot', methods=['POST'], docstring="[sync] Clean in-place process replacement to restart the OS daemon.")

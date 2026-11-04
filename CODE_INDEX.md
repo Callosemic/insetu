@@ -54,6 +54,7 @@ insetu/
 │   │   ├── 0099-devops-extension-suite-zero-css-modernization-batched-git-cat-file-and-sieve-diff-parity.md # ADR 0099: DevOps Extension Suite Zero-CSS Modernization, Batched Git Cat-File Pre-Fetching, Topology Sieve Diff Parity, and Landmark-Driven...
 │   │   ├── 0100-knowledge-and-work-extension-suites-convergence-sieve-parity-and-metronome-polling.md # ADR 0100: Knowledge & Content and Work & Automation Suites Convergence, Sieve Parity, and Metronome Polling Unification
 │   │   ├── 0101-s8-confirmed-protected-changes-attestation-store-smoke-testing-and-lifeboat-fallback.md # ADR 0101: S8 Confirmed Protected Changes, Unified Attestation Store, Subprocess Recovery Smoke Testing, and Last-Good Lifeboat Fallbacks
+│   │   ├── 0102-four-tier-agent-directives-repository-attestation-and-unified-session-protocols.md # ADR 0102: Four-Tier Agent Directives, Repository Attestation Acceptance, and Unified Session Protocols
 │   │   ├── archived/               # Superseded and historical ADR documents.
 │   │   │   ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │   │   │   ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -136,7 +137,9 @@ insetu/
 │       ├── 2026-11-03-routine-expression-compiler-and-parser-unification.md # Create blueprint stub for compiler-grade routine condition parsing and Yomama parser unification, explicitly marked for human-architect disc...
 │       ├── 2026-11-03-s8-confirmed-protected-changes.md # Completed plan: S8 confirmed protected changes, attestation store, smoke test, last-good lifeboat.
 │       ├── 2026-11-03-six-bucket-orchestrator-and-composable-rag.md # Refactor orchestrator.py, engine_agent.py, and context_assemble.py to implement the 6-bucket envelope, 4 resource lenses, composable RAG uni...
-│       └── 2026-11-03-subsystem-mental-models-and-worker-fault-transparency.md # Create a blueprint for institutionalizing Subsystem Mental Models across the core engines, wiring blast-radius model injection, and enforcin...
+│       ├── 2026-11-03-subsystem-mental-models-and-worker-fault-transparency.md # Create a blueprint for institutionalizing Subsystem Mental Models across the core engines, wiring blast-radius model injection, and enforcin...
+│       ├── 2026-11-04-prompts-tree.md # Plan stub for one prompts tree: canonical templates materialized per repository by scope, overrides that never overwrite, directives as stac...
+│       └── 2026-11-04-system-notices.md # Plan: System Notices, One Mechanism for Everything That Needs Your Attention
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── app.py                      # [Micro-Kernel & Extension Bootloader]
@@ -315,7 +318,7 @@ insetu/
 │   │   │   │   ├── class BridgeTestPayload(TypedDict) # [comment required]
 │   │   │   │   ├── class BridgeTestApprovePayload(TypedDict) # Request schema for a person approving one custom test command for a repository (P5).
 │   │   │   │   ├── def bridge_run_test_gate(ctx) # [comment required]
-│   │   │   │   ├── def bridge_approve_test_command(ctx) # Records a person's approval of a custom repository test command; hidden from MCP and banned in routines (P5).
+│   │   │   │   ├── def bridge_approve_test_command(ctx) # [stale?] Records a person's approval of a custom repository test command; hidden from MCP and banned in routines (P5).
 │   │   │   │   ├── def bridge_commit_message(ctx) # [comment required]
 │   │   │   │   ├── class BridgeMergeBlocksPayload(TypedDict) # [comment required]
 │   │   │   │   ├── def bridge_merge_blocks(ctx) # [comment required]
@@ -343,6 +346,10 @@ insetu/
 │   │   ├── config/                 # Repository and bucket topology configuration UI.
 │   │   │   └── config.js           # UI for managing repository topologies and tracked buckets.
 │   │   │       └── class InSetuExtConfig # [comment required]
+│   │   ├── directives.py           # directives.py is read by topology, the system routes and the agent, so it lives in core/ beside attestations.py
+│   │   │   ├── def resolve_directive_tier_uri(tier, repo) # Maps a directive tier identifier ('user', 'workspace', 'repo_shared', 'repo_local') to its canonical VFS/CTX URI.
+│   │   │   ├── def ensure_local_settings_gitignored(ctx, repo) # Ensures `settings.local/` is listed in `vfs://<repo>/.insetu-data/.gitignore` when local repo settings are written.
+│   │   │   └── def get_directives(ctx, repo) # [stale?] Assembles the active agent directives across the four tiers for `repo` (defaulting to the first mounted repo).
 │   │   ├── editor/                 # Global CodeMirror editor settings.
 │   │   │   └── engine_editor.py    # Editor preferences, language manifest discovery, and local language pack resolution.
 │   │   │       ├── def get_preference(ctx) # [comment required]
@@ -596,7 +603,8 @@ insetu/
 │   │   │       └── def api_bind_tailscale(ctx) # Manually triggers 'tailscale serve' to expose the local inSetu port to the Tailnet.
 │   │   ├── sdk/                    # Developer SDK namespace.
 │   │   │   └── __init__.py         # Module initialization.
-│   │   │       ├── class TemplateOverlayVFSDriver(DefaultVFSDriver) # Unified Tier 2 Template Overlay VFS Driver for ctx://prompts and ctx://routines: - Routes ctx://<vol>/.templates/user/...
+│   │   │       ├── def reset_kernel_state(**kwargs) # [stale?] Resets Akasa kernel state and synchronizes Tier 2 extension volume mount caches and S8 protected targets so subsequent `bp.get_context(wid)`...
+│   │   │       ├── class TemplateOverlayVFSDriver(DefaultVFSDriver) # [stale?] Unified Tier 2 Template Overlay VFS Driver for ctx://prompts and ctx://routines: - Routes ctx://<vol>/.templates/user/...
 │   │   │       ├── class InSetuContext(_BaseExtensionContext) # [stale?] Tier 2 Developer OS Extension Context with dual-root Manifest, RAG compilation, and Frontmatter helpers.
 │   │   │       ├── def get_mountable_data_domains() # Returns options for all registered extensions that own a 'data'-tier VFS volume, plus the '*' wildcard.
 │   │   │       ├── def resolve_external_dependency_spec(dep_str) # Normalizes an external dependency declaration into (import_specifier, pypi_package_name).
@@ -676,6 +684,14 @@ insetu/
 │   │   │   │   ├── def api_protected_pending(ctx) # Lists protected-file changes waiting for a person's confirmation (S8).
 │   │   │   │   ├── def api_protected_confirm(ctx) # Human-only: writes a pending protected change the person reviewed (S8).
 │   │   │   │   ├── def api_protected_discard(ctx) # Human-only: drops a pending protected change (S8).
+│   │   │   │   ├── class DirectivesQueryPayload(TypedDict) # Request schema for querying four-tier directives for a target repository.
+│   │   │   │   ├── class DirectivesAcceptPayload(TypedDict) # Request schema for accepting shared repository directives with content digest.
+│   │   │   │   ├── class DirectivesRevokePayload(TypedDict) # Request schema for revoking acceptance of shared repository directives.
+│   │   │   │   ├── class DirectivesSavePayload(TypedDict) # Request schema for human editor saving of a specific directive tier.
+│   │   │   │   ├── def api_directives_get(ctx) # Returns the four directive tiers for a repository (or the first mounted repository when omitted).
+│   │   │   │   ├── def api_directives_save(ctx) # Saves a directive tier document from the Settings Hub with EDITOR_SOURCE so UI saves write directly.
+│   │   │   │   ├── def api_directives_accept(ctx) # Records a person's acceptance of `vfs://<repo>/.insetu-data/settings/agent.md` at the reviewed digest.
+│   │   │   │   ├── def api_directives_revoke(ctx) # Revokes a person's acceptance of a repository's shared directives.
 │   │   │   │   ├── def api_system_reboot(ctx) # Clean in-place process replacement to restart the OS daemon.
 │   │   │   │   ├── class SystemConfigPayload(TypedDict) # [comment required]
 │   │   │   │   ├── def api_system_config(ctx) # [comment required]
@@ -759,7 +775,7 @@ insetu/
 │   │   │       ├── def resolve_repo_landmarks(ctx, repo) # [stale?] Resolves where a repository keeps each landmark kind (standards, contracts, ADRs, tests, fitness suites, and kinds registered by extensions).
 │   │   │       ├── def resolve_repo_code_index_uri(ctx, repo_dir, repo_cfg) # Resolves the canonical VFS URI for a repository's CODE_INDEX.md.
 │   │   │       ├── def infer_target_repo(ctx, explicit_repo, candidate_uris) # [stale?] Infers the target repository directory from an explicit repo name or a list of candidate URIs (such as `ctx://prompts/<repo>/...`, `vfs://<r...
-│   │   │       ├── def build_sys_landmarks_context(ctx, repo_hint, candidate_uris, extra_inputs, ...) # Single Source of Truth builder for the `sys.*` template variable dictionary.
+│   │   │       ├── def build_sys_landmarks_context(ctx, repo_hint, candidate_uris, extra_inputs, ...) # [stale?] Single Source of Truth builder for the `sys.*` template variable dictionary.
 │   │   │       ├── def discover_constitution_files(ctx) # [stale?] Returns the standards files to auto-pin (Tier 0) across mounted repositories, from each repository's landmarks.
 │   │   │       ├── class TopologyLandmarksPayload(TypedDict) # Request schema for topology.landmarks: an optional repository name.
 │   │   │       ├── def api_topology_landmarks(ctx) # Resolves repository landmarks for one repository (the first mounted one when none is named).
@@ -801,8 +817,6 @@ insetu/
 │   │       ├── def get_approved_commands(workspace_id) # [stale?] Returns the approved command signatures for workspace_id from host.json (P5).
 │   │       ├── def approve_command(workspace_id, kind, repo, command) # [stale?] Records a person's approval of one exact command of a kind ('test', 'preview') for a repository.
 │   │       ├── def is_command_approved(workspace_id, kind, repo, command) # True only when the attestation store holds a person's approval of this exact command of this kind for this repository.
-│   │       ├── def get_approved_test_commands(workspace_id) # Returns the approved command signatures for workspace_id (kept for existing callers of the P5 store).
-│   │       ├── def approve_test_command(workspace_id, repo, command) # Records a person's approval of a custom test command (approve_command with kind 'test') and returns its signature.
 │   │       ├── def is_test_command_approved(workspace_id, repo, command, default_command) # True for the repository's default test command, or a custom command a person approved; never approves anything itself (P5).
 │   │       ├── def get_workspace_extension_reserved_names() # Names a workspace extension cannot take: every bundled extension and core module, plus config, sdk, languages.
 │   │       ├── def get_workspace_extensions_root() # The one folder workspace extensions load from: .insetu/extensions/ under the default workspace root.
@@ -1133,7 +1147,7 @@ insetu/
 │   │   │   │   ├── class InSetuTrackerEditProjection # [comment required]
 │   │   │   │   └── class InSetuExtTrackerSettings # [stale?] OS Registration Hook
 │   │   │   └── prompts/            # Management of global prompt templates and macro inclusions.
-│   │   │       ├── close_session_tickets.md # Protocol for closing completed tracker tickets and generating retrospective changelog epics at session closeout.
+│   │   │       ├── housekeeping_tracker_phase.md # Protocol for closing completed tracker tickets in sys.tracker_dir and generating retrospective changelog epics at session closeout.
 │   │   │       └── ticket_authoring_guide.md # Prompt template guiding LLMs on authoring Markdown-as-Code Kanban tickets.
 │   │   └── update/                 # Automated Python semantic versioning and PyPI distribution.
 │   │       ├── __init__.py         # Module initialization.
@@ -1279,6 +1293,8 @@ insetu/
         │   └── class TestDagFaultQuarantine(unittest.TestCase) # [stale?] Verifies that a fault in a non-foundational Core module or Tier 3 extension quarantines only its DAG dependents.
         ├── test_dev_exec_exposure.py # Tests that MCP neither lists nor calls dev.exec and that routines cannot use it.
         │   └── class TestDevExecExposure(unittest.TestCase) # MCP neither lists nor calls dev.exec, and routines cannot use it.
+        ├── test_directives.py      # New test suite verifying 4-tier directive assembly, acceptance logic, and protected target configuration.
+        │   └── class TestDirectivesAndAcceptance(unittest.TestCase) # [stale?] Verifies 4-tier directive assembly, attestation acceptance, route guards, and S8 VFS protection.
         ├── test_editor_vendorize.py # S4 tests: bundled and local language descriptors resolve, local entries cannot shadow bundled ids, unknown packs are not downloaded, and invalid names are refused.
         │   └── class TestEditorVendorize(unittest.TestCase) # [stale?] Bundled and local descriptors resolve; local entries cannot shadow bundled ids; unknown packs are not downloaded; invalid names are refused.
         ├── test_ext_preview_unit.py # Unittest suite for passive framework detection and preview server lifecycle.
@@ -1348,7 +1364,7 @@ insetu/
         │   └── class TestSutramCompliance(unittest.TestCase) # [stale?] Executes Sutram's official consumer linter and inSetu's JavaScript fitness rules against inSetu core UI components and domain extensions to...
         ├── test_test_command_approval.py # P5 tests: no self-approval, approvals per workspace and repo, approval hidden from MCP and banned in routines.
         │   ├── class TestNoSelfApproval(unittest.TestCase) # The run paths take no approval flag, so whoever asks for a command cannot also approve it.
-        │   ├── class TestApprovalRecord(unittest.TestCase) # Approvals are recorded per workspace and repository, and checking never records one.
+        │   ├── class TestApprovalRecord(unittest.TestCase) # [stale?] Approvals are recorded per workspace and repository, and checking never records one.
         │   └── class TestApprovalStaysHuman(unittest.TestCase) # The approval route exists for people, and is unreachable from MCP and routines.
         ├── test_topology_manifest_freshness.py # Tests that incremental topology events honor .gitignore and that manifest caches never keep pre-commit state.
         │   ├── class TestIncrementalEventsHonorGitignore(_WorkspaceCase) # [stale?] Watcher events for git-ignored files stay out of the ledger, as they do in a full scan.

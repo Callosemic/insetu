@@ -1520,16 +1520,6 @@ def is_command_approved(workspace_id: str, kind: str, repo: str, command: str) -
     return _attestations.is_attested("command", _command_subject(workspace_id, sig), sig)
 
 
-def get_approved_test_commands(workspace_id: str) -> set:
-    """Returns the set of approved command signatures for workspace_id (kept for existing callers)."""
-    return get_approved_commands(workspace_id)
-
-
-def approve_test_command(workspace_id: str, repo: str, command: str) -> str:
-    """Persists approval for a custom repository test command and returns its signature."""
-    return approve_command(workspace_id, "test", repo, command)
-
-
 def is_test_command_approved(
     workspace_id: str,
     repo: str,

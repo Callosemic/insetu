@@ -422,7 +422,10 @@ export class InSetuSystemSettings extends InSetuElement {
         _topologyIsNewRepo: { type: Boolean },
         _showHostBrowser: { type: Boolean },
         _newWsId: { type: String },
-        _newWsRoot: { type: String }
+        _newWsRoot: { type: String },
+        _directivesData: { type: Object },
+        _directiveDrafts: { type: Object },
+        _directivesDiffOpen: { type: Boolean }
     };
     static styles = [sharedStyles];
     constructor() {
@@ -454,6 +457,9 @@ export class InSetuSystemSettings extends InSetuElement {
         this._showHostBrowser = false;
         this._newWsId = '';
         this._newWsRoot = '';
+        this._directivesData = null;
+        this._directiveDrafts = {};
+        this._directivesDiffOpen = false;
     }
     async _loadMountsData() {
         this._mountsLoading = true;
@@ -550,6 +556,199 @@ export class InSetuSystemSettings extends InSetuElement {
             }
         } catch (e) {}
     }
+    async _fetchDirectives(repo = '') {
+        const allRepos = this.ecosystem?.allRepos || [];
+        const targetRepo = repo || this._selectedRepo || allRepos[0] || '';
+        try {
+            const qs = targetRepo ? `?repo=${encodeURIComponent(targetRepo)}&t=${Date.now()}` : `?t=${Date.now()}`;
+            const res = await this.api.get('system/directives' + qs);
+            if (res.ok) {
+                const data = await res.json();
+                this._directivesData = data;
+                const drafts = {};
+                Object.entries(data.tiers || {}).forEach(([tKey, tInfo]) => {
+                    drafts[tKey] = tInfo.body || '';
+                });
+                this._directiveDrafts = drafts;
+                this.requestUpdate();
+            }
+        } catch (e) {
+            console.warn('Failed to load directives:', e);
+        }
+    }
+
+    async _saveDirectiveTier(tierKey) {
+        const repo = this._directivesData?.repo || this._selectedRepo || (this.ecosystem?.allRepos || [])[0] || '';
+        const content = this._directiveDrafts?.[tierKey] ?? '';
+        const res = await this.api.post('system/directives/save', { tier: tierKey, repo, content });
+        if (res.ok) {
+            const data = await res.json();
+            if (data.directives) {
+                this._directivesData = data.directives;
+            } else {
+                await this._fetchDirectives(repo);
+            }
+            this.setStatus(`Saved ${tierKey} directives.`, 2500);
+            this.requestUpdate();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Failed to save directive tier.');
+        }
+    }
+
+    async _acceptSharedDirectives() {
+        const repo = this._directivesData?.repo || this._selectedRepo || '';
+        const sharedTier = this._directivesData?.tiers?.repo_shared;
+        if (!repo || !sharedTier?.digest) return;
+        const res = await this.api.post('system/directives/accept', { repo, digest: sharedTier.digest });
+        if (res.ok) {
+            const data = await res.json();
+            this._directivesData = data.directives || this._directivesData;
+            this._directivesDiffOpen = false;
+            this.setStatus(`Accepted shared directives for ${repo}.`, 2500);
+            this.requestUpdate();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Could not accept repository directives.');
+            await this._fetchDirectives(repo);
+        }
+    }
+
+    async _revokeSharedDirectives() {
+        const repo = this._directivesData?.repo || this._selectedRepo || '';
+        if (!repo) return;
+        const res = await this.api.post('system/directives/revoke', { repo });
+        if (res.ok) {
+            const data = await res.json();
+            this._directivesData = data.directives || this._directivesData;
+            this.setStatus(`Revoked shared directives for ${repo}.`, 2500);
+            this.requestUpdate();
+        }
+    }
+
+    _renderAgentDirectivesSection(allRepos) {
+        const d = this._directivesData;
+        const activeRepo = d?.repo || this._selectedRepo || allRepos[0] || '';
+        const tiers = d?.tiers || {};
+        // Same order as the prompt (DIRECTIVE_TIERS): least to most authoritative.
+        const tierOrder = [
+            ...(activeRepo ? [
+                { id: 'repo_shared', label: `1. Shared Repository Directives (${activeRepo})`, scope: 'repo' }
+            ] : []),
+            { id: 'user', label: '2. Your Directives (User Tier)', scope: 'daemon' },
+            { id: 'workspace', label: '3. Workspace Directives', scope: 'workspace' },
+            ...(activeRepo ? [
+                { id: 'repo_local', label: `4. Local Repository Directives (${activeRepo}, git-ignored)`, scope: 'repo' }
+            ] : [])
+        ];
+        const sharedInfo = tiers.repo_shared || {};
+        const hasDiffFromAccepted = Boolean(
+            sharedInfo.accepted_body && sharedInfo.body && sharedInfo.accepted_body !== sharedInfo.body
+        );
+
+        return html`
+            <sutram-collapsible titleText="Directives (4-Tier Markdown-as-Code)" intent="highlight" ?open=${true}>
+                <sutram-stack direction="col" gap="md">
+                    <sutram-label text="Prose instructions assembled into sys.directives (Repository Shared → User → Workspace → Repository Local). Later sections win on conflict."></sutram-label>
+                    ${allRepos.length > 1 ? html`
+                        <sutram-select
+                            label="Target Repository for Repository Directives"
+                            ?flush=${true}
+                            .value=${activeRepo}
+                            .options=${allRepos.map(r => ({ value: r, label: r }))}
+                            @sutram-input-changed=${e => {
+                                this._selectedRepo = e.detail.value;
+                                this._fetchDirectives(e.detail.value);
+                            }}>
+                        </sutram-select>
+                    ` : ''}
+                    ${(d?.notices || []).map(notice => html`
+                        <sutram-surface variant="tinted" intent="warning" padding="xs">
+                            <sutram-label intent="warning" .text=${notice}></sutram-label>
+                        </sutram-surface>
+                    `)}
+                    ${tierOrder.map(tSpec => {
+                        const info = tiers[tSpec.id] || {};
+                        const isShared = tSpec.id === 'repo_shared';
+                        const waitingAcceptance = isShared && info.body && !info.accepted;
+                        return html`
+                            <sutram-field-card
+                                .label=${tSpec.label}
+                                .description=${info.uri || ''}
+                                .scope=${tSpec.scope}>
+                                <sutram-stack slot="header-actions" direction="row" align="center" gap="xs" ?wrap=${true}>
+                                    ${waitingAcceptance ? html`
+                                        <sutram-tag text="Not in prompts until you accept" intent="warning"></sutram-tag>
+                                        ${hasDiffFromAccepted ? html`
+                                            <sutram-btn
+                                                ?compact=${true}
+                                                intent="warning"
+                                                icon="git-compare"
+                                                label="View Diff"
+                                                @click=${() => { this._directivesDiffOpen = true; }}>
+                                            </sutram-btn>
+                                        ` : ''}
+                                        <sutram-async-btn
+                                            ?compact=${true}
+                                            intent="success"
+                                            icon="check"
+                                            label="Accept"
+                                            .onClick=${() => this._acceptSharedDirectives()}>
+                                        </sutram-async-btn>
+                                    ` : (isShared && info.accepted && info.body ? html`
+                                        <sutram-tag text="Accepted" intent="success"></sutram-tag>
+                                        <sutram-async-btn
+                                            ?compact=${true}
+                                            intent="neutral"
+                                            icon="x"
+                                            label="Revoke"
+                                            .onClick=${() => this._revokeSharedDirectives()}>
+                                        </sutram-async-btn>
+                                    ` : '')}
+                                    <sutram-async-btn
+                                        ?compact=${true}
+                                        intent="primary"
+                                        icon="save"
+                                        label="Save Tier"
+                                        .onClick=${() => this._saveDirectiveTier(tSpec.id)}>
+                                    </sutram-async-btn>
+                                </sutram-stack>
+                                <sutram-textarea
+                                    ?flush=${true}
+                                    .monospace=${true}
+                                    placeholder="Markdown directives for this tier..."
+                                    .value=${this._directiveDrafts?.[tSpec.id] ?? info.body ?? ''}
+                                    @sutram-input-changed=${e => {
+                                        this._directiveDrafts = { ...(this._directiveDrafts || {}), [tSpec.id]: e.detail.value };
+                                    }}>
+                                </sutram-textarea>
+                            </sutram-field-card>
+                        `;
+                    })}
+                </sutram-stack>
+            </sutram-collapsible>
+            ${this._directivesDiffOpen ? html`
+                <sutram-modal
+                    ?open=${true}
+                    ?fullscreen=${true}
+                    ?flush=${true}
+                    titleText=${`Directive Changes in ${activeRepo}`}
+                    @sutram-modal-closed=${() => { this._directivesDiffOpen = false; }}>
+                    <sutram-view slot="body" ?flush=${true} ?noScroll=${true}>
+                        <sutram-diff-viewer
+                            .searchStr=${sharedInfo.accepted_body || ''}
+                            .replaceStr=${sharedInfo.body || ''}
+                            leftTitle="Previously Accepted"
+                            rightTitle="Current on Disk">
+                        </sutram-diff-viewer>
+                    </sutram-view>
+                    <sutram-btn slot="footer" intent="neutral" icon="x" label="Close" @click=${() => { this._directivesDiffOpen = false; }}></sutram-btn>
+                    <sutram-async-btn slot="footer" intent="success" icon="check" label="Accept Current Directives" .onClick=${() => this._acceptSharedDirectives()}></sutram-async-btn>
+                </sutram-modal>
+            ` : ''}
+        `;
+    }
+
     async _drillIntoExtension(extName) {
         const allRepos = this.ecosystem?.allRepos || [];
         if (!this._selectedRepo && allRepos.length > 0) {
@@ -557,6 +756,9 @@ export class InSetuSystemSettings extends InSetuElement {
         }
         this._activeView = 'ext:' + extName;
         await this._fetchExtSettings(extName, this._selectedRepo);
+        if (extName === 'agent') {
+            await this._fetchDirectives(this._selectedRepo);
+        }
         if (extName === 'llm') {
             try {
                 const [profRes, catRes] = await Promise.all([
@@ -822,6 +1024,9 @@ export class InSetuSystemSettings extends InSetuElement {
             if (extName && repo) {
                 this._selectedRepo = repo;
                 this._fetchExtSettings(extName, repo, true);
+                if (extName === 'agent') {
+                    this._fetchDirectives(repo);
+                }
             }
         });
         this.registerGlobalListener('sutram-settings-custom-action', this, (e) => {
@@ -1363,6 +1568,7 @@ export class InSetuSystemSettings extends InSetuElement {
                     }}>
                 </insetu-schema-repeater>
             `)}
+            ${activeExtModule?.id === 'agent' ? this._renderAgentDirectivesSection(allRepos) : ''}
         `;
     }
 

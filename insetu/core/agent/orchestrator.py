@@ -47,6 +47,9 @@ ROUTINE_BANNED_CAPABILITIES = frozenset({
     "dev.exec",
     "bridge.test.approve",  # P5: only a person approves commands; a routine must never approve its own.
     "preview.approve_command",  # P5: same for custom preview launch commands.
+    "system.directives.accept",  # S8: only a person accepts or edits directives through the UI route.
+    "system.directives.revoke",
+    "system.directives.save",
     "preview.open_lan",  # S2: LAN exposure is a person's grant, never a routine's.
     "dev.sql.query",
     "system.reboot",

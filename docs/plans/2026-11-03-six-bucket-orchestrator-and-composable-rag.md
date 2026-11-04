@@ -10,6 +10,8 @@ models:
 
 # Plan: 6-Bucket Routine Orchestrator, Representational Lenses & Federated RAG
 
+> **Related direction (2026-11-04):** prompts as the LLM compute units of routines, deterministic units beside them, and alternate deterministic and LLM routes for one node (`2026-11-04-prompts-tree.md`). Sprints 2 and 3 should express nodes and RAG units in those terms.
+
 ## Context & Problem Statement
 This plan implements the mental model codified in `vfs://insetu/docs/models/agent_orchestrator_and_rag.md`. It resolves the original `/wrap` context explosion (where wrapping a sub-bucket diff pulled all 42 test files in `tests/` across 6 handoff chunks), retires ghost `ctx://workflows/` background pre-compilation left over from the decommissioned `flow` extension, removes the 80-line truncation of `CODE_INDEX.md`, and unifies single- and cross-repo (`insetu`, `sutram`, `akasa`) retrieval around 6 volatility-ordered buckets and 4 representational lenses.
 

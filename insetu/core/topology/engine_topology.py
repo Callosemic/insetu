@@ -20,6 +20,7 @@ from insetu.core.sdk import (
     set_workspace_router,
     thread_safe_cache,
 )
+from insetu.core.directives import get_directives
 from insetu.core.languages import (
     SUPPORTED_SYMBOL_EXTENSIONS,
     extract_file_symbols,
@@ -1888,6 +1889,13 @@ def build_sys_landmarks_context(
     hardening_targets = list(dict.fromkeys(fitness_list + test_list))
     hardening_str = ", ".join(f"`{h}`" for h in hardening_targets) if hardening_targets else f"`vfs://{primary_repo_name}/tests/`"
 
+    # The accepted, assembled directives are always present. A caller's own directives for this run (a routine input)
+    # are added after them under their own heading; they never replace what a person wrote or accepted.
+    directives_text = get_directives(ctx, primary_repo_name).get("text", "")
+    run_directives = str(extra.get("directives") or "").strip()
+    if run_directives:
+        directives_text = f"{directives_text}\n\n#### Directives for this run\n\n{run_directives}".strip()
+
     return {
         **(prior_sys or {}),
         **raw_landmarks,
@@ -1901,7 +1909,7 @@ def build_sys_landmarks_context(
         "tracker_closed_dir": str(extra.get("tracker_closed_dir") or f"{tracker_dir_val.rstrip('/')}/epics/closed"),
         "guardrail_rules": str(extra.get("guardrail_rules") or DEFAULT_GUARDRAIL_RULES),
         "hardening_target": str(extra.get("hardening_target") or hardening_str),
-        "directives": str((prior_sys or {}).get("directives") or extra.get("directives") or ""),
+        "directives": directives_text,
         "active_bucket": f"{primary_repo_name}::main",
     }
 

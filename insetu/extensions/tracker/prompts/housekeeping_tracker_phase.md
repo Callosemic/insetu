@@ -1,12 +1,12 @@
 ---
 title: "Tracker: End-of-Session Changelog & Ticket Alignment"
-description: "Protocol for closing completed tracker tickets and generating retrospective changelog epics at session closeout."
+description: "Protocol for closing completed tracker tickets in sys.tracker_dir and generating retrospective changelog epics at session closeout."
 ---
 
-### Tracker: End-of-Session Ticket & Changelog Protocol
+### Tracker: End-of-Session Ticket & Changelog Protocol (`{{ sys.tracker_dir }}`)
 
 1. **Closing Existing Tickets:**
-   * If an existing `.insetu-data/tracker/` ticket matches work completed in the diffs, update its `status` to `closed` (the background sweeper will relocate the file into the `closed/` directory and stamp `closed_at` automatically).
+   * If an existing ticket under `{{ sys.tracker_dir }}` matches work completed in the diffs, update its `status` to `closed` (the background sweeper will relocate the file into the `closed/` directory and stamp `closed_at` automatically).
    * Refine the ticket's `title` and expand `## Description` and `## Notes / Execution Log` with a thorough technical summary of the resolution. Always preserve or add detail rather than summarizing it away.
 
 2. **Drafting New Changelog Epics (Strict Genesis Block Rules):**
@@ -15,7 +15,7 @@ description: "Protocol for closing completed tracker tickets and generating retr
      * **YAML Frontmatter:**
        * `id`: `"{REPO}-CHG-<YYYYMMDD_HHMM>"` (e.g., `"INSETU-CHG-20261103_0520"`)
        * `title`: Concise summary string wrapped in double quotes.
-       * `repo`: Target repository name.
+       * `repo`: `{{ sys.repo_name }}`
        * `type`: `epic`
        * `status`: `closed`
        * `sub_bucket`: `None`

@@ -18,7 +18,8 @@ my_ext_bp = InSetuExtension(
     settings_schema=[{"id": "api_key", "label": "API Key", "type": "text", "scope": "workspace", "default": ""}],
     volumes={
         "my_domain": {
-            "tier": "data",  # "data" (.insetu/data/<ext>/) or "cache" (.insetu/cache/<ext>/)
+            "tier": "data",  # "data" (.insetu/data/<domain>/) or "cache" (.insetu/cache/<domain>/)
+            "domain": "my_ext",  # Optional: the folder under the tier; defaults to the extension's name
             "scheme": "ctx",
             "module_subdir": "prompts",  # Optional: Mounts TemplateOverlayVFSDriver for 3-tier cascade
             "legacy_dirs": ["ext/my_ext/data"]  # Auto-migrated on Phase 1 boot

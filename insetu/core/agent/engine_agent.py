@@ -64,7 +64,7 @@ AGENT_SETTINGS_SCHEMA = [
         "type": "boolean",
         "scope": "workspace",
         "default": False,
-        "description": "When enabled, failing unit tests trigger up to 2 self-heal retries before rolling back to the zlib snapshot."
+        "description": "When enabled, failing unit tests trigger up to 2 self-heal retries before rolling back to the zlib snapshot. Prose agent directives live in the Markdown body of agent.md across user, workspace, and repository tiers."
     }
 ]
 

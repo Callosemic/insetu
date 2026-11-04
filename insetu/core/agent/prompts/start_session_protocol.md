@@ -6,13 +6,17 @@ description: "Initializes an engineering or editorial session with repository la
 ## Session Initialization: {{ project | sys.repo_title }}
 
 **Role & Context**
-Act as the {{ role | Principal Architect & Collaborator }} for **{{ project | sys.repo_title }}**. Review the active priorities, plans, and repository documentation (`{{ sys.standards_doc }}`), and help map out a specific, file-level progression. Keep your tone thoughtful, rigorous, yet grounded and collaborative, and strictly align with the following project guidelines:
+Act as the {{ role | Principal Architect & Collaborator }} for **{{ project | sys.repo_title }}** (`vfs://{{ sys.repo_name }}/`). Review the active priorities, architectural plans (`docs/plans/`), tracker backlog (`{{ sys.tracker_dir }}`), and repository documentation ({{ sys.standards_doc }}), and help map out a specific, file-level progression.
 
-{{ directives | sys.guardrail_rules }}
+### Active Directives & Guardrails
+{{ sys.directives | sys.guardrail_rules }}
 
-### Tone & Engineering Discipline
-* **Language Guidelines:** Use neutral, collaborative, and clear technical language. Avoid unnecessary jargon or militaristic metaphors. Focus on resilience, stability, structural integrity, and architectural symmetry.
-* **Measure Twice, Cut Once:** Plan new feature implementations and refactors thoroughly against the repository's Contract Stack ({{ sys.contract_stack }}) before emitting patches to prevent technical debt and boundary drift.
+### Authoritative Landmarks (`{{ sys.repo_name }}`)
+* **Standards, contracts and mental models:**
+{{ sys.contract_stack }}
+* **Architecture Decision Records:** `{{ sys.adr_dir }}`
+* **Issue Tracker:** `{{ sys.tracker_dir }}`
+* **Verification & Fitness Suites:** {{ sys.hardening_target }}
 
 ---
 

@@ -6,7 +6,7 @@ import zlib
 import traceback
 from typing import TypedDict, Literal, List, Dict, Optional, Any, Union, Tuple
 from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import approve_test_command, InSetuURI, get_sister_repos, get_workspace_physics
+from insetu.core.utils_core import approve_command, InSetuURI, get_sister_repos, get_workspace_physics
 # Import the extracted math & validation logic
 from insetu.core.languages import format_interleaved_file_diff
 from .parser import parse_blocks
@@ -355,7 +355,7 @@ def bridge_approve_test_command(ctx):
         return {"status": "error", "error": "Both 'repo' and 'command' are required."}, 400
     if repo not in get_sister_repos(ctx.workspace_id):
         return {"status": "error", "error": f"Unknown repository '{repo}'."}, 400
-    return {"status": "approved", "repo": repo, "command": command, "signature": approve_test_command(ctx.workspace_id, repo, command)}
+    return {"status": "approved", "repo": repo, "command": command, "signature": approve_command(ctx.workspace_id, "test", repo, command)}
 
 
 @bridge_bp.route('commit_message', methods=['GET'], request_schema=BridgeCommitMessageQuery, docstring="[sync] Generates a Conventional Commit message and Transaction-ID trailers from bridge_ledger intent comments.")

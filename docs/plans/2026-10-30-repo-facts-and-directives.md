@@ -6,7 +6,7 @@ status: "active"
 **Status (2026-11-03).**
 * Phase 1 Sprints 1 and 2 shipped in insetu 0.31: `SETTINGS_ACCESS_RATCHET`, the `ctx://settings` mount, landmarks (`resolve_repo_landmarks`, `topology.landmarks`), the `sys.*` prompt variables and `{{include_prompt?: ...}}`.
 * S8 is built (release: akasa 0.8.0, then insetu). It delivers everything Sprint 3 depended on: the attestation store, pending protected changes with human-only confirmation, execution-frame origins and the audit log. Sections 2D and 4.3 below describe the store as built.
-* Phase 1 Sprints 3 and 4 are next and are written in 4.5 as self-contained briefs, so they can be handed to another model. Phases 2 to 6 have not started.
+* Phase 1 Sprints 3 and 4 are built: 4-tier directives (`insetu/core/directives.py`), `repo_directive` acceptance and Settings Hub diff review, protected directive targets, `housekeeping_tracker_phase.md`, and migration of repository directives out of per-repository prompt wrappers into `.insetu-data/settings/agent.md`. Phases 2 to 6 have not started.
 
 *Supersedes the 2026-10-30 settings-unification draft. This blueprint keeps that draft's goal (one settings model, Markdown-as-Code, prose directives beside the fields they belong to) and reaches it in phases, each of which removes legacy code rather than adding a parallel path.*
 
@@ -154,12 +154,13 @@ landmarks:
 
 Directives are the Markdown body of the `agent` settings document at each tier: `ctx://settings/.templates/user/agent.md`, `ctx://settings/agent.md`, and the repository's `.insetu-data/settings/agent.md` and `settings.local/agent.md`. In Phase 1 only the **body** of user and workspace settings documents is read. Their fields still live in JSON until Phase 6, so frontmatter in those files is refused with a notice rather than silently ignored.
 
-`get_directives(ctx, repo)` assembles them in order (user, workspace, repository shared, repository local), each under its own heading, and states that earlier sections win on conflict:
+`get_directives(ctx, repo)` assembles them from least to most authoritative, each under its own heading, and states that a later section wins on conflict. The repository's suggestions come first because someone else wrote them; our own tiers follow from most general to most specific, the usual cascade order (and the order models weight most):
 
 ```
-## Your directives
-## Workspace directives
-## Directives suggested by the <repo> repository (repository content)
+#### Directives suggested by the <repo> repository (repository content)
+#### Your directives
+#### Workspace directives
+#### Local repository directives (<repo>)
 ```
 
 * **Acceptance.** Shared repository directives come from content we may not have written. They are left out of every prompt until a person accepts them: an attestation of kind `repo_directive` whose digest is the hash of the exact text. A `git pull` that changes the text drops them again until re-accepted, and the Settings hub shows the diff. Local repository directives are ours and need no acceptance.
@@ -204,12 +205,12 @@ Sprints 1 and 2 shipped in insetu 0.31. Sprints 3 and 4 start once S8 is release
 * **Deletes:** nothing yet; it removes the reason for the per-repository wrappers, which Sprint 4 deletes.
 * **Verification:** the tracker phase expands when `tracker` is enabled, resolves to `""` when it is disabled, still errors when enabled but missing, and errors when `?` is used outside extension templates.
 
-**Sprint 3: Directives and acceptance** (next; a self-contained brief)
+**Sprint 3: Directives and acceptance** (built)
 
 * **Read first:** this blueprint's 2A, 2D and 4.3; `docs/plans/2026-11-03-s8-confirmed-protected-changes.md`; `docs/01_engineering_standards.md` §9.3 and §9.4; `insetu/core/attestations.py`; `insetu/core/protected_changes.py`; `resolve_repo_landmarks` in `insetu/core/topology/engine_topology.py` (it already reads `.insetu-data/settings/` and `settings.local/` with the confinement and gitignore checks to reuse).
 * **Work:**
-  * 1. **`get_directives(ctx, repo)`** in `insetu/core/agent/directives.py` (a new module; `orchestrator.py` is already large). It reads the Markdown body of `agent.md` at four tiers, in this order: user `ctx://settings/.templates/user/agent.md`, workspace `ctx://settings/agent.md`, repository shared `vfs://<repo>/.insetu-data/settings/agent.md`, repository local `vfs://<repo>/.insetu-data/settings.local/agent.md`.
-    * It returns the assembled block of 4.3: each tier under its own heading, the shared repository tier labeled as repository content, and a line saying earlier sections win on conflict.
+  * 1. **`get_directives(ctx, repo)`** in `insetu/core/directives.py` (a new module; `orchestrator.py` is already large). It reads the Markdown body of `agent.md` at four tiers, in this order: repository shared `vfs://<repo>/.insetu-data/settings/agent.md`, user `ctx://settings/.templates/user/agent.md`, workspace `ctx://settings/agent.md`, repository local `vfs://<repo>/.insetu-data/settings.local/agent.md`.
+    * It returns the assembled block of 4.3: each tier under its own heading, the shared repository tier labeled as repository content, and a line saying later sections win on conflict.
     * Frontmatter in the user and workspace documents is refused with a notice and never parsed (fields stay in JSON until Phase 6).
     * Read through `ctx.vfs`; never `open()`.
   * 2. **Acceptance of shared repository directives.**
@@ -236,7 +237,7 @@ Sprints 1 and 2 shipped in insetu 0.31. Sprints 3 and 4 start once S8 is release
 * **Docs in the same change:** §9.9 and §9.10 below in `docs/01_engineering_standards.md`; the agent `settings_schema` notes; CODE_INDEX entries. Give every new function and test class a docstring, because the cartographer writes its descriptions from them.
 * **Return:** `git diff <before>..<after>` for insetu, for audit (the agent contract in the roadmap's Reference).
 
-**Sprint 4: Port the session templates** (after Sprint 3; a self-contained brief)
+**Sprint 4: Port the session templates** (built)
 
 * **Read first:** 4.2, 4.4, the built-in `insetu/extensions/git/prompts/close_session_protocol.md` and `upkeep.md`, and the person's current templates and wrappers in `ctx://prompts/` (the person supplies them; they are not in the repository).
 * **Work:**

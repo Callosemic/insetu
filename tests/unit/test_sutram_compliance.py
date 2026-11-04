@@ -32,6 +32,7 @@ class TestSutramCompliance(unittest.TestCase):
         sutram_linter = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(sutram_linter)
         return sutram_linter
+
     def _declared_sutram_properties(self, sutram_linter):
         if not hasattr(sutram_linter, "load_declared_properties"):
             self.skipTest("Sibling sutram predates the property contract check.")

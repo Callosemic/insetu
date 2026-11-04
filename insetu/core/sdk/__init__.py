@@ -135,7 +135,6 @@ CORE_MODULES_TUPLE = (
 configure_kernel = _akasa.configure
 init_kernel_app = _akasa.init_app
 boot_kernel = _akasa.boot
-reset_kernel_state = _akasa.reset_state
 
 # The recovery path (S8): the CLI that boots the lifeboat, the lifeboat itself, and the stdlib-only
 # credential store the lifeboat loads by path. The kernel also refuses anything that would shadow
@@ -148,7 +147,27 @@ INSETU_PROTECTED_VFS_TARGETS = (
     ("insetu", "cli.py"),
     ("insetu", "fallback_bridge.py"),
     ("akasa/auth", "credentials.py"),
+    # The four directive documents (P13): repository shared and local, workspace (ctx://settings/agent.md) and user
+    # (ctx://settings/.templates/user/agent.md). Writes to them from anything but a person's editor wait for confirmation.
+    (".insetu-data/settings", "agent.md"),
+    (".insetu-data/settings.local", "agent.md"),
+    (".insetu/data/settings", "agent.md"),
+    (".insetu/data/settings/.templates/user", "agent.md"),
 ) + tuple((".insetu", name) for name in INSETU_CONTROL_STORE_NAMES)
+
+_REGISTERED_EXTENSION_INSTANCES: List["InSetuExtension"] = []
+
+
+def reset_kernel_state(*args, **kwargs) -> None:
+    """
+    Resets akasa's state for a test harness and forgets which workspaces each extension mounted, so the next
+    `bp.get_context(wid)` mounts its declarative volumes under the new daemon cwd instead of the previous one.
+    Protected targets and the protected-write handler survive akasa's reset; tests that need the handler install it.
+    """
+    _akasa.reset_state(*args, **kwargs)
+    for ext in _REGISTERED_EXTENSION_INSTANCES:
+        ext._mounted_workspaces.clear()
+
 
 hooks.register_trusted_namespace("insetu.core.")
 hooks.register_extension_namespace("insetu.extensions.")
@@ -239,9 +258,15 @@ class TemplateOverlayVFSDriver(DefaultVFSDriver):
                         mod_name = parts[0]
                         mod_rel = parts[1] if len(parts) > 1 else ""
                         if mod_name == "user":
-                                self.ensure_global_user_templates_dir(workspace_id or "default")
+                                user_dir = self.ensure_global_user_templates_dir(workspace_id or "default")
                                 ws_uri = f"ws://default/{self.module_subdir}/.templates/user/{mod_rel}".rstrip("/")
-                                return resolve_physical_path(ws_uri, workspace_id)
+                                resolved_ws = resolve_physical_path(ws_uri, workspace_id)
+                                if resolved_ws:
+                                        return resolved_ws
+                                if not mod_rel:
+                                        return user_dir.as_posix()
+                                target = user_dir.joinpath(mod_rel).resolve()
+                                return target.as_posix() if is_subpath(target, user_dir) else None
 
                         mod_dir = self.resolve_module_dir(mod_name, workspace_id)
                         if not mod_dir:
@@ -512,6 +537,7 @@ class InSetuExtension(AkasaExtension):
         self.post_install_commands = list(post_install_commands or [])
         self.requires_reboot_on_install = bool(requires_reboot_on_install)
         self._mounted_workspaces = set()
+        _REGISTERED_EXTENSION_INSTANCES.append(self)
         if self.volumes:
             self._validate_volume_layout()
             self._register_declarative_volumes()
@@ -521,23 +547,24 @@ class InSetuExtension(AkasaExtension):
                     _MOUNTABLE_DATA_DOMAINS[name] = f"{label_prefix} (.insetu/data/{name})"
 
     def _validate_volume_layout(self) -> None:
-        """Ensures no two declared volumes resolve to the same <tier>/<ext_name>[/<subdir>] directory."""
-        seen: Dict[Tuple[str, str], str] = {}
+        """Ensures no two declared volumes resolve to the same <tier>/<domain>[/<subdir>] directory."""
+        seen: Dict[Tuple[str, str, str], str] = {}
         for vol_name, vol_spec in self.volumes.items():
-            key = (vol_spec.get("tier", "data"), str(vol_spec.get("subdir") or "").strip("/"))
+            key = (vol_spec.get("tier", "data"), str(vol_spec.get("domain") or self.name), str(vol_spec.get("subdir") or "").strip("/"))
             if key in seen:
                 raise ValueError(
                     f"Extension '{self.name}': volumes '{seen[key]}' and '{vol_name}' resolve to the same "
-                    f"{key[0]}/{self.name}/ directory. Declare a distinct 'subdir' for one of them."
+                    f"{key[0]}/{key[1]}/ directory. Declare a distinct 'subdir' for one of them."
                 )
             seen[key] = vol_name
     def _resolve_volume_dir(self, workspace_id: str, vol_name: str, vol_spec: Dict[str, Any]) -> str:
-        """SSOT for volume placement: <control>/<tier>/<ext_name>[/<subdir>]."""
+        """SSOT for volume placement: <control>/<tier>/<domain>[/<subdir>], where domain is the spec's 'domain' or the extension's name."""
         tier = vol_spec.get("tier", "data")
+        domain_folder = str(vol_spec.get("domain") or self.name)
         base = (
-            _utils_core.get_domain_cache_path(workspace_id, self.name)
+            _utils_core.get_domain_cache_path(workspace_id, domain_folder)
             if tier == "cache"
-            else _utils_core.get_domain_data_path(workspace_id, self.name)
+            else _utils_core.get_domain_data_path(workspace_id, domain_folder)
         )
         subdir = str(vol_spec.get("subdir") or "").strip("/")
         if not subdir:

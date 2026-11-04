@@ -8,6 +8,8 @@ tags: [plan, rfc, routines, prompts, web-chat, parser, dsl, bridge, discussion-n
 
 # Blueprint Stub: Greenfield Routine & Prompt Compiler, Web-Chat Transport & Parser Unification
 
+> **Related direction (2026-11-04):** the routine grammar should start from prompts as LLM compute units, deterministic units beside them, and alternate routes for one node (`2026-11-04-prompts-tree.md`).
+
 > **STATUS — DISCUSSION REQUIRED BEFORE EXECUTION:**
 > This document is an architectural stub capturing candidate designs for (1) replacing regex/AST condition pre-processing and ad-hoc mustache pipe fallbacks with a formal expression/template grammar, (2) unifying the Yomama patch parsers across backend and frontend, and (3) consolidating Routines, Prompts, and `web_chat` transport into a single greenfield pipeline. **We need to talk through the exact grammar boundaries and migration trade-offs together before writing code.**
 
