@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.35.0 (2026-11-05)
+
+### Features
+
+- **bridge**: Implement FileTimeline Optional[str] algebra and Wave 1 system decomposition
+  ([`bd421bc`](https://github.com/Callosemic/insetu/commit/bd421bc427f96c594e1e7c478cf9479db5a82d40))
+
+
 ## v0.34.0 (2026-11-04)
 
 ### Features
