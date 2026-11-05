@@ -4,8 +4,7 @@ import json
 import re
 from pathlib import Path
 from typing import TypedDict, Optional, Dict, Any, Union
-from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import FetchHTTPError, fetch_url
+from insetu.core.sdk import FetchHTTPError, InSetuExtension, fetch_url
 # Declarative schema for settings so users can input credentials via the UI
 FRESHDESK_SETTINGS_SCHEMA = [
     {

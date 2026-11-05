@@ -1,5 +1,7 @@
 import { html } from 'lit';
-import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
+import { InSetuElement } from '/static/extensions/system/insetu_element.js';
+import { createExtensionStore, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
+import '/static/extensions/system/components/ui_schema_repeater.js';
 export const AgentStore = createExtensionStore('Agent', {
     sessions: [],
     routines: [],

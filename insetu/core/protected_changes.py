@@ -49,7 +49,7 @@ from insetu.core.sdk import (
     sse_bus,
     sync_vfs_barrier,
 )
-from insetu.core.utils_core import child_env
+from insetu.core.system.security_io import child_env
 
 PENDING_DIRNAME = "pending_changes"
 AUDIT_DIRNAME = "audit"

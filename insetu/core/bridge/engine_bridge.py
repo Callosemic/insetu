@@ -1,3 +1,5 @@
+import difflib
+import re
 import uuid
 import json
 import time
@@ -6,10 +8,11 @@ import zlib
 import traceback
 from typing import TypedDict, Literal, List, Dict, Optional, Any, Union, Tuple
 from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import approve_command, InSetuURI, get_sister_repos, get_workspace_physics
+from insetu.core.system.security_io import approve_command
+from insetu.core.utils_core import compute_vfs_sha256, InSetuURI, get_sister_repos, get_workspace_physics
 # Import the extracted math & validation logic
 from insetu.core.languages import format_interleaved_file_diff
-from .parser import parse_blocks
+from .parser import LEDGER_CHUNK_TYPES, parse_blocks
 from .bridge_fuzzy import apply_block_in_memory, apply_textedit_in_memory, apply_json_patch_in_memory
 from .bridge_vfs import execute_bridge_sync, _process_sync_transaction
 from .bridge_ast import generate_commit_message_from_ledger
@@ -67,12 +70,13 @@ def bridge_history(ctx):
     # Explicitly exclude the 'compressed_state' BLOB to prevent JSON serialization crashes
     records = ctx.db.execute("SELECT patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, timestamp, ttl_expires_at, patch_count, chunks_json FROM bridge_ledger ORDER BY timestamp DESC LIMIT 100").fetchall()
     return {"history": [dict(r) for r in records]}
-def _replay_ledger_chunks_in_memory(filepath: str, base_content: str, patch_rows: List[Any]) -> str:
+def _replay_ledger_chunks_in_memory(filepath: str, base_content: Optional[str], patch_rows: List[Any]) -> Optional[str]:
     """
     Single Source of Truth forward-replay engine for bridge_ledger records.
-    Replays exact, regex, textedit, json_patch, and delete_file chunks deterministically.
+    Operates over Optional[str] buffer states (None = file absent on disk, "" = 0-byte file, str = content)
+    and replays exact, regex, textedit, json_patch, relocate, rename, and delete_file chunks deterministically.
     """
-    content = base_content or ""
+    content: Optional[str] = base_content
     for p in (patch_rows or []):
         chunks = []
         raw_chunks_json = p["chunks_json"] if isinstance(p, dict) or hasattr(p, "__getitem__") else None
@@ -85,21 +89,26 @@ def _replay_ledger_chunks_in_memory(filepath: str, base_content: str, patch_rows
             chunks = [{"search": p["search_block"], "replace": p["replace_block"]}]
         for block in chunks:
             b_type = block.get("type", "exact")
+            if b_type not in LEDGER_CHUNK_TYPES:
+                raise ValueError(f"Unknown ledger chunk type '{b_type}'. Expected one of {sorted(LEDGER_CHUNK_TYPES)}.")
             if b_type == "delete_file":
-                content = "__DELETED_FILE__"
+                content = None
+            elif b_type in ("relocate", "rename", "move_file", "archive_file", "revert"):
+                if block.get("replace") is not None:
+                    content = block["replace"]
             elif b_type == "textedit":
-                ok, new_content, _ = apply_textedit_in_memory(content, block, silent=True)
+                ok, new_content, _ = apply_textedit_in_memory(content or "", block, silent=True)
                 if ok:
                     content = new_content
             elif b_type == "json_patch":
                 if block.get("patch_body"):
-                    ok, new_content, _ = apply_json_patch_in_memory(filepath, content, block, silent=True)
+                    ok, new_content, _ = apply_json_patch_in_memory(filepath, content or "", block, silent=True)
                     if ok:
                         content = new_content
                 elif block.get("replace") is not None:
                     content = block["replace"]
             else:
-                ok, new_content, _ = apply_block_in_memory(content, block, silent=True)
+                ok, new_content, _ = apply_block_in_memory(content or "", block, silent=True)
                 if ok:
                     content = new_content
     return content
@@ -142,51 +151,57 @@ def bridge_revert(ctx):
             filepath = target['filepath']
             target_ts = target['timestamp']
             # 1. Find nearest preceding snapshot
-            # Bugfix: Always use '<=' because the target transaction itself may contain the pre-patch snapshot.
+            # Always use '<=' because the target transaction itself may contain the pre-patch snapshot.
             snap = ctx.db.execute("SELECT timestamp, compressed_state FROM bridge_ledger WHERE filepath=? AND is_snapshot=1 AND timestamp <= ? ORDER BY timestamp DESC LIMIT 1", (filepath, target_ts)).fetchone()
 
-            if snap and snap['compressed_state']:
-                content = zlib.decompress(snap['compressed_state']).decode('utf-8')
+            if snap is not None:
+                base_state: Optional[str] = (
+                    zlib.decompress(snap['compressed_state']).decode('utf-8')
+                    if snap['compressed_state'] is not None else None
+                )
                 start_ts = snap['timestamp']
             else:
-                content = ""
+                base_state = None
                 start_ts = 0
-            # 2. Replay patches forward in memory via unified SSOT helper
+
+            # 2. Replay patches forward in memory via unified SSOT helper (None = absent, "" = 0-byte, str = content)
             patch_op = "<" if is_initial else "<="
             patches = ctx.db.execute(f"SELECT search_block, replace_block, chunks_json FROM bridge_ledger WHERE filepath=? AND timestamp >= ? AND timestamp {patch_op} ? ORDER BY timestamp ASC", (filepath, start_ts, target_ts)).fetchall()
-            content = _replay_ledger_chunks_in_memory(filepath, content, patches)
+            content = _replay_ledger_chunks_in_memory(filepath, base_state, patches)
 
             # 3. Snapshot current state and save reconstructed state as a new transaction
             raw_on_disk = vfs.read(filepath)
             current_on_disk = raw_on_disk or ""
-            if content == "__DELETED_FILE__" or (not snap and is_initial and raw_on_disk is not None):
+            if content is None:
                 if raw_on_disk is None:
                     continue
-                compressed_state = zlib.compress(current_on_disk.encode('utf-8'))
+                compressed_state = zlib.compress(raw_on_disk.encode('utf-8'))
                 new_patch_id = f"ptc_{uuid.uuid4().hex[:12]}"
                 uri = InSetuURI(filepath)
                 repo = uri.repo if uri.repo else (uri.path.partition('/')[0] if '/' in uri.path else "")
+                del_chunks_json = json.dumps([{"type": "delete_file", "search": raw_on_disk, "replace": ""}])
                 ctx.db.execute('''
-                    INSERT INTO bridge_ledger (patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, compressed_state, timestamp, ttl_expires_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (new_patch_id, new_tx_id, repo, filepath, f"<<<<<<< REVERT DELETE {target['transaction_id']}", "", "", 1, compressed_state, time.time(), time.time() + 172800.0))
+                    INSERT INTO bridge_ledger (patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, compressed_state, timestamp, ttl_expires_at, patch_count, chunks_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (new_patch_id, new_tx_id, repo, filepath, f"<<<<<<< REVERT DELETE {target['transaction_id']}", "", "", 1, compressed_state, time.time(), time.time() + 172800.0, 1, del_chunks_json))
                 vfs.delete(filepath)
                 reverted_count += 1
                 continue
 
-            if raw_on_disk is not None and current_on_disk == content:
+            if raw_on_disk is not None and raw_on_disk == content:
                 continue
-            compressed_state = zlib.compress(current_on_disk.encode('utf-8'))
-            post_patch_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
+            compressed_state = zlib.compress(raw_on_disk.encode('utf-8')) if raw_on_disk is not None else None
+            post_patch_hash = compute_vfs_sha256(content)
             new_patch_id = f"ptc_{uuid.uuid4().hex[:12]}"
 
             uri = InSetuURI(filepath)
             repo = uri.repo if uri.repo else (uri.path.partition('/')[0] if '/' in uri.path else "")
+            rev_chunks_json = json.dumps([{"type": "revert", "search": current_on_disk, "replace": content}])
 
             ctx.db.execute('''
-                INSERT INTO bridge_ledger (patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, compressed_state, timestamp, ttl_expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (new_patch_id, new_tx_id, repo, filepath, f"<<<<<<< REVERT TO {target['transaction_id']}", content, post_patch_hash, 1, compressed_state, time.time(), time.time() + 172800.0))
+                INSERT INTO bridge_ledger (patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, compressed_state, timestamp, ttl_expires_at, patch_count, chunks_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (new_patch_id, new_tx_id, repo, filepath, f"<<<<<<< REVERT TO {target['transaction_id']}", content, post_patch_hash, 1, compressed_state, time.time(), time.time() + 172800.0, 1, rev_chunks_json))
 
             vfs.save(filepath, content)
             reverted_count += 1
@@ -463,15 +478,16 @@ def bridge_turn_diff(ctx):
             "SELECT timestamp, compressed_state FROM bridge_ledger WHERE filepath=? AND is_snapshot=1 AND timestamp <= ? ORDER BY timestamp DESC LIMIT 1",
             (fp, first_ts),
         ).fetchone()
-        if snap and snap["compressed_state"]:
-            base_content = zlib.decompress(snap["compressed_state"]).decode("utf-8")
+        if snap is not None:
+            init_base: Optional[str] = (
+                zlib.decompress(snap["compressed_state"]).decode("utf-8")
+                if snap["compressed_state"] is not None else None
+            )
             prior_patches = ctx.db.execute(
                 "SELECT search_block, replace_block, chunks_json FROM bridge_ledger WHERE filepath=? AND timestamp >= ? AND timestamp < ? ORDER BY timestamp ASC",
                 (fp, snap["timestamp"], first_ts),
             ).fetchall()
-            base_content = _replay_ledger_chunks_in_memory(fp, base_content, prior_patches)
-            if base_content == "__DELETED_FILE__":
-                base_content = ""
+            base_content = _replay_ledger_chunks_in_memory(fp, init_base, prior_patches) or ""
         else:
             base_content = ""
 
@@ -534,31 +550,52 @@ def _extract_windowed_buffer_context(
     filepath: str,
     buffer_text: str,
     failed_blocks: List[Dict[str, Any]],
-    window_radius: int = 80,
+    window_radius: int = 60,
     full_file_threshold_lines: int = 400,
+    extra_focus_lines: Optional[List[int]] = None,
 ) -> str:
     """
-    Extracts a compact +/- window_radius line slice around each failed block's closest
-    SequenceMatcher anchor when a file exceeds full_file_threshold_lines, reducing healer
-    prompt token size by 70-90% on large files.
+    Extracts high-signal windowed slices from `buffer_text` for the AI patch healer:
+    - Always includes the top module header (`Lines 1..40`) on large files so imports/globals are visible.
+    - Centers windows on the longest match, the top edge of SEARCH, the bottom edge of SEARCH (in case
+      intermediate code was deleted), and any explicit `extra_focus_lines` (ambiguous match lines or syntax error lines).
     """
     file_lines = buffer_text.splitlines()
     total_lines = len(file_lines)
     if total_lines <= full_file_threshold_lines:
         return f"=== FILE STATE AFTER APPLYING VALID PATCHES: {filepath} (Lines 1-{total_lines}) ===\n{buffer_text}"
 
-    spans: List[Tuple[int, int]] = []
+    # Always include top-of-file imports/header (Lines 1..40)
+    spans: List[Tuple[int, int]] = [(0, min(total_lines, 40))]
+
+    for focus_ln in (extra_focus_lines or []):
+        if isinstance(focus_ln, int) and focus_ln > 0:
+            idx0 = max(0, min(total_lines - 1, focus_ln - 1))
+            spans.append((max(0, idx0 - 25), min(total_lines, idx0 + 25)))
+
     for fb in failed_blocks:
         s_lines = (fb.get("search") or "").splitlines()
-        if not s_lines:
+        non_empty = [l for l in s_lines if l.strip()]
+        if not non_empty:
             spans.append((0, min(total_lines, window_radius * 2)))
             continue
-        matcher = difflib.SequenceMatcher(None, file_lines, s_lines)
-        match = matcher.find_longest_match(0, total_lines, 0, len(s_lines))
-        approx_start = max(0, match.a - match.b)
-        w_start = max(0, approx_start - window_radius)
-        w_end = min(total_lines, approx_start + len(s_lines) + window_radius)
-        spans.append((w_start, w_end))
+
+        for probe in (s_lines, non_empty[:3], non_empty[-3:]):
+            if not probe:
+                continue
+            matcher = difflib.SequenceMatcher(None, file_lines, probe)
+            match = matcher.find_longest_match(0, total_lines, 0, len(probe))
+            if match.size > 0:
+                approx_start = max(0, match.a - match.b)
+                w_start = max(0, approx_start - window_radius)
+                w_end = min(total_lines, approx_start + len(s_lines) + window_radius)
+                spans.append((w_start, w_end))
+
+        sym = fb.get("symbol") or fb.get("target_symbol")
+        if sym:
+            for idx_line, fl in enumerate(file_lines):
+                if sym in fl:
+                    spans.append((max(0, idx_line - 25), min(total_lines, idx_line + 45)))
 
     spans.sort(key=lambda x: x[0])
     merged_spans: List[Tuple[int, int]] = []
@@ -668,16 +705,63 @@ def _background_bridge_sync(
                 if n_minus_1_text is None:
                     return fp_key, None, f"Target file '{fp_key}' not found for healing."
 
-                windowed_snippet = _extract_windowed_buffer_context(fp_key, n_minus_1_text, [f_blk])
-                failed_yomama = _serialize_blocks_to_yomama({fp_key: [f_blk]})
                 err_msg = df_entry["patch_tel"].get("error_message") or df_entry["patch_tel"].get("status") or "Anchor mismatch"
+                p_status = df_entry["patch_tel"].get("status") or ""
+                focus_lines: List[int] = list(df_entry["patch_tel"].get("ambiguous_lines") or [])
+                for m_ln in re.findall(r'\b[Ll]ine\s+(\d+)\b', str(err_msg)):
+                    focus_lines.append(int(m_ln))
+
+                windowed_snippet = _extract_windowed_buffer_context(
+                    fp_key, n_minus_1_text, [f_blk], extra_focus_lines=focus_lines
+                )
+                if p_status == "syntax_error" and isinstance(df_entry.get("post_buffer"), str):
+                    post_lines = df_entry["post_buffer"].splitlines()
+                    err_ln = focus_lines[0] if focus_lines else 1
+                    p_start = max(0, err_ln - 20)
+                    p_end = min(len(post_lines), err_ln + 20)
+                    post_excerpt = "\n".join(
+                        f"{idx_l + 1}: {post_lines[idx_l]}" for idx_l in range(p_start, p_end)
+                    )
+                    windowed_snippet += (
+                        f"\n\n=== BROKEN POST-PATCH EXCERPT AROUND SYNTAX ERROR ({err_msg}) ===\n"
+                        f"{post_excerpt}"
+                    )
+                elif f_blk.get("type") == "relocate" and f_blk.get("target_uri"):
+                    dst_uri = str(InSetuURI(f_blk["target_uri"]))
+                    dst_text = (post_valid_buffers or {}).get(dst_uri) or ctx.vfs.read(dst_uri) or ""
+                    if dst_text:
+                        windowed_snippet += (
+                            f"\n\n=== DESTINATION FILE BUFFER ({dst_uri}) ===\n"
+                            f"{dst_text[:8000]}"
+                        )
+
+                failed_yomama = _serialize_blocks_to_yomama({fp_key: [f_blk]})
+                extra_instructions = (
+                    "Rewrite ONLY the failed Yomama patch block above so its SEARCH block matches the exact lines in the "
+                    "'FILE STATE AFTER APPLYING VALID PATCHES' (n-1) buffer while preserving its intended changes."
+                )
+                if p_status == "syntax_error":
+                    extra_instructions = (
+                        f"This patch anchored, but introduced an AST syntax error ({err_msg}). "
+                        "Inspect the 'BROKEN POST-PATCH EXCERPT' above and rewrite the Yomama patch block so the resulting file is syntactically valid."
+                    )
+                elif df_entry["patch_tel"].get("resolution_type") == "ambiguous_anchor":
+                    extra_instructions = (
+                        f"This SEARCH block matched multiple locations ({err_msg}). "
+                        "Use the comment/intent and the excerpts above to identify the intended location, and include 2-4 additional unchanged surrounding lines in SEARCH so it matches uniquely."
+                    )
+                elif f_blk.get("type") == "relocate":
+                    extra_instructions = (
+                        f"The AST RELOCATE directive failed ({err_msg}) — for example, because the symbol is a const/variable assignment rather than a function/class, or was already moved. "
+                        "Rewrite it as standard '<<<<<<< FILE:' + '<<<<<<< SEARCH' / '=======' / '>>>>>>> REPLACE' block(s) against the source (and destination, if needed) buffers above."
+                    )
                 file_heal_prompt = (
                     "All preceding patches (0 .. n-1) for this file have been applied in memory.\n"
-                    "The following Yomama patch block (patch n) failed to anchor (or had a syntax error) against the n-1 buffer state:\n"
+                    "The following Yomama patch block (patch n) failed against the n-1 buffer state:\n"
                     f"- {fp_key}: {err_msg}"
                     + f"\n\n--- FAILED PATCH BLOCK TO REPAIR ---\n{failed_yomama}\n\n"
                     + windowed_snippet
-                    + "\n\nRewrite ONLY the failed Yomama patch block above so its SEARCH block matches the exact lines in the 'FILE STATE AFTER APPLYING VALID PATCHES' (n-1) buffer while preserving its intended changes."
+                    + f"\n\n{extra_instructions}"
                 )
                 try:
                     h_res = ctx.call(

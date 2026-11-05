@@ -29,7 +29,7 @@ from insetu.core.sdk import (
     register_proxy_header,
     register_allowed_host,
 )
-from insetu.core.utils_core import child_env
+from insetu.core.system.security_io import child_env
 
 __depends__ = []
 

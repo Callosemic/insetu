@@ -359,6 +359,35 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
         assert is_effectively_identical(["    a", "        b"], ["a", "    b"])
         assert not is_effectively_identical(["a", "", "b"], ["a", "b"])
 
+    def test_stray_two_space_docstring_lines_never_double_four_space_indentation(self):
+        """Regression test for Issue E7: a 2-space continuation line inside a docstring or block must not flip the step to 2 and double 4-space indents into 8-space indents."""
+        from insetu.core.bridge.parser import get_base_step_and_diffs as _get_step
+
+        sample_lines = [
+            "def example(a, b):",
+            '    """',
+            "    Summary line:",
+            "      - stray 2-space bullet inside docstring",
+            '    """',
+            "    if a > b:",
+            "        return a",
+            "    return b",
+        ]
+        step, _ = _get_step(sample_lines)
+        self.assertEqual(step, 4, "A stray 2-space line inside a 4-space function must not flip the base step from 4 to 2")
+
+        file_content = "def header():\n    return 0\n\ndef target():\n    return 1\n"
+        replacement = "\n".join(sample_lines)
+        ok, updated, status = apply_block_in_memory(
+            file_content,
+            {"search": "def target():\n    return 1", "replace": replacement},
+            silent=True,
+        )
+        self.assertTrue(ok)
+        self.assertEqual(status, "success")
+        self.assertIn("    if a > b:\n        return a\n    return b", updated)
+        self.assertNotIn("        if a > b:", updated, "4-space body must never be doubled to 8 spaces")
+
     def test_deterministic_overlap_rebase_merges_shared_boundary_context(self):
         """
         When Patch #1 and Patch #2 are both written against the original file (O) and share
@@ -582,6 +611,49 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
             # 69 out of 70 patches hit cache (98.57% >= 95%): only 1 call to apply_block_in_memory!
             self.assertEqual(spy_apply_70.call_count, 1)
             self.assertLess(elapsed_ms, 50.0, f"Expected 70-patch memoized re-evaluation in <50ms, took {elapsed_ms:.2f}ms")
+
+    def test_module_forward_ref_gate_allows_lambda_and_try_except_defs_and_rejects_true_forward_ref(self):
+        """
+        Regression test for 1b:
+        1. `handler = lambda: later()` before `def later(): return 1` is valid at import time and passes `_validate_buffer_syntax`.
+        2. `try: import fastjson as js / except ImportError: def js(): return helper()` before `def helper(): return 1` is valid at import time and passes.
+        3. `register(later)` at module top level before `def later(): return 1` raises NameError at import time and is rejected by `_validate_buffer_syntax`.
+        """
+        from insetu.core.bridge.bridge_vfs import _validate_buffer_syntax as __validate_buffer_syntax
+        from insetu.core.system.engine_system import system_bp as _system_bp
+
+        ctx = _system_bp.get_context("default")
+
+        lambda_src = (
+            "handler = lambda: later()\n"
+            "def later():\n"
+            "    return 1\n"
+        )
+        has_err_lambda, err_lambda = __validate_buffer_syntax(ctx, "vfs://repo/lambda_ok.py", lambda_src)
+        self.assertFalse(has_err_lambda, f"Lambda body must not be flagged as an import-time forward reference: {err_lambda}")
+
+        try_except_def_src = (
+            "try:\n"
+            "    import fastjson as js\n"
+            "except ImportError:\n"
+            "    def js():\n"
+            "        return helper()\n"
+            "def helper():\n"
+            "    return 1\n"
+        )
+        has_err_try, err_try = __validate_buffer_syntax(ctx, "vfs://repo/try_def_ok.py", try_except_def_src)
+        self.assertFalse(has_err_try, f"Def body inside try/except must not be flagged as an import-time forward reference: {err_try}")
+
+        real_fwd_ref_src = (
+            "def register(fn):\n"
+            "    return fn\n"
+            "register(later)\n"
+            "def later():\n"
+            "    return 1\n"
+        )
+        has_err_real, err_real = __validate_buffer_syntax(ctx, "vfs://repo/real_fwd_bad.py", real_fwd_ref_src)
+        self.assertTrue(has_err_real, "True import-time forward reference `register(later)` before `def later` must fail the syntax gate")
+        self.assertIn("forward reference to 'later'", err_real)
 
     def test_fitness_no_undefined_type_annotations_across_codebase(self):
         """

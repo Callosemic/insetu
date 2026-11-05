@@ -34,14 +34,23 @@ if __name__ == "__main__":
 
     raw_args = sys.argv[1:]
     only_last_failed = any(a in ("--lf", "--failed", "--last-failed") for a in raw_args)
-    patterns = [a for a in raw_args if not a.startswith("-")]
+    quiet_mode = any(a in ("-q", "--quiet") for a in raw_args)
+    patterns = []
+    skip_next = False
     for idx, a in enumerate(raw_args):
+        if skip_next:
+            skip_next = False
+            continue
         if a == "-k" and idx + 1 < len(raw_args):
             patterns.append(raw_args[idx + 1])
+            skip_next = True
+        elif not a.startswith("-"):
+            patterns.append(a)
 
-    print("============================================================")
-    print("         inSetu Developer OS & Akasa Unit Test Suite        ")
-    print("============================================================\n")
+    if not quiet_mode:
+        print("============================================================")
+        print("         inSetu Developer OS & Akasa Unit Test Suite        ")
+        print("============================================================\n")
 
     loader = unittest.TestLoader()
     start_dir = (Path(__file__).resolve().parent / "unit").as_posix()
@@ -72,8 +81,14 @@ if __name__ == "__main__":
     else:
         suite = full_suite
 
-    runner = unittest.TextTestRunner(verbosity=2)
+    runner = unittest.TextTestRunner(
+        stream=sys.stdout,
+        verbosity=0 if quiet_mode else 2,
+    )
     result = runner.run(suite)
+    if quiet_mode and not result.wasSuccessful():
+        runner.stream.writeln("")
+        result.printErrors()
 
     new_failed_ids = sorted(
         {test.id() for test, _ in (list(result.failures) + list(result.errors)) if hasattr(test, "id")}

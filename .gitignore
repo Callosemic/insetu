@@ -21,6 +21,7 @@ scripts/codemirror/.entry_stage/
 npm-debug.log*
 
 # Local Testing/Artifacts (if running insetu serve inside its own repo)
+tests/results*.txt
 data/
 contexts/
 diffs/

@@ -218,22 +218,19 @@ class TestSutramCompliance(unittest.TestCase):
             self.assertIn("export const REQUIRED_CHASSIS_PRIMITIVES", prim_src, "primitives.js must export REQUIRED_CHASSIS_PRIMITIVES")
             self.assertIn("export function validateChassisContract", prim_src, "primitives.js must export validateChassisContract")
             self.assertNotIn("../../yenvui/", prim_src, "primitives.js must not use relative ../../yenvui/ imports")
-            # Execute validateChassisContract in Node against both a complete DummyChassis and an incomplete provider
-            start_idx = prim_src.index("export const REQUIRED_CHASSIS_PRIMITIVES")
-            end_idx = prim_src.index("SutramUIAdapter.registerChassis(Chassis);")
-            contract_fn_code = prim_src[start_idx:end_idx]
-
-            node_test = f"""
+            # Execute validateChassisContract in Node by importing directly from 'sutram' via js_loader.mjs
+            loader_path = (Path(__file__).resolve().parent / "js_loader.mjs").resolve()
+            node_test = """
 import assert from 'node:assert/strict';
-{contract_fn_code}
+import { REQUIRED_CHASSIS_PRIMITIVES, validateChassisContract } from 'sutram';
 
-const DummyChassis = {{ CHASSIS_PROVIDER_META: {{ name: 'dummy-chassis', version: '1.0.0' }} }};
-for (const name of REQUIRED_CHASSIS_PRIMITIVES) {{
-    DummyChassis[name] = class {{}};
-}}
+const DummyChassis = { CHASSIS_PROVIDER_META: { name: 'dummy-chassis', version: '1.0.0' } };
+for (const name of REQUIRED_CHASSIS_PRIMITIVES) {
+    DummyChassis[name] = class {};
+}
 assert.equal(validateChassisContract(DummyChassis), true);
 
-const IncompleteChassis = {{ ...DummyChassis }};
+const IncompleteChassis = { ...DummyChassis };
 delete IncompleteChassis.Modal;
 delete IncompleteChassis.Card;
 assert.throws(
@@ -241,7 +238,10 @@ assert.throws(
     /\\[Sutram Boot Error\\] Chassis 'dummy-chassis' fails contract\\. Missing primitives: Card, Modal/
 );
 """
-            res = _execute_binary(["node", "--input-type=module", "-e", node_test], timeout=10.0)
+            res = _execute_binary(
+                ["node", "--import", loader_path.as_posix(), "--input-type=module", "-e", node_test],
+                timeout=10.0,
+            )
             self.assertEqual(res.returncode, 0, f"Chassis contract gatekeeper Node test failed:\n{res.stderr}")
 
     def test_rfc_0108_tab_scoped_navigation_isolation(self):
@@ -274,18 +274,19 @@ assert.throws(
         self.assertNotIn("flow_workflows", fs_js, "fs.js must not hardcode flow_workflows")
         self.assertNotIn("stores.Gather", fs_js, "fs.js must not couple directly to stores.Gather")
         sdk_js = (BACKEND_DIR / "core" / "system" / "insetu_sdk.js").read_text(encoding="utf-8")
+        uri_js = (BACKEND_DIR / "core" / "system" / "uri.js").read_text(encoding="utf-8")
+        element_js = (BACKEND_DIR / "core" / "system" / "insetu_element.js").read_text(encoding="utf-8")
         vendor_sutram_js = "\n".join(
             p.read_text(encoding="utf-8")
             for p in sorted((BACKEND_DIR / "static" / "vendor" / "sutram" / "js").glob("*.js"))
         )
-        combined_membrane_src = sdk_js + "\n" + vendor_sutram_js
+        combined_membrane_src = sdk_js + "\n" + uri_js + "\n" + element_js + "\n" + vendor_sutram_js
         for lego_export in ("SutramIcon", "SutramView", "SutramStack", "SutramSurface", "SutramActionBar", "SutramFloatingHud", "SutramComposer", "SutramSpinner", "SutramEmptyState"):
             self.assertIn(lego_export, combined_membrane_src, f"Missing Lego primitive export '{lego_export}' in SDK membrane")
         self.assertIn("emitHookAll:", sdk_js, "insetu_sdk.js must define emitHookAll")
-        self.assertIn("_resolveScopedPath:", sdk_js, "insetu_sdk.js must define _resolveScopedPath")
-        start_idx = sdk_js.index("export class InSetuURI {")
-        end_idx = sdk_js.index("window.inSetu = window.inSetu || {};", start_idx)
-        uri_class_src = sdk_js[start_idx:end_idx]
+        self.assertIn("_resolveScopedPath:", element_js, "insetu_element.js must define _resolveScopedPath")
+        start_idx = uri_js.index("export class InSetuURI {")
+        uri_class_src = uri_js[start_idx:]
         self.assertNotIn("derivedVfsFiles", uri_class_src, "InSetuURI must not couple to derivedVfsFiles")
         self.assertNotIn("AppStore", uri_class_src, "InSetuURI must not couple to AppStore")
 
@@ -296,9 +297,9 @@ assert.throws(
         2. Preserves cross-module routes ('prompts/resolve?file=...' -> 'prompts/resolve?file=...').
         3. Gracefully prefixes legacy relative routes ('batches/save' -> 'flow/batches/save').
         """
-        sdk_js = (BACKEND_DIR / "core" / "system" / "insetu_sdk.js").read_text(encoding="utf-8")
-        self.assertIn("_resolveScopedPath:", sdk_js, "insetu_sdk.js must define _resolveScopedPath")
-        self.assertIn("this.api._resolveScopedPath(path)", sdk_js, "insetu_sdk.js must route API calls through _resolveScopedPath")
+        element_js = (BACKEND_DIR / "core" / "system" / "insetu_element.js").read_text(encoding="utf-8")
+        self.assertIn("_resolveScopedPath:", element_js, "insetu_element.js must define _resolveScopedPath")
+        self.assertIn("resolveScopedPath(path)", element_js, "insetu_element.js must route API calls through resolveScopedPath")
         api_js = (BACKEND_DIR / "core" / "system" / "api.js").read_text(encoding="utf-8")
         self.assertIn("getJson:", api_js, "api.js must define getJson")
         self.assertIn("postJson:", api_js, "api.js must define postJson")

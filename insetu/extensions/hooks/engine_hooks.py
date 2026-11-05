@@ -8,8 +8,7 @@ import uuid
 import datetime
 from pathlib import Path
 from typing import TypedDict, Optional
-from insetu.core.sdk import InSetuExtension, ExtensionContext
-from insetu.core.utils_core import child_env
+from insetu.core.sdk import ExtensionContext, InSetuExtension, child_env
 import insetu.core.attestations as _attestations
 from insetu.core.topology.engine_topology import resolve_file_bucket
 

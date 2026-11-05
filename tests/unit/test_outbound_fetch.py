@@ -6,8 +6,8 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from insetu.core import utils_core
-from insetu.core.utils_core import FetchHTTPError, FetchRefused, fetch_url
+from insetu.core.system import security_io
+from insetu.core.system.security_io import FetchHTTPError, FetchRefused, fetch_url
 from insetu.extensions.ingest.engine_ingest import extract_markdown_from_url
 
 PROXY_VARS = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY")
@@ -107,7 +107,7 @@ class TestOutboundFetch(unittest.TestCase):
 
     def test_connected_address_is_checked_even_if_resolution_lied(self):
         # Simulates DNS rebinding: the pre-connect check passes, but the socket lands on loopback.
-        with patch.object(utils_core, "_check_fetch_target", lambda *a, **k: None):
+        with patch.object(security_io, "_check_fetch_target", lambda *a, **k: None):
             with self.assertRaises(FetchRefused):
                 fetch_url(f"{self.local}/ok")
 

@@ -296,12 +296,19 @@ class TestRepoLandmarks(unittest.TestCase):
                 self.assertIn("[!] OPTIONAL INCLUDE ERROR:", out_invalid_opt)
 
     def test_settings_access_ratchet_is_a_ratchet(self):
-        """New files and higher counts fail; lower counts and empty entries fail until the baseline is lowered."""
+        """New files and higher counts fail; lower counts and empty entries fail; docstrings/comments are ignored and intra-package splits roll up cleanly."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            (root / "insetu" / "core" / "sample").mkdir(parents=True)
+            sample_pkg = root / "insetu" / "core" / "sample"
+            sample_pkg.mkdir(parents=True)
             floor = root / "insetu" / "cli.py"
-            floor.write_text('x = "config.json"\n', encoding="utf-8")
+            # Docstrings and comments mentioning config.json/host.json must NOT be counted as accesses
+            floor.write_text(
+                '"""Boot docstring mentioning "config.json" and "host.json"."""\n'
+                '# Comment mentioning load_config() and "workspace.settings.json"\n'
+                'x = "config.json"\n',
+                encoding="utf-8",
+            )
             baseline = {"insetu/cli.py": (1, "boot floor")}
             self.assertEqual(check_settings_access_ratchet(root, ratchet=baseline), [])
 
@@ -320,6 +327,19 @@ class TestRepoLandmarks(unittest.TestCase):
 
             floor.write_text('x = "config.json"\n', encoding="utf-8")
             self.assertIn("lower its SETTINGS_ACCESS_RATCHET baseline to 1", check_settings_access_ratchet(root, ratchet={"insetu/cli.py": (2, "boot floor")})[0])
+
+            # Splitting a package's accesses across engine_sample.py (1) + submod.py (1) preserves the package's ratchet (2)
+            pkg_baseline = {
+                "insetu/cli.py": (1, "boot floor"),
+                "insetu/core/sample/engine_sample.py": (2, "sample package"),
+            }
+            (sample_pkg / "engine_sample.py").write_text('a = "config.json"\n', encoding="utf-8")
+            (sample_pkg / "submod.py").write_text('b = "host.json"\n', encoding="utf-8")
+            self.assertEqual(check_settings_access_ratchet(root, ratchet=pkg_baseline), [])
+
+            # Adding a 3rd access in submod.py exceeds the package ratchet (2 -> 3) and fails
+            (sample_pkg / "submod.py").write_text('b = "host.json"\nc = "target_repos"\n', encoding="utf-8")
+            self.assertIn("grew from 2 to 3", check_settings_access_ratchet(root, ratchet=pkg_baseline)[0])
 
     def test_settings_access_ratchet_matches_the_repository(self):
         self.assertEqual(check_settings_access_ratchet(), [])

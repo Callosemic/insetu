@@ -131,148 +131,150 @@ def is_effectively_identical(lines_a, lines_b):
 
     return True
 def find_all_block_anchors(file_lines: List[str], block_lines: List[str], allow_boundary_partial: bool = False) -> List[Dict[str, Any]]:
-        """
-        Two-Tier Contiguous Block Anchor Scanner:
-        - Tier 0 (Strict Full-Line Scan): Requires every non-empty line in block_lines to match
-            file_lines via exact stripped equality (or adjacent soft-wrap line stitching).
-        - Tier 1 (Boundary Prefix/Suffix Fallback, only if Tier 0 finds 0 hits and allow_boundary_partial=True):
-            Allows the first line to match a line suffix (len >= 6) or the last line to match a line prefix (len >= 6),
-            recording exact unmatched_first_prefix and unmatched_last_suffix strings so callers never slice lines in half.
-        Returns all non-overlapping matches in the winning tier so callers can detect ambiguous anchors.
-        """
-        non_empty_indices = [idx for idx, l in enumerate(block_lines) if l.strip() and l.strip().upper() != "{{UNTIL}}"]
-        if not non_empty_indices:
-                return []
-        baseline_s_idx = non_empty_indices[0]
-        last_content_s_idx = non_empty_indices[-1]
-        has_until_macro = any(l.strip().upper() == "{{UNTIL}}" for l in block_lines)
+    """
+    Two-Tier Contiguous Block Anchor Scanner:
+    - Tier 0 (Strict Full-Line Scan): Requires every non-empty line in block_lines to match
+        file_lines via exact stripped equality (or adjacent soft-wrap line stitching).
+    - Tier 1 (Boundary Prefix/Suffix Fallback, only if Tier 0 finds 0 hits and allow_boundary_partial=True):
+        Allows the first line to match a line suffix (len >= 6) or the last line to match a line prefix (len >= 6),
+        recording exact unmatched_first_prefix and unmatched_last_suffix strings so callers never slice lines in half.
+    Returns all non-overlapping matches in the winning tier so callers can detect ambiguous anchors.
+    """
+    non_empty_indices = [idx for idx, l in enumerate(block_lines) if l.strip() and l.strip().upper() != "{{UNTIL}}"]
+    if not non_empty_indices:
+        return []
+    baseline_s_idx = non_empty_indices[0]
+    last_content_s_idx = non_empty_indices[-1]
+    has_until_macro = any(l.strip().upper() == "{{UNTIL}}" for l in block_lines)
 
-        def _scan_tier(permit_partial_bounds: bool) -> List[Dict[str, Any]]:
-                matches: List[Dict[str, Any]] = []
-                i = 0
-                while i < len(file_lines):
-                        match_meta = {
-                                "last_content_f_idx": -1,
-                                "unmatched_first_prefix": "",
-                                "unmatched_last_suffix": "",
-                        }
+    def _scan_tier(permit_partial_bounds: bool) -> List[Dict[str, Any]]:
+        matches: List[Dict[str, Any]] = []
+        i = 0
+        while i < len(file_lines):
+            match_meta = {
+                "last_content_f_idx": -1,
+                "unmatched_first_prefix": "",
+                "unmatched_last_suffix": "",
+            }
 
-                        def match_from(f_idx: int, s_idx: int) -> Tuple[bool, int, int]:
-                                local_baseline_f_idx = -1
-                                while s_idx < len(block_lines):
-                                        if block_lines[s_idx].strip().upper() == "{{UNTIL}}":
-                                                s_idx += 1
-                                                if s_idx >= len(block_lines):
-                                                        return True, len(file_lines) - i, local_baseline_f_idx
-                                                while f_idx < len(file_lines):
-                                                        ok, span, b_f_idx = match_from(f_idx, s_idx)
-                                                        if ok:
-                                                                return True, span, (local_baseline_f_idx if local_baseline_f_idx != -1 else b_f_idx)
-                                                        f_idx += 1
-                                                return False, 0, -1
-                                        else:
-                                                if f_idx >= len(file_lines):
-                                                        return False, 0, -1
-                                                f_stripped = file_lines[f_idx].strip()
-                                                s_stripped = block_lines[s_idx].strip()
+            def match_from(f_idx: int, s_idx: int) -> Tuple[bool, int, int]:
+                local_baseline_f_idx = -1
+                while s_idx < len(block_lines):
+                    if block_lines[s_idx].strip().upper() == "{{UNTIL}}":
+                        s_idx += 1
+                        if s_idx >= len(block_lines):
+                            return True, len(file_lines) - i, local_baseline_f_idx
+                        while f_idx < len(file_lines):
+                            ok, span, b_f_idx = match_from(f_idx, s_idx)
+                            if ok:
+                                return True, span, (local_baseline_f_idx if local_baseline_f_idx != -1 else b_f_idx)
+                            f_idx += 1
+                        return False, 0, -1
+                    else:
+                        if f_idx >= len(file_lines):
+                            return False, 0, -1
+                        f_stripped = file_lines[f_idx].strip()
+                        s_stripped = block_lines[s_idx].strip()
 
-                                                if not s_stripped and f_stripped:
-                                                        s_idx += 1
-                                                        continue
-                                                if not f_stripped and s_stripped:
-                                                        f_idx += 1
-                                                        continue
+                        if not s_stripped and f_stripped:
+                            s_idx += 1
+                            continue
+                        if not f_stripped and s_stripped:
+                            f_idx += 1
+                            continue
 
-                                                if s_idx == last_content_s_idx:
-                                                        match_meta["last_content_f_idx"] = f_idx
+                        if s_idx == last_content_s_idx:
+                            match_meta["last_content_f_idx"] = f_idx
 
-                                                if f_stripped == s_stripped:
-                                                        pass
-                                                elif (
-                                                        permit_partial_bounds
-                                                        and s_idx == baseline_s_idx
-                                                        and len(s_stripped) >= 6
-                                                        and f_stripped.endswith(s_stripped)
-                                                ):
-                                                        prefix_len = len(f_stripped) - len(s_stripped)
-                                                        match_meta["unmatched_first_prefix"] = f_stripped[:prefix_len]
-                                                elif (
-                                                        permit_partial_bounds
-                                                        and s_idx == last_content_s_idx
-                                                        and len(s_stripped) >= 6
-                                                        and f_stripped.startswith(s_stripped)
-                                                ):
-                                                        match_meta["unmatched_last_suffix"] = f_stripped[len(s_stripped):]
-                                                else:
-                                                        next_f = file_lines[f_idx + 1].strip() if f_idx + 1 < len(file_lines) else None
-                                                        next_s = block_lines[s_idx + 1].strip() if s_idx + 1 < len(block_lines) else None
+                        if f_stripped == s_stripped:
+                            pass
+                        elif (
+                            permit_partial_bounds
+                            and s_idx == baseline_s_idx
+                            and len(s_stripped) >= 6
+                            and f_stripped.endswith(s_stripped)
+                        ):
+                            prefix_len = len(f_stripped) - len(s_stripped)
+                            match_meta["unmatched_first_prefix"] = f_stripped[:prefix_len]
+                        elif (
+                            permit_partial_bounds
+                            and s_idx == last_content_s_idx
+                            and len(s_stripped) >= 6
+                            and f_stripped.startswith(s_stripped)
+                        ):
+                            match_meta["unmatched_last_suffix"] = f_stripped[len(s_stripped):]
+                        else:
+                            next_f = file_lines[f_idx + 1].strip() if f_idx + 1 < len(file_lines) else None
+                            next_s = block_lines[s_idx + 1].strip() if s_idx + 1 < len(block_lines) else None
 
-                                                        def stitch_match(f1, f2, s1, s2):
-                                                                f_opts = [f1 + " " + f2, f1 + f2] if f2 is not None else [f1]
-                                                                s_opts = [s1 + " " + s2, s1 + s2] if s2 is not None else [s1]
-                                                                return any(f == s for f in f_opts for s in s_opts)
+                            def stitch_match(f1, f2, s1, s2):
+                                f_opts = [f1 + " " + f2, f1 + f2] if f2 is not None else [f1]
+                                s_opts = [s1 + " " + s2, s1 + s2] if s2 is not None else [s1]
+                                return any(f == s for f in f_opts for s in s_opts)
 
-                                                        if next_f is not None and stitch_match(f_stripped, next_f, s_stripped, None):
-                                                                f_idx += 1
-                                                        elif next_s is not None and stitch_match(f_stripped, None, s_stripped, next_s):
-                                                                s_idx += 1
-                                                        elif next_f is not None and next_s is not None and stitch_match(f_stripped, next_f, s_stripped, next_s):
-                                                                f_idx += 1
-                                                                s_idx += 1
-                                                        else:
-                                                                return False, 0, -1
+                            if next_f is not None and stitch_match(f_stripped, next_f, s_stripped, None):
+                                f_idx += 1
+                            elif next_s is not None and stitch_match(f_stripped, None, s_stripped, next_s):
+                                s_idx += 1
+                            elif next_f is not None and next_s is not None and stitch_match(f_stripped, next_f, s_stripped, next_s):
+                                f_idx += 1
+                                s_idx += 1
+                            else:
+                                return False, 0, -1
 
-                                                if s_idx == baseline_s_idx:
-                                                        local_baseline_f_idx = f_idx
-                                                f_idx += 1
-                                                s_idx += 1
-                                return True, f_idx - i, local_baseline_f_idx
+                        if s_idx == baseline_s_idx:
+                            local_baseline_f_idx = f_idx
+                        f_idx += 1
+                        s_idx += 1
+                return True, f_idx - i, local_baseline_f_idx
 
-                        ok, span, b_f_idx = match_from(i, 0)
-                        if ok and b_f_idx != -1:
-                                # Blank file lines are skipped softly while matching, so a scan starting on a
-                                # blank line just above the target also succeeds and would swallow that line.
-                                # Pin the start: consume at most as many leading blank lines as the SEARCH has.
-                                pinned_idx = max(i, b_f_idx - baseline_s_idx)
-                                span -= pinned_idx - i
-                                if not matches or matches[-1]["matched_baseline_f_idx"] != b_f_idx:
-                                        matches.append({
-                                                "match_idx": pinned_idx,
-                                                "actual_span": span,
-                                                "matched_baseline_f_idx": b_f_idx,
-                                                "matched_last_content_f_idx": match_meta["last_content_f_idx"],
-                                                "baseline_s_idx": baseline_s_idx,
-                                                "last_content_s_idx": last_content_s_idx,
-                                                "unmatched_first_prefix": match_meta["unmatched_first_prefix"],
-                                                "unmatched_last_suffix": match_meta["unmatched_last_suffix"],
-                                                "tier": 1 if permit_partial_bounds else 0,
-                                        })
-                                if has_until_macro:
-                                        break
-                                i = max(i + 1, b_f_idx + 1)
-                                continue
-                        i += 1
-                return matches
+            ok, span, b_f_idx = match_from(i, 0)
+            if ok and b_f_idx != -1:
+                # Blank file lines are skipped softly while matching, so a scan starting on a
+                # blank line just above the target also succeeds and would swallow that line.
+                # Pin the start: consume at most as many leading blank lines as the SEARCH has.
+                pinned_idx = max(i, b_f_idx - baseline_s_idx)
+                span -= pinned_idx - i
+                if not matches or matches[-1]["matched_baseline_f_idx"] != b_f_idx:
+                    matches.append({
+                        "match_idx": pinned_idx,
+                        "actual_span": span,
+                        "matched_baseline_f_idx": b_f_idx,
+                        "matched_last_content_f_idx": match_meta["last_content_f_idx"],
+                        "baseline_s_idx": baseline_s_idx,
+                        "last_content_s_idx": last_content_s_idx,
+                        "unmatched_first_prefix": match_meta["unmatched_first_prefix"],
+                        "unmatched_last_suffix": match_meta["unmatched_last_suffix"],
+                        "tier": 1 if permit_partial_bounds else 0,
+                    })
+                if has_until_macro:
+                    break
+                i = max(i + 1, b_f_idx + 1)
+                continue
+            i += 1
+        return matches
 
-        strict_matches = _scan_tier(False)
-        if strict_matches or not allow_boundary_partial:
-                return strict_matches
-        return _scan_tier(True)
+    strict_matches = _scan_tier(False)
+    if strict_matches or not allow_boundary_partial:
+        return strict_matches
+    return _scan_tier(True)
 
 
 def find_block_anchor(file_lines, block_lines, allow_boundary_partial: bool = False):
-        """
-        Backward-compatible single-anchor wrapper around find_all_block_anchors.
-        Returns the single match dict when unambiguous, or None if 0 matches exist.
-        Attaches 'ambiguous_matches' metadata if multiple locations matched.
-        """
-        matches = find_all_block_anchors(file_lines, block_lines, allow_boundary_partial=allow_boundary_partial)
-        if not matches:
-                return None
-        primary = dict(matches[0])
-        if len(matches) > 1:
-                primary["ambiguous_matches"] = [m["matched_baseline_f_idx"] + 1 for m in matches]
-        return primary
+    """
+    Backward-compatible single-anchor wrapper around find_all_block_anchors.
+    Returns the single match dict when unambiguous, or None if 0 matches exist.
+    Attaches 'ambiguous_matches' metadata if multiple locations matched.
+    """
+    matches = find_all_block_anchors(file_lines, block_lines, allow_boundary_partial=allow_boundary_partial)
+    if not matches:
+        return None
+    primary = dict(matches[0])
+    if len(matches) > 1:
+        primary["ambiguous_matches"] = [m["matched_baseline_f_idx"] + 1 for m in matches]
+    return primary
+
+
 def normalize_patch_payload(text: str, reference_content: str = "") -> str:
     """
     Single Source of Truth normalizer for Yomama SEARCH, REPLACE, TEXTEDIT, and JSON_PATCH payloads.
@@ -427,19 +429,10 @@ def apply_block_in_memory(content, block, silent=False):
 
     llm_base_indent = len(search_lines[baseline_s_idx]) - len(search_lines[baseline_s_idx].lstrip()) if baseline_s_idx != -1 else 0
     actual_base_indent = len(file_lines[matched_baseline_f_idx]) - len(file_lines[matched_baseline_f_idx].lstrip()) if matched_baseline_f_idx != -1 else 0
-    # 1. Calculate File Step (Source of Truth)
+    # 1. Calculate File Step (Source of Truth) — a patch never overrides the file's baseline step.
     file_step, _ = _get_base_step_and_diffs(file_lines)
+    indent_delta = actual_base_indent - llm_base_indent
 
-    # 2. Evaluate LLM Step against File Step
-    all_llm_lines = search_lines + replace_lines
-    llm_raw_step, llm_diffs = _get_base_step_and_diffs(all_llm_lines)
-
-    if llm_diffs and all(d % file_step == 0 for d in llm_diffs):
-        # If all LLM indentation jumps are perfect multiples of the file's step size, it's correctly aligned
-        llm_step = file_step
-    else:
-        # If not, assume the LLM hallucinated a different base ratio. Fall back to its raw step.
-        llm_step = llm_raw_step if llm_diffs else file_step
     unmatched_first_prefix = search_match.get("unmatched_first_prefix") or ""
     unmatched_last_suffix = search_match.get("unmatched_last_suffix") or ""
     if unmatched_first_prefix and replace_lines:
@@ -458,21 +451,11 @@ def apply_block_in_memory(content, block, silent=False):
             continue
 
         r_indent = len(r_line) - len(r_line.lstrip())
-        # Absolute root-escape: if LLM provides 0 spaces, force it to the module root
+        # Absolute root-escape: if LLM provides 0 spaces while anchored inside an indented block, allow module-root escape
         if r_indent == 0 and llm_base_indent > 0:
             target_indent = 0
         else:
-            # THE HYBRID ACCORDION:
-            # Re-enable the ratio math to translate LLM 4-space hallucinations into 2-space files.
-            # Add a strict circuit breaker: if the file's step size is chaotic (> 8 spaces),
-            # or the LLM step is 0, fall back to the safe 1:1 absolute shift to prevent math explosions.
-            if file_step > 8 or llm_step <= 0:
-                indent_delta = actual_base_indent - llm_base_indent
-                target_indent = max(0, r_indent + indent_delta)
-            else:
-                nesting_levels = (r_indent - llm_base_indent) / llm_step
-                # Snap to the discrete grid: round the tier FIRST, then multiply by the physical step
-                target_indent = max(0, actual_base_indent + (int(round(nesting_levels)) * file_step))
+            target_indent = max(0, r_indent + indent_delta)
         new_replace_lines.append((" " * target_indent) + r_line.lstrip())
 
     final_content = "\n".join(file_lines[:match_idx] + new_replace_lines + file_lines[match_idx + actual_span:])

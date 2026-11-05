@@ -1077,13 +1077,15 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         sys_ctx = system_bp.get_context("default")
         agent_ctx = agent_bp.get_context("default")
 
-        # 1. Verify llm.resolve_target capability returns driver metadata
-        target_res = sys_ctx.call("llm.resolve_target", tier="standard")
-        self.assertEqual(target_res["tier"], "standard")
+        # 1. Verify llm.resolve_target capability returns driver metadata and can_auto_heal readiness
+        target_res = sys_ctx.call("llm.resolve_target", tier="fast")
+        self.assertEqual(target_res["tier"], "fast")
         self.assertIn("provider", target_res)
         self.assertIn("model", target_res)
         self.assertIn("is_web_chat", target_res)
         self.assertIn("has_api_key", target_res)
+        self.assertFalse(target_res["can_auto_heal"], "Without an API key on a cloud endpoint, can_auto_heal must be False")
+        self.assertIn("No API key", target_res["auto_heal_reason"])
         self.assertNotIn("api_key", target_res, "api_key plaintext must not be exposed by resolve_target")
 
         # 2. Verify chat_messages preserves raw_content alongside clean prose content

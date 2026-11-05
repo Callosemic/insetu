@@ -355,41 +355,12 @@ class TestCanonicalURIs(unittest.TestCase):
         self.assertIn("vfs://alpha/main.py", expanded)
 
     def test_frontend_insetu_uri_value_object_in_node(self):
-        """Frontend InSetuURI in insetu_sdk.js preserves scheme:// across withName, parentUri, join, and pathSegments."""
-        sdk_path = (Path(__file__).resolve().parent.parent.parent / "insetu" / "core" / "system" / "insetu_sdk.js").resolve()
-        sdk_src = sdk_path.read_text(encoding="utf-8")
-        self.assertIn("export class InSetuURI", sdk_src)
-
+        """Frontend InSetuURI in uri.js (imported directly through js_loader.mjs) preserves scheme:// across withName, parentUri, join, and pathSegments."""
+        loader_path = (Path(__file__).resolve().parent / "js_loader.mjs").resolve()
         node_script = """
 import assert from 'node:assert/strict';
+import { InSetuURI } from '/static/extensions/system/uri.js';
 
-globalThis.window = { inSetu: { utils: {} } };
-window.inSetu.utils.parseURI = function(pathStr) {
-    if (!pathStr) {
-        return { scheme: '', volume: '', repo: '', relativePath: '', filename: '', raw: '' };
-    }
-    let str = String(pathStr).replace(/\\\\/g, '/').trim();
-    let scheme = '';
-    const schemeMatch = str.match(/^([a-zA-Z0-9_-]+):\\/\\/(.*)$/);
-    if (schemeMatch) {
-        scheme = schemeMatch[1];
-        str = schemeMatch[2];
-    }
-    str = str.replace(/^\\/+/, '');
-    const parts = str.split('/').filter(Boolean);
-    const volume = parts.length > 0 ? parts[0] : '';
-    const repo = parts.length > 1 ? parts[0] : (scheme === 'vfs' ? volume : '');
-    const relativePath = parts.length > 1 ? parts.slice(1).join('/') : (scheme === 'vfs' ? '' : str);
-    const filename = parts[parts.length - 1] || '';
-    return { scheme, volume, repo, relativePath, filename, raw: pathStr };
-};
-"""
-        # Extract the exact InSetuURI class definition from insetu_sdk.js
-        start_idx = sdk_src.index("export class InSetuURI {")
-        end_idx = sdk_src.index("window.inSetu = window.inSetu || {};", start_idx)
-        uri_class_code = sdk_src[start_idx:end_idx]
-
-        assertions = """
 // 1. Nested file rename preserves vfs:// scheme and parent path
 const nestedFile = new InSetuURI('vfs://alpha/src/components/button.js');
 assert.equal(nestedFile.basename, 'button.js');
@@ -413,8 +384,10 @@ assert.equal(subFolder.join('intro.md'), 'vfs://alpha/docs/guides/intro.md');
 const repoRoot = new InSetuURI('vfs://alpha/');
 assert.equal(repoRoot.isRootVolume, true);
 """
-        full_script = f"{node_script}\n{uri_class_code}\n{assertions}"
-        res = execute_binary(["node", "--input-type=module", "-e", full_script], timeout=10.0)
+        res = execute_binary(
+            ["node", "--import", loader_path.as_posix(), "--input-type=module", "-e", node_script],
+            timeout=10.0,
+        )
         self.assertEqual(res.returncode, 0, f"Frontend InSetuURI Node test failed:\n{res.stderr}")
 
     def test_multipart_chunk_resolution_and_self_healing_fetch(self):

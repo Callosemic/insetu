@@ -6,8 +6,13 @@ from datetime import datetime
 import urllib.parse
 import json
 from typing import TypedDict, Optional
-from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import FetchHTTPError, fetch_url, is_extension_enabled, get_workspace_physics
+from insetu.core.sdk import (
+    FetchHTTPError,
+    InSetuExtension,
+    fetch_url,
+    get_workspace_physics,
+    is_extension_enabled,
+)
 RESEARCH_SCHEMA = {
     "research_jobs": {
         "id": "TEXT PRIMARY KEY",

@@ -15,7 +15,7 @@ from insetu.core.bridge import bridge_test
 from insetu.core.bridge.engine_bridge import BridgeTestPayload
 from insetu.core.mcp import engine_mcp
 from insetu.core.sdk import get_registered_capabilities
-from insetu.core.utils_core import approve_command, is_test_command_approved
+from insetu.core.system.security_io import approve_command, is_test_command_approved
 
 APPROVE_CAPABILITY = "bridge.test.approve"
 

@@ -13,11 +13,11 @@ import akasa
 import akasa.utils as akasa_utils
 from akasa.extension import _CAPABILITY_REGISTRY
 import insetu.app as insetu_app
-from insetu.core import utils_core
+from insetu.core.system import ext_manager as utils_core
 from insetu.core.agent.orchestrator import ROUTINE_BANNED_CAPABILITIES
 from insetu.core.bridge.bridge_vfs import _is_banned_bridge_target
 from insetu.core.sdk import InSetuURI
-from insetu.core.system import engine_system
+from insetu.core.system import ext_manager as engine_system
 
 ENGINE_SRC = '''from insetu.core.sdk import InSetuExtension
 __depends__ = []

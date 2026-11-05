@@ -55,6 +55,7 @@ insetu/
 │   │   ├── 0100-knowledge-and-work-extension-suites-convergence-sieve-parity-and-metronome-polling.md # ADR 0100: Knowledge & Content and Work & Automation Suites Convergence, Sieve Parity, and Metronome Polling Unification
 │   │   ├── 0101-s8-confirmed-protected-changes-attestation-store-smoke-testing-and-lifeboat-fallback.md # ADR 0101: S8 Confirmed Protected Changes, Unified Attestation Store, Subprocess Recovery Smoke Testing, and Last-Good Lifeboat Fallbacks
 │   │   ├── 0102-four-tier-agent-directives-repository-attestation-and-unified-session-protocols.md # ADR 0102: Four-Tier Agent Directives, Repository Attestation Acceptance, and Unified Session Protocols
+│   │   ├── 0103-optional-str-buffer-algebra-and-wave-1-system-decomposition.md # 0103: Optional[str] Buffer Algebra, Bridge Working Tree, and Wave 1 System Decomposition
 │   │   ├── archived/               # Superseded and historical ADR documents.
 │   │   │   ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │   │   │   ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -138,12 +139,13 @@ insetu/
 │       ├── 2026-11-03-s8-confirmed-protected-changes.md # Completed plan: S8 confirmed protected changes, attestation store, smoke test, last-good lifeboat.
 │       ├── 2026-11-03-six-bucket-orchestrator-and-composable-rag.md # Refactor orchestrator.py, engine_agent.py, and context_assemble.py to implement the 6-bucket envelope, 4 resource lenses, composable RAG uni...
 │       ├── 2026-11-03-subsystem-mental-models-and-worker-fault-transparency.md # Create a blueprint for institutionalizing Subsystem Mental Models across the core engines, wiring blast-radius model injection, and enforcin...
+│       ├── 2026-11-04-ast-import-rewriting-file-moves.md # Plan: Moves That Keep Imports Working (Bridge Issue #15, RELOCATE Targets, AST Import Rewriting)
 │       ├── 2026-11-04-prompts-tree.md # Plan stub for one prompts tree: canonical templates materialized per repository by scope, overrides that never overwrite, directives as stac...
 │       └── 2026-11-04-system-notices.md # Plan: System Notices, One Mechanism for Everything That Needs Your Attention
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── app.py                      # [Micro-Kernel & Extension Bootloader]
-│   │   ├── def load_workspace_extensions() # [comment required]
+│   │   ├── def load_workspace_extensions() # Two-stage topological bootloader separating Tier 2 Core and Tier 3 extensions with fault quarantine.
 │   │   ├── def parse_semver(v_str) # Converts a SemVer string into a comparable integer tuple (major, minor, patch).
 │   │   ├── def eval_single_clause(v_tuple, clause) # Evaluates a single comparison clause against a version tuple.
 │   │   ├── def satisfies_range(version_str, range_str) # Evaluates compound range expressions (e.g., '>=5.0.0 && <6.0.0').
@@ -276,7 +278,7 @@ insetu/
 │   │   │   │   ├── class InSetuExtBridgeActions # [comment required]
 │   │   │   │   └── class InSetuExtBridgeHistory # [comment required]
 │   │   │   ├── bridge_ast.py       # Yomama v4 AST symbol relocation, token-aware renaming, and commit message synthesis.
-│   │   │   │   ├── def apply_ast_relocate_in_memory(source_content, target_content, source_uri, target_uri, ...) # Byte-exact AST symbol cut-and-paste from source_content into target_content.
+│   │   │   │   ├── def apply_ast_relocate_in_memory(source_content, target_content, source_uri, target_uri, ...) # [stale?] Byte-exact AST symbol cut-and-paste from source_content into target_content.
 │   │   │   │   ├── def apply_ast_rename_to_content(filepath, content, target_symbol, new_symbol) # Token-aware symbol renamer for a single file buffer.
 │   │   │   │   ├── def resolve_scope_files(workspace_id, scope_prefix, allowed_repos) # Resolves a URI prefix or glob pattern (e.g.
 │   │   │   │   └── def generate_commit_message_from_ledger(ctx, repo, transaction_id, limit) # Synthesizes a Conventional Commit message and Transaction-ID trailers directly from recent bridge_ledger intent comments (<<<<<<< COMMENT).
@@ -300,13 +302,15 @@ insetu/
 │   │   │   │   ├── def clear_bridge_eval_cache() # Clears the in-memory content-addressed FileEvalSig and PatchEvalSig caches.
 │   │   │   │   ├── def compute_file_eval_signature(workspace_id, target_file, disk_hash, blocks, ...) # [stale?] Tier 1 Per-File Bundle Signature (FileEvalSig): Pure function of the target file's on-disk SHA-256 hash, the ordered list of active patch bl...
 │   │   │   │   ├── def compute_patch_eval_signature(resolved_path, input_buffer_hash, orig_disk_hash, block, ...) # Tier 2 Intra-File Sequential Chunk Signature (PatchEvalSig): Models a single chunk evaluation as a pure state transition from `input_buffer_...
+│   │   │   │   ├── class FileTimeline # [stale?] Single Source of Truth for one file's state progression B_0 -> B_1 -> ...
+│   │   │   │   ├── class BridgeWorkingTree # Speculative VFS overlay for a single Bridge transaction.
 │   │   │   │   └── def execute_bridge_sync(workspace_id, data, ctx) # [comment required]
 │   │   │   ├── engine_bridge.py    # [Yomama Sync Bridge Transaction Logic]
 │   │   │   │   ├── class BridgeLedgerRecord(TypedDict) # [comment required]
 │   │   │   │   ├── class BridgeHistoryResponse(TypedDict) # [comment required]
 │   │   │   │   ├── def bridge_history(ctx) # Phase C: Returns the ephemeral ledger history for the UI.
 │   │   │   │   ├── class BridgeRevertPayload(TypedDict) # [comment required]
-│   │   │   │   ├── def bridge_revert(ctx) # Phase 5: Forward-replay reversion.
+│   │   │   │   ├── def bridge_revert(ctx) # [stale?] Phase 5: Forward-replay reversion.
 │   │   │   │   ├── class PatchResolution(TypedDict) # [comment required]
 │   │   │   │   ├── class BridgeSyncPayload(TypedDict) # [comment required]
 │   │   │   │   ├── def bridge_sync(ctx) # Receives Yomama payloads from the UI and dispatches the sync.
@@ -325,7 +329,7 @@ insetu/
 │   │   │   │   ├── class BridgeTurnDiffPayload(TypedDict) # [comment required]
 │   │   │   │   └── def bridge_turn_diff(ctx) # [comment required]
 │   │   │   ├── parser.py           # Create dedicated Yomama Bridge lexer and lookahead parser module (extracted from utils_core.py) with deterministic block content hashing for...
-│   │   │   │   ├── def get_base_step_and_diffs(lines) # Analyzes a block of code to find its true structural base indentation unit (LCD > 1).
+│   │   │   │   ├── def get_base_step_and_diffs(lines) # [stale?] Analyzes a block of code to find its true structural base indentation unit (LCD > 1).
 │   │   │   │   ├── def compute_block_signature(block, resolution) # Computes a deterministic SHA-256 content signature for a parsed Yomama block and its user resolution.
 │   │   │   │   ├── def parse_blocks(text) # [stale?] Compiler-grade two-phase Lexer + Lookahead Parser for Yomama Bridge payloads: - Heals web-chat chevron meltdown (`> > > REPLACE`, `< < < SEA...
 │   │   │   │   └── def flatten_parsed_blocks(parsed_structure) # Returns a flat list of (raw_target_file, block_index_in_file, block_dict) sorted strictly by the canonical 0..n creation order ('order') in...
@@ -520,7 +524,7 @@ insetu/
 │   │   │   ├── python.py           # Consolidate Python AST symbol extraction, normalized body hashing, file description, and interface slicing in PythonLanguageProvider.
 │   │   │   │   ├── def format_py_signature(node) # Formats a canonical, coordinate-free Python class or function signature.
 │   │   │   │   ├── def compute_normalized_py_body_hash(node, fallback_slice) # Computes an 8-char SHA-256 hash of a Python AST node's body (excluding leading docstring).
-│   │   │   │   └── class PythonLanguageProvider(BaseLanguageProvider) # Python AST language provider with zero external package dependencies.
+│   │   │   │   └── class PythonLanguageProvider(BaseLanguageProvider) # [stale?] Python AST language provider with zero external package dependencies.
 │   │   │   └── rust.py             # Create RustLanguageProvider in insetu/core/languages/rust.py with body_hash, snippet, and symbol slice extraction.
 │   │   │       └── class RustLanguageProvider(BaseLanguageProvider) # [stale?] Rust language provider for AST inspection and interface extraction.
 │   │   ├── llm/                    # Universal multi-provider LLM gateway and streaming proxy.
@@ -613,10 +617,11 @@ insetu/
 │   │   │   ├── api.js              # Centralized API fetch wrapper and token injector.
 │   │   │   │   ├── class SSEPipeline # Phase E: Network Hysteresis, Outbox Reconciliation & SSE Pipeline (also carries the pending protected change count).
 │   │   │   │   └── function attemptReconciliation() # [comment required]
+│   │   │   ├── blueprint.py        # Shared `system_bp` InSetuExtension blueprint and `SYSTEM_SETTINGS_SCHEMA` for the `insetu.core.system` package.
 │   │   │   ├── cli_commands.py     # Modular CLI command implementations (init, daemon service, GUI, shortcuts).
 │   │   │   │   ├── def handle_init(cwd, args) # Interactive and headless onboarding wizard for initializing an inSetu workspace.
 │   │   │   │   ├── def handle_service(action, cwd) # Manages the background systemd daemon for inSetu.
-│   │   │   │   ├── def scaffold_extension(ext_name, bundled) # Scaffolds a new extension from the default templates.
+│   │   │   │   ├── def scaffold_extension(ext_name, bundled) # [stale?] Scaffolds a new extension from the default templates.
 │   │   │   │   ├── def check_daemon_alive(port) # Pings localhost to check if an inSetu daemon is already running.
 │   │   │   │   ├── def launch_gui(cwd) # Launches pywebview desktop shell, attaching to an active daemon or starting an embedded server.
 │   │   │   │   ├── def create_desktop_shortcut(cwd) # Generates a native OS application shortcut for inSetu GUI.
@@ -655,30 +660,22 @@ insetu/
 │   │   │   │   │   ├── function hashReviewedContent(change) # S8: the review window for changes to protected files (the CLI, the lifeboat, the credential store).
 │   │   │   │   │   ├── class InSetuProtectedChangesProjection # Shows pending protected changes one at a time as diffs, with Previous and Next, Confirm and Discard.
 │   │   │   │   │   └── function openProtectedChangesReview() # Opens the review window beside the current column.
+│   │   │   │   ├── ui_schema_repeater.js # Declarative schema-driven repeater component and field condition/default helpers.
+│   │   │   │   │   └── class InSetuSchemaRepeater # Declarative repeater widget for array-of-object settings schemas with bounds, slug sync, and conditional sub-fields.
 │   │   │   │   └── ui_system_settings.js # The 3-Tier Configuration Editor and Settings Hub.
-│   │   │   │       ├── class InSetuSchemaRepeater # [comment required]
 │   │   │   │       └── class InSetuSystemSettings # [comment required]
 │   │   │   ├── engine_system.py    # System topology, deltas, and lifecycle REST endpoints.
 │   │   │   │   ├── def vault_repeater_secrets_for_schema(ext_name, workspace_id) # [stale?] Universal Repeater Secret Vaulting: Scans any registered settings schema for `type: 'repeater'` fields that contain `secure: True` subfields...
 │   │   │   │   ├── def core_system_settings_updated(workspace_id, **kwargs) # [comment required]
 │   │   │   │   ├── def hydrate_and_migrate_cascade_settings(cfg, workspace_id, **kwargs) # Transparent 3-Tier Cascade Bridge: 1.
 │   │   │   │   ├── def provide_vfs_ignores(workspace_id, **kwargs) # Host application declaration of directories the VFS should never traverse natively.
-│   │   │   │   ├── def api_system_openapi() # Phase 3 Tool Calling: Generates a real-time OpenAPI 3.0 specification from mounted SDK routes.
+│   │   │   │   ├── def api_system_openapi() # [stale?] Phase 3 Tool Calling: Generates a real-time OpenAPI 3.0 specification from mounted SDK routes.
 │   │   │   │   ├── class DeltasQueryPayload(TypedDict) # [comment required]
 │   │   │   │   ├── class SystemDeltasResponse(TypedDict) # [comment required]
 │   │   │   │   ├── def api_system_deltas(ctx) # [comment required]
 │   │   │   │   ├── class PipelineSubmitPayload(TypedDict) # [comment required]
 │   │   │   │   ├── def api_system_pipeline_submit(ctx) # [comment required]
 │   │   │   │   ├── def handle_config_pre_save(workspace_id, filepath, content, data, **kwargs) # [comment required]
-│   │   │   │   ├── def get_system_config(workspace_id) # [comment required]
-│   │   │   │   ├── def save_system_config(workspace_id, payload) # [comment required]
-│   │   │   │   ├── class ExtensionInstallDepsPayload(TypedDict) # [comment required]
-│   │   │   │   ├── def api_system_install_extension_deps(ctx) # [comment required]
-│   │   │   │   ├── class WorkspaceExtensionApprovePayload(TypedDict) # [comment required]
-│   │   │   │   ├── class WorkspaceExtensionRevokePayload(TypedDict) # [comment required]
-│   │   │   │   ├── def api_workspace_extensions(ctx) # Lists .insetu/extensions/ folders with approval status, changed files and whether each is running.
-│   │   │   │   ├── def api_workspace_extension_approve(ctx) # Approves the files a person reviewed: the fingerprint they saw must still match the folder, or nothing is approved.
-│   │   │   │   ├── def api_workspace_extension_revoke(ctx) # Human-only: removes a workspace extension's approval; it stops loading at the next restart.
 │   │   │   │   ├── class ProtectedChangeConfirmPayload(TypedDict) # change_id and the result_hash of the content the person reviewed.
 │   │   │   │   ├── class ProtectedChangeDiscardPayload(TypedDict) # change_id of the change to drop.
 │   │   │   │   ├── def api_protected_pending(ctx) # Lists protected-file changes waiting for a person's confirmation (S8).
@@ -711,26 +708,61 @@ insetu/
 │   │   │   │   ├── def api_system_config_test_bucketing(ctx) # [comment required]
 │   │   │   │   ├── class ListLocalResponse(TypedDict) # [comment required]
 │   │   │   │   ├── def api_list_local_host_dirs(ctx) # Stateless directory explorer that reads absolute host paths for workspace mounts.
-│   │   │   │   └── def api_system_memory(ctx) # [comment required]
+│   │   │   │   ├── def api_system_memory(ctx) # [comment required]
+│   │   │   │   ├── def get_system_config(workspace_id) # [comment required]
+│   │   │   │   └── def save_system_config(workspace_id, payload) # [comment required]
+│   │   │   ├── ext_manager.py      # Workspace extension (.insetu/extensions/) discovery, symlink/size validation, SHA-256 fingerprinting, and human approval helpers.
+│   │   │   │   ├── def get_workspace_extension_reserved_names() # Names a workspace extension cannot take: every bundled extension and core module, plus config, sdk, languages.
+│   │   │   │   ├── def get_workspace_extensions_root() # The one folder workspace extensions load from: .insetu/extensions/ under the default workspace root.
+│   │   │   │   ├── def snapshot_workspace_extension(ext_dir, with_contents) # Hashes every file of one workspace extension.
+│   │   │   │   ├── def current_workspace_extension_fingerprint(ext_dir) # The extension's fingerprint now, rehashed only when a file's size or mtime changed (for per-request checks).
+│   │   │   │   ├── def get_workspace_extension_approvals() # Approved workspace extensions from the attestation store: {name: {"fingerprint", "files", "approved_at"}}.
+│   │   │   │   ├── def approve_workspace_extension(name, snapshot) # Records a person's approval of one extension's exact files in the attestation store; refused to machine origins.
+│   │   │   │   ├── def revoke_workspace_extension(name) # Removes a person's approval for one extension; it stops loading at the next restart.
+│   │   │   │   ├── def describe_workspace_extension(name, snapshot, approval, reserved) # Status of one workspace extension for the review screen: approved, changed, unapproved, or invalid.
+│   │   │   │   ├── def scan_workspace_extensions(reserved_names, with_contents) # Every folder in .insetu/extensions/ with its status; with_contents adds the "snapshot" for approved ones.
+│   │   │   │   ├── class ExtensionInstallDepsPayload(TypedDict) # Request payload naming the extension whose declared Python dependencies should be installed.
+│   │   │   │   ├── class WorkspaceExtensionApprovePayload(TypedDict) # Request payload naming a workspace extension and the SHA-256 fingerprint the person reviewed.
+│   │   │   │   ├── class WorkspaceExtensionRevokePayload(TypedDict) # Request payload naming a workspace extension whose approval should be revoked.
+│   │   │   │   ├── def api_system_install_extension_deps(ctx) # Dispatches a background job to install whitelisted PyPI dependencies for an extension.
+│   │   │   │   ├── def api_workspace_extensions(ctx) # [stale?] Lists .insetu/extensions/ folders with approval status, changed files and whether each is running.
+│   │   │   │   ├── def api_workspace_extension_approve(ctx) # [stale?] Approves the files a person reviewed: the fingerprint they saw must still match the folder, or nothing is approved.
+│   │   │   │   └── def api_workspace_extension_revoke(ctx) # [stale?] Human-only: removes a workspace extension's approval; it stops loading at the next restart.
+│   │   │   ├── insetu_element.js   # Base Web Component class providing tenant workspace hydration, scoped API client access, and ecosystem filtering.
+│   │   │   │   └── class InSetuElement # Base Web Component class for inSetu core views and extensions with tenant-scoped API, store, and ecosystem bindings.
 │   │   │   ├── insetu_sdk.js       # The InSetuElement base class and Zustand store factory.
 │   │   │   │   ├── function extractTemplateVariables() # [comment required]
 │   │   │   │   ├── function interpolateTemplateVariables() # [comment required]
 │   │   │   │   ├── function cleanCodeArtifacts(text) # [comment required]
 │   │   │   │   ├── function createExtensionStore() # [comment required]
-│   │   │   │   ├── function createIsolatedSlice(store, sliceKey) # [comment required]
-│   │   │   │   ├── class BucketAddress # Immutable value object representing a canonical structural bucket address.
-│   │   │   │   ├── class InSetuURI # [comment required]
-│   │   │   │   └── class InSetuElement # [comment required]
+│   │   │   │   └── function createIsolatedSlice(store, sliceKey) # [comment required]
 │   │   │   ├── legacy.py           # Self-healing database recovery and legacy sandbox migration.
 │   │   │   │   ├── def move_tree_contents(src_dir, dst_dir) # Recursively merges files from src_dir into dst_dir and removes empty source directories.
 │   │   │   │   ├── def split_system_json(**kwargs) # Delegates legacy system.json splitting (into host.json and workspaces.json) to the Akasa kernel.
 │   │   │   │   └── def migrate_physical_sandboxes(**kwargs) # [stale?] Domain-agnostic kernel migration: consolidates SQLite databases into .insetu/cache/db/ and heals .gitignore.
+│   │   │   ├── manifest_sync.js    # Decentralized VFS/CTX manifest delta synchronization and background IndexedDB cache warming queue.
+│   │   │   │   └── function checkManifestVersion() # [stale?] --- DECENTRALIZED MANIFEST SYNC & KERNEL HEARTBEAT ---
+│   │   │   ├── memory_profiler.py  # Process memory telemetry, garbage collection object profiling, and tracemalloc snapshot helpers.
+│   │   │   │   └── def collect_process_memory_telemetry(action) # Inspects backend RAM usage, internal caches, top Python object types, and optionally triggers GC/malloc_trim or tracemalloc.
+│   │   │   ├── openapi.py          # OpenAPI 3.0 specification builder for mounted Akasa and inSetu extension routes.
+│   │   │   │   └── def build_system_openapi_spec(app) # Generates a real-time OpenAPI 3.0 specification dictionary from mounted SDK routes on `app`.
+│   │   │   ├── security_io.py      # Child process environment sanitization, outbound HTTP SSRF/byte-cap guard, command attestations, and repeater secret vaulting.
+│   │   │   │   ├── def get_approved_commands(workspace_id) # [stale?] Returns the approved command signatures for workspace_id from host.json (P5).
+│   │   │   │   ├── def approve_command(workspace_id, kind, repo, command) # [stale?] Records a person's approval of one exact command of a kind ('test', 'preview') for a repository.
+│   │   │   │   ├── def is_command_approved(workspace_id, kind, repo, command) # True only when the attestation store holds a person's approval of this exact command of this kind for this repository.
+│   │   │   │   ├── def is_test_command_approved(workspace_id, repo, command, default_command) # True for the repository's default test command, or a custom command a person approved; never approves anything itself (P5).
+│   │   │   │   ├── def is_secret_env_name(name) # True for environment variable names that look like credentials (API keys, tokens, passwords, SSH_AUTH_SOCK).
+│   │   │   │   ├── def get_child_env_passthrough(workspace_id, repo) # The credential-like variable names a person allowed through to this repository's processes.
+│   │   │   │   ├── def child_env(purpose, workspace_id, repo, extra) # Builds the environment for a child process.
+│   │   │   │   ├── class FetchRefused(Exception) # A URL was refused before or during the fetch: wrong scheme, a non-public address, or a body over the cap.
+│   │   │   │   ├── class FetchHTTPError(Exception) # The server answered with an HTTP error status.
+│   │   │   │   ├── class FetchResult # A completed fetch: final URL after redirects, status, headers and the decoded (decompressed) body.
+│   │   │   │   └── def fetch_url(url) # The one way insetu makes an outbound HTTP request (S4).
 │   │   │   ├── store.js            # [Zustand Unified Data Flow (UDF) Store]
 │   │   │   ├── system.js           # System settings UI, SSE pipeline listeners, and recovery triggers.
 │   │   │   │   ├── function bootServiceWorker() # [comment required]
 │   │   │   │   ├── function autoWireSettingsSchemas() # [comment required]
 │   │   │   │   ├── function bootExtensions() # [comment required]
-│   │   │   │   ├── function checkManifestVersion() # [stale?] --- DECENTRALIZED MANIFEST SYNC & KERNEL HEARTBEAT ---
 │   │   │   │   ├── function updateBootProgress(statusMsg) # [comment required]
 │   │   │   │   ├── function executeSecurityHandshake() # [comment required]
 │   │   │   │   ├── function executeBootSequence() # [comment required]
@@ -745,7 +777,13 @@ insetu/
 │   │   │   │   ├── function performSoftRefresh(targetWs = null, targetHash = null) # [comment required]
 │   │   │   │   ├── function fullRefresh() # [comment required]
 │   │   │   │   └── function initializeWorkspaceTopology() # [comment required]
-│   │   │   └── types.js            # Root JSDoc type definitions entry point.
+│   │   │   ├── types.js            # Root JSDoc type definitions entry point.
+│   │   │   ├── uri.js              # Canonical URI and structural bucket address value objects for the inSetu frontend.
+│   │   │   │   ├── class BucketAddress # Immutable value object representing a canonical structural bucket address.
+│   │   │   │   └── class InSetuURI # Lexical URI parser and manipulator enforcing canonical scheme:// prefixes across vfs://, ctx://, and ws:// paths.
+│   │   │   └── watchdog.py         # Out-of-band filesystem observer and deterministic content-addressed VFS echo filter.
+│   │   │       ├── def start_filesystem_observer(**kwargs) # [stale?] Initializes a unified Watchdog observer for all active workspaces.
+│   │   │       └── def stop_filesystem_observer(**kwargs) # [comment required]
 │   │   ├── topology/               # Central SSOT for logical workspace topologies.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   └── engine_topology.py  # Tracks the active layout of repositories and buckets, and resolves repository landmarks from core and extension-registered kinds.
@@ -796,8 +834,6 @@ insetu/
 │   │       ├── def get_earlier_date(d1, d2) # Safely compares and returns the earlier of two ISO timestamp strings.
 │   │       ├── def parse_list_field(raw_val) # Safely parses comma-separated strings or JSON arrays into a standardized JSON string.
 │   │       ├── def parse_string_enum(raw_val) # Safely parses and normalizes string enumerations (e.g., priority, sizes).
-│   │       ├── def start_filesystem_observer(**kwargs) # [stale?] Initializes a unified Watchdog observer for all active workspaces.
-│   │       ├── def stop_filesystem_observer(**kwargs) # [comment required]
 │   │       ├── def generate_text_chunks(blocks, chunk_limit) # [comment required]
 │   │       ├── def evaluate_circuit_breaker(touched_count, total_count, threshold) # [comment required]
 │   │       ├── def extract_manifest_files(manifest_data, target_key, domain, exclude_types, ...) # [comment required]
@@ -812,28 +848,6 @@ insetu/
 │   │       ├── def get_available_contexts(workspace_id, exclusion_flags, exclude_types, include_types) # [comment required]
 │   │       ├── def get_repo_path(repo_dir, workspace_id) # SSOT for resolving a repository's physical override or logical path.
 │   │       ├── def get_sister_repos(workspace_id) # [comment required]
-│   │       ├── def get_repeater_secret(ext_name, workspace_id, repeater_id, item_id, ...) # [stale?] SSOT reader for encrypted repeater item secrets stored in .insetu/secrets.json.
-│   │       ├── def set_repeater_secret(ext_name, workspace_id, repeater_id, item_id, ...) # SSOT writer for encrypted repeater item secrets in .insetu/secrets.json.
-│   │       ├── def get_approved_commands(workspace_id) # [stale?] Returns the approved command signatures for workspace_id from host.json (P5).
-│   │       ├── def approve_command(workspace_id, kind, repo, command) # [stale?] Records a person's approval of one exact command of a kind ('test', 'preview') for a repository.
-│   │       ├── def is_command_approved(workspace_id, kind, repo, command) # True only when the attestation store holds a person's approval of this exact command of this kind for this repository.
-│   │       ├── def is_test_command_approved(workspace_id, repo, command, default_command) # True for the repository's default test command, or a custom command a person approved; never approves anything itself (P5).
-│   │       ├── def get_workspace_extension_reserved_names() # Names a workspace extension cannot take: every bundled extension and core module, plus config, sdk, languages.
-│   │       ├── def get_workspace_extensions_root() # The one folder workspace extensions load from: .insetu/extensions/ under the default workspace root.
-│   │       ├── def snapshot_workspace_extension(ext_dir, with_contents) # Hashes every file of one workspace extension.
-│   │       ├── def current_workspace_extension_fingerprint(ext_dir) # The extension's fingerprint now, rehashed only when a file's size or mtime changed (for per-request checks).
-│   │       ├── def get_workspace_extension_approvals() # Approved workspace extensions from the attestation store: {name: {"fingerprint", "files", "approved_at"}}.
-│   │       ├── def approve_workspace_extension(name, snapshot) # Records a person's approval of one extension's exact files in the attestation store; refused to machine origins.
-│   │       ├── def revoke_workspace_extension(name) # Removes a person's approval for one extension; it stops loading at the next restart.
-│   │       ├── def describe_workspace_extension(name, snapshot, approval, reserved) # Status of one workspace extension for the review screen: approved, changed, unapproved, or invalid.
-│   │       ├── def scan_workspace_extensions(reserved_names, with_contents) # Every folder in .insetu/extensions/ with its status; with_contents adds the "snapshot" for approved ones.
-│   │       ├── def is_secret_env_name(name) # True for environment variable names that look like credentials (API keys, tokens, passwords, SSH_AUTH_SOCK).
-│   │       ├── def get_child_env_passthrough(workspace_id, repo) # The credential-like variable names a person allowed through to this repository's processes.
-│   │       ├── def child_env(purpose, workspace_id, repo, extra) # Builds the environment for a child process.
-│   │       ├── class FetchRefused(Exception) # A URL was refused before or during the fetch: wrong scheme, a non-public address, or a body over the cap.
-│   │       ├── class FetchHTTPError(Exception) # The server answered with an HTTP error status.
-│   │       ├── class FetchResult   # A completed fetch: final URL after redirects, status, headers and the decoded (decompressed) body.
-│   │       ├── def fetch_url(url)  # The one way insetu makes an outbound HTTP request (S4).
 │   │       ├── def resolve_logical_path(path, workspace_id) # [comment required]
 │   │       ├── def hook_expand_selection(items, workspace_id, gather_only, **kwargs) # [comment required]
 │   │       ├── def find_path_candidates(query_path, workspace_id, allowed_repos, **kwargs) # Explicit, opt-in candidate finder for path disambiguation.
@@ -841,7 +855,9 @@ insetu/
 │   │       ├── def normalize_repo_domains(target_repos, strip_empty_overrides) # SSOT normalizer for repository, sub-bucket, and meta_map domain strings.
 │   │       ├── def heal_manifest_entry_domain(entry, target_repos, workspace_id) # Ensures entry['meta']['domain'] is never blank, inheriting from the parent repository domain when empty.
 │   │       ├── def heal_sqlite_uri_column(conn, table, column, default_prefix) # Collision-safe SQLite URI column healer: removes duplicate unprefixed shadow rows before prepending default_prefix.
-│   │       └── def sanitize_workspace_config(cfg) # [comment required]
+│   │       ├── def sanitize_workspace_config(cfg) # [comment required]
+│   │       ├── def get_repeater_secret(ext_name, workspace_id, repeater_id, item_id, ...) # [stale?] SSOT reader for encrypted repeater item secrets stored in .insetu/secrets.json.
+│   │       └── def set_repeater_secret(ext_name, workspace_id, repeater_id, item_id, ...) # SSOT writer for encrypted repeater item secrets in .insetu/secrets.json.
 │   ├── defaults/                   # Base templates for workspace scaffolding.
 │   │   ├── .gitkeep                # Git folder retention.
 │   │   ├── config_json.txt         # Default config.json template for new workspace scaffolding.
@@ -1249,10 +1265,11 @@ insetu/
     │   │   ├── def check_tier0_domain_purity() # [comment required]
     │   │   └── def check_javascript_files() # [comment required]
     │   └── rules_python.py         # Python AST linter enforcing async barriers and context accessors.
-    │       ├── def count_direct_settings_access(source) # Number of direct configuration accesses in one file's source (the unit SETTINGS_ACCESS_RATCHET counts).
-    │       ├── def check_settings_access_ratchet(repo_root, report, ratchet) # Compares each file's direct configuration access count with SETTINGS_ACCESS_RATCHET.
+    │       ├── def count_direct_settings_access(source) # [stale?] Number of direct configuration accesses in one file's source (the unit SETTINGS_ACCESS_RATCHET counts).
+    │       ├── def check_settings_access_ratchet(repo_root, report, ratchet) # [stale?] Compares each file's direct configuration access count with SETTINGS_ACCESS_RATCHET.
     │       ├── class BackendFitnessVisitor(ast.NodeVisitor) # [comment required]
-    │       └── def check_python_files() # [comment required]
+    │       ├── def check_python_files() # [comment required]
+    │       └── def check_module_size_ratchet(repo_root, report) # [stale?] Wave 1 A4.3 (E2): Enforces shrinking line-count ceilings on MODULE_LINE_RATCHET entries and fails if any unlisted Python or JS module in ins...
     ├── fitness_functions.py        # Master CLI runner for the architectural fitness linter suite.
     ├── run_unit_tests.py           # Master CLI runner for behavioral unit and integration test suite.
     └── unit/                       # Dynamic behavioral unit and integration test suite.
@@ -1282,7 +1299,7 @@ insetu/
         ├── test_child_env.py       # S3 tests: purposes, credential stripping for repository code, per-repository passthrough, a real env run showing no token or key, preview's...
         │   ├── class TestChildEnvPurposes(_EnvCase) # Who chose the command decides what it inherits.
         │   ├── class TestRepositoryProcesses(_EnvCase) # Preview servers and test runners use repo_code, and a real child sees neither the token nor a key.
-        │   └── class TestChildEnvAndFetchRules(unittest.TestCase) # CHILD_ENV_MANDATE, OUTBOUND_FETCH_MANDATE and REMOTE_CODE_URL_BAN flag the raw patterns outside their homes.
+        │   └── class TestChildEnvAndFetchRules(unittest.TestCase) # [stale?] CHILD_ENV_MANDATE, OUTBOUND_FETCH_MANDATE and REMOTE_CODE_URL_BAN flag the raw patterns outside their homes.
         ├── test_codemirror_bundle.py # Genesis unit test suite verifying the CodeMirror bundle manifest, absence of stale files or CDN specifiers, and Node.js parser execution acr...
         │   └── class TestCodeMirrorBundle(unittest.TestCase) # [stale?] Every file in static/vendor/codemirror/ is accounted for, free of CDN shims, and parses samples in Node.
         ├── test_config_cascade.py  # Unit tests for the 3-tier configuration cascade, secret encryption, and lazy migration.
@@ -1322,7 +1339,7 @@ insetu/
         ├── test_macro_escapes.py   # Tests that transport macros expand in files documenting them, literal tokens via brace macros, and lifeboat parity.
         │   └── class TestMacroEscapes(unittest.TestCase) # The namespaced transport macro always expands, even in files that document it, and both bridges agree.
         ├── test_outbound_fetch.py  # S4 tests: schemes, private and metadata addresses, person-allowed hosts, redirects into private addresses or other schemes, the connected-ad...
-        │   ├── class TestOutboundFetch(unittest.TestCase) # fetch_url() against a local server: schemes, address policy, redirects, caps and error bodies.
+        │   ├── class TestOutboundFetch(unittest.TestCase) # [stale?] fetch_url() against a local server: schemes, address policy, redirects, caps and error bodies.
         │   └── class TestIngestUsesThePolicy(unittest.TestCase) # Ingest refuses file:// and private hosts in both parser modes, unless a person allowed the host.
         ├── test_preview_exposure.py # S2: preview servers bind loopback, open to the LAN only on a person's lease, and run custom commands only once approved.
         │   ├── class TestLoopbackByDefault(_PreviewCase) # Nothing binds beyond loopback unless a person opens it, and auto-start never does.
@@ -1335,7 +1352,7 @@ insetu/
         │   ├── class TestProposals(_ProtectedCase) # Machine saves and deletes wait and write nothing; moves, recovery-file deletes and insetu's own records are refused.
         │   ├── class TestConfirmation(_ProtectedCase) # Only a person confirms, only the reviewed content, and only against an unchanged file.
         │   ├── class TestWritersSeeTheHold(_ProtectedCase) # A person's editor save is checked and written; MCP saves and bridge patches come back as pending.
-        │   └── class TestProtectedWriteChokepoint(unittest.TestCase) # PROTECTED_WRITE_CHOKEPOINT: only the two homes write past the guard or set the policy.
+        │   └── class TestProtectedWriteChokepoint(unittest.TestCase) # [stale?] PROTECTED_WRITE_CHOKEPOINT: only the two homes write past the guard or set the policy.
         ├── test_publish_extension.py # Unit tests for document publishing compilation and ephemeral wordcount macro stripping.
         │   └── class TestPublishExtension(unittest.TestCase) # [comment required]
         ├── test_recovery_path.py   # Test the smoke tests, the last-good lifeboat and credential store, the panic fallback and auth rotate
@@ -1373,8 +1390,10 @@ insetu/
         │   └── class TestVendorLock(unittest.TestCase) # [stale?] sutram.lock.json and codemirror.lock.json record vendored builds and catch drift between the locks and the committed files.
         ├── test_vfs_three_way_merge.py # Unit tests for 3-way OCC text merging, ancestor ring buffers, and conflict fallback files.
         │   └── class TestVfsThreeWayMerge(unittest.TestCase) # [comment required]
+        ├── test_wave1_ratchets.py  # Wave 1 line-count ratchets and re-export contract tests for the System & Core Utils decomposition.
+        │   └── class TestWave1Ratchets(unittest.TestCase) # [stale?] Enforces Wave 1 file-size ceilings and re-export contracts across Python and JavaScript.
         ├── test_workspace_extension_approval.py # Tests that .insetu/extensions/ code loads and is served only while its files match a person's approval, and that only a person can approve.
-        │   └── class TestWorkspaceExtensionApproval(unittest.TestCase) # Only approved, unchanged workspace extensions are imported or served; only a person approves.
+        │   └── class TestWorkspaceExtensionApproval(unittest.TestCase) # [stale?] Only approved, unchanged workspace extensions are imported or served; only a person approves.
         ├── test_workspace_mounts.py # Unit tests for InterWorkspaceVFSDriver, ws:// read-only write barriers, and cross-workspace event broadcasting.
         │   └── class TestWorkspaceMounts(unittest.TestCase) # [comment required]
         └── test_workspace_swap_fsm.py # Behavioral unit tests for the synchronous workspace swap FSM and Bound-Scope StoreRegistry hydration.

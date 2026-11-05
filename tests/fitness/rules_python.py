@@ -9,6 +9,26 @@ from .core import (
     SQLITE_WHITELIST, SUBPROCESS_WHITELIST, EXECUTE_BINARY_WHITELIST, report_violation, collect_unique_files
 )
 
+
+def _load_sdk_lazy_reexports_from_ast() -> frozenset:
+    """Reads `_UTILS_CORE_REEXPORTS` and `_SECURITY_IO_REEXPORTS` directly from `insetu/core/sdk/__init__.py` via AST."""
+    sdk_init = BACKEND_DIR / "core" / "sdk" / "__init__.py"
+    if not sdk_init.is_file():
+        return frozenset()
+    names = set()
+    try:
+        tree = ast.parse(sdk_init.read_text(encoding="utf-8"), filename=str(sdk_init))
+        for stmt in tree.body:
+            if isinstance(stmt, ast.Assign):
+                if any(isinstance(t, ast.Name) and t.id in ("_UTILS_CORE_REEXPORTS", "_SECURITY_IO_REEXPORTS") for t in stmt.targets):
+                    if isinstance(stmt.value, ast.Call) and stmt.value.args and isinstance(stmt.value.args[0], (ast.Set, ast.List, ast.Tuple)):
+                        for elt in stmt.value.args[0].elts:
+                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                names.add(elt.value)
+    except Exception:
+        pass
+    return frozenset(names)
+
 # ==============================================================================
 # SETTINGS_ACCESS_RATCHET (P13 blueprint, section 3, rule 1)
 # ==============================================================================
@@ -24,9 +44,10 @@ SETTINGS_ACCESS_RATCHET: Dict[str, Tuple[int, str]] = {
     "insetu/cli.py": (3, "Boot floor: profile scaffolding before the app is imported."),
     "insetu/fallback_bridge.py": (3, "Boot floor: the stdlib-only lifeboat reads workspaces.json, config.json and host.json."),
     # Legacy seams, removed by later P13 phases
-    "insetu/core/utils_core.py": (19, "Phase 3/4: helper seam (get_repo_path, get_sister_repos, sanitize_workspace_config)."),
+    "insetu/core/utils_core.py": (17, "Phase 3/4: helper seam (get_repo_path, get_sister_repos, sanitize_workspace_config)."),
     "insetu/core/attestations.py": (1, "S8: one-time move of approvals out of host.json into the attestation store; remove with that migration."),
     "insetu/core/system/engine_system.py": (19, "Phase 3/4: the config route and the 3-tier cascade migration bridge."),
+    "insetu/core/system/watchdog.py": (2, "Phase 3: Watchdog observer reading load_config and target_repos."),
     "insetu/core/system/cli_commands.py": (5, "Phase 3/4: CLI init, service and mcp commands that read load_config and write config.json, host.json and workspace.settings.json."),
     "insetu/core/system/legacy.py": (2, "Phase 6: one-shot boot migration of legacy config.json keys."),
     "insetu/core/topology/engine_topology.py": (3, "Phase 3: the topology engine's target_repos accessor and two load_config reads."),
@@ -52,17 +73,99 @@ _DIRECT_SETTINGS_PATTERNS = (
     re.compile(r'["\'](?:config|host|workspace\.settings|repo\.settings)\.json["\']'),
     re.compile(r'["\']target_repos["\']'),
 )
+_DIRECT_SETTINGS_CALL_NAMES = frozenset({"load_config", "get_daemon_host_config_path"})
+_DIRECT_SETTINGS_STRINGS = frozenset({
+    "config.json",
+    "host.json",
+    "workspace.settings.json",
+    "repo.settings.json",
+    "target_repos",
+})
+
+
+def _collect_docstring_constant_ids(tree: ast.AST) -> set:
+    """Returns object ids of AST Constant nodes that serve as module, class, or function docstrings."""
+    doc_ids = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
+            first_stmt = node.body[0]
+            if (
+                isinstance(first_stmt, ast.Expr)
+                and isinstance(first_stmt.value, ast.Constant)
+                and isinstance(first_stmt.value.value, str)
+            ):
+                doc_ids.add(id(first_stmt.value))
+    return doc_ids
+
+
+def _scan_direct_settings_ast(source: str) -> Tuple[int, int]:
+    """
+    AST-based counter for direct configuration accesses (ignoring comments and docstrings).
+    Returns (count, first_line_number). Falls back to regex if source has a SyntaxError.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        count = sum(len(pat.findall(source)) for pat in _DIRECT_SETTINGS_PATTERNS)
+        first = min((m.start() for pat in _DIRECT_SETTINGS_PATTERNS for m in [pat.search(source)] if m), default=0)
+        return count, (source.count("\n", 0, first) + 1 if count else 1)
+
+    doc_ids = _collect_docstring_constant_ids(tree)
+    hit_lines: List[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            fn_name = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else (node.func.attr if isinstance(node.func, ast.Attribute) else "")
+            )
+            if fn_name in _DIRECT_SETTINGS_CALL_NAMES:
+                hit_lines.append(getattr(node, "lineno", 1))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in doc_ids:
+            if node.value in _DIRECT_SETTINGS_STRINGS:
+                hit_lines.append(getattr(node, "lineno", 1))
+            else:
+                for cfg_tok in ("config.json", "host.json", "workspace.settings.json", "repo.settings.json"):
+                    if node.value.endswith(f"/{cfg_tok}") or node.value.endswith(f"\\{cfg_tok}"):
+                        hit_lines.append(getattr(node, "lineno", 1))
+                        break
+    return len(hit_lines), (min(hit_lines) if hit_lines else 1)
 
 
 def count_direct_settings_access(source: str) -> int:
-    """Number of direct configuration accesses in one file's source (the unit SETTINGS_ACCESS_RATCHET counts)."""
-    return sum(len(pat.findall(source)) for pat in _DIRECT_SETTINGS_PATTERNS)
+    """Number of direct configuration accesses in one file's source (ignoring comments and docstrings)."""
+    return _scan_direct_settings_ast(source)[0]
+
+
+def _resolve_ratchet_bucket_key(rel_path: str, baseline: Dict[str, Tuple[int, str]]) -> Optional[str]:
+    """
+    Maps `rel_path` to its governing key in `baseline`:
+    1. Exact file match (`rel_path in baseline`).
+    2. Explicit package directory key (`"insetu/core/system"` in `baseline`).
+    3. Sibling submodule rollup: if `rel_path` is a new submodule inside `insetu/core/<pkg>/` or
+        `insetu/extensions/<ext>/` that isn't listed individually in `baseline`, rolls its count into
+        that package's primary `engine_<pkg>.py` (or `<pkg>.py`) baseline entry so decomposing a God
+        file into sibling submodules within the same package preserves the package's ratchet total.
+    """
+    if rel_path in baseline:
+        return rel_path
+    parts = Path(rel_path).parts
+    if len(parts) >= 4 and parts[0] == "insetu" and parts[1] in ("core", "extensions"):
+        pkg_dir = f"{parts[0]}/{parts[1]}/{parts[2]}"
+        if pkg_dir in baseline:
+            return pkg_dir
+        pkg_name = parts[2]
+        for cand in (f"{pkg_dir}/engine_{pkg_name}.py", f"{pkg_dir}/{pkg_name}.py"):
+            if cand in baseline:
+                return cand
+    return None
 
 
 def check_settings_access_ratchet(repo_root: Path = PROJECT_ROOT, report: bool = False, ratchet: Optional[Dict[str, Tuple[int, str]]] = None) -> List[str]:
     """
-    Compares each file's direct configuration access count with SETTINGS_ACCESS_RATCHET. Fails on a new file,
-    a count above its baseline, a count below it (lower the baseline), and an entry whose file no longer has any.
+    Compares each file's (or package's) direct configuration access count with SETTINGS_ACCESS_RATCHET.
+    Fails on a new unmapped file, a count above its baseline, a count below it (lower the baseline),
+    and an entry whose file/package no longer has any.
     """
     baseline = SETTINGS_ACCESS_RATCHET if ratchet is None else ratchet
     violations: List[str] = []
@@ -75,7 +178,9 @@ def check_settings_access_ratchet(repo_root: Path = PROJECT_ROOT, report: bool =
         if report:
             report_violation("SETTINGS_ACCESS_RATCHET", path, line, msg)
 
-    seen = set()
+    counts_by_key: Dict[str, int] = {}
+    first_loc_by_key: Dict[str, Tuple[int, Path]] = {}
+
     for py_file in sorted(insetu_pkg.rglob("*.py")):
         if "__pycache__" in py_file.parts or "venv" in py_file.parts:
             continue
@@ -84,19 +189,26 @@ def check_settings_access_ratchet(repo_root: Path = PROJECT_ROOT, report: bool =
             source = py_file.read_text(encoding="utf-8")
         except OSError:
             continue
-        count = count_direct_settings_access(source)
+        count, line = _scan_direct_settings_ast(source)
         if not count:
             continue
-        seen.add(rel_path)
-        first = min((m.start() for pat in _DIRECT_SETTINGS_PATTERNS for m in [pat.search(source)] if m), default=0)
-        line = source.count("\n", 0, first) + 1
-        if rel_path not in baseline:
+        bucket_key = _resolve_ratchet_bucket_key(rel_path, baseline)
+        if bucket_key is None:
             _flag(rel_path, line, f"New direct configuration access ({count}). Use ctx.settings or the topology API instead.", py_file)
-        elif count > baseline[rel_path][0]:
-            _flag(rel_path, line, f"Direct configuration access grew from {baseline[rel_path][0]} to {count}. Use ctx.settings or the topology API instead.", py_file)
-        elif count < baseline[rel_path][0]:
-            _flag(rel_path, line, f"Direct configuration access fell from {baseline[rel_path][0]} to {count}: lower its SETTINGS_ACCESS_RATCHET baseline to {count}.", py_file)
-    for rel_path in sorted(set(baseline) - seen):
+            continue
+        counts_by_key[bucket_key] = counts_by_key.get(bucket_key, 0) + count
+        if bucket_key not in first_loc_by_key or rel_path == bucket_key:
+            first_loc_by_key[bucket_key] = (line, py_file)
+
+    for bucket_key, total_count in sorted(counts_by_key.items()):
+        expected_count = baseline[bucket_key][0]
+        line, py_file = first_loc_by_key[bucket_key]
+        if total_count > expected_count:
+            _flag(bucket_key, line, f"Direct configuration access grew from {expected_count} to {total_count}. Use ctx.settings or the topology API instead.", py_file)
+        elif total_count < expected_count:
+            _flag(bucket_key, line, f"Direct configuration access fell from {expected_count} to {total_count}: lower its SETTINGS_ACCESS_RATCHET baseline to {total_count}.", py_file)
+
+    for rel_path in sorted(set(baseline) - set(counts_by_key)):
         _flag(rel_path, 1, "No direct configuration access remains: remove this SETTINGS_ACCESS_RATCHET entry.", Path(repo_root) / rel_path)
     return violations
 
@@ -111,8 +223,8 @@ FORWARDED_CLIENT_HEADERS = frozenset({
 
 SETTING_SUBSCHEMA_KEYS = ("item_schema", "fields")
 
-# S3: every child process environment comes from utils_core.child_env(purpose).
-CHILD_ENV_BUILDER_FILES = frozenset({"insetu/core/utils_core.py"})
+# S3: every child process environment comes from security_io.child_env(purpose).
+CHILD_ENV_BUILDER_FILES = frozenset({"insetu/core/system/security_io.py"})
 # S4: every outbound HTTP request goes through utils_core.fetch_url(). Reviewed exceptions, with the reason.
 RAW_URLOPEN_REVIEWED = {
     "insetu/core/llm/engine_llm.py": "Provider calls (streaming SSE) to endpoints a person configured; moves to fetch_url with P4's provider layer.",
@@ -125,6 +237,112 @@ PROTECTED_WRITE_HOMES = {
 }
 # S4: insetu never loads code from a CDN at runtime.
 REMOTE_CODE_HOSTS = ("esm.sh/", "cdn.jsdelivr.net/", "unpkg.com/", "cdnjs.cloudflare.com/", "cdn.skypack.dev/")
+
+# Wave 1 A4.1: Symbols moved out of utils_core.py and engine_system.py in A1/A2 (no legacy import shims).
+BANNED_UTILS_CORE_MOVED_IMPORTS = frozenset({
+    # Moved to insetu.core.system.watchdog
+    "_is_watchdog_vfs_echo", "_watchdog_debouncer_loop", "_track_intent_vfs_writes",
+    "start_filesystem_observer", "stop_filesystem_observer",
+    # Moved to insetu.core.system.security_io
+    "is_secret_env_name", "get_child_env_passthrough", "child_env",
+    "FetchRefused", "FetchHTTPError", "FetchResult",
+    "_is_public_address", "_host_is_allowed_private", "_goes_through_proxy",
+    "_check_fetch_target", "_PeerCheckingMixin", "_build_fetch_opener", "_read_capped", "fetch_url",
+    "_command_signature", "_command_subject", "get_approved_commands",
+    "approve_command", "is_command_approved", "is_test_command_approved",
+    # Moved to insetu.core.system.ext_manager
+    "get_workspace_extension_reserved_names", "get_workspace_extensions_root",
+    "snapshot_workspace_extension", "current_workspace_extension_fingerprint",
+    "get_workspace_extension_approvals", "approve_workspace_extension",
+    "revoke_workspace_extension", "describe_workspace_extension", "scan_workspace_extensions",
+})
+
+BANNED_ENGINE_SYSTEM_MOVED_IMPORTS = frozenset({
+    "build_system_openapi_spec",
+    "collect_process_memory_telemetry",
+    "_StaticExtMeta",
+    "_inspect_or_resolve_extension_meta",
+    "_resolve_extension_module_and_bp",
+    "_get_whitelisted_extension_packages",
+    "_background_install_extension_deps",
+    "_workspace_extensions_report",
+    "api_system_install_extension_deps",
+    "api_workspace_extensions",
+    "api_workspace_extension_approve",
+    "api_workspace_extension_revoke",
+    "_handle_install_extension_deps",
+    "_handle_workspace_extensions",
+    "_handle_workspace_extension_approve",
+    "_handle_workspace_extension_revoke",
+})
+
+# Pattern 2: Leaf modules whose symbols are lazily re-exported by the SDK barrel (`insetu/core/sdk/__init__.py`)
+# must never import from `insetu.core.sdk` a symbol that `insetu.core.sdk` lazily re-exports from them.
+SDK_BARREL_LEAF_FILES = frozenset({
+    "insetu/core/utils_core.py",
+    "insetu/core/system/security_io.py",
+    "insetu/core/system/ext_manager.py",
+})
+SDK_BARREL_LAZY_REEXPORTS = _load_sdk_lazy_reexports_from_ast()
+
+# Wave 1 A4.2: Shrinking allowlist of existing post-A1 direct `insetu.core.utils_core` imports in `insetu/extensions/*`.
+# Extensions may never import from `insetu.core.system.*`, and may only import these remaining symbols from `utils_core`
+# until they are migrated to `insetu.core.sdk`.
+EXTENSION_UTILS_CORE_RATCHET: Dict[str, frozenset] = {
+    "insetu/extensions/citations/engine_citations.py": frozenset({"InSetuURI", "parse_frontmatter"}),
+    "insetu/extensions/cronic/engine_cronic.py": frozenset({"InSetuURI", "is_extension_enabled"}),
+    "insetu/extensions/dev/engine_dev.py": frozenset({"InSetuURI", "execute_binary", "get_repo_path", "resolve_system_artifact_path"}),
+    "insetu/extensions/favorites/engine_favorites.py": frozenset({"InSetuURI"}),
+    "insetu/extensions/format/engine_format.py": frozenset({"InSetuURI"}),
+    "insetu/extensions/hooks/engine_hooks.py": frozenset({"InSetuURI"}),
+    "insetu/extensions/notes/engine_notes.py": frozenset({"InSetuURI", "parse_frontmatter", "update_frontmatter"}),
+    "insetu/extensions/publish/engine_publish.py": frozenset({"InSetuURI", "parse_frontmatter"}),
+    "insetu/extensions/research/engine_research.py": frozenset({"InSetuURI", "get_repeater_secret", "parse_frontmatter", "set_repeater_secret"}),
+    "insetu/extensions/skills/engine_skills.py": frozenset({"InSetuURI", "parse_frontmatter", "slugify", "update_frontmatter"}),
+    "insetu/extensions/tracker/engine_tracker.py": frozenset({
+        "InSetuURI", "clean_date_str", "get_earlier_date", "get_repo_path", "get_safe_repo_id",
+        "parse_frontmatter", "parse_list_field", "parse_string_enum", "update_frontmatter",
+    }),
+    "insetu/extensions/update/engine_update.py": frozenset({"InSetuURI", "get_repo_path"}),
+}
+
+# Wave 1 A4.3 (E2): Module size ratchet for the largest modules across insetu/core and insetu/extensions
+# (excluding vendored files), plus an 800-line ceiling for all unlisted modules. Ceilings may only go down.
+MAX_UNLISTED_MODULE_LINES = 800
+MODULE_LINE_RATCHET: Dict[str, int] = {
+    "insetu/core/fs/fs.js": 3788,
+    "insetu/extensions/tracker/ext_tracker.js": 2932,
+    "insetu/core/bridge/bridge.js": 2281,
+    "insetu/core/topology/engine_topology.py": 2205,
+    "insetu/core/agent/agent.js": 2057,
+    "insetu/core/system/components/ui_system_settings.js": 1807,
+    "insetu/core/agent/orchestrator.py": 1766,
+    "insetu/core/bridge/bridge_vfs.py": 1588,
+    "insetu/core/system/system.js": 1562,
+    "insetu/core/llm/engine_llm.py": 1555,
+    "insetu/core/utils_core.py": 1479,
+    "insetu/extensions/tracker/engine_tracker.py": 1464,
+    "insetu/core/gather/engine_gather.py": 1430,
+    "insetu/extensions/git/ext_git.js": 1277,
+    "insetu/extensions/git/engine_git.py": 1168,
+    "insetu/core/config/config.js": 1147,
+    "insetu/extensions/update/ext_update.js": 1120,
+    "insetu/core/agent/engine_agent.py": 1081,
+    "insetu/extensions/update/engine_update.py": 957,
+    "insetu/extensions/preview/engine_preview.py": 928,
+    "insetu/core/bridge/engine_bridge.py": 900,
+    "insetu/core/bridge/bridge_fuzzy.py": 836,
+    "insetu/core/cartographer/cartographer.py": 834,
+    "insetu/core/system/engine_system.py": 814,
+    # Ring 1 (akasa) and Ring 2 (sutram) modules currently above 800 lines (shrinking in Wave 2):
+    "sutram/sutram/js/primitives.js": 2850,
+    "sutram/sutram/js/sutram_sdk.js": 1890,
+    "sutram/sutram/js/app_shell.js": 1418,
+    "akasa/akasa/vfs.py": 1246,
+    "akasa/akasa/extension.py": 1223,
+    "akasa/akasa/workers/__init__.py": 1200,
+    "sutram/sutram/js/utils.js": 818,
+}
 
 _CROSS_MODULE_PRIVATE_REFS = None
 
@@ -151,6 +369,30 @@ def _cross_module_private_refs() -> set:
                         refs.add(n.attr)
         _CROSS_MODULE_PRIVATE_REFS = refs
     return _CROSS_MODULE_PRIVATE_REFS
+
+
+def _package_scope_of_rel_path(rel_posix: str) -> str:
+    """Returns the logical package boundary ('insetu.core.<pkg>' or 'insetu.extensions.<ext>') for a file path."""
+    clean = str(rel_posix or "").replace("\\", "/").lstrip("/")
+    parts = [p for p in clean.split("/") if p]
+    if "insetu" in parts:
+        idx = parts.index("insetu")
+        sub = parts[idx:]
+        if len(sub) >= 4 and sub[1] in ("core", "extensions"):
+            return f"insetu.{sub[1]}.{sub[2]}"
+        if len(sub) >= 3 and sub[1] == "core":
+            return "insetu.core"
+    return ""
+
+
+def _package_scope_of_module(module_name: str) -> str:
+    """Returns the logical package boundary ('insetu.core.<pkg>' or 'insetu.extensions.<ext>') for a dotted module name."""
+    parts = [p for p in str(module_name or "").split(".") if p]
+    if len(parts) >= 3 and parts[0] == "insetu" and parts[1] in ("core", "extensions"):
+        return f"insetu.{parts[1]}.{parts[2]}"
+    if len(parts) >= 2 and parts[0] == "insetu" and parts[1] == "core":
+        return "insetu.core"
+    return ""
 
 
 class BackendFitnessVisitor(ast.NodeVisitor):
@@ -1031,6 +1273,51 @@ class BackendFitnessVisitor(ast.NodeVisitor):
 
     def visit_ImportFrom(self, node):
         self._check_sqlite_import(node)
+        if node.module == "insetu.core.sdk" and self.rel_posix in SDK_BARREL_LEAF_FILES:
+            for alias in node.names:
+                if alias.name in SDK_BARREL_LAZY_REEXPORTS:
+                    report_violation(
+                        "BARREL_CYCLE_BAN",
+                        self.filepath,
+                        node.lineno,
+                        f"Leaf module '{self.rel_posix}' is re-exported by 'insetu.core.sdk' and cannot import barrel-re-exported symbol '{alias.name}' from 'insetu.core.sdk'. Import directly from the peer leaf module instead."
+                    )
+        if node.module == "insetu.core.utils_core":
+            for alias in node.names:
+                if alias.name in BANNED_UTILS_CORE_MOVED_IMPORTS:
+                    report_violation(
+                        "BANNED_WAVE1_LEGACY_IMPORT",
+                        self.filepath,
+                        node.lineno,
+                        f"Importing moved symbol '{alias.name}' from 'insetu.core.utils_core' is banned (Wave 1 A1). Import from its canonical module in 'insetu.core.system.*' (or 'insetu.core.sdk' in extensions)."
+                    )
+        elif node.module == "insetu.core.system.engine_system":
+            for alias in node.names:
+                if alias.name in BANNED_ENGINE_SYSTEM_MOVED_IMPORTS:
+                    report_violation(
+                        "BANNED_WAVE1_LEGACY_IMPORT",
+                        self.filepath,
+                        node.lineno,
+                        f"Importing moved symbol '{alias.name}' from 'insetu.core.system.engine_system' is banned (Wave 1 A2). Import from 'insetu.core.system.openapi', 'ext_manager', or 'memory_profiler'."
+                    )
+        if not self.is_test and "extensions" in self.filepath.parts and node.module:
+            if node.module == "insetu.core.system" or node.module.startswith("insetu.core.system."):
+                report_violation(
+                    "EXTENSION_MEMBRANE_RATCHET",
+                    self.filepath,
+                    node.lineno,
+                    f"Extension '{self.rel_posix}' imports internal module '{node.module}' directly. Extensions must import through 'insetu.core.sdk'."
+                )
+            elif node.module == "insetu.core.utils_core":
+                allowed_syms = EXTENSION_UTILS_CORE_RATCHET.get(self.rel_posix, frozenset())
+                for alias in node.names:
+                    if alias.name not in allowed_syms:
+                        report_violation(
+                            "EXTENSION_MEMBRANE_RATCHET",
+                            self.filepath,
+                            node.lineno,
+                            f"Extension '{self.rel_posix}' imports '{alias.name}' from 'insetu.core.utils_core', which is not in EXTENSION_UTILS_CORE_RATCHET. Import from 'insetu.core.sdk' instead."
+                        )
         if (
             not self.is_test
             and node.module
@@ -1038,14 +1325,18 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             and node.module != "insetu.core.utils_core"
             and node.level == 0
         ):
-            for alias in node.names:
-                if alias.name.startswith("_"):
-                    report_violation(
-                        "CROSS_MODULE_PRIVATE_IMPORT_BAN",
-                        self.filepath,
-                        node.lineno,
-                        f"Cross-module import of private symbol '{alias.name}' from '{node.module}' is banned. Use public APIs or ctx.call() instead."
-                    )
+            importer_pkg = _package_scope_of_rel_path(self.rel_posix)
+            target_pkg = _package_scope_of_module(node.module)
+            is_same_package = bool(importer_pkg and target_pkg and importer_pkg == target_pkg)
+            if not is_same_package:
+                for alias in node.names:
+                    if alias.name.startswith("_"):
+                        report_violation(
+                            "CROSS_MODULE_PRIVATE_IMPORT_BAN",
+                            self.filepath,
+                            node.lineno,
+                            f"Cross-package import of private symbol '{alias.name}' from '{node.module}' is banned. Keep '_' helpers internal to '{target_pkg or node.module}' or expose a public API / ctx.call()."
+                        )
         if (
             not self.is_test
             and ("core" in self.filepath.parts or "extensions" in self.filepath.parts or self.filename == "engine_template_py.txt")
@@ -1221,6 +1512,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     self.filepath,
                     node.lineno,
                     "SQL update to topology_ledger.git_status must not overwrite the 'timestamp' column, as doing so clobbers physical file mutation watermarks."
+                )
+            if not self.is_test and self.filename != "rules_python.py" and node.value == "__DELETED_FILE__":
+                report_violation(
+                    "MAGIC_DELETED_FILE_SENTINEL_BAN",
+                    self.filepath,
+                    node.lineno,
+                    "String-band deletion sentinel '__DELETED_FILE__' is banned. Represent absent/deleted VFS buffers as None (Optional[str])."
                 )
         self.generic_visit(node)
 
@@ -1402,6 +1700,55 @@ def check_python_files():
             )
     # Enforce SETTINGS_ACCESS_RATCHET across all Python files in insetu/
     check_settings_access_ratchet(PROJECT_ROOT, report=True)
+    # Enforce Wave 1 A4.3 Module Size Ratchet across core and extensions
+    check_module_size_ratchet(PROJECT_ROOT, report=True)
+
+
+def check_module_size_ratchet(repo_root: Path = PROJECT_ROOT, report: bool = False) -> List[str]:
+    """
+    Wave 1 A4.3 (E2): Enforces shrinking line-count ceilings on MODULE_LINE_RATCHET entries
+    and fails if any unlisted Python or JS module across akasa, sutram, insetu/core, or insetu/extensions
+    exceeds MAX_UNLISTED_MODULE_LINES (800).
+    """
+    violations: List[str] = []
+    insetu_pkg = Path(repo_root) / "insetu"
+    scan_targets: List[Tuple[Path, Path]] = []
+    if insetu_pkg.exists():
+        for sub in ("core", "extensions"):
+            if (insetu_pkg / sub).exists():
+                scan_targets.append((insetu_pkg / sub, Path(repo_root)))
+    if repo_root == PROJECT_ROOT:
+        if AKASA_DIR.exists():
+            scan_targets.append((AKASA_DIR, PROJECT_ROOT.parent))
+        if (PROJECT_ROOT.parent / "sutram" / "sutram" / "js").exists():
+            scan_targets.append((PROJECT_ROOT.parent / "sutram" / "sutram" / "js", PROJECT_ROOT.parent))
+
+    for scan_dir, rel_base in scan_targets:
+        for fp in sorted(scan_dir.rglob("*")):
+            if not fp.is_file() or fp.suffix not in (".py", ".js"):
+                continue
+            if "vendor" in fp.parts or "__pycache__" in fp.parts or "node_modules" in fp.parts:
+                continue
+            rel = fp.relative_to(rel_base).as_posix()
+            try:
+                line_count = len(fp.read_text(encoding="utf-8").splitlines())
+            except OSError:
+                continue
+            ceiling = MODULE_LINE_RATCHET.get(rel, MAX_UNLISTED_MODULE_LINES)
+            if line_count > ceiling:
+                msg = f"Module '{rel}' has {line_count} lines, exceeding its ceiling of {ceiling} lines."
+                violations.append(f"❌ [VIOLATION: MODULE_SIZE_RATCHET] {rel}:1 — {msg}")
+                if report:
+                    report_violation("MODULE_SIZE_RATCHET", fp, 1, msg)
+            elif rel in MODULE_LINE_RATCHET and rel.startswith("insetu/") and line_count < ceiling - 25:
+                msg = (
+                    f"Module '{rel}' shrank from {ceiling} to {line_count} lines: "
+                    f"lower its MODULE_LINE_RATCHET ceiling to {line_count}."
+                )
+                violations.append(f"❌ [VIOLATION: MODULE_SIZE_RATCHET] {rel}:1 — {msg}")
+                if report:
+                    report_violation("MODULE_SIZE_RATCHET", fp, 1, msg)
+    return violations
 
     # Validate CODE_INDEX.md has no unresolved file/directory Cartographer placeholders
     code_index_path = PROJECT_ROOT / "CODE_INDEX.md"

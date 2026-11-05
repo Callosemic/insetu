@@ -12,7 +12,7 @@ import akasa
 import akasa.utils as akasa_utils
 import insetu.app as insetu_app
 from insetu.core.sdk import get_workspace_physics
-from insetu.core.utils_core import approve_workspace_extension, snapshot_workspace_extension
+from insetu.core.system.ext_manager import approve_workspace_extension, snapshot_workspace_extension
 
 
 class TestDagFaultQuarantine(unittest.TestCase):

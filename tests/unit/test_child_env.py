@@ -14,10 +14,14 @@ import akasa.utils as akasa_utils
 from akasa.vfs import mount_volume
 from insetu.core.sdk import SettingsManager
 from insetu.core.system.engine_system import system_bp  # registers the system settings schema
-from insetu.core.utils_core import child_env, is_secret_env_name
+from insetu.core.system.security_io import child_env, is_secret_env_name
 from insetu.extensions.preview.engine_preview import _build_launch_command, preview_bp
 from tests.fitness.core import FitnessState
-from tests.fitness.rules_python import BackendFitnessVisitor
+from tests.fitness.rules_python import (
+    CHILD_ENV_BUILDER_FILES,
+    RAW_URLOPEN_REVIEWED,
+    BackendFitnessVisitor,
+)
 
 PLANTED = {
     "AKASA_BOOT_TOKEN": "boot-token-value",
@@ -145,8 +149,12 @@ class TestChildEnvAndFetchRules(unittest.TestCase):
         self.assertEqual(out.count("REMOTE_CODE_URL_BAN"), 1)
 
     def test_homes_and_reviewed_files_are_exempt(self):
-        self.assertNotIn("CHILD_ENV_MANDATE", self._rules("insetu/core/utils_core.py"))
-        self.assertNotIn("OUTBOUND_FETCH_MANDATE", self._rules("insetu/core/llm/engine_llm.py"))
+        for builder_path in CHILD_ENV_BUILDER_FILES:
+            with self.subTest(builder=builder_path):
+                self.assertNotIn("CHILD_ENV_MANDATE", self._rules(builder_path))
+        for reviewed_path in RAW_URLOPEN_REVIEWED:
+            with self.subTest(reviewed=reviewed_path):
+                self.assertNotIn("OUTBOUND_FETCH_MANDATE", self._rules(reviewed_path))
 
 
 if __name__ == "__main__":

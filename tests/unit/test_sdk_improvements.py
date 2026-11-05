@@ -21,10 +21,10 @@ from insetu.core.sdk import (
     get_registered_capabilities,
     resolve_external_dependency_spec,
 )
-from insetu.core.system.engine_system import (
-    _get_whitelisted_extension_packages,
+from insetu.core.system.engine_system import system_bp
+from insetu.core.system.ext_manager import (
     _background_install_extension_deps,
-    system_bp,
+    _get_whitelisted_extension_packages,
 )
 from insetu.core.system.legacy import move_tree_contents
 from insetu.core.utils_core import parse_frontmatter, get_domain_cache_path, get_domain_data_path
@@ -283,6 +283,20 @@ class TestSdkImprovements(unittest.TestCase):
             self.assertIn("FLASK_TRANSPORT_LEAK_BAN", out_bad)
             self.assertIn("CROSS_MODULE_PRIVATE_IMPORT_BAN", out_bad)
             self.assertIn("DIRECT_ROUTE_FUNCTION_CALL_BAN", out_bad)
+
+            # Verify intra-package private helper imports (e.g. engine_demo.py importing _helper from insetu.extensions.demo.submod) are allowed
+            same_pkg_code = (
+                "from insetu.core.sdk import InSetuExtension\n"
+                "from insetu.extensions.demo.submod import _internal_helper\n"
+                "demo_bp = InSetuExtension('demo', __name__)\n"
+                "__depends__ = []\n"
+            )
+            buf_same_pkg = io.StringIO()
+            with contextlib.redirect_stdout(buf_same_pkg):
+                BackendFitnessVisitor(fake_path, "engine_demo.py", is_test=False).visit(
+                    ast.parse(same_pkg_code, filename=str(fake_path))
+                )
+            self.assertNotIn("CROSS_MODULE_PRIVATE_IMPORT_BAN", buf_same_pkg.getvalue())
             self.assertIn("DEAD_PRIVATE_HELPER_BAN", out_bad)
             self.assertIn("LEGACY_GATHER_LANGUAGES_IMPORT_BAN", out_bad)
             self.assertIn("DUPLICATE_LANGUAGE_AST_HELPER_BAN", out_bad)

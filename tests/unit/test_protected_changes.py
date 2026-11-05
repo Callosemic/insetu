@@ -31,7 +31,7 @@ from insetu.core.sdk import (
 from insetu.core.system.engine_system import system_bp  # noqa: F401 - registers the system.protected.* routes
 from insetu.core.topology.engine_topology import TOPOLOGY_SCHEMA, mount_topology_volumes_dynamically
 from tests.fitness.core import FitnessState
-from tests.fitness.rules_python import BackendFitnessVisitor
+from tests.fitness.rules_python import PROTECTED_WRITE_HOMES, BackendFitnessVisitor
 
 def cli_source(label):
     """A small but working cli.py: the smoke test imports it and runs `insetu --help`."""
@@ -257,8 +257,12 @@ class TestProtectedWriteChokepoint(unittest.TestCase):
 
     def test_flagged_outside_its_homes(self):
         self.assertEqual(self._rules("insetu/extensions/demo/engine_demo.py"), 2)
-        self.assertEqual(self._rules("insetu/core/attestations.py"), 1, "attestations may write past the guard, not set the policy")
-        self.assertEqual(self._rules("insetu/core/protected_changes.py"), 0)
+        both_homes = PROTECTED_WRITE_HOMES["execute_confirmed_protected_write"] & PROTECTED_WRITE_HOMES["set_protected_write_handler"]
+        write_only_homes = PROTECTED_WRITE_HOMES["execute_confirmed_protected_write"] - PROTECTED_WRITE_HOMES["set_protected_write_handler"]
+        for home in write_only_homes:
+            self.assertEqual(self._rules(home), 1, f"{home} may write past the guard, not set the policy")
+        for home in both_homes:
+            self.assertEqual(self._rules(home), 0)
 
 
 if __name__ == "__main__":

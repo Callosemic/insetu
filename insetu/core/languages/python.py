@@ -60,6 +60,135 @@ class PythonLanguageProvider(BaseLanguageProvider):
         except SyntaxError:
             return None
 
+    @staticmethod
+    def collect_top_level_bound_names(stmt: ast.stmt) -> Dict[str, int]:
+        """Collects names bound at module import time by a top-level statement without descending into deferred def, class, or lambda bodies."""
+        bound: Dict[str, int] = {}
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound[stmt.name] = stmt.lineno
+            return bound
+        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            for alias in stmt.names:
+                bound[alias.asname or alias.name.split(".")[0]] = stmt.lineno
+            return bound
+
+        def _walk_bindings(node: ast.AST) -> None:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                bound.setdefault(node.name, getattr(node, "lineno", stmt.lineno))
+                return
+            if isinstance(node, ast.Lambda):
+                return
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    bound.setdefault(alias.asname or alias.name.split(".")[0], getattr(node, "lineno", stmt.lineno))
+                return
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                bound.setdefault(node.id, getattr(node, "lineno", stmt.lineno))
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                bound.setdefault(node.name, getattr(node, "lineno", stmt.lineno))
+            for child in ast.iter_child_nodes(node):
+                _walk_bindings(child)
+
+        _walk_bindings(stmt)
+        return bound
+
+    @classmethod
+    def iter_import_time_load_names(cls, stmt: ast.stmt) -> List[Tuple[str, int]]:
+        """
+        Returns (name, lineno) pairs for ast.Name nodes in Load context that execute at module import time.
+        Skips deferred function, method, and lambda bodies (including functions/classes nested inside if/try/with blocks)
+        while still inspecting their import-time decorators, default argument values, and class bases/keywords.
+        """
+        loads: List[Tuple[str, int]] = []
+
+        def _walk_import_time(node: ast.AST, local_using_scope: Set[str]) -> None:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                return
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for dec in node.decorator_list:
+                    _walk_import_time(dec, local_using_scope)
+                for default_val in node.args.defaults:
+                    _walk_import_time(default_val, local_using_scope)
+                for kw_default in node.args.kw_defaults:
+                    if kw_default is not None:
+                        _walk_import_time(kw_default, local_using_scope)
+                return
+            if isinstance(node, ast.ClassDef):
+                for dec in node.decorator_list:
+                    _walk_import_time(dec, local_using_scope)
+                for base in node.bases:
+                    _walk_import_time(base, local_using_scope)
+                for kw in node.keywords:
+                    _walk_import_time(kw.value, local_using_scope)
+                return
+            if isinstance(node, ast.Lambda):
+                for default_val in node.args.defaults:
+                    _walk_import_time(default_val, local_using_scope)
+                for kw_default in node.args.kw_defaults:
+                    if kw_default is not None:
+                        _walk_import_time(kw_default, local_using_scope)
+                return
+            if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+                comp_locals = set(local_using_scope)
+                for gen in node.generators:
+                    _walk_import_time(gen.iter, comp_locals)
+                    for sub_t in ast.walk(gen.target):
+                        if isinstance(sub_t, ast.Name) and isinstance(sub_t.ctx, ast.Store):
+                            comp_locals.add(sub_t.id)
+                    for if_clause in gen.ifs:
+                        _walk_import_time(if_clause, comp_locals)
+                if isinstance(node, ast.DictComp):
+                    _walk_import_time(node.key, comp_locals)
+                    _walk_import_time(node.value, comp_locals)
+                else:
+                    _walk_import_time(node.elt, comp_locals)
+                return
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                if node.id not in local_using_scope:
+                    loads.append((node.id, getattr(node, "lineno", getattr(stmt, "lineno", 1))))
+                return
+            for child in ast.iter_child_nodes(node):
+                _walk_import_time(child, local_using_scope)
+
+        _walk_import_time(stmt, set())
+        return loads
+
+    @classmethod
+    def check_module_forward_refs(cls, tree: ast.Module) -> Optional[str]:
+        """
+        Detects top-level module execution statements that reference a symbol at import time
+        before `def fn` / `class fn` / assignment binds it later in the module.
+        """
+        later_defined: Dict[str, int] = {}
+        for stmt in tree.body:
+            for name, lineno in cls.collect_top_level_bound_names(stmt).items():
+                later_defined.setdefault(name, lineno)
+
+        defined_so_far: Set[str] = set()
+        for stmt in tree.body:
+            for name, use_line in cls.iter_import_time_load_names(stmt):
+                if name not in defined_so_far and name in later_defined and later_defined[name] > use_line:
+                    return (
+                        f"Line {use_line}: Module-level forward reference to '{name}' before its definition at line {later_defined[name]} "
+                        f"(will raise NameError at import time)."
+                    )
+            defined_so_far.update(cls.collect_top_level_bound_names(stmt).keys())
+        return None
+
+    @classmethod
+    def find_first_import_time_reference_line(cls, content: str, symbol: str) -> Optional[int]:
+        """Finds the 1-based line number of the first top-level statement that references `symbol` at import time."""
+        if not content or not symbol:
+            return None
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            return None
+        for stmt in tree.body:
+            if any(name == symbol for name, _ in cls.iter_import_time_load_names(stmt)):
+                return getattr(stmt, "lineno", None)
+        return None
+
     def describe_file(self, filepath: str, content: str) -> str:
         tree = self._parse_tree(content)
         if not tree:

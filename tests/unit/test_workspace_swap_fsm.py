@@ -22,7 +22,11 @@ class TestWorkspaceSwapFSM(unittest.TestCase):
     def test_kernel_files_expose_fsm_primitives(self):
         """Verify system.js, insetu_sdk.js, api.js, and sutram_sdk.js expose all 5 FSM primitives."""
         system_js = (PROJECT_ROOT / "insetu" / "core" / "system" / "system.js").read_text(encoding="utf-8")
-        insetu_sdk_js = (PROJECT_ROOT / "insetu" / "core" / "system" / "insetu_sdk.js").read_text(encoding="utf-8")
+        insetu_sdk_js = (
+            (PROJECT_ROOT / "insetu" / "core" / "system" / "insetu_sdk.js").read_text(encoding="utf-8")
+            + "\n"
+            + (PROJECT_ROOT / "insetu" / "core" / "system" / "insetu_element.js").read_text(encoding="utf-8")
+        )
         api_js = (PROJECT_ROOT / "insetu" / "core" / "system" / "api.js").read_text(encoding="utf-8")
         # SessionOrchestrator phases & StoreRegistry integration
         self.assertIn("export const SessionOrchestrator", system_js, "system.js must export SessionOrchestrator")

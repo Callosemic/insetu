@@ -5,37 +5,69 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 from insetu.core.utils_core import InSetuURI
 
+LEDGER_CHUNK_TYPES = frozenset({
+    "exact",
+    "regex",
+    "textedit",
+    "json_patch",
+    "relocate",
+    "rename",
+    "move_file",
+    "archive_file",
+    "delete_file",
+    "revert",
+})
+
 
 def get_base_step_and_diffs(lines: List[str]) -> Tuple[int, List[int]]:
-    """Analyzes a block of code to find its true structural base indentation unit (LCD > 1)."""
-    indents = sorted(list(set(len(line) - len(line.lstrip()) for line in lines if line.strip())))
-    if len(indents) > 1:
-        diffs = [indents[k + 1] - indents[k] for k in range(len(indents) - 1)]
-        valid_diffs = [d for d in diffs if d > 1]
+    """
+    Analyzes a block of code to find its dominant structural base indentation unit (LCD > 1).
+    Weights indentation transitions by actual line frequency so a few stray 2-space docstring
+    or continuation lines cannot override a 4-space file's baseline step.
+    """
+    line_indents = [len(line) - len(line.lstrip()) for line in lines if line.strip()]
+    unique_indents = sorted(set(line_indents))
+    if len(unique_indents) <= 1:
+        return 4, []
 
-        if valid_diffs:
-            best_step = 4
-            min_error = float('inf')
+    diffs = [unique_indents[k + 1] - unique_indents[k] for k in range(len(unique_indents) - 1)]
+    # Weight each non-zero indent jump by how many consecutive line transitions or indented lines support it
+    weighted_jumps: List[int] = []
+    for idx in range(len(line_indents) - 1):
+        jump = abs(line_indents[idx + 1] - line_indents[idx])
+        if jump > 1:
+            weighted_jumps.append(jump)
+    if not weighted_jumps:
+        weighted_jumps = [d for d in diffs if d > 1]
 
-            for s_step in [4, 2, 3, 8]:
-                error = 0
-                has_base_jump = False
+    if not weighted_jumps:
+        return 4, diffs
 
-                for d in valid_diffs:
-                    k = max(1, int(round(d / s_step)))
-                    if k == 1:
-                        has_base_jump = True
-                    error += abs(d - (k * s_step))
+    # If the majority (>= 60%) of indented lines sit on multiples of 4, 4 is the structural step
+    non_zero_indents = [i for i in line_indents if i > 0]
+    if non_zero_indents:
+        mult4_ratio = sum(1 for i in non_zero_indents if i % 4 == 0) / len(non_zero_indents)
+        has_step4_jump = any(j == 4 for j in weighted_jumps) or (4 in unique_indents)
+        if mult4_ratio >= 0.6 and has_step4_jump:
+            return 4, diffs
 
-                if not has_base_jump:
-                    error += 1000
+    best_step = 4
+    min_error = float('inf')
+    for s_step in [4, 2, 3, 8]:
+        error = 0
+        has_base_jump = False
+        for d in weighted_jumps:
+            k = max(1, int(round(d / s_step)))
+            if k == 1:
+                has_base_jump = True
+            error += abs(d - (k * s_step))
+        if not has_base_jump:
+            error += 1000 * len(weighted_jumps)
+        if error < min_error:
+            min_error = error
+            best_step = s_step
 
-                if error < min_error:
-                    min_error = error
-                    best_step = s_step
-
-            return best_step, diffs
-    return 4, []
+    return best_step, diffs
 
 
 def _parse_kv_directive_lines(lines: List[str]) -> Dict[str, str]:

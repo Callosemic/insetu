@@ -17,11 +17,11 @@ This plan implements the mental model codified in `vfs://insetu/docs/models/agen
 
 ---
 
-## Sprint 1: Retire Ghost Workflow Pre-Compilation & Fix `hierarchy` Truncation
+## Sprint 1: Retire Ghost Workflow Pre-Compilation & Verify Full `hierarchy` Index
 Eliminate background `ctx://workflows/workflow_*_context.txt` compilation on file saves and ensure fast scouts see untruncated repository symbol maps.
 
-- [ ] [S1.T1] Remove `_register_agent_workflow_compilation_step`, `_background_compile_routine_workflows`, and the `ctx://workflows` cache volume from `engine_agent.py` and `engine_gather.py`; treat routine frontmatter `includes:` strictly as initial envelope seeds on invocation. <!-- targets: vfs://insetu/insetu/core/agent/engine_agent.py, vfs://insetu/insetu/core/gather/engine_gather.py, test_contract: vfs://insetu/tests/test_agent_orchestrator.py -->
-- [ ] [S1.T2] Remove the `[:80]` line truncation of `CODE_INDEX.md` in `api_topology_overview` (`engine_topology.py`) and include federated public symbol maps across co-mounted workspace repositories (`insetu`, `sutram`, `akasa`). <!-- targets: vfs://insetu/insetu/core/topology/engine_topology.py, test_contract: vfs://insetu/tests/test_topology.py -->
+- [ ] [S1.T1] Remove `_register_agent_workflow_compilation_step`, `_background_compile_routine_workflows`, and the `ctx://workflows` cache volume from `engine_agent.py` and `engine_gather.py`, plus the `ctx://workflows/...` path resolution in `utils_core.py` (and clean up the legacy cache folder); treat routine frontmatter `includes:` strictly as initial context resolved when the routine runs. <!-- targets: vfs://insetu/insetu/core/agent/engine_agent.py, vfs://insetu/insetu/core/gather/engine_gather.py, vfs://insetu/insetu/core/utils_core.py, test_contract: vfs://insetu/tests/unit/test_agent_orchestrator_and_mcp.py -->
+- [ ] [S1.T2] Verify that the `[:80]` line truncation of `CODE_INDEX.md` in `api_topology_overview` (`engine_topology.py`) is already removed in 0.34.0 (`idx_full`); defer federated cross-repo symbol maps to Sprint 4 (`S4.T2`). <!-- targets: vfs://insetu/insetu/core/topology/engine_topology.py, test_contract: vfs://insetu/tests/unit/test_repo_landmarks.py -->
 
 ---
 

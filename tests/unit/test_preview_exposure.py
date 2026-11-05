@@ -16,7 +16,7 @@ from akasa.vfs import mount_volume
 import insetu.core.attestations as _attestations
 from insetu.core.agent import orchestrator
 from insetu.core.sdk import execution_frame, get_registered_capabilities
-from insetu.core.utils_core import approve_command, is_command_approved
+from insetu.core.system.security_io import approve_command, is_command_approved
 from insetu.extensions.preview import engine_preview
 from insetu.extensions.preview.engine_preview import (
     PreviewApprovalRequired,

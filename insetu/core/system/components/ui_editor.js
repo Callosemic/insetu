@@ -4,7 +4,7 @@ import { AppStore } from '/static/extensions/system/store.js';
 
 // The manifest's built-in entries, used until languages.json arrives so the first paint is highlighted.
 // test_editor_vendorize.py checks that this table matches the manifest's built-in entries exactly.
-const _BUILTIN_FALLBACK_LANGUAGES = {
+export const _BUILTIN_FALLBACK_LANGUAGES = {
     python: { label: 'Python', kind: 'builtin', export: 'python', extensions: ['py', 'pyi'] },
     javascript: { label: 'JavaScript', kind: 'builtin', export: 'javascript', options: { jsx: true }, extensions: ['js', 'mjs', 'cjs', 'jsx'] },
     typescript: { label: 'TypeScript', kind: 'builtin', export: 'javascript', options: { typescript: true, jsx: true }, extensions: ['ts', 'mts', 'cts', 'tsx'] },

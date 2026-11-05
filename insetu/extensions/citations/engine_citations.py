@@ -4,8 +4,7 @@ import re
 import json
 import urllib.parse
 from typing import TypedDict, Optional, List
-from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import InSetuURI, fetch_url
+from insetu.core.sdk import InSetuExtension, InSetuURI, fetch_url
 CITATIONS_SCHEMA = {
     "citations": {
         "id": "TEXT PRIMARY KEY",

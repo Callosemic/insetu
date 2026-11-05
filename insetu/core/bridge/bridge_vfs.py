@@ -17,12 +17,13 @@ from collections import OrderedDict
 import copy
 import threading
 
-from typing import Any, Dict, List, Optional, Tuple
-from insetu.core.utils_core import get_workspace_physics, get_sister_repos, InSetuURI
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from insetu.core.utils_core import compute_vfs_sha256, get_workspace_physics, get_sister_repos, InSetuURI
 from insetu.core.sdk import is_protected_vfs_target
 from insetu.core.protected_changes import REFERENCE_KEY as _PROTECTED_REFERENCE_KEY, SOURCE_KEY as _PROTECTED_SOURCE_KEY
+from insetu.core.languages import PythonLanguageProvider
 from insetu.core.topology.engine_topology import get_omniscient_workspace_files
-from .parser import compute_block_signature, flatten_parsed_blocks, parse_blocks
+from .parser import LEDGER_CHUNK_TYPES, compute_block_signature, flatten_parsed_blocks, parse_blocks
 from .bridge_fuzzy import (
     apply_block_in_memory,
     apply_textedit_in_memory,
@@ -130,6 +131,157 @@ _BANNED_CONTROL_PLANE_FILENAMES = frozenset({
 PROTECTED_CONFIRMATION_FLAG = "protected_needs_confirmation"
 
 
+class FileTimeline:
+    """
+    Single Source of Truth for one file's state progression B_0 -> B_1 -> ... -> B_m across a Bridge transaction.
+    Every buffer state B_k is Optional[str]:
+        - None: file does not exist (absent on disk, or deleted by DELETE_FILE / MOVE_FILE).
+        - "":   a 0-byte file exists.
+        - str:  a file with content exists.
+    """
+    __slots__ = ("uri", "baseline", "baseline_hash", "current", "transitions")
+
+    def __init__(self, uri: str, baseline: Optional[str]):
+        self.uri: str = uri
+        self.baseline: Optional[str] = baseline
+        self.baseline_hash: Optional[str] = compute_vfs_sha256(baseline) if baseline is not None else None
+        self.current: Optional[str] = baseline
+        self.transitions: List[Dict[str, Any]] = []
+
+    @property
+    def existed_on_disk(self) -> bool:
+        return self.baseline is not None
+
+    @property
+    def exists_now(self) -> bool:
+        return self.current is not None
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.current is None
+
+    @property
+    def is_modified(self) -> bool:
+        return self.current != self.baseline
+
+    def record_step(
+        self,
+        post_buf: Optional[str],
+        block: Dict[str, Any],
+        patch_tel: Dict[str, Any],
+        raw_target_file: str = "",
+        block_index: int = 0,
+        ledger_type: Optional[str] = None,
+        ledger_search: Optional[str] = None,
+        ledger_replace: Optional[str] = None,
+    ) -> None:
+        b_type = ledger_type or block.get("type", "exact")
+        if b_type not in LEDGER_CHUNK_TYPES:
+            raise ValueError(f"Unknown ledger chunk type '{b_type}'. Expected one of {sorted(LEDGER_CHUNK_TYPES)}.")
+        pre_str = self.current or ""
+        post_str = post_buf or ""
+        if ledger_search is not None:
+            s_val = ledger_search
+        elif b_type in ("exact", "regex", "textedit"):
+            s_val = block.get("search", "")
+        else:
+            s_val = pre_str
+
+        if ledger_replace is not None:
+            r_val = ledger_replace
+        elif b_type in ("exact", "regex", "textedit"):
+            r_val = block.get("replace", "")
+        else:
+            r_val = post_str
+
+        self.transitions.append({
+            "order": block.get("order", patch_tel.get("patch_index", 0)),
+            "block": block,
+            "block_index": block_index,
+            "patch_tel": patch_tel,
+            "pre_buffer": pre_str,
+            "post_buffer": post_str,
+            "post_state": post_buf,
+            "cell_id": block.get("id"),
+            "target_file": str(InSetuURI.from_external_input(raw_target_file)) if raw_target_file else self.uri,
+            "raw_target_file": raw_target_file or self.uri,
+            "ledger_chunk": {
+                "comment": block.get("comment", ""),
+                "type": b_type,
+                "search": s_val,
+                "replace": r_val,
+                **({"patch_body": block["patch_body"]} if block.get("patch_body") else {}),
+            },
+        })
+        self.current = post_buf
+
+
+class BridgeWorkingTree:
+    """
+    Speculative VFS overlay for a single Bridge transaction.
+    Owns all per-file FileTimeline instances and transitive move pointer redirects (src_uri -> dst_uri).
+    """
+
+    def __init__(self, vfs):
+        self.vfs = vfs
+        self.timelines: Dict[str, FileTimeline] = {}
+        self.redirects: Dict[str, str] = {}
+
+    def resolve_pointer(self, uri_str: str) -> str:
+        cur = uri_str
+        seen = set()
+        while cur in self.redirects and cur not in seen:
+            seen.add(cur)
+            cur = self.redirects[cur]
+        return cur
+
+    def timeline(self, filepath: str) -> FileTimeline:
+        tl = self.timelines.get(filepath)
+        if tl is None:
+            disk_content = self.vfs.read(filepath)
+            tl = FileTimeline(filepath, disk_content)
+            self.timelines[filepath] = tl
+        return tl
+
+    def read(self, filepath: str) -> Optional[str]:
+        return self.timeline(filepath).current
+
+    def disk_hash(self, filepath: str) -> Optional[str]:
+        return self.timeline(filepath).baseline_hash
+
+    def baseline(self, filepath: str) -> Optional[str]:
+        return self.timeline(filepath).baseline
+
+    def apply_step(
+        self,
+        filepath: str,
+        post_buf: Optional[str],
+        block: Dict[str, Any],
+        patch_tel: Dict[str, Any],
+        raw_target_file: str = "",
+        block_index: int = 0,
+        ledger_type: Optional[str] = None,
+        ledger_search: Optional[str] = None,
+        ledger_replace: Optional[str] = None,
+    ) -> FileTimeline:
+        tl = self.timeline(filepath)
+        tl.record_step(
+            post_buf=post_buf,
+            block=block,
+            patch_tel=patch_tel,
+            raw_target_file=raw_target_file,
+            block_index=block_index,
+            ledger_type=ledger_type,
+            ledger_search=ledger_search,
+            ledger_replace=ledger_replace,
+        )
+        return tl
+
+    def to_buffer_dict(self) -> Dict[str, str]:
+        """Projects touched timelines to {uri: str} (with "" for deleted files) for backward-compatible callers."""
+        return {fp: (tl.current if tl.current is not None else "") for fp, tl in self.timelines.items()}
+
+
 def _is_banned_bridge_target(uri: InSetuURI, norm_target: str, extra_protected_Substrings: Optional[ list ] = None, allow_protected: bool = True) -> Optional[str]:
     base_lower = (uri.basename or "").lower()
     norm_lower = norm_target.replace("\\", "/").lower()
@@ -158,6 +310,11 @@ try:
     import tree_sitter_javascript as _ts_javascript
 except ImportError:
     _ts_javascript = None
+
+
+def _check_python_module_forward_refs(tree: ast.Module) -> Optional[str]:
+    """Delegates module-level import-time forward reference checking to PythonLanguageProvider."""
+    return PythonLanguageProvider.check_module_forward_refs(tree)
 
 
 def _validate_buffer_syntax(ctx, resolved_path: str, new_content: str) -> Tuple[bool, str]:
@@ -198,12 +355,20 @@ def _validate_buffer_syntax(ctx, resolved_path: str, new_content: str) -> Tuple[
                         return True, "Tree-sitter detected a syntax error, and node fallback verification failed."
                 else:
                     return True, "Tree-sitter detected a syntax error in the modified AST."
+            if ext == '.py':
+                py_tree = ast.parse(new_content)
+                fwd_err = _check_python_module_forward_refs(py_tree)
+                if fwd_err:
+                    return True, fwd_err
             return False, ""
         raise ImportError("Language not mapped for Tree-sitter.")
     except ImportError:
         if ext == '.py':
             try:
-                ast.parse(new_content)
+                py_tree = ast.parse(new_content)
+                fwd_err = _check_python_module_forward_refs(py_tree)
+                if fwd_err:
+                    return True, fwd_err
             except SyntaxError as e:
                 return True, f"Line {e.lineno}: {e.msg}"
         elif ext in ('.js', '.ts', '.mjs'):
@@ -243,69 +408,9 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
         "summary": {"total_patches": 0, "resolved": 0, "auto_skipped": 0, "action_required": 0, "failed": 0},
         "patches": []
     }
-    memory_buffers = {}
-    original_buffers = {}
-    disk_hashes = {}
-    deleted_targets = set()
+    tree = BridgeWorkingTree(vfs)
     omniscient_cache = None
-    file_transitions: Dict[str, List[Dict[str, Any]]] = {}
     deferred_failures = []
-
-    def get_file_content(filepath):
-        if filepath in memory_buffers: return memory_buffers[filepath]
-        content = vfs.read(filepath)
-        if content is not None:
-            disk_hashes[filepath] = hashlib.sha256(content.encode('utf-8')).hexdigest()
-            original_buffers[filepath] = content
-            memory_buffers[filepath] = content
-        return content
-
-    def _record_transition(
-        filepath: str,
-        block: Dict[str, Any],
-        pre_buf: Optional[str],
-        post_buf: str,
-        patch_tel: Dict[str, Any],
-        raw_target_file: str = "",
-        block_index: int = 0,
-        ledger_type: Optional[str] = None,
-        ledger_search: Optional[str] = None,
-        ledger_replace: Optional[str] = None,
-    ) -> None:
-        b_type = ledger_type or block.get("type", "exact")
-        pre_str = pre_buf or ""
-        if ledger_search is not None:
-            s_val = ledger_search
-        elif b_type in ("exact", "regex", "textedit"):
-            s_val = block.get("search", "")
-        else:
-            s_val = pre_str
-
-        if ledger_replace is not None:
-            r_val = ledger_replace
-        elif b_type in ("exact", "regex", "textedit"):
-            r_val = block.get("replace", "")
-        else:
-            r_val = post_buf
-
-        file_transitions.setdefault(filepath, []).append({
-            "order": block.get("order", patch_tel.get("patch_index", 0)),
-            "block": block,
-            "block_index": block_index,
-            "patch_tel": patch_tel,
-            "pre_buffer": pre_str,
-            "post_buffer": post_buf,
-            "cell_id": block.get("id"),
-            "target_file": str(InSetuURI.from_external_input(raw_target_file)) if raw_target_file else filepath,
-            "raw_target_file": raw_target_file or filepath,
-            "ledger_chunk": {
-                "comment": block.get("comment", ""),
-                "type": b_type,
-                "search": s_val,
-                "replace": r_val,
-                **({"patch_body": block["patch_body"]} if block.get("patch_body") else {}),
-            },
-        })
     protected_substrings = []
     try:
         protected_substrings = ctx.emit_merge_list('register_protected_bridge_paths')
@@ -336,12 +441,134 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 return True
         return False
 
+    def _validate_and_isolate_syntax(target_uris: Iterable[str]) -> None:
+        """
+        O(1) Per-File End-of-File AST Syntax Gate + Fault-Isolating Rollback:
+        Validates the final buffer of each modified file once; if a syntax error is detected,
+        walks that file's transition log to blame and isolate the offending chunk(s) while
+        preserving valid sibling chunks.
+        """
+        for res_fp in sorted(target_uris):
+            tl = tree.timelines.get(res_fp)
+            if tl is None or not tl.transitions or tl.is_deleted:
+                continue
+            applied_records = tl.transitions
+            if all(_is_gate_approved(rec["cell_id"], "SYNTAX_ERROR", rec["target_file"], res_fp) for rec in applied_records):
+                continue
+
+            final_buf = tl.current or ""
+            has_syn_err, syn_err_str = _validate_buffer_syntax(ctx, res_fp, final_buf)
+            if not has_syn_err:
+                continue
+
+            clean_running_buf = applied_records[0]["pre_buffer"]
+            isolated_culprit = False
+            for idx_rec, rec in enumerate(applied_records):
+                if _is_gate_approved(rec["cell_id"], "SYNTAX_ERROR", rec["target_file"], res_fp):
+                    clean_running_buf = rec["post_buffer"]
+                    continue
+                if idx_rec == 0 or batch_has_cross_file_ops:
+                    cand_buf = rec["post_buffer"]
+                else:
+                    b_cand = rec["block"]
+                    fn_cand = apply_textedit_in_memory if b_cand.get("type") == "textedit" else apply_block_in_memory
+                    ok_c, cand_buf, _ = fn_cand(clean_running_buf, b_cand, silent=True)
+                    if not ok_c and tl.baseline:
+                        ok_c, cand_buf, _ = rebase_overlapping_block_in_memory(
+                            tl.baseline, clean_running_buf, b_cand, silent=True
+                        )
+                    if not ok_c:
+                        cand_buf = rec["post_buffer"]
+
+                chunk_err, chunk_err_str = _validate_buffer_syntax(ctx, res_fp, cand_buf)
+                if chunk_err and idx_rec < len(applied_records) - 1:
+                    if batch_has_cross_file_ops:
+                        lookahead_buf = applied_records[-1]["post_buffer"]
+                    else:
+                        lookahead_buf = cand_buf
+                        for rem_rec in applied_records[idx_rec + 1:]:
+                            rem_b = rem_rec["block"]
+                            rem_fn = apply_textedit_in_memory if rem_b.get("type") == "textedit" else apply_block_in_memory
+                            ok_rem, next_buf, _ = rem_fn(lookahead_buf, rem_b, silent=True)
+                            if ok_rem:
+                                lookahead_buf = next_buf
+                    healed_later_err, _ = _validate_buffer_syntax(ctx, res_fp, lookahead_buf)
+                    if not healed_later_err:
+                        chunk_err = False
+
+                if chunk_err:
+                    isolated_culprit = True
+                    pt = rec["patch_tel"]
+                    if pt["status"] == "resolved":
+                        telemetry["summary"]["resolved"] = max(0, telemetry["summary"]["resolved"] - 1)
+                    pt["status"] = "syntax_error"
+                    pt["error_message"] = chunk_err_str or syn_err_str
+                    diff = list(difflib.unified_diff(clean_running_buf.splitlines(), cand_buf.splitlines(), lineterm=""))
+                    err_b64 = base64.b64encode(("\n".join(diff)).encode("utf-8")).decode("utf-8")
+                    pt["syntax_error"] = err_b64
+                    pt["gate"] = {
+                        "code": "SYNTAX_ERROR",
+                        "target_uri": res_fp,
+                        "reason": chunk_err_str or syn_err_str,
+                    }
+                    for act_name in ("approve_gate", "ignore_syntax_error", "deselect_patch"):
+                        if act_name not in pt["available_actions"]:
+                            pt["available_actions"].append(act_name)
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["action_required"] += 1
+                    deferred_failures.append({
+                        "filepath": res_fp,
+                        "raw_target_file": rec["raw_target_file"],
+                        "block": rec["block"],
+                        "block_index": rec.get("block_index", idx_rec),
+                        "pre_buffer": clean_running_buf,
+                        "post_buffer": cand_buf,
+                        "patch_tel": pt,
+                    })
+                    ctx.emit_background(
+                        "bridge_error",
+                        filepath=res_fp,
+                        error_type="syntax_error",
+                        details=chunk_err_str or syn_err_str,
+                        file_content=cand_buf,
+                        patch_payload=json.dumps(rec["block"]),
+                    )
+                else:
+                    clean_running_buf = cand_buf
+
+            if isolated_culprit:
+                tl.current = clean_running_buf
+                tl.transitions = [
+                    tr for tr in tl.transitions
+                    if tr["patch_tel"].get("status") == "resolved"
+                ]
+
     active_uris = {str(InSetuURI.from_external_input(af)) for af in active_files} | set(active_files)
+    if active_files:
+        for _, _, blk in flatten_parsed_blocks(parsed_structure):
+            s_u = str(InSetuURI.from_external_input(blk["source_uri"])) if blk.get("source_uri") else ""
+            t_u = str(InSetuURI.from_external_input(blk["target_uri"])) if blk.get("target_uri") else ""
+            if s_u in active_uris and t_u:
+                active_uris.add(t_u)
+            elif t_u in active_uris and s_u:
+                active_uris.add(s_u)
+
+    batch_has_cross_file_ops = any(
+        blk.get("type") in ("relocate", "rename", "move_file", "archive_file", "delete_file")
+        for _, _, blk in flatten_parsed_blocks(parsed_structure)
+    )
+    execution_groups: List[Tuple[str, List[Dict[str, Any]]]] = (
+        [(raw_fp, [blk]) for raw_fp, _, blk in flatten_parsed_blocks(parsed_structure)]
+        if batch_has_cross_file_ops
+        else list(parsed_structure.items())
+    )
+    all_touched_files: Set[str] = set()
     patch_index = 0
-    for raw_target_file, blocks in parsed_structure.items():
+    for raw_target_file, blocks in execution_groups:
         uri = InSetuURI.from_external_input(raw_target_file)
-        target_file = str(uri)
-        if active_files and (raw_target_file not in active_uris and target_file not in active_uris) or not blocks:
+        target_file = tree.resolve_pointer(str(uri))
+        uri = InSetuURI(target_file)
+        if active_files and (raw_target_file not in active_uris and str(InSetuURI.from_external_input(raw_target_file)) not in active_uris and target_file not in active_uris) or not blocks:
             continue
         norm_target = f"{uri.repo}/{uri.path}".strip('/') if uri.repo else uri.path
         if target_file.startswith("ws://"):
@@ -413,8 +640,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
         file_level_res = resolutions_map.get(target_file) if isinstance(resolutions_map.get(target_file), dict) else {}
         explicit_file_pointer = file_level_res.get("selected_uri") or confirmed_map.get(target_file)
         pointer_for_sig = str(InSetuURI.from_external_input(explicit_file_pointer)) if explicit_file_pointer else target_file
-        get_file_content(pointer_for_sig)
-        initial_disk_hash = disk_hashes.get(pointer_for_sig)
+        initial_disk_hash = tree.disk_hash(pointer_for_sig)
         file_res_subset: Dict[str, Any] = {}
         if target_file in resolutions_map:
             file_res_subset[target_file] = resolutions_map[target_file]
@@ -446,10 +672,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             cached_file_bundle = _cache_get(_FILE_EVAL_CACHE, file_eval_sig)
             if cached_file_bundle is not None:
                 c_res_path = cached_file_bundle.get("resolved_path")
-                if c_res_path:
-                    get_file_content(c_res_path)
-                    if disk_hashes.get(c_res_path) != cached_file_bundle.get("resolved_disk_hash"):
-                        cached_file_bundle = None
+                if c_res_path and tree.disk_hash(c_res_path) != cached_file_bundle.get("resolved_disk_hash"):
+                    cached_file_bundle = None
             if cached_file_bundle is not None:
                 for cp in cached_file_bundle["patches"]:
                     cp_copy = dict(cp)
@@ -474,9 +698,10 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                     deferred_failures.append(copy.deepcopy(df_item))
                 c_res_path = cached_file_bundle.get("resolved_path")
                 if c_res_path and cached_file_bundle.get("final_buffer") is not None:
-                    memory_buffers[c_res_path] = cached_file_bundle["final_buffer"]
+                    tl_cached = tree.timeline(c_res_path)
+                    tl_cached.current = cached_file_bundle["final_buffer"]
                     if cached_file_bundle.get("transitions"):
-                        file_transitions[c_res_path] = copy.deepcopy(cached_file_bundle["transitions"])
+                        tl_cached.transitions = copy.deepcopy(cached_file_bundle["transitions"])
                 continue
 
         file_patch_start_idx = len(telemetry["patches"])
@@ -510,13 +735,13 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             telemetry["summary"]["total_patches"] += 1
             block_type = b.get("type", "exact")
             if block_type == "relocate":
-                src_uri = str(InSetuURI.from_external_input(b.get("source_uri") or target_file))
-                dst_uri = str(InSetuURI.from_external_input(b.get("target_uri") or ""))
+                src_uri = tree.resolve_pointer(str(InSetuURI.from_external_input(b.get("source_uri") or target_file)))
+                dst_uri = tree.resolve_pointer(str(InSetuURI.from_external_input(b.get("target_uri") or "")))
                 sym_name = b.get("symbol", "")
-                src_content = get_file_content(src_uri)
-                dst_content = get_file_content(dst_uri)
+                src_content = tree.read(src_uri)
+                dst_content = tree.read(dst_uri)
                 ok_rel, new_src, new_dst, rel_status = apply_ast_relocate_in_memory(
-                    src_content, dst_content, src_uri, dst_uri, sym_name
+                    src_content, dst_content, src_uri, dst_uri, sym_name, comment=b.get("comment")
                 )
                 if not ok_rel:
                     patch_tel.update({
@@ -528,6 +753,14 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                     })
                     telemetry["can_commit"] = False
                     telemetry["summary"]["failed"] += 1
+                    deferred_failures.append({
+                        "filepath": src_uri,
+                        "raw_target_file": raw_target_file,
+                        "block": b,
+                        "block_index": b_idx,
+                        "pre_buffer": src_content or "",
+                        "patch_tel": patch_tel,
+                    })
                     telemetry["patches"].append(patch_tel)
                     continue
                 if rel_status == "idempotent":
@@ -541,16 +774,17 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                     telemetry["summary"]["auto_skipped"] += 1
                     telemetry["patches"].append(patch_tel)
                     continue
-                memory_buffers[src_uri] = new_src
-                memory_buffers[dst_uri] = new_dst
-                _record_transition(src_uri, b, src_content, new_src, patch_tel, raw_target_file, b_idx)
-                _record_transition(dst_uri, b, dst_content, new_dst, patch_tel, raw_target_file, b_idx)
+                tree.apply_step(src_uri, new_src, b, patch_tel, raw_target_file, b_idx)
+                tree.apply_step(dst_uri, new_dst, b, patch_tel, raw_target_file, b_idx)
                 touched_in_group.update((src_uri, dst_uri))
+                all_touched_files.update((src_uri, dst_uri))
                 patch_tel.update({
-                    "resolved_file": f"{src_uri} -> {dst_uri}",
+                    "resolved_file": src_uri,
+                    "target_uri": dst_uri,
+                    "symbol": sym_name,
                     "status": "resolved",
                     "resolution_type": "ast_relocate",
-                    "flags": [f"relocate:{sym_name}"],
+                    "flags": ["ast_relocate"],
                 })
                 telemetry["summary"]["resolved"] += 1
                 telemetry["patches"].append(patch_tel)
@@ -575,14 +809,14 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 scoped_files = resolve_scope_files(workspace_id, scope_prefix, allowed_repos=allowed_repos)
                 modified_in_rename = []
                 for s_fp in scoped_files:
-                    s_content = get_file_content(s_fp)
+                    s_content = tree.read(s_fp)
                     if not s_content or target_sym not in s_content:
                         continue
                     renamed_content = apply_ast_rename_to_content(s_fp, s_content, target_sym, new_sym)
                     if renamed_content != s_content:
-                        memory_buffers[s_fp] = renamed_content
-                        _record_transition(s_fp, b, s_content, renamed_content, patch_tel, raw_target_file, b_idx)
+                        tree.apply_step(s_fp, renamed_content, b, patch_tel, raw_target_file, b_idx)
                         touched_in_group.add(s_fp)
+                        all_touched_files.add(s_fp)
                         modified_in_rename.append(s_fp)
                 if not modified_in_rename:
                     patch_tel.update({
@@ -595,9 +829,11 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 else:
                     patch_tel.update({
                         "resolved_file": modified_in_rename[0] if len(modified_in_rename) == 1 else scope_prefix,
+                        "symbol": target_sym,
+                        "renamed_count": len(modified_in_rename),
                         "status": "resolved",
                         "resolution_type": "ast_rename",
-                        "flags": [f"renamed in {len(modified_in_rename)} file(s)"],
+                        "flags": ["ast_rename"],
                     })
                     telemetry["summary"]["resolved"] += 1
                 telemetry["patches"].append(patch_tel)
@@ -623,7 +859,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                     telemetry["patches"].append(patch_tel)
                     continue
 
-                src_content = get_file_content(src_uri)
+                src_content = tree.read(src_uri)
                 if src_content is None:
                     patch_tel.update({
                         "resolved_file": src_uri,
@@ -660,10 +896,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                         telemetry["summary"]["action_required"] += 1
                         telemetry["patches"].append(patch_tel)
                         continue
-                    memory_buffers[src_uri] = ""
-                    deleted_targets.add(src_uri)
-                    _record_transition(
-                        src_uri, b, src_content, "", patch_tel, raw_target_file, b_idx,
+                    tree.apply_step(
+                        src_uri, None, b, patch_tel, raw_target_file, b_idx,
                         ledger_type="delete_file", ledger_search=src_content, ledger_replace=""
                     )
                     patch_tel.update({
@@ -713,30 +947,31 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                     telemetry["patches"].append(patch_tel)
                     continue
 
-                dst_prev = get_file_content(dst_uri)
-                memory_buffers[src_uri] = ""
-                memory_buffers[dst_uri] = src_content
-                deleted_targets.add(src_uri)
-                _record_transition(
-                    src_uri, b, src_content, "", patch_tel, raw_target_file, b_idx,
+                dst_prev = tree.read(dst_uri)
+                tree.apply_step(
+                    src_uri, None, b, patch_tel, raw_target_file, b_idx,
                     ledger_type="delete_file", ledger_search=src_content, ledger_replace=""
                 )
-                _record_transition(
-                    dst_uri, b, dst_prev, src_content, patch_tel, raw_target_file, b_idx,
+                tree.apply_step(
+                    dst_uri, src_content, b, patch_tel, raw_target_file, b_idx,
                     ledger_type="exact", ledger_search=dst_prev or "", ledger_replace=src_content
                 )
+                tree.redirects[src_uri] = dst_uri
+                touched_in_group.add(dst_uri)
+                all_touched_files.add(dst_uri)
                 patch_tel.update({
-                    "resolved_file": f"{src_uri} -> {dst_uri}",
+                    "resolved_file": src_uri,
+                    "target_uri": dst_uri,
                     "status": "resolved",
                     "resolution_type": block_type,
-                    "flags": [f"{block_type}:{InSetuURI(dst_uri).basename}"],
+                    "flags": [block_type],
                 })
                 telemetry["summary"]["resolved"] += 1
                 telemetry["patches"].append(patch_tel)
                 continue
 
             if block_type == "json_patch":
-                content = get_file_content(target_file)
+                content = tree.read(target_file)
                 if content is None:
                     patch_tel.update({
                         "resolved_file": target_file,
@@ -773,12 +1008,12 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                     telemetry["summary"]["auto_skipped"] += 1
                     telemetry["patches"].append(patch_tel)
                     continue
-                _record_transition(
-                    target_file, b, content, new_jp_content, patch_tel, raw_target_file, b_idx,
+                tree.apply_step(
+                    target_file, new_jp_content, b, patch_tel, raw_target_file, b_idx,
                     ledger_type="json_patch", ledger_search=content, ledger_replace=new_jp_content
                 )
                 touched_in_group.add(target_file)
-                memory_buffers[target_file] = new_jp_content
+                all_touched_files.add(target_file)
                 patch_tel.update({
                     "resolved_file": target_file,
                     "status": "resolved",
@@ -788,7 +1023,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 telemetry["summary"]["resolved"] += 1
                 telemetry["patches"].append(patch_tel)
                 continue
-            content = get_file_content(target_file)
+            content = tree.read(target_file)
             search_str = normalize_patch_payload(b["search"], reference_content=content or "")
             replace_str = normalize_patch_payload(b["replace"], reference_content=content or "")
             is_genesis = not search_str.strip()
@@ -812,7 +1047,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             def _enforce_genesis_overwrite_gate(resolved_uri: str) -> bool:
                 if not resolved_uri:
                     return False
-                if get_file_content(resolved_uri) is not None and not _is_gate_approved(
+                if tree.read(resolved_uri) is not None and not _is_gate_approved(
                     cell_id, "OVERWRITE_EXISTING", target_file, resolved_uri
                 ):
                     patch_tel.update({
@@ -844,7 +1079,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                         pctx.handled = True
                         _enforce_genesis_overwrite_gate(cand_uri)
                         return
-                    if get_file_content(cand_uri) is not None:
+                    if tree.read(cand_uri) is not None:
                         pctx.resolved_path = cand_uri
                         pctx.resolution_type = "confirmed_candidate"
                         pctx.handled = True
@@ -906,7 +1141,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             def resolve_pinned_shortcut():
                 if len(allowed_repos) == 1 and not effective_deep_search:
                     cand = f"vfs://{allowed_repos[0]}/{norm_target}"
-                    if get_file_content(cand) is not None:
+                    if tree.read(cand) is not None:
                         pctx.resolved_path = cand
                         pctx.resolution_type = "pinned_shortcut"
                         pctx.handled = True
@@ -923,7 +1158,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 cand_list = []
 
                 for cand in candidates:
-                    cand_content = get_file_content(cand)
+                    cand_content = tree.read(cand)
                     if cand_content is None:
                         continue
                     ok_search, _, s_status = apply_block_in_memory(cand_content, dict(b), silent=True)
@@ -970,7 +1205,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                     cand_list = []
                     for cand_basename, cand_fp in omniscient_cache:
                         cand_uri = str(InSetuURI(cand_fp))
-                        cand_content = get_file_content(cand_uri)
+                        cand_content = tree.read(cand_uri)
                         if cand_content and longest_line in cand_content:
                             ok_search, _, s_status = apply_block_in_memory(cand_content, dict(b), silent=True)
                             if ok_search and s_status != "idempotent":
@@ -1005,9 +1240,9 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
 
             patch_tel["resolved_file"] = resolved_path
             patch_tel["resolution_type"] = resolution_type
-            patch_tel["disk_hash"] = disk_hashes.get(resolved_path)
+            patch_tel["disk_hash"] = tree.disk_hash(resolved_path)
 
-            content = get_file_content(resolved_path) or ""
+            content = tree.read(resolved_path) or ""
             # Step h: Phase 2 - Patch Safety & Recursion
             is_confirmed_override = _is_gate_approved(cell_id, "EXPANSION_RISK", target_file, resolved_path)
             if search_str and search_str != replace_str and search_str in replace_str:
@@ -1032,8 +1267,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 continue
 
             # --- PHASE 2: CANONICAL IN-MEMORY TEST LOOP & TIER 2 SIGNATURE MEMOIZATION (PatchEvalSig) ---
-            input_buf_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-            orig_file_hash = disk_hashes.get(resolved_path, "")
+            input_buf_hash = compute_vfs_sha256(content)
+            orig_file_hash = tree.disk_hash(resolved_path) or ""
             patch_eval_sig = compute_patch_eval_signature(resolved_path, input_buf_hash, orig_file_hash, b, cell_res)
             cached_chunk = _cache_get(_PATCH_EVAL_CACHE, patch_eval_sig)
             apply_stat = "success"
@@ -1047,9 +1282,10 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
             else:
                 apply_fn = apply_textedit_in_memory if block_type == "textedit" else apply_block_in_memory
                 ok, new_content, apply_stat = apply_fn(content, dict(b), silent=True)
-                if not ok and block_type != "textedit" and original_buffers.get(resolved_path) and original_buffers.get(resolved_path) != content:
+                orig_base = tree.baseline(resolved_path)
+                if not ok and block_type != "textedit" and orig_base and orig_base != content:
                     ok_reb, reb_content, reb_stat = rebase_overlapping_block_in_memory(
-                        original_buffers.get(resolved_path), content, dict(b), silent=True
+                        orig_base, content, dict(b), silent=True
                     )
                     if ok_reb:
                         ok, new_content, apply_stat = True, reb_content, reb_stat
@@ -1088,6 +1324,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                         "resolved_file": resolved_path,
                         "status": "needs_confirmation",
                         "resolution_type": "ambiguous_anchor",
+                        "ambiguous_lines": [int(x.strip()) for x in amb_lines.split(",") if x.strip().isdigit()],
                         "error_message": f"Ambiguous Search Anchor: SEARCH block matched multiple locations in '{resolved_path}' (lines {amb_lines}). Add 1-2 lines of surrounding context to disambiguate.",
                         "flags": ["ambiguous_anchor"],
                         "available_actions": ["deselect_patch"],
@@ -1153,112 +1390,19 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 ctx.emit_background('bridge_error', filepath=resolved_path, error_type='patch_failed', details=patch_tel["error_message"], file_content=content, patch_payload=json.dumps(b))
                 continue
 
-            # Record applied chunk in unified transition log for O(1) end-of-file AST validation and ledger commit
-            _record_transition(resolved_path, b, content, new_content, patch_tel, raw_target_file, b_idx)
+            # Record applied chunk in unified FileTimeline for O(1) end-of-file AST validation and ledger commit
+            tree.apply_step(resolved_path, new_content, b, patch_tel, raw_target_file, b_idx)
             touched_in_group.add(resolved_path)
-            memory_buffers[resolved_path] = new_content
+            all_touched_files.add(resolved_path)
             patch_tel["status"] = "resolved"
             telemetry["summary"]["resolved"] += 1
             telemetry["patches"].append(patch_tel)
 
+        if batch_has_cross_file_ops:
+            continue
+
         # --- Step i: O(1) Per-File End-of-File AST Syntax Gate + Fault-Isolating Rollback ---
-        for res_fp in sorted(touched_in_group):
-            applied_records = file_transitions.get(res_fp) or []
-            if not applied_records or res_fp in deleted_targets:
-                continue
-            all_syntax_approved = all(
-                _is_gate_approved(rec["cell_id"], "SYNTAX_ERROR", rec["target_file"], res_fp)
-                for rec in applied_records
-            )
-            if all_syntax_approved:
-                continue
-
-            final_buf = memory_buffers.get(res_fp, "")
-            has_syn_err, syn_err_str = _validate_buffer_syntax(ctx, res_fp, final_buf)
-            if not has_syn_err:
-                continue
-
-            # Fault-Isolation Path: Walk applied chunks to isolate the offending chunk(s)
-            # while preserving valid sibling chunks in memory_buffers[res_fp]!
-            clean_running_buf = applied_records[0]["pre_buffer"]
-            isolated_culprit = False
-            for idx_rec, rec in enumerate(applied_records):
-                if _is_gate_approved(rec["cell_id"], "SYNTAX_ERROR", rec["target_file"], res_fp):
-                    clean_running_buf = rec["post_buffer"]
-                    continue
-                if idx_rec == 0:
-                    cand_buf = rec["post_buffer"]
-                else:
-                    b_cand = rec["block"]
-                    fn_cand = apply_textedit_in_memory if b_cand.get("type") == "textedit" else apply_block_in_memory
-                    ok_c, cand_buf, _ = fn_cand(clean_running_buf, b_cand, silent=True)
-                    if not ok_c and original_buffers.get(res_fp):
-                        ok_c, cand_buf, _ = rebase_overlapping_block_in_memory(
-                            original_buffers.get(res_fp), clean_running_buf, b_cand, silent=True
-                        )
-                    if not ok_c:
-                        cand_buf = rec["post_buffer"]
-
-                chunk_err, chunk_err_str = _validate_buffer_syntax(ctx, res_fp, cand_buf)
-                # Lookahead check: only flag this chunk if applying the remaining chunks still leaves a syntax error
-                if chunk_err and idx_rec < len(applied_records) - 1:
-                    lookahead_buf = cand_buf
-                    for rem_rec in applied_records[idx_rec + 1:]:
-                        rem_b = rem_rec["block"]
-                        rem_fn = apply_textedit_in_memory if rem_b.get("type") == "textedit" else apply_block_in_memory
-                        ok_rem, next_buf, _ = rem_fn(lookahead_buf, rem_b, silent=True)
-                        if ok_rem:
-                            lookahead_buf = next_buf
-                    healed_later_err, _ = _validate_buffer_syntax(ctx, res_fp, lookahead_buf)
-                    if not healed_later_err:
-                        chunk_err = False
-
-                if chunk_err:
-                    isolated_culprit = True
-                    pt = rec["patch_tel"]
-                    if pt["status"] == "resolved":
-                        telemetry["summary"]["resolved"] = max(0, telemetry["summary"]["resolved"] - 1)
-                    pt["status"] = "syntax_error"
-                    pt["error_message"] = chunk_err_str or syn_err_str
-                    diff = list(difflib.unified_diff(clean_running_buf.splitlines(), cand_buf.splitlines(), lineterm=""))
-                    err_b64 = base64.b64encode(("\n".join(diff)).encode("utf-8")).decode("utf-8")
-                    pt["syntax_error"] = err_b64
-                    pt["gate"] = {
-                        "code": "SYNTAX_ERROR",
-                        "target_uri": res_fp,
-                        "reason": chunk_err_str or syn_err_str,
-                    }
-                    for act_name in ("approve_gate", "ignore_syntax_error", "deselect_patch"):
-                        if act_name not in pt["available_actions"]:
-                            pt["available_actions"].append(act_name)
-                    telemetry["can_commit"] = False
-                    telemetry["summary"]["action_required"] += 1
-                    deferred_failures.append({
-                        "filepath": res_fp,
-                        "raw_target_file": rec["raw_target_file"],
-                        "block": rec["block"],
-                        "block_index": rec.get("block_index", idx_rec),
-                        "pre_buffer": clean_running_buf,
-                        "patch_tel": pt,
-                    })
-                    ctx.emit_background(
-                        "bridge_error",
-                        filepath=res_fp,
-                        error_type="syntax_error",
-                        details=chunk_err_str or syn_err_str,
-                        file_content=cand_buf,
-                        patch_payload=json.dumps(rec["block"]),
-                    )
-                else:
-                    clean_running_buf = cand_buf
-
-            if isolated_culprit:
-                memory_buffers[res_fp] = clean_running_buf
-                if res_fp in file_transitions:
-                    file_transitions[res_fp] = [
-                        tr for tr in file_transitions[res_fp]
-                        if tr["patch_tel"].get("status") == "resolved"
-                    ]
+        _validate_and_isolate_syntax(touched_in_group)
 
         # Store evaluated file bundle in _FILE_EVAL_CACHE for O(1) subsequent skips
         if file_eval_sig is not None:
@@ -1268,21 +1412,28 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 (p.get("resolved_file") for p in file_patches_slice if p.get("resolved_file")),
                 target_file,
             )
+            tl_resolved = tree.timelines.get(resolved_fp_for_cache) if resolved_fp_for_cache else None
             _cache_put(_FILE_EVAL_CACHE, file_eval_sig, {
                 "resolved_path": resolved_fp_for_cache,
-                "resolved_disk_hash": disk_hashes.get(resolved_fp_for_cache),
+                "resolved_disk_hash": tree.disk_hash(resolved_fp_for_cache) if resolved_fp_for_cache else None,
                 "patches": file_patches_slice,
                 "deferred_failures": file_def_slice,
-                "transitions": file_transitions.get(resolved_fp_for_cache, []),
-                "final_buffer": memory_buffers.get(resolved_fp_for_cache) if resolved_fp_for_cache else None,
+                "transitions": tl_resolved.transitions if tl_resolved else [],
+                "final_buffer": tl_resolved.current if tl_resolved else None,
             }, MAX_FILE_EVAL_CACHE_SIZE)
+
+    if batch_has_cross_file_ops and all_touched_files:
+        _validate_and_isolate_syntax(all_touched_files)
 
     telemetry["patches"].sort(key=lambda p: p.get("patch_index", 0))
     # S8: tell the person before committing which files will wait for their confirmation instead of being written.
     for patch in telemetry["patches"]:
         flags = list(patch.get("flags") or [])
-        if patch.get("status") == "resolved" and PROTECTED_CONFIRMATION_FLAG not in flags and is_protected_vfs_target(patch.get("resolved_file"), workspace_id):
-            patch["flags"] = flags + [PROTECTED_CONFIRMATION_FLAG]
+        if patch.get("status") == "resolved" and PROTECTED_CONFIRMATION_FLAG not in flags:
+            if is_protected_vfs_target(patch.get("resolved_file"), workspace_id) or (
+                patch.get("target_uri") and is_protected_vfs_target(patch.get("target_uri"), workspace_id)
+            ):
+                patch["flags"] = flags + [PROTECTED_CONFIRMATION_FLAG]
 
     # Zero-Patch Validation
     if telemetry["summary"]["total_patches"] == 0:
@@ -1292,18 +1443,16 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
 
     # Phase 4 Concurrency Lock: Re-verify physical disk hashes before commit
     if not dry_run and telemetry["can_commit"]:
-        for filepath in memory_buffers.keys():
-            if original_buffers.get(filepath, "") == memory_buffers.get(filepath, ""):
+        for filepath, tl in tree.timelines.items():
+            if not tl.is_modified:
                 continue
             current_on_disk = vfs.read(filepath)
-            if current_on_disk is not None:
-                current_hash = hashlib.sha256(current_on_disk.encode('utf-8')).hexdigest()
-                eval_hash = disk_hashes.get(filepath, "")
-                if current_hash != eval_hash:
-                    telemetry["can_commit"] = False
-                    telemetry["status"] = "failed"
-                    telemetry["message"] = f"Concurrency Guard Triggered: '{filepath}' was modified on disk during transaction evaluation."
-                    break
+            current_hash = compute_vfs_sha256(current_on_disk) if current_on_disk is not None else None
+            if current_hash != tl.baseline_hash:
+                telemetry["can_commit"] = False
+                telemetry["status"] = "failed"
+                telemetry["message"] = f"Concurrency Guard Triggered: '{filepath}' was modified on disk during transaction evaluation."
+                break
     # Phase 4 & 5: Settlement and Ledger Staging
     if not dry_run and telemetry["can_commit"]:
         db_conn = ctx.db
@@ -1312,14 +1461,15 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
         created_file_comments: Dict[str, str] = {}
         protected_results: List[Dict[str, Any]] = []
 
-        for filepath, final_content in memory_buffers.items():
-            orig_content = original_buffers.get(filepath, "")
-            if final_content == orig_content:
+        for filepath, tl in tree.timelines.items():
+            if not tl.is_modified:
                 continue
+            orig_content = tl.baseline or ""
+            final_content = tl.current or ""
             if is_protected_vfs_target(filepath, workspace_id):
                 # Nothing is written and nothing enters the ledger: the change is staged for a person to confirm.
                 origin_data = {_PROTECTED_SOURCE_KEY: "bridge", _PROTECTED_REFERENCE_KEY: pid}
-                answer = vfs.delete(filepath, origin_data) if filepath in deleted_targets else vfs.save(filepath, final_content, origin_data)
+                answer = vfs.delete(filepath, origin_data) if tl.is_deleted else vfs.save(filepath, final_content, origin_data)
                 body = answer[0] if isinstance(answer, tuple) else answer
                 body = body if isinstance(body, dict) else {}
                 protected_results.append({
@@ -1330,19 +1480,19 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 })
                 continue
 
-            disk_hash = disk_hashes.get(filepath, "")
-            post_patch_hash = hashlib.sha256(final_content.encode('utf-8')).hexdigest()
+            disk_hash = tl.baseline_hash or ""
+            post_patch_hash = "" if tl.is_deleted else compute_vfs_sha256(final_content)
             last_record = db_conn.execute("SELECT post_patch_hash FROM bridge_ledger WHERE filepath=? ORDER BY timestamp DESC LIMIT 1", (filepath,)).fetchone()
             last_known_hash = last_record['post_patch_hash'] if last_record else ""
 
-            transitions = sorted(file_transitions.get(filepath) or [], key=lambda tr: tr.get("order", 0))
+            transitions = sorted(tl.transitions, key=lambda tr: tr.get("order", 0))
             ledger_chunks = [tr["ledger_chunk"] for tr in transitions]
             if not ledger_chunks:
                 ledger_chunks = [{
-                    "comment": "File deleted/relocated" if filepath in deleted_targets else "",
-                    "type": "delete_file" if filepath in deleted_targets else "exact",
+                    "comment": "File deleted/relocated" if tl.is_deleted else "",
+                    "type": "delete_file" if tl.is_deleted else "exact",
                     "search": orig_content,
-                    "replace": "" if filepath in deleted_targets else final_content,
+                    "replace": "" if tl.is_deleted else final_content,
                 }]
 
             s_block = "\n".join([c.get("search", "") for c in ledger_chunks])
@@ -1350,29 +1500,30 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
 
             is_snapshot = False
             compressed_state = None
+            existed_before_tx = tl.existed_on_disk
 
-            # 1. The Human Intercept Rule (Manual edits detected)
-            if disk_hash != last_known_hash:
+            # 1. The Human Intercept Rule (Manual edits detected) or brand-new file creation boundary
+            if not existed_before_tx or disk_hash != last_known_hash:
                 is_snapshot = True
             # 2. Genesis Overwrite Guardrail & Deletion Snapshot Guarantee
-            is_genesis = any(not c.get("search", "").strip() for c in ledger_chunks)
-            if (is_genesis and orig_content.strip()) or filepath in deleted_targets:
+            is_genesis = (not existed_before_tx) or any(not c.get("search", "").strip() for c in ledger_chunks)
+            if (is_genesis and orig_content.strip()) or tl.is_deleted:
                 is_snapshot = True
-            if is_genesis and not orig_content.strip() and filepath not in deleted_targets:
+            if not existed_before_tx and not tl.is_deleted:
                 genesis_comment = next(
-                    (c.get("comment", "").strip() for c in ledger_chunks if not c.get("search", "").strip() and c.get("comment", "").strip()),
+                    (c.get("comment", "").strip() for c in ledger_chunks if c.get("comment", "").strip()),
                     "",
                 )
                 if genesis_comment:
                     created_file_comments[filepath] = genesis_comment
 
             # 3. The 5-Turn Keyframe Routine
-            if not is_snapshot:
+            if not is_snapshot and existed_before_tx:
                 recent_records = db_conn.execute("SELECT is_snapshot FROM bridge_ledger WHERE filepath=? ORDER BY timestamp DESC LIMIT 4", (filepath,)).fetchall()
                 if len(recent_records) == 4 and not any(r['is_snapshot'] for r in recent_records):
                     is_snapshot = True
-            if is_snapshot:
-                compressed_state = zlib.compress(orig_content.encode('utf-8'))
+            if is_snapshot and existed_before_tx and tl.baseline is not None:
+                compressed_state = zlib.compress(tl.baseline.encode('utf-8'))
             file_uri = InSetuURI(filepath)
             current_repo = file_uri.repo if file_uri.repo else (file_uri.path.partition('/')[0] if '/' in file_uri.path else "")
             patch_id = f"ptc_{uuid.uuid4().hex[:12]}"
@@ -1382,7 +1533,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 INSERT INTO bridge_ledger (patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, compressed_state, timestamp, ttl_expires_at, patch_count, chunks_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (patch_id, pid, current_repo, filepath, s_block, r_block, post_patch_hash, 1 if is_snapshot else 0, compressed_state, now_ts, ttl_48h, patch_count, chunks_json))
-            if filepath in deleted_targets:
+            if tl.is_deleted:
                 vfs.delete(filepath)
             else:
                 # Phase 4: Restore target file EOL format (CRLF drift prevention)
@@ -1412,7 +1563,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
         telemetry["status"] = "action_required" if telemetry["summary"]["action_required"] > 0 else "failed"
 
     if return_buffers:
-        return telemetry, memory_buffers, deferred_failures
+        return telemetry, tree.to_buffer_dict(), deferred_failures
     return telemetry
 def execute_bridge_sync(workspace_id, data, ctx=None):
     if ctx is None:

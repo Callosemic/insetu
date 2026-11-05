@@ -23,12 +23,9 @@ from insetu.core.sdk import (
     sync_vfs_barrier,
 )
 from insetu.extensions.hooks import engine_hooks
-from insetu.core.utils_core import (
-    InSetuURI,
-    approve_command,
-    get_workspace_extension_approvals,
-    is_command_approved,
-)
+from insetu.core.system.ext_manager import get_workspace_extension_approvals
+from insetu.core.system.security_io import approve_command, is_command_approved
+from insetu.core.utils_core import InSetuURI
 
 
 class _StoreCase(unittest.TestCase):

@@ -326,7 +326,7 @@ def scaffold_extension(ext_name, bundled=False):
     if bundled:
         ext_dir = root_dir / "extensions" / ext_name
     else:
-        from insetu.core.utils_core import (
+        from insetu.core.system.ext_manager import (
             get_workspace_extension_reserved_names as _get_workspace_extension_reserved_names,
             get_workspace_extensions_root as _get_workspace_extensions_root,
         )

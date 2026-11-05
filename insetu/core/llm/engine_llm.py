@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import TypedDict, List, Dict, Any, Generator, Optional, Union, Tuple
 from flask import Response, stream_with_context
 from insetu.core.sdk import InSetuExtension, SettingsManager, slugify, atomic_write_text
-from insetu.core.utils_core import (
+from insetu.core.system.security_io import (
     child_env,
-    execute_binary,
     fetch_url,
+)
+from insetu.core.utils_core import (
+    execute_binary,
     get_domain_cache_path,
     get_repeater_secret,
     load_json_config,
@@ -619,10 +621,28 @@ class LlmResolveTargetPayload(TypedDict, total=False):
 def api_llm_resolve_target(ctx):
     data = ctx.payload or {}
     target = _resolve_tier_execution_target(ctx, tier=data.get("tier"), profile_id=data.get("profile_id"))
+    raw_driver = target["raw_driver"]
+    has_key = bool(target.get("api_key"))
+    has_model = bool((target.get("model") or "").strip())
+    requires_key = raw_driver in ("anthropic", "gemini", "openrouter", "decisions")
+
+    if target["is_web_chat"]:
+        can_auto_heal = False
+        auto_heal_reason = "Fast tier is set to External Web Chat — use 'Copy Repair Prompt' instead, or assign an API/local model to the Fast tier."
+    elif not has_model:
+        can_auto_heal = False
+        auto_heal_reason = f"No model is configured for the '{target['tier']}' tier in profile '{target['profile_id']}'."
+    elif requires_key and not has_key:
+        can_auto_heal = False
+        auto_heal_reason = f"No API key configured for endpoint '{target['endpoint_id']}' ({raw_driver}). Configure it in Settings -> LLM."
+    else:
+        can_auto_heal = True
+        auto_heal_reason = f"AI Auto-Repair ready ({target['model']} via {target['endpoint_id']})."
+
     return {
         "endpoint_id": target["endpoint_id"],
         "provider": target["provider"],
-        "raw_driver": target["raw_driver"],
+        "raw_driver": raw_driver,
         "model": target["model"],
         "base_url": target["base_url"],
         "max_parallel": target["max_parallel"],
@@ -630,7 +650,9 @@ def api_llm_resolve_target(ctx):
         "profile_id": target["profile_id"],
         "is_decision_model": target["is_decision_model"],
         "is_web_chat": target["is_web_chat"],
-        "has_api_key": bool(target.get("api_key")),
+        "has_api_key": has_key,
+        "can_auto_heal": can_auto_heal,
+        "auto_heal_reason": auto_heal_reason,
     }
 
 
@@ -1010,8 +1032,15 @@ def api_llm_complete(ctx):
     endpoint_id = target["endpoint_id"]
     is_decision_model = target["is_decision_model"]
 
-    if provider in ("anthropic", "gemini", "decisions") and not api_key:
-        return {"error": f"API key is missing for endpoint '{endpoint_id}' ({provider}). Please configure your Compute Pool in OS Settings."}, 400
+    if target.get("is_web_chat"):
+        return {
+            "error": (
+                f"Endpoint '{endpoint_id}' is set to External Web Chat and cannot run unattended background inference. "
+                "Use 'Copy Repair Prompt' or assign an API/local model to the Fast tier."
+            )
+        }, 400
+    if (provider in ("anthropic", "gemini", "decisions") or target.get("raw_driver") == "openrouter") and not api_key:
+        return {"error": f"API key is missing for endpoint '{endpoint_id}' ({target.get('raw_driver') or provider}). Please configure your Compute Pool in OS Settings."}, 400
 
     working_messages = list(messages)
     last_error = ""

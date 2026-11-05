@@ -1,5 +1,6 @@
 import { html } from 'lit';
-import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
+import { InSetuElement } from '/static/extensions/system/insetu_element.js';
+import { createExtensionStore, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 import { AppStore } from '/static/extensions/system/store.js';
 // --- VFS BRIDGE STATE STORE (UDF LAYER) ---
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
@@ -25,11 +26,62 @@ const BRIDGE_GATE_UI_MAP = {
     OUT_OF_SCOPE_TARGET: { label: 'Authorize File Edit', intent: 'warning', icon: 'shield-alert' }
 };
 
+const BRIDGE_FLAG_UI_MAP = {
+    ast_relocate: {
+        label: (p) => {
+            const rawDst = p.target_uri && window.inSetu?.utils?.InSetuURI ? new window.inSetu.utils.InSetuURI(p.target_uri).basename : '';
+            const dstName = window.inSetu?.utils?.truncateFilename ? window.inSetu.utils.truncateFilename(rawDst, 18) : rawDst;
+            return dstName ? `relocate → ${dstName}` : 'relocate';
+        },
+        tooltip: (p) => `relocate:${p.symbol || ''}${p.target_uri ? ` → ${p.target_uri}` : ''}`,
+        intent: 'highlight'
+    },
+    ast_rename: {
+        label: (p) => `renamed (${p.renamed_count || 0})`,
+        tooltip: (p) => `Renamed ${p.symbol || ''} in ${p.renamed_count || 0} file(s)`,
+        intent: 'highlight'
+    },
+    move_file: {
+        label: (p) => {
+            const rawDst = p.target_uri && window.inSetu?.utils?.InSetuURI ? new window.inSetu.utils.InSetuURI(p.target_uri).basename : (p.target_uri || '');
+            const dstName = window.inSetu?.utils?.truncateFilename ? window.inSetu.utils.truncateFilename(rawDst, 18) : rawDst;
+            return `move → ${dstName}`;
+        },
+        tooltip: (p) => `move → ${p.target_uri || ''}`,
+        intent: 'highlight'
+    },
+    archive_file: {
+        label: () => 'archived',
+        tooltip: (p) => `archive → ${p.target_uri || 'archived'}`,
+        intent: 'highlight'
+    },
+    delete_file: { label: () => 'delete file', intent: 'danger' },
+    confirm_delete: { label: () => 'confirm delete', intent: 'danger' },
+    json_patch: { label: () => 'json patch', intent: 'primary' },
+    already_applied: { label: () => 'Already Applied', intent: 'success' },
+    rebased_overlap: { label: () => 'Rebased Overlap', intent: 'success' },
+    code_removal: { label: () => 'Code Removal', intent: 'warning' },
+    expansion_risk: { label: () => 'Expansion Risk', intent: 'warning' },
+    'confirm-to-overwrite': { label: () => 'Confirm Overwrite', intent: 'warning' },
+    ambiguous_anchor: { label: () => 'Ambiguous Anchor', intent: 'warning' },
+    protected_needs_confirmation: { label: () => 'Protected: Waits for Your Confirmation', intent: 'warning' },
+    read_only_mount: { label: () => 'Read-Only Mount', intent: 'danger' },
+    banned_target: { label: () => 'Banned Target', intent: 'danger' },
+    execution_locked: { label: () => 'Execution Locked', intent: 'danger' }
+};
+
 export const BridgeStore = createExtensionStore('Bridge', {
     cells: [],
     resolutions: {},
     activeSurface: 'bridge',
     autoHeal: false,
+    fastTierStatus: {
+        canAutoHeal: false,
+        reason: 'Checking Fast LLM tier configuration...',
+        model: '',
+        endpointId: '',
+        isWebChat: false
+    },
     drawerOpen: false,
     drawerCollapsedDesktop: false,
     activeBridgeJobId: null,
@@ -402,6 +454,29 @@ export const BridgeStore = createExtensionStore('Bridge', {
     setViewMode: (mode) => BridgeStore.setState({ viewMode: mode }),
     setConsoleOutput: (out) => BridgeStore.setState({ consoleOutput: out }),
     setTelemetry: (tel) => BridgeStore.setState({ telemetry: tel }),
+    fetchFastTierStatus: async () => {
+        try {
+            const activeProfileId = window.inSetu?.stores?.Agent?.getState()?.activeProfileId || '';
+            const qs = activeProfileId ? `&profile_id=${encodeURIComponent(activeProfileId)}` : '';
+            const res = await window.inSetu.api.get(`llm/resolve_target?tier=fast${qs}`);
+            if (res.ok) {
+                const data = await res.json();
+                const canAutoHeal = Boolean(data.can_auto_heal);
+                BridgeStore.setState(state => ({
+                    autoHeal: canAutoHeal ? state.autoHeal : false,
+                    fastTierStatus: {
+                        canAutoHeal,
+                        reason: data.auto_heal_reason || (canAutoHeal ? `AI Auto-Repair ready (${data.model})` : 'Fast LLM tier is not configured for programmatic repair.'),
+                        model: data.model || '',
+                        endpointId: data.endpoint_id || '',
+                        isWebChat: Boolean(data.is_web_chat)
+                    }
+                }));
+            }
+        } catch (e) {
+            console.warn("Failed to resolve fast LLM tier status", e);
+        }
+    },
     fetchHistory: async () => {
         try {
             const res = await window.inSetu.api.get('bridge/history');
@@ -444,6 +519,7 @@ export class InSetuExtBridge extends InSetuElement {
         cells: { type: Array },
         activeSurface: { type: String },
         autoHeal: { type: Boolean },
+        fastTierStatus: { type: Object },
         drawerOpen: { type: Boolean },
         drawerCollapsedDesktop: { type: Boolean },
         consoleOutput: { type: String },
@@ -458,6 +534,7 @@ export class InSetuExtBridge extends InSetuElement {
         this.cells = [];
         this.activeSurface = 'bridge';
         this.autoHeal = false;
+        this.fastTierStatus = BridgeStore.getState().fastTierStatus || { canAutoHeal: false, reason: '' };
         this.drawerOpen = false;
         this.drawerCollapsedDesktop = false;
         this.consoleOutput = 'Ready...';
@@ -521,10 +598,12 @@ export class InSetuExtBridge extends InSetuElement {
     onWorkspaceLoad(workspaceId) {
         BridgeStore.getState().clearPayload();
         BridgeStore.getState().fetchHistory();
+        BridgeStore.getState().fetchFastTierStatus();
         this.requestUpdate();
     }
     onForceRefresh() {
         BridgeStore.getState().fetchHistory();
+        BridgeStore.getState().fetchFastTierStatus();
     }
     connectedCallback() {
         super.connectedCallback();
@@ -534,17 +613,19 @@ export class InSetuExtBridge extends InSetuElement {
                 cells: state.cells || [],
                 activeSurface: state.activeSurface || 'bridge',
                 autoHeal: !!state.autoHeal,
+                fastTierStatus: state.fastTierStatus || { canAutoHeal: false, reason: '' },
                 drawerOpen: !!state.drawerOpen,
                 drawerCollapsedDesktop: !!state.drawerCollapsedDesktop,
                 consoleOutput: state.consoleOutput,
                 viewMode: state.viewMode,
                 telemetry: state.telemetry
             }),
-            ({ cells, activeSurface, autoHeal, drawerOpen, drawerCollapsedDesktop, consoleOutput, viewMode, telemetry }) => {
+            ({ cells, activeSurface, autoHeal, fastTierStatus, drawerOpen, drawerCollapsedDesktop, consoleOutput, viewMode, telemetry }) => {
                 const cellsChanged = this.cells !== cells;
                 this.cells = cells;
                 this.activeSurface = activeSurface;
                 this.autoHeal = autoHeal;
+                this.fastTierStatus = fastTierStatus;
                 this.drawerOpen = drawerOpen;
                 this.drawerCollapsedDesktop = drawerCollapsedDesktop;
                 this.consoleOutput = consoleOutput;
@@ -565,6 +646,9 @@ export class InSetuExtBridge extends InSetuElement {
         });
         this.registerGlobalListener('insetu:yomama:toggle-drawer', window, () => {
             BridgeStore.getState().toggleDrawer();
+        });
+        this.registerGlobalListener('insetu-llm-settings-changed', window, () => {
+            BridgeStore.getState().fetchFastTierStatus();
         });
         this.registerGlobalListener('paste', window, (e) => {
             if (this.activeSurface !== 'bridge' || !this.offsetParent) return;
@@ -631,6 +715,7 @@ export class InSetuExtBridge extends InSetuElement {
         this.cells = bState.cells || [];
         this.activeSurface = bState.activeSurface || 'bridge';
         this.autoHeal = !!bState.autoHeal;
+        this.fastTierStatus = bState.fastTierStatus || { canAutoHeal: false, reason: '' };
         this.drawerOpen = !!bState.drawerOpen;
         this.drawerCollapsedDesktop = !!bState.drawerCollapsedDesktop;
         this.consoleOutput = bState.consoleOutput;
@@ -640,6 +725,7 @@ export class InSetuExtBridge extends InSetuElement {
         this._fileVerificationCache = fsState.fileVerificationCache || {};
 
         window.inSetu.stores.Fs?.getState()?.verifyFiles(this.cells.map(c => c.file));
+        BridgeStore.getState().fetchFastTierStatus();
     }
     disconnectedCallback() {
         super.disconnectedCallback();
@@ -731,7 +817,7 @@ export class InSetuExtBridge extends InSetuElement {
                             BridgeStore.setState({ viewMode: 'console', telemetry: tel });
                         }
 
-                        // State Parity: Auto-sync frontend paths with backend fuzzy resolutions
+                        // State Parity: Auto-sync frontend paths when backend resolves a fuzzy/pinned path
                         if (tel.patches) {
                             tel.patches.forEach(p => {
                                 if (p.cell_id && p.resolved_file && p.original_file !== p.resolved_file) {
@@ -1070,7 +1156,15 @@ export class InSetuExtBridge extends InSetuElement {
                                     <sutram-btn ?compact=${true} data-action="snap-all-anchors" icon="check" intent="success" label="Snap All Closest Anchors (${snapableCount})"></sutram-btn>
                                 ` : ''}
                                 ${aiRepairableCount > 0 ? html`
-                                    <sutram-btn ?compact=${true} data-action="ai-repair-all" icon="sparkles" intent="highlight" label="AI Repair All Failed (${aiRepairableCount})"></sutram-btn>
+                                    <sutram-btn
+                                        ?compact=${true}
+                                        ?disabled=${!this.fastTierStatus?.canAutoHeal}
+                                        title=${this.fastTierStatus?.reason || ''}
+                                        data-action="ai-repair-all"
+                                        icon="sparkles"
+                                        intent="highlight"
+                                        label="AI Repair All Failed (${aiRepairableCount})">
+                                    </sutram-btn>
                                 ` : ''}
                                 <sutram-btn ?compact=${true} data-action="copy-repair-prompt" icon="clipboard" intent="primary" label="Copy Repair Prompt"></sutram-btn>
                                 <sutram-btn ?compact=${true} data-action="skip-all-failed" icon="skip-forward" intent="neutral" label="Skip All Failed (${unresolvedCount})"></sutram-btn>
@@ -1133,21 +1227,26 @@ export class InSetuExtBridge extends InSetuElement {
                                             ? 'danger'
                                             : ((p.status === 'needs_confirmation' || p.status === 'offer_deep_search' || p.status === 'auto_skipped') ? 'warning' : 'success');
                                         const resolveFlagLabel = (flagStr) => {
-                                            if (flagStr === 'rebased_overlap') return 'Rebased Overlap';
-                                            if (flagStr === 'already_applied') return 'Already Applied';
-                                            if (flagStr === 'protected_needs_confirmation') return 'Protected: Waits for Your Confirmation';
+                                            const spec = BRIDGE_FLAG_UI_MAP[flagStr];
+                                            if (spec) return typeof spec.label === 'function' ? spec.label(p) : spec.label;
                                             return String(flagStr || '').replace(/_/g, ' ');
                                         };
                                         const resolveFlagIntent = (flagStr) => {
-                                            const f = String(flagStr || '').toLowerCase();
-                                            if (f.includes('syntax') || f.includes('error') || f.includes('delete') || f.includes('destructive')) return 'danger';
-                                            if (f.startsWith('protected') || f.includes('removal') || f.includes('warn') || f.includes('expansion') || f.includes('overwrite') || f.includes('skip')) return 'warning';
-                                            if (f.includes('heal') || f.includes('rebased') || f.includes('create') || f.includes('genesis')) return 'success';
-                                            return 'primary';
+                                            const spec = BRIDGE_FLAG_UI_MAP[flagStr];
+                                            return spec ? spec.intent : 'primary';
                                         };
+                                        const resolveFlagTooltip = (flagStr) => {
+                                            const spec = BRIDGE_FLAG_UI_MAP[flagStr];
+                                            if (spec && typeof spec.tooltip === 'function') return spec.tooltip(p);
+                                            return resolveFlagLabel(flagStr);
+                                        };
+                                        const patchDetailText = p.symbol
+                                            ? `${p.symbol}${p.target_uri ? ` → ${new window.inSetu.utils.InSetuURI(p.target_uri).basename}` : ''}`
+                                            : '';
                                         return html`
                                             <sutram-card
                                                 .titleText=${`Patch #${(p.patch_index || 0) + 1} (${idxInFile + 1} of ${filePatches.length}): ${(p.status || 'unknown').replace(/_/g, ' ')}`}
+                                                .detailText=${patchDetailText}
                                                 .icon=${statusIntent === 'success' ? 'check' : (statusIntent === 'danger' ? 'alert-octagon' : 'alert-triangle')}
                                                 .intent=${statusIntent}
                                                 ?disableSelection=${true}
@@ -1163,7 +1262,7 @@ export class InSetuExtBridge extends InSetuElement {
                                                 ${p.flags && p.flags.length > 0 ? html`
                                                     <sutram-stack slot="header-actions" direction="row" align="center" gap="xs" ?wrap=${true}>
                                                         ${p.flags.map(flag => html`
-                                                            <sutram-tag .text=${resolveFlagLabel(flag)} .intent=${resolveFlagIntent(flag)}></sutram-tag>
+                                                            <sutram-tag .text=${resolveFlagLabel(flag)} .intent=${resolveFlagIntent(flag)} title=${resolveFlagTooltip(flag)}></sutram-tag>
                                                         `)}
                                                     </sutram-stack>
                                                 ` : ''}
@@ -1223,7 +1322,16 @@ export class InSetuExtBridge extends InSetuElement {
                                                             <sutram-btn ?compact=${true} data-action="heal-anchor" data-old="${p.original_file}" data-cell-id="${p.cell_id || ''}" data-anchor="${p.actual_anchor}" intent="success" icon="check" label="Snap Anchor to Disk"></sutram-btn>
                                                         ` : ''}
                                                         ${(p.status === 'needs_confirmation' || p.status === 'failed' || p.status === 'syntax_error') && !p.gate ? html`
-                                                            <sutram-btn ?compact=${true} data-action="ai-repair-cell" data-cell-id="${p.cell_id || ''}" icon="sparkles" intent="highlight" label="AI Repair This Patch"></sutram-btn>
+                                                            <sutram-btn
+                                                                ?compact=${true}
+                                                                ?disabled=${!this.fastTierStatus?.canAutoHeal}
+                                                                title=${this.fastTierStatus?.reason || ''}
+                                                                data-action="ai-repair-cell"
+                                                                data-cell-id="${p.cell_id || ''}"
+                                                                icon="sparkles"
+                                                                intent="highlight"
+                                                                label="AI Repair This Patch">
+                                                            </sutram-btn>
                                                         ` : ''}
                                                         ${p.available_actions?.includes('deselect_patch') ? html`
                                                             <sutram-btn ?compact=${true} data-action="deselect-this-patch" data-old="${p.original_file}" data-resolved="${p.resolved_file || ''}" data-cell-id="${p.cell_id}" intent="neutral" icon="skip-forward" label="Skip Patch"></sutram-btn>
@@ -1413,12 +1521,18 @@ export class InSetuExtBridge extends InSetuElement {
                         </sutram-btn>
                         ${this.cells.length > 0 && this.viewMode === 'input' ? html`
                             <sutram-btn
-                                intent=${this.autoHeal ? "highlight" : "neutral"}
-                                ?active=${this.autoHeal}
+                                intent=${this.autoHeal && this.fastTierStatus?.canAutoHeal ? "highlight" : "neutral"}
+                                ?active=${this.autoHeal && Boolean(this.fastTierStatus?.canAutoHeal)}
+                                ?disabled=${!this.fastTierStatus?.canAutoHeal}
                                 icon="sparkles"
-                                label=${this.autoHeal ? "AI Auto-Repair: ON" : "AI Auto-Repair: OFF"}
-                                title="Automatically repair failed anchors or syntax errors in parallel per-file using the Fast LLM tier"
-                                @click=${() => BridgeStore.setState({ autoHeal: !this.autoHeal })}>
+                                label=${!this.fastTierStatus?.canAutoHeal
+                                    ? (this.fastTierStatus?.isWebChat ? "AI Auto-Repair: Web Chat" : "AI Auto-Repair: No Model")
+                                    : (this.autoHeal ? "AI Auto-Repair: ON" : "AI Auto-Repair: OFF")}
+                                title=${this.fastTierStatus?.reason || "Automatically repair failed anchors or syntax errors in parallel per-file using the Fast LLM tier"}
+                                @click=${() => {
+                                    if (!this.fastTierStatus?.canAutoHeal) return;
+                                    BridgeStore.setState({ autoHeal: !this.autoHeal });
+                                }}>
                             </sutram-btn>
                         ` : ''}
                         ${this.cells.length === 0 && this.viewMode === 'input' ? html`

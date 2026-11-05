@@ -3,8 +3,7 @@ import urllib.parse
 import uuid
 import json
 from typing import TypedDict, Optional
-from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import fetch_url
+from insetu.core.sdk import InSetuExtension, fetch_url
 
 INGEST_SETTINGS_SCHEMA = [
     {

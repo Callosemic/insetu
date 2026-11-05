@@ -182,18 +182,59 @@ import insetu.core.utils_core as _utils_core
 
 _UTILS_CORE_REEXPORTS = frozenset({
     "InSetuURI",
+    "BucketAddress",
     "update_frontmatter",
     "dump_yaml_string",
+    "load_yaml_string",
+    "parse_frontmatter",
+    "resolve_macro_includes",
+    "clean_date_str",
+    "get_earlier_date",
+    "parse_list_field",
+    "parse_string_enum",
+    "truncate_filename",
+    "get_flattened_buckets",
+    "get_available_contexts",
+    "get_repo_path",
+    "get_safe_repo_id",
+    "get_sister_repos",
     "get_domain_cache_path",
     "get_domain_data_path",
     "heal_sqlite_uri_column",
+    "get_repeater_secret",
+    "set_repeater_secret",
+})
+
+_SECURITY_IO_REEXPORTS = frozenset({
+    "child_env",
+    "fetch_url",
+    "FetchRefused",
+    "FetchHTTPError",
+    "FetchResult",
+    "approve_command",
+    "scan_workspace_extensions",
+    "snapshot_workspace_extension",
+    "approve_workspace_extension",
+    "revoke_workspace_extension",
+    "get_workspace_extension_approvals",
+    "is_command_approved",
+    "is_test_command_approved",
+    "get_approved_commands",
+    "is_secret_env_name",
+    "get_child_env_passthrough",
 })
 
 
 def __getattr__(name: str):
-    """PEP 562 lazy re-export: keeps `from insetu.core.sdk import InSetuURI` working for user-space extensions."""
+    """PEP 562 lazy re-export: keeps `from insetu.core.sdk import ...` working for Tier 3 extensions without circular imports."""
     if name in _UTILS_CORE_REEXPORTS:
         return getattr(_utils_core, name)
+    if name in _SECURITY_IO_REEXPORTS:
+        import insetu.core.system.security_io as _security_io
+        if hasattr(_security_io, name):
+            return getattr(_security_io, name)
+        import insetu.core.system.ext_manager as _ext_mgr
+        return getattr(_ext_mgr, name)
     raise AttributeError(f"module 'insetu.core.sdk' has no attribute '{name}'")
 
 

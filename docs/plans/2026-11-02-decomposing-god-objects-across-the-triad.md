@@ -50,30 +50,26 @@ When extracting domain subsystems out of internal monoliths (`utils_core.py`, `e
 
 ## 2. Purifying `insetu/core/system` & `insetu/core/utils_core.py` ("The Kitchen Sink")
 
-### 2.1 Untangling `insetu/core/utils_core.py` (~1,150 LOC → ~380 LOC)
-Currently, `utils_core.py` conflates 6 unrelated domains. We will extract 3 dedicated modules and delete their symbols from `utils_core.py`:
+### 2.1 Untangling `insetu/core/utils_core.py` (~2,250 LOC)
+*(Note: `insetu/core/bridge/parser.py` was already extracted, and `approve_test_command` / `get_approved_test_commands` were deleted in 0.34.0.)*
 
-1. **Extract `insetu/core/bridge/parser.py` (~350 LOC):**
-   * **Relocate Symbols:** `parse_blocks`, `_preclean_web_chat_artifacts`, `_select_optimal_separator_index`, `_project_textedit_search_replace`, and associated regex constants.
-   * **Rewire Callers Directly to `insetu.core.bridge.parser`:**
-     * `insetu/core/bridge/engine_bridge.py`
-     * `insetu/core/bridge/bridge_vfs.py`
-     * `insetu/core/agent/engine_agent.py`
-     * `insetu/core/agent/orchestrator.py`
-     * `insetu/core/agent/schemas/__init__.py`
-     * `insetu/core/llm/engine_llm.py`
-     * All parser unit tests in `tests/`.
-2. **Extract `insetu/core/system/watchdog.py` (~210 LOC):**
-   * **Relocate Symbols:** `start_filesystem_observer`, `stop_filesystem_observer`, `_watchdog_debouncer_loop`, `_is_watchdog_vfs_echo`, and observer state locks.
-   * **Rewire Callers Directly to `insetu.core.system.watchdog`:** `cli.py`, `engine_system.py`, and watchdog unit tests.
-3. **Extract `insetu/core/system/security_io.py` (~220 LOC):**
-   * **Relocate Symbols:**
-     * SSRF-guarded outbound HTTP client: `fetch_url`, `FetchRefused`, `FetchHTTPError`, `_PeerCheckingMixin`.
-     * Subprocess sandboxing & human command approval gates: `child_env`, `execute_binary`, `approve_command`, `is_command_approved`, `approve_test_command`, `is_test_command_approved`.
-   * **Expose Cleanly on `insetu/core/sdk.py` for Extensions:** Re-export `fetch_url`, `FetchRefused`, `FetchHTTPError`, `child_env`, `execute_binary`, `approve_command`, and `is_command_approved` on `insetu.core.sdk` so extensions (`citations`, `freshdesk`, `ingest`, `research`, `hooks`, `preview`, `term`, `git`, `update`) import them from `insetu.core.sdk` (the official extension membrane) instead of reaching into `utils_core.py`.
-   * **Rewire Core Callers Directly to `insetu.core.system.security_io`:** `bridge_test.py`, `engine_bridge.py`, `engine_llm.py`, `engine_system.py`.
-4. **What Remains in `insetu/core/utils_core.py` (~380 LOC):**
-   * Pure workspace data/URI primitives only: `InSetuURI`, `BucketAddress`, YAML frontmatter & macro helpers (`parse_frontmatter`, `update_frontmatter`, `load_yaml_string`, `dump_yaml_string`, `resolve_macro_includes`), and workspace path/manifest resolution helpers (`get_workspace_physics`, `get_sister_repos`, `get_repo_path`, `get_available_contexts`, `typeddict_to_openapi`).
+We will extract 3 dedicated modules under `insetu/core/system/` and delete their moved symbols from `utils_core.py` (with zero re-export shims):
+
+1. **Extract `insetu/core/system/watchdog.py`:**
+    * **Relocate Symbols:** `_is_watchdog_vfs_echo`, `_watchdog_debouncer_loop`, `_track_intent_vfs_writes`, `start_filesystem_observer`, `stop_filesystem_observer`, and their shared observer state/locks.
+    * **Rewire Callers Directly to `insetu.core.system.watchdog`.**
+2. **Extract `insetu/core/system/security_io.py`:**
+    * **Relocate Symbols:**
+    * Child environments: `is_secret_env_name`, `get_child_env_passthrough`, `child_env`.
+    * Outbound fetch: `FetchRefused`, `FetchHTTPError`, `FetchResult`, `_is_public_address`, `_host_is_allowed_private`, `_goes_through_proxy`, `_check_fetch_target`, `_PeerCheckingMixin`, `_build_fetch_opener`, `_read_capped`, `fetch_url`.
+    * Command approvals: `_command_signature`, `_command_subject`, `get_approved_commands`, `approve_command`, `is_command_approved`, `is_test_command_approved`.
+    * **Expose Cleanly on `insetu/core/sdk/__init__.py` for Extensions:** Re-export moved symbols lazily on `insetu.core.sdk` so extensions import moved security/IO symbols from `insetu.core.sdk` (leaving their other existing `utils_core` imports untouched and tracked by the A4 extension membrane ratchet).
+    * **Update `CHILD_ENV_BUILDER_FILES` in `tests/fitness/rules_python.py`** to `{"insetu/core/system/security_io.py"}`.
+3. **Extract Workspace Extension Helpers into `insetu/core/system/ext_manager.py`:**
+    * **Relocate Symbols:** `get_workspace_extension_reserved_names`, `get_workspace_extensions_root`, `snapshot_workspace_extension`, `current_workspace_extension_fingerprint`, `get_workspace_extension_approvals`, `approve_workspace_extension`, `revoke_workspace_extension`, `describe_workspace_extension`, `scan_workspace_extensions` (joined in Wave 1.2 by the extension-management code and routes from `engine_system.py`).
+4. **What Remains in `insetu/core/utils_core.py` (~800 LOC Cohesion Budget):**
+    * `InSetuURI`, `BucketAddress`, YAML/frontmatter/macro/mustache helpers, date and list parsers, manifest/domain/path helpers, repository/config helpers, and `get_repeater_secret` / `set_repeater_secret` (owned by S9).
+    * **Why ~800 lines is the right ceiling for `utils_core.py` (rather than an artificial 450-line target):** Once `bridge/parser.py`, `system/watchdog.py`, `system/security_io.py`, and `system/ext_manager.py` are extracted with zero legacy re-export shims, `utils_core.py` drops from ~2,250 LOC to ~800 LOC. Forcing it below 450 lines would require either splitting cohesive URI/frontmatter/template-macro primitives away from `InSetuURI` or introducing barrel re-export shims that violate Rule B. Keeping the 800-line module cohesion budget (`MAX_UNLISTED_MODULE_LINES = 800` + per-module shrinking ceilings in `MODULE_LINE_RATCHET`) prevents God Objects from reforming without encouraging artificial micro-file fragmentation.
 
 ### 2.2 Untangling `insetu/core/system/` (Backend & Frontend)
 
@@ -159,11 +155,15 @@ Alongside file decomposition, we will eradicate the following legacy compatibili
 
 Each wave is independently executable and verified by the full test and architectural fitness suite:
 
-### Wave 1 — Purifying `utils_core.py`, `sdk.py` & `insetu/core/system`
-* [ ] **1.1** Extract `insetu/core/bridge/parser.py`, `insetu/core/system/watchdog.py`, and `insetu/core/system/security_io.py` from `utils_core.py`; expose extension-safe security/IO helpers on `insetu/core/sdk.py`; rewire all callers across `core/`, `extensions/`, and `tests/`; delete relocated functions from `utils_core.py`.
-* [ ] **1.2** Extract `system/openapi.py`, `system/ext_manager.py`, and `system/memory_profiler.py` from `engine_system.py`.
-* [ ] **1.3** Extract `system/uri.js`, `system/insetu_element.js`, `system/manifest_sync.js`, and `system/components/ui_schema_repeater.js` from `insetu_sdk.js`, `system.js`, and `ui_system_settings.js`.
-* [ ] **1.4** Verify with `python3 tests/run_unit_tests.py` and `python3 tests/fitness_functions.py`.
+### Wave 1 — Purifying `utils_core.py`, `sdk/__init__.py` & `insetu/core/system`
+*(Constraints: `directives.py`, `attestations.py`, `protected_changes.py`, `cli.py`, and `fallback_bridge.py` are hands-off in Wave 1. Each sub-wave A1–A3 is its own `refactor(<area>): ...` commit.)*
+* [x] **A1 (`utils_core.py` split):** Extract `insetu/core/system/watchdog.py`, `insetu/core/system/security_io.py`, and the workspace-extension helpers into `insetu/core/system/ext_manager.py`; lazily re-export moved extension-facing symbols on `insetu/core/sdk/__init__.py`; rewire callers across `core/`, `extensions/` (moved symbols only -> `insetu.core.sdk`), `tests/`, and `insetu/app.py`.
+* [x] **A2 (`engine_system.py` split):** Extract `system/openapi.py` (OpenAPI 3.0 builder), `system/ext_manager.py` (`_StaticExtMeta`, `_inspect_or_resolve_extension_meta`, `_resolve_extension_module_and_bp`, `_get_whitelisted_extension_packages`, `_background_install_extension_deps`, `_workspace_extensions_report`, and the 4 `extensions/*` routes with their payload types and `mcp_expose=False` flags), and `system/memory_profiler.py` (`tracemalloc` and memory helpers). Keep protected-change and directives routes in `engine_system.py`.
+* [x] **A3 (`system` frontend split):** Extract `system/uri.js` (`InSetuURI`, `BucketAddress`), `system/insetu_element.js` (`InSetuElement`), `system/manifest_sync.js` (`checkManifestVersion`, delta sync, cache warmer), and `system/components/ui_schema_repeater.js` (`InSetuSchemaRepeater` and field helpers). Keep `insetu_sdk.js` re-exporting public symbols for extensions; rewire core modules to import directly; keep `_renderAgentDirectivesSection` in `ui_system_settings.js`; update `sw.js` / asset lists if needed.
+* [x] **A4 (Wave 1 fitness ratchets):** Add to `tests/fitness/`:
+  1. **Banned legacy imports:** Fail if any module imports a symbol moved in A1/A2 from `insetu.core.utils_core` or `insetu.core.system.engine_system`.
+  2. **Extension membrane ratchet:** Fail if `insetu/extensions/*` imports from `insetu.core.system.*` or `insetu.core.utils_core` outside an explicit shrinking allowlist of the remaining post-A1 `utils_core` imports.
+  3. **Module size ratchet (E2):** Record the current line counts of the 15 largest modules across `akasa`, `sutram`, `insetu/core`, and `insetu/extensions` (excluding vendored files) as shrinking ceilings, and fail if any unlisted module exceeds 800 lines.
 
 ### Wave 2 — `akasa` & `sutram` Kernel Decomposition
 * [ ] **2.1** Split `akasa/workers/__init__.py` into `dag.py`, `validation.py`, `metronome.py`, and `immediate.py` (re-exported via `workers/__init__.py`).

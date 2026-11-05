@@ -10,7 +10,7 @@ import akasa
 import akasa.utils as akasa_utils
 from akasa.hooks import hooks
 from akasa.vfs import mount_volume
-from insetu.core.utils_core import approve_command
+from insetu.core.system.security_io import approve_command
 from insetu.extensions.preview.engine_preview import (
     preview_bp,
     _detect_repo_mode,

@@ -165,6 +165,8 @@ def check_javascript_files():
     custom_css_block_pattern = re.compile(r'static\s+styles\s*=\s*\[[^\]]*\bcss`')
     sutram_subdir_pattern = re.compile(r'from\s+[\'"][^\'"]*vendor/sutram/(?!js/)[^\'"]*[\'"]')
     sutram_membrane_leak_pattern = re.compile(r'(?:from\s+|import\s+)[\'"](?:[^\'"]*vendor/(?:sutram|yenvui)/[^\'"]*|sutram(?:-chassis)?)[\'"]')
+    js_barrel_reexported_leaves = {"uri.js", "insetu_element.js", "manifest_sync.js", "ui_schema_repeater.js"}
+    js_barrel_import_pattern = re.compile(r'from\s+[\'"][^\'"]*insetu_sdk\.js[\'"]')
     raw_dialog_pattern = re.compile(r'<dialog\b')
     inline_date_formatting_pattern = re.compile(r'new\s+Date\([^)]*\)\.toLocale(?:Date|Time)?String\(\)')
     raw_poll_job_pattern = re.compile(r'\bthis\.api\.pollJob\s*\(')
@@ -418,7 +420,7 @@ def check_javascript_files():
                 line_num,
                 f"Speculative pre-warming ('{m.group(0)}') on card reveal/drawer open is banned; fetch on explicit click and use keepDrawerOpen: true."
             )
-        if file == "insetu_sdk.js":
+        if file in ("insetu_sdk.js", "uri.js"):
             uri_cls_match = insetu_uri_class_pattern.search(full_content)
             if uri_cls_match:
                 uri_body = uri_cls_match.group(1)
@@ -505,7 +507,7 @@ def check_javascript_files():
                 line_num,
                 "Legacy array persistKeys detected in store instantiation. Migrate to persistenceSchema object ({ localSync, sessionSync })."
             )
-        if file not in ("insetu_sdk.js", "ui_file_tree.js", "utils.js"):
+        if file not in ("insetu_sdk.js", "uri.js", "insetu_element.js", "ui_file_tree.js", "utils.js"):
             for m in uri_raw_split_pattern.finditer(full_content):
                 line_num = full_content[:m.start()].count('\n') + 1
                 report_violation(
@@ -829,12 +831,19 @@ def check_javascript_files():
                 report_violation("VENDOR_SHARED_STYLES_MANDATE", filepath, line_num, "Legacy or un-vendorized sharedStyles import detected. Import sharedStyles strictly from '/static/extensions/system/insetu_sdk.js'.")
             if sutram_subdir_pattern.search(line):
                 report_violation("VENDOR_SUTRAM_JS_SUBDIR_MANDATE", filepath, line_num, "Sutram vendor imports must explicitly target the 'vendor/sutram/js/' subfolder.")
-            if file != "insetu_sdk.js" and sutram_membrane_leak_pattern.search(line):
+            if file in js_barrel_reexported_leaves and js_barrel_import_pattern.search(line):
+                report_violation(
+                    "BARREL_CYCLE_BAN",
+                    filepath,
+                    line_num,
+                    f"Leaf module '{file}' is re-exported by or sits beneath 'insetu_sdk.js' and must not import from 'insetu_sdk.js'. Import directly from 'sutram' or the peer leaf module instead."
+                )
+            if not ("core" in filepath.parts and "system" in filepath.parts) and sutram_membrane_leak_pattern.search(line):
                 report_violation(
                     "SUTRAM_MEMBRANE_ISOLATION",
                     filepath,
                     line_num,
-                    "Direct import from 'vendor/sutram', 'vendor/yenvui', or 'sutram' outside the Single-File Frontend Membrane ('insetu/core/system/insetu_sdk.js'). Import from '/static/extensions/system/insetu_sdk.js' instead."
+                    "Direct import from 'vendor/sutram', 'vendor/yenvui', or 'sutram' outside 'insetu/core/system/'. Import from '/static/extensions/system/insetu_sdk.js' instead."
                 )
             if raw_dialog_pattern.search(line) and '@cancel' not in line:
                 report_violation("RAW_DIALOG_OVERLAY_BAN", filepath, line_num, "Unwrapped <dialog> element detected without an explicit @cancel handler. Wrap in <sutram-modal> or supply an @cancel listener to prevent unhandled backdrop escape loops.")

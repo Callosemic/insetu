@@ -10,9 +10,8 @@ import shutil
 import json
 from pathlib import Path
 from typing import TypedDict, Optional
-from insetu.core.sdk import InSetuExtension
+from insetu.core.sdk import InSetuExtension, child_env, execute_binary, fetch_url, get_repo_path
 from insetu.extensions.git.engine_git import execute_git
-from insetu.core.utils_core import child_env, fetch_url, get_repo_path, execute_binary
 # Declarative schema for Semantic Release parameters
 UPDATE_SETTINGS_SCHEMA = [
     {

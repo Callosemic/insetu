@@ -1,3 +1,4 @@
+import ast
 import io
 import re
 import json
@@ -7,7 +8,25 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from insetu.core.utils_core import InSetuURI, get_sister_repos
 from insetu.core.cartographer.cartographer import extract_symbol_source_slice
+from insetu.core.languages import PythonLanguageProvider, first_sentence as _first_sentence
 from insetu.core.topology.engine_topology import get_omniscient_workspace_files
+
+
+def _format_new_module_docstring(target_uri: str, comment: Optional[str]) -> str:
+    """Formats a one-sentence module docstring from a RELOCATE block's COMMENT when creating a new file."""
+    summary = _first_sentence(str(comment or "").strip())
+    if not summary:
+        return ""
+    ext = Path(InSetuURI(target_uri).path or target_uri).suffix.lower()
+    if ext == ".py":
+        safe = summary.replace('"""', "'''")
+        return f'"""{safe}"""\n\n\n'
+    if ext in (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"):
+        safe = summary.replace("*/", "* /")
+        return f"/**\n * {safe}\n */\n\n"
+    if ext == ".rs":
+        return f"//! {summary}\n\n"
+    return ""
 
 
 def apply_ast_relocate_in_memory(
@@ -16,9 +35,12 @@ def apply_ast_relocate_in_memory(
     source_uri: str,
     target_uri: str,
     symbol: str,
+    comment: Optional[str] = None,
 ) -> Tuple[bool, str, str, str]:
     """
     Byte-exact AST symbol cut-and-paste from source_content into target_content.
+    If target_content is None or empty, creates the new destination module content and
+    seeds its module docstring from the first sentence of `comment`.
     Returns (ok, updated_source_content, updated_target_content, status_or_error).
     """
     if not symbol or not source_uri or not target_uri:
@@ -68,9 +90,19 @@ def apply_ast_relocate_in_memory(
         new_target = "\n".join(updated_t_lines).rstrip() + "\n"
     else:
         if target_base.strip():
-            new_target = target_base.rstrip() + "\n\n\n" + slice_text.strip() + "\n"
+            insert_before_line = None
+            if Path(InSetuURI(target_uri).path or target_uri).suffix.lower() == ".py":
+                insert_before_line = PythonLanguageProvider.find_first_import_time_reference_line(target_base, symbol)
+            if insert_before_line is not None and insert_before_line > 1:
+                t_lines = target_base.splitlines()
+                before_chunk = "\n".join(t_lines[:insert_before_line - 1]).rstrip()
+                after_chunk = "\n".join(t_lines[insert_before_line - 1:]).lstrip("\n")
+                new_target = f"{before_chunk}\n\n\n{slice_text.strip()}\n\n\n{after_chunk}\n"
+            else:
+                new_target = target_base.rstrip() + "\n\n\n" + slice_text.strip() + "\n"
         else:
-            new_target = slice_text.strip() + "\n"
+            header_doc = _format_new_module_docstring(target_uri, comment)
+            new_target = header_doc + slice_text.strip() + "\n"
 
     return True, new_source, new_target, "success"
 

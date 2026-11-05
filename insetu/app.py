@@ -60,7 +60,7 @@ from insetu.core.sdk import (
 )
 import insetu.core.attestations as _attestations
 import insetu.core.protected_changes as _protected_changes
-from insetu.core.utils_core import (
+from insetu.core.system.ext_manager import (
     current_workspace_extension_fingerprint,
     get_workspace_extensions_root,
     scan_workspace_extensions,

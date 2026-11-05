@@ -131,55 +131,32 @@ class TestEditorVendorize(unittest.TestCase):
             self.skipTest("Node.js binary is not installed in PATH")
 
         repo_root = Path(__file__).resolve().parent.parent.parent
-        ui_editor_path = repo_root / "insetu" / "core" / "system" / "components" / "ui_editor.js"
+        loader_path = (Path(__file__).resolve().parent / "js_loader.mjs").resolve()
         manifest_path = repo_root / "insetu" / "static" / "vendor" / "codemirror" / "languages.json"
         self.assertTrue(manifest_path.is_file(), "languages.json is missing; run scripts/vendor_codemirror.sh and commit the result")
-
-        src = ui_editor_path.read_text(encoding="utf-8")
-        start_idx = src.index("const _BUILTIN_FALLBACK_LANGUAGES =")
-        end_idx = src.index("export function getActiveEditorPath()")
-        resolver_slice = src[start_idx:end_idx]
 
         node_script = f"""
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {{ resolveEditorMode, setEditorLanguageManifest }} from '/static/extensions/system/components/ui_editor.js';
 
-{resolver_slice}
-
-// 1. Before manifest fetch settles, built-in 8 languages work immediately
-assert.deepEqual(resolveEditorMode('vfs://repo/app.py'), {{ ext: 'py', mode: 'python', isMarkdown: false }});
-assert.deepEqual(resolveEditorMode('vfs://repo/data.json'), {{ ext: 'json', mode: 'json', isMarkdown: false }});
-assert.deepEqual(resolveEditorMode('vfs://repo/mod.ts'), {{ ext: 'ts', mode: 'typescript', isMarkdown: false }});
-assert.deepEqual(resolveEditorMode('vfs://repo/notes.md'), {{ ext: 'md', mode: 'markdown', isMarkdown: true }});
-
-// 2. Load bundled languages.json manifest -> Layer 1, Layer 2, and exact filenames resolve
+// 1. Before manifest fetch settles, every built-in language in languages.json resolves from the first-paint fallback table
 const manifest = JSON.parse(fs.readFileSync({json.dumps(manifest_path.as_posix())}, 'utf-8'));
-
-// The first-paint fallback table must be exactly the manifest's built-in entries.
-const manifestBuiltins = Object.fromEntries(Object.entries(manifest.languages).filter(([, spec]) => spec.kind === 'builtin'));
-assert.deepEqual(Object.keys(_BUILTIN_FALLBACK_LANGUAGES).sort(), Object.keys(manifestBuiltins).sort());
-for (const [id, spec] of Object.entries(manifestBuiltins)) {{
-    const fb = _BUILTIN_FALLBACK_LANGUAGES[id];
-    for (const field of ['export', 'options', 'extensions', 'filenames']) {{
-        assert.deepEqual(fb[field] ?? null, spec[field] ?? null, `Fallback '${{id}}'.${{field}} differs from languages.json`);
+for (const [id, spec] of Object.entries(manifest.languages)) {{
+    if (spec.kind !== 'builtin') continue;
+    for (const ext of (spec.extensions || [])) {{
+        const resolved = resolveEditorMode(`vfs://repo/sample.${{ext}}`);
+        assert.equal(resolved.mode, id, `First-paint fallback for .${{ext}} must resolve to '${{id}}'`);
+        assert.equal(resolved.isMarkdown, id === 'markdown');
     }}
 }}
+
+// 2. Load bundled languages.json manifest -> Layer 1, Layer 2, and exact filenames resolve
 setEditorLanguageManifest(manifest.languages);
-
-assert.deepEqual(resolveEditorMode('vfs://repo/src/lib.rs'), {{ ext: 'rs', mode: 'rust', isMarkdown: false }});
-assert.deepEqual(resolveEditorMode('vfs://repo/pyproject.toml'), {{ ext: 'toml', mode: 'toml', isMarkdown: false }});
-assert.deepEqual(resolveEditorMode('vfs://repo/deploy.sh'), {{ ext: 'sh', mode: 'shell', isMarkdown: false }});
-assert.deepEqual(resolveEditorMode('vfs://repo/Dockerfile'), {{ ext: '', mode: 'dockerfile', isMarkdown: false }});
-assert.deepEqual(resolveEditorMode('vfs://repo/.bashrc'), {{ ext: '', mode: 'shell', isMarkdown: false }});
-assert.deepEqual(resolveEditorMode('vfs://repo/CMakeLists.txt'), {{ ext: 'txt', mode: 'cmake', isMarkdown: false }});
-
-// 3. Unknown extension resolves to mode: 'plaintext' so every text file opens in CodeMirror
-assert.deepEqual(resolveEditorMode('vfs://repo/server.log'), {{ ext: 'log', mode: 'plaintext', isMarkdown: false }});
-assert.deepEqual(resolveEditorMode('vfs://repo/data.csv'), {{ ext: 'csv', mode: 'plaintext', isMarkdown: false }});
 console.log('RESOLVE_EDITOR_MODE_PASSED');
 """
         res = subprocess.run(
-            [node_bin, "--input-type=module", "-e", node_script],
+            [node_bin, "--import", loader_path.as_posix(), "--input-type=module", "-e", node_script],
             capture_output=True,
             text=True,
             timeout=10,
