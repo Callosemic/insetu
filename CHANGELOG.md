@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v0.36.0 (2026-11-08)
+
+### Features
+
+- **core**: Decommission workflows volume, decompose bridge/fs god-objects, and harden offline
+  app-shell
+  ([`b9cb170`](https://github.com/Callosemic/insetu/commit/b9cb17028003c21eb3ee6852bf9f34f6613fd124))
+
+- **extensions**: Modernize knowledge and automation suites with S8 hook approvals, non-destructive
+  CQRS sync, and global modals
+  ([`e0aa60f`](https://github.com/Callosemic/insetu/commit/e0aa60fe09044fd7cb73ec6aad45f331de98caa8))
+
+### Testing
+
+- **fitness**: Add parallel logic parity registry, fitness linters, and review guide
+  ([`8dd0bc7`](https://github.com/Callosemic/insetu/commit/8dd0bc776ccc786b68b9b3a9d4eb7f122620939b))
+
+
 ## v0.35.0 (2026-11-05)
 
 ### Features
