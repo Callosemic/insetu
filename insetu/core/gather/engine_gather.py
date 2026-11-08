@@ -28,7 +28,6 @@ from insetu.core.utils_core import (
     get_safe_repo_id,
     vacuum_manifest_artifacts,
     extract_manifest_files,
-    get_domain_artifact_path,
     heal_manifest_entry_domain,
     BucketAddress,
     InSetuURI,
@@ -787,7 +786,6 @@ def vacuum_unaccounted_cache_on_complete(workspace_id=None, **kwargs):
         expected_by_volume = {
             "contexts": set(),
             "diffs": set(),
-            "workflows": set()
         }
 
         for r in rows:
@@ -804,7 +802,6 @@ def vacuum_unaccounted_cache_on_complete(workspace_id=None, **kwargs):
                 expected_by_volume[vol].add(uri.basename)
         vacuum_manifest_artifacts(ctx, "ctx://contexts", expected_by_volume["contexts"], exempt_abs_paths=active_ephemerals)
         vacuum_manifest_artifacts(ctx, "ctx://diffs", expected_by_volume["diffs"], exempt_abs_paths=active_ephemerals)
-        vacuum_manifest_artifacts(ctx, "ctx://workflows", expected_by_volume["workflows"], exempt_abs_paths=active_ephemerals)
         ctx.sync_vfs_barrier()
         from insetu.core.sdk import sse_bus as _sse_bus
         if _sse_bus:
@@ -1142,6 +1139,9 @@ def mount_gather_volumes(workspace_id=None, **kwargs):
             fp = r["filepath"]
             raw_json = r["entry_json"]
             ts = r["timestamp"]
+            if str(fp).startswith("ctx://workflows/"):
+                deletes.append((fp,))
+                continue
             if not raw_json:
                 if "://" not in str(fp):
                     deletes.append((fp,))
@@ -1251,7 +1251,7 @@ _LOCAL_HEAL_GUARD = threading.local()
 @gather_bp.on('vfs_resolve_file')
 def _resolve_or_heal_compiled_ctx_artifact(filename=None, workspace_id=None, **kwargs):
     """
-    Universal Logical-to-Physical Resolver for compiled ctx:// artifacts (contexts, diffs, workflows):
+    Universal Logical-to-Physical Resolver for compiled ctx:// artifacts (contexts, diffs):
     1. If a logical base_uri is requested and its multi-part chunks exist on disk, resolves to the first chunk.
     2. If the physical cache file is missing on disk, invokes the owning domain's compiler on demand
         to materialize the artifact before returning its physical path.
@@ -1266,7 +1266,7 @@ def _resolve_or_heal_compiled_ctx_artifact(filename=None, workspace_id=None, **k
         parsed = InSetuURI(canon_uri)
     except Exception:
         return None
-    if parsed.scheme != "ctx" or parsed.volume not in ("contexts", "diffs", "workflows"):
+    if parsed.scheme != "ctx" or parsed.volume not in ("contexts", "diffs"):
         return None
 
     wid = workspace_id or "default"
@@ -1295,12 +1295,7 @@ def _resolve_or_heal_compiled_ctx_artifact(filename=None, workspace_id=None, **k
     # Self-heal cold/wiped cache on demand for the requested domain
     try:
         _LOCAL_HEAL_GUARD.active = True
-        if parsed.volume != "contexts":
-            if ctx.has_missing_domain_artifacts("gather"):
-                generate_context_file(wid)
-            hooks.emit('heal_missing_domain_volume', volume=parsed.volume, workspace_id=wid)
-        else:
-            generate_context_file(wid)
+        generate_context_file(wid)
         ctx.sync_vfs_barrier()
         hook_request_manifest.invalidate(workspace_id=wid)
 

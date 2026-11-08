@@ -23,12 +23,22 @@ import {
     compileDagWavefronts,
     extractTemplateVariables as _sutramExtractTemplateVariables,
     interpolateTemplateVariables as _sutramInterpolateTemplateVariables,
+    ensureSutramAppShellCached as ensureAppShellCached,
+    SutramCacheWarmer,
     getEventPath,
     getEventTarget
 } from 'sutram';
 import * as jsYaml from '/static/vendor/js-yaml/js-yaml.min.js';
 import { BucketAddress, InSetuURI } from '/static/extensions/system/uri.js';
 import { InSetuElement } from '/static/extensions/system/insetu_element.js';
+
+export { ensureAppShellCached, SutramCacheWarmer };
+
+if (typeof window !== 'undefined') {
+    window.inSetu = window.inSetu || {};
+    window.inSetu.sys = window.inSetu.sys || {};
+    window.inSetu.sys.ensureAppShellCached = ensureAppShellCached;
+}
 
 export { BucketAddress, InSetuURI, InSetuElement };
 const INSETU_RESERVED_MACROS = Object.freeze([
@@ -369,6 +379,11 @@ window.inSetu.utils.copyToClipboard = async function(text) {
 };
 
 window.inSetu.utils.copyRawText = async function(text, successMsg = "✅ Copied!") {
+    // An empty copy would silently clear the clipboard, so it is reported instead
+    if (typeof text !== 'string' || !text.trim()) {
+        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("Nothing to copy.", 3000, true);
+        throw new Error("Nothing to copy");
+    }
     try {
         await window.inSetu.utils.copyToClipboard(text);
         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(successMsg, 2000);

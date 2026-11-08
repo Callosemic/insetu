@@ -86,9 +86,41 @@ async function _hydrateEditorLanguageManifest() {
     } catch (_) {}
 }
 
+let _mdLinksEnabled = true;
+
+async function _hydrateEditorGlobalSettings() {
+    try {
+        if (window.inSetu?.api?.get) {
+            const res = await window.inSetu.api.get('editor/settings');
+            if (res && res.ok) {
+                const data = await res.json();
+                if (data && data.insetu_md_links !== undefined) {
+                    _mdLinksEnabled = Boolean(data.insetu_md_links);
+                    window.dispatchEvent(new CustomEvent('insetu:md-links-preference-updated', {
+                        detail: { enabled: _mdLinksEnabled }
+                    }));
+                }
+            }
+        }
+    } catch (_) {}
+}
+
+export function isMarkdownLinksEnabled() {
+    return _mdLinksEnabled;
+}
+
 if (typeof window !== 'undefined') {
-    queueMicrotask(() => { _hydrateEditorLanguageManifest(); });
-    window.addEventListener('insetu:soft-refresh', () => { _hydrateEditorLanguageManifest(); });
+    queueMicrotask(() => {
+        _hydrateEditorLanguageManifest();
+        _hydrateEditorGlobalSettings();
+    });
+    window.addEventListener('insetu:soft-refresh', () => {
+        _hydrateEditorLanguageManifest();
+        _hydrateEditorGlobalSettings();
+    });
+    window.addEventListener('insetu-editor-settings-changed', () => {
+        _hydrateEditorGlobalSettings();
+    });
 }
 
 /** Replaces the language lookup tables with a manifest's languages (used by tests and hosts that preload it). */
@@ -207,6 +239,69 @@ export function insertLinkToEditor(path, name) {
 
     window.inSetu.stores.Fs?.getState()?.setModal('linkInsert', { open: false });
 }
+
+export function resolveEditorLinkTarget(rawHref, currentFileUri = null) {
+    const href = String(rawHref || '').trim();
+    if (!href || href.startsWith('#')) return null;
+
+    if (/^(?:https?:|mailto:)/i.test(href)) {
+        return { type: 'external', url: href };
+    }
+
+    const rawPathPart = href.split('#')[0].split('?')[0].trim();
+    let cleanHref = rawPathPart;
+    try {
+        cleanHref = decodeURIComponent(rawPathPart);
+    } catch (_) {}
+    if (!cleanHref) return null;
+
+    const UriCls = window.inSetu?.utils?.InSetuURI;
+    if (cleanHref.includes('://')) {
+        const parsed = UriCls ? new UriCls(cleanHref) : null;
+        return { type: 'vfs', uri: parsed ? parsed.toString() : cleanHref };
+    }
+
+    const activeFile = currentFileUri || getActiveEditorPath();
+    if (activeFile && UriCls) {
+        const baseUri = new UriCls(activeFile);
+        if (baseUri.scheme === 'vfs' || baseUri.scheme === 'ctx' || baseUri.scheme === 'ws') {
+            return { type: 'vfs', uri: baseUri.resolveRelative(cleanHref) };
+        }
+    }
+
+    const fallbackUri = window.inSetu?.vfs?.normalizeVfsURI
+        ? window.inSetu.vfs.normalizeVfsURI(cleanHref)
+        : cleanHref;
+    return { type: 'vfs', uri: fallbackUri };
+}
+
+export async function openEditorLinkTarget(rawHref, currentFileUri = null) {
+    const resolved = resolveEditorLinkTarget(rawHref, currentFileUri);
+    if (!resolved) return false;
+
+    if (resolved.type === 'external') {
+        window.open(resolved.url, '_blank', 'noopener,noreferrer');
+        return true;
+    }
+
+    const targetUri = resolved.uri;
+    if (!targetUri) return false;
+    const UriCls = window.inSetu?.utils?.InSetuURI;
+    const parsed = UriCls ? new UriCls(targetUri) : null;
+    if (parsed && parsed.isCompiledArtifact && window.inSetu?.vfs?.viewInWindow) {
+        await window.inSetu.vfs.viewInWindow(targetUri);
+        return true;
+    }
+    if (window.inSetu?.vfs?.viewSourceFile) {
+        const isEditable = parsed
+            ? Boolean(parsed.isEditable)
+            : (!targetUri.startsWith('ws://') && !targetUri.includes('/.templates/'));
+        await window.inSetu.vfs.viewSourceFile(targetUri, isEditable);
+        return true;
+    }
+    return false;
+}
+
 async function vendorizeEditorLanguage(lang) {
     if (window.inSetu?.api?.post) {
         const res = await window.inSetu.api.post('editor/vendorize', { mode: lang });
@@ -281,6 +376,8 @@ window.inSetu.editor.setEditorContent = setEditorContent;
 window.inSetu.editor.insertTextAtCursor = insertTextAtCursor;
 window.inSetu.editor.resolveEditorMode = resolveEditorMode;
 window.inSetu.editor.insertLinkToEditor = insertLinkToEditor;
+window.inSetu.editor.resolveEditorLinkTarget = resolveEditorLinkTarget;
+window.inSetu.editor.openEditorLinkTarget = openEditorLinkTarget;
 export class InSetuMarkdownEditor extends SutramEditor {}
 if (!customElements.get('insetu-markdown-editor')) {
     customElements.define('insetu-markdown-editor', InSetuMarkdownEditor);

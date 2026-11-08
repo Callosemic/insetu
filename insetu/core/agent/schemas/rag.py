@@ -54,10 +54,6 @@ def strip_markdown_fences(raw_text: str) -> str:
     return re.sub(r',\s*(\}|\])', r'\1', text)
 
 
-# Backward-compatible alias
-_strip_markdown_fences = strip_markdown_fences
-
-
 def get_macro_scout_directive() -> str:
     """Returns the prompt instruction directive for macro file scouting."""
     return (
@@ -68,7 +64,7 @@ def get_macro_scout_directive() -> str:
 
 def validate_macro_scout_response(raw_text: str) -> Tuple[bool, Any, str]:
     """Validates an LLM output against the MacroScoutSchema contract."""
-    cleaned = _strip_markdown_fences(raw_text)
+    cleaned = strip_markdown_fences(raw_text)
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError as e:
@@ -113,7 +109,7 @@ def get_context_slice_directive() -> str:
 
 def validate_context_slice_response(raw_text: str) -> Tuple[bool, Any, str]:
     """Validates an LLM output against the ContextSliceSchema contract."""
-    cleaned = _strip_markdown_fences(raw_text)
+    cleaned = strip_markdown_fences(raw_text)
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError as e:

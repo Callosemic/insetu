@@ -4,9 +4,11 @@ import uuid
 import time
 import datetime
 import mimetypes
+import tempfile
 import traceback
+import zipfile
 from pathlib import Path
-from typing import TypedDict, Optional, List, Dict, Any, Tuple
+from typing import TypedDict, Optional, List, Dict, Any, Tuple, Union
 import werkzeug.utils
 from flask import request, send_file
 from insetu.core.sdk import InSetuExtension, hooks, is_protected_vfs_target
@@ -33,6 +35,11 @@ __depends__ = []
 
 class FileTargetPayload(TypedDict):
     file: str
+
+
+class FileDownloadZipPayload(TypedDict, total=False):
+    items: List[Union[str, Dict[str, Any]]]
+    archive_name: Optional[str]
 _TEXT_MIME_PREFIXES = ('text/', 'application/json', 'application/javascript', 'application/xml', 'application/x-yaml', 'application/toml')
 _TEXT_EXTENSIONS = {'.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.md', '.txt', '.html', '.htm', '.css', '.sh', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.sql', '.rs', '.go', '.c', '.cpp', '.h', '.java', '.rb', '.gitignore', '.gitkeep', '.env'}
 
@@ -46,6 +53,123 @@ def _is_binary_file(resolved_path: str, guessed_mime: Optional[str]) -> bool:
             return False
         return True
     return False
+
+
+def _compute_zip_arcnames(expanded_uris: List[str], raw_items: List[Any]) -> Tuple[List[Tuple[str, str]], str]:
+    """
+    Computes ([(canonical_uri, arcname_in_zip), ...], archive_filename) for a list of expanded VFS/CTX URIs.
+    If a single folder was requested, roots archive paths inside that folder's basename; otherwise preserves
+    repo/relative_path structure and deduplicates any colliding archive paths.
+    """
+    single_dir_prefix = ""
+    single_dir_name = ""
+    if len(raw_items) == 1:
+        item0 = raw_items[0]
+        raw_p = (
+            item0.get("folderpath") or item0.get("filepath") or item0.get("id") or ""
+            if isinstance(item0, dict)
+            else str(item0 or "")
+        ).strip()
+        is_dir0 = (isinstance(item0, dict) and bool(item0.get("isDir") or item0.get("folderpath"))) or raw_p.endswith("/")
+        if raw_p and is_dir0:
+            u0 = InSetuURI.from_external_input(raw_p.rstrip("/"))
+            full_rel0 = u0.logical_path
+            single_dir_name = u0.basename or u0.root_segment or "folder"
+            if full_rel0:
+                parent_rel = full_rel0.rpartition("/")[0]
+                single_dir_prefix = f"{parent_rel}/" if parent_rel else ""
+
+    entries: List[Tuple[str, str]] = []
+    seen_arcnames = set()
+    repos_seen = set()
+
+    for uri_str in expanded_uris:
+        u = InSetuURI(uri_str)
+        if u.basename in (".gitkeep", ".keep") and len(expanded_uris) > 1:
+            continue
+        if u.repo:
+            repos_seen.add(u.repo)
+        full_rel = u.logical_path
+        if single_dir_prefix and full_rel.startswith(single_dir_prefix):
+            arcname = full_rel[len(single_dir_prefix):]
+        else:
+            arcname = full_rel or u.basename or "file"
+        arcname = arcname.lstrip("/") or "file"
+        if arcname in seen_arcnames:
+            stem = Path(arcname).stem
+            suffix = Path(arcname).suffix
+            parent = Path(arcname).parent.as_posix()
+            idx = 2
+            while True:
+                cand = f"{stem}_{idx}{suffix}" if parent == "." else f"{parent}/{stem}_{idx}{suffix}"
+                if cand not in seen_arcnames:
+                    arcname = cand
+                    break
+                idx += 1
+        seen_arcnames.add(arcname)
+        entries.append((uri_str, arcname))
+
+    if single_dir_name:
+        zip_name = f"{single_dir_name}.zip"
+    elif len(entries) == 1:
+        zip_name = f"{Path(entries[0][1]).stem}.zip"
+    elif len(repos_seen) == 1:
+        zip_name = f"{next(iter(repos_seen))}_selection.zip"
+    else:
+        zip_name = "workspace_selection.zip"
+    return entries, zip_name
+
+
+@fs_bp.route('download_zip', methods=['POST'], request_schema=FileDownloadZipPayload, docstring="[sync] Compresses any selection of VFS/CTX files and folders into a downloadable .zip archive while preserving directory structure.")
+def api_fs_download_zip(ctx):
+    """Expands selected files and folders through the Topology Sieve and streams a deflated .zip archive."""
+    data = ctx.payload or {}
+    raw_items = data.get("items") or []
+    if not raw_items or not isinstance(raw_items, list):
+        return {"error": "A non-empty 'items' list is required."}, 400
+
+    expanded = ctx.expand_selection(raw_items, gather_only=False)
+    if not expanded:
+        return {"error": "No valid files matched the selection."}, 404
+
+    entries, default_zip_name = _compute_zip_arcnames(expanded, raw_items)
+    if not entries:
+        return {"error": "No downloadable files found in selection."}, 404
+
+    custom_name = str(data.get("archive_name") or "").strip()
+    if custom_name:
+        safe_custom = werkzeug.utils.secure_filename(custom_name)
+        if safe_custom:
+            default_zip_name = safe_custom if safe_custom.lower().endswith(".zip") else f"{safe_custom}.zip"
+
+    spool = tempfile.SpooledTemporaryFile(max_size=16 * 1024 * 1024, mode="w+b")
+    written_count = 0
+    with zipfile.ZipFile(spool, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for uri_str, arcname in entries:
+            uri_obj = InSetuURI(uri_str)
+            phys_path = uri_obj.resolve_if_exists(ctx.workspace_id)
+            if phys_path and Path(phys_path).is_file():
+                zf.write(phys_path, arcname=arcname)
+                written_count += 1
+                continue
+            content = ctx.vfs.read(str(uri_obj))
+            if content is not None:
+                zf.writestr(arcname, content.encode("utf-8") if isinstance(content, str) else content)
+                written_count += 1
+
+    if written_count == 0:
+        spool.close()
+        return {"error": "Selected files could not be read from disk."}, 404
+
+    spool.seek(0)
+    res = send_file(
+        spool,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=default_zip_name,
+    )
+    res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return res
 
 
 @fs_bp.route('exists', methods=['GET'], request_schema=FileTargetPayload, docstring="[sync] Verifies if a file exists on the Virtual File System.")

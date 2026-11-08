@@ -129,10 +129,26 @@ import{html as s,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
             display: flex;
             align-items: center;
             gap: 6px;
+            flex: 1 1 35%;
             min-width: 0;
             overflow: hidden;
             overflow-wrap: anywhere;
             word-break: break-word;
+        }
+        .card-header-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            flex: 0 1 auto;
+            max-width: 65%;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .card-header-actions > ::slotted(*) {
+            max-width: 100%;
+            min-width: 0;
+            overflow: hidden;
         }
         .card-desc {
             color: var(--text-muted, #888);
@@ -402,8 +418,8 @@ import{html as s,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
                                 ${this.titleText}
                             </yenvui-scrub-track>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
-                            ${this.statusText?s`<span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic; margin-right: 4px;">${this.statusText}</span>`:""}
+                        <div class="card-header-actions">
+                            ${this.statusText?s`<span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic; margin-right: 4px; flex-shrink: 0;">${this.statusText}</span>`:""}
                             <slot name="header-actions"></slot>
                             ${this.detailSuffix?s`
                                 <div class="card-detail-suffix" style="font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-muted); opacity: 0.85; flex-shrink: 0; margin-left: 8px;">

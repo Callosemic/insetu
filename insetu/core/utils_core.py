@@ -63,18 +63,11 @@ class InSetuURI(AkasaURI):
         clean = re.sub(r'^(vfs|ctx|ws|virtual|yomama):/(?!/)', r'\1://', clean)
         if "://" in clean:
             uri_obj = cls(clean)
-            if uri_obj.scheme == 'ctx' and uri_obj.volume == 'contexts' and (
-                (uri_obj.basename.startswith('workflow_') and ('_context' in uri_obj.basename))
-                or uri_obj.basename.endswith('_workflow_context.txt')
-            ):
-                return f"ctx://workflows/{uri_obj.basename}"
             base_canon = str(uri_obj).rstrip('/')
             return f"{base_canon}/" if has_trailing_slash else base_canon
         clean_stripped = clean.lstrip('/')
         if clean_stripped.endswith('_diffs.txt') or clean_stripped.startswith('diffs/'):
             return f"ctx://diffs/{Path(clean_stripped).name}"
-        if (clean_stripped.startswith('workflow_') and clean_stripped.endswith('_context.txt')) or clean_stripped.startswith('workflows/'):
-            return f"ctx://workflows/{Path(clean_stripped).name}"
         if clean_stripped.endswith(('_context.txt', '_vault.json')) or re.search(r'_context_part\d+\.txt$', clean_stripped) or clean_stripped.startswith('contexts/'):
             return f"ctx://contexts/{Path(clean_stripped).name}"
         if clean_stripped.startswith('prompts/'):
@@ -101,6 +94,18 @@ class InSetuURI(AkasaURI):
     @property
     def repo(self) -> str:
         return self.volume
+
+    @property
+    def root_segment(self) -> str:
+        return self.repo or self.volume or ""
+
+    @property
+    def logical_path(self) -> str:
+        root = self.root_segment
+        clean_p = (self.path or "").strip("/")
+        if root:
+            return f"{root}/{clean_p}" if clean_p else root
+        return clean_p
 
     @property
     def is_diff(self) -> bool:
@@ -166,9 +171,6 @@ class InSetuURI(AkasaURI):
     def resolve(self, workspace_id: Optional[str] = None, is_absolute_artifact: bool = False) -> Optional[str]:
         return _vfs_resolve_physical_path(str(self), workspace_id, is_absolute_artifact=is_absolute_artifact)
 
-    def resolve_physical(self, workspace_id: Optional[str] = None) -> Optional[str]:
-        # Backward compatibility alias
-        return self.resolve(workspace_id)
     def exists(self, workspace_id: Optional[str] = None) -> bool:
         phys = self.resolve(workspace_id)
         return bool(phys and os.path.exists(phys))
@@ -176,7 +178,7 @@ class InSetuURI(AkasaURI):
         phys = self.resolve(workspace_id)
         if phys and os.path.exists(phys):
             return phys
-        if allow_heal and self.scheme == 'ctx' and self.volume in ('contexts', 'diffs', 'workflows'):
+        if allow_heal and self.scheme == 'ctx' and self.volume in ('contexts', 'diffs'):
             healed = hooks.emit_first('vfs_resolve_file', filename=str(self), workspace_id=workspace_id or 'default')
             if isinstance(healed, tuple) and healed[0] and os.path.exists(healed[0]):
                 return healed[0]
@@ -204,15 +206,16 @@ class InSetuURI(AkasaURI):
                 return None
         return None
     def read(self, workspace_id: Optional[str] = None, is_absolute_artifact: bool = False) -> Optional[str]:
-        with VFSTransaction(workspace_id) as vfs:
-            content = vfs.read(str(self), is_absolute_artifact=is_absolute_artifact)
-            if content is not None:
-                return content
-            if not is_absolute_artifact and self.scheme == 'ctx' and self.volume in ('contexts', 'diffs', 'workflows'):
-                resolved = self.resolve_if_exists(workspace_id, allow_heal=True)
-                if resolved and os.path.exists(resolved):
-                    return vfs.read(resolved, is_absolute_artifact=True)
-            return None
+        wid = workspace_id or sniff_tenant_id() or "default"
+        with VFSTransaction(wid) as v:
+            if not is_absolute_artifact and self.scheme == 'ctx' and self.volume in ('contexts', 'diffs') and not re.search(r'_part\d+\.txt$', self.basename):
+                chunks = hooks.emit_first('resolve_payload_chunks', uri=str(self), workspace_id=wid, default=[])
+                if chunks and (len(chunks) > 1 or chunks[0] != str(self)):
+                    parts = [v.read(c, is_absolute_artifact=True) for c in chunks]
+                    valid_parts = [p for p in parts if p is not None]
+                    if valid_parts:
+                        return "\n\n".join(valid_parts)
+            return v.read(str(self), is_absolute_artifact=is_absolute_artifact)
     def bucket(self, workspace_id=None):
         from insetu.core.topology.engine_topology import resolve_file_bucket as _resolve_file_bucket
 
@@ -966,11 +969,6 @@ def get_domain_data_path(workspace_id, domain_name):
         return f".insetu/data/{domain_name}"
 
 
-def get_domain_artifact_path(workspace_id, domain_name, ext_name=None):
-    """Backward-compatible router directing compiled artifacts to .insetu/cache/<domain_name>."""
-    return get_domain_cache_path(workspace_id, domain_name)
-
-
 def get_safe_repo_id(repo_dir):
     if not repo_dir: return ""
     safe_dir = f"dot_{repo_dir[1:]}" if repo_dir.startswith('.') else repo_dir
@@ -1184,7 +1182,7 @@ def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kw
                     is_folder = bool(item.get("isDir"))
                 elif item.get("folderpath") or uri.is_dir:
                     is_folder = True
-                elif uri.scheme == 'ctx' and uri.volume in ('contexts', 'diffs', 'workflows'):
+                elif uri.scheme == 'ctx' and uri.volume in ('contexts', 'diffs'):
                     is_folder = False
                 elif '.' in uri.basename and not uri.basename.startswith('.'):
                     is_folder = False
@@ -1199,7 +1197,7 @@ def hook_expand_selection(items=None, workspace_id=None, gather_only=False, **kw
                     continue
                 if uri.is_dir:
                     is_folder = True
-                elif uri.scheme == 'ctx' and uri.volume in ('contexts', 'diffs', 'workflows'):
+                elif uri.scheme == 'ctx' and uri.volume in ('contexts', 'diffs'):
                     is_folder = False
                 elif '.' in uri.basename and not uri.basename.startswith('.'):
                     is_folder = False
@@ -1474,6 +1472,3 @@ def set_repeater_secret(
         if legacy_key:
             ext_sec.pop(legacy_key, None)
     save_json_config(sec_path.as_posix(), raw, workspace_id=target_wid)
-
-
-

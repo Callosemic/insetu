@@ -440,7 +440,6 @@ class TopologyResponse(TypedDict):
     port: int
     term_port: int
     target_repos: List[Dict[str, Any]]
-    virtual_contexts: List[Dict[str, Any]]
     category_order: List[str]
     tab_order: List[str]
     hidden_outputs: List[str]
@@ -473,7 +472,6 @@ def api_system_topology(ctx):
             "port": int(os.environ.get("INSETU_PORT", cfg.get("port", 5005))),
             "term_port": cfg.get("term_port", 8181),
             "target_repos": target_repos or [],
-            "virtual_contexts": cfg.get("virtual_contexts", []),
             "category_order": cfg.get("category_order", []),
             "tab_order": cfg.get("tab_order", ["context", "edit", "tasks", "ctrl", "library"]),
             "hidden_outputs": cfg.get("hidden_outputs", ["ctx://contexts/context_prompt.md", "ctx://diffs/context_prompt_diffs.txt"]),

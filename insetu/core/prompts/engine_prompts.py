@@ -153,7 +153,14 @@ class PromptResolveQuery(TypedDict, total=False):
     repo: str
 
 
-def read_prompt_with_cascade(ctx, uri_str: str) -> Optional[str]:
+def _found(report: Optional[Dict[str, str]], source_uri: str, via: str, text: str) -> str:
+    """Records where the cascade found a prompt (read by the routine check) and returns its text."""
+    if report is not None:
+        report.update({"source": source_uri, "via": via})
+    return text
+
+
+def read_prompt_with_cascade(ctx, uri_str: str, report: Optional[Dict[str, str]] = None) -> Optional[str]:
     """
     Single Source of Truth prompt reader evaluating the 3-Tier Override Cascade:
     1. Exact URI or Workspace Override (`ctx://prompts/<rel>`)
@@ -185,12 +192,12 @@ def read_prompt_with_cascade(ctx, uri_str: str) -> Optional[str]:
         ):
             val = ctx.vfs.read(cand_uri)
             if val is not None:
-                return val
+                return _found(report, cand_uri, "cascade", val)
     else:
         for cand_uri in (str(u_obj), str(u_obj).lower()):
             val = ctx.vfs.read(cand_uri)
             if val is not None:
-                return val
+                return _found(report, cand_uri, "exact", val)
 
     if rel_p:
         target_lower = rel_p.lower()
@@ -200,8 +207,20 @@ def read_prompt_with_cascade(ctx, uri_str: str) -> Optional[str]:
             if avail_lower.endswith(f"/{target_lower}") or avail_lower.endswith(f"/{target_name_lower}"):
                 val = ctx.vfs.read(avail_uri)
                 if val is not None:
-                    return val
+                    return _found(report, avail_uri, "name_search", val)
     return None
+
+
+class PromptNotFound(ValueError):
+    """A routine step names a prompt that does not resolve."""
+
+
+def require_prompt_text(text: Optional[str], prompt_uri: str, routine_id: Optional[str] = None) -> str:
+    """Returns a resolved prompt, or raises PromptNotFound naming the routine and the URI, so a missing prompt stops the run instead of sending an empty one."""
+    if text is None:
+        owner = f"Routine '{routine_id}'" if routine_id else "This routine"
+        raise PromptNotFound(f"{owner} needs the prompt {prompt_uri}, which was not found. Point the routine at an existing prompt; Routine Studio lists each routine's problems.")
+    return text
 
 
 def resolve_prompt_text(

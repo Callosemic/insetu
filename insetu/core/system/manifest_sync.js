@@ -1,7 +1,7 @@
 /**
 * Decentralized VFS/CTX manifest delta synchronization and background IndexedDB cache warming queue.
 */
-import { SutramDB } from 'sutram';
+import { SutramDB, SutramCacheWarmer } from 'sutram';
 import { AppStore } from '/static/extensions/system/store.js';
 
 // --- DECENTRALIZED MANIFEST SYNC & KERNEL HEARTBEAT ---
@@ -203,17 +203,26 @@ export async function checkManifestVersion() {
                     }
                 }
 
-                // Spread the chunk evenly across a 2.5 second window to prevent bursting
-                const staggerMs = Math.floor(2500 / chunkSize);
-
                 const chunk = q.slice(0, chunkSize);
                 const activeWs = window.inSetu.utils.getActiveWorkspace();
 
-                chunk.forEach((p, index) => {
-                    setTimeout(() => {
-                        window.inSetu?.api?.request?.(p, { priority: 'low', onlyIfMissing: true }, activeWs).catch(() => {});
-                    }, index * staggerMs);
-                });
+                const Warmer = SutramCacheWarmer || window.Sutram?.SutramCacheWarmer;
+                if (typeof Warmer?.enqueue === 'function') {
+                    Warmer.enqueue(activeWs, chunk, async (url, wsId) => {
+                        const res = await window.inSetu?.api?.request?.(url, { priority: 'low', onlyIfMissing: true }, wsId);
+                        if (res && res.status === 204) {
+                            Warmer.clear();
+                            AppStore.setState({ warmingQueue: new Set() });
+                        }
+                    });
+                } else {
+                    const staggerMs = Math.floor(2500 / chunkSize);
+                    chunk.forEach((p, index) => {
+                        setTimeout(() => {
+                            window.inSetu?.api?.request?.(p, { priority: 'low', onlyIfMissing: true }, activeWs).catch(() => {});
+                        }, index * staggerMs);
+                    });
+                }
 
                 AppStore.setState(s => {
                     const newQ = new Set(s.warmingQueue);

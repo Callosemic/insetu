@@ -332,23 +332,19 @@ export function classifyRoutineTargetUri(rawInc) {
     const availContexts = opts.contexts || [];
     const availDiffs = opts.diffs || [];
     const availPrompts = opts.prompts || [];
-    const routines = agentState.routines || [];
-    const availWorkflows = routines.map(r => `ctx://workflows/workflow_${r.id}_context.txt`);
-    const allDefinedUris = [...availDiffs, ...availContexts, ...availPrompts, ...availWorkflows];
+    const allDefinedUris = [...availDiffs, ...availContexts, ...availPrompts];
     const uriObj = new window.inSetu.utils.InSetuURI(rawInc);
     const inc = uriObj.isDir ? `${uriObj.toString()}/` : uriObj.toString();
     const isSystem = uriObj.scheme === 'ctx' || uriObj.scheme === 'ws';
     const isDiff = inc.startsWith('ctx://diffs/') || inc.endsWith('_diffs.txt');
-    const isWorkflow = inc.startsWith('ctx://workflows/');
     const isPrompt = inc.startsWith('ctx://prompts/') || uriObj.volume === 'prompts';
-    const isGatherContext = isSystem && !isDiff && !isWorkflow && !isPrompt;
+    const isGatherContext = isSystem && !isDiff && !isPrompt;
 
     const hasTopologyLoaded = availContexts.length > 0 || availDiffs.length > 0 || allRepos.length > 0;
     let isUndefined = false;
     if (hasTopologyLoaded) {
         if (isDiff) isUndefined = !availDiffs.includes(inc);
         else if (isGatherContext) isUndefined = !availContexts.includes(inc) && !manifestCtx[inc];
-        else if (isWorkflow) isUndefined = routines.length > 0 && !availWorkflows.includes(inc);
         else if (isPrompt) isUndefined = availPrompts.length > 0 && !availPrompts.includes(inc);
         else if (uriObj.scheme === 'vfs' && uriObj.repo && allRepos.length > 0 && !allRepos.includes(uriObj.repo)) {
             isUndefined = true;
@@ -973,17 +969,17 @@ export class InSetuCoreAgentRoutines extends InSetuElement {
                                 ${grouped[domainName].map(r => {
                                     const srcBadge = r.source === 'workspace' ? 'Workspace Override' : (r.source === 'user_template' ? 'User Template' : (r.is_shared ? `Shared (${r.source_workspace})` : 'Built-In'));
                                     const incCount = Array.isArray(r.includes) ? r.includes.length : 0;
-                                    const detailSuffix = incCount > 0 ? ` | ${incCount} context(s)` : '';
+                                    const detailSuffix = `${incCount > 0 ? ` | ${incCount} context(s)` : ''}${r.problems?.length ? ` | ⚠️ ${r.problems.length} problem(s)` : ''}`;
                                     return html`
                                         <sutram-card
                                             .filename=${r.filepath || `ctx://routines/${r.id}.md`}
                                             .titleText=${r.title || r.name || r.id}
-                                            .descriptionText=${r.description}
+                                            .descriptionText=${r.problems?.length ? `⚠️ ${r.problems[0].message}` : r.description}
                                             .detailPrefix=${`[${srcBadge}] `}
                                             .detailText=${r.slash_command || `/${r.id}`}
                                             .detailSuffix=${detailSuffix}
                                             icon="workflow"
-                                            intent=${r.source === 'workspace' ? 'highlight' : 'warning'}
+                                            intent=${r.problems?.some(p => p.severity === 'error') ? 'danger' : (r.source === 'workspace' ? 'highlight' : 'warning')}
                                             .entityType=${'agent_routine'}
                                             .entityData=${{
                                                 ...r,
@@ -1643,7 +1639,7 @@ export class InSetuCoreAgent extends InSetuElement {
                     const activeBranch = branches[safeIdx] || ph;
                     const routineObj = (this.routines || []).find(r => r.id === (this.pendingHandoff.routine_id || this.agentRoutineId));
                     const displayTitle = this.pendingHandoff.routine_title || activeBranch.routine_title || routineObj?.title || routineObj?.name || this.pendingHandoff.routine_id || 'Routine';
-                    const wfCtxUri = activeBranch.workflow_context_uri || (routineObj?.includes?.length ? `ctx://workflows/workflow_${routineObj.id}_context.txt` : '');
+                    const wfCtxUri = activeBranch.workflow_context_uri || '';
                     const promptToCopy = activeBranch.prompt_text || activeBranch.compiled_prompt || '';
                     return html`
                         <sutram-surface slot="footer" variant="tinted" intent="warning" border="top" padding="md" gap="sm">
@@ -1697,7 +1693,7 @@ export class InSetuCoreAgent extends InSetuElement {
                                         intent="primary"
                                         icon="clipboard"
                                         label="Copy Prompt + Directives"
-                                        @click=${() => this.utils.copyRawText(promptToCopy, () => this.setStatus("📋 Prompt & directives copied!", 2000))}>
+                                        @click=${() => this.utils.copyRawText(promptToCopy, "📋 Prompt & directives copied!").catch(() => {})}>
                                     </sutram-btn>
                                 </sutram-stack>
                             </sutram-stack>

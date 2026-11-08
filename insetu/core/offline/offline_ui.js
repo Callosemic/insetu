@@ -11,12 +11,13 @@ export const OfflineStore = createExtensionStore('Offline', {
     storageUsage: 0,
     storageQuota: 0,
     storagePersisted: false,
-    addLog: (message, type = 'info', details = null) => {
+    addLog: (message, type = 'info', details = null, category = 'offline') => {
         const newEntry = {
             id: 'log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
             timestamp: Date.now(),
             message,
             type,
+            category,
             details
         };
         OfflineStore.setState(s => ({
@@ -63,14 +64,35 @@ export const OfflineStore = createExtensionStore('Offline', {
     }
 });
 window.inSetu.stores.Offline = OfflineStore;
-window.inSetu.offlineLog = (message, type = 'info', details = null) => {
+window.inSetu.offlineLog = (message, type = 'info', details = null, category = 'offline') => {
     if (window.inSetu?.stores?.Offline) {
-        window.inSetu.stores.Offline.getState().addLog(message, type, details);
+        window.inSetu.stores.Offline.getState().addLog(message, type, details, category);
     }
 };
 
 window.Sutram = window.Sutram || {};
 window.Sutram.offlineLog = window.inSetu.offlineLog;
+
+if (typeof SutramDB.subscribeTelemetry === 'function') {
+    SutramDB.subscribeTelemetry((d) => {
+        if (d.message && window.inSetu?.stores?.Offline) {
+            window.inSetu.stores.Offline.getState().addLog(d.message, d.type || 'info', d.details || null, d.category || 'kernel');
+        }
+    });
+} else {
+    window.addEventListener('sutram:offline-telemetry', (e) => {
+        const d = e.detail || {};
+        if (d.message && window.inSetu?.stores?.Offline) {
+            window.inSetu.stores.Offline.getState().addLog(d.message, d.type || 'info', d.details || null, d.category || 'kernel');
+        }
+    });
+}
+
+window.addEventListener('sutram:offline-state-changed', () => {
+    if (window.inSetu?.stores?.Offline?.getState()?.fetchOfflineState) {
+        window.inSetu.stores.Offline.getState().fetchOfflineState();
+    }
+});
 
 export class InSetuCoreOfflineLedger extends InSetuElement {
     static get extensionName() { return 'offline'; }
@@ -141,36 +163,18 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
             OfflineStore.getState().fetchOfflineState();
             if (window.inSetu?.offlineLog) window.inSetu.offlineLog(`Discarded poison pill: [${item.method}] ${item.path}`, 'warning');
         } catch (e) {
-            alert("Failed to delete record.");
+            this.setStatus("❌ Failed to delete dead-letter record.", 3500, true);
         }
     }
     async _retryDeadLetter(item) {
         try {
             await SutramDB.retryDeadLetter(item);
             OfflineStore.getState().fetchOfflineState();
-            const count = await SutramDB.getOutboxCount(item.scope_id);
-
-            // Re-hydrate UDF pending sets so optimistic UI restores instantly
-            const pendingSet = new Set(window.inSetu.stores.App.getState().pendingMutations);
-            const deletedSet = new Set(window.inSetu.stores.App.getState().deletedMutations);
-
-            try {
-                const payload = item.bodyString ? JSON.parse(item.bodyString) : {};
-                const fp = payload.filepath || payload.dest_path;
-                if (fp) {
-                    const isDelete = item.method === 'DELETE' || (item.path && item.path.includes('fs/delete')) || (item.path && item.path.includes('fs/move'));
-                    if (isDelete) {
-                        deletedSet.add(fp);
-                    } else {
-                        pendingSet.add(fp);
-                    }
-                }
-            } catch (e) {}
-            window.inSetu.stores.App.setState({ outboxCount: count, pendingMutations: pendingSet, deletedMutations: deletedSet });
+            const count = await window.inSetu.utils?.syncOutboxMutationMarkers?.(item.scope_id);
             if (window.inSetu?.offlineLog) window.inSetu.offlineLog(`Re-queued poison pill for sync: [${item.method}] ${item.path}`, 'info');
-            if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`Queued for sync (${count})`, 3000);
+            this.setStatus(`Queued for sync (${count})`, 3000);
         } catch (e) {
-            alert("Failed to re-queue record.");
+            this.setStatus("❌ Failed to re-queue dead-letter record.", 3500, true);
         }
     }
     async _requestPersistentStorage() {
@@ -178,11 +182,57 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
             const granted = await navigator.storage.persist();
             if (granted) {
                 OfflineStore.setState({ storagePersisted: true });
-                if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus("Persistent Storage Granted!", 3000);
+                this.setStatus("Persistent Storage Granted!", 3000);
             } else {
-                alert("The browser denied persistent storage rights. You may need to interact with the site more or install it as a PWA to elevate your storage clearance.");
+                this.setStatus("⚠️ Browser denied persistent storage rights (try installing as a PWA).", 4500, true);
             }
         }
+    }
+
+    async _preCacheRepository(repoDir) {
+        if (!repoDir) return;
+        const vfsManifest = window.inSetu?.stores?.App?.getState()?.manifest?.vfs || {};
+        const files = [];
+        Object.entries(vfsManifest).forEach(([key, bucket]) => {
+            if (key.startsWith(`${repoDir}::`)) {
+                files.push(...(bucket.files || []));
+            }
+        });
+        if (this.vfs?.preCacheFiles) {
+            await this.vfs.preCacheFiles(files, { label: repoDir });
+        }
+    }
+
+    async _evictRepositoryCache(repoDir) {
+        if (!repoDir || typeof SutramDB.evictByPrefix !== 'function') return;
+        const ws = this.utils.getActiveWorkspace();
+        const evicted = await SutramDB.evictByPrefix(ws, encodeURIComponent(`vfs://${repoDir}/`)).catch(() => 0);
+        OfflineStore.getState().fetchOfflineState();
+        window.inSetu?.offlineLog?.(`Evicted ${evicted} cached blob(s) for '${repoDir}'.`, 'warning', null, 'cache');
+        if (this.ui?.setGlobalStatus) {
+            this.ui.setGlobalStatus(`Evicted ${evicted} cached blobs for ${repoDir}`, 3000);
+        }
+    }
+
+    async _toggleRepositoryOffline(repoDir, enabled) {
+        if (!repoDir) return;
+        const appStore = window.inSetu?.stores?.App;
+        const currentTargets = appStore?.getState?.()?.targetConfigs || [];
+        const updatedTargets = currentTargets.map(r => (r && r.repo_dir === repoDir ? { ...r, offline_capable: enabled } : r));
+        if (appStore) {
+            appStore.setState({ targetConfigs: updatedTargets });
+        }
+        try {
+            await this.api.postJson('offline/repo_toggle', { repo: repoDir, enabled });
+        } catch (err) {
+            window.inSetu?.offlineLog?.(`Offline toggle saved locally for '${repoDir}' (${err.message})`, 'warning', null, 'cache');
+        }
+        if (enabled) {
+            await this._preCacheRepository(repoDir);
+        } else {
+            await this._evictRepositoryCache(repoDir);
+        }
+        this.requestUpdate();
     }
 
     render() {
@@ -200,11 +250,11 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                 titleText="Offline Ledger (IndexedDB)"
                 descriptionText="Inspect the VFS blob cache and pending mutation outbox.">
                 <sutram-btn slot="header-actions" ?compact=${true} intent="primary" icon="refresh-cw" label="Refresh" @click=${() => this.onForceRefresh()}></sutram-btn>
-                <sutram-stack direction="col" gap="lg">
+                <sutram-stack direction="col" gap="wide">
 
-                    <sutram-surface variant="panel" padding="md">
-                        <sutram-stack direction="row" justify="between" align="center" gap="md" ?wrap=${true}>
-                            <sutram-stack direction="col" gap="xs" ?flex=${true}>
+                    <sutram-surface variant="panel" padding="normal">
+                        <sutram-stack direction="row" justify="between" align="center" gap="normal" ?wrap=${true}>
+                            <sutram-stack direction="col" gap="compact" ?flex=${true}>
                                 <sutram-stack direction="row" justify="between" align="center">
                                     <strong>Browser Storage Quota</strong>
                                     <sutram-tag text="${usageMB} MB / ${quotaMB} MB"></sutram-tag>
@@ -213,7 +263,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                                     <div style="width: ${usagePct}%; height: 100%; background: ${usagePct > 90 ? 'var(--intent-danger)' : (usagePct > 75 ? 'var(--intent-warning)' : 'var(--intent-success)')}; transition: width 0.3s ease;"></div>
                                 </div>
                             </sutram-stack>
-                            <sutram-stack direction="row" align="center" gap="sm">
+                            <sutram-stack direction="row" align="center" gap="compact">
                                 <sutram-tag
                                     intent=${this.storagePersisted ? 'success' : 'warning'}
                                     text=${this.storagePersisted ? 'Persisted (Safe from Eviction)' : 'Best Effort (At risk of eviction)'}>
@@ -233,14 +283,14 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                             icon="cloud-lightning"
                             intent="warning"
                             ?disableSelection=${true}>
-                            <sutram-stack direction="col" gap="sm">
+                            <sutram-stack direction="col" gap="compact">
                                 ${this.outboxItems.length === 0 ? html`
-                                    <sutram-stack direction="row" align="center" gap="xs">
+                                    <sutram-stack direction="row" align="center" gap="compact">
                                         <sutram-icon name="check-circle-2" size="sm" intent="success"></sutram-icon>
                                         <sutram-label text="Outbox is empty. All mutations are synced."></sutram-label>
                                     </sutram-stack>
                                 ` : this.outboxItems.map(item => html`
-                                    <sutram-surface variant="inset" padding="sm" gap="xs">
+                                    <sutram-surface variant="inset" padding="compact" gap="compact">
                                         <sutram-stack direction="row" justify="between" align="center">
                                             <strong>${item.method} ${item.path.split('/api/')[1] || item.path}</strong>
                                             <sutram-label .text=${this.utils.formatDate(item.timestamp)}></sutram-label>
@@ -257,20 +307,63 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                             icon="skull"
                             intent="danger"
                             ?disableSelection=${true}>
-                            <sutram-stack direction="col" gap="sm">
+                            <sutram-stack direction="col" gap="compact">
                                 ${this.deadLetters.map(item => html`
-                                    <sutram-surface variant="tinted" intent="danger" padding="sm" gap="xs">
+                                    <sutram-surface variant="tinted" intent="danger" padding="compact" gap="compact">
                                         <sutram-stack direction="row" justify="between" align="center">
                                             <strong>${item.method} ${item.path.split('/api/')[1] || item.path} (HTTP ${item.error_status})</strong>
                                             <sutram-label .text=${this.utils.formatDate(item.failed_at)}></sutram-label>
                                         </sutram-stack>
                                         <pre>${item.bodyString ? (item.bodyString.startsWith('{') || item.bodyString.startsWith('[') ? JSON.stringify(JSON.parse(item.bodyString), null, 2) : item.bodyString) : 'Empty Payload'}</pre>
-                                        <sutram-stack direction="row" gap="sm">
+                                        <sutram-stack direction="row" gap="compact">
                                             <sutram-btn intent="warning" ?compact=${true} label="Retry" @click=${() => this._retryDeadLetter(item)}></sutram-btn>
                                             <sutram-btn intent="danger" ?compact=${true} label="Discard" @click=${() => this._discardDeadLetter(item)}></sutram-btn>
                                         </sutram-stack>
                                     </sutram-surface>
                                 `)}
+                            </sutram-stack>
+                        </sutram-card>
+                        ` : ''}
+                        ${(this.ecosystem?.targetConfigs || []).length > 0 ? html`
+                        <sutram-card
+                            titleText="Repository Offline Switchboard (${(this.ecosystem?.targetConfigs || []).filter(r => r.offline_capable).length}/${(this.ecosystem?.targetConfigs || []).length} enabled)"
+                            descriptionText="Toggle which repositories sync to IndexedDB for offline editing. Turning a repository on warms its cache; turning it off evicts its cached blobs."
+                            icon="package"
+                            intent="highlight"
+                            ?disableSelection=${true}>
+                            <sutram-stack direction="col" gap="compact">
+                                ${(this.ecosystem?.targetConfigs || []).map(repo => {
+                                    const rDir = repo.repo_dir || '';
+                                    const encodedPrefix = encodeURIComponent(`vfs://${rDir}/`);
+                                    const repoBlobCount = (this.cachedBlobs || []).filter(k => k.includes(encodedPrefix) || k.includes(`vfs://${rDir}/`)).length;
+                                    return html`
+                                        <sutram-surface variant="inset" padding="compact">
+                                            <sutram-stack direction="row" justify="between" align="center" gap="compact" ?wrap=${true}>
+                                                <sutram-stack direction="row" align="center" gap="compact" ?wrap=${true}>
+                                                    <sutram-toggle
+                                                        .label=${repo.title || rDir}
+                                                        .checked=${!!repo.offline_capable}
+                                                        ?flush=${true}
+                                                        @sutram-input-changed=${(e) => this._toggleRepositoryOffline(rDir, Boolean(e.detail.value))}>
+                                                    </sutram-toggle>
+                                                    <sutram-tag
+                                                        .text=${repo.offline_capable ? '⚡ Offline Enabled' : 'Online Only'}
+                                                        .intent=${repo.offline_capable ? 'success' : 'neutral'}>
+                                                    </sutram-tag>
+                                                    <sutram-tag .text=${`${repoBlobCount} cached blobs`} intent="primary"></sutram-tag>
+                                                </sutram-stack>
+                                                <sutram-stack direction="row" align="center" gap="compact">
+                                                    ${repo.offline_capable ? html`
+                                                        <sutram-async-btn ?compact=${true} intent="primary" icon="download" label="Warm Now" .onClick=${() => this._preCacheRepository(rDir)}></sutram-async-btn>
+                                                    ` : ''}
+                                                    ${repoBlobCount > 0 ? html`
+                                                        <sutram-async-btn ?compact=${true} intent="danger" icon="trash-2" label="Evict" .onClick=${() => this._evictRepositoryCache(rDir)}></sutram-async-btn>
+                                                    ` : ''}
+                                                </sutram-stack>
+                                            </sutram-stack>
+                                        </sutram-surface>
+                                    `;
+                                })}
                             </sutram-stack>
                         </sutram-card>
                         ` : ''}
@@ -280,26 +373,26 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                             icon="hard-drive"
                             intent="primary"
                             ?disableSelection=${true}>
-                            <sutram-stack direction="col" gap="sm">
+                            <sutram-stack direction="col" gap="compact">
                                 <sutram-search-bar 
                                     placeholder="Filter cache keys..." 
                                     .value=${this.searchQuery} 
                                     @search-changed=${e => this.searchQuery = e.detail.value}>
                                 </sutram-search-bar>
-                                <div style="height: 400px; display: flex; flex-direction: column;">
+                                <sutram-stack direction="col" ?scrollable=${true}>
                                     ${filteredBlobs.length === 0 ? html`
                                         <sutram-empty-state text="No cached blobs found."></sutram-empty-state>
                                     ` : html`
                                         <sutram-virtual-list
                                             .items=${filteredBlobs}
                                             .renderItem=${key => html`
-                                                <sutram-surface variant="inset" padding="xs">
+                                                <sutram-surface variant="inset" padding="compact">
                                                     <code>${key}</code>
                                                 </sutram-surface>
                                             `}>
                                         </sutram-virtual-list>
                                     `}
-                                </div>
+                                </sutram-stack>
                             </sutram-stack>
                         </sutram-card>
                     </sutram-card-group>
@@ -356,7 +449,7 @@ export class InSetuCoreOfflineLog extends InSetuElement {
                 titleText="Offline Telemetry Log (${this.logs.length}/100)"
                 descriptionText="Real-time inspection of caching, reads, outbox mutations, and sync events.">
                 <sutram-btn slot="header-actions" ?compact=${true} intent="danger" icon="trash-2" label="Clear Logs" @click=${() => OfflineStore.getState().clearLogs()}></sutram-btn>
-                <sutram-stack direction="col" gap="md">
+                <sutram-stack direction="col" gap="normal">
 
                     <sutram-search-bar
                         placeholder="Filter telemetry logs..."
@@ -364,17 +457,18 @@ export class InSetuCoreOfflineLog extends InSetuElement {
                         @search-changed=${e => this.searchQuery = e.detail.value}>
                     </sutram-search-bar>
 
-                    <sutram-stack direction="col" gap="sm">
+                    <sutram-stack direction="col" gap="compact">
                         ${filtered.length === 0 ? html`
                             <sutram-empty-state text="No telemetry entries logged yet. Perform file opens, offline edits, or pre-caching to observe events."></sutram-empty-state>
                         ` : filtered.map(log => {
-                            const timeStr = new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
+                            const timeStr = this.utils.formatDate(log.timestamp);
                             const intent = this._getIntentName(log.type);
                             return html`
-                                <sutram-surface variant="panel" .intent=${intent} border="left" padding="sm" gap="xs">
-                                    <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
+                                <sutram-surface variant="panel" .intent=${intent} border="left" padding="compact" gap="compact">
+                                    <sutram-stack direction="row" align="center" gap="compact" ?wrap=${true}>
                                         <sutram-label .text=${timeStr}></sutram-label>
                                         <sutram-tag .text=${log.type.toUpperCase()} .intent=${intent}></sutram-tag>
+                                        ${log.category ? html`<sutram-tag .text=${String(log.category).toUpperCase()} intent="neutral"></sutram-tag>` : ''}
                                         <strong>${log.message}</strong>
                                     </sutram-stack>
                                     ${log.details ? html`

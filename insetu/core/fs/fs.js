@@ -9,8 +9,23 @@ import {
     downloadBlob,
     bindGhostDrag
 } from '/static/extensions/system/insetu_sdk.js';
-import { resolveEditorMode, insertLinkToEditor } from '/static/extensions/system/components/ui_editor.js';
+import { resolveEditorMode, insertLinkToEditor, openEditorLinkTarget, isMarkdownLinksEnabled } from '/static/extensions/system/components/ui_editor.js';
 import { AppStore, SelectionStore } from '/static/extensions/system/store.js';
+import {
+    InSetuBrowserProjection,
+    InSetuLinkInsertProjection,
+    InSetuMoveFileProjection,
+    InSetuNewFileProjection,
+    InSetuNewFolderProjection,
+} from '/static/extensions/fs/fs_modals.js';
+
+export {
+    InSetuBrowserProjection,
+    InSetuLinkInsertProjection,
+    InSetuMoveFileProjection,
+    InSetuNewFileProjection,
+    InSetuNewFolderProjection,
+};
 export function bindDownloadDrag(e, filename, fetchUrl) {
     const absoluteUrl = window.location.origin + fetchUrl;
     const safeName = filename.split('/').pop();
@@ -780,6 +795,7 @@ export async function saveBufferFile(filepath, autoSave = false) {
     const { content, base_hash: baseHash, base_content: baseContent } = payload;
 
     const savingSet = FsStore.getState().savingPaths;
+    if (savingSet.has(normPath)) return;
     savingSet.add(normPath);
     FsStore.getState().updateBuffer(normPath, {
         saveStatus: 'saving',
@@ -867,17 +883,20 @@ export async function saveBufferFile(filepath, autoSave = false) {
                 FsStore.getState().updateBuffer(normPath, patch);
             }
         });
+    } catch (saveErr) {
+        if (String(saveErr?.message || '').includes('OCC Conflict')) {
+            setTimeout(() => reconcileBufferWithDisk(normPath, true), 50);
+        }
     } finally {
         savingSet.delete(normPath);
     }
 }
-export async function reconcileBufferWithDisk(filepath) {
+export async function reconcileBufferWithDisk(filepath, forceBaselineSync = false) {
     const normPath = normalizeVfsURI(filepath);
     const fsState = FsStore.getState();
     const recSet = fsState.reconcilingPaths;
     const savingSet = fsState.savingPaths;
-    const autoSaveTimers = fsState.autoSaveTimers;
-    if (!normPath || recSet.has(normPath) || savingSet?.has(normPath) || autoSaveTimers?.has(normPath)) return;
+    if (!normPath || recSet.has(normPath) || savingSet?.has(normPath)) return;
     const curBuf = fsState.activeBuffers?.[normPath] || fsState.activeBuffers?.[filepath];
     if (!curBuf || !curBuf.isFS || curBuf.isTruncated || curBuf.content === 'Loading...') return;
 
@@ -885,7 +904,7 @@ export async function reconcileBufferWithDisk(filepath) {
     const startBaseHash = curBuf.baseHash || null;
     recSet.add(normPath);
     try {
-        const r = await window.inSetu.api.get(`fs/fetch?file=${encodeURIComponent(normPath)}`, {
+        const r = await window.inSetu.api.get(`fs/fetch?file=${encodeURIComponent(normPath)}&t=${Date.now()}`, {
             headers: { 'Cache-Control': 'no-cache' }
         });
         if (!r.ok) return;
@@ -894,12 +913,12 @@ export async function reconcileBufferWithDisk(filepath) {
         const latestBuf = latestState.activeBuffers?.[normPath] || latestState.activeBuffers?.[filepath];
         if (!latestBuf || newText === null) return;
 
-        // Deterministic Lockout: Abort if user typed, scheduled autosave, or saved while fetch was in flight
         if (
-            latestState.savingPaths?.has(normPath) ||
-            latestState.autoSaveTimers?.has(normPath) ||
-            (latestBuf.docRevision || 0) !== startDocRev ||
-            (latestBuf.baseHash || null) !== startBaseHash
+            !forceBaselineSync && (
+                latestState.savingPaths?.has(normPath) ||
+                (latestBuf.docRevision || 0) !== startDocRev ||
+                (latestBuf.baseHash || null) !== startBaseHash
+            )
         ) {
             return;
         }
@@ -914,8 +933,7 @@ export async function reconcileBufferWithDisk(filepath) {
             return;
         }
 
-        // Causal Monotonicity: Never roll back to a known historical ancestor of this buffer
-        if (newHash && Array.isArray(latestBuf.ancestorHashes) && latestBuf.ancestorHashes.includes(newHash)) {
+        if (!forceBaselineSync && newHash && Array.isArray(latestBuf.ancestorHashes) && latestBuf.ancestorHashes.includes(newHash) && latestBuf.content !== latestBuf.originalContent) {
             return;
         }
 
@@ -936,8 +954,8 @@ export async function reconcileBufferWithDisk(filepath) {
             });
         } else {
             const rebased = rebaseConcurrentText(latestBuf.originalContent, latestBuf.content, newText);
+            const nextRev = (latestBuf.docRevision || 0) + 1;
             if (rebased.clean) {
-                const nextRev = (latestBuf.docRevision || 0) + 1;
                 FsStore.getState().updateBuffer(normPath, {
                     content: rebased.merged,
                     originalContent: newText,
@@ -946,6 +964,13 @@ export async function reconcileBufferWithDisk(filepath) {
                     ancestorHashes: nextAncestors,
                     docRevision: nextRev
                 });
+            } else {
+                // Advance baseline hash to the new disk state so subsequent saves do not loop on 409 OCC conflicts
+                FsStore.getState().updateBuffer(normPath, {
+                    originalContent: newText,
+                    baseHash: newHash,
+                    ancestorHashes: nextAncestors
+                }, { skipFrontmatterParse: true });
             }
         }
     } catch (_) {
@@ -1113,7 +1138,7 @@ window.addEventListener('sutram-projections-migrated', (e) => {
     }
 });
 
-async function executeMove() {
+export async function executeMove() {
     const { currentFile, destPath } = FsStore.getState().modals.move;
     if (!destPath || destPath === currentFile) return alert("Please enter a valid new destination path.");
 
@@ -1143,96 +1168,6 @@ async function executeMove() {
     });
 }
 
-export class InSetuMoveFileProjection extends InSetuElement {
-    static get extensionName() { return 'fs'; }
-    static properties = {
-        moveState: { type: Object }
-    };
-    static styles = [sharedStyles];
-
-    constructor() {
-        super();
-        this.moveState = FsStore.getState().modals.move || { currentFile: '', destPath: '', initialParts: [] };
-    }
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(
-            FsStore,
-            state => state.modals?.move || { currentFile: '', destPath: '', initialParts: [] },
-            (moveState) => {
-                this.moveState = moveState;
-                this.requestUpdate();
-            }
-        );
-    }
-
-    render() {
-        const m = this.moveState || {};
-        return html`
-            <sutram-view ?flush=${true} ?noScroll=${true}>
-                <sutram-surface slot="header" variant="panel" border="bottom" padding="md" gap="sm">
-                    <sutram-stack direction="row" align="center" gap="xs">
-                        <sutram-icon name="file-code-2" size="sm" intent="primary"></sutram-icon>
-                        <sutram-label text="Source:"></sutram-label>
-                        <code>${m.currentFile || ''}</code>
-                    </sutram-stack>
-                    <sutram-input
-                        label="Destination Path"
-                        ?flush=${true}
-                        .value=${m.destPath || ''}
-                        placeholder="path/to/destination/file.ext"
-                        @sutram-input-changed=${e => {
-                            const uri = new window.inSetu.utils.InSetuURI(e.detail.value);
-                            const parts = uri.pathSegments;
-                            parts.pop();
-                            FsStore.getState().setModal('move', { destPath: uri.toString(), initialParts: parts });
-                        }}>
-                    </sutram-input>
-                </sutram-surface>
-
-                <insetu-file-tree
-                    basePath=""
-                    .files=${getGlobalManifest()}
-                    .currentPath=${m.initialParts || []}
-                    .hidePath=${false}
-                    .hideFiles=${true}
-                    .enableSearch=${false}
-                    @path-changed=${e => {
-                        const pathArr = e.detail.path || [];
-                        const folderPrefix = pathArr.join('/');
-                        const filename = m.currentFile ? new window.inSetu.utils.InSetuURI(m.currentFile).basename : '';
-                        const nextDest = folderPrefix ? `vfs://${folderPrefix}/${filename}` : `vfs://${filename}`;
-                        FsStore.getState().setModal('move', {
-                            destPath: nextDest,
-                            initialParts: pathArr
-                        });
-                    }}>
-                </insetu-file-tree>
-
-                <sutram-btn
-                    slot="footer"
-                    intent="neutral"
-                    icon="x"
-                    label="Cancel"
-                    @click=${() => {
-                        FsStore.getState().setModal('move', { open: false });
-                        if (window.Sutram?.stores?.Layout) {
-                            window.Sutram.stores.Layout.getState().closeWindow('vfs:move-file');
-                        }
-                    }}>
-                </sutram-btn>
-                <sutram-async-btn
-                    slot="footer"
-                    intent="primary"
-                    icon="truck"
-                    label="Move File"
-                    .onClick=${executeMove}>
-                </sutram-async-btn>
-            </sutram-view>
-        `;
-    }
-}
-customElements.define('insetu-move-file-projection', InSetuMoveFileProjection);
 export async function deleteEmptyFolder(dirPath) {
     if (!confirm(`Are you sure you want to delete the empty folder /${dirPath}?`)) return;
     const normPath = normalizeVfsURI(dirPath);
@@ -1537,6 +1472,48 @@ export async function executeBulkArchive(items) {
             }
         }
     });
+}
+
+export async function executeDownloadZip(items, archiveName = null) {
+    const targets = pruneSubsumedTargets(items);
+    if (targets.length === 0) return;
+
+    await flushAllDirtyBuffers(false);
+    const payloadItems = targets.map(t => ({
+        filepath: t.isDir ? `${t.path}/` : t.path,
+        folderpath: t.isDir ? t.path : undefined,
+        isDir: Boolean(t.isDir)
+    }));
+    const activeWs = window.inSetu.utils.getActiveWorkspace();
+    const fallbackName = archiveName || (
+        targets.length === 1
+            ? `${new window.inSetu.utils.InSetuURI(targets[0].path).basename || 'archive'}.zip`
+            : 'workspace_selection.zip'
+    );
+    if (window.inSetu.ui?.setGlobalStatus) {
+        window.inSetu.ui.setGlobalStatus("⏳ Packing ZIP archive...", null);
+    }
+    try {
+        await downloadFile(
+            `/api/${activeWs}/fs/download_zip`,
+            fallbackName,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ items: payloadItems, archive_name: archiveName || undefined })
+            }
+        );
+        SelectionStore.getState().clearSelection();
+        if (window.inSetu.ui?.setGlobalStatus) {
+            window.inSetu.ui.setGlobalStatus("✅ Downloaded ZIP archive!", 2500);
+        }
+    } catch (err) {
+        if (window.inSetu.ui?.setGlobalStatus) {
+            window.inSetu.ui.setGlobalStatus(`❌ ZIP Error: ${err.message}`, 3000, true);
+        } else {
+            alert("Failed to download ZIP archive: " + err.message);
+        }
+    }
 }
 
 export async function executeBulkDelete(items) {
@@ -2013,7 +1990,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             vfsBound: false,
             intent: 'primary',
             order: 18,
-            match: (data) => !data.isSkeleton,
+            match: (data) => !data.isSkeleton && !data.isDir,
             asyncAction: async (data, e) => {
                 const preTarget = resolveEntityExportTarget(data);
                 if (preTarget.mode === 'memory') {
@@ -2041,6 +2018,27 @@ window.ExtensionRegistry.registerExtension('fs', {
                     const fetchUrl = baseFetchUrl.includes('/fs/fetch?') ? `${baseFetchUrl}&download=1` : baseFetchUrl;
                     await window.inSetu.vfs.fetchAndDownloadState(data.filepath, fetchUrl);
                 }
+            }
+        },
+        {
+            targetEntity: 'folder',
+            targetEntities: ['file', 'folder'],
+            id: 'vfs-download-zip',
+            bulkGroupKey: 'download-zip',
+            label: 'Download ZIP',
+            bulkLabel: 'Download ZIP',
+            icon: 'archive',
+            group: 'file',
+            vfsBound: false,
+            intent: 'primary',
+            order: 18.2,
+            bulkable: true,
+            match: (data) => !data.isSkeleton && Boolean(data.isDir || data.filepath || data.folderpath),
+            asyncAction: async (data) => {
+                await executeDownloadZip([data]);
+            },
+            bulkAction: async (items) => {
+                await executeDownloadZip(items);
             }
         },
         {
@@ -2116,24 +2114,19 @@ export function checkFileExtension(filename) {
     return getFileExtensionWarning(filename);
 }
 function openNewFileModal(overridePath = null) {
+    const isObj = Boolean(overridePath && typeof overridePath === 'object');
     const gbPath = AppStore.getState().getBrowsePath ? AppStore.getState().getBrowsePath('fs:files') : [];
-    const rawPrefix = typeof overridePath === 'string' ? overridePath : (gbPath.length > 0 ? `vfs://${gbPath.join('/')}/` : '');
+    const rawPrefix = typeof overridePath === 'string' ? overridePath : (isObj && typeof overridePath.basePath === 'string' ? overridePath.basePath : (gbPath.length > 0 ? `vfs://${gbPath.join('/')}/` : ''));
     const prefix = rawPrefix ? normalizeVfsURI(rawPrefix) : '';
-    FsStore.getState().setModal('newFile', { open: true, basePath: prefix, fileName: '', content: '' });
+    const fileName = isObj ? (overridePath.fileName || overridePath.filename || '') : '';
+    const content = isObj ? (overridePath.content || '') : '';
+    FsStore.getState().setModal('newFile', { open: true, basePath: prefix, fileName, content });
     if (window.Sutram?.stores?.Layout) {
         const layout = window.Sutram.stores.Layout.getState();
-        layout.openWindow({
-            id: 'vfs:new-file',
-            component: 'insetu-new-file-projection',
-            label: 'Create New Workspace File',
-            icon: 'file-plus',
-            intent: 'primary',
-            extName: 'fs',
-            windowOnly: true
-        }, layout.focusedColumn || 'center', 1);
+        layout.openWindow({ id: 'vfs:new-file', component: 'insetu-new-file-projection', label: 'Create New Workspace File', icon: 'file-plus', intent: 'primary', extName: 'fs', windowOnly: true }, layout.focusedColumn || 'center', 1);
     }
 }
-async function saveNewFile() {
+export async function saveNewFile() {
     const mState = FsStore.getState().modals.newFile;
     const basePath = mState.basePath;
     let fileName = mState.fileName.trim();
@@ -2201,7 +2194,7 @@ async function openNewFolderModal(overridePath = null) {
     }
 }
 
-async function saveNewFolder() {
+export async function saveNewFolder() {
     const mState = FsStore.getState().modals.newFolder;
     const basePath = mState.basePath;
     let folderName = mState.folderName.trim();
@@ -2292,35 +2285,13 @@ export async function hydrateVfsBuffer(filepath, { isFS = null, forceReload = fa
             const protectionCheck = effectiveIsFS
                 ? window.inSetu.api.getJson(`fs/protected?file=${encodeURIComponent(normPath)}`).catch(() => null)
                 : Promise.resolve(null);
-            try {
-                const activeWs = window.inSetu.utils.getActiveWorkspace();
-                const fetchUrl = resolveFileFetchUrl(normPath, effectiveIsFS);
-                const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
-                if (res.ok) text = await res.text();
-            } catch (e) {
-                // Network or cache miss, proceed to outbox rescue
+            const activeWs = window.inSetu.utils.getActiveWorkspace();
+            const fetchUrl = resolveFileFetchUrl(normPath, effectiveIsFS);
+            const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
+            if (res && res.ok) {
+                text = await res.text();
             }
-
-            // Always check the outbox for pending writes to prevent stale cache reads offline
-            const outbox = window.inSetu?.stores?.Offline?.getState()?.outboxItems || [];
-            let pendingContent = undefined;
-            [...outbox].reverse().find(i => {
-                if (i.method === 'POST' && i.path.endsWith('fs/save')) {
-                    try {
-                        const payload = i.bodyString ? JSON.parse(i.bodyString) : (i.payload || {});
-                        const normPayloadFp = normalizeVfsURI(payload.filepath || '');
-                        if (normPayloadFp === normPath && payload.content !== undefined) {
-                            pendingContent = payload.content;
-                            return true;
-                        }
-                    } catch(e) {}
-                }
-                return false;
-            });
-
-            if (pendingContent !== undefined) {
-                text = pendingContent;
-            } else if (text === null) {
+            if (text === null) {
                 throw new Error("Failed to fetch");
             }
             let initialHash = null;
@@ -2373,7 +2344,7 @@ export async function viewSourceFile(filepath, isFS = false, bypassHook = false,
         await FsStore.getState().toggleBufferPreview(normPath, true);
     }
 }
-function closeBrowseModal() {
+export function closeBrowseModal() {
     FsStore.getState().setModal('browser', { open: false });
     AppStore.setState({ browserConfig: { mode: 'view', callback: null } });
     if (window.Sutram?.stores?.Layout) {
@@ -2419,24 +2390,10 @@ export function openWorkspaceBrowser(options = {}) {
         }, layout.focusedColumn || 'center', 1);
     }
 }
-function _handleBrowserCardClick(detail) {
-    const { browserConfig } = AppStore.getState();
-    if (browserConfig && browserConfig.mode === 'file') {
-        if (browserConfig.callback) browserConfig.callback(detail.filename);
-        closeBrowseModal();
-    } else if (browserConfig && browserConfig.mode === 'view') {
-        if (detail.isSource && window.inSetu.vfs.viewSourceFile) {
-            window.inSetu.vfs.viewSourceFile(detail.filename, true);
-        } else if (window.inSetu.vfs.viewAndCopy) {
-            window.inSetu.vfs.viewAndCopy(detail.filename);
-        }
-    }
-};
-
 export function openFolderBrowser(callback = null) {
     openWorkspaceBrowser({ mode: 'folder', title: 'Select Destination Folder', callback: callback });
 }
-function confirmFolderSelection() {
+export function confirmFolderSelection() {
     const { browserConfig } = AppStore.getState();
     const browserPath = FsStore.getState().modals?.browser?.currentPath || [];
     const selectedPath = (browserPath || []).join('/');
@@ -2491,6 +2448,7 @@ export class InSetuEditorProjection extends InSetuElement {
         _yamlData: { type: Object },
         _bodyContent: { type: String },
         _hasTitleSlot: { type: Boolean },
+        _enableMdLinks: { type: Boolean },
         zenMode: { type: Boolean, reflect: true, attribute: 'zen-mode' }
     };
 
@@ -2508,6 +2466,7 @@ export class InSetuEditorProjection extends InSetuElement {
         this._yamlData = {};
         this._bodyContent = '';
         this._hasTitleSlot = false;
+        this._enableMdLinks = isMarkdownLinksEnabled();
         this.zenMode = false;
         this._transientCursorPos = 0;
         this._transientScrollTop = 0;
@@ -2794,20 +2753,14 @@ export class InSetuEditorProjection extends InSetuElement {
             });
             if (matchingSave) {
                 const fsState = FsStore.getState();
-                const isLockedByLocalEdit = Boolean(
-                    this.isDirty ||
-                    fsState.savingPaths?.has(normPath) ||
-                    fsState.autoSaveTimers?.has(normPath)
-                );
+                if (fsState.savingPaths?.has(normPath)) return;
                 const isKnownHash = Boolean(
-                    matchingSave.base_hash && (
+                    !this.isDirty && matchingSave.base_hash && (
                         matchingSave.base_hash === this._buffer?.baseHash ||
                         (Array.isArray(this._buffer?.ancestorHashes) && this._buffer.ancestorHashes.includes(matchingSave.base_hash))
                     )
                 );
-                if (isLockedByLocalEdit || isKnownHash) {
-                    return;
-                }
+                if (isKnownHash) return;
                 reconcileBufferWithDisk(normPath);
             }
         });
@@ -2829,6 +2782,10 @@ export class InSetuEditorProjection extends InSetuElement {
             }
         });
 
+        this.registerGlobalListener('insetu:md-links-preference-updated', window, (e) => {
+            this._enableMdLinks = Boolean(e.detail?.enabled);
+        });
+        this._enableMdLinks = isMarkdownLinksEnabled();
         this._loadPreference(this.filepath);
     }
     updated(changedProperties) {
@@ -3008,7 +2965,12 @@ export class InSetuEditorProjection extends InSetuElement {
                     .value=${editorTextValue} 
                     .language=${m.codeMode || 'plaintext'} 
                     .readOnly=${shouldBeReadOnly}
+                    .enableMarkdownLinks=${this._enableMdLinks}
                     ?writingMode=${this._writingMode}
+                    @editor-link-clicked=${(e) => {
+                        const href = e.detail?.href;
+                        if (href) openEditorLinkTarget(href, this._normPath());
+                    }}
                     @editor-selection=${(e) => { this._transientCursorPos = e.detail?.cursor ?? 0; }}
                     @editor-scroll=${(e) => { this._transientScrollTop = e.detail?.top ?? 0; }}
                     @content-changed=${(e) => {
@@ -3103,10 +3065,59 @@ window.inSetu.vfs.renameFileTracking = renameFileTracking;
 window.inSetu.vfs.getChunks = getChunks;
 window.inSetu.vfs.ensureFreshContext = ensureFreshContext;
 window.inSetu.vfs.openPartsModal = openPartsModal;
+export function syncVirtualBuffer(virtualUri, fullText = null) {
+    const fsStore = window.inSetu?.stores?.Fs?.getState();
+    if (!fsStore) return;
+    if (fullText === null) {
+        fsStore.closeBuffer(virtualUri);
+        return;
+    }
+    const existing = fsStore.activeBuffers?.[virtualUri];
+    if (existing) {
+        fsStore.openBuffer(virtualUri, { ...existing, content: fullText, originalContent: fullText, fullText });
+    }
+}
+
+export async function preCacheFiles(filepaths = [], { label = 'selection' } = {}) {
+    const validFiles = (filepaths || []).filter(f => f && !f.endsWith('/.gitkeep') && !f.endsWith('/.keep'));
+    if (validFiles.length === 0) {
+        if (window.inSetu?.ui?.setGlobalStatus) {
+            window.inSetu.ui.setGlobalStatus(`No indexed files found for '${label}'.`, 3000, true);
+        }
+        return 0;
+    }
+    const activeWs = window.inSetu.utils.getActiveWorkspace();
+    const urls = validFiles.map(fp => resolveFileFetchUrl(fp, true));
+    if (window.inSetu?.stores?.App?.getState()?.enqueueWarming) {
+        window.inSetu.stores.App.getState().enqueueWarming(urls);
+    }
+    window.inSetu?.offlineLog?.(`Pre-caching '${label}' (${urls.length} files)...`, 'info', null, 'cache');
+    if (window.inSetu?.ui?.setGlobalStatus) {
+        window.inSetu.ui.setGlobalStatus(`⏳ Caching ${urls.length} files for ${label}...`, null);
+    }
+    let cachedCount = 0;
+    for (const fetchUrl of urls) {
+        try {
+            await window.inSetu.api.fetchImmutableText(fetchUrl, {}, activeWs);
+            cachedCount++;
+        } catch (_) {}
+    }
+    window.inSetu?.stores?.Offline?.getState()?.fetchOfflineState?.();
+    window.inSetu?.offlineLog?.(`Pre-cached ${cachedCount}/${urls.length} files for '${label}'.`, 'success', null, 'cache');
+    if (window.inSetu?.ui?.setGlobalStatus) {
+        window.inSetu.ui.setGlobalStatus(`✅ Cached ${cachedCount} files for ${label}`, 3000);
+    }
+    return cachedCount;
+}
+
 window.inSetu.vfs.openVirtualFile = openVirtualFile;
+window.inSetu.vfs.openNewFileModal = openNewFileModal;
+window.inSetu.vfs.syncVirtualBuffer = syncVirtualBuffer;
+window.inSetu.vfs.preCacheFiles = preCacheFiles;
 window.inSetu.vfs.fetchAndCopy = fetchAndCopy;
 window.inSetu.vfs.fetchAndDownloadState = fetchAndDownloadState;
 window.inSetu.vfs.downloadFile = downloadFile;
+window.inSetu.vfs.executeDownloadZip = executeDownloadZip;
 window.inSetu.vfs.shareFiles = shareFiles;
 window.inSetu.vfs.uploadFileToWorkspace = uploadFileToWorkspace;
 window.inSetu.vfs.viewSourceFile = viewSourceFile;
@@ -3256,317 +3267,6 @@ function executeLinkSearch(query) {
     const results = window.inSetu.utils.fuzzyFilterObjects(mdFiles, q).slice(0, 50).map(path => ({ path }));
     FsStore.getState().setModal('linkInsert', { searchResults: results });
 }
-export class InSetuNewFileProjection extends InSetuElement {
-    static get extensionName() { return 'fs'; }
-    static properties = { newFileState: { type: Object } };
-    static styles = [sharedStyles];
-    constructor() {
-        super();
-        this.newFileState = FsStore.getState().modals?.newFile || {};
-    }
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(
-            FsStore,
-            state => state.modals?.newFile || {},
-            (newFileState) => {
-                this.newFileState = newFileState;
-                this.requestUpdate();
-            }
-        );
-    }
-    render() {
-        const nf = this.newFileState || {};
-        const extWarning = getFileExtensionWarning(nf.fileName || '', nf.basePath || '');
-        const actions = window.ExtensionRegistry?.getLayoutSlots?.().filter(s => s.slot === 'modal:new-file:actions') || [];
-        return html`
-            <sutram-view ?flush=${true} ?noScroll=${true}>
-                <sutram-surface slot="header" variant="panel" border="bottom" padding="md" gap="sm">
-                    <sutram-stack direction="row" align="center" gap="xs">
-                        <sutram-icon name="folder" size="sm" intent="highlight"></sutram-icon>
-                        <sutram-label text="Directory:"></sutram-label>
-                        <code>/${nf.basePath || ''}</code>
-                    </sutram-stack>
-                    <sutram-input
-                        label="Filename"
-                        ?flush=${true}
-                        placeholder="Filename (e.g. my-prompt.md)..."
-                        .value=${nf.fileName || ''}
-                        @sutram-input-changed=${e => {
-                            FsStore.getState().setModal('newFile', { fileName: e.detail.value });
-                        }}>
-                    </sutram-input>
-                    ${extWarning ? html`
-                        <sutram-surface variant="tinted" intent="warning" padding="xs">
-                            <sutram-stack direction="row" align="center" gap="xs">
-                                <sutram-icon name="alert-triangle" size="sm" intent="warning"></sutram-icon>
-                                <span>${extWarning}</span>
-                            </sutram-stack>
-                        </sutram-surface>
-                    ` : ''}
-                    ${actions.map(act => html`<div style="display: contents;" data-ext="${act.extName}">${this.mountDynamicSlot(act.component)}</div>`)}
-                </sutram-surface>
-                <insetu-markdown-editor
-                    .value=${nf.content || ''}
-                    .language=${resolveEditorMode(nf.fileName || '').mode || 'markdown'}
-                    @content-changed=${e => FsStore.getState().setModal('newFile', { content: e.detail.value })}>
-                </insetu-markdown-editor>
-                <sutram-btn slot="footer" intent="neutral" icon="x" label="Cancel" @click=${() => {
-                    FsStore.getState().setModal('newFile', { open: false });
-                    if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('vfs:new-file');
-                }}></sutram-btn>
-                <sutram-async-btn slot="footer" intent="primary" icon="save" label="Create & Save File" .onClick=${saveNewFile}></sutram-async-btn>
-            </sutram-view>
-        `;
-    }
-}
-customElements.define('insetu-new-file-projection', InSetuNewFileProjection);
-
-export class InSetuNewFolderProjection extends InSetuElement {
-    static get extensionName() { return 'fs'; }
-    static properties = { newFolderState: { type: Object } };
-    static styles = [sharedStyles];
-    constructor() {
-        super();
-        this.newFolderState = FsStore.getState().modals?.newFolder || {};
-    }
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(
-            FsStore,
-            state => state.modals?.newFolder || {},
-            (newFolderState) => {
-                this.newFolderState = newFolderState;
-                this.requestUpdate();
-            }
-        );
-    }
-    render() {
-        const nf = this.newFolderState || {};
-        return html`
-            <sutram-view>
-                <sutram-stack direction="col" gap="md">
-                    <sutram-stack direction="row" align="center" gap="xs">
-                        <sutram-icon name="folder" size="sm" intent="highlight"></sutram-icon>
-                        <sutram-label text="Base Path:"></sutram-label>
-                        <code>/${nf.basePath || ''}</code>
-                    </sutram-stack>
-                    <sutram-input
-                        label="Directory Name"
-                        placeholder="Directory name..."
-                        .value=${nf.folderName || ''}
-                        @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { folderName: e.detail.value })}>
-                    </sutram-input>
-                    ${nf.basePath === '' ? html`
-                        <sutram-surface variant="panel" padding="md" gap="md">
-                            <h4>Repository Configuration</h4>
-                            <sutram-input label="Repository Title" placeholder="e.g., Core API" .value=${nf.repoTitle || ''} ?flush=${true} @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { repoTitle: e.detail.value })}></sutram-input>
-                            <sutram-input label="Domain Category" placeholder="e.g., Workspaces" .value=${nf.repoDomain || ''} ?flush=${true} @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { repoDomain: e.detail.value })}></sutram-input>
-                            <sutram-input label="Description" placeholder="Short summary..." .value=${nf.repoDesc || ''} ?flush=${true} @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { repoDesc: e.detail.value })}></sutram-input>
-                            <sutram-input label="Tracked Extensions" placeholder="e.g., .py, .json, .md" .value=${nf.repoExts || ''} ?flush=${true} @sutram-input-changed=${e => FsStore.getState().setModal('newFolder', { repoExts: e.detail.value })}></sutram-input>
-                        </sutram-surface>
-                    ` : ''}
-                </sutram-stack>
-                <sutram-btn slot="footer" intent="neutral" icon="x" label="Cancel" @click=${() => {
-                    FsStore.getState().setModal('newFolder', { open: false });
-                    if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('vfs:new-folder');
-                }}></sutram-btn>
-                <sutram-async-btn slot="footer" intent="primary" icon="${nf.basePath === '' ? 'package' : 'folder-plus'}" label="${nf.basePath === '' ? 'Initialize Repository' : 'Create Folder'}" .onClick=${saveNewFolder}></sutram-async-btn>
-            </sutram-view>
-        `;
-    }
-}
-customElements.define('insetu-new-folder-projection', InSetuNewFolderProjection);
-
-export class InSetuLinkInsertProjection extends InSetuElement {
-    static get extensionName() { return 'fs'; }
-    static properties = { linkState: { type: Object } };
-    static styles = [sharedStyles];
-    constructor() {
-        super();
-        this.linkState = FsStore.getState().modals?.linkInsert || {};
-    }
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(
-            FsStore,
-            state => state.modals?.linkInsert || {},
-            (linkState) => {
-                this.linkState = linkState;
-                this.requestUpdate();
-            }
-        );
-    }
-    render() {
-        const li = this.linkState || {};
-        return html`
-            <sutram-view>
-                <sutram-surface slot="header" variant="panel" border="bottom" padding="sm" gap="sm">
-                    <sutram-stack direction="row" gap="xs">
-                        <sutram-pill pillId="filename" labelText="Filename" ?active=${li.activeTab === 'filename'} @sutram-pill-toggled=${() => switchLinkTab('filename')}></sutram-pill>
-                        <sutram-pill pillId="deep" labelText="Deep Search" ?active=${li.activeTab === 'deep'} @sutram-pill-toggled=${() => switchLinkTab('deep')}></sutram-pill>
-                    </sutram-stack>
-                    <sutram-stack direction="row" align="center" gap="sm">
-                        <sutram-input
-                            placeholder="Search files..."
-                            ?flush=${true}
-                            ?grow=${true}
-                            .value=${li.searchQuery || ''}
-                            @sutram-input-changed=${e => onLinkSearchInput(e.detail.value)}>
-                        </sutram-input>
-                        ${li.activeTab === 'deep' ? html`
-                            <sutram-btn label="${li.deepSearchLoading ? 'Searching...' : 'Search'}" icon="search" @click=${() => executeDeepLinkSearch()} intent="highlight" ?disabled=${li.deepSearchLoading}></sutram-btn>
-                        ` : ''}
-                    </sutram-stack>
-                </sutram-surface>
-                <sutram-stack direction="col" gap="xs">
-                    ${li.deepSearchLoading ? html`<sutram-spinner text="Searching file contents across workspace..."></sutram-spinner>` : ''}
-                    ${(!li.deepSearchLoading && (!li.searchResults || li.searchResults.length === 0)) ? html`
-                        <sutram-empty-state text=${(!li.searchQuery) ? 'Type to search...' : 'No files found.'}></sutram-empty-state>
-                    ` : ''}
-                    ${(li.searchResults || []).map(item => {
-                        const name = new window.inSetu.utils.InSetuURI(item.path).basename;
-                        return html`
-                            <sutram-card
-                                .filename=${item.path}
-                                .titleText=${name}
-                                .detailText=${item.path}
-                                .detailSuffix=${item.score !== undefined ? `Score: ${item.score}` : ''}
-                                .descriptionText=${item.snippet ? '"...' + item.snippet.replace(/</g, '&lt;') + '"' : ''}
-                                icon="file-text"
-                                intent="primary"
-                                ?disableSelection=${true}
-                                @card-clicked=${() => {
-                                    insertLinkToEditor(item.path, name);
-                                    if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('vfs:link-insert');
-                                }}>
-                            </sutram-card>
-                        `;
-                    })}
-                </sutram-stack>
-            </sutram-view>
-        `;
-    }
-}
-customElements.define('insetu-link-insert-projection', InSetuLinkInsertProjection);
-export class InSetuBrowserProjection extends InSetuElement {
-    static get extensionName() { return 'fs'; }
-    static properties = {
-        browserModal: { type: Object },
-        browserConfig: { type: Object },
-        browserPath: { type: Array }
-    };
-    static styles = [sharedStyles];
-    constructor() {
-        super();
-        const bModal = FsStore.getState().modals?.browser || {};
-        this.browserModal = bModal;
-        this.browserConfig = AppStore.getState().browserConfig || {};
-        this.browserPath = bModal.currentPath || [];
-    }
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(
-            FsStore,
-            state => state.modals?.browser || {},
-            (browserModal) => {
-                this.browserModal = browserModal;
-                this.browserPath = browserModal.currentPath || [];
-                this.requestUpdate();
-            }
-        );
-        this.subscribe(
-            AppStore,
-            state => state.browserConfig || {},
-            (browserConfig) => {
-                this.browserConfig = browserConfig;
-                this.requestUpdate();
-            }
-        );
-    }
-    render() {
-        const b = this.browserModal || {};
-        const isParts = b.isParts || b.title?.startsWith('Parts:');
-        const manifest = b.manifest || [];
-
-        return html`
-            <sutram-view ?flush=${true} ?noScroll=${!isParts}>
-                ${isParts ? html`
-                    <sutram-stack direction="col" gap="none">
-                        ${manifest.length > 0 ? html`
-                            <sutram-surface variant="panel" border="bottom" padding="md">
-                                <sutram-stack direction="row" align="center" gap="sm">
-                                    <sutram-icon name="package" size="md" intent="highlight"></sutram-icon>
-                                    <strong>${manifest[0].includes('/') ? manifest[0].split('/').pop() : manifest[0]}</strong>
-                                </sutram-stack>
-                            </sutram-surface>
-                            ${manifest.map((f, idx) => {
-                                const fetchUrl = `${resolveFileFetchUrl(f, false)}&download=1`;
-                                const partMatch = f.match(/_part(\d+)/i);
-                                const displayTitle = partMatch ? `Part ${partMatch[1]}` : `Part ${idx + 1}`;
-                                return html`
-                                    <sutram-surface variant="inset" border="bottom" padding="md">
-                                        <sutram-stack direction="row" justify="between" align="center" gap="sm">
-                                            <sutram-stack direction="row" align="center" gap="sm">
-                                                <sutram-icon name="puzzle" size="md" intent="muted"></sutram-icon>
-                                                <strong>${displayTitle}</strong>
-                                            </sutram-stack>
-                                            <sutram-stack direction="row" gap="sm">
-                                                <sutram-async-btn label="View" icon="eye" intent="neutral" ?compact=${true} .onClick=${async () => { if (window.inSetu.vfs.viewAndCopy) window.inSetu.vfs.viewAndCopy(f); }}></sutram-async-btn>
-                                                <sutram-async-btn label="Download" icon="download" intent="primary" ?compact=${true} .onClick=${async () => { await window.inSetu.vfs.fetchAndDownloadState(f, fetchUrl); }}></sutram-async-btn>
-                                            </sutram-stack>
-                                        </sutram-stack>
-                                    </sutram-surface>
-                                `;
-                            })}
-                        ` : ''}
-                    </sutram-stack>
-                ` : html`
-                    <insetu-file-tree 
-                        basePath=""
-                        .files=${manifest}
-                        .currentPath=${this.browserPath || []}
-                        .hidePath=${false}
-                        .enableSearch=${this.browserConfig?.mode !== 'folder'}
-                        searchPlaceholder="Fuzzy find files..."
-                        .hideFiles=${this.browserConfig?.mode === 'folder'}
-                        @path-changed=${e => FsStore.getState().setModal('browser', { currentPath: e.detail.path || [] })}
-                        @card-clicked=${e => _handleBrowserCardClick(e.detail)}>
-                    </insetu-file-tree>
-                `}
-                ${isParts ? html`
-                    <sutram-surface slot="footer" variant="panel" border="top" padding="sm">
-                        <sutram-stack direction="row" gap="sm">
-                            <sutram-async-btn label="Download All" icon="download" intent="primary" ?grow=${true} .onClick=${async () => {
-                                for (const f of manifest) {
-                                    await window.inSetu.vfs.fetchAndDownloadState(f, `${resolveFileFetchUrl(f, false)}&download=1`);
-                                    await new Promise(r => setTimeout(r, 300));
-                                }
-                            }}></sutram-async-btn>
-                            ${!!navigator.share && !!navigator.canShare ? html`
-                                <sutram-async-btn label="Share All" icon="share" intent="neutral" ?grow=${true} .onClick=${async () => {
-                                    if (manifest.length > 0) {
-                                        const firstFile = manifest[0];
-                                        const cleanFirst = new window.inSetu.utils.InSetuURI(firstFile).basename || firstFile;
-                                        await shareFiles(cleanFirst, manifest, false);
-                                    }
-                                }}></sutram-async-btn>
-                            ` : ''}
-                        </sutram-stack>
-                    </sutram-surface>
-                ` : (this.browserConfig?.mode === 'folder' ? html`
-                    <sutram-surface slot="footer" variant="panel" border="top" padding="sm">
-                        <sutram-stack direction="row" gap="sm">
-                            <sutram-btn intent="neutral" icon="x" label="Cancel" ?grow=${true} @click=${closeBrowseModal}></sutram-btn>
-                            <sutram-async-btn label="Select This Folder" icon="check-circle-2" intent="success" ?grow=${true} .onClick=${confirmFolderSelection}></sutram-async-btn>
-                        </sutram-stack>
-                    </sutram-surface>
-                ` : '')}
-            </sutram-view>
-        `;
-    }
-}
-customElements.define('insetu-browser-projection', InSetuBrowserProjection);
 export class InSetuFileDiffProjection extends InSetuElement {
     static get extensionName() { return 'fs'; }
     static properties = {

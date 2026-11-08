@@ -160,10 +160,27 @@ _REGISTERED_EXTENSION_INSTANCES: List["InSetuExtension"] = []
 
 def reset_kernel_state(*args, **kwargs) -> None:
     """
-    Resets akasa's state for a test harness and forgets which workspaces each extension mounted, so the next
-    `bp.get_context(wid)` mounts its declarative volumes under the new daemon cwd instead of the previous one.
+    Resets akasa's state for a test harness, closes any cached SQLite connections, and forgets which workspaces
+    each extension mounted, so the next `bp.get_context(wid)` mounts its declarative volumes under the new daemon cwd.
     Protected targets and the protected-write handler survive akasa's reset; tests that need the handler install it.
     """
+    import akasa.db as _akasa_db
+    for attr in dir(_akasa_db):
+        obj = getattr(_akasa_db, attr)
+        if hasattr(obj, "connections") and isinstance(obj.connections, dict):
+            for c in list(obj.connections.values()):
+                try:
+                    c.close()
+                except Exception:
+                    pass
+            obj.connections.clear()
+        elif isinstance(obj, dict) and "conn" in attr.lower():
+            for c in list(obj.values()):
+                try:
+                    c.close()
+                except Exception:
+                    pass
+            obj.clear()
     _akasa.reset_state(*args, **kwargs)
     for ext in _REGISTERED_EXTENSION_INSTANCES:
         ext._mounted_workspaces.clear()
@@ -343,7 +360,14 @@ class InSetuContext(_BaseExtensionContext):
             if status_code >= 400:
                 err_msg = body.get("error") if isinstance(body, dict) else str(body)
                 raise RuntimeError(err_msg or f"Capability '{capability_id}' failed with status {status_code}")
-            return body
+            res = body
+        if (
+            wait
+            and isinstance(res, dict)
+            and isinstance(res.get("artifact"), dict)
+            and set(res.keys()) <= {"message", "artifact", "status", "job_id", "next_kwargs"}
+        ):
+            return res["artifact"]
         return res
 
     @property
@@ -358,11 +382,9 @@ class InSetuContext(_BaseExtensionContext):
     @property
     def manifest(self) -> Dict[str, Any]:
         """Reads the centralized dual-root (vfs / ctx) manifest statelessly."""
-        if not hasattr(self, '_manifest_cache'):
-            ctx_manifest = self.emit_first('request_manifest', default={})
-            vfs_manifest = self.emit_first('request_vfs_manifest', default={})
-            self._manifest_cache = {"vfs": vfs_manifest, "ctx": ctx_manifest}
-        return self._manifest_cache
+        ctx_manifest = self.emit_first('request_manifest', default={})
+        vfs_manifest = self.emit_first('request_vfs_manifest', default={})
+        return {"vfs": vfs_manifest, "ctx": ctx_manifest}
 
     def get_manifest_files(self, target_key: Optional[str] = None) -> List[str]:
         """SSOT Helper to extract polymorphic lists of files or chunks from the manifest."""
@@ -371,8 +393,6 @@ class InSetuContext(_BaseExtensionContext):
     def save_manifest(self, manifest_data: Dict[str, Any], is_full_compile: bool = False) -> None:
         """Writes updates to the centralized context manifest."""
         self.emit('save_manifest', manifest_data=manifest_data, is_full_compile=is_full_compile)
-        if hasattr(self, '_manifest_cache'):
-            del self._manifest_cache
     def resolve_path(self, filepath: str, is_absolute_artifact: bool = False, must_exist: bool = False, allow_heal: bool = False) -> Optional[str]:
         if not filepath:
             return None
@@ -409,6 +429,10 @@ class InSetuContext(_BaseExtensionContext):
             c_text = self.vfs.read(c, is_absolute_artifact=is_sys)
             if c_text:
                 parts.append(c_text)
+        if not parts:
+            direct = self.vfs.read(uri)
+            if direct:
+                return direct
         return "\n\n".join(parts) if len(parts) > 1 else (parts[0] if parts else "")
 
     def has_missing_domain_artifacts(self, domain_type: str) -> bool:

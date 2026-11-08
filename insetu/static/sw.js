@@ -1,20 +1,33 @@
 self.HOST_ASSETS = [
     '/',
-    '/static/css/style.css',
-    '/static/js/app.js',
     '/manifest.json',
-    '/static/vendor/sutram/js/sutram-boot.js',
     '/static/vendor.json',
+    '/static/css/style.css',
+    '/static/vendor/yenvui/css/theme-tokens.css',
+    '/static/vendor/yenvui/css/yenvui-primitives.css',
+    '/static/vendor/lucide/icons.js',
+    '/static/vendor/sutram/js/sutram-boot.js',
+    '/static/vendor/sutram/js/index.js',
+    '/static/vendor/yenvui/js/index.js',
+    '/static/js/app.js',
+    '/static/extensions/system/system.js',
+    '/static/extensions/system/api.js',
+    '/static/extensions/system/store.js',
+    '/static/extensions/system/insetu_sdk.js',
+    '/static/extensions/system/insetu_element.js',
+    '/static/extensions/system/uri.js',
+    '/static/extensions/system/manifest_sync.js',
     '/static/icon-192.png',
     '/static/icon-512.png'
 ];
 self.HOST_BYPASS_PATTERNS = [
     '/api/',
+    '/auth/',
     '/submit',
     '/recovery',
     '/api/system/panic'
 ];
-// Force SW update cycle to purge stale HTTP cache state
-self.OS_CACHE_VERSION = 'v7';
+// Force SW update cycle to activate hardened App Shell vault
+self.OS_CACHE_VERSION = 'v8';
 
 importScripts('/static/vendor/sutram/js/sw-core.js');

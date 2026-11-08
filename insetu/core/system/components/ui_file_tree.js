@@ -50,7 +50,7 @@ export function buildUriFileTree(uris, rootScope = '') {
                 ? (i === 0 ? repoPromptsPrefix : `${repoPromptsPrefix}/${parts.slice(1, i + 1).join('/')}`)
                 : `${schemePrefix}${parts.slice(0, i + 1).join('/')}`;
             if (isLast) {
-                const isSource = !rawUri.startsWith('ctx://contexts/') && !rawUri.startsWith('ctx://diffs/') && !rawUri.startsWith('ctx://workflows/');
+                const isSource = !rawUri.startsWith('ctx://contexts/') && !rawUri.startsWith('ctx://diffs/');
                 cursor.children[part] = {
                     name: part,
                     type: 'file',

@@ -1,4 +1,3 @@
-import difflib
 import re
 import uuid
 import json
@@ -12,9 +11,23 @@ from insetu.core.system.security_io import approve_command
 from insetu.core.utils_core import compute_vfs_sha256, InSetuURI, get_sister_repos, get_workspace_physics
 # Import the extracted math & validation logic
 from insetu.core.languages import format_interleaved_file_diff
-from .parser import LEDGER_CHUNK_TYPES, parse_blocks
-from .bridge_fuzzy import apply_block_in_memory, apply_textedit_in_memory, apply_json_patch_in_memory
-from .bridge_vfs import execute_bridge_sync, _process_sync_transaction
+from .parser import (
+    LEDGER_CHUNK_TYPES,
+    parse_blocks,
+    serialize_block_chunk,
+    serialize_blocks_to_yomama as _serialize_blocks_to_yomama,
+)
+from .bridge_fuzzy import (
+    apply_block_in_memory,
+    apply_textedit_in_memory,
+    apply_json_patch_in_memory,
+)
+from .bridge_window import extract_windowed_buffer_context as _extract_windowed_buffer_context
+from .bridge_vfs import (
+    execute_bridge_sync,
+    process_sync_transaction,
+    validate_buffer_syntax as _validate_buffer_syntax,
+)
 from .bridge_ast import generate_commit_message_from_ledger
 from .bridge_test import run_repo_test_diagnostics
 # 1. Initialize the Single Source of Truth Blueprint
@@ -382,58 +395,6 @@ def bridge_commit_message(ctx):
     return generate_commit_message_from_ledger(ctx, repo=repo, transaction_id=tx_id, limit=limit)
 
 
-class BridgeMergeBlocksPayload(TypedDict, total=False):
-    original_text: str
-    healed_blocks: Union[str, List[str]]
-    failed_cell_ids: Optional[List[str]]
-
-
-@bridge_bp.route('merge_blocks', methods=['POST'], request_schema=BridgeMergeBlocksPayload, docstring="[sync] Merges healed Yomama patch blocks in-place at their canonical positions for iterative self-healing.")
-def bridge_merge_blocks(ctx):
-    data = ctx.payload or {}
-    original_text = str(data.get("original_text") or "")
-    raw_healed = data.get("healed_blocks") or ""
-    if isinstance(raw_healed, list):
-        healed_text = "\n\n".join(str(x) for x in raw_healed if x)
-    else:
-        healed_text = str(raw_healed)
-    failed_ids = set(data.get("failed_cell_ids") or [])
-
-    parsed_orig = parse_blocks(original_text)
-    parsed_healed = parse_blocks(healed_text)
-    healed_queues_by_file: Dict[str, List[Dict[str, Any]]] = {}
-    for raw_h_fp, h_blks in parsed_healed.items():
-        canon_h_fp = str(InSetuURI(raw_h_fp))
-        healed_queues_by_file.setdefault(canon_h_fp, []).extend(h_blks)
-
-    merged_by_file: Dict[str, List[Dict[str, Any]]] = {}
-    for raw_fp, blks in parsed_orig.items():
-        canon_fp = str(InSetuURI(raw_fp))
-        h_queue = healed_queues_by_file.get(canon_fp, [])
-        for b in blks:
-            if b.get("id") and b.get("id") in failed_ids:
-                if h_queue:
-                    rep_b = dict(h_queue.pop(0))
-                    if not rep_b.get("id"):
-                        rep_b["id"] = b["id"]
-                    if not rep_b.get("comment") and b.get("comment"):
-                        rep_b["comment"] = b["comment"]
-                    merged_by_file.setdefault(canon_fp, []).append(rep_b)
-                continue
-            merged_by_file.setdefault(canon_fp, []).append(b)
-
-    for canon_h_fp, rem_blks in healed_queues_by_file.items():
-        if rem_blks:
-            merged_by_file.setdefault(canon_h_fp, []).extend(rem_blks)
-
-    merged_text = _serialize_blocks_to_yomama(merged_by_file)
-    return {
-        "status": "success",
-        "text": merged_text,
-        "active_files": list(merged_by_file.keys()),
-    }
-
-
 class BridgeTurnDiffPayload(TypedDict, total=False):
     transaction_ids: Union[str, List[str]]
 
@@ -506,112 +467,6 @@ def bridge_turn_diff(ctx):
         "files": touched_files,
         "diff_text": "\n\n".join(diff_blocks),
     }
-def _serialize_blocks_to_yomama(file_to_blocks: Dict[str, List[Dict[str, Any]]]) -> str:
-    """Serializes a mapping of filepath -> block dicts back into canonical Yomama patch text."""
-    chunks: List[str] = []
-    for fp, blks in file_to_blocks.items():
-        if not blks:
-            continue
-        file_lines = [f"<<<<<<< FILE: {fp}"]
-        for b in blks:
-            if b.get("id"):
-                file_lines.append(f"<<<<<<< ID: {b['id']}")
-            if b.get("comment"):
-                file_lines.append(f"<<<<<<< COMMENT\n{b['comment']}")
-            b_type = b.get("type", "exact")
-            if b_type in ("relocate", "rename", "move_file", "archive_file", "delete_file"):
-                header_map = {
-                    "relocate": "<<<<<<< RELOCATE",
-                    "rename": "<<<<<<< RENAME",
-                    "move_file": "<<<<<<< MOVE_FILE",
-                    "archive_file": "<<<<<<< ARCHIVE_FILE",
-                    "delete_file": "<<<<<<< DELETE_FILE",
-                }
-                raw_dir = b.get("raw_directive", "")
-                if not raw_dir:
-                    if b_type == "move_file":
-                        raw_dir = f"FROM: {b.get('source_uri') or fp}\nTO: {b.get('target_uri') or ''}"
-                    elif b_type in ("archive_file", "delete_file"):
-                        raw_dir = f"FILE: {b.get('source_uri') or fp}"
-                file_lines.append(f"{header_map[b_type]}\n{raw_dir}\n>>>>>>> EXECUTE")
-            elif b_type == "json_patch":
-                body_str = b.get("patch_body") or b.get("raw_directive") or b.get("replace", "")
-                file_lines.append(f"<<<<<<< JSON_PATCH\n{body_str}\n>>>>>>> REPLACE")
-            elif b_type == "textedit" and b.get("raw_textedit"):
-                file_lines.append(f"<<<<<<< TEXTEDIT\n{b['raw_textedit']}\n>>>>>>> REPLACE")
-            else:
-                search_header = "<<<<<<< SEARCH REGEX" if b_type == "regex" else "<<<<<<< SEARCH"
-                file_lines.append(f"{search_header}\n{b.get('search', '')}\n=======\n{b.get('replace', '')}\n>>>>>>> REPLACE")
-        chunks.append("\n".join(file_lines))
-    return "\n\n".join(chunks)
-
-
-def _extract_windowed_buffer_context(
-    filepath: str,
-    buffer_text: str,
-    failed_blocks: List[Dict[str, Any]],
-    window_radius: int = 60,
-    full_file_threshold_lines: int = 400,
-    extra_focus_lines: Optional[List[int]] = None,
-) -> str:
-    """
-    Extracts high-signal windowed slices from `buffer_text` for the AI patch healer:
-    - Always includes the top module header (`Lines 1..40`) on large files so imports/globals are visible.
-    - Centers windows on the longest match, the top edge of SEARCH, the bottom edge of SEARCH (in case
-      intermediate code was deleted), and any explicit `extra_focus_lines` (ambiguous match lines or syntax error lines).
-    """
-    file_lines = buffer_text.splitlines()
-    total_lines = len(file_lines)
-    if total_lines <= full_file_threshold_lines:
-        return f"=== FILE STATE AFTER APPLYING VALID PATCHES: {filepath} (Lines 1-{total_lines}) ===\n{buffer_text}"
-
-    # Always include top-of-file imports/header (Lines 1..40)
-    spans: List[Tuple[int, int]] = [(0, min(total_lines, 40))]
-
-    for focus_ln in (extra_focus_lines or []):
-        if isinstance(focus_ln, int) and focus_ln > 0:
-            idx0 = max(0, min(total_lines - 1, focus_ln - 1))
-            spans.append((max(0, idx0 - 25), min(total_lines, idx0 + 25)))
-
-    for fb in failed_blocks:
-        s_lines = (fb.get("search") or "").splitlines()
-        non_empty = [l for l in s_lines if l.strip()]
-        if not non_empty:
-            spans.append((0, min(total_lines, window_radius * 2)))
-            continue
-
-        for probe in (s_lines, non_empty[:3], non_empty[-3:]):
-            if not probe:
-                continue
-            matcher = difflib.SequenceMatcher(None, file_lines, probe)
-            match = matcher.find_longest_match(0, total_lines, 0, len(probe))
-            if match.size > 0:
-                approx_start = max(0, match.a - match.b)
-                w_start = max(0, approx_start - window_radius)
-                w_end = min(total_lines, approx_start + len(s_lines) + window_radius)
-                spans.append((w_start, w_end))
-
-        sym = fb.get("symbol") or fb.get("target_symbol")
-        if sym:
-            for idx_line, fl in enumerate(file_lines):
-                if sym in fl:
-                    spans.append((max(0, idx_line - 25), min(total_lines, idx_line + 45)))
-
-    spans.sort(key=lambda x: x[0])
-    merged_spans: List[Tuple[int, int]] = []
-    for s_start, s_end in spans:
-        if merged_spans and s_start <= merged_spans[-1][1] + 10:
-            merged_spans[-1] = (merged_spans[-1][0], max(merged_spans[-1][1], s_end))
-        else:
-            merged_spans.append((s_start, s_end))
-
-    window_strs = [f"=== FILE STATE AFTER APPLYING VALID PATCHES: {filepath} (Windowed Excerpts of {total_lines} lines) ==="]
-    for w_start, w_end in merged_spans:
-        excerpt = "\n".join(file_lines[w_start:w_end])
-        window_strs.append(f"--- Lines {w_start + 1}..{w_end} of {filepath} ---\n{excerpt}")
-    return "\n\n".join(window_strs)
-
-
 # 3. Background Workers
 @bridge_bp.worker("sync_task")
 def _background_bridge_sync(
@@ -659,19 +514,21 @@ def _background_bridge_sync(
 
     try:
         with ctx.vfs as vfs:
-            sync_data, post_valid_buffers, deferred_failures = _process_sync_transaction(
+            sync_data, post_valid_buffers, deferred_failures = process_sync_transaction(
                 vfs, ctx.workspace_id, sync_payload, sister_repos, ws_root, return_buffers=True, ctx=ctx
             )
 
         effective_max_passes = max(1, int(max_heal_passes or 2)) if auto_heal else 0
         heal_attempt = 0
+        attempted_cell_ids = set()
+        healed_cells_map: Dict[str, Any] = {}
 
         while heal_attempt < effective_max_passes and not sync_data.get("can_commit") and deferred_failures:
-            scoped_failures = (
-                [df for df in deferred_failures if df["block"].get("id") == target_cell_id]
-                if target_cell_id
-                else list(deferred_failures)
-            )
+            scoped_failures = [
+                df for df in deferred_failures
+                if (not target_cell_id or df["block"].get("id") == target_cell_id)
+                and df["block"].get("id") not in attempted_cell_ids
+            ]
             if not scoped_failures:
                 break
 
@@ -686,15 +543,16 @@ def _background_bridge_sync(
                 canon_fp = str(InSetuURI(raw_fp))
                 all_blocks_by_file.setdefault(canon_fp, []).extend(blks)
 
-            # Group failures by file and select the FIRST failed patch n per file so it is healed
-            # strictly against its n-1 buffer state (pre_buffer) and substituted in-place at index n.
+            # Select the first unattempted failed patch n per file so it is healed against its exact n-1 buffer state
             first_failure_by_file: Dict[str, Dict[str, Any]] = {}
             for df in scoped_failures:
                 fp_canon = str(InSetuURI(df["filepath"]))
                 if fp_canon not in first_failure_by_file:
                     first_failure_by_file[fp_canon] = df
+                    if df["block"].get("id"):
+                        attempted_cell_ids.add(df["block"]["id"])
 
-            def _heal_single_file(item: Tuple[str, Dict[str, Any]]) -> Tuple[str, Optional[Dict[str, Any]], Optional[str]]:
+            def _heal_single_file(item: Tuple[str, Dict[str, Any]]) -> Tuple[str, Optional[List[Tuple[str, Dict[str, Any]]]], Optional[str]]:
                 fp_key, df_entry = item
                 f_blk = df_entry["block"]
                 n_minus_1_text = df_entry.get("pre_buffer")
@@ -779,17 +637,48 @@ def _background_bridge_sync(
                     )
                     h_text = h_res.get("text", "") if isinstance(h_res, dict) else str(h_res)
                     h_parsed = parse_blocks(h_text)
-                    repaired_list: List[Dict[str, Any]] = []
-                    for _, r_blks in h_parsed.items():
-                        repaired_list.extend(r_blks)
-                    if not repaired_list:
+                    repaired_pairs: List[Tuple[str, Dict[str, Any]]] = []
+                    for r_fp, r_blks in h_parsed.items():
+                        canon_r_fp = str(InSetuURI(r_fp)) if r_fp else fp_key
+                        for rb in r_blks:
+                            repaired_pairs.append((canon_r_fp, dict(rb)))
+                    if not repaired_pairs:
                         return fp_key, None, "LLM healer returned no valid Yomama blocks."
-                    rep_b = dict(repaired_list[0])
-                    if not rep_b.get("id") and f_blk.get("id"):
-                        rep_b["id"] = f_blk["id"]
-                    if not rep_b.get("comment") and f_blk.get("comment"):
-                        rep_b["comment"] = f_blk["comment"]
-                    return fp_key, rep_b, None
+
+                    base_cell_id = f_blk.get("id")
+                    verified_pairs: List[Tuple[str, Dict[str, Any]]] = []
+                    running_buffers: Dict[str, str] = {fp_key: n_minus_1_text}
+
+                    for idx_r, (target_r_fp, rep_b) in enumerate(repaired_pairs):
+                        if base_cell_id:
+                            rep_b["id"] = base_cell_id if len(repaired_pairs) == 1 else f"{base_cell_id}__part_{idx_r + 1}"
+                        if not rep_b.get("comment") and f_blk.get("comment"):
+                            rep_b["comment"] = f_blk["comment"]
+
+                        buf_for_target = running_buffers.get(target_r_fp)
+                        if buf_for_target is None:
+                            buf_for_target = (post_valid_buffers or {}).get(target_r_fp) or ctx.vfs.read(target_r_fp) or ""
+
+                        # Immediate In-Memory Verification Gate against B_{k-1}:
+                        # Reject any LLM repair that still fails to anchor, is a no-op, or introduces a syntax error!
+                        rep_type = rep_b.get("type", "exact")
+                        if rep_type in ("exact", "regex", "textedit", "json_patch"):
+                            if rep_type == "json_patch":
+                                ok_cand, cand_buf, cand_stat = apply_json_patch_in_memory(target_r_fp, buf_for_target, dict(rep_b), silent=True)
+                            elif rep_type == "textedit":
+                                ok_cand, cand_buf, cand_stat = apply_textedit_in_memory(buf_for_target, dict(rep_b), silent=True)
+                            else:
+                                ok_cand, cand_buf, cand_stat = apply_block_in_memory(buf_for_target, dict(rep_b), silent=True)
+                            if not ok_cand or cand_stat == "no_op":
+                                return fp_key, None, f"Healer candidate failed verification on {target_r_fp} ({cand_stat})."
+                            if p_status == "syntax_error":
+                                has_syn, syn_msg = _validate_buffer_syntax(ctx, target_r_fp, cand_buf)
+                                if has_syn:
+                                    return fp_key, None, f"Healer candidate still has syntax error ({syn_msg})."
+                            running_buffers[target_r_fp] = cand_buf
+                        verified_pairs.append((target_r_fp, rep_b))
+
+                    return fp_key, verified_pairs, None
                 except Exception as exc:
                     return fp_key, None, str(exc)
 
@@ -808,34 +697,69 @@ def _background_bridge_sync(
             merged_by_file: Dict[str, List[Dict[str, Any]]] = {
                 fp: [dict(b) for b in blks] for fp, blks in all_blocks_by_file.items()
             }
-            for fp_key, repaired_blk, err_str in healed_results:
-                if err_str or repaired_blk is None:
+            for fp_key, verified_pairs, err_str in healed_results:
+                if err_str or not verified_pairs:
                     if err_str:
                         heal_errors.append(err_str)
                     continue
-                any_repaired = True
                 df_entry = first_failure_by_file[fp_key]
                 orig_blk = df_entry["block"]
                 orig_idx = df_entry.get("block_index")
-                file_blks = merged_by_file.get(fp_key, [])
+                cell_id = orig_blk.get("id")
+                orig_serialized = serialize_block_chunk(orig_blk, filepath=fp_key, include_file_header=False, include_id=False)
+                primary_r_fp, primary_rep_blk = verified_pairs[0]
+                base_order = orig_blk.get("order")
+                if base_order is not None:
+                    for idx_vp, (_, vp_blk) in enumerate(verified_pairs):
+                        vp_blk["order"] = base_order + (idx_vp * 0.001)
+
+                raw_fp_key = str(InSetuURI(df_entry.get("raw_target_file") or fp_key))
+                if raw_fp_key != fp_key and raw_fp_key in merged_by_file:
+                    moved_blks = merged_by_file.pop(raw_fp_key)
+                    merged_by_file.setdefault(fp_key, []).extend(moved_blks)
+                file_blks = merged_by_file.setdefault(fp_key, [])
+
                 replaced_in_place = False
-                if orig_blk.get("id"):
-                    for i_b, cand_b in enumerate(file_blks):
-                        if cand_b.get("id") == orig_blk.get("id"):
-                            file_blks[i_b] = repaired_blk
-                            replaced_in_place = True
+                if cell_id:
+                    for target_list in ([file_blks] + [blks for k, blks in merged_by_file.items() if k != fp_key]):
+                        for i_b, cand_b in enumerate(target_list):
+                            if cand_b.get("id") == cell_id:
+                                new_serialized = serialize_block_chunk(primary_rep_blk, filepath=primary_r_fp, include_file_header=False, include_id=False)
+                                if orig_serialized != new_serialized or len(verified_pairs) > 1 or primary_r_fp != fp_key:
+                                    any_repaired = True
+                                same_file_reps = [rb for r_fp, rb in verified_pairs if r_fp == fp_key]
+                                target_list[i_b : i_b + 1] = same_file_reps
+                                for extra_fp, extra_rb in verified_pairs:
+                                    if extra_fp != fp_key:
+                                        merged_by_file.setdefault(extra_fp, []).append(extra_rb)
+                                replaced_in_place = True
+                                break
+                        if replaced_in_place:
                             break
                 if not replaced_in_place and isinstance(orig_idx, int) and 0 <= orig_idx < len(file_blks):
-                    file_blks[orig_idx] = repaired_blk
+                    new_serialized = serialize_block_chunk(primary_rep_blk, filepath=primary_r_fp, include_file_header=False, include_id=False)
+                    if orig_serialized != new_serialized or len(verified_pairs) > 1 or primary_r_fp != fp_key:
+                        any_repaired = True
+                    same_file_reps = [rb for r_fp, rb in verified_pairs if r_fp == fp_key]
+                    file_blks[orig_idx : orig_idx + 1] = same_file_reps
+                    for extra_fp, extra_rb in verified_pairs:
+                        if extra_fp != fp_key:
+                            merged_by_file.setdefault(extra_fp, []).append(extra_rb)
                     replaced_in_place = True
-                if not replaced_in_place:
-                    for i_b, cand_b in enumerate(file_blks):
-                        if cand_b.get("search") == orig_blk.get("search") and cand_b.get("replace") == orig_blk.get("replace"):
-                            file_blks[i_b] = repaired_blk
-                            break
+                if replaced_in_place and cell_id:
+                    serialized_cells = [
+                        {
+                            "id": rb.get("id") or cell_id,
+                            "file": r_fp,
+                            "content": serialize_block_chunk(rb, filepath=r_fp, include_file_header=False, include_id=False),
+                        }
+                        for r_fp, rb in verified_pairs
+                    ]
+                    healed_cells_map[cell_id] = serialized_cells[0] if len(serialized_cells) == 1 else serialized_cells
 
-            if heal_errors and not any_repaired:
-                sync_data["heal_error"] = "; ".join(heal_errors)
+            if not any_repaired:
+                if heal_errors:
+                    sync_data["heal_error"] = "; ".join(heal_errors)
                 break
 
             current_text = _serialize_blocks_to_yomama(merged_by_file)
@@ -843,11 +767,13 @@ def _background_bridge_sync(
             sync_payload["active_files"] = list(merged_by_file.keys())
 
             with ctx.vfs as vfs:
-                sync_data, post_valid_buffers, deferred_failures = _process_sync_transaction(
+                sync_data, post_valid_buffers, deferred_failures = process_sync_transaction(
                     vfs, ctx.workspace_id, sync_payload, sister_repos, ws_root, return_buffers=True, ctx=ctx
                 )
             sync_data["healed_attempts"] = heal_attempt
             sync_data["healed_payload"] = current_text
+            if healed_cells_map:
+                sync_data["healed_cells"] = dict(healed_cells_map)
             if target_cell_id:
                 break
 

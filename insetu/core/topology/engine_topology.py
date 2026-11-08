@@ -919,18 +919,23 @@ def resolve_topology_buffer(workspace_id):
     return final_events
 @topology_bp.on('mutate_workspace_config')
 def mount_topology_volumes_dynamically(cfg, workspace_id=None, **kwargs):
-    """Dynamically remounts VFS volumes whenever the configuration changes."""
-    _, ws_root = get_workspace_physics(workspace_id)
-    mount_volume(workspace_id, 'vfs', '', ws_root)
+    """Dynamically remounts VFS volumes and projects repo-scoped offline_capable settings whenever configuration changes."""
+    wid = workspace_id or "default"
+    _, ws_root = get_workspace_physics(wid)
+    mount_volume(wid, 'vfs', '', ws_root)
+    offline_settings = SettingsManager('offline', wid)
     for repo_cfg in _target_repo_configs(cfg):
         repo_dir = repo_cfg.get("repo_dir")
         if repo_dir:
+            saved_offline = offline_settings.get("offline_capable", repo=repo_dir)
+            if saved_offline is not None:
+                repo_cfg["offline_capable"] = bool(saved_offline)
             p_path = repo_cfg.get("physical_path")
             if p_path:
                 repo_path = Path(p_path).expanduser().resolve().as_posix()
             else:
                 repo_path = Path(ws_root).joinpath(repo_dir).resolve().as_posix()
-            mount_volume(workspace_id, 'vfs', repo_dir, repo_path)
+            mount_volume(wid, 'vfs', repo_dir, repo_path)
 @topology_bp.on('workspace_boot', priority=1)
 def init_topology_on_boot(workspace_id=None, **kwargs):
     """Topology owns the boot sequence. Maps the drive immediately."""

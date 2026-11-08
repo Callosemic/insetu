@@ -215,33 +215,6 @@ export class InSetuExtConfig extends InSetuElement {
         this._notifyModeChange();
         this.requestUpdate();
     }
-    async _preCacheRepo(repoDir) {
-        const files = [];
-        const vfsManifest = window.inSetu.stores.App.getState().manifest?.vfs || {};
-        Object.entries(vfsManifest).forEach(([key, bucket]) => {
-            if (key.startsWith(repoDir + '::')) {
-                files.push(...(bucket.files || []));
-            }
-        });
-        if (files.length === 0) {
-            alert(`No indexed files found for '${repoDir}'. Save & remap first if this is a newly added repository.`);
-            return;
-        }
-        window.inSetu?.offlineLog?.(`Starting pre-cache for repository '${repoDir}' (${files.length} files)...`, 'info');
-        let cachedCount = 0;
-        for (const f of files) {
-            const res = await this.api.get(`fs/fetch?file=${encodeURIComponent(f)}`).catch(() => null);
-            if (res && res.ok) {
-                await res.blob().catch(() => {});
-                cachedCount++;
-            }
-        }
-        window.inSetu?.offlineLog?.(`Pre-cache complete for '${repoDir}': ${cachedCount}/${files.length} cached.`, 'success');
-        if (this.ui?.setGlobalStatus) {
-            this.ui.setGlobalStatus(`Cached ${cachedCount}/${files.length} files for ${repoDir}`, 3000);
-        }
-    }
-
     connectedCallback() {
         super.connectedCallback();
         if (this.embedded) {
@@ -764,13 +737,12 @@ export class InSetuExtConfig extends InSetuElement {
                         </sutram-stack>
 
                         ${this._renderFieldCard(
-                            'Pipeline, Sieve & Offline Capabilities',
-                            'Control ignore rule evaluation, extension-specific exclusions, and IndexedDB offline caching for this repository.',
+                            'Pipeline & Sieve Capabilities',
+                            'Control ignore rule evaluation and extension-specific exclusions for this repository.',
                             html`
-                                <sutram-stack direction="row" justify="between" align="center" gap="lg" ?wrap=${true}>
-                                    <sutram-stack direction="row" align="center" gap="lg" ?wrap=${true}>
+                                <sutram-stack direction="row" justify="between" align="center" gap="normal" ?wrap=${true}>
+                                    <sutram-stack direction="row" align="center" gap="normal" ?wrap=${true}>
                                         <sutram-toggle label="Apply Ignore Rules" .checked=${repo.apply_ignore !== false} @sutram-input-changed=${(e) => { repo.apply_ignore = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-toggle>
-                                        <sutram-toggle label="Offline Capable (IndexedDB Sync)" .checked=${!!repo.offline_capable} @sutram-input-changed=${(e) => { repo.offline_capable = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-toggle>
                                         ${(() => {
                                             const opts = typeof window.ExtensionRegistry?.getRepoConfigOptions === 'function'
                                                 ? window.ExtensionRegistry.getRepoConfigOptions()
@@ -783,16 +755,6 @@ export class InSetuExtConfig extends InSetuElement {
                                                 .map(opt => opt.component({ repo, updateCallback: () => this.requestUpdate() }));
                                         })()}
                                     </sutram-stack>
-                                    ${repo.repo_dir ? html`
-                                        <sutram-async-btn
-                                            ?compact=${true}
-                                            intent="highlight"
-                                            icon="hard-drive"
-                                            label="Pre-Cache Repo Now"
-                                            ?disabled=${!repo.offline_capable}
-                                            .onClick=${() => this._preCacheRepo(repo.repo_dir)}>
-                                        </sutram-async-btn>
-                                    ` : ''}
                                 </sutram-stack>
                             `,
                             'repo'

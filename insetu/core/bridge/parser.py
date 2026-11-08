@@ -236,9 +236,10 @@ def parse_blocks(text: str) -> Dict[str, List[Dict[str, Any]]]:
         diag_msg = f"Line {line_no}: {reason}"
         print(f"  [!] Yomama Parser Diagnostic ({dest_file}): {diag_msg}")
         excerpt_str = "\n".join(raw_excerpt[:20])
+        order_idx = _next_order()
         files.setdefault(dest_file, []).append({
-            "id": current_id,
-            "order": _next_order(),
+            "id": current_id or f"cell_{order_idx}",
+            "order": order_idx,
             "type": "exact",
             "malformed": True,
             "error": diag_msg,
@@ -270,9 +271,10 @@ def parse_blocks(text: str) -> Dict[str, List[Dict[str, Any]]]:
         split_at = _select_optimal_separator_index(body_lines, sep_indices)
         s_lines = body_lines[:split_at]
         r_lines = body_lines[split_at + 1:]
+        order_idx = _next_order()
         files.setdefault(current_file, []).append({
-            "id": current_id,
-            "order": _next_order(),
+            "id": current_id or f"cell_{order_idx}",
+            "order": order_idx,
             "type": current_type,
             "line_start": state_start_line,
             "line_end": close_line_no,
@@ -296,9 +298,10 @@ def parse_blocks(text: str) -> Dict[str, List[Dict[str, Any]]]:
                 dst_file = str(InSetuURI.from_external_input(raw_dst)) if raw_dst else ""
                 sym_name = kv.get("SYMBOL") or ""
                 if src_file:
+                    order_idx = _next_order()
                     files.setdefault(src_file, []).append({
-                        "id": current_id,
-                        "order": _next_order(),
+                        "id": current_id or f"cell_{order_idx}",
+                        "order": order_idx,
                         "type": "relocate",
                         "line_start": state_start_line,
                         "line_end": close_line_no,
@@ -314,9 +317,10 @@ def parse_blocks(text: str) -> Dict[str, List[Dict[str, Any]]]:
                 scope_val = kv.get("SCOPE") or current_file or "vfs://"
                 target_sym = kv.get("TARGET") or ""
                 replace_sym = kv.get("REPLACE_WITH") or ""
+                order_idx = _next_order()
                 files.setdefault(scope_val, []).append({
-                    "id": current_id,
-                    "order": _next_order(),
+                    "id": current_id or f"cell_{order_idx}",
+                    "order": order_idx,
                     "type": "rename",
                     "line_start": state_start_line,
                     "line_end": close_line_no,
@@ -334,9 +338,10 @@ def parse_blocks(text: str) -> Dict[str, List[Dict[str, Any]]]:
                 src_file = str(InSetuURI.from_external_input(raw_src)) if raw_src else ""
                 dst_file = str(InSetuURI.from_external_input(raw_dst)) if raw_dst else ""
                 if src_file:
+                    order_idx = _next_order()
                     files.setdefault(src_file, []).append({
-                        "id": current_id,
-                        "order": _next_order(),
+                        "id": current_id or f"cell_{order_idx}",
+                        "order": order_idx,
                         "type": "move_file",
                         "line_start": state_start_line,
                         "line_end": close_line_no,
@@ -351,9 +356,10 @@ def parse_blocks(text: str) -> Dict[str, List[Dict[str, Any]]]:
                 raw_target = kv.get("FILE") or kv.get("FROM") or current_file or ""
                 target_uri = str(InSetuURI.from_external_input(raw_target)) if raw_target else ""
                 if target_uri:
+                    order_idx = _next_order()
                     files.setdefault(target_uri, []).append({
-                        "id": current_id,
-                        "order": _next_order(),
+                        "id": current_id or f"cell_{order_idx}",
+                        "order": order_idx,
                         "type": "archive_file",
                         "line_start": state_start_line,
                         "line_end": close_line_no,
@@ -367,9 +373,10 @@ def parse_blocks(text: str) -> Dict[str, List[Dict[str, Any]]]:
                 raw_target = kv.get("FILE") or kv.get("FROM") or current_file or ""
                 target_uri = str(InSetuURI.from_external_input(raw_target)) if raw_target else ""
                 if target_uri:
+                    order_idx = _next_order()
                     files.setdefault(target_uri, []).append({
-                        "id": current_id,
-                        "order": _next_order(),
+                        "id": current_id or f"cell_{order_idx}",
+                        "order": order_idx,
                         "type": "delete_file",
                         "line_start": state_start_line,
                         "line_end": close_line_no,
@@ -381,9 +388,10 @@ def parse_blocks(text: str) -> Dict[str, List[Dict[str, Any]]]:
                     })
         elif state == "JSON_PATCH" and current_file:
             raw_json_body = "\n".join(ast_lines).strip()
+            order_idx = _next_order()
             files.setdefault(current_file, []).append({
-                "id": current_id,
-                "order": _next_order(),
+                "id": current_id or f"cell_{order_idx}",
+                "order": order_idx,
                 "type": "json_patch",
                 "line_start": state_start_line,
                 "line_end": close_line_no,
@@ -396,9 +404,10 @@ def parse_blocks(text: str) -> Dict[str, List[Dict[str, Any]]]:
         elif state == "TEXTEDIT" and current_file:
             raw_te = "\n".join(ast_lines)
             s_proj, r_proj = _project_textedit_search_replace(raw_te)
+            order_idx = _next_order()
             files.setdefault(current_file, []).append({
-                "id": current_id,
-                "order": _next_order(),
+                "id": current_id or f"cell_{order_idx}",
+                "order": order_idx,
                 "type": "textedit",
                 "line_start": state_start_line,
                 "line_end": close_line_no,
@@ -529,3 +538,69 @@ def flatten_parsed_blocks(parsed_structure: Dict[str, List[Dict[str, Any]]]) -> 
             seq += 1
     flat.sort(key=lambda item: item[0])
     return [(raw_file, b_idx, blk) for _, raw_file, b_idx, blk in flat]
+
+
+def serialize_block_chunk(
+    block: Dict[str, Any],
+    filepath: str = "",
+    include_file_header: bool = False,
+    include_id: bool = False,
+) -> str:
+    """
+    Single Source of Truth serializer for a single Yomama block dict.
+    When `include_file_header=False` and `include_id=False`, emits the exact body stored in `BridgeStore.cells[].content`.
+    """
+    lines: List[str] = []
+    if include_file_header and filepath:
+        lines.append(f"<<<<<<< FILE: {filepath}")
+    if include_id and block.get("id"):
+        lines.append(f"<<<<<<< ID: {block['id']}")
+    if block.get("comment"):
+        lines.append(f"<<<<<<< COMMENT\n{block['comment']}")
+    b_type = block.get("type", "exact")
+    if b_type in ("relocate", "rename", "move_file", "archive_file", "delete_file"):
+        header_map = {
+            "relocate": "<<<<<<< RELOCATE",
+            "rename": "<<<<<<< RENAME",
+            "move_file": "<<<<<<< MOVE_FILE",
+            "archive_file": "<<<<<<< ARCHIVE_FILE",
+            "delete_file": "<<<<<<< DELETE_FILE",
+        }
+        raw_dir = block.get("raw_directive", "")
+        if not raw_dir:
+            if b_type == "move_file":
+                raw_dir = f"FROM: {block.get('source_uri') or filepath}\nTO: {block.get('target_uri') or ''}"
+            elif b_type in ("archive_file", "delete_file"):
+                raw_dir = f"FILE: {block.get('source_uri') or filepath}"
+        lines.append(f"{header_map[b_type]}\n{raw_dir}\n>>>>>>> EXECUTE")
+    elif b_type == "json_patch":
+        body_str = block.get("patch_body") or block.get("raw_directive") or block.get("replace", "")
+        lines.append(f"<<<<<<< JSON_PATCH\n{body_str}\n>>>>>>> REPLACE")
+    elif b_type == "textedit" and block.get("raw_textedit"):
+        lines.append(f"<<<<<<< TEXTEDIT\n{block['raw_textedit']}\n>>>>>>> REPLACE")
+    else:
+        search_header = "<<<<<<< SEARCH REGEX" if b_type == "regex" else "<<<<<<< SEARCH"
+        lines.append(f"{search_header}\n{block.get('search', '')}\n=======\n{block.get('replace', '')}\n>>>>>>> REPLACE")
+    return "\n".join(lines)
+
+
+def serialize_blocks_to_yomama(file_to_blocks: Dict[str, List[Dict[str, Any]]]) -> str:
+    """Serializes a mapping of filepath -> block dicts into canonical Yomama patch text, preserving canonical 0..n order across interleaved files."""
+    flat = flatten_parsed_blocks(file_to_blocks)
+    if not flat:
+        return ""
+    groups: List[str] = []
+    current_fp: Optional[str] = None
+    current_lines: List[str] = []
+    for raw_fp, _, blk in flat:
+        if raw_fp != current_fp:
+            if current_lines:
+                groups.append("\n".join(current_lines))
+            current_fp = raw_fp
+            current_lines = [f"<<<<<<< FILE: {raw_fp}"]
+        current_lines.append(
+            serialize_block_chunk(blk, filepath=raw_fp, include_file_header=False, include_id=bool(blk.get("id")))
+        )
+    if current_lines:
+        groups.append("\n".join(current_lines))
+    return "\n\n".join(groups)

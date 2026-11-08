@@ -145,7 +145,7 @@ def _build_mcp_resources_list(ctx) -> List[Dict[str, Any]]:
                 "mimeType": "text/markdown",
             })
 
-    # 2. Expose compiled ctx://contexts/*, ctx://diffs/*, and ctx://workflows/* from the manifest
+    # 2. Expose compiled ctx://contexts/* and ctx://diffs/* from the manifest
     ctx_manifest = ctx.manifest.get("ctx", {}) or {}
     for uri_key, entry in sorted(ctx_manifest.items()):
         if not isinstance(entry, dict) or uri_key in seen_uris:
@@ -342,10 +342,11 @@ def handle_mcp_jsonrpc(ctx, rpc_payload: Dict[str, Any]) -> Optional[Dict[str, A
                 return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32602, "message": "Missing 'uri' parameter."}}
             uri_obj = InSetuURI.from_external_input(raw_uri)
             uri_str = str(uri_obj)
-            if uri_obj.scheme == "ctx" and uri_obj.volume in ("contexts", "diffs", "workflows"):
-                text = ctx.read_compiled_context(uri_str)
-            else:
-                text = ctx.vfs.read(uri_str)
+            text = (
+                ctx.read_compiled_context(uri_str)
+                if uri_obj.scheme == "ctx" and uri_obj.volume in ("contexts", "diffs")
+                else ctx.vfs.read(uri_str)
+            )
             if text is None:
                 return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32002, "message": f"Resource not found: {uri_str}"}}
             mime = "text/markdown" if uri_str.endswith(".md") else "text/plain"

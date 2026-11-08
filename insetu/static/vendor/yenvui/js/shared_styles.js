@@ -22,7 +22,7 @@ import{css as e}from"lit";export const sharedStyles=e`
     }
     yenvui-icon { display: inline-block; vertical-align: middle; flex-shrink: 0; }
     yenvui-pill { display: inline-flex; }
-    yenvui-tag { display: inline-flex; align-items: center; }
+    yenvui-tag { display: inline-flex; align-items: center; max-width: 100%; min-width: 0; }
     yenvui-label { display: inline-block; margin-bottom: 4px; max-width: 100%; }
     yenvui-label[truncate] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -225,11 +225,14 @@ import{css as e}from"lit";export const sharedStyles=e`
         font-size: 0.72rem;
         font-family: var(--font-mono, monospace);
         font-weight: 700;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
+        display: inline-block;
+        vertical-align: middle;
+        max-width: var(--yv-tag-max-width, 28ch);
+        overflow: hidden;
+        text-overflow: ellipsis;
         line-height: 1.2;
         white-space: nowrap;
+        box-sizing: border-box;
     }
     .yv-tag--primary {
         --tag-bg: color-mix(in srgb, var(--intent-primary) 18%, var(--input-bg));

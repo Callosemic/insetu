@@ -74,9 +74,6 @@ export class InSetuURI {
         let withScheme = clean
             ? (clean.includes('://') ? clean : `${defaultScheme}://${clean.replace(/^\/+/, '')}`)
             : '';
-        if (withScheme.startsWith('ctx://contexts/workflow_') && (withScheme.endsWith('_context.txt') || /_context_part\d+\.txt$/.test(withScheme))) {
-            withScheme = withScheme.replace(/^ctx:\/\/contexts\//, 'ctx://workflows/');
-        }
 
         let str = withScheme;
         let scheme = defaultScheme;
@@ -101,7 +98,7 @@ export class InSetuURI {
         this.canonical = withScheme;
         this.isDir = hadTrailingSlash;
 
-        this.isCompiledArtifact = scheme === 'ctx' && ['contexts', 'diffs', 'workflows'].includes(volume);
+        this.isCompiledArtifact = scheme === 'ctx' && ['contexts', 'diffs'].includes(volume);
         this.isUserTemplate = withScheme.includes('/.templates/user/');
         this.isReadOnlyTemplate = !this.isUserTemplate && withScheme.includes('/.templates/');
         this.isTemplate = this.isUserTemplate || this.isReadOnlyTemplate;
@@ -115,11 +112,19 @@ export class InSetuURI {
         return this.filename || this.volume || '';
     }
 
+    get rootSegment() {
+        return this.repo || this.volume || '';
+    }
+
+    get logicalPath() {
+        const root = this.rootSegment;
+        return root
+            ? (this.relativePath ? `${root}/${this.relativePath}` : root)
+            : (this.relativePath || '');
+    }
+
     get pathSegments() {
-        const rel = this.repo
-            ? (this.relativePath ? `${this.repo}/${this.relativePath}` : this.repo)
-            : (this.volume ? (this.relativePath ? `${this.volume}/${this.relativePath}` : this.volume) : this.relativePath);
-        return String(rel || '').split('/').filter(Boolean);
+        return String(this.logicalPath || '').split('/').filter(Boolean);
     }
 
     get isRootVolume() {
@@ -157,6 +162,35 @@ export class InSetuURI {
         }
         return `${base}/${cleanSegs.join('/')}`;
     }
+
+    resolveRelative(targetPath) {
+        const cleanTarget = String(targetPath || '').replace(/\\/g, '/').trim();
+        if (!cleanTarget) return this.toString();
+        if (cleanTarget.includes('://')) {
+            return new InSetuURI(cleanTarget).toString();
+        }
+        const scheme = this.scheme || 'vfs';
+        const volume = this.volume || this.repo || '';
+        const baseRelParts = cleanTarget.startsWith('/')
+            ? []
+            : (this.relativePath ? this.relativePath.split('/').filter(Boolean) : []);
+        if (!cleanTarget.startsWith('/') && !this.isDir && baseRelParts.length > 0) {
+            baseRelParts.pop();
+        }
+        for (const seg of cleanTarget.replace(/^\/+/, '').split('/')) {
+            if (!seg || seg === '.') continue;
+            if (seg === '..') {
+                if (baseRelParts.length > 0) baseRelParts.pop();
+                continue;
+            }
+            baseRelParts.push(seg);
+        }
+        const relJoined = baseRelParts.join('/');
+        if (volume) {
+            return relJoined ? `${scheme}://${volume}/${relJoined}` : `${scheme}://${volume}`;
+        }
+        return relJoined ? `${scheme}://${relJoined}` : `${scheme}://`;
+    }
     static canonicalize(raw, defaultScheme = 'vfs') {
         if (!raw) return '';
         const rawStr = typeof raw === 'object' && raw !== null
@@ -177,9 +211,6 @@ export class InSetuURI {
         if (!clean) return `${defaultScheme}://`;
         if (clean.includes('diffs/') || clean.endsWith('_diffs.txt')) {
             return `ctx://diffs/${clean.replace(/^diffs\//, '')}`;
-        }
-        if (clean.includes('workflows/') || clean.endsWith('_workflow_context.txt') || (clean.startsWith('workflow_') && clean.endsWith('_context.txt'))) {
-            return `ctx://workflows/${clean.replace(/^workflows\//, '').replace(/^contexts\//, '')}`;
         }
         if (clean.includes('prompts/')) {
             return `ctx://prompts/${clean.replace(/^prompts\//, '')}`;

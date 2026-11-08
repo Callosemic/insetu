@@ -10,11 +10,11 @@ from typing import TypedDict, List, Dict, Any, Optional, Union, Literal, Tuple
 from insetu.core.sdk import InSetuExtension, slugify
 from insetu.core.utils_core import (
     InSetuURI,
-    generate_ascii_tree,
     get_available_contexts,
 )
 from insetu.core.bridge.bridge_test import run_repo_test_diagnostics
 from insetu.core.gather.context_assemble import discover_constitution_files, record_affinity_interaction
+from insetu.core.agent.routine_check import attach_routine_problems
 from .orchestrator import (
     execute_declarative_routine,
     list_available_routines,
@@ -110,29 +110,9 @@ agent_bp = InSetuExtension(
             "module_subdir": "routines",
             "legacy_dirs": ["routines", "data/agent/routines"],
         },
-        "workflows": {
-            "scheme": "ctx",
-            "tier": "cache",
-            "path_key": "workflows_dir",
-            "legacy_dirs": ["workflows", "cache/workflows"],
-        },
     },
 )
 __depends__ = ['topology', 'llm', 'gather', 'bridge']
-
-
-@agent_bp.on('mutate_workspace_config')
-def _inject_agent_workflow_metadata(cfg, workspace_id=None, **kwargs):
-    if "virtual_contexts" not in cfg:
-        cfg["virtual_contexts"] = []
-    vc = {
-        "title": "Routine & Workflow Batches",
-        "domain": "Routines",
-        "description": "Compiled routine and workflow batch context payloads.",
-        "out_file": "ctx://workflows/workflows_context.txt",
-    }
-    if not any(v.get("out_file") == vc["out_file"] for v in cfg["virtual_contexts"]):
-        cfg["virtual_contexts"].append(vc)
 
 
 @agent_bp.on('pre_file_save')
@@ -159,148 +139,6 @@ def _handle_routine_response_pre_save(workspace_id=None, filepath=None, content=
                 if old_content is not None:
                     ctx.vfs.save(dest_path, old_content)
                     ctx.vfs.delete(walk_path, data={"ignore_ledger": True})
-
-
-@agent_bp.on('heal_missing_domain_volume')
-def _heal_missing_agent_workflows_volume(ctx, volume=None, workspace_id=None, **kwargs):
-    if volume == "workflows":
-        _background_compile_routine_workflows(ctx, force_full=True)
-
-
-@agent_bp.on('register_compilation_steps')
-def _register_agent_workflow_compilation_step(workspace_id=None, **kwargs):
-    return [{
-        "id": "agent_workflows",
-        "anchor": "body",
-        "order": 40,
-        "depends_on": ["gather_base", "git_diffs"],
-        "ext_name": "agent",
-        "worker_name": "compile_routine_workflows_task",
-    }]
-
-
-@agent_bp.worker("compile_routine_workflows_task")
-def _background_compile_routine_workflows(
-    ctx,
-    force_full: Union[bool, Literal["compile_only"]] = False,
-    compile_only: bool = False,
-    target_repos: Optional[List[str]] = None,
-    ledger_events: Optional[List[Dict[str, Any]]] = None,
-    chain_state: Optional[Dict[str, Any]] = None,
-):
-    ctx.jobs.update_progress("Packing routine context batches...")
-    ctx.sync_vfs_barrier()
-    all_routines = [r for r in list_available_routines(ctx) if isinstance(r, dict) and r.get("includes")]
-    current_manifest = ctx.manifest.get("ctx", {})
-    manifest_deltas = {}
-
-    if not all_routines:
-        ctx.reconcile_domain(
-            domain_uri_prefix="ctx://workflows/workflow_",
-            manifest_deltas={},
-            domain_dir="ctx://workflows",
-            target_repos=target_repos,
-        )
-        return {"message": "No routine batches with static includes to pack."}
-    effective_chain_state = chain_state if chain_state is not None else (ctx.jobs.chain_state or {})
-    touched_buckets = effective_chain_state.get("touched_buckets")
-    touched_diffs = effective_chain_state.get("touched_diffs")
-    ledger_events = ledger_events or []
-    explicit_target_repos = set(target_repos or [])
-    mutated_vfs_files = {
-        str(InSetuURI(e.get("filepath", "") if isinstance(e, dict) else str(e)))
-        for e in ledger_events
-        if (e.get("filepath") if isinstance(e, dict) else e) and "://" in str(e.get("filepath") if isinstance(e, dict) else e)
-    }
-
-    def _pack_routine(routine):
-        rid = routine.get("id")
-        includes = routine.get("includes") or []
-        if not rid or not includes:
-            return None, None
-        base_uri = f"ctx://workflows/workflow_{rid}_context.txt"
-        expanded_chunks = ctx.expand_selection(includes)
-        batch_repos = set()
-        expanded_base_uris = set()
-        has_targeted_raw_files = False
-        for chunk_id in expanded_chunks:
-            expanded_base_uris.add(chunk_id)
-            chunk_uri = InSetuURI(chunk_id)
-            if chunk_uri.scheme == "ctx":
-                base_cand = re.sub(r'_part\d+\.txt$', '.txt', chunk_id)
-                expanded_base_uris.add(base_cand)
-                meta_item = (current_manifest.get(base_cand) or {}).get("meta", {})
-                item_repos = meta_item.get("repos") or ([meta_item.get("repo")] if meta_item.get("repo") else [])
-                batch_repos.update(r for r in item_repos if r)
-            elif chunk_uri.repo:
-                batch_repos.add(chunk_uri.repo)
-                if chunk_uri.scheme == "vfs" and (
-                    str(chunk_uri) in mutated_vfs_files
-                    or (explicit_target_repos and chunk_uri.repo in explicit_target_repos)
-                ):
-                    has_targeted_raw_files = True
-
-        existing_entry = current_manifest.get(base_uri)
-        chunks_exist_on_disk = ctx.is_context_on_disk(base_uri, existing_entry)
-        if not force_full and target_repos and not (batch_repos & set(target_repos)) and chunks_exist_on_disk:
-            return base_uri, existing_entry
-        if not force_full and touched_buckets is not None and touched_diffs is not None and chunks_exist_on_disk:
-            changed_deps = set(touched_buckets + touched_diffs)
-            if not has_targeted_raw_files and not (expanded_base_uris & changed_deps):
-                return base_uri, existing_entry
-
-        text_blocks = []
-        resolved_files = []
-        for chunk_id in expanded_chunks:
-            chunk_uri = InSetuURI(chunk_id)
-
-            content = ctx.vfs.read(str(chunk_uri))
-            if content is None and chunk_uri.scheme == "ctx":
-                phys = ctx.resolve_path(str(chunk_uri), must_exist=True, allow_heal=False)
-                if phys:
-                    content = ctx.vfs.read(phys, is_absolute_artifact=True)
-            if content is not None:
-                text_blocks.append(f"--- {chunk_id} ---\n{content}\n\n")
-                resolved_files.append(chunk_id)
-            elif chunk_uri.is_diff:
-                text_blocks.append(f"--- {chunk_id} (NO PENDING DIFFS) ---\n[Working tree clean.]\n\n")
-                resolved_files.append(chunk_id)
-
-        header_str = f"========== ROUTINE BATCH: {routine.get('title', rid)} ==========\n\n"
-        header_str += generate_ascii_tree(resolved_files) + "\n\n"
-        sorted_repos = sorted(batch_repos)
-        meta = {
-            "type": "routine",
-            "title": routine.get("title", rid),
-            "domain": routine.get("domain", "Routines"),
-            "desc": routine.get("description") or "Compiled routine context payload.",
-            "repo": sorted_repos[0] if len(sorted_repos) == 1 else "global",
-            "bucket_id": "workflows",
-            "repos": sorted_repos,
-        }
-        entry = ctx.compile_context(base_uri, header_str, text_blocks, resolved_files, meta)
-        return base_uri, entry
-
-    for filename, entry in ctx.jobs.map_parallel(_pack_routine, all_routines):
-        if filename and entry:
-            manifest_deltas[filename] = entry
-
-    ctx.reconcile_domain(
-        domain_uri_prefix="ctx://workflows/workflow_",
-        manifest_deltas=manifest_deltas,
-        domain_dir="ctx://workflows",
-        target_repos=target_repos,
-    )
-    return {
-        "message": "Routine workflows compiled successfully.",
-        "artifact": {
-            "step_id": "agent_workflows",
-            "files": list(manifest_deltas.keys()),
-            "cleared_buckets": ["global::workflows"],
-            "touched_buckets": ["global::workflows"],
-            "is_full_sweep": False,
-        },
-    }
 
 
 class ChatSessionPayload(TypedDict):
@@ -388,8 +226,8 @@ def _parse_slash_command(raw_prompt: str, explicit_mode: Optional[str] = None, r
         return fallback_mode if fallback_mode in ("code", "plan", "ask", "yomama", "auto") else "auto", text
 @agent_bp.route('routines', methods=['GET'], docstring="[sync] Lists all available declarative Markdown-as-Code (.md) and YAML (.yaml) routines with wavefront metadata and available contexts/prompts.")
 def get_routines(ctx):
-    routines = list_available_routines(ctx)
-    expected_contexts = get_available_contexts(ctx.workspace_id, exclusion_flags=["exclude_from_context"], exclude_types=["diff", "routine"])
+    routines = attach_routine_problems(ctx, list_available_routines(ctx))
+    expected_contexts = get_available_contexts(ctx.workspace_id, exclusion_flags=["exclude_from_context"], exclude_types=["diff"])
     available_diffs = []
     available_prompts = []
     try:
@@ -476,16 +314,12 @@ def api_save_routine(ctx):
             ctx.vfs.delete(old_uri)
 
     ctx.vfs.save(target_uri, md_content)
-    job_id = None
-    if parsed.get("includes"):
-        job_id = ctx.jobs.submit("compile_routine_workflows_task", coalesce=True, job_category="ui_blocking")
-
     return {
         "status": "success",
         "filepath": target_uri,
         "routine": {**parsed, "filepath": target_uri, "source": "user_template" if "user/" in target_uri else "workspace"},
         "routines": list_available_routines(ctx),
-        "job_id": job_id,
+        "job_id": None,
     }
 
 
@@ -517,12 +351,11 @@ def api_delete_routine(ctx):
             ctx.vfs.delete(cand)
             deleted.append(cand)
 
-    job_id = ctx.jobs.submit("compile_routine_workflows_task", coalesce=True, job_category="system_background")
     return {
         "status": "success",
         "deleted": deleted,
         "routines": list_available_routines(ctx),
-        "job_id": job_id,
+        "job_id": None,
     }
 
 

@@ -29,7 +29,7 @@ import{css as a}from"lit";import{sharedStyles as r,Btn as e}from"sutram-chassis"
     sutram-stack, sutram-surface { display: flex; box-sizing: border-box; }
     sutram-action-bar { display: flex; align-items: center; width: 100%; box-sizing: border-box; }
     sutram-pill { display: inline-flex; }
-    sutram-tag { display: inline-flex; align-items: center; }
+    sutram-tag { display: inline-flex; align-items: center; max-width: 100%; min-width: 0; }
     sutram-label { display: inline-block; margin-bottom: 4px; max-width: 100%; }
     sutram-label[truncate] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     sutram-input, sutram-select, sutram-textarea, sutram-toggle, sutram-combobox, sutram-target-binding, sutram-composer {

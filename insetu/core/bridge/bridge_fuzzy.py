@@ -12,6 +12,7 @@ from insetu.core.utils_core import (
     update_frontmatter,
 )
 from .parser import get_base_step_and_diffs as _get_base_step_and_diffs
+from .bridge_window import has_distinctive_anchor_line, locate_closest_window
 # ==============================================================================
 # CHATBOT & LLM TRANSPORT ARTIFACT HEALERS
 # ==============================================================================
@@ -27,8 +28,7 @@ def heal_chevron_meltdown(text):
     return text
 
 
-# Backward-compatible alias
-clean_chevron_meltdown = heal_chevron_meltdown
+
 
 
 _MATH_SPAN_RE = re.compile(r'(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)')
@@ -372,14 +372,9 @@ def apply_block_in_memory(content, block, silent=False):
             except Exception:
                 pass
         if not silent:
-            # Heuristic Error Analysis: Find the closest matching window via optimized SequenceMatcher
-            matcher = difflib.SequenceMatcher(None, file_lines, search_lines)
-            match = matcher.find_longest_match(0, len(file_lines), 0, len(search_lines))
-
-            # Align the comparison window by offsetting the match starting points
-            start_idx = max(0, match.a - match.b)
-            end_idx = min(len(file_lines), start_idx + len(search_lines))
-            actual_lines = file_lines[start_idx:end_idx]
+            # Heuristic Error Analysis: Find the closest matching window via locate_closest_window
+            win_info = locate_closest_window(file_lines, search_lines, replace_lines)
+            actual_lines = win_info["actual_lines"]
             # Use ndiff to show exact character-level discrepancies (indicated by ? and ^)
             diff = list(difflib.ndiff(search_lines, actual_lines))
             diff_str = "\n".join(diff)

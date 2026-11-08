@@ -668,7 +668,12 @@ export class InSetuSystemSettings extends InSetuElement {
     }
     _setLayoutCapacity(cap) {
         if (window.Sutram?.stores?.Layout) {
-            window.Sutram.stores.Layout.getState().setCapacity(cap);
+            const layout = window.Sutram.stores.Layout.getState();
+            if (typeof layout.setUserCapacity === 'function') {
+                layout.setUserCapacity(cap);
+            } else {
+                layout.setCapacity(cap);
+            }
         }
         this.menuOpen = false;
     }

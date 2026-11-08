@@ -28,10 +28,12 @@ from .bridge_fuzzy import (
     apply_block_in_memory,
     apply_textedit_in_memory,
     apply_json_patch_in_memory,
-    clean_chevron_meltdown,
     expand_macros,
+    heal_chevron_meltdown,
+    has_distinctive_anchor_line,
     heal_llm_block_artifacts,
     is_effectively_identical,
+    locate_closest_window,
     normalize_patch_payload,
     rebase_overlapping_block_in_memory,
 )
@@ -311,13 +313,34 @@ try:
 except ImportError:
     _ts_javascript = None
 
+_TS_PARSER_LOCAL = threading.local()
+
+
+def _get_cached_ts_parser(ext: str):
+    """Returns a thread-local cached Tree-sitter Parser for .py or .js/.ts files."""
+    if not _TSLanguage or not _TSParser:
+        return None
+    cache = getattr(_TS_PARSER_LOCAL, "parsers", None)
+    if cache is None:
+        cache = {}
+        _TS_PARSER_LOCAL.parsers = cache
+    lang_key = "py" if ext == ".py" else ("js" if ext in (".js", ".mjs", ".cjs", ".ts", ".tsx") else "")
+    if not lang_key:
+        return None
+    if lang_key not in cache:
+        lang_mod = _ts_python if lang_key == "py" else _ts_javascript
+        if not lang_mod:
+            return None
+        cache[lang_key] = _TSParser(_TSLanguage(lang_mod.language()))
+    return cache[lang_key]
+
 
 def _check_python_module_forward_refs(tree: ast.Module) -> Optional[str]:
     """Delegates module-level import-time forward reference checking to PythonLanguageProvider."""
     return PythonLanguageProvider.check_module_forward_refs(tree)
 
 
-def _validate_buffer_syntax(ctx, resolved_path: str, new_content: str) -> Tuple[bool, str]:
+def validate_buffer_syntax(ctx, resolved_path: str, new_content: str) -> Tuple[bool, str]:
     """
     Validates full-buffer syntax for .json, .py, and .js/.ts/.mjs files using
     Tree-sitter (with ast.parse / node --input-type=module -c verification).
@@ -331,14 +354,8 @@ def _validate_buffer_syntax(ctx, resolved_path: str, new_content: str) -> Tuple[
         if not _TSLanguage or not _TSParser:
             raise ImportError("Tree-sitter core bindings unavailable.")
 
-        lang_mod = None
-        if ext == '.py':
-            lang_mod = _ts_python
-        elif ext in ('.js', '.mjs', '.cjs', '.ts', '.tsx'):
-            lang_mod = _ts_javascript
-
-        if lang_mod:
-            parser = _TSParser(_TSLanguage(lang_mod.language()))
+        parser = _get_cached_ts_parser(ext)
+        if parser is not None:
             tree = parser.parse(bytes(new_content, "utf8"))
             if tree.root_node.has_error:
                 if ext == '.py':
@@ -387,11 +404,11 @@ def _validate_buffer_syntax(ctx, resolved_path: str, new_content: str) -> Tuple[
         return True, str(e)
 
 
-def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, return_buffers=False, ctx=None):
+def process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, return_buffers=False, ctx=None):
     if ctx is None:
         from insetu.core.bridge.engine_bridge import bridge_bp as _bridge_bp
         ctx = _bridge_bp.get_context(workspace_id)
-    raw_text = clean_chevron_meltdown(data.get("text", ""))
+    raw_text = heal_chevron_meltdown(data.get("text", ""))
     active_files = data.get("active_files", [])
     dry_run = data.get("dry_run", False)
     pinned_repos_raw = data.get("pinned_repos", ["ALL"])
@@ -457,7 +474,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                 continue
 
             final_buf = tl.current or ""
-            has_syn_err, syn_err_str = _validate_buffer_syntax(ctx, res_fp, final_buf)
+            has_syn_err, syn_err_str = validate_buffer_syntax(ctx, res_fp, final_buf)
             if not has_syn_err:
                 continue
 
@@ -480,7 +497,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                     if not ok_c:
                         cand_buf = rec["post_buffer"]
 
-                chunk_err, chunk_err_str = _validate_buffer_syntax(ctx, res_fp, cand_buf)
+                chunk_err, chunk_err_str = validate_buffer_syntax(ctx, res_fp, cand_buf)
                 if chunk_err and idx_rec < len(applied_records) - 1:
                     if batch_has_cross_file_ops:
                         lookahead_buf = applied_records[-1]["post_buffer"]
@@ -492,7 +509,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                             ok_rem, next_buf, _ = rem_fn(lookahead_buf, rem_b, silent=True)
                             if ok_rem:
                                 lookahead_buf = next_buf
-                    healed_later_err, _ = _validate_buffer_syntax(ctx, res_fp, lookahead_buf)
+                    healed_later_err, _ = validate_buffer_syntax(ctx, res_fp, lookahead_buf)
                     if not healed_later_err:
                         chunk_err = False
 
@@ -543,9 +560,10 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                     if tr["patch_tel"].get("status") == "resolved"
                 ]
 
+    flat_all_blocks = flatten_parsed_blocks(parsed_structure)
     active_uris = {str(InSetuURI.from_external_input(af)) for af in active_files} | set(active_files)
     if active_files:
-        for _, _, blk in flatten_parsed_blocks(parsed_structure):
+        for _, _, blk in flat_all_blocks:
             s_u = str(InSetuURI.from_external_input(blk["source_uri"])) if blk.get("source_uri") else ""
             t_u = str(InSetuURI.from_external_input(blk["target_uri"])) if blk.get("target_uri") else ""
             if s_u in active_uris and t_u:
@@ -555,10 +573,10 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
 
     batch_has_cross_file_ops = any(
         blk.get("type") in ("relocate", "rename", "move_file", "archive_file", "delete_file")
-        for _, _, blk in flatten_parsed_blocks(parsed_structure)
+        for _, _, blk in flat_all_blocks
     )
     execution_groups: List[Tuple[str, List[Dict[str, Any]]]] = (
-        [(raw_fp, [blk]) for raw_fp, _, blk in flatten_parsed_blocks(parsed_structure)]
+        [(raw_fp, [blk]) for raw_fp, _, blk in flat_all_blocks]
         if batch_has_cross_file_ops
         else list(parsed_structure.items())
     )
@@ -629,10 +647,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
         # --- Tier 1 Content-Addressed File Bundle Cache Lookup (FileEvalSig) ---
         # A file group is eligible for isolated FileEvalSig caching if it contains no cross-file directives
         # and no global cross-file directives (RELOCATE, RENAME, MOVE_FILE) exist in the batch that could mutate it out-of-band.
-        batch_has_cross_file_ops = any(
-            blk.get("type") in ("relocate", "rename", "move_file", "archive_file", "delete_file")
-            for _, _, blk in flatten_parsed_blocks(parsed_structure)
-        )
         has_cross_file_directives = batch_has_cross_file_ops or any(
             b.get("type") in ("relocate", "rename", "move_file", "archive_file", "delete_file")
             for b in blocks
@@ -1159,7 +1173,10 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
 
                 for cand in candidates:
                     cand_content = tree.read(cand)
-                    if cand_content is None:
+                    if cand_content is None or (
+                        not has_distinctive_anchor_line(cand_content, search_str)
+                        and not has_distinctive_anchor_line(cand_content, replace_str)
+                    ):
                         continue
                     ok_search, _, s_status = apply_block_in_memory(cand_content, dict(b), silent=True)
                     if ok_search:
@@ -1331,28 +1348,22 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
                     })
                 else:
                     search_lines = search_str.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
+                    replace_lines = replace_str.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
                     file_lines = content.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
-                    matcher = difflib.SequenceMatcher(None, file_lines, search_lines)
-                    match = matcher.find_longest_match(0, len(file_lines), 0, len(search_lines))
-                    start_idx = max(0, match.a - match.b)
-                    end_idx = min(len(file_lines), start_idx + len(search_lines))
-                    actual_lines = file_lines[start_idx:end_idx]
+                    win_info = locate_closest_window(
+                        file_lines,
+                        search_lines,
+                        replace_lines=replace_lines,
+                        symbol_hint=b.get("symbol") or b.get("target_symbol"),
+                    )
+                    actual_lines = win_info["actual_lines"]
                     diff = list(difflib.ndiff(search_lines, actual_lines))
                     err_b64 = base64.b64encode(("\n".join(diff)).encode('utf-8')).decode('utf-8')
 
                     # Only allow deterministic 'Snap Anchor to Disk' (heal_anchor) when the closest candidate
                     # window shares genuine structural similarity (>= 0.65) and at least one non-trivial line match,
                     # preventing single-brace coincidences from snapping onto unrelated code blocks.
-                    norm_s_text = "\n".join(l.strip() for l in search_lines if l.strip())
-                    norm_a_text = "\n".join(l.strip() for l in actual_lines if l.strip())
-                    has_meaningful_line = any(
-                        len(l.strip()) > 3 for l in search_lines[match.b : match.b + match.size]
-                    )
-                    sim_ratio = (
-                        difflib.SequenceMatcher(None, norm_s_text, norm_a_text).ratio()
-                        if (norm_s_text and norm_a_text and has_meaningful_line)
-                        else 0.0
-                    )
+                    sim_ratio = win_info["similarity_ratio"]
                     can_snap_anchor = sim_ratio >= 0.65 and bool(actual_lines)
                     anchor_b64 = (
                         base64.b64encode(("\n".join(actual_lines)).encode('utf-8')).decode('utf-8')
@@ -1565,6 +1576,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, re
     if return_buffers:
         return telemetry, tree.to_buffer_dict(), deferred_failures
     return telemetry
+
+
 def execute_bridge_sync(workspace_id, data, ctx=None):
     if ctx is None:
         from insetu.core.bridge.engine_bridge import bridge_bp as _bridge_bp
@@ -1574,7 +1587,7 @@ def execute_bridge_sync(workspace_id, data, ctx=None):
 
     try:
         with ctx.vfs as vfs:
-            telemetry = _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, ctx=ctx)
+            telemetry = process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, ctx=ctx)
             return json.dumps(telemetry)
     except Exception as e:
         return json.dumps({
@@ -1586,3 +1599,5 @@ def execute_bridge_sync(workspace_id, data, ctx=None):
             "summary": {"total_patches": 0, "resolved": 0, "auto_skipped": 0, "action_required": 0, "failed": 1},
             "patches": []
         })
+
+

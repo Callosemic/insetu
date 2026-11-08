@@ -245,7 +245,15 @@ function isPromptPath(filepath) {
     if (!filepath) return false;
     const raw = typeof filepath === 'object' ? (filepath.src || filepath.filepath || filepath.oldPath || '') : filepath;
     const str = String(raw).replace(/\\/g, '/');
-    return str.includes('prompts') || str.includes('.templates');
+    if (str.startsWith('ctx://diffs/') || str.startsWith('ctx://contexts/') || str.endsWith('_diffs.txt') || str.endsWith('_context.txt')) {
+        return false;
+    }
+    return (
+        str.startsWith('ctx://prompts/') ||
+        str.includes('/.insetu-data/prompts/') ||
+        str.includes('/.templates/') ||
+        (str.startsWith('ws://') && str.includes('/prompts/'))
+    );
 }
 
 window.addEventListener('insetu:can-preview-file', (e) => {

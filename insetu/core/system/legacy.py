@@ -16,7 +16,7 @@ from insetu.core.utils_core import (
     save_json_config,
 )
 
-LEGACY_MIGRATION_VERSION = 3
+LEGACY_MIGRATION_VERSION = 4
 def move_tree_contents(src_dir: Path, dst_dir: Path):
     """Recursively merges files from src_dir into dst_dir and removes empty source directories."""
     if not src_dir.exists() or not src_dir.is_dir():
@@ -127,6 +127,15 @@ def migrate_physical_sandboxes(**kwargs):
             store_mgr = StoreManager(ws_id, ext_name=ext_name)
             for fname in filenames:
                 store_mgr._resolve_store_path(fname)
+        # 4b. Delete retired ctx://workflows cache directories (.insetu/workflows, .insetu/cache/workflows, .insetu/cache/agent)
+        for retired_wf_dir in (
+            base_dir.joinpath("workflows"),
+            base_dir.joinpath("cache", "workflows"),
+            base_dir.joinpath("cache", "agent"),
+        ):
+            if retired_wf_dir.exists() and retired_wf_dir.is_dir():
+                shutil.rmtree(retired_wf_dir.as_posix(), ignore_errors=True)
+
         # 5. Sanitize legacy tracker paths and dead out_file references in config.json
         try:
             cfg_path, _ = get_workspace_physics(ws_id)

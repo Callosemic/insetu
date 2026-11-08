@@ -123,7 +123,6 @@ export const AppStore = createExtensionStore('App', {
     clearResolvingLock: (path) => AppStore.setState(s => { const newLocks = { ...s.resolvingLocks }; delete newLocks[path]; return { resolvingLocks: newLocks }; }),
     allRepos: [],
     targetConfigs: [],
-    virtualContexts: [],
     categoryOrder: [],
     hiddenOutputs: [],
     pinnedRepos: new Set(["ALL"]),

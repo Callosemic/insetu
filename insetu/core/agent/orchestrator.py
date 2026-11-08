@@ -23,8 +23,8 @@ from insetu.core.utils_core import (
     update_frontmatter,
     get_sister_repos,
 )
-from insetu.core.bridge.parser import parse_blocks
-from insetu.core.prompts.engine_prompts import resolve_prompt_text
+from insetu.core.bridge.parser import parse_blocks, serialize_block_chunk
+from insetu.core.prompts.engine_prompts import require_prompt_text, resolve_prompt_text
 from insetu.core.topology.engine_topology import (
     build_sys_landmarks_context,
     clamp_uris_to_topology,
@@ -67,7 +67,7 @@ ROUTINE_BANNED_CAPABILITIES = frozenset({
     "system.RebootServer",
     "system.UpdateHostTopology",
     "hooks.save",
-    "hooks.toggle",  # S8: enabling a rule approves its command.
+    "hooks.toggle", "hooks.approve",  # S8: enabling or approving a rule approves its command.
     "hooks.execute",
     "cronic.schedule",
     "cronic.run_now",
@@ -1031,7 +1031,7 @@ def _execute_declarative_routine_body(
         if raw_p:
             return resolve_prompt_text(ctx, target_uri=base_fp, raw_content=raw_p, interpolate_vars=False) or ""
         if p_uri:
-            return resolve_prompt_text(ctx, target_uri=p_uri, interpolate_vars=False) or ""
+            return require_prompt_text(resolve_prompt_text(ctx, target_uri=p_uri, interpolate_vars=False), p_uri, routine.get("id"))
         return ""
 
     def _prepare_llm_prompt_and_system(
@@ -1062,8 +1062,17 @@ def _execute_declarative_routine_body(
         if include_context:
             ctx_text = (local_ctx.get("fetch_context") or {}).get("content") or str(extra_inputs.get("context_block") or "")
             if not ctx_text and routine_includes:
-                wf_uri = f"ctx://workflows/workflow_{routine.get('id', routine_id)}_context.txt"
-                ctx_text = ctx.read_compiled_context(wf_uri) or ctx.vfs.read(wf_uri) or ""
+                inc_blocks = [
+                    f"--- {u} ---\n{b}" if b else f"--- {u} (NO PENDING DIFFS) ---\n[Working tree clean.]"
+                    for u in ctx.expand_selection(routine_includes)
+                    for u_obj in (InSetuURI(u),)
+                    for b in ((ctx.read_compiled_context(str(u_obj)) if u_obj.scheme == "ctx" and u_obj.volume in ("contexts", "diffs") else ctx.vfs.read(str(u_obj))),)
+                    if b or u_obj.is_diff
+                ]
+                ctx_text = "\n\n".join(inc_blocks)
+                if ctx_text:
+                    with context_lock:
+                        chain_context.setdefault("fetch_context", {"status": "completed", "base_filename": None, "content": ctx_text, "total_tokens_estimated": len(ctx_text) // 4})
             if ctx_text:
                 clean_ctx_text = re.sub(r'</?workspace_context_[0-9a-fA-F]+>\n?', '', ctx_text).replace(context_nonce, "").strip()
                 if f"<workspace_context_{context_nonce}>" not in node_system and "fetch_context.content" not in raw_prompt:
@@ -1356,10 +1365,8 @@ def _execute_declarative_routine_body(
                         if p.get("status") not in ("resolved", "auto_skipped"):
                             orig_fp = p.get("original_file") or p.get("resolved_file") or ""
                             file_blks = parsed_blocks.get(orig_fp) or []
-                            raw_blk_str = ""
-                            if file_blks:
-                                b0 = file_blks[0]
-                                raw_blk_str = f"<<<<<<< FILE: {orig_fp}\n<<<<<<< SEARCH\n{b0.get('search', '')}\n=======\n{b0.get('replace', '')}\n>>>>>>> REPLACE"
+                            matched_blk = next((fb for fb in file_blks if p.get("cell_id") and fb.get("id") == p.get("cell_id")), file_blks[0] if file_blks else None)
+                            raw_blk_str = serialize_block_chunk(matched_blk, filepath=orig_fp, include_file_header=True) if matched_blk else ""
                             failed_cells_list.append({
                                 "cell_id": p.get("cell_id"),
                                 "resolved_file": p.get("resolved_file") or orig_fp,
@@ -1643,25 +1650,23 @@ def _execute_declarative_routine_body(
                 if schema_dir and schema_dir not in clean_prompt_only:
                     directive_block = f"\n\n{schema_dir}"
 
-            wf_batch_uri = (
-                (chain_context.get("fetch_context") or {}).get("base_filename")
-                or (f"ctx://workflows/workflow_{routine.get('id', routine_id)}_context.txt" if routine_includes else None)
-            )
+            wf_batch_uri = (chain_context.get("fetch_context") or {}).get("base_filename")
+            if not wf_batch_uri and routine_includes:
+                try:
+                    packed_inc = ctx.call("gather.pack_selection", items=[{"filepath": f} for f in routine_includes], gather_only=False, wait=True)
+                    if isinstance(packed_inc, dict) and packed_inc.get("base_filename"):
+                        wf_batch_uri = packed_inc["base_filename"]
+                        chain_context.setdefault("fetch_context", {"status": "completed", "base_filename": wf_batch_uri, "content": ctx.read_compiled_context(wf_batch_uri)})
+                except Exception:
+                    pass
             if not wf_batch_uri and (editable_list or readonly_list or all_context_files):
                 try:
-                    assembled_handoff = assemble_context_payload(
-                        ctx,
-                        edit_targets=editable_list or all_context_files,
-                        reference_files=readonly_list,
-                        user_message=user_prompt,
-                        strategy=rag_strategy_val,
-                        session_id=session_id,
-                    )
+                    assembled_handoff = assemble_context_payload(ctx, edit_targets=editable_list or all_context_files, reference_files=readonly_list, user_message=user_prompt, strategy=rag_strategy_val, session_id=session_id)
                     if isinstance(assembled_handoff, dict) and assembled_handoff.get("context_uri"):
                         wf_batch_uri = assembled_handoff["context_uri"]
                 except Exception:
                     pass
-            has_wf_uri = bool(wf_batch_uri and (not is_manual_transport or ctx.vfs.read(wf_batch_uri) is not None))
+            has_wf_uri = bool(wf_batch_uri and (not is_manual_transport or ctx.is_context_on_disk(wf_batch_uri) or ctx.vfs.read(wf_batch_uri) is not None))
             context_uris = [wf_batch_uri] if has_wf_uri else list(all_context_files)
             prompt_text = f"{clean_prompt_only}{directive_block}".strip() if directive_block else clean_prompt_only
             compiled_prompt = prompt_text or usr_p
