@@ -9,7 +9,7 @@ INGEST_SETTINGS_SCHEMA = [
     {
         "id": "allowed_private_hosts",
         "label": "Allowed Private Hosts",
-        "type": "comma_list",
+        "type": "string_list",
         "scope": "workspace",
         "default": [],
         "description": "Hosts on your own machine or network that ingest may fetch (for example 'localhost:8000' or 'docs.lan'). Every other loopback, private, link-local and tailnet address is refused."
@@ -71,7 +71,7 @@ def extract_markdown_from_url(ctx, target_url, method="bs4"):
             from bs4 import BeautifulSoup as _BeautifulSoup
             import markdownify as _markdownify
         except ImportError:
-            raise Exception("Missing optional dependencies for local parsing. Please install them via: pip install beautifulsoup4 markdownify")
+            raise RuntimeError("Missing optional dependencies for local parsing. Please install them via: pip install beautifulsoup4 markdownify")
         page = fetch_url(
             target_url,
             headers={'User-Agent': 'Mozilla/5.0'},

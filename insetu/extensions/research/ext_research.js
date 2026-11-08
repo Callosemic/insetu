@@ -4,6 +4,23 @@ import { createExtensionStore, InSetuElement, bindStoreInput, sharedStyles } fro
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
 
+const getJobPresentation = (job, formatDateFn) => {
+    const meta = job?.meta || {};
+    const intentMap = {
+        running: 'primary',
+        gathering: 'highlight',
+        completed: 'primary',
+        reviewed: 'success',
+        failed: 'danger'
+    };
+    const statusIntent = intentMap[job?.status] || 'neutral';
+    const safeDate = formatDateFn ? formatDateFn(job?.created_at) : (job?.created_at || '');
+    const cardStatusExtra = job?.status === 'gathering'
+        ? `(Page ${Math.floor((meta.start_index || 0) / 10) + 1} - ${job.total_links} found)`
+        : `(${job?.processed_links || 0}/${job?.total_links || 0} scraped)`;
+    return { meta, statusIntent, safeDate, cardStatusExtra };
+};
+
 // --- UDF STATE STORE ---
 export const ResearchStore = createExtensionStore('Research', {
     jobs: [],
@@ -12,10 +29,52 @@ export const ResearchStore = createExtensionStore('Research', {
     selectedItemId: null,
     targetDir: 'vfs://research/',
     aiTriageMode: false,
+    aiJsonInput: '',
+    triagePromptTemplate: '',
     isTabActive: false,
     newJobModalOpen: false,
     searchForm: { query: '', provider: 'serper', parser: 'bs4', dateRange: '', dateStart: '', dateEnd: '', yearStart: '', yearEnd: '', maxResults: '50', maxCustom: '' },
     setSearchForm: (field, val) => ResearchStore.setState(state => ({ searchForm: { ...state.searchForm, [field]: val } })),
+    cloneJobToModal: (job) => {
+        if (!job) return;
+        const meta = job.meta || (() => { try { return JSON.parse(job.meta_json || '{}'); } catch (_) { return {}; } })();
+        const rawRange = meta.date_range || '';
+        let dateRange = rawRange;
+        let dateStart = '';
+        let dateEnd = '';
+        if (rawRange.includes('..')) {
+            const [s, e] = rawRange.split('..');
+            dateRange = 'custom';
+            dateStart = s || '';
+            dateEnd = e || '';
+        }
+        const presetMax = ['10', '25', '50', '100', '9999'];
+        const maxStr = String(meta.max_results || 50);
+        const isPreset = presetMax.includes(maxStr);
+        ResearchStore.setState({
+            targetDir: meta.target_dir || ResearchStore.getState().targetDir || 'vfs://research/',
+            searchForm: {
+                query: job.query || '',
+                provider: job.provider || 'serper',
+                parser: meta.parser || 'bs4',
+                dateRange,
+                dateStart,
+                dateEnd,
+                yearStart: '',
+                yearEnd: '',
+                maxResults: isPreset ? maxStr : 'custom',
+                maxCustom: isPreset ? '' : maxStr
+            },
+            newJobModalOpen: true
+        });
+    },
+    loadTriagePrompt: async () => {
+        if (ResearchStore.getState().triagePromptTemplate) return;
+        try {
+            const txt = await window.inSetu.api.fetchImmutableText('ctx://prompts/.templates/research/batch_triage_filter.md');
+            if (txt) ResearchStore.setState({ triagePromptTemplate: txt.trim() });
+        } catch (_) {}
+    },
     openItemPreview: (itemId) => {
         ResearchStore.setState({ selectedItemId: itemId });
         if (window.Sutram?.stores?.Layout) {
@@ -31,6 +90,44 @@ export const ResearchStore = createExtensionStore('Research', {
                 windowOnly: true
             }, layout.focusedColumn || 'center', 1);
         }
+    },
+    disposeInboxItem: async (inboxId, status) => {
+        const state = ResearchStore.getState();
+        const item = (state.inbox || []).find(i => i.id === inboxId);
+        if (!item) return false;
+        if (status === 'accepted') {
+            const targetDir = (state.targetDir || 'vfs://research/').replace(/\/+$/, '') + '/';
+            const slug = (() => {
+                const generated = window.inSetu.utils.slugify(item.title);
+                return (generated || 'research-note').replace(/^-+|-+$/g, '').substring(0, 60);
+            })();
+            const rawFp = targetDir + slug + '.md';
+            const filepath = window.inSetu.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(rawFp) : rawFp;
+
+            const success = await window.inSetu.sys.executeWorkspaceMutation('fs/save', { filepath, content: item.raw_markdown }, { silent: true });
+            if (!success) {
+                if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("❌ Failed to write Markdown to disk.", 4000, true);
+                return false;
+            }
+        }
+        await window.inSetu.api.post(`research/inbox/${inboxId}/disposition`, { status });
+        if (ResearchStore.getState().selectedItemId === inboxId) {
+            ResearchStore.setState({ selectedItemId: null });
+            if (window.Sutram?.stores?.Layout) {
+                window.Sutram.stores.Layout.getState().closeWindow('research:preview');
+            }
+        }
+        const currentInbox = ResearchStore.getState().inbox || [];
+        if (status === 'force_scrape') {
+            ResearchStore.setState({
+                inbox: currentInbox.map(i => i.id === inboxId ? { ...i, status: 'pending', scraped_at: null, raw_markdown: null } : i)
+            });
+        } else {
+            ResearchStore.setState({
+                inbox: currentInbox.filter(i => i.id !== inboxId)
+            });
+        }
+        return true;
     }
 }, {
     onEvict: {
@@ -48,9 +145,10 @@ export class InSetuExtResearch extends InSetuElement {
         selectedItemId: { type: String },
         targetDir: { type: String },
         aiTriageMode: { type: Boolean },
+        aiJsonInput: { type: String },
+        triagePromptTemplate: { type: String },
         newJobModalOpen: { type: Boolean },
-        searchForm: { type: Object },
-        _aiJsonInput: { type: String }
+        searchForm: { type: Object }
     };
     static styles = [sharedStyles];
     constructor() {
@@ -61,9 +159,10 @@ export class InSetuExtResearch extends InSetuElement {
         this.selectedItemId = null;
         this.targetDir = 'vfs://research/';
         this.aiTriageMode = false;
+        this.aiJsonInput = '';
+        this.triagePromptTemplate = '';
         this.newJobModalOpen = false;
         this.searchForm = {};
-        this._aiJsonInput = '';
     }
     connectedCallback() {
         super.connectedCallback();
@@ -76,6 +175,8 @@ export class InSetuExtResearch extends InSetuElement {
                 selectedItemId: state.selectedItemId,
                 targetDir: state.targetDir,
                 aiTriageMode: state.aiTriageMode,
+                aiJsonInput: state.aiJsonInput || '',
+                triagePromptTemplate: state.triagePromptTemplate || '',
                 newJobModalOpen: state.newJobModalOpen,
                 searchForm: state.searchForm
             }),
@@ -83,7 +184,9 @@ export class InSetuExtResearch extends InSetuElement {
         );
 
         this.registerGlobalListener('insetu:research:action', window, (e) => this.handleJobAction(e.detail.id, e.detail.action));
+        this.registerGlobalListener('insetu:research:clone', window, (e) => ResearchStore.getState().cloneJobToModal(e.detail.job));
         this.registerGlobalListener('insetu:research:fetch', window, () => this.fetchState());
+        this.registerGlobalListener('sutram-sync-complete', window, () => this.fetchState());
     }
     disconnectedCallback() {
         super.disconnectedCallback();
@@ -161,68 +264,43 @@ export class InSetuExtResearch extends InSetuElement {
 
         try {
             await this.api.post(`research/${jobId}/action`, { action });
-            if (action === 'delete') {
-                ResearchStore.setState({ selectedJobId: null, selectedItemId: null, aiTriageMode: false });
+            if (action === 'delete' || action === 'cancel') {
+                if (window.Sutram?.stores?.Layout) {
+                    window.Sutram.stores.Layout.getState().closeWindow('research:preview');
+                }
+                if (action === 'delete') {
+                    ResearchStore.setState({ selectedJobId: null, selectedItemId: null, aiTriageMode: false });
+                }
             }
             await this.fetchState();
         } catch (err) {
-            alert(`Action failed: ${err.message}`);
+            this.setStatus(`❌ Action failed: ${err.message}`, 4000, true);
         }
     }
 
     async handleDisposition(inboxId, status) {
-        const item = this.inbox.find(i => i.id === inboxId);
-        if (!item) return;
-        if (status === 'accepted') {
-            const targetDir = (this.targetDir || 'research/').replace(/\/+$/, '') + '/';
-            const slug = (() => {
-                const generated = this.utils.slugify(item.title);
-                return (generated || 'research-note').replace(/^-+|-+$/g, '').substring(0, 60);
-            })();
-            const rawFp = targetDir + slug + '.md';
-            const filepath = this.vfs?.normalizeVfsURI ? this.vfs.normalizeVfsURI(rawFp) : rawFp;
-
-            const success = await this.sys.executeWorkspaceMutation('fs/save', { filepath, content: item.raw_markdown }, { silent: true });
-            if (!success) return alert("Failed to write Markdown to disk.");
-        }
         try {
-            await this.api.post(`research/inbox/${inboxId}/disposition`, { status });
-            if (this.selectedItemId === inboxId) {
-                ResearchStore.setState({ selectedItemId: null });
-                if (window.Sutram?.stores?.Layout) {
-                    window.Sutram.stores.Layout.getState().closeWindow('research:preview');
-                }
-            }
-
-            const currentInbox = this.inbox;
-            if (status === 'force_scrape') {
-                const updatedInbox = currentInbox.map(i => i.id === inboxId ? { ...i, status: 'pending', scraped_at: null, raw_markdown: null } : i);
-                ResearchStore.setState({ inbox: updatedInbox });
-            } else {
-                const updatedInbox = currentInbox.filter(i => i.id !== inboxId);
-                ResearchStore.setState({ inbox: updatedInbox });
-            }
+            await ResearchStore.getState().disposeInboxItem(inboxId, status);
         } catch (err) {
-            alert(`Disposition failed: ${err.message}`);
+            this.setStatus(`❌ Disposition failed: ${err.message}`, 4000, true);
         }
     }
     _getGenerateContextAction(jobId) {
         return this.api.bindJobAction(`research/${jobId}/export_context`, {}, {
             onComplete: async (statusData) => {
-                const files = statusData.artifact.files || [];
+                const files = statusData.artifact?.files || [];
                 for (const f of files) {
-                    await this.vfs.fetchAndDownloadState(f.filename, f.download_url);
+                    if (this.vfs?.downloadFile) {
+                        await this.vfs.downloadFile(f.download_url, f.filename);
+                    }
                 }
             },
-            onError: (err) => alert("Failed to generate context files: " + err.message)
+            onError: (err) => this.setStatus(`❌ Failed to generate context files: ${err.message}`, 4000, true)
         });
     }
 
-    async generateContext(jobId, e) {
-        try { await this._getGenerateContextAction(jobId)(e); } catch(err) {}
-    }
-    async executeAITriage(e) {
-        const input = (this._aiJsonInput || '').trim();
+    async executeAITriage() {
+        const input = (this.aiJsonInput || '').trim();
         if (!input) return;
 
         const payload = (() => {
@@ -235,7 +313,8 @@ export class InSetuExtResearch extends InSetuElement {
         })();
 
         if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-            return alert("Invalid JSON object. Ensure it looks like: {\"accept\": [], \"reject\": [], \"rescan\": []}");
+            this.setStatus('❌ Invalid JSON object. Expected {"accept": [], "reject": [], "rescan": []}', 4000, true);
+            return;
         }
 
         const extractId = (val) => (typeof val === 'object' && val !== null && val.id) ? String(val.id).trim() : String(val).trim();
@@ -248,40 +327,27 @@ export class InSetuExtResearch extends InSetuElement {
             for (const id of rejectIds) if (id) await this.handleDisposition(id, 'rejected');
             for (const id of rescanIds) if (id) await this.handleDisposition(id, 'force_scrape');
 
-            this._aiJsonInput = '';
             await this.fetchState();
-            alert(`✅ Triage complete:\n- ${acceptIds.length} Accepted to Workspace\n- ${rejectIds.length} Rejected\n- ${rescanIds.length} Queued for Rescan`);
-            ResearchStore.setState({ aiTriageMode: false, selectedItemId: null });
+            this.setStatus(`✅ Triage complete: ${acceptIds.length} accepted, ${rejectIds.length} rejected, ${rescanIds.length} rescanned.`, 4000);
+            ResearchStore.setState({ aiJsonInput: '', aiTriageMode: false, selectedItemId: null });
         } catch(err) {
             throw new Error("An error occurred executing the batch triage.");
         }
     }
     _renderJobCard(job) {
-        const meta = job.meta || {};
-        const statusIntent = (() => {
-            if (job.status === 'running') return 'primary';
-            if (job.status === 'gathering') return 'highlight';
-            if (job.status === 'completed') return 'primary';
-            if (job.status === 'reviewed') return 'success';
-            if (job.status === 'failed') return 'danger';
-            return 'neutral';
-        })();
-        const safeDate = this.utils.formatDate(job.created_at);
-        const cardStatusExtra = job.status === 'gathering'  
-            ? `(Page ${Math.floor((meta.start_index || 0) / 10) + 1} -${job.total_links} found)`
-            : `(${job.processed_links}/${job.total_links} scraped)`;
+        const { meta, statusIntent, safeDate, cardStatusExtra } = getJobPresentation(job, (ts) => this.utils.formatDate(ts));
         return html`
             <sutram-card
                 .filename=${job.id}
                 .titleText=${`🔍 ${job.query}`}
-                .descriptionText=${`Status: ${job.status.toUpperCase()}${cardStatusExtra}`}
-                .detailText=${`Created: ${safeDate} | Range:${meta.date_range || 'Any Time'}`}
+                .descriptionText=${`Status: ${job.status.toUpperCase()} ${cardStatusExtra}`}
+                .detailText=${`Created: ${safeDate} | Range: ${meta.date_range || 'Any Time'}`}
                 icon="search"
                 intent=${statusIntent}
                 entityType="research_job"
                 .entityData=${job}
                 @card-clicked=${() => ResearchStore.setState({ selectedJobId: job.id, selectedItemId: null })}>
-                ${(job.status === 'failed' && meta.error) ? html`<sutram-surface variant="tinted" intent="danger" padding="xs"><span>⚠️ <b>Error:</b> ${meta.error}</span></sutram-surface>` : ''}
+                ${(job.status === 'failed' && meta.error) ? html`<sutram-surface variant="tinted" intent="danger" padding="xs"><sutram-label intent="danger" .text=${`⚠️ Error: ${meta.error}`}></sutram-label></sutram-surface>` : ''}
             </sutram-card>
         `;
     }
@@ -289,34 +355,23 @@ export class InSetuExtResearch extends InSetuElement {
         const job = this.jobs.find(j => j.id === this.selectedJobId);
         if (!job) return '';
 
-        const meta = job.meta || {};
-        const activeIntent = (() => {
-            if (job.status === 'running') return 'primary';
-            if (job.status === 'gathering') return 'highlight';
-            if (job.status === 'completed') return 'primary';
-            if (job.status === 'reviewed') return 'success';
-            if (job.status === 'failed') return 'danger';
-            return 'neutral';
-        })();
-        const safeDate = this.utils.formatDate(job.created_at);
-        const cardStatusExtra = job.status === 'gathering'  
-            ? `(Page ${Math.floor((meta.start_index || 0) / 10) + 1} - ${job.total_links} found)`
-            : `(${job.processed_links}/${job.total_links} scraped)`;
+        const { meta, statusIntent, safeDate, cardStatusExtra } = getJobPresentation(job, (ts) => this.utils.formatDate(ts));
         const activeInbox = this.inbox.filter(i => i.job_id === this.selectedJobId);
         return html`
             <sutram-surface id="rs-detail-header" variant="panel" padding="md" gap="sm">
                 <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
                     <sutram-stack direction="row" align="center" gap="sm">
-                        <sutram-btn ?compact=${true} intent="neutral" icon="arrow-left" label="Back to Jobs" @click=${() => ResearchStore.setState({ selectedJobId: null, selectedItemId: null, aiTriageMode: false })}></sutram-btn>
+                        <sutram-btn ?compact=${true} intent="neutral" icon="arrow-left" label="Back to Jobs" @click=${() => {
+                            if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('research:preview');
+                            ResearchStore.setState({ selectedJobId: null, selectedItemId: null, aiTriageMode: false });
+                        }}></sutram-btn>
                         <sutram-icon name="search" size="md" intent="primary"></sutram-icon>
-                        <h4>${job.query}</h4>
+                        <sutram-label intent="neutral" .text=${job.query}></sutram-label>
                     </sutram-stack>
-                    <sutram-async-btn icon="copy" label="Copy" intent="neutral" .onClick=${() => this.utils.copyRawText(job.query)}></sutram-async-btn>
+                    <sutram-async-btn ?compact=${true} icon="copy" label="Copy" intent="neutral" .onClick=${() => this.utils.copyRawText(job.query)}></sutram-async-btn>
                 </sutram-stack>
-                <sutram-stack direction="row" align="center" gap="sm">
-                    <sutram-tag .text=${`${job.status.toUpperCase()} ${cardStatusExtra}`} .intent=${activeIntent}></sutram-tag>
-                </sutram-stack>
-                <sutram-stack direction="row" gap="md" ?wrap=${true}>
+                <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
+                    <sutram-tag .text=${`${job.status.toUpperCase()} ${cardStatusExtra}`} .intent=${statusIntent}></sutram-tag>
                     <sutram-label .text=${`Provider: ${job.provider}`}></sutram-label>
                     <sutram-label .text=${`Date Range: ${meta.date_range || 'Any Time'}`}></sutram-label>
                     <sutram-label .text=${`Started: ${safeDate}`}></sutram-label>
@@ -326,23 +381,26 @@ export class InSetuExtResearch extends InSetuElement {
                 ${job.status === 'running' ? html`<sutram-btn ?compact=${true} intent="warning" icon="pause" label="Pause" @click=${() => this.handleJobAction(job.id, 'pause')}></sutram-btn>` : ''}
                 ${job.status === 'paused' ? html`<sutram-btn ?compact=${true} intent="success" icon="play" label="Resume" @click=${() => this.handleJobAction(job.id, 'resume')}></sutram-btn>` : ''}
                 ${job.status === 'failed' ? html`<sutram-btn ?compact=${true} intent="highlight" icon="refresh-cw" label="Retry" @click=${() => this.handleJobAction(job.id, 'retry')}></sutram-btn>` : ''}
+                ${['completed', 'reviewed', 'cancelled'].includes(job.status) ? html`<sutram-btn ?compact=${true} intent="primary" icon="rotate-cw" label="Re-Run" @click=${() => this.handleJobAction(job.id, 'rerun')}></sutram-btn>` : ''}
+                <sutram-btn ?compact=${true} intent="neutral" icon="copy" label="Clone as New" @click=${() => ResearchStore.getState().cloneJobToModal(job)}></sutram-btn>
                 ${['running', 'paused', 'gathering', 'failed'].includes(job.status) ? html`<sutram-btn ?compact=${true} intent="neutral" icon="square" label="Cancel" @click=${() => this.handleJobAction(job.id, 'cancel')}></sutram-btn>` : ''}
                 <sutram-btn ?compact=${true} variant="tinted" intent="danger" icon="trash-2" label="Delete" @click=${() => this.handleJobAction(job.id, 'delete')}></sutram-btn>
-                <sutram-btn ?compact=${true} intent="highlight" icon="${this.aiTriageMode ? 'arrow-left' : 'bot'}" .label=${this.aiTriageMode ? 'Back to Manual Triage' : 'AI-Assisted Batch Triage'} @click=${() => ResearchStore.setState({ aiTriageMode: !this.aiTriageMode })}></sutram-btn>
+                <sutram-btn ?compact=${true} intent="highlight" icon="${this.aiTriageMode ? 'arrow-left' : 'bot'}" .label=${this.aiTriageMode ? 'Back to Manual Triage' : 'AI-Assisted Batch Triage'} @click=${() => {
+                    const nextMode = !this.aiTriageMode;
+                    ResearchStore.setState({ aiTriageMode: nextMode });
+                    if (nextMode) ResearchStore.getState().loadTriagePrompt();
+                }}></sutram-btn>
             </sutram-stack>
 
             ${this.aiTriageMode ? html`
                 <sutram-surface variant="panel" padding="lg" gap="md">
-                    <h3>Batch Triage Pipeline</h3>
-                    <h4>Step 1: Download Context</h4>
-                    <sutram-label text="Downloads all fully-scraped pending URLs in this job as chunked text files."></sutram-label>
+                    <sutram-label intent="highlight" text="Step 1: Download Context (all fully-scraped pending URLs)"></sutram-label>
                     <sutram-async-btn icon="package" label="Pack Context Files" intent="primary" .onClick=${this._getGenerateContextAction(job.id)}></sutram-async-btn>
 
-                    <h4>Step 2: Prompt Template</h4>
-                    <sutram-textarea readonly ?flush=${true} .value=${'Review these scraped documents. I am researching [INSERT TOPIC]. Filter out any documents that are SEO spam, irrelevant, or low quality. Output your response as a raw JSON object containing three arrays of `id` strings: `accept` (highly relevant), `reject` (spam/irrelevant), and `rescan` (relevant but poorly formatted or truncated). Do not include markdown blocks. Example: {"accept": ["id-1"], "reject": ["id-2"], "rescan": ["id-3"]}'}></sutram-textarea>
-                    <h4>Step 3: Ingest AI Triage</h4>
-                    <sutram-label text="Paste the raw JSON object from the LLM here to process the batch."></sutram-label>
-                    <sutram-textarea id="rs-ai-json-input" ?flush=${true} .value=${this._aiJsonInput} @sutram-input-changed=${e => this._aiJsonInput = e.detail.value} placeholder='{"accept": [], "reject": [], "rescan": []}'></sutram-textarea>
+                    <sutram-label intent="highlight" text="Step 2: Prompt Template"></sutram-label>
+                    <sutram-textarea readonly ?monospace=${true} .value=${this.triagePromptTemplate || 'Loading prompt template...'}></sutram-textarea>
+                    <sutram-label intent="highlight" text="Step 3: Ingest AI Triage (Paste raw JSON response)"></sutram-label>
+                    ${bindStoreInput(ResearchStore, 'aiJsonInput', this.aiJsonInput, { id: 'rs-ai-json-input', type: 'textarea', placeholder: '{"accept": [], "reject": [], "rescan": []}', flush: true })}
                     <sutram-async-btn ?fullWidth=${true} icon="bot" label="Execute Triage" intent="highlight" .onClick=${this.executeAITriage.bind(this)}></sutram-async-btn>
                 </sutram-surface>
             ` : html`
@@ -373,18 +431,11 @@ export class InSetuExtResearch extends InSetuElement {
     }
     render() {
         return html`
-            <sutram-view>
+            <sutram-view .titleText=${!this.selectedJobId ? 'Active & Past Jobs' : ''}>
                 ${!this.selectedJobId ? html`
-                    <sutram-stack direction="col" gap="md">
-                        <sutram-surface variant="ghost" border="bottom" padding="sm">
-                            <sutram-stack direction="row" justify="between" align="center">
-                                <h4>Active & Past Jobs</h4>
-                                <sutram-btn ?compact=${true} intent="success" icon="plus" label="New Job" @click=${() => ResearchStore.setState({ newJobModalOpen: true })}></sutram-btn>
-                            </sutram-stack>
-                        </sutram-surface>
-                        <sutram-stack direction="col" gap="sm">
-                            ${(this.jobs || []).map(job => this._renderJobCard(job))}
-                        </sutram-stack>
+                    <sutram-btn slot="header-actions" ?compact=${true} intent="success" icon="plus" label="New Job" @click=${() => ResearchStore.setState({ newJobModalOpen: true })}></sutram-btn>
+                    <sutram-stack direction="col" gap="sm">
+                        ${(this.jobs || []).length === 0 ? html`<sutram-empty-state text="No research jobs yet. Click 'New Job' to start scraping."></sutram-empty-state>` : (this.jobs || []).map(job => this._renderJobCard(job))}
                     </sutram-stack>
                 ` : html`
                     <sutram-stack direction="col" gap="md">
@@ -397,7 +448,7 @@ export class InSetuExtResearch extends InSetuElement {
                 const needsPlaywright = (this.searchForm.provider === 'google') && missingPkgs.includes('playwright');
                 const needsBs4 = (this.searchForm.provider === 'duckduckgo' || this.searchForm.parser === 'bs4') && missingPkgs.includes('beautifulsoup4');
                 return html`
-            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="New Research Job" @sutram-modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
+            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="New Research Job" @sutram-modal-closed=${(e) => { if (e.target === e.currentTarget) ResearchStore.setState({ newJobModalOpen: false }); }}>
                 <sutram-stack slot="body" direction="col" gap="md">
                     ${bindStoreInput(ResearchStore, 'searchForm.query', this.searchForm.query, { placeholder: 'Search Query...', flush: true })}
                     <sutram-stack direction="grid" ?compact=${true}>
@@ -407,7 +458,7 @@ export class InSetuExtResearch extends InSetuElement {
                     ${(needsPlaywright || needsBs4) ? html`
                         <sutram-surface variant="tinted" intent="warning" padding="sm">
                             <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
-                                <span>Selected provider/parser requires <strong>${missingPkgs.join(', ')}</strong>.</span>
+                                <sutram-label intent="warning" .text=${`Selected provider/parser requires: ${missingPkgs.join(', ')}`}></sutram-label>
                                 <sutram-async-btn
                                     ?compact=${true}
                                     intent="primary"
@@ -433,7 +484,7 @@ export class InSetuExtResearch extends InSetuElement {
                     <sutram-stack direction="grid" ?compact=${true}>
                         ${bindStoreInput(ResearchStore, 'searchForm.parser', this.searchForm.parser || 'bs4', { label: 'Extraction Parser', type: 'select', flush: true, selectOptions: [{value: 'bs4', label: 'Local (BeautifulSoup)'}, {value: 'jina', label: 'Jina AI (sends each URL to r.jina.ai)'}] })}
                         <sutram-stack direction="row" align="end" gap="xs">
-                            ${bindStoreInput(ResearchStore, 'targetDir', this.targetDir || 'research/', { label: 'Default Output Folder', placeholder: 'e.g. research/', flush: true, grow: true })}
+                            ${bindStoreInput(ResearchStore, 'targetDir', this.targetDir || 'vfs://research/', { label: 'Default Output Folder', placeholder: 'e.g. vfs://research/', flush: true, grow: true })}
                             <sutram-btn ?compact=${true} intent="highlight" label="..." @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}></sutram-btn>
                         </sutram-stack>
                     </sutram-stack>
@@ -464,7 +515,7 @@ export class InSetuResearchPreviewProjection extends InSetuElement {
         const st = ResearchStore.getState();
         this.inbox = st.inbox || [];
         this.selectedItemId = st.selectedItemId || null;
-        this.targetDir = st.targetDir || 'research/';
+        this.targetDir = st.targetDir || 'vfs://research/';
     }
     connectedCallback() {
         super.connectedCallback();
@@ -473,7 +524,7 @@ export class InSetuResearchPreviewProjection extends InSetuElement {
             state => ({
                 inbox: state.inbox || [],
                 selectedItemId: state.selectedItemId,
-                targetDir: state.targetDir || 'research/'
+                targetDir: state.targetDir || 'vfs://research/'
             }),
             (slice) => {
                 this.inbox = slice.inbox;
@@ -483,35 +534,10 @@ export class InSetuResearchPreviewProjection extends InSetuElement {
         );
     }
     async handleDisposition(inboxId, status) {
-        const item = this.inbox.find(i => i.id === inboxId);
-        if (!item) return;
-        if (status === 'accepted') {
-            const targetDir = (this.targetDir || 'research/').replace(/\/+$/, '') + '/';
-            const slug = (() => {
-                const generated = this.utils.slugify(item.title);
-                return (generated || 'research-note').replace(/^-+|-+$/g, '').substring(0, 60);
-            })();
-            const rawFp = targetDir + slug + '.md';
-            const filepath = this.vfs?.normalizeVfsURI ? this.vfs.normalizeVfsURI(rawFp) : rawFp;
-
-            const success = await this.sys.executeWorkspaceMutation('fs/save', { filepath, content: item.raw_markdown }, { silent: true });
-            if (!success) return alert("Failed to write Markdown to disk.");
-        }
         try {
-            await this.api.post(`research/inbox/${inboxId}/disposition`, { status });
-            if (window.Sutram?.stores?.Layout) {
-                window.Sutram.stores.Layout.getState().closeWindow('research:preview');
-            }
-            const currentInbox = this.inbox;
-            if (status === 'force_scrape') {
-                const updatedInbox = currentInbox.map(i => i.id === inboxId ? { ...i, status: 'pending', scraped_at: null, raw_markdown: null } : i);
-                ResearchStore.setState({ inbox: updatedInbox });
-            } else {
-                const updatedInbox = currentInbox.filter(i => i.id !== inboxId);
-                ResearchStore.setState({ inbox: updatedInbox });
-            }
+            await ResearchStore.getState().disposeInboxItem(inboxId, status);
         } catch (err) {
-            alert(`Disposition failed: ${err.message}`);
+            this.setStatus(`❌ Disposition failed: ${err.message}`, 4000, true);
         }
     }
     render() {
@@ -521,16 +547,19 @@ export class InSetuResearchPreviewProjection extends InSetuElement {
             <sutram-view>
                 <sutram-surface slot="header" variant="panel" border="bottom" padding="md" gap="sm">
                     <sutram-stack direction="col" gap="xs">
-                        <h4>${activeItem.title || 'Untitled'}</h4>
+                        <sutram-label intent="neutral" .text=${activeItem.title || 'Untitled'}></sutram-label>
                         <sutram-stack direction="row" align="center" gap="xs">
                             <sutram-icon name="link" size="sm" intent="primary"></sutram-icon>
-                            <a href="${activeItem.url}" target="_blank" style="color: var(--intent-primary); word-break: break-all;">${activeItem.url}</a>
+                            <sutram-label intent="primary" ?monospace=${true} ?truncate=${true} .text=${activeItem.url}></sutram-label>
+                            ${activeItem.url ? html`
+                                <sutram-btn ?compact=${true} intent="primary" icon="external-link" label="Open" @click=${() => window.open(activeItem.url, '_blank', 'noopener,noreferrer')}></sutram-btn>
+                            ` : ''}
                         </sutram-stack>
-                        <code>Item ID: ${activeItem.id}</code>
+                        <sutram-tag intent="neutral" .text=${`ID: ${activeItem.id}`}></sutram-tag>
                     </sutram-stack>
                     <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
                         <sutram-stack direction="row" align="center" gap="xs" ?flex=${true}>
-                            <sutram-input ?flush=${true} ?grow=${true} .value=${this.targetDir || 'research/'} placeholder="Target path (e.g. research/)" @sutram-input-changed=${(e) => ResearchStore.setState({ targetDir: e.detail.value })}></sutram-input>
+                            <sutram-input ?grow=${true} .value=${this.targetDir || 'vfs://research/'} placeholder="Target path (e.g. vfs://research/)" @sutram-input-changed=${(e) => ResearchStore.setState({ targetDir: e.detail.value })}></sutram-input>
                             <sutram-btn ?compact=${true} intent="highlight" label="..." @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}></sutram-btn>
                         </sutram-stack>
                         <sutram-btn ?compact=${true} intent="success" icon="check" label="Accept to Workspace" @click=${() => this.handleDisposition(activeItem.id, 'accepted')}></sutram-btn>
@@ -538,7 +567,7 @@ export class InSetuResearchPreviewProjection extends InSetuElement {
                         <sutram-btn ?compact=${true} intent="warning" icon="refresh-cw" label="Re-Scrape" @click=${() => this.handleDisposition(activeItem.id, 'force_scrape')}></sutram-btn>
                     </sutram-stack>
                 </sutram-surface>
-                <pre tabindex="0" .textContent=${activeItem.raw_markdown || 'Awaiting extraction...'}></pre>
+                <sutram-textarea readonly ?monospace=${true} size="full" .value=${activeItem.raw_markdown || 'Awaiting extraction...'}></sutram-textarea>
             </sutram-view>
         `;
     }
@@ -577,6 +606,25 @@ window.ExtensionRegistry.registerExtension('research', {
             order: 10,
             match: (data) => data.status === 'failed',
             emitEvent: (data) => ({ name: 'insetu:research:action', detail: { id: data.id, action: 'retry' } })
+        },
+        {
+            targetEntity: 'research_job',
+            id: 'rs-rerun',
+            label: 'Re-Run',
+            icon: 'rotate-cw',
+            intent: 'primary',
+            order: 12,
+            match: (data) => ['completed', 'reviewed', 'cancelled'].includes(data.status),
+            emitEvent: (data) => ({ name: 'insetu:research:action', detail: { id: data.id, action: 'rerun' } })
+        },
+        {
+            targetEntity: 'research_job',
+            id: 'rs-clone',
+            label: 'Clone as New',
+            icon: 'copy',
+            intent: 'neutral',
+            order: 15,
+            emitEvent: (data) => ({ name: 'insetu:research:clone', detail: { job: data } })
         },
         {
             targetEntity: 'research_job',

@@ -15,6 +15,9 @@ export const SkillsStore = createExtensionStore('Skills', {
             formScore: 4,
             formStatus: '',
             formMetrics: {},
+            editForm: { name: '', tags: '', group: '' },
+            newSkillForm: { name: '', group: '', domain: '', tags: '', status: 'untouched', parts: '', custom_steps: '' },
+            newSkillMetrics: {},
             clearPayload: () => SkillsStore.setState({ playlist: [], allSkills: [], groupsList: [] }),
             fetchPlaylist: async (silent = false) => {
                 if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('skills')) return;
@@ -63,7 +66,8 @@ export const SkillsStore = createExtensionStore('Skills', {
                     modalMode: mode,
                     formScore: 4,
                     formStatus: item ? item.status : '',
-                    formMetrics: { ...(item ? item.metrics : {}) }
+                    formMetrics: { ...(item ? item.metrics : {}) },
+                    editForm: item ? { name: item.name || '', tags: item.tags || '', group: item.group_name || '' } : { name: '', tags: '', group: '' }
                 });
                 if (item && mode === 'train' && window.Sutram?.stores?.Layout) {
                     const layout = window.Sutram.stores.Layout.getState();
@@ -102,10 +106,9 @@ export class InSetuExtSkills extends InSetuElement {
         formStatus: { type: String },
         formMetrics: { type: Object },
         modalMode: { type: String },
-        _newSkillDomain: { type: String },
-        _editName: { type: String },
-        _editTags: { type: String },
-        _editGroup: { type: String }
+        editForm: { type: Object },
+        newSkillForm: { type: Object },
+        newSkillMetrics: { type: Object }
     };
     static styles = [sharedStyles];
     constructor() {
@@ -121,12 +124,9 @@ export class InSetuExtSkills extends InSetuElement {
         this.formStatus = '';
         this.formMetrics = {};
         this.modalMode = 'train';
-        this._newSkillDomain = '';
-        this._newSkillForm = {};
-        this._newSkillMetrics = {};
-        this._editName = '';
-        this._editTags = '';
-        this._editGroup = '';
+        this.editForm = { name: '', tags: '', group: '' };
+        this.newSkillForm = { name: '', group: '', domain: '', tags: '', status: 'untouched', parts: '', custom_steps: '' };
+        this.newSkillMetrics = {};
     }
     get currentViewMode() {
         if (this.dataset.subId) {
@@ -140,10 +140,14 @@ export class InSetuExtSkills extends InSetuElement {
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
-            const touchedSkill = payload.mutations.some(m => m.filepath && m.filepath.startsWith('ctx://skills/'));
+            const touchedSkill = payload.mutations.some(m => m.filepath && (
+                m.filepath.startsWith('ctx://skills/') || m.filepath.includes('/skills/')
+            ));
             if (touchedSkill) {
-                SkillsStore.getState().fetchPlaylist(true);
-                SkillsStore.getState().fetchAllSkills();
+                this.registerTimeout(() => {
+                    SkillsStore.getState().fetchPlaylist(true);
+                    SkillsStore.getState().fetchAllSkills();
+                }, 300);
             }
         });
         this.bindStore(
@@ -159,26 +163,12 @@ export class InSetuExtSkills extends InSetuElement {
                 formScore: state.formScore,
                 formStatus: state.formStatus,
                 formMetrics: state.formMetrics,
-                modalMode: state.modalMode
+                modalMode: state.modalMode,
+                editForm: state.editForm,
+                newSkillForm: state.newSkillForm,
+                newSkillMetrics: state.newSkillMetrics
             }),
-            {
-                autoFetch: () => this._reloadAll(),
-                equalityFn: (a, b) => {
-                    Object.assign(this, b);
-                    if (b.selectedItem && (this._lastSelectedFile !== b.selectedItem.filepath)) {
-                        this._lastSelectedFile = b.selectedItem.filepath;
-                        this._editName = b.selectedItem.name;
-                        this._editTags = b.selectedItem.tags || '';
-                        this._editGroup = b.selectedItem.group_name || '';
-                    } else if (!b.selectedItem) {
-                        this._lastSelectedFile = null;
-                        this._editName = '';
-                        this._editTags = '';
-                        this._editGroup = '';
-                    }
-                    return this.utils.shallowEqual(a, b);
-                }
-            }
+            { autoFetch: () => this._reloadAll() }
         );
         this.registerGlobalListener('sutram-sync-complete', window, () => {
             this._reloadAll(true);
@@ -202,97 +192,6 @@ export class InSetuExtSkills extends InSetuElement {
         SkillsStore.getState().fetchPlaylist(silent);
         SkillsStore.getState().fetchAllSkills();
         SkillsStore.getState().fetchDomainConfig();
-    }
-    async _handleCreateSkill(e) {
-        if (e && e.preventDefault) e.preventDefault();
-        const domain = this._newSkillForm.domain || this._newSkillDomain || Object.keys(this.domainConfig)[0];
-
-        const metrics = {};
-        const domainMeta = this.domainConfig[domain];
-        if (domainMeta && domainMeta.metrics) {
-            Object.keys(domainMeta.metrics).forEach(key => {
-                const val = this._newSkillMetrics[key];
-                if (val !== undefined && val !== null && val !== '') {
-                    metrics[key] = domainMeta.metrics[key].type === 'integer' ? parseInt(val, 10) : parseFloat(val);
-                }
-            });
-        }
-        const payload = {
-            name: this._newSkillForm.name || '',
-            domain: domain,
-            tags: this._newSkillForm.tags || '',
-            group: this._newSkillForm.group || '',
-            status: this._newSkillForm.status || 'untouched',
-            parts: this._newSkillForm.parts || '',
-            custom_steps: this._newSkillForm.custom_steps || '',
-            metrics: metrics
-        };
-        try {
-            const res = await this.api.post('skills/create', payload, {
-                collapseKey: `skills:create:${payload.name}`
-            });
-            const data = await res.json();
-            SkillsStore.setState({ newSkillModalOpen: false });
-            if (data.job_id === 'offline_queue') {
-                const tempFilepath = `ctx://skills/${window.inSetu.utils.slugify(payload.name)}.md`;
-                const newItem = { ...payload, filepath: tempFilepath, id: 'SKL-' + Date.now() };
-                SkillsStore.setState(s => ({ allSkills: [...s.allSkills, newItem] }));
-            }
-        } catch (err) {
-            alert(`Failed to compile item structure: ${err.message}`);
-        }
-    }
-    async _deleteSkillItem() {
-        if (!this.selectedItem) return;
-        if (!confirm(`⚠️ Are you absolutely sure you want to permanently delete "${this.selectedItem.name}"?\nThis action will destroy the markdown file on disk and cannot be undone.`)) return;
-        try {
-            const res = await this.api.post('skills/delete', { filepath: this.selectedItem.filepath }, { 
-                collapseKey: `skills:delete:${this.selectedItem.filepath}`,
-                pendingMutations: [this.selectedItem.filepath]
-            });
-            const data = await res.json();
-            const filepath = this.selectedItem.filepath;
-            SkillsStore.setState({ selectedItem: null });
-            if (data.job_id === 'offline_queue') {
-                SkillsStore.setState(s => ({
-                    playlist: s.playlist.filter(p => p.filepath !== filepath),
-                    allSkills: s.allSkills.filter(p => p.filepath !== filepath)
-                }));
-            }
-            alert("Track permanently wiped from file system.");
-        } catch (err) {
-            alert(`Failed to execute deletion sequence: ${err.message}`);
-        }
-    }
-    async _submitStructuralEdit() {
-        if (!this.selectedItem) return;
-        const payload = {
-            filepath: this.selectedItem.filepath,
-            name: this._editName,
-            tags: this._editTags,
-            group: this._editGroup,
-            status: this.formStatus,
-            parts: this.formMetrics.parts || '',
-            custom_steps: this.formMetrics.custom_steps || ''
-        };
-        try {
-            const res = await this.api.post('skills/update', payload, { 
-                collapseKey: `skills:update:${this.selectedItem.filepath}`,
-                pendingMutations: [this.selectedItem.filepath]
-            });
-            const data = await res.json();
-            const item = this.selectedItem;
-            SkillsStore.setState({ selectedItem: null });
-            if (data.job_id === 'offline_queue') {
-                SkillsStore.setState(s => ({
-                    allSkills: s.allSkills.map(p => p.id === item.id ? { ...p, name: payload.name, tags: payload.tags, group_name: payload.group, status: payload.status, metrics: { ...p.metrics, parts: payload.parts, custom_steps: payload.custom_steps } } : p),
-                    playlist: s.playlist.map(p => p.id === item.id ? { ...p, name: payload.name, tags: payload.tags, group_name: payload.group, status: payload.status, metrics: { ...p.metrics, parts: payload.parts, custom_steps: payload.custom_steps } } : p)
-                }));
-            }
-            alert("Structural configuration updated successfully!");
-        } catch (err) {
-            alert(`Failed to save adjustments: ${err.message}`);
-        }
     }
     _renderGroupsTab() {
         const structuredGroups = [...this.groupsList];
@@ -323,11 +222,10 @@ export class InSetuExtSkills extends InSetuElement {
                                         <sutram-card
                                             .filename=${item.filepath}
                                             .titleText=${item.name}
-                                            .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage:${item.status}`}
+                                            .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage: ${item.status}`}
                                             .detailText=${item.filepath}
                                             icon="music"
                                             intent="neutral"
-                                            @click=${() => SkillsStore.getState().selectItem(item, 'train')}
                                             entityType="skill"
                                             .entityData=${item}
                                             @card-clicked=${() => SkillsStore.getState().selectItem(item, 'train')}>
@@ -343,7 +241,6 @@ export class InSetuExtSkills extends InSetuElement {
     }
     render() {
         const viewMode = this.currentViewMode;
-        const activeNewDomain = this._newSkillDomain || Object.keys(this.domainConfig)[0] || 'musical_repertoire';
 
         return html`
             <sutram-view>
@@ -351,7 +248,14 @@ export class InSetuExtSkills extends InSetuElement {
                     ${this.loading ? html`<sutram-spinner text="Sweeping session items..."></sutram-spinner>` : ''}
                     <sutram-surface variant="ghost" border="bottom" padding="xs">
                         <sutram-stack direction="row" justify="end" align="center">
-                            <sutram-btn ?compact=${true} intent="success" icon="plus" label="New Skill Item" @click=${() => { this._newSkillDomain = Object.keys(this.domainConfig)[0] || ''; SkillsStore.setState({ newSkillModalOpen: true }); }}></sutram-btn>
+                            <sutram-btn ?compact=${true} intent="success" icon="plus" label="New Skill Item" @click=${() => {
+                                const defaultDomain = Object.keys(this.domainConfig)[0] || 'musical_repertoire';
+                                SkillsStore.setState({
+                                    newSkillModalOpen: true,
+                                    newSkillForm: { name: '', group: '', domain: defaultDomain, tags: '', status: 'untouched', parts: '', custom_steps: '' },
+                                    newSkillMetrics: {}
+                                });
+                            }}></sutram-btn>
                         </sutram-stack>
                     </sutram-surface>
 
@@ -367,11 +271,10 @@ export class InSetuExtSkills extends InSetuElement {
                                         <sutram-card
                                             .filename=${item.filepath}
                                             .titleText=${item.name}
-                                            .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage:${item.status}`}
+                                            .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage: ${item.status}`}
                                             .detailText=${item.filepath}
                                             icon="target"
                                             intent="primary"
-                                            @click=${() => SkillsStore.getState().selectItem(item, 'train')}
                                             entityType="skill"
                                             .entityData=${item}
                                             @card-clicked=${() => SkillsStore.getState().selectItem(item, 'train')}>
@@ -392,13 +295,12 @@ export class InSetuExtSkills extends InSetuElement {
                                         <sutram-card
                                             .filename=${item.filepath}
                                             .titleText=${item.name}
-                                            .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage:${item.status}`}
+                                            .descriptionText=${`Domain: ${domainMeta.label}${tagsLabel} | Stage: ${item.status}`}
                                             .detailText=${item.filepath}
                                             icon="folder"
                                             intent="neutral"
                                             entityType="skill"
                                             .entityData=${item}
-                                            @click=${() => SkillsStore.getState().selectItem(item, 'train')}
                                             @card-clicked=${() => SkillsStore.getState().selectItem(item, 'train')}>
                                         </sutram-card>
                                     `;
@@ -408,20 +310,176 @@ export class InSetuExtSkills extends InSetuElement {
                     ` : this._renderGroupsTab()}
                 </sutram-stack>
             </sutram-view>
+        `;
+    }
+}
+customElements.define('insetu-ext-skills', InSetuExtSkills);
+
+export class InSetuExtSkillsModals extends InSetuElement {
+    static get extensionName() { return 'skills'; }
+    static properties = {
+        domainConfig: { type: Object },
+        selectedItem: { type: Object },
+        newSkillModalOpen: { type: Boolean },
+        formStatus: { type: String },
+        formMetrics: { type: Object },
+        modalMode: { type: String },
+        editForm: { type: Object },
+        newSkillForm: { type: Object },
+        newSkillMetrics: { type: Object }
+    };
+    static styles = [sharedStyles];
+
+    constructor() {
+        super();
+        this.domainConfig = {};
+        this.selectedItem = null;
+        this.newSkillModalOpen = false;
+        this.formStatus = '';
+        this.formMetrics = {};
+        this.modalMode = 'train';
+        this.editForm = { name: '', tags: '', group: '' };
+        this.newSkillForm = { name: '', group: '', domain: '', tags: '', status: 'untouched', parts: '', custom_steps: '' };
+        this.newSkillMetrics = {};
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(
+            SkillsStore,
+            state => ({
+                domainConfig: state.domainConfig || {},
+                selectedItem: state.selectedItem,
+                newSkillModalOpen: !!state.newSkillModalOpen,
+                formStatus: state.formStatus || '',
+                formMetrics: state.formMetrics || {},
+                modalMode: state.modalMode || 'train',
+                editForm: state.editForm || { name: '', tags: '', group: '' },
+                newSkillForm: state.newSkillForm || { name: '', group: '', domain: '', tags: '', status: 'untouched', parts: '', custom_steps: '' },
+                newSkillMetrics: state.newSkillMetrics || {}
+            }),
+            (slice) => {
+                Object.assign(this, slice);
+            }
+        );
+    }
+
+    async _handleCreateSkill(e) {
+        if (e && e.preventDefault) e.preventDefault();
+        const domain = this.newSkillForm.domain || Object.keys(this.domainConfig)[0] || 'musical_repertoire';
+
+        const metrics = {};
+        const domainMeta = this.domainConfig[domain];
+        if (domainMeta && domainMeta.metrics) {
+            Object.keys(domainMeta.metrics).forEach(key => {
+                const val = this.newSkillMetrics[key];
+                if (val !== undefined && val !== null && val !== '') {
+                    metrics[key] = domainMeta.metrics[key].type === 'integer' ? parseInt(val, 10) : parseFloat(val);
+                }
+            });
+        }
+        const payload = {
+            name: this.newSkillForm.name || '',
+            domain: domain,
+            tags: this.newSkillForm.tags || '',
+            group: this.newSkillForm.group || '',
+            status: this.newSkillForm.status || 'untouched',
+            parts: this.newSkillForm.parts || '',
+            custom_steps: this.newSkillForm.custom_steps || '',
+            metrics: metrics
+        };
+        const res = await this.api.post('skills/create', payload, {
+            collapseKey: `skills:create:${payload.name}`
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            this.setStatus(`❌ ${data.error || 'Failed to create skill item.'}`, 4000, true);
+            throw new Error(data.error || 'Failed to create skill item.');
+        }
+        SkillsStore.setState({
+            newSkillModalOpen: false,
+            newSkillForm: { name: '', group: '', domain: '', tags: '', status: 'untouched', parts: '', custom_steps: '' },
+            newSkillMetrics: {}
+        });
+        if (data.job_id === 'offline_queue') {
+            const tempFilepath = `ctx://skills/${this.utils.slugify(payload.name)}.md`;
+            const newItem = { ...payload, filepath: tempFilepath, id: 'SKL-' + Date.now() };
+            SkillsStore.setState(s => ({ allSkills: [...s.allSkills, newItem] }));
+        }
+        this.setStatus("✅ Skill item created.", 2500);
+    }
+
+    async _deleteSkillItem() {
+        if (!this.selectedItem) return;
+        if (!confirm(`⚠️ Are you absolutely sure you want to permanently delete "${this.selectedItem.name}"?\nThis action will destroy the markdown file on disk and cannot be undone.`)) return;
+        const res = await this.api.post('skills/delete', { filepath: this.selectedItem.filepath }, { 
+            collapseKey: `skills:delete:${this.selectedItem.filepath}`,
+            pendingMutations: [this.selectedItem.filepath]
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            this.setStatus(`❌ ${data.error || 'Failed to delete skill item.'}`, 4000, true);
+            throw new Error(data.error || 'Failed to delete skill item.');
+        }
+        const filepath = this.selectedItem.filepath;
+        SkillsStore.setState({ selectedItem: null });
+        if (data.job_id === 'offline_queue') {
+            SkillsStore.setState(s => ({
+                playlist: s.playlist.filter(p => p.filepath !== filepath),
+                allSkills: s.allSkills.filter(p => p.filepath !== filepath)
+            }));
+        }
+        this.setStatus("🗑️ Skill item deleted.", 2500);
+    }
+
+    async _submitStructuralEdit() {
+        if (!this.selectedItem) return;
+        const payload = {
+            filepath: this.selectedItem.filepath,
+            name: this.editForm.name,
+            tags: this.editForm.tags,
+            group: this.editForm.group,
+            status: this.formStatus,
+            parts: this.formMetrics.parts || '',
+            custom_steps: this.formMetrics.custom_steps || ''
+        };
+        const res = await this.api.post('skills/update', payload, { 
+            collapseKey: `skills:update:${this.selectedItem.filepath}`,
+            pendingMutations: [this.selectedItem.filepath]
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            this.setStatus(`❌ ${data.error || 'Failed to update skill item.'}`, 4000, true);
+            throw new Error(data.error || 'Failed to update skill item.');
+        }
+        const item = this.selectedItem;
+        SkillsStore.setState({ selectedItem: null });
+        if (data.job_id === 'offline_queue') {
+            SkillsStore.setState(s => ({
+                allSkills: s.allSkills.map(p => p.id === item.id ? { ...p, name: payload.name, tags: payload.tags, group_name: payload.group, status: payload.status, metrics: { ...p.metrics, parts: payload.parts, custom_steps: payload.custom_steps } } : p),
+                playlist: s.playlist.map(p => p.id === item.id ? { ...p, name: payload.name, tags: payload.tags, group_name: payload.group, status: payload.status, metrics: { ...p.metrics, parts: payload.parts, custom_steps: payload.custom_steps } } : p)
+            }));
+        }
+        this.setStatus("✅ Structural configuration updated.", 2500);
+    }
+
+    render() {
+        const activeNewDomain = this.newSkillForm.domain || Object.keys(this.domainConfig)[0] || 'musical_repertoire';
+        return html`
             ${(!!this.selectedItem && this.modalMode === 'edit') ? html`
             <sutram-modal
                 ?open=${true}
                 ?fullscreen=${true}
                 titleText="Edit Skill Architecture & Structure"
-                @sutram-modal-closed=${() => SkillsStore.setState({ selectedItem: null })}>
+                @sutram-modal-closed=${(e) => { if (e.target === e.currentTarget) SkillsStore.setState({ selectedItem: null }); }}>
                 <sutram-stack slot="body" direction="col" gap="md">
                     <sutram-stack direction="grid" ?compact=${true}>
-                        <sutram-input label="Track / Skill Title" ?flush=${true} .value=${this._editName || ''} @sutram-input-changed=${(e) => this._editName = e.detail.value}></sutram-input>
-                        <sutram-input label="Parent Collection Group" ?flush=${true} placeholder="e.g. Warmups (or leave blank)" .value=${this._editGroup || ''} @sutram-input-changed=${(e) => this._editGroup = e.detail.value}></sutram-input>
+                        <sutram-input label="Track / Skill Title" .value=${this.editForm.name || ''} @sutram-input-changed=${(e) => SkillsStore.setState(s => ({ editForm: { ...s.editForm, name: e.detail.value } }))}></sutram-input>
+                        <sutram-input label="Parent Collection Group" placeholder="e.g. Warmups (or leave blank)" .value=${this.editForm.group || ''} @sutram-input-changed=${(e) => SkillsStore.setState(s => ({ editForm: { ...s.editForm, group: e.detail.value } }))}></sutram-input>
                     </sutram-stack>
-                    <sutram-input label="Tags" ?flush=${true} .value=${this._editTags || ''} placeholder="e.g. Piano, Acoustic, Classical" @sutram-input-changed=${(e) => this._editTags = e.detail.value}></sutram-input>
-                    <sutram-input label="Section / Parts Definition Matrix" ?flush=${true} .value=${this.formMetrics.parts || ''} placeholder="e.g. Intro, Verse, Solo" @sutram-input-changed=${(e) => SkillsStore.getState().updateMetricField('parts', e.detail.value)}></sutram-input>
-                    <sutram-input label="Optional Path Custom Steps (Comma Separated Overrides)" ?flush=${true} .value=${this.formMetrics.custom_steps || ''} placeholder="e.g. Intro, Solo, Chorus, Mastered" @sutram-input-changed=${(e) => SkillsStore.getState().updateMetricField('custom_steps', e.detail.value)}></sutram-input>
+                    <sutram-input label="Tags" .value=${this.editForm.tags || ''} placeholder="e.g. Piano, Acoustic, Classical" @sutram-input-changed=${(e) => SkillsStore.setState(s => ({ editForm: { ...s.editForm, tags: e.detail.value } }))}></sutram-input>
+                    <sutram-input label="Section / Parts Definition Matrix" .value=${this.formMetrics.parts || ''} placeholder="e.g. Intro, Verse, Solo" @sutram-input-changed=${(e) => SkillsStore.getState().updateMetricField('parts', e.detail.value)}></sutram-input>
+                    <sutram-input label="Optional Path Custom Steps (Comma Separated Overrides)" .value=${this.formMetrics.custom_steps || ''} placeholder="e.g. Intro, Solo, Chorus, Mastered" @sutram-input-changed=${(e) => SkillsStore.getState().updateMetricField('custom_steps', e.detail.value)}></sutram-input>
                 </sutram-stack>
                 <sutram-async-btn slot="footer" icon="trash-2" label="Delete Item" intent="danger" .onClick=${this._deleteSkillItem.bind(this)}></sutram-async-btn>
                 <sutram-async-btn slot="footer" icon="save" label="Save Structural Changes" intent="primary" .onClick=${this._submitStructuralEdit.bind(this)}></sutram-async-btn>
@@ -432,21 +490,20 @@ export class InSetuExtSkills extends InSetuElement {
                 ?open=${true}
                 ?fullscreen=${true}
                 titleText="Add New Training Skill Item"
-                @sutram-modal-closed=${() => SkillsStore.setState({ newSkillModalOpen: false })}>
+                @sutram-modal-closed=${(e) => { if (e.target === e.currentTarget) SkillsStore.setState({ newSkillModalOpen: false }); }}>
                 <sutram-stack slot="body" direction="col" gap="md">
                     <sutram-stack direction="grid" ?compact=${true}>
-                        <sutram-input label="Item Name / Track Title" ?flush=${true} placeholder="e.g. Stairway to Heaven" .value=${this._newSkillForm.name || ''} @sutram-input-changed=${e => this._newSkillForm.name = e.detail.value}></sutram-input>
-                        <sutram-input label="Collection Group" ?flush=${true} placeholder="e.g. Repertoire (or leave blank)" .value=${this._newSkillForm.group || ''} @sutram-input-changed=${e => this._newSkillForm.group = e.detail.value}></sutram-input>
+                        <sutram-input label="Item Name / Track Title" placeholder="e.g. Stairway to Heaven" .value=${this.newSkillForm.name || ''} @sutram-input-changed=${e => SkillsStore.setState(s => ({ newSkillForm: { ...s.newSkillForm, name: e.detail.value } }))}></sutram-input>
+                        <sutram-input label="Collection Group" placeholder="e.g. Repertoire (or leave blank)" .value=${this.newSkillForm.group || ''} @sutram-input-changed=${e => SkillsStore.setState(s => ({ newSkillForm: { ...s.newSkillForm, group: e.detail.value } }))}></sutram-input>
                         <sutram-select 
                             label="Target Domain Framework" 
-                            ?flush=${true}
                             .value=${activeNewDomain} 
                             .options=${Object.keys(this.domainConfig).map(k => ({ value: k, label: this.domainConfig[k].label || k }))}
-                            @sutram-input-changed=${(e) => { this._newSkillDomain = e.detail.value; this._newSkillForm.domain = e.detail.value; }}>
+                            @sutram-input-changed=${(e) => SkillsStore.setState(s => ({ newSkillForm: { ...s.newSkillForm, domain: e.detail.value } }))}>
                         </sutram-select>
                     </sutram-stack>
 
-                    <sutram-input label="Tags" ?flush=${true} placeholder="e.g. Piano, Acoustic, Classical" .value=${this._newSkillForm.tags || ''} @sutram-input-changed=${e => this._newSkillForm.tags = e.detail.value}></sutram-input>
+                    <sutram-input label="Tags" placeholder="e.g. Piano, Acoustic, Classical" .value=${this.newSkillForm.tags || ''} @sutram-input-changed=${e => SkillsStore.setState(s => ({ newSkillForm: { ...s.newSkillForm, tags: e.detail.value } }))}></sutram-input>
 
                     <sutram-stack direction="grid" ?compact=${true}>
                         ${(() => {
@@ -456,16 +513,15 @@ export class InSetuExtSkills extends InSetuElement {
                             return html`
                                 <sutram-select 
                                     label="Initial Starting Status Stage" 
-                                    ?flush=${true}
-                                    .value=${this._newSkillForm.status || 'untouched'} 
+                                    .value=${this.newSkillForm.status || 'untouched'} 
                                     .options=${mappedOptions}
-                                    @sutram-input-changed=${e => this._newSkillForm.status = e.detail.value}>
+                                    @sutram-input-changed=${e => SkillsStore.setState(s => ({ newSkillForm: { ...s.newSkillForm, status: e.detail.value } }))}>
                                 </sutram-select>
                             `;
                         })()}
-                        <sutram-input label="Sections / Parts Matrix Checklist" ?flush=${true} placeholder="e.g. Intro, Verse, Solo" .value=${this._newSkillForm.parts || ''} @sutram-input-changed=${e => this._newSkillForm.parts = e.detail.value}></sutram-input>
+                        <sutram-input label="Sections / Parts Matrix Checklist" placeholder="e.g. Intro, Verse, Solo" .value=${this.newSkillForm.parts || ''} @sutram-input-changed=${e => SkillsStore.setState(s => ({ newSkillForm: { ...s.newSkillForm, parts: e.detail.value } }))}></sutram-input>
                     </sutram-stack>
-                    <sutram-input label="Optional Path Custom Steps (Comma Separated Overrides)" ?flush=${true} placeholder="e.g. Intro, Solo, Chorus, Mastered" .value=${this._newSkillForm.custom_steps || ''} @sutram-input-changed=${e => this._newSkillForm.custom_steps = e.detail.value}></sutram-input>
+                    <sutram-input label="Optional Path Custom Steps (Comma Separated Overrides)" placeholder="e.g. Intro, Solo, Chorus, Mastered" .value=${this.newSkillForm.custom_steps || ''} @sutram-input-changed=${e => SkillsStore.setState(s => ({ newSkillForm: { ...s.newSkillForm, custom_steps: e.detail.value } }))}></sutram-input>
                     ${(() => {
                         const activeConfig = this.domainConfig[activeNewDomain];
                         if (!activeConfig || !activeConfig.metrics) return '';
@@ -486,10 +542,9 @@ export class InSetuExtSkills extends InSetuElement {
                                             return html`
                                                 <sutram-select 
                                                     label=${m.label} 
-                                                    ?flush=${true}
-                                                    .value=${this._newSkillMetrics[key] || min} 
+                                                    .value=${this.newSkillMetrics[key] ?? min} 
                                                     .options=${options.map(opt => ({ value: opt, label: String(opt) }))}
-                                                    @sutram-input-changed=${e => this._newSkillMetrics[key] = e.detail.value}>
+                                                    @sutram-input-changed=${e => SkillsStore.setState(s => ({ newSkillMetrics: { ...s.newSkillMetrics, [key]: e.detail.value } }))}>
                                                 </sutram-select>
                                             `;
                                         }
@@ -497,11 +552,10 @@ export class InSetuExtSkills extends InSetuElement {
                                         return html`
                                             <sutram-input 
                                                 type="number"
-                                                ?flush=${true}
                                                 label="${m.label} ${m.unit ? `(${m.unit})` : ''}"
                                                 placeholder="${m.unit ? m.unit : 'Value'}"
-                                                .value=${this._newSkillMetrics[key] || ''} 
-                                                @sutram-input-changed=${e => this._newSkillMetrics[key] = e.detail.value}>
+                                                .value=${this.newSkillMetrics[key] ?? ''} 
+                                                @sutram-input-changed=${e => SkillsStore.setState(s => ({ newSkillMetrics: { ...s.newSkillMetrics, [key]: e.detail.value } }))}>
                                             </sutram-input>
                                         `;
                                     })}
@@ -516,7 +570,7 @@ export class InSetuExtSkills extends InSetuElement {
         `;
     }
 }
-customElements.define('insetu-ext-skills', InSetuExtSkills);
+customElements.define('insetu-ext-skills-modals', InSetuExtSkillsModals);
 
 export class InSetuSkillsSessionProjection extends InSetuElement {
     static get extensionName() { return 'skills'; }
@@ -650,9 +704,9 @@ export class InSetuSkillsSessionProjection extends InSetuElement {
                     allSkills: s.allSkills.map(p => p.id === item.id ? { ...p, status: payload.status, metrics: payload.metrics } : p)
                 }));
             }
-            alert("Practice entry committed atomically into text ledger!");
+            this.setStatus("✅ Practice entry committed to ledger.", 2500);
         } catch (err) {
-            alert(`Network error sync loop failed: ${err.message}`);
+            this.setStatus(`❌ Failed to log practice session: ${err.message}`, 4000, true);
         }
     }
     render() {
@@ -728,6 +782,10 @@ window.ExtensionRegistry.registerExtension('skills', {
         }
     ],
     layoutSlots: [
+        {
+            slot: "slots:global",
+            component: "insetu-ext-skills-modals"
+        },
         {
             slot: "slots:primary-navigation",
             id: "skills",

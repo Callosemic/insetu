@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TypedDict, Optional
 from insetu.core.sdk import ExtensionContext, InSetuExtension, child_env
 import insetu.core.attestations as _attestations
+
 from insetu.core.topology.engine_topology import resolve_file_bucket
 
 HOOKS_SCHEMA = {
@@ -177,8 +178,12 @@ def _mark_hook_approved(ctx, rule_id: str, command: str):
 def _ensure_hooks_hydrated(ctx):
     count = ctx.db.execute("SELECT count(*) FROM hooks_rules").fetchone()[0]
     saved = ctx.store.get("rules.json", "rules", None)
+    approved = _get_approved_hook_ids(ctx)
+
+    # Hydration never approves anything. A rule loaded from rules.json or carried over from an older
+    # SQLite table stays disabled until a person approves its command (S8): rules.json can arrive from a
+    # repository or be written by a tool, so treating its rules as approved would let them run commands.
     if count == 0 and saved:
-        approved = _get_approved_hook_ids(ctx)
         for r in saved:
             if r.get("id") and r.get("command"):
                 sig = _hook_signature(r["id"], r["command"])
@@ -193,22 +198,19 @@ def _ensure_hooks_hydrated(ctx):
                     "created_at": r.get("created_at", datetime.datetime.now().isoformat())
                 })
     elif count > 0 and saved is None:
-        for r in ctx.db.get_all("hooks_rules"):
-            if r.get("enabled"):
-                try:
-                    _mark_hook_approved(ctx, r["id"], r["command"])
-                except _attestations.AttestationRefused:
-                    pass  # Only a person's request carries rules over as approved.
         _flush_hooks_to_json(ctx)
 
 def _flush_hooks_to_json(ctx):
     rules = ctx.db.get_all("hooks_rules", order_by="created_at DESC")
     ctx.store.set("rules.json", "rules", rules)
+
 @hooks_bp.route('list', methods=['GET'], docstring="Lists all configured automation rules.")
 def list_rules(ctx):
     """Lists all configured automation rules."""
     _ensure_hooks_hydrated(ctx)
     rules = ctx.db.get_all("hooks_rules", order_by="created_at DESC")
+    for r in rules:
+        r["approved"] = _is_hook_approved(ctx, r["id"], r["command"])
     return {"rules": rules}
 class HookSavePayload(TypedDict, total=False):
     name: str
@@ -271,6 +273,29 @@ def toggle_rule(ctx):
     ctx.db.commit()
     _flush_hooks_to_json(ctx)
     return {"status": "success"}
+class HookApprovePayload(TypedDict):
+    id: str
+    command: str
+@hooks_bp.route('approve', methods=['POST'], request_schema=HookApprovePayload, mcp_expose=False, docstring="[sync] Approves a rule's command exactly as the person was shown it, without changing the rule; refused if the command changed since. Human-only: hidden from MCP and banned in routines (S8).")
+def approve_rule(ctx):
+    """Approves a rule's command as shown on its card. A command that changed since it was shown is refused (409), so a person never approves text they did not see."""
+    data = ctx.payload or {}
+    rule_id = data.get('id')
+    shown_command = str(data.get('command') or '')
+    if not rule_id:
+        return {"error": "Rule ID required."}, 400
+
+    _ensure_hooks_hydrated(ctx)
+    row = ctx.db.get_by_id("hooks_rules", rule_id)
+    if not row:
+        return {"error": "Rule not found."}, 404
+    if row["command"] != shown_command:
+        return {"error": "This rule's command changed since it was shown. Reload the Hooks panel and review it again."}, 409
+    try:
+        _mark_hook_approved(ctx, rule_id, row["command"])
+    except _attestations.AttestationRefused as exc:
+        return {"error": str(exc)}, 403
+    return {"status": "success"}
 class HookIdPayload(TypedDict):
     id: str
 @hooks_bp.route('execute', methods=['POST'], request_schema=HookIdPayload, docstring="Manually executes an automation rule.")
@@ -285,7 +310,7 @@ def execute_rule_manual(ctx):
     if not rule:
         return {"error": "Rule not found."}, 404
     if not _is_hook_approved(ctx, rule_id, rule['command']):
-        return {"error": "This rule's command has not been approved. Save or enable it from the Hooks panel first."}, 403
+        return {"error": "This rule's command has not been approved yet. Click Approve on its card to review and approve its command."}, 403
     job_id = ctx.jobs.submit(
         "execute_rule_task", 
         rule_id=rule_id, 

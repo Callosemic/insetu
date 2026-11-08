@@ -90,6 +90,7 @@ export class InSetuExtHooks extends InSetuElement {
         );
         this.allRepos = AppStore.getState()?.allRepos || [];
 
+        this.registerGlobalListener('insetu:hooks:approve', window, (e) => this.approveRule(e.detail.data));
         this.registerGlobalListener('insetu:hooks:toggle', window, (e) => this.toggleRule(e.detail.data));
         this.registerGlobalListener('insetu:hooks:execute', window, (e) => this.executeRule(e.detail.id));
         this.registerGlobalListener('insetu:hooks:edit', window, (e) => this.openCreateModal(e.detail.data));
@@ -127,6 +128,22 @@ export class InSetuExtHooks extends InSetuElement {
             HooksStore.getState().fetchRules();
         } catch (e) {
             alert(`Error saving rule: ${e.message}`);
+        }
+    }
+
+    async approveRule(rule) {
+        if (!confirm(`Approve this command? It runs with your account whenever the rule fires.\n\n${rule.command}`)) return;
+        try {
+            // Sends the command that was shown, so a command changed in the meantime is refused rather than approved unseen
+            const res = await this.api.post('hooks/approve', { id: rule.id, command: rule.command });
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.error || `HTTP ${res.status}`);
+            }
+            HooksStore.getState().fetchRules();
+        } catch (e) {
+            alert(`Error approving rule: ${e.message}`);
+            HooksStore.getState().fetchRules();
         }
     }
 
@@ -174,20 +191,24 @@ export class InSetuExtHooks extends InSetuElement {
                     ${this.loading ? html`<sutram-spinner text="Loading automation rules..."></sutram-spinner>` : ''}
                     <sutram-stack direction="col" gap="sm">
                         ${this.rules.length === 0 && !this.loading ? html`<sutram-empty-state text="No automation rules configured. Click '+ New Rule' to create one."></sutram-empty-state>` : ''}
-                        ${this.rules.map(rule => html`
+                        ${this.rules.map(rule => {
+                            const needsApproval = rule.approved === false;
+                            const desc = `IF: ${rule.trigger_type} [Target:${rule.trigger_target}]${needsApproval ? ' • 🔒 Needs approval: click Approve to review its command' : ''}`;
+                            return html`
                             <sutram-card
                                 .filename=${rule.id}
                                 .titleText=${rule.name}
-                                .descriptionText=${`IF: ${rule.trigger_type} [Target:${rule.trigger_target}]`}
-                                icon=${rule.enabled ? 'play-circle' : 'circle'}
-                                intent=${rule.enabled ? 'success' : 'neutral'}
+                                .descriptionText=${desc}
+                                icon=${needsApproval ? 'lock' : (rule.enabled ? 'play-circle' : 'circle')}
+                                intent=${needsApproval ? 'warning' : (rule.enabled ? 'success' : 'neutral')}
                                 entityType="hook_rule"
                                 .entityData=${rule}>
                                 <sutram-surface variant="inset" padding="xs">
                                     <code><b>THEN:</b> ${rule.command}</code>
                                 </sutram-surface>
                             </sutram-card>
-                        `)}
+                        `;
+                        })}
                     </sutram-stack>
 
                     <sutram-surface variant="ghost" border="top" padding="sm" gap="sm">
@@ -312,6 +333,16 @@ window.ExtensionRegistry.registerExtension('hooks', {
     entityActions: [
         {
             targetEntity: 'hook_rule',
+            id: 'hook-approve',
+            label: 'Approve',
+            icon: '🔓',
+            intent: 'warning',
+            order: 5,
+            match: (data) => data.approved === false,
+            emitEvent: (data) => ({ name: 'insetu:hooks:approve', detail: { data } })
+        },
+        {
+            targetEntity: 'hook_rule',
             id: 'hook-toggle',
             label: (data) => data.enabled ? 'Pause' : 'Enable',
             icon: (data) => data.enabled ? '⏸️' : '▶️',
@@ -326,6 +357,7 @@ window.ExtensionRegistry.registerExtension('hooks', {
             icon: '⚡',
             intent: 'highlight',
             order: 15,
+            match: (data) => data.approved !== false,
             emitEvent: (data) => ({ name: 'insetu:hooks:execute', detail: { id: data.id } })
         },
         {

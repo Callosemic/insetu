@@ -64,54 +64,63 @@ export const NotesStore = createExtensionStore('Notes', {
     }),
     saveNewNote: async () => {
         const { title, repo, bucket, tags } = NotesStore.getState().noteForm;
-        if (!title) return alert("Title is required.");
-        const noteId = `note-${Math.random().toString(36).substr(2, 8)}`;
-        const slug = window.inSetu.utils.slugify(title);
-        const filename = `${slug}-${noteId}.md`;
+        const cleanTitle = (title || '').trim();
+        if (!cleanTitle) {
+            if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("❌ Note title is required.", 3000, true);
+            throw new Error("Title is required.");
+        }
         const targetRepo = repo || 'global';
+        const subBucket = bucket || 'None';
+        const noteId = `note-${Math.random().toString(36).substring(2, 10)}`;
+        const slug = window.inSetu.utils.slugify(cleanTitle) || 'untitled';
+        const filename = `${slug}-${noteId}.md`;
         const filepath = targetRepo !== 'global'
             ? `vfs://${targetRepo}/.insetu-data/notes/${filename}`
             : `ctx://notes/${filename}`;
 
-        const tagsArr = tags ? tags.split(',').map(t => t.trim()).filter(t=>t) : [];
+        const tagsArr = tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : [];
         const now = new Date().toISOString().split('.')[0];
-
         const yamlObj = {
             id: noteId,
-            title: title.replace(/"/g, "'"),
-            repo: repo || 'global',
-            sub_bucket: bucket || 'None',
+            title: cleanTitle.replace(/"/g, "'"),
+            repo: targetRepo,
+            sub_bucket: subBucket,
             tags: tagsArr,
             created_at: now,
             updated_at: now
         };
+        const rawBody = `## ${cleanTitle}\n\n`;
+        const content = window.inSetu.utils.serializeFrontmatter(yamlObj, rawBody);
+        const activeWs = window.inSetu.utils.getActiveWorkspace();
+        const cacheBlobUrl = window.inSetu.vfs?.resolveFileFetchUrl
+            ? window.inSetu.vfs.resolveFileFetchUrl(filepath, true)
+            : `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(filepath)}`;
 
-        const rawContent = `## ${title}\n\n`;
-        const content = window.inSetu.utils.serializeFrontmatter(yamlObj, rawContent);
-        try {
-            // Issuing a standard fs/save mutation ensures the backend Event Ledger syncs perfectly
-            await window.inSetu.sys.executeWorkspaceMutation('fs/save', { filepath, content }, { 
-                silent: true, 
-                collapseKey: `vfs:save:${filepath}`,
-                pendingMutations: [filepath],
-                cacheBlobUrl: `/api/${window.inSetu.utils.getActiveWorkspace()}/fs/fetch?file=${encodeURIComponent(filepath)}`,
-                cacheBlobContent: content
-            });
+        const res = await window.inSetu.sys.executeWorkspaceMutation('notes/new', {
+            id: noteId,
+            title: cleanTitle,
+            repo: targetRepo,
+            sub_bucket: subBucket,
+            tags: tags || ''
+        }, {
+            silent: true,
+            collapseKey: `vfs:save:${filepath}`,
+            pendingMutations: [filepath],
+            cacheBlobUrl,
+            cacheBlobContent: content
+        });
+        const resolvedPath = (res && typeof res === 'object' && res.filepath) ? res.filepath : filepath;
 
-            NotesStore.setState(s => ({  
-                notes: [{ filepath, title, repo, sub_bucket: bucket, tags: tagsArr, updated_at: now }, ...s.notes],
-                newNoteModalOpen: false, 
-                editNoteFilepath: filepath,
-                noteForm: { title: '', repo: 'global', bucket: 'None', tags: '' } 
-            }));
+        NotesStore.setState(s => ({
+            notes: [{ id: noteId, filepath: resolvedPath, title: cleanTitle, repo: targetRepo, sub_bucket: subBucket, tags: tagsArr, created_at: now, updated_at: now }, ...s.notes.filter(n => n.filepath !== resolvedPath)],
+            newNoteModalOpen: false,
+            editNoteFilepath: resolvedPath,
+            noteForm: { title: '', repo: 'global', bucket: 'None', tags: '' }
+        }));
 
-            NotesStore.getState().openNoteEditor(filepath, title);
-
-            if (!window.inSetu.stores.App.getState().isOffline) {
-                NotesStore.getState().fetchNotes();
-            }
-        } catch (e) {
-            alert("Network error: " + e.message);
+        NotesStore.getState().openNoteEditor(resolvedPath, cleanTitle);
+        if (!window.inSetu.stores.App.getState().isOffline) {
+            NotesStore.getState().fetchNotes();
         }
     }
 }, {
@@ -151,7 +160,7 @@ export class InSetuExtNotesModals extends InSetuElement {
             <sutram-modal 
                 ?open=${true} 
                 titleText="Create New Note"
-                @sutram-modal-closed=${() => NotesStore.setState({ newNoteModalOpen: false })}>
+                @sutram-modal-closed=${(e) => { if (e.target === e.currentTarget) NotesStore.setState({ newNoteModalOpen: false }); }}>
                 <sutram-stack slot="body" direction="col" gap="md">
                     <sutram-input label="Note Title" ?flush=${true} .value=${this.noteForm?.title || ''} placeholder="e.g., API Architectural Decision" @sutram-input-changed=${(e) => NotesStore.setState(state => ({ noteForm: { ...state.noteForm, title: e.detail.value }}))}></sutram-input>
                     <sutram-stack direction="grid" ?compact=${true}>
@@ -308,20 +317,19 @@ export class InSetuExtNotesEditor extends InSetuElement {
                     .defaultExpanded=${false}
                     @editor-dirty=${e => { this._isDirty = e.detail.isDirty; }}
                     @insetu:frontmatter-loaded=${this._onFrontmatterLoaded}>
-                    <div slot="title-control">
-                        <sutram-textarea 
-                            .value=${this.editForm.title} 
-                            placeholder="Note Title..." 
-                            variant="ghost"
-                            ?compact=${true}
-                            ?flush=${true}
-                            @sutram-input-changed=${e => { 
-                                const val = e.detail.value.replace(/[\r\n]+/g, ' '); 
-                                this.editForm = { ...this.editForm, title: val }; 
-                                this._pushFrontmatter();
-                            }}>
-                        </sutram-textarea>
-                    </div>
+                    <sutram-textarea 
+                        slot="title-control"
+                        .value=${this.editForm.title} 
+                        placeholder="Note Title..." 
+                        variant="ghost"
+                        ?compact=${true}
+                        ?flush=${true}
+                        @sutram-input-changed=${e => { 
+                            const val = e.detail.value.replace(/[\r\n]+/g, ' '); 
+                            this.editForm = { ...this.editForm, title: val }; 
+                            this._pushFrontmatter();
+                        }}>
+                    </sutram-textarea>
                     <sutram-stack slot="metadata-controls" direction="col" gap="sm">
                         <sutram-stack direction="grid" ?compact=${true}>
                             <sutram-select ?flush=${true} label="Repository" .value=${this.editForm.repo} .options=${[{value: 'global', label: 'Global OS Level'}, ...(this.ecosystem.allRepos || []).map(r => ({value: r, label: r}))]} @sutram-input-changed=${e => { this.editForm = { ...this.editForm, repo: e.detail.value, bucket: 'None' }; this._pushFrontmatter(); }}></sutram-select>
@@ -385,6 +393,7 @@ export class InSetuExtNotes extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
+        this._debouncedFetchNotes = this.utils.debounce(() => NotesStore.getState().fetchNotes(), 300);
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
@@ -393,7 +402,9 @@ export class InSetuExtNotes extends InSetuElement {
                 m.filepath.includes('.insetu-data/notes/') ||
                 (m.filepath.startsWith('ws://') && m.filepath.includes('/notes/'))
             ));
-            if (touchedNote) NotesStore.getState().fetchNotes();
+            if (touchedNote) {
+                this._debouncedFetchNotes();
+            }
         });
         this.bindStore(
             NotesStore,
@@ -491,31 +502,11 @@ customElements.define('insetu-ext-notes', InSetuExtNotes);
 async function _preCacheAllNotes() {
     const notes = NotesStore.getState().notes || [];
     if (notes.length === 0) {
-        alert("No notes available to cache.");
+        if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("No notes available to cache.", 2500);
         return;
     }
-    const activeWs = window.inSetu.utils.getActiveWorkspace();
-    window.inSetu?.offlineLog?.(`Starting pre-cache for Notes Library (${notes.length} files)...`, 'info');
-    if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`Caching ${notes.length} notes...`, null);
-
-    let cachedCount = 0;
-    try {
-        for (const n of notes) {
-            if (!n.filepath) continue;
-            const res = await window.inSetu.api.request(`/api/${activeWs}/fs/fetch?file=${encodeURIComponent(n.filepath)}`, {}, activeWs).catch(() => {});
-            if (res && res.ok) {
-                await res.blob().catch(() => {});
-                cachedCount++;
-            }
-        }
-        window.inSetu?.offlineLog?.(`Pre-cache complete for Notes: ${cachedCount}/${notes.length} cached.`, 'success');
-        if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`Successfully cached ${cachedCount} notes.`, 3000);
-        setTimeout(() => {
-            window.inSetu?.events?.emit('insetu:force-refresh', { parentId: 'offline', subId: 'ledger' });
-        }, 500);
-    } catch (e) {
-        window.inSetu?.offlineLog?.(`Pre-cache failed for Notes: ${e.message}`, 'error');
-        alert(`Failed to cache notes: ${e.message}`);
+    if (window.inSetu?.vfs?.preCacheFiles) {
+        await window.inSetu.vfs.preCacheFiles(notes.map(n => n.filepath).filter(Boolean), { label: 'Notes Library' });
     }
 }
 

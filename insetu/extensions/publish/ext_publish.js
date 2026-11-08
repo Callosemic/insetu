@@ -6,7 +6,6 @@ export const PublishStore = createExtensionStore('Publish', {
     publishModalOpen: false,
     currentPublishTarget: '',
     publishMode: 'html_snippet',
-    activePublishJobId: null,
     publishError: '',
     snippetHtml: ''
 }, {
@@ -21,7 +20,6 @@ export class InSetuExtPublishModals extends InSetuElement {
         publishModalOpen: { type: Boolean },
         currentPublishTarget: { type: String },
         publishMode: { type: String },
-        activePublishJobId: { type: String },
         publishError: { type: String },
         snippetHtml: { type: String }
     };
@@ -33,7 +31,6 @@ export class InSetuExtPublishModals extends InSetuElement {
         this.publishModalOpen = false;
         this.currentPublishTarget = '';
         this.publishMode = st.publishMode || 'html_snippet';
-        this.activePublishJobId = null;
         this.publishError = '';
         this.snippetHtml = '';
     }
@@ -45,7 +42,6 @@ export class InSetuExtPublishModals extends InSetuElement {
                 publishModalOpen: state.publishModalOpen,
                 currentPublishTarget: state.currentPublishTarget,
                 publishMode: state.publishMode,
-                activePublishJobId: state.activePublishJobId,
                 publishError: state.publishError,
                 snippetHtml: state.snippetHtml
             }),
@@ -75,11 +71,11 @@ export class InSetuExtPublishModals extends InSetuElement {
         const missingPandoc = missingBins.includes('pandoc');
         const missingPdflatex = missingBins.includes('pdflatex');
         return html`
-            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Publish Document" @sutram-modal-closed=${() => PublishStore.setState({ publishModalOpen: false, snippetHtml: '', publishError: '' })}>
+            <sutram-modal ?open=${true} ?fullscreen=${true} titleText="Publish Document" @sutram-modal-closed=${(e) => { if (e.target === e.currentTarget) PublishStore.setState({ publishModalOpen: false, snippetHtml: '', publishError: '' }); }}>
                 <sutram-stack slot="body" direction="col" gap="md">
                     ${missingPandoc ? html`
                         <sutram-surface variant="tinted" intent="danger" padding="sm">
-                            ⚠️ System binary <code>pandoc</code> was not found in PATH. Install Pandoc on your host OS to compile documents.
+                            <sutram-label intent="danger" text="⚠️ System binary 'pandoc' was not found in PATH. Install Pandoc on your host OS to compile documents."></sutram-label>
                         </sutram-surface>
                     ` : ''}
                     <sutram-select 
@@ -96,7 +92,7 @@ export class InSetuExtPublishModals extends InSetuElement {
 
                     ${this.publishError ? html`
                         <sutram-surface variant="tinted" intent="danger" padding="sm">
-                            <strong>Error:</strong> ${this.publishError}
+                            <sutram-label intent="danger" .text=${`Error: ${this.publishError}`}></sutram-label>
                         </sutram-surface>
                     ` : ''}
 
@@ -105,7 +101,7 @@ export class InSetuExtPublishModals extends InSetuElement {
                             <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
                                 <sutram-stack direction="row" align="center" gap="xs">
                                     <sutram-icon name="check-circle-2" size="md" intent="success"></sutram-icon>
-                                    <strong>HTML Snippet Ready (${this.snippetHtml.length} chars)</strong>
+                                    <sutram-label intent="success" .text=${`HTML Snippet Ready (${this.snippetHtml.length} chars)`}></sutram-label>
                                 </sutram-stack>
                                 <sutram-stack direction="row" gap="sm" ?wrap=${true}>
                                     <sutram-btn
@@ -124,7 +120,7 @@ export class InSetuExtPublishModals extends InSetuElement {
                                     </sutram-btn>
                                 </sutram-stack>
                             </sutram-stack>
-                            <pre style="max-height: 320px; overflow-y: auto; margin: 0;">${this.snippetHtml}</pre>
+                            <sutram-textarea readonly ?monospace=${true} size="wide" .value=${this.snippetHtml}></sutram-textarea>
                         </sutram-surface>
                     ` : ''}
                 </sutram-stack>
@@ -204,7 +200,7 @@ window.ExtensionRegistry.registerExtension('publish', {
                 return fp.endsWith('.md');
             },
             onClick: (data, e) => {
-                PublishStore.setState({ publishModalOpen: true, currentPublishTarget: data.filepath, activePublishJobId: null, publishError: '', snippetHtml: '' });
+                PublishStore.setState({ publishModalOpen: true, currentPublishTarget: data.filepath, publishError: '', snippetHtml: '' });
             }
         }
     ],

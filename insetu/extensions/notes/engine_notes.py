@@ -88,6 +88,10 @@ def _sync_all_notes_to_db(ctx):
                 nid = _parse_and_upsert_note(abs_path, rel_path, ctx.workspace_id, valid_repos=valid_repos)
                 if nid:
                     seen_ids.add(nid)
+    existing_rows = ctx.db.get_all("notes_ledger")
+    for row in existing_rows:
+        if row["id"] not in seen_ids:
+            ctx.db.delete("notes_ledger", "id", row["id"])
     _SYNCED_NOTES_WORKSPACES.add(ctx.workspace_id)
 @notes_bp.on('mutate_workspace_config')
 def inject_notes_config(cfg, workspace_id=None, **kwargs):
@@ -107,8 +111,6 @@ def inject_notes_config(cfg, workspace_id=None, **kwargs):
 @notes_bp.on('topology_boot_complete')
 def hydrate_notes_on_boot(ctx, workspace_id=None, **kwargs):
     try:
-        ctx.db.execute("DELETE FROM notes_ledger")
-        ctx.db.commit()
         _sync_all_notes_to_db(ctx)
     except Exception:
         pass
@@ -214,8 +216,6 @@ def api_notes_list(ctx):
     """CQRS read-path: Fetches notes from DB, ensuring post-migration paths are synchronized."""
     count_check = ctx.db.execute("SELECT count(*) FROM notes_ledger").fetchone()[0]
     if count_check == 0 or ctx.workspace_id not in _SYNCED_NOTES_WORKSPACES:
-        ctx.db.execute("DELETE FROM notes_ledger")
-        ctx.db.commit()
         _sync_all_notes_to_db(ctx)
 
     rows = ctx.db.get_all("notes_ledger", order_by="updated_at DESC")
@@ -227,29 +227,44 @@ def api_notes_list(ctx):
     notes.extend(_discover_mounted_notes(ctx))
     return {"notes": notes}
 class NoteNewPayload(TypedDict, total=False):
+    id: Optional[str]
     title: str
     repo: Optional[str]
     sub_bucket: Optional[str]
     tags: Optional[str]
+    body: Optional[str]
 @notes_bp.route('new', methods=['POST'], request_schema=NoteNewPayload, docstring="Generates a new markdown note file with managed YAML frontmatter.")
 def api_notes_new(ctx):
     """Generates a new note file with managed YAML frontmatter."""
     data = ctx.payload or {}
-    title = data.get("title", "Untitled Note")
-    repo = data.get("repo", "global")
+    title = str(data.get("title") or "Untitled Note").strip() or "Untitled Note"
+    repo = str(data.get("repo") or "global").strip() or "global"
     valid_repos = {r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")}
     folder = f"vfs://{repo}/.insetu-data/notes" if (repo != "global" and repo in valid_repos) else "ctx://notes"
 
+    raw_tags = data.get("tags", "")
+    if isinstance(raw_tags, list):
+        tags_list = [str(t).strip() for t in raw_tags if str(t).strip()]
+    else:
+        tags_list = [t.strip() for t in str(raw_tags or "").split(",") if t.strip()]
+
     yaml_data = {
         "repo": repo,
-        "sub_bucket": data.get("sub_bucket", "None"),
+        "sub_bucket": data.get("sub_bucket") or "None",
+        "tags": tags_list,
     }
-    tags = data.get("tags", "")
-    if tags:
-        yaml_data["tags"] = [t.strip() for t in tags.split(',') if t.strip()]
+    if data.get("id"):
+        yaml_data["id"] = str(data["id"]).strip()
 
-    filepath, _ = ctx.create_entity_file(folder, title, yaml_data, prefix="note")
-    return {"status": "success", "filepath": filepath}
+    body_text = data.get("body")
+    filepath, full_yaml = ctx.create_entity_file(
+        folder,
+        title,
+        yaml_data,
+        body_content=str(body_text) if body_text is not None else f"## {title}\n\n",
+        prefix="note",
+    )
+    return {"status": "success", "id": full_yaml.get("id"), "filepath": filepath}
 @notes_bp.on('gather_declare_topology')
 def declare_notes_topology(ctx, target_repos=None, ledger_events=None, workspace_id=None, **kwargs):
     """Declares the notes library to the Gather engine for centralized chunking and context compilation."""

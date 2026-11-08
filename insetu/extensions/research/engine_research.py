@@ -109,11 +109,11 @@ class DuckDuckGoHTMLProvider(SearchProvider):
         try:
             from bs4 import BeautifulSoup as _BeautifulSoup
         except ImportError:
-            raise Exception("BeautifulSoup4 is required for DuckDuckGo local parsing.")
-            
+            raise RuntimeError("BeautifulSoup4 is required for DuckDuckGo local parsing.")
+
         safe_query = urllib.parse.quote(query)
         url = f"https://html.duckduckgo.com/html/?q={safe_query}"
-        
+
         if date_range:
             url += f"&df={date_range}"
 
@@ -121,7 +121,7 @@ class DuckDuckGoHTMLProvider(SearchProvider):
         try:
             html = fetch_url(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}, timeout=20).text()
         except Exception as e:
-            raise Exception(f"Search request failed: {str(e)}")
+            raise RuntimeError(f"Search request failed: {str(e)}")
         soup = _BeautifulSoup(html, 'html.parser')
         results = []
         
@@ -145,7 +145,7 @@ class GooglePlaywrightProvider(SearchProvider):
         try:
             from playwright.sync_api import sync_playwright as _sync_playwright, TimeoutError as _PlaywrightTimeoutError
         except ImportError:
-            raise Exception("Playwright is required for Google Search. Run: pip install playwright && playwright install chromium")
+            raise RuntimeError("Playwright is required for Google Search. Run: pip install playwright && playwright install chromium")
         safe_query = urllib.parse.quote(query)
         # Drop the &num parameter. Requesting 150 results on a single page triggers bot defenses.
         # The Metronome naturally pages through 10 standard results at a time via &start=
@@ -191,7 +191,7 @@ class GooglePlaywrightProvider(SearchProvider):
 
                     # Hard fail if we hit a CAPTCHA wall
                     if page.locator('div.g-recaptcha').count() > 0 or "sorry/index" in page.url:
-                        raise Exception("Google blocked the search with a CAPTCHA. Please try again later or switch to DuckDuckGo.")
+                        raise RuntimeError("Google blocked the search with a CAPTCHA. Please try again later or switch to DuckDuckGo.")
                     try:
                         # 2026 Update: Broaden selector to capture modern SERP links and avoid strict div.g dependence
                         page.wait_for_selector("div.g, a:has(h3), h3 a", timeout=8000)
@@ -200,7 +200,7 @@ class GooglePlaywrightProvider(SearchProvider):
                           break # Cleanly exit if no more documents
                         if results:
                           break # Safely return existing results rather than crashing
-                        raise Exception("Search results failed to load. Google may have changed their layout or blocked the request.")
+                        raise RuntimeError("Search results failed to load. Google may have changed their layout or blocked the request.")
 
                     # Target any anchor tag wrapping or containing an h3, or within a standard result div
                     search_links = page.locator("a:has(h3), h3 a, div.g a:has(h3)")
@@ -253,7 +253,7 @@ class SerperDevProvider(SearchProvider):
         api_key = ctx.settings.get("serper_api_key")
 
         if not api_key:
-            raise Exception("Missing Serper API Key. Please add it via the Settings menu.")
+            raise RuntimeError("Missing Serper API Key. Please add it via the Settings menu.")
 
         url = "https://google.serper.dev/search"
 
@@ -284,10 +284,10 @@ class SerperDevProvider(SearchProvider):
             }, data=json.dumps(payload).encode('utf-8'), timeout=20).json()
         except FetchHTTPError as e:
             if e.code in (401, 403):
-                raise Exception("Invalid Serper.dev API Key. Please check your Research Settings in the Settings Hub.")
-            raise Exception(f"Serper API request failed: HTTP {e.code}")
+                raise RuntimeError("Invalid Serper.dev API Key. Please check your Research Settings in the Settings Hub.")
+            raise RuntimeError(f"Serper API request failed: HTTP {e.code}")
         except Exception as e:
-            raise Exception(f"Serper API request failed: {str(e)}")
+            raise RuntimeError(f"Serper API request failed: {str(e)}")
 
         results = []
         for item in data.get("organic", []):
@@ -324,7 +324,8 @@ def gather_next_page(ctx, research_job_id: Optional[str] = None, job_id: Optiona
   date_range = meta.get('date_range', '')
   try:
     provider = get_provider(job['provider'])
-    links = provider.execute_search(job['query'], max_results=max_results, date_range=date_range, start_index=start_index, workspace_id=workspace_id)
+    page_limit = min(10, max(1, max_results - start_index))
+    links = provider.execute_search(job['query'], max_results=page_limit, date_range=date_range, start_index=start_index, workspace_id=workspace_id)
     new_links_count = 0
     for link in links:
       exists = conn.execute("SELECT id FROM research_inbox WHERE job_id=? AND url=?", (target_id, link['url'])).fetchone()
@@ -343,12 +344,28 @@ def gather_next_page(ctx, research_job_id: Optional[str] = None, job_id: Optiona
         new_links_count += 1
 
     conn.execute("UPDATE research_jobs SET total_links = total_links + ? WHERE id=?", (new_links_count, target_id))
-    current_total = conn.execute("SELECT total_links FROM research_jobs WHERE id=?", (target_id,)).fetchone()['total_links']
-    if new_links_count == 0 or current_total >= max_results:
-      conn.execute("UPDATE research_jobs SET status='paused' WHERE id=?", (target_id,))
+    next_start = start_index + 10
+    if not links or next_start >= max_results:
       ctx.jobs.cancel(f"research_gather_{target_id}")
+      unscraped = conn.execute(
+          "SELECT count(*) as c FROM research_inbox WHERE job_id=? AND status='pending' AND scraped_at IS NULL",
+          (target_id,),
+      ).fetchone()['c']
+      if unscraped > 0:
+        conn.execute("UPDATE research_jobs SET status='running' WHERE id=?", (target_id,))
+        conn.commit()
+        _, _, s_int, s_jit = _get_research_intervals(workspace_id)
+        ctx.jobs.schedule("scrape_next_link", s_int, jitter_ms=s_jit, job_id=f"research_{target_id}", research_job_id=target_id)
+        return
+      else:
+        pending_triage = conn.execute(
+            "SELECT count(*) as c FROM research_inbox WHERE job_id=? AND status='pending'",
+            (target_id,),
+        ).fetchone()['c']
+        final_status = 'completed' if pending_triage > 0 else 'reviewed'
+        conn.execute("UPDATE research_jobs SET status=? WHERE id=?", (final_status, target_id))
     else:
-      meta['start_index'] = start_index + 10
+      meta['start_index'] = next_start
       conn.execute("UPDATE research_jobs SET meta_json=? WHERE id=?", (json.dumps(meta), target_id))
 
     conn.commit()
@@ -391,7 +408,11 @@ def scrape_next_link(ctx, research_job_id: Optional[str] = None, job_id: Optiona
         now_str = datetime.now().isoformat(timespec='seconds')
         conn.execute("UPDATE research_inbox SET raw_markdown=?, scraped_at=? WHERE id=?", (f"Extraction Error: {str(e)}", now_str, inbox_id))
 
-    conn.execute("UPDATE research_jobs SET processed_links = processed_links + 1 WHERE id=?", (target_id,))
+    scraped_count = conn.execute(
+        "SELECT count(*) as c FROM research_inbox WHERE job_id=? AND scraped_at IS NOT NULL",
+        (target_id,),
+    ).fetchone()['c']
+    conn.execute("UPDATE research_jobs SET processed_links = ? WHERE id=?", (scraped_count, target_id))
     conn.commit()
 def _get_research_intervals(workspace_id='default'):
     """Reads dynamic pacing configurations from the workspace settings."""
@@ -418,10 +439,13 @@ def start_job(ctx):
     data = ctx.payload or {}
     query = str(data.get('query') or '').strip()
     provider_name = data.get('provider', 'duckduckgo')
-    max_results = int(data.get('max_results', 10))
+    try:
+        max_results = int(data.get('max_results', 10))
+    except (ValueError, TypeError):
+        max_results = 10
     date_range = str(data.get('date_range') or '').strip()
     parser = data.get('parser', 'bs4')
-    target_dir = data.get('target_dir', 'research/')
+    target_dir = data.get('target_dir', 'vfs://research/')
     if not is_extension_enabled('ingest', workspace_id):
         return {"error": "Pre-flight Validation Failed: Extension 'ingest' is required but not enabled in this workspace."}, 422
 
@@ -439,10 +463,16 @@ def start_job(ctx):
         "target_dir": target_dir
       })
 
-      conn = ctx.db
-      conn.execute("INSERT INTO research_jobs (id, query, provider, status, total_links, created_at, meta_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (job_id, query, provider_name, 'gathering', 0, now_str, meta_json))
-      conn.commit()
+      ctx.db.insert_or_replace("research_jobs", {
+        "id": job_id,
+        "query": query,
+        "provider": provider_name,
+        "status": "gathering",
+        "total_links": 0,
+        "processed_links": 0,
+        "created_at": now_str,
+        "meta_json": meta_json
+      })
       g_int, g_jit, _, _ = _get_research_intervals(workspace_id)
       # Dispatch to Metronome: Fetch a SERP page dynamically to avoid rate limits
       ctx.jobs.schedule("gather_next_page", g_int, jitter_ms=g_jit, job_id=f"research_gather_{job_id}", research_job_id=job_id)
@@ -454,9 +484,9 @@ def start_job(ctx):
 class ResearchActionPayload(TypedDict, total=False):
     action: str
     meta: dict
-@research_bp.route('<job_id>/action', methods=['POST'], request_schema=ResearchActionPayload, docstring="Performs lifecycle actions (pause, resume, cancel, retry, delete) on a specific research job.")
+@research_bp.route('<job_id>/action', methods=['POST'], request_schema=ResearchActionPayload, docstring="Performs lifecycle actions (pause, resume, cancel, retry, rerun, delete) on a specific research job.")
 def job_action(ctx, job_id):
-    """Performs lifecycle actions (pause, resume, cancel, retry, delete) on a specific research job."""
+    """Performs lifecycle actions (pause, resume, cancel, retry, rerun, delete) on a specific research job."""
     workspace_id = ctx.workspace_id
     data = ctx.payload or {}
     action = data.get('action') # 'pause', 'resume', 'cancel'
@@ -474,10 +504,12 @@ def job_action(ctx, job_id):
         conn.commit()
         # The Metronome will detect the paused status and self-terminate the ledger entry on its next execution
         return {"status": "success", "message": "Job paused"}
-    elif action == 'cancel' and current_status in ('running', 'paused', 'gathering'):
-        conn.execute("UPDATE research_jobs SET status='cancelled' WHERE id=?", (job_id,))
+    elif action == 'cancel' and current_status in ('running', 'paused', 'gathering', 'failed'):
+        conn.execute("UPDATE research_jobs SET status='cancelled', total_links=0, processed_links=0 WHERE id=?", (job_id,))
         conn.execute("DELETE FROM research_inbox WHERE job_id=?", (job_id,))
         conn.commit()
+        ctx.jobs.cancel(f"research_{job_id}")
+        ctx.jobs.cancel(f"research_gather_{job_id}")
         return {"status": "success", "message": "Job cancelled"}
     elif action == 'resume' and current_status == 'paused':
         conn.execute("UPDATE research_jobs SET status='running' WHERE id=?", (job_id,))
@@ -495,9 +527,8 @@ def job_action(ctx, job_id):
         conn.commit()
         return {"status": "success", "message": "Metadata updated"}
     elif action == 'delete':
-        conn.execute("DELETE FROM research_jobs WHERE id=?", (job_id,))
-        conn.execute("DELETE FROM research_inbox WHERE job_id=?", (job_id,))
-        conn.commit()
+        conn.delete("research_jobs", "id", job_id)
+        conn.delete("research_inbox", "job_id", job_id)
         ctx.jobs.cancel(f"research_{job_id}")
         ctx.jobs.cancel(f"research_gather_{job_id}")
 
@@ -524,6 +555,22 @@ def job_action(ctx, job_id):
             ctx.jobs.schedule("scrape_next_link", s_int, jitter_ms=s_jit, job_id=f"research_{job_id}", research_job_id=job_id)
 
         return {"status": "success", "message": f"Job retrying in {target_status} phase"}
+
+    elif action == 'rerun' and current_status in ('completed', 'reviewed', 'cancelled', 'failed'):
+        job_data = conn.execute("SELECT meta_json FROM research_jobs WHERE id=?", (job_id,)).fetchone()
+        meta = json.loads(job_data['meta_json'] if job_data and job_data['meta_json'] else '{}')
+        meta.pop('error', None)
+        meta['start_index'] = 0
+        existing_total = conn.execute("SELECT count(*) as c FROM research_inbox WHERE job_id=?", (job_id,)).fetchone()['c']
+        existing_scraped = conn.execute("SELECT count(*) as c FROM research_inbox WHERE job_id=? AND scraped_at IS NOT NULL", (job_id,)).fetchone()['c']
+        conn.execute(
+            "UPDATE research_jobs SET status='gathering', total_links=?, processed_links=?, meta_json=? WHERE id=?",
+            (existing_total, existing_scraped, json.dumps(meta), job_id),
+        )
+        conn.commit()
+        g_int, g_jit, _, _ = _get_research_intervals(workspace_id)
+        ctx.jobs.schedule("gather_next_page", g_int, jitter_ms=g_jit, job_id=f"research_gather_{job_id}", research_job_id=job_id)
+        return {"status": "success", "message": "Job re-running SERP gather pass"}
 
     return {"error": f"Invalid transition from {current_status} to {action}"}, 400
 @research_bp.route('jobs', methods=['GET'], docstring="Retrieves the history of active and past research jobs.")

@@ -4,7 +4,7 @@ import re
 import json
 import urllib.parse
 from typing import TypedDict, Optional, List
-from insetu.core.sdk import InSetuExtension, InSetuURI, fetch_url
+from insetu.core.sdk import InSetuExtension, fetch_url
 CITATIONS_SCHEMA = {
     "citations": {
         "id": "TEXT PRIMARY KEY",
@@ -161,6 +161,7 @@ def get_metadata_index(ctx):
     """Leverages SQLite JSON1 C-extensions to calculate aggregates instantly, eliminating Python RAM caching."""
     conn = ctx.db
     try:
+        _ensure_citations_hydrated(ctx)
         pubs = [row[0] for row in conn.execute("SELECT DISTINCT json_extract(raw_json, '$.container-title') FROM citations WHERE json_extract(raw_json, '$.container-title') IS NOT NULL ORDER BY 1").fetchall()]
 
         authors = set()
@@ -184,11 +185,13 @@ def _ensure_citations_hydrated(ctx):
                 continue
             item_copy = dict(item)
             atts = item_copy.pop("_attachments", [])
-            ctx.db.execute(
-                "INSERT OR REPLACE INTO citations (id, type, title, raw_json, attachments) VALUES (?, ?, ?, ?, ?)",
-                (str(csl_id), str(item_copy.get("type", "unknown")), str(item_copy.get("title", "Untitled")), json.dumps(item_copy), json.dumps(atts))
-            )
-        ctx.db.commit()
+            ctx.db.insert_or_replace("citations", {
+                "id": str(csl_id),
+                "type": str(item_copy.get("type", "unknown")),
+                "title": str(item_copy.get("title", "Untitled")),
+                "raw_json": json.dumps(item_copy),
+                "attachments": json.dumps(atts)
+            })
     elif count > 0 and saved is None:
         _flush_citations_to_json(ctx)
 
@@ -224,9 +227,7 @@ def attach_citation(ctx, csl_id):
     attachments = data.get("attachments", [])
     try:
         _ensure_citations_hydrated(ctx)
-        conn = ctx.db
-        conn.execute("UPDATE citations SET attachments = ? WHERE id = ?", (json.dumps(attachments), csl_id))
-        conn.commit()
+        ctx.db.update("citations", {"attachments": json.dumps(attachments)}, "id", csl_id)
         _flush_citations_to_json(ctx)
         return {"status": "success"}
     except Exception as e:
@@ -286,8 +287,10 @@ def _background_citation_search(
                 try:
                     cat_data = fetch_url(cat_url, headers={'User-Agent': 'mailto:insetu-dev@localhost'}, timeout=20).json()
                     if cat_data.get('results'):
-                        topic_id = InSetuURI(cat_data['results'][0]['id']).basename
-                        filters.append(f"topics.id:{topic_id}")
+                        raw_topic_id = str(cat_data['results'][0].get('id') or '')
+                        topic_id = Path(urllib.parse.urlparse(raw_topic_id).path).name or raw_topic_id
+                        if topic_id:
+                            filters.append(f"topics.id:{topic_id}")
                 except Exception:
                     pass
             if field == 'title' and safe_query:
@@ -301,8 +304,10 @@ def _background_citation_search(
 
             data = fetch_url(url, headers={'User-Agent': 'mailto:insetu-dev@localhost'}, timeout=20).json()
             for work in data.get('results', []):
+                raw_work_id = str(work.get('id') or '')
+                work_id = Path(urllib.parse.urlparse(raw_work_id).path).name or raw_work_id or 'unknown'
                 csl_items.append({
-                    "id": InSetuURI(work.get('id', '')).basename,
+                    "id": work_id,
                     "title": work.get('title', 'Untitled'),
                     "type": work.get('type', 'article'),
                     "author": [{"family": a.get('author', {}).get('display_name', '')} for a in work.get('authorships', [])],
@@ -359,8 +364,7 @@ def import_citations(ctx):
         for item in items:
             csl_id = item.get("id")
             if not csl_id: continue
-            # Check for existing record
-            existing = conn.execute("SELECT id, attachments FROM citations WHERE id = ?", (csl_id,)).fetchone()
+            existing = conn.get_by_id("citations", str(csl_id))
             atts = '[]'
 
             if existing:
@@ -371,15 +375,16 @@ def import_citations(ctx):
                     conflicts.append(item)
                     continue
 
-            # Overwrite or insert new, preserving attachments
             csl_type = item.get("type", "unknown")
             csl_title = item.get("title", "Untitled Reference")
-            conn.execute(
-                "INSERT OR REPLACE INTO citations (id, type, title, raw_json, attachments) VALUES (?, ?, ?, ?, ?)",
-                (str(csl_id), str(csl_type), str(csl_title), json.dumps(item), atts)
-            )
+            conn.insert_or_replace("citations", {
+                "id": str(csl_id),
+                "type": str(csl_type),
+                "title": str(csl_title),
+                "raw_json": json.dumps(item),
+                "attachments": atts
+            })
             count += 1
-        conn.commit()
         _flush_citations_to_json(ctx)
         return {
             "status": "success",  
@@ -396,11 +401,9 @@ def delete_citation(ctx, csl_id):
     """Permanently removes a citation from the global library."""
     try:
         _ensure_citations_hydrated(ctx)
-        conn = ctx.db
-        cursor = conn.execute("DELETE FROM citations WHERE id = ?", (csl_id,))
-        if cursor.rowcount == 0:
+        if not ctx.db.get_by_id("citations", csl_id):
             return {"error": "Citation not found"}, 404
-        conn.commit()
+        ctx.db.delete("citations", "id", csl_id)
         _flush_citations_to_json(ctx)
 
         return {"status": "success", "message": f"Deleted citation {csl_id}"}
@@ -411,6 +414,7 @@ def _check_url_in_citations_library(ctx, url=None, workspace_id=None, **kwargs):
     if not url:
         return None
     try:
+        _ensure_citations_hydrated(ctx)
         row = ctx.db.execute(
             "SELECT id FROM citations WHERE json_extract(raw_json, '$.URL') = ?",
             (url,),
@@ -430,6 +434,7 @@ def inject_citation_middleware(text, workspace_id=None, **kwargs):
     csl_items = []
     try:
         ctx = citations_bp.get_context(workspace_id)
+        _ensure_citations_hydrated(ctx)
         conn = ctx.db
         placeholders = ','.join(['?'] * len(true_ids))
         cursor = conn.execute(f"SELECT raw_json FROM citations WHERE id IN ({placeholders})", tuple(true_ids))

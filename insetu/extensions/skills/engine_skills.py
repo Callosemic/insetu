@@ -114,35 +114,88 @@ def _parse_and_upsert_skill(skill_uri, workspace_id=None):
                     except (ValueError, TypeError):
                         metrics[k] = v
 
-        conn = ctx.db
-        conn.execute("""
-            INSERT OR REPLACE INTO skills_ledger  
-            (id, domain, tags, group_name, name, status, last_practiced, interval_days, next_review, filepath, metrics_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (s_id, domain, tags, group_name, name, status, last_practiced, interval_days, next_review, canon_uri, json.dumps(metrics)))
-        conn.commit()
+        ctx.db.insert_or_replace("skills_ledger", {
+            "id": s_id,
+            "domain": domain,
+            "tags": tags,
+            "group_name": group_name,
+            "name": name,
+            "status": status,
+            "last_practiced": last_practiced,
+            "interval_days": interval_days,
+            "next_review": next_review,
+            "filepath": canon_uri,
+            "metrics_json": json.dumps(metrics)
+        })
     except Exception as e:
         print(f"Error parsing global skill file {skill_uri}: {e}")
+
+
+def _serialize_skill_rows(rows) -> list:
+    items = []
+    for row in rows:
+        d = dict(row)
+        d['metrics'] = json.loads(d['metrics_json']) if d.get('metrics_json') else {}
+        items.append(d)
+    return items
+
+
+def _apply_skill_mutation(ctx, filename: str, data: dict, metric_updates: dict, last_practiced=None, interval_days=None, next_review=None):
+    canon_uri = _canonical_skill_uri(filename)
+    row = ctx.db.get_by_id("skills_ledger", canon_uri, id_col="filepath")
+    if not row:
+        return None, ("Global user skill record not found", 404)
+
+    content = ctx.vfs.read(canon_uri) or ""
+    existing_metrics = json.loads(row['metrics_json']) if row['metrics_json'] else {}
+    existing_metrics.update(metric_updates)
+
+    name = str(data.get('name', row['name'])).strip()
+    tags = str(data.get('tags', row['tags'] if 'tags' in row.keys() else '')).strip()
+    group_name = str(data.get('group', row['group_name'] if 'group_name' in row.keys() else '')).strip()
+    status = str(data.get('status', row['status'])).strip()
+
+    yaml_data = {
+        "id": row["id"],
+        "domain": row["domain"],
+        "tags": tags,
+        "group": group_name,
+        "name": name,
+        "status": status,
+        "last_practiced": last_practiced if last_practiced is not None else (row["last_practiced"] or "null"),
+        "interval_days": interval_days if interval_days is not None else (row["interval_days"] or 1),
+        "next_review": next_review if next_review is not None else (row["next_review"] or datetime.date.today().isoformat()),
+        **existing_metrics
+    }
+    final_content = ctx.update_frontmatter(content, yaml_data)
+    final_uri = canon_uri
+    if name.lower() != row['name'].lower():
+        final_uri = f"ctx://skills/{slugify(name)}.md"
+        ctx.vfs.delete(canon_uri)
+        ctx.db.delete("skills_ledger", "filepath", canon_uri)
+
+    ctx.vfs.save(final_uri, final_content)
+    ctx.sync_vfs_barrier()
+    _parse_and_upsert_skill(final_uri, workspace_id=ctx.workspace_id)
+    return final_uri, None
+
+
 @skills_bp.route('playlist', methods=['GET'], docstring="Compiles a unified practice batch across all domains based on SM-2 spacing.")
 def get_practice_playlist(ctx):
     """Compiles a unified practice batch across all domains sorted globally."""
     try:
         _ensure_skills_hydrated(ctx)
-        conn = ctx.db
         today_str = datetime.date.today().isoformat()
-        cursor = conn.execute("""
+        cursor = ctx.db.execute("""
             SELECT * FROM skills_ledger 
             WHERE next_review <= ? OR next_review IS NULL 
             ORDER BY interval_days ASC, id ASC
         """, (today_str,))
-        items = []
-        for row in cursor.fetchall():
-            d = dict(row)
-            d['metrics'] = json.loads(d['metrics_json'])
-            items.append(d)
-        return {"playlist": items}
+        return {"playlist": _serialize_skill_rows(cursor.fetchall())}
     except Exception as e:
         return {"error": str(e)}, 500
+
+
 class LogSkillPayload(TypedDict, total=False):
     filepath: str
     score: int
@@ -152,19 +205,19 @@ class LogSkillPayload(TypedDict, total=False):
     group: str
     status: str
 
+
 @skills_bp.route('log', methods=['POST'], request_schema=LogSkillPayload, docstring="Logs a practice session and updates the SM-2 spaced repetition clocks.")
 def log_skill_practice(ctx):
     """Logs a practice run against the user's global profile tracking framework."""
     data = ctx.payload or {}
-    filename = data.get('filepath')  # Maps strictly to user space base filename
+    filename = data.get('filepath')
     score = int(data.get('score', 3))
     updates = data.get('metrics', {})
     if not filename:
         return {"error": "Filename tracking reference required"}, 400
     try:
         canon_uri = _canonical_skill_uri(filename)
-        conn = ctx.db
-        row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (canon_uri,)).fetchone()
+        row = ctx.db.get_by_id("skills_ledger", canon_uri, id_col="filepath")
         if not row:
             return {"error": "Global user skill record not found"}, 404
         current_interval = row['interval_days'] or 1
@@ -175,41 +228,24 @@ def log_skill_practice(ctx):
         else:
             next_interval = 1
         today = datetime.date.today()
-        next_review_date = today + datetime.timedelta(days=next_interval)
-        content = ctx.vfs.read(canon_uri) or ""
+        next_review_date = (today + datetime.timedelta(days=next_interval)).isoformat()
 
-        existing_metrics = json.loads(row['metrics_json']) if row['metrics_json'] else {}
-        existing_metrics.update(updates)
-        name = data.get('name', row['name']).strip()
-        tags = data.get('tags', row['tags'] if 'tags' in row.keys() else '').strip()
-        group_name = data.get('group', row['group_name'] if 'group_name' in row.keys() else '').strip()
-
-        yaml_data = {
-            "id": row["id"],
-            "domain": row["domain"],
-            "tags": tags,
-            "group": group_name,
-            "name": name,
-            "status": data.get("status", row["status"]),
-            "last_practiced": today.isoformat(),
-            "interval_days": next_interval,
-            "next_review": next_review_date.isoformat(),
-            **existing_metrics
-        }
-        final_content = ctx.update_frontmatter(content, yaml_data)
-        final_uri = canon_uri
-        if name.lower() != row['name'].lower():
-            final_uri = f"ctx://skills/{slugify(name)}.md"
-            ctx.vfs.delete(canon_uri)
-            conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (canon_uri,))
-            conn.commit()
-
-        ctx.vfs.save(final_uri, final_content)
-        ctx.sync_vfs_barrier()
-        _parse_and_upsert_skill(final_uri, workspace_id=ctx.workspace_id)
-        return {"status": "success", "interval_days": next_interval, "next_review": next_review_date.isoformat(), "filepath": final_uri}
+        final_uri, err = _apply_skill_mutation(
+            ctx,
+            filename=filename,
+            data=data,
+            metric_updates=updates,
+            last_practiced=today.isoformat(),
+            interval_days=next_interval,
+            next_review=next_review_date,
+        )
+        if err:
+            return {"error": err[0]}, err[1]
+        return {"status": "success", "interval_days": next_interval, "next_review": next_review_date, "filepath": final_uri}
     except Exception as e:
         return {"error": str(e)}, 500
+
+
 class UpdateSkillPayload(TypedDict, total=False):
     filepath: str
     name: str
@@ -219,6 +255,7 @@ class UpdateSkillPayload(TypedDict, total=False):
     parts: str
     custom_steps: str
 
+
 @skills_bp.route('update', methods=['POST'], request_schema=UpdateSkillPayload, docstring="Updates structural properties of a skill item without affecting practice clocks.")
 def update_skill_structure(ctx):
     """Updates structural track properties without affecting the SM-2 spaced repetition clocks."""
@@ -227,49 +264,22 @@ def update_skill_structure(ctx):
     if not filename:
         return {"error": "Filename tracking reference required"}, 400
     try:
-        canon_uri = _canonical_skill_uri(filename)
-        conn = ctx.db
-        row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (canon_uri,)).fetchone()
-        if not row:
-            return {"error": "Global user skill record not found"}, 404
-        content = ctx.vfs.read(canon_uri) or ""
-
-        existing_metrics = json.loads(row['metrics_json']) if row['metrics_json'] else {}
-        name = data.get('name', row['name']).strip()
-        tags = data.get('tags', row['tags'] if 'tags' in row.keys() else '').strip()
-        group_name = data.get('group', row['group_name'] if 'group_name' in row.keys() else '').strip()
-        status = data.get('status', row['status']).strip()
-        if 'parts' in data: existing_metrics['parts'] = data['parts'].strip()
-        if 'custom_steps' in data: existing_metrics['custom_steps'] = data['custom_steps'].strip()
-
-        yaml_data = {
-            "id": row["id"],
-            "domain": row["domain"],
-            "tags": tags,
-            "group": group_name,
-            "name": name,
-            "status": status,
-            "last_practiced": row["last_practiced"] or "null",
-            "interval_days": row["interval_days"] or 1,
-            "next_review": row["next_review"] or datetime.date.today().isoformat(),
-            **existing_metrics
-        }
-        final_content = ctx.update_frontmatter(content, yaml_data)
-        final_uri = canon_uri
-        if name.lower() != row['name'].lower():
-            final_uri = f"ctx://skills/{slugify(name)}.md"
-            ctx.vfs.delete(canon_uri)
-            conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (canon_uri,))
-            conn.commit()
-
-        ctx.vfs.save(final_uri, final_content)
-        ctx.sync_vfs_barrier()
-        _parse_and_upsert_skill(final_uri, workspace_id=ctx.workspace_id)
+        metric_updates = {}
+        if 'parts' in data:
+            metric_updates['parts'] = str(data['parts']).strip()
+        if 'custom_steps' in data:
+            metric_updates['custom_steps'] = str(data['custom_steps']).strip()
+        final_uri, err = _apply_skill_mutation(ctx, filename=filename, data=data, metric_updates=metric_updates)
+        if err:
+            return {"error": err[0]}, err[1]
         return {"status": "success", "filepath": final_uri}
     except Exception as e:
         return {"error": str(e)}, 500
+
+
 class DeleteSkillPayload(TypedDict):
     filepath: str
+
 
 @skills_bp.route('delete', methods=['POST'], request_schema=DeleteSkillPayload, docstring="Permanently deletes a skill tracking record and its associated physical markdown file.")
 def delete_skill_item(ctx):
@@ -280,26 +290,20 @@ def delete_skill_item(ctx):
         return {"error": "Filename tracking reference required"}, 400
     try:
         canon_uri = _canonical_skill_uri(filename)
-        conn = ctx.db
         ctx.vfs.delete(canon_uri)
-        conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (canon_uri,))
-        conn.commit()
+        ctx.db.delete("skills_ledger", "filepath", canon_uri)
         return {"status": "success"}
     except Exception as e:
         return {"error": str(e)}, 500
+
+
 @skills_bp.route('list', methods=['GET'], docstring="Retrieves all registered skill items across the entire user profile.")
 def get_all_skills(ctx):
     """Returns every tracking item registered across the user profile layout."""
     try:
         _ensure_skills_hydrated(ctx)
-        conn = ctx.db
-        cursor = conn.execute("SELECT * FROM skills_ledger ORDER BY name ASC")
-        items = []
-        for row in cursor.fetchall():
-            d = dict(row)
-            d['metrics'] = json.loads(d['metrics_json'])
-            items.append(d)
-        return {"skills": items}
+        rows = ctx.db.get_all("skills_ledger", order_by="name ASC")
+        return {"skills": _serialize_skill_rows(rows)}
     except Exception as e:
         return {"error": str(e)}, 500
 class CreateSkillPayload(TypedDict, total=False):
