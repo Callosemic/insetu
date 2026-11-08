@@ -12,6 +12,18 @@ models:
 
 > **Related direction (2026-11-04):** prompts as the LLM compute units of routines, deterministic units beside them, and alternate deterministic and LLM routes for one node (`2026-11-04-prompts-tree.md`). Sprints 2 and 3 should express nodes and RAG units in those terms.
 
+## Roadmap placement (2026-11-07)
+
+- **Sprint 1 is done** (reviewed 2026-11-07).
+- **After 1.0:** Sprints 2 to 6, in the experimental lane beside the agent loop.
+- **Order constraints:**
+    - S6.T2 (`git.commit` and `git.push` as routine capabilities, `/yolo`) only after S5's risk classes, with commit and push classed `exec`.
+    - S6.T3 after S7 (terminal hardening).
+    - S6.T4 after S5, built on `fetch_url`.
+    - S6.T1 joins the post-diff plan's 4.4 conflict staging rather than adding a second mechanism.
+- **Test paths:** the `test_contract` comments name `tests/test_*.py`; the suites live in `tests/unit/`.
+
+
 ## Context & Problem Statement
 This plan implements the mental model codified in `vfs://insetu/docs/models/agent_orchestrator_and_rag.md`. It resolves the original `/wrap` context explosion (where wrapping a sub-bucket diff pulled all 42 test files in `tests/` across 6 handoff chunks), retires ghost `ctx://workflows/` background pre-compilation left over from the decommissioned `flow` extension, removes the 80-line truncation of `CODE_INDEX.md`, and unifies single- and cross-repo (`insetu`, `sutram`, `akasa`) retrieval around 6 volatility-ordered buckets and 4 representational lenses.
 
@@ -20,8 +32,8 @@ This plan implements the mental model codified in `vfs://insetu/docs/models/agen
 ## Sprint 1: Retire Ghost Workflow Pre-Compilation & Verify Full `hierarchy` Index
 Eliminate background `ctx://workflows/workflow_*_context.txt` compilation on file saves and ensure fast scouts see untruncated repository symbol maps.
 
-- [ ] [S1.T1] Remove `_register_agent_workflow_compilation_step`, `_background_compile_routine_workflows`, and the `ctx://workflows` cache volume from `engine_agent.py` and `engine_gather.py`, plus the `ctx://workflows/...` path resolution in `utils_core.py` (and clean up the legacy cache folder); treat routine frontmatter `includes:` strictly as initial context resolved when the routine runs. <!-- targets: vfs://insetu/insetu/core/agent/engine_agent.py, vfs://insetu/insetu/core/gather/engine_gather.py, vfs://insetu/insetu/core/utils_core.py, test_contract: vfs://insetu/tests/unit/test_agent_orchestrator_and_mcp.py -->
-- [ ] [S1.T2] Verify that the `[:80]` line truncation of `CODE_INDEX.md` in `api_topology_overview` (`engine_topology.py`) is already removed in 0.34.0 (`idx_full`); defer federated cross-repo symbol maps to Sprint 4 (`S4.T2`). <!-- targets: vfs://insetu/insetu/core/topology/engine_topology.py, test_contract: vfs://insetu/tests/unit/test_repo_landmarks.py -->
+- [x] [S1.T1] Remove `_register_agent_workflow_compilation_step`, `_background_compile_routine_workflows`, and the `ctx://workflows` cache volume from `engine_agent.py` and `engine_gather.py`, plus the `ctx://workflows/...` path resolution in `utils_core.py` (and clean up the legacy cache folder); treat routine frontmatter `includes:` strictly as initial context resolved when the routine runs. <!-- targets: vfs://insetu/insetu/core/agent/engine_agent.py, vfs://insetu/insetu/core/gather/engine_gather.py, vfs://insetu/insetu/core/utils_core.py, test_contract: vfs://insetu/tests/unit/test_agent_orchestrator_and_mcp.py -->
+- [x] [S1.T2] Verify that the `[:80]` line truncation of `CODE_INDEX.md` in `api_topology_overview` (`engine_topology.py`) is already removed in 0.34.0 (`idx_full`); defer federated cross-repo symbol maps to Sprint 4 (`S4.T2`). <!-- targets: vfs://insetu/insetu/core/topology/engine_topology.py, test_contract: vfs://insetu/tests/unit/test_repo_landmarks.py -->
 
 ---
 

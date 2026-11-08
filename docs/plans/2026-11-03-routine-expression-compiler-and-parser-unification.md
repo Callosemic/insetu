@@ -15,6 +15,15 @@ tags: [plan, rfc, routines, prompts, web-chat, parser, dsl, bridge, discussion-n
 
 ---
 
+## Roadmap placement (2026-11-07)
+
+- **1.0:**
+    - Vector A's grammar, designed with Claude (step 5 of the road to 1.0). It unblocks God-objects Wave 3.2.
+    - Vector B through the post-diff plan's 1.3, after V7, tested against the E1 conformance vectors.
+- **Vector C's five failure modes no longer reproduce** (checked 2026-11-07). The one handoff defect found that day, Copy Prompt + Directives showing no result, was a call-site bug in `agent.js`, fixed separately.
+- **After 1.0:** the 4-stage `compile_node_request` and `web_chat` as a transport driver, built with the prompts-as-units direction (N2).
+
+
 ## 1. Problem Statement & Open Design Questions
 
 ### Vector A: Declarative Routine Expression DSL (`when:`, `condition:`, `until:`)

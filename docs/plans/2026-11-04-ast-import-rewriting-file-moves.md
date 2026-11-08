@@ -11,6 +11,13 @@ depends_on:
 
 # Plan: Moves That Keep Imports Working
 
+## Roadmap placement (2026-11-07)
+
+- **Sprint 1 is done** (released 2026-11-05). The Order section below is kept as history.
+- **1.0:** Sprints 2 and 3, step 5 of the road to 1.0 (kept before 1.0, decided 2026-11-07).
+- **After 1.0:** the language-server tier, after S5.
+
+
 ## Order (revised 2026-11-04)
 
 1. **Sprint 1 first, before God-objects Wave 1:** fix bridge issue #15 and let `RELOCATE` create a missing destination file, with property tests. Wave 1 moves symbols, not whole files, so this is the part that helps it: one transaction can relocate symbols into a new module and edit the callers' imports.

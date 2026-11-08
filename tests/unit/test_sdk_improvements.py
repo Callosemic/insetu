@@ -19,6 +19,7 @@ from insetu.core.sdk import (
     InSetuExtension,
     ExtensionContext,
     get_registered_capabilities,
+    reset_kernel_state,
     resolve_external_dependency_spec,
 )
 from insetu.core.system.engine_system import system_bp
@@ -35,8 +36,8 @@ from insetu.core.agent.engine_agent import (
     agent_bp,
     AGENT_SCHEMA,
     _execute_agent_turn,
-    _background_compile_routine_workflows,
 )
+from insetu.core.agent.orchestrator import execute_declarative_routine
 from insetu.core.bridge.engine_bridge import bridge_bp, BRIDGE_SCHEMA
 from insetu.core.llm.engine_llm import llm_bp
 from insetu.core.topology.engine_topology import TOPOLOGY_SCHEMA, mount_topology_volumes_dynamically
@@ -44,24 +45,8 @@ from tests.fitness.core import FitnessState
 from tests.fitness.rules_python import BackendFitnessVisitor, check_python_files
 
 
-def _reset_db_connections():
-    for attr in dir(akasa_db):
-        obj = getattr(akasa_db, attr)
-        if hasattr(obj, "connections") and isinstance(obj.connections, dict):
-            for c in list(obj.connections.values()):
-                try: c.close()
-                except Exception: pass
-            obj.connections.clear()
-        elif isinstance(obj, dict) and "conn" in attr.lower():
-            for c in list(obj.values()):
-                try: c.close()
-                except Exception: pass
-            obj.clear()
-
-
 class TestSdkImprovements(unittest.TestCase):
     def setUp(self):
-        _reset_db_connections()
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root_path = Path(self.temp_dir.name).resolve()
         self.control_dir = self.root_path / ".insetu"
@@ -69,7 +54,7 @@ class TestSdkImprovements(unittest.TestCase):
 
         self.orig_cwd = akasa_utils.get_daemon_cwd()
         self.orig_env_ctrl = os.environ.get("AKASA_CONTROL_DIR")
-        akasa.reset_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
+        reset_kernel_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
         self.workspace_id = f"ws_{uuid.uuid4().hex[:8]}"
         (self.control_dir / "host.json").write_text(
             json.dumps({"port": 5005}),
@@ -134,20 +119,21 @@ class TestSdkImprovements(unittest.TestCase):
         self.assertIn("Initial architectural review notes.", body)
     def test_move_tree_contents_self_move_immunity_and_volume_disjointness(self):
         """move_tree_contents never deletes files when src_dir == dst_dir, and mount_volumes is idempotent."""
-        target_dir = Path(agent_bp._resolve_volume_dir(self.workspace_id, "workflows", agent_bp.volumes["workflows"]))
+        target_dir = Path(agent_bp._resolve_volume_dir(self.workspace_id, "routines", agent_bp.volumes["routines"]))
         target_dir.mkdir(parents=True, exist_ok=True)
-        sentinel = target_dir / "workflow_morning_briefing_context.txt"
-        sentinel.write_text("Morning briefing payload", encoding="utf-8")
+        sentinel = target_dir / "morning_briefing.md"
+        sentinel.write_text("---\nid: morning_briefing\n---\n", encoding="utf-8")
 
         # 1. Direct self-move call must be a safe no-op
         move_tree_contents(target_dir, target_dir)
         self.assertTrue(sentinel.exists(), "move_tree_contents must never delete files when src_dir == dst_dir")
 
-        # 2. Repeated mount_volumes and get_context calls must preserve files in .insetu/cache/agent
+        # 2. Repeated mount_volumes and get_context calls must preserve files in .insetu/data/agent
         agent_bp.mount_volumes(self.workspace_id, force=True)
         agent_bp.mount_volumes(self.workspace_id)
         _ = agent_bp.get_context(self.workspace_id)
-        self.assertTrue(sentinel.exists(), "agent_bp.mount_volumes must preserve compiled workflow cache files")
+        self.assertTrue(sentinel.exists(), "agent_bp.mount_volumes must preserve routine files")
+        self.assertNotIn("workflows", agent_bp.volumes, "Retired ctx://workflows volume must not be mounted on agent_bp")
 
         # 3. Verify no extension declares a legacy_dir that resolves to its own target cache/data directory
         for ext_bp in (gather_bp, agent_bp):
@@ -161,12 +147,15 @@ class TestSdkImprovements(unittest.TestCase):
                         f"Extension '{ext_bp.name}' volume '{vol_name}' declares legacy_dir '{rel_legacy}' equal to target_dir!",
                     )
 
-    def test_flow_two_phase_incremental_skip_zero_vfs_reads(self):
-        """_background_compile_routine_workflows short-circuits untouched routine batches on disk before calling ctx.vfs.read."""
+    def test_routine_includes_resolved_on_demand_without_workflows_volume(self):
+        """Routine frontmatter includes: are resolved on demand when the routine runs without any pre-compiled ctx://workflows volume (S1.T1)."""
+        from insetu.core.topology.engine_topology import force_topology_scan as _force_scan
+
+        apply_declarative_schema("topology", TOPOLOGY_SCHEMA, self.workspace_id)
         apply_declarative_schema("vfs_index", VFS_INDEX_SCHEMA, self.workspace_id)
         repo_dir = self.root_path / "alpha"
         repo_dir.mkdir(parents=True, exist_ok=True)
-        (repo_dir / "note.md").write_text("# Briefing Note", encoding="utf-8")
+        (repo_dir / "note.md").write_text("# Live Briefing Note Content", encoding="utf-8")
 
         (self.control_dir / "config.json").write_text(
             json.dumps({
@@ -178,45 +167,77 @@ class TestSdkImprovements(unittest.TestCase):
         )
         akasa_utils.load_config.clear_all()
         mount_topology_volumes_dynamically(load_config(self.workspace_id), workspace_id=self.workspace_id)
+        _force_scan(workspace_id=self.workspace_id)
 
         ctx = agent_bp.get_context(self.workspace_id)
         ctx.vfs.save(
             "ctx://routines/morning_briefing.md",
-            "---\nid: morning_briefing\ntitle: Morning Briefing\ndomain: Workflows\nincludes:\n  - vfs://alpha/note.md\n---\n",
+            "---\nid: morning_briefing\ntitle: Morning Briefing\ndomain: Routines\nincludes:\n  - vfs://alpha/note.md\n---\n\nSummarize the note.",
         )
         sync_vfs_barrier(self.workspace_id)
 
-        # 1. Initial compile writes workflow_morning_briefing_context.txt to disk and manifest
-        res1 = _background_compile_routine_workflows(ctx, force_full=True)
-        sync_vfs_barrier(self.workspace_id)
-        base_uri = "ctx://workflows/workflow_morning_briefing_context.txt"
-        self.assertIn(base_uri, res1["artifact"]["files"])
-        self.assertTrue(ctx.is_context_on_disk(base_uri))
+        llm_ctx = llm_bp.get_context(self.workspace_id)
+        llm_ctx.settings.update({"provider": "anthropic", "api_key": "sk-test"})
 
-        # 2. Second incremental run with empty touched_buckets / touched_diffs must perform ZERO vfs.read calls on chunks
-        fresh_ctx = agent_bp.get_context(self.workspace_id)
-        with patch.object(fresh_ctx.vfs, "read", wraps=fresh_ctx.vfs.read) as spy_read:
-            _background_compile_routine_workflows(
-                fresh_ctx,
-                force_full=False,
-                chain_state={"touched_buckets": [], "touched_diffs": []},
-                ledger_events=[],
+        captured_sys = []
+
+        def fake_infer(provider, api_key, model, messages, system_prompt, base_url="", **kwargs):
+            captured_sys.append(system_prompt)
+            return "Briefing summary ready.", None
+
+        with patch("insetu.core.llm.engine_llm._run_single_inference", side_effect=fake_infer):
+            out = execute_declarative_routine(ctx, routine_id="morning_briefing", user_prompt="Run briefing")
+        self.assertEqual(out["status"], "completed")
+        self.assertEqual(len(captured_sys), 1)
+        self.assertIn("# Live Briefing Note Content", captured_sys[0])
+
+    def test_fs_download_zip_streams_selected_files_and_folders(self):
+        """POST /api/<ws>/fs/download_zip expands selected folders and files through ctx.expand_selection and returns a valid .zip archive."""
+        import zipfile as _zipfile
+        from flask import Flask as _Flask
+        from insetu.core.fs.engine_fs import fs_bp as _fs_bp
+        from insetu.core.topology.engine_topology import force_topology_scan as _force_scan
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ws_dir = Path(tmp) / "ws"
+            repo_dir = ws_dir / "alpha"
+            (repo_dir / "pkg").mkdir(parents=True)
+            (repo_dir / "pkg" / "mod_a.py").write_text("VALUE_A = 1\n", encoding="utf-8")
+            (repo_dir / "pkg" / "mod_b.py").write_text("VALUE_B = 2\n", encoding="utf-8")
+            (repo_dir / "README.md").write_text("# Alpha\n", encoding="utf-8")
+            ctrl_dir = ws_dir / ".insetu"
+            ctrl_dir.mkdir(parents=True)
+            (ctrl_dir / "config.json").write_text(json.dumps({
+                "workspace_root": ws_dir.as_posix(),
+                "include_extensions": [".py", ".md"],
+                "target_repos": [{"repo_dir": "alpha", "title": "Alpha", "domain": "Workspaces"}],
+            }), encoding="utf-8")
+
+            (ctrl_dir / "host.json").write_text(json.dumps({"port": 5005}), encoding="utf-8")
+            (ctrl_dir / "workspaces.json").write_text(
+                json.dumps({"workspaces": {"default": {"config_path": "config.json"}}, "active_workspace": "default"}),
+                encoding="utf-8",
             )
-            chunk_reads = [c for c in spy_read.call_args_list if c.args and c.args[0] == "vfs://alpha/note.md"]
-            self.assertEqual(len(chunk_reads), 0, "Untouched routine workflow batch on disk must skip VFS file reads")
+            akasa.reset_state(cwd=ws_dir.as_posix(), control_dir=".insetu")
+            _init_worker_schema("default")
+            apply_declarative_schema("topology", TOPOLOGY_SCHEMA, workspace_id="default")
+            akasa.vfs.mount_volume("default", "vfs", "alpha", repo_dir.as_posix())
+            _force_scan(workspace_id="default")
 
-        # 3. If physical workflow file is wiped from cache, has_missing_domain_artifacts self-heals it
-        phys_wf = Path(fresh_ctx.resolve_path(base_uri))
-        phys_wf.unlink()
-        self.assertFalse(fresh_ctx.is_context_on_disk(base_uri))
-        _background_compile_routine_workflows(
-            agent_bp.get_context(self.workspace_id),
-            force_full=False,
-            chain_state={"touched_buckets": [], "touched_diffs": []},
-            ledger_events=[],
-        )
-        sync_vfs_barrier(self.workspace_id)
-        self.assertTrue(phys_wf.exists(), "Missing workflow artifact on disk must auto-heal on next compile")
+            app = _Flask(__name__)
+            app.register_blueprint(_fs_bp.bp)
+
+            with app.test_client() as client:
+                resp = client.post(
+                    "/api/default/fs/download_zip",
+                    json={"items": [{"filepath": "vfs://alpha/pkg/", "folderpath": "vfs://alpha/pkg", "isDir": True}, {"filepath": "vfs://alpha/README.md"}]},
+                )
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.mimetype, "application/zip")
+                with _zipfile.ZipFile(io.BytesIO(resp.data), "r") as zf:
+                    names = sorted(zf.namelist())
+                    self.assertEqual(names, ["alpha/README.md", "alpha/pkg/mod_a.py", "alpha/pkg/mod_b.py"])
+                    self.assertEqual(zf.read("alpha/pkg/mod_a.py").decode("utf-8"), "VALUE_A = 1\n")
 
     def test_python_fitness_linter_catches_redundant_mounts_and_dead_hooks(self):
         """BackendFitnessVisitor flags manual .mount_volumes() calls, manual move_tree_contents(), and dead @on('compile_contexts') hooks."""
@@ -472,17 +493,114 @@ class TestSdkImprovements(unittest.TestCase):
             self.assertIn("chromium", post_cmd)
 
     def test_unified_frontend_api_client_contract(self):
-        """api.js and insetu_sdk.js expose a unified flat API client without legacy api.workspace or api.system sub-objects."""
-        insetu_pkg = Path(__file__).resolve().parent.parent.parent / "insetu"
-        api_js = (insetu_pkg / "core" / "system" / "api.js").read_text(encoding="utf-8")
-        sdk_js = (insetu_pkg / "core" / "system" / "insetu_sdk.js").read_text(encoding="utf-8")
+        """api.js and insetu_element.js expose a unified flat API client and _resolveScopedPath in Node.js via js_loader.mjs without legacy api.workspace or api.system sub-objects."""
+        import shutil as _shutil
+        from insetu.core.utils_core import execute_binary as _execute_binary
 
-        for verb in ("get:", "post:", "delete:", "getJson:", "postJson:", "deleteJson:", "bindJobAction:", "pollJob:"):
-            self.assertIn(verb, api_js, f"api.js must define flat canonical verb '{verb}'")
-        self.assertNotIn("api.workspace", api_js)
-        self.assertNotIn("api.system", api_js)
-        self.assertNotIn("api.workspace", sdk_js)
-        self.assertNotIn("api.system", sdk_js)
+        if not _shutil.which("node"):
+            self.skipTest("Node.js binary is not installed in PATH")
+
+        loader_path = (Path(__file__).resolve().parent / "js_loader.mjs").resolve()
+        node_script = """
+import assert from 'node:assert/strict';
+import { InSetuElement } from '/static/extensions/system/insetu_element.js';
+import '/static/extensions/system/api.js';
+
+for (const verb of ['get', 'post', 'delete', 'getJson', 'postJson', 'deleteJson', 'bindJobAction', 'pollJob', 'request']) {
+    assert.equal(typeof window.inSetu.api[verb], 'function', `window.inSetu.api.${verb} must be a function`);
+}
+assert.equal(window.inSetu.api.workspace, undefined);
+assert.equal(window.inSetu.api.system, undefined);
+
+window.ACTIVE_EXTENSIONS = ['notes', 'tracker'];
+const el = Object.create(InSetuElement.prototype);
+Object.defineProperty(el, 'extName', { get: () => 'notes' });
+Object.defineProperty(el, 'workspaceId', { get: () => 'default' });
+
+assert.equal(el.api._resolveScopedPath('notes/save'), 'notes/save');
+assert.equal(el.api._resolveScopedPath('/notes/save'), 'notes/save');
+assert.equal(el.api._resolveScopedPath('prompts/resolve?file=ctx://prompts/a.md'), 'prompts/resolve?file=ctx://prompts/a.md');
+assert.equal(el.api._resolveScopedPath('save'), 'notes/save');
+"""
+        res = _execute_binary(
+            ["node", "--import", loader_path.as_posix(), "--input-type=module", "-e", node_script],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+        )
+        self.assertEqual(res.returncode, 0, f"Node API client contract test failed:\n{res.stderr}")
+
+    def test_a_refused_job_action_reaches_on_error(self):
+        """bindJobAction reports a refused or unreachable request through onError, as it does a failed job, so callers that leave reporting to onError never fail silently."""
+        import shutil as _shutil
+        from insetu.core.utils_core import execute_binary as _execute_binary
+
+        if not _shutil.which("node"):
+            self.skipTest("Node.js binary is not installed in PATH")
+
+        loader_path = (Path(__file__).resolve().parent / "js_loader.mjs").resolve()
+        node_script = """
+import assert from 'node:assert/strict';
+import '/static/extensions/system/api.js';
+
+const api = window.inSetu.api;
+const seen = [];
+const onError = (err) => seen.push(err.message);
+
+api.post = async () => ({ ok: false, status: 403, json: async () => ({ error: 'not approved' }) });
+await assert.rejects(api.bindJobAction('hooks/execute', { id: 'r1' }, { onError })(), /not approved/);
+
+api.post = async () => ({ ok: false, status: 500, json: async () => { throw new Error('no body'); } });
+await assert.rejects(api.bindJobAction('hooks/execute', { id: 'r1' }, { onError })(), /HTTP 500/);
+
+api.post = async () => { throw new Error('offline'); };
+await assert.rejects(api.bindJobAction('hooks/execute', { id: 'r1' }, { onError })(), /offline/);
+
+assert.deepEqual(seen, ['not approved', 'HTTP 500', 'offline']);
+
+api.post = async () => ({ ok: false, status: 403, json: async () => ({ error: 'still refused' }) });
+await assert.rejects(api.bindJobAction('hooks/execute', { id: 'r1' })(), /still refused/);
+"""
+        res = _execute_binary(
+            ["node", "--import", loader_path.as_posix(), "--input-type=module", "-e", node_script],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+        )
+        self.assertEqual(res.returncode, 0, f"bindJobAction error contract test failed:\n{res.stderr}")
+
+    def test_copying_nothing_is_reported_not_silent(self):
+        """copyRawText refuses an empty or missing text with an error status instead of clearing the clipboard, and copies real text with its message."""
+        import shutil as _shutil
+        from insetu.core.utils_core import execute_binary as _execute_binary
+
+        if not _shutil.which("node"):
+            self.skipTest("Node.js binary is not installed in PATH")
+
+        loader_path = (Path(__file__).resolve().parent / "js_loader.mjs").resolve()
+        node_script = """
+import assert from 'node:assert/strict';
+const written = [];
+Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText: async (t) => { written.push(t); } } }, configurable: true });
+await import('/static/extensions/system/insetu_sdk.js');
+const statuses = [];
+window.inSetu.ui = window.inSetu.ui || {};
+window.inSetu.ui.setGlobalStatus = (msg, _t, isError) => statuses.push([msg, Boolean(isError)]);
+const u = window.inSetu.utils;
+await u.copyRawText('the prompt', '📋 Prompt copied!');
+await assert.rejects(u.copyRawText('', 'x'), /Nothing to copy/);
+await assert.rejects(u.copyRawText('   ', 'x'), /Nothing to copy/);
+await assert.rejects(u.copyRawText(undefined), /Nothing to copy/);
+assert.deepEqual(written, ['the prompt']);
+assert.deepEqual(statuses, [['📋 Prompt copied!', false], ['Nothing to copy.', true], ['Nothing to copy.', true], ['Nothing to copy.', true]]);
+"""
+        res = _execute_binary(
+            ["node", "--import", loader_path.as_posix(), "--input-type=module", "-e", node_script],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+        )
+        self.assertEqual(res.returncode, 0, f"copyRawText contract test failed:\n{res.stderr}")
 
 
 if __name__ == "__main__":

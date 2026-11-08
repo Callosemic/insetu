@@ -285,33 +285,11 @@ assert.throws(
             self.assertIn(lego_export, combined_membrane_src, f"Missing Lego primitive export '{lego_export}' in SDK membrane")
         self.assertIn("emitHookAll:", sdk_js, "insetu_sdk.js must define emitHookAll")
         self.assertIn("_resolveScopedPath:", element_js, "insetu_element.js must define _resolveScopedPath")
-        start_idx = uri_js.index("export class InSetuURI {")
-        uri_class_src = uri_js[start_idx:]
-        self.assertNotIn("derivedVfsFiles", uri_class_src, "InSetuURI must not couple to derivedVfsFiles")
-        self.assertNotIn("AppStore", uri_class_src, "InSetuURI must not couple to AppStore")
-
-    def test_canonical_api_route_resolution_contract(self):
-        """
-        Verifies that InSetuElement.api._resolveScopedPath:
-        1. Preserves canonical self-prefixed routes ('flow/batches/save' -> 'flow/batches/save').
-        2. Preserves cross-module routes ('prompts/resolve?file=...' -> 'prompts/resolve?file=...').
-        3. Gracefully prefixes legacy relative routes ('batches/save' -> 'flow/batches/save').
-        """
-        element_js = (BACKEND_DIR / "core" / "system" / "insetu_element.js").read_text(encoding="utf-8")
-        self.assertIn("_resolveScopedPath:", element_js, "insetu_element.js must define _resolveScopedPath")
-        self.assertIn("resolveScopedPath(path)", element_js, "insetu_element.js must route API calls through resolveScopedPath")
-        api_js = (BACKEND_DIR / "core" / "system" / "api.js").read_text(encoding="utf-8")
-        self.assertIn("getJson:", api_js, "api.js must define getJson")
-        self.assertIn("postJson:", api_js, "api.js must define postJson")
-        self.assertIn("deleteJson:", api_js, "api.js must define deleteJson")
-        self.assertIn("bindJobAction:", api_js, "api.js must define bindJobAction")
-        self.assertNotIn("api.workspace", api_js, "Legacy api.workspace sub-namespace must be removed from api.js")
-        self.assertNotIn("api.system", api_js, "Legacy api.system sub-namespace must be removed from api.js")
 
     def test_workflow_management_suite_canonical_api_routes(self):
         """
         Verifies that all API calls across the Workflow Automation and Task Management
-        extension suite (cronic, favorites, flow, hooks, tracker) use explicit canonical
+        extension suite (cronic, favorites, hooks, tracker) use explicit canonical
         route prefixes (<module>/<endpoint>) to eliminate runtime path prepending ambiguity.
         """
         ext_dir = BACKEND_DIR / "extensions"

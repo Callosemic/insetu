@@ -7,6 +7,30 @@ tags: [plan, rfc, mental-models, landmarks, rag, fitness, workers]
 
 # Blueprint: Subsystem Mental Models, Blast-Radius Model Injection & Worker Fault Transparency
 
+## Roadmap placement (2026-11-07)
+
+- **Sprint 1 is yours, any time.** For the review-ready cut, the models a reviewer reads (`yomama_bridge.md` above all) should be ones you dictated. Two tasks come before plans that build on them: Task 1.2 (`vfs_occ_and_offline_outbox.md`) before the post-diff plan's 4.3 and 4.4, and Task 1.4 (`workspace_swap_fsm.md`) before the multi-tenant plan's Phase 2.
+- **1.0:** Sprint 3 together with roadmap V3, as one rule in step 2. A worker is the strictest case of V3's swallowed-exception rule, not a second rule.
+- **After 1.0:** Sprint 2 (blast-radius model injection), with the agent loop.
+
+
+## Model catalogue (2026-11-07)
+
+Every model that exists or that a plan needs, so no plan names one that is not there. A plan lists a model under `models:` only when the file exists; until then it names it in its text as "waits for model X".
+
+| Model file | Status | Needed before | Sprint 1 task |
+| --- | --- | --- | --- |
+| `docs/models/yomama_bridge.md` | Exists. Confirm it is your dictation before the review-ready cut | REVIEWING.md's bridge stop; God-objects 3.4 (`bridge_vfs.py`) | Task 1.0 |
+| `docs/models/agent_orchestrator_and_rag.md` | Exists. Confirm it is your dictation | Six-bucket Sprint 2 (after 1.0) | Task 1.3 |
+| `docs/models/vfs_occ_and_offline_outbox.md` | Not written | Post-diff 3.1, 4.3 and 4.4 (1.0) | Task 1.2 |
+| `docs/models/workspace_swap_fsm.md` | Not written | Multi-tenant Phase 2 (1.0) | Task 1.4 |
+| `docs/models/topology_and_gather_pipeline.md` | Not written | Watchdog and gather changes; six-bucket Sprint 3 | Task 1.1 |
+| `docs/models/protected_changes_and_attestations.md` | Proposed | The S5 + P13 Phase 2 blueprint; `SECURITY.md` | Task 1.5 (new) |
+| `docs/models/layered_settings.md` | Proposed: tiers, `authority`, `merge`, the boot floor | P13 Phase 2 | Task 1.6 (new) |
+| `docs/models/boot_and_offline_shell.md` | Proposed: shell cache, warming, quarantine, a dropped connection during boot | Post-diff 3.1; the boot network-drop fix | Task 1.7 (new) |
+
+The three proposed models are suggestions: dictate them, merge them into others, or drop them.
+
 ## 1. Architectural Context & Objective
 
 While ADRs capture historical point-in-time decisions and `01_engineering_standards.md` defines global rules of engagement, complex stateful subsystems rely on strict **state-machine invariants** (ordering guarantees, immutability boundaries, and cache invalidation laws). When those mental models are not explicitly documented and surfaced in context, AI coding turns optimize locally and inadvertently violate subsystem invariants.

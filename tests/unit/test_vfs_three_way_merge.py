@@ -35,8 +35,9 @@ class TestVfsThreeWayMerge(unittest.TestCase):
         self.orig_env_ctrl = os.environ.get("AKASA_CONTROL_DIR")
         akasa.reset_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
 
-        (self.control_dir / "system.json").write_text(
-            json.dumps({"port": 5005, "workspaces": {"default": {"config_path": "config.json"}}}),
+        (self.control_dir / "host.json").write_text(json.dumps({"port": 5005}), encoding="utf-8")
+        (self.control_dir / "workspaces.json").write_text(
+            json.dumps({"workspaces": {"default": {"config_path": "config.json"}}, "active_workspace": "default"}),
             encoding="utf-8",
         )
         (self.control_dir / "config.json").write_text(

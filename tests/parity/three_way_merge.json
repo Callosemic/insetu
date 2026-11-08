@@ -1,0 +1,99 @@
+{
+    "pair": "three_way_merge",
+    "status": "diverges",
+    "why": "The offline outbox merges without the server; the server merges on save.",
+    "python": "akasa.vfs:three_way_merge_text",
+    "javascript": "/static/vendor/sutram/js/utils.js:threeWayMergeText",
+    "adapter": "merge",
+    "note": "Python takes (base, disk, incoming) and returns (clean, merged). JavaScript takes (base, local, remote) and returns {merged, clean}; local is the incoming side. The adapter maps both to {clean, merged}. On 3,000 seeded random cases the two disagree about a quarter of the time (2026-11-07), so the differential test is an expected failure until one algorithm is ported to the other.",
+    "differential": {
+        "seed": 7,
+        "count": 3000
+    },
+    "cases": [
+        {
+            "label": "one side changed",
+            "args": [
+                "a\nb\nc",
+                "A\nb\nc",
+                "a\nb\nc"
+            ],
+            "expect": {
+                "clean": true,
+                "merged": "A\nb\nc"
+            }
+        },
+        {
+            "label": "other side changed",
+            "args": [
+                "a\nb\nc",
+                "a\nb\nc",
+                "a\nb\nC"
+            ],
+            "expect": {
+                "clean": true,
+                "merged": "a\nb\nC"
+            }
+        },
+        {
+            "label": "both changed different lines",
+            "args": [
+                "a\nb\nc",
+                "A\nb\nc",
+                "a\nb\nC"
+            ],
+            "expect": {
+                "clean": true,
+                "merged": "A\nb\nC"
+            }
+        },
+        {
+            "label": "both made the same change",
+            "args": [
+                "a\nb\nc",
+                "a\nB\nc",
+                "a\nB\nc"
+            ],
+            "expect": {
+                "clean": true,
+                "merged": "a\nB\nc"
+            }
+        },
+        {
+            "label": "both changed the same line differently",
+            "args": [
+                "a\nb\nc",
+                "a\nX\nc",
+                "a\nY\nc"
+            ],
+            "expect": {
+                "clean": false
+            }
+        },
+        {
+            "label": "Windows line endings on one side",
+            "args": [
+                "a\nb\nc",
+                "a\r\nb\r\nc",
+                "a\nb\nC"
+            ],
+            "expect": {
+                "clean": true,
+                "merged": "a\nb\nC"
+            }
+        },
+        {
+            "label": "incoming deletes a line next to a line disk changed",
+            "args": [
+                "d\nc\nf\nf\nb\nb",
+                "d\nf\nf\nb*\nb",
+                "d\nc\nf\nf\nb"
+            ],
+            "expect": {
+                "clean": true,
+                "merged": "d\nf\nf\nb*"
+            },
+            "known_bug": "Python reports a clean merge but returns the disk text unchanged, dropping incoming's deletion (issue #18, found 2026-11-07 by the differential test)."
+        }
+    ]
+}

@@ -1,0 +1,9 @@
+{
+    "pair": "frontmatter_parse",
+    "status": "pending",
+    "why": "Editors read and change frontmatter before saving.",
+    "python": "insetu.core.utils_core:parse_frontmatter",
+    "javascript": "/static/extensions/system/insetu_sdk.js:window.inSetu.utils.parseFrontmatter",
+    "note": "The JavaScript side is only on window.inSetu.utils; export it from uri.js or insetu_sdk.js so tests and callers import it.",
+    "cases": []
+}

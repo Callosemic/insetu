@@ -319,6 +319,15 @@ class TestMapRepositoriesFileFallback(unittest.TestCase):
         self.assertIn("def gap()                   # Returns two as well.", text)
         self.assertNotIn("[stale?]", text)
 
+        # Verify _build_enrich_symbol_context preserves the bottom tail of >65-line functions so edits after line 30 are visible
+        long_lines = ["def long_fn(x):"] + [f"    step_{i} = x + {i}" for i in range(75)] + ["    return step_74 * 999"]
+        long_src = "\n".join(long_lines) + "\n"
+        [long_sym] = carto.extract_file_symbols("long.py", long_src)
+        enrich_ctx = carto._build_enrich_symbol_context("long.py", long_src, long_sym, "Long function module.")
+        self.assertIn("# File: long.py — Long function module.", enrich_ctx)
+        self.assertIn("lines omitted", enrich_ctx)
+        self.assertIn("return step_74 * 999", enrich_ctx)
+
 
     def test_a_revision_does_not_replace_a_description_a_person_edited_during_the_review(self):
         (self.repo_dir / "a.py").write_text("def revise():\n    return 1\n", encoding="utf-8")

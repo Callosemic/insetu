@@ -156,6 +156,29 @@ assert.equal(BridgeStore.getState().telemetry.can_commit, true, 'Optimistic skip
 assert.equal(BridgeStore.getState().telemetry.summary.resolved, 1);
 assert.equal(BridgeStore.getState().telemetry.summary.failed, 0);
 
+// 5c. BridgeStore preserves <<<<<<< ID: headers and applyHealedCells updates in-place by cell.id even on partial heals
+BridgeStore.getState().clearPayload();
+BridgeStore.getState().parseAndAppendCells([
+    '<<<<<<< FILE: vfs://alpha/src/main.py',
+    '<<<<<<< ID: cell_explicit_42',
+    '<<<<<<< SEARCH',
+    'old_line = 1',
+    '=======',
+    'new_line = 2',
+    '>>>>>>> REPLACE'
+].join('\\n'));
+assert.equal(BridgeStore.getState().cells[0].id, 'cell_explicit_42');
+const healedCount = BridgeStore.getState().applyHealedCells({
+    cell_explicit_42: {
+        id: 'cell_explicit_42',
+        file: 'vfs://alpha/src/main.py',
+        content: '<<<<<<< SEARCH\\nreal_line = 1\\n=======\\nnew_line = 2\\n>>>>>>> REPLACE'
+    }
+});
+assert.equal(healedCount, 1);
+assert.equal(BridgeStore.getState().cells[0].id, 'cell_explicit_42');
+assert.match(BridgeStore.getState().cells[0].content, /real_line = 1/);
+
 // 6. InSetuElement.prototype.filterItems (repo pinning + fuzzy search)
 const sampleItems = [
     { title: 'Alpha Service', repo: 'alpha', filepath: 'vfs://alpha/service.py' },

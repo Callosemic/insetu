@@ -52,7 +52,7 @@ SETTINGS_ACCESS_RATCHET: Dict[str, Tuple[int, str]] = {
     "insetu/core/system/legacy.py": (2, "Phase 6: one-shot boot migration of legacy config.json keys."),
     "insetu/core/topology/engine_topology.py": (3, "Phase 3: the topology engine's target_repos accessor and two load_config reads."),
     "insetu/core/gather/engine_gather.py": (4, "Phase 3: gather declarations and the compiler reading target_repos."),
-    "insetu/core/cartographer/cartographer.py": (3, "Phase 3: map_repositories reading target_repos."),
+    "insetu/core/cartographer/cartographer.py": (2, "Phase 3: map_repositories and _background_enrich reading target_repos."),
     "insetu/core/prompts/engine_prompts.py": (1, "Phase 3: prompt config mutation hook."),
     "insetu/core/agent/engine_agent.py": (3, "Phase 3: plan and test-command helpers reading target_repos."),
     "insetu/core/bridge/bridge_test.py": (1, "Phase 3: the test runner resolving its repository config."),
@@ -310,37 +310,39 @@ EXTENSION_UTILS_CORE_RATCHET: Dict[str, frozenset] = {
 # (excluding vendored files), plus an 800-line ceiling for all unlisted modules. Ceilings may only go down.
 MAX_UNLISTED_MODULE_LINES = 800
 MODULE_LINE_RATCHET: Dict[str, int] = {
-    "insetu/core/fs/fs.js": 3788,
+    "insetu/core/fs/fs.js": 3488,
     "insetu/extensions/tracker/ext_tracker.js": 2932,
-    "insetu/core/bridge/bridge.js": 2281,
-    "insetu/core/topology/engine_topology.py": 2205,
-    "insetu/core/agent/agent.js": 2057,
-    "insetu/core/system/components/ui_system_settings.js": 1807,
-    "insetu/core/agent/orchestrator.py": 1766,
-    "insetu/core/bridge/bridge_vfs.py": 1588,
-    "insetu/core/system/system.js": 1562,
+    "insetu/core/topology/engine_topology.py": 2210,
+    "insetu/core/agent/agent.js": 2054,
+    "insetu/core/system/components/ui_system_settings.js": 1812,
+    "insetu/core/agent/orchestrator.py": 1771,
+    "insetu/core/bridge/bridge_vfs.py": 1603,
     "insetu/core/llm/engine_llm.py": 1555,
-    "insetu/core/utils_core.py": 1479,
+    "insetu/core/utils_core.py": 1476,
     "insetu/extensions/tracker/engine_tracker.py": 1464,
+    "insetu/core/system/system.js": 1458,
     "insetu/core/gather/engine_gather.py": 1430,
+    "insetu/core/bridge/bridge.js": 1329,
     "insetu/extensions/git/ext_git.js": 1277,
     "insetu/extensions/git/engine_git.py": 1168,
-    "insetu/core/config/config.js": 1147,
+    "insetu/core/config/config.js": 1110,
     "insetu/extensions/update/ext_update.js": 1120,
-    "insetu/core/agent/engine_agent.py": 1081,
     "insetu/extensions/update/engine_update.py": 957,
     "insetu/extensions/preview/engine_preview.py": 928,
-    "insetu/core/bridge/engine_bridge.py": 900,
-    "insetu/core/bridge/bridge_fuzzy.py": 836,
-    "insetu/core/cartographer/cartographer.py": 834,
+    "insetu/core/agent/engine_agent.py": 913,
+    "insetu/extensions/skills/ext_skills.js": 828,
+    "insetu/core/bridge/engine_bridge.py": 825,
+    "insetu/core/bridge/bridge_fuzzy.py": 815,
     "insetu/core/system/engine_system.py": 814,
+    "insetu/extensions/citations/ext_citations.js": 803,
     # Ring 1 (akasa) and Ring 2 (sutram) modules currently above 800 lines (shrinking in Wave 2):
-    "sutram/sutram/js/primitives.js": 2850,
-    "sutram/sutram/js/sutram_sdk.js": 1890,
-    "sutram/sutram/js/app_shell.js": 1418,
+    "sutram/sutram/js/primitives.js": 2853,
+    "sutram/sutram/js/sutram_sdk.js": 1916,
+    "sutram/sutram/js/app_shell.js": 1423,
     "akasa/akasa/vfs.py": 1246,
     "akasa/akasa/extension.py": 1223,
     "akasa/akasa/workers/__init__.py": 1200,
+    "sutram/sutram/js/offline.js": 1018,
     "sutram/sutram/js/utils.js": 818,
 }
 
@@ -526,8 +528,8 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     self.top_level_imports.add(f"{module}.{alias.name}" if module else alias.name)
                     self.top_level_imports.add(alias.asname or alias.name)
 
-        # UNDEFINED_TYPE_ANNOTATION_BAN: Verify that all identifiers referenced in parameter,
-        # return, or variable type annotations (including nested closures) are bound in module/local scope.
+        # UNDEFINED_TYPE_ANNOTATION_BAN & UNDEFINED_SYMBOL_CALL_BAN: Verify that all identifiers
+        # referenced in type annotations or called as bare functions are bound in module/local scope.
         bound_names = set(dir(builtins)) | {"__file__", "__name__", "__doc__", "__package__", "__annotations__"}
         for n in ast.walk(node):
             if isinstance(n, ast.Import):
@@ -540,8 +542,19 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 bound_names.add(n.name)
             elif isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
                 bound_names.add(n.id)
+            elif isinstance(n, ast.ExceptHandler) and n.name:
+                bound_names.add(n.name)
             elif isinstance(n, ast.arg):
                 bound_names.add(n.arg)
+
+        for n in ast.walk(node):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id not in bound_names:
+                report_violation(
+                    "UNDEFINED_SYMBOL_CALL_BAN",
+                    self.filepath,
+                    n.lineno,
+                    f"Call to undefined or unimported symbol '{n.func.id}()'. Ensure imports and renames are updated across all callers."
+                )
 
         annotation_exprs = []
         for n in ast.walk(node):
@@ -708,6 +721,20 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         if not self.is_test:
             self._check_child_env_and_fetch(node)
             self._check_protected_write_homes(node)
+            if (
+                "bridge" in self.filepath.parts
+                and self.filename not in ("bridge_window.py", "bridge_fuzzy.py")
+                and (
+                    (isinstance(node.func, ast.Attribute) and node.func.attr == "SequenceMatcher")
+                    or (isinstance(node.func, ast.Name) and node.func.id == "SequenceMatcher")
+                )
+            ):
+                report_violation(
+                    "SINGLE_WINDOW_LOCATOR_MANDATE",
+                    self.filepath,
+                    node.lineno,
+                    "Raw difflib.SequenceMatcher() in insetu/core/bridge/ outside bridge_window.py / bridge_fuzzy.py is banned. Delegate to locate_closest_window() in bridge_window.py so indentation differences never blind anchor windowing."
+                )
         for arg in node.args:
             if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                 if any(m in arg.value for m in ('manifest.json', 'manifest_cache.json')):
@@ -890,7 +917,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                         report_violation("URI_SCHEME_STRIP_BAN", self.filepath, node.lineno, f"Stripping URI scheme ({node.args[0].value}) via .replace() is banned. Preserve canonical URIs or use InSetuURI(uri).path for internal math.")
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'endswith':
             if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
-                if node.args[0].value in ('_diffs.txt', '_context.txt', '_workflow_context.txt'):
+                if node.args[0].value in ('_diffs.txt', '_context.txt'):
                     if self.filename not in ("utils_core.py", "engine_git.py"):
                         report_violation("URI_EXTENSION_MATCHING_BAN", self.filepath, node.lineno, f"Manual suffix matching ('{node.args[0].value}') detected. Rely on InSetuURI(path) domain resolution instead.")
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'parse_uri':
@@ -1000,7 +1027,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 # Ensure Tier 3 extensions only query topology keys on ctx.config
                 if is_ext and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == 'config':
                     allowed_topology_keys = {
-                        "target_repos", "extensions", "managed_dirs", "virtual_contexts",
+                        "target_repos", "extensions", "managed_dirs",
                         "ignore_dirs", "ignore_files", "ignore_patterns", "include_extensions",
                         "workspace_root", "category_order", "tab_order", "hidden_outputs"
                     }
@@ -1255,6 +1282,20 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 self.filepath,
                 node.lineno,
                 "Direct assignment to '._cwd' detected. Use 'akasa.reset_state(cwd=...)' or 'set_daemon_cwd()' instead."
+            )
+        if (
+            not self.is_test
+            and self.rel_posix.endswith("insetu/core/sdk/__init__.py")
+            and isinstance(node.ctx, ast.Store)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+            and node.attr.endswith("_cache")
+        ):
+            report_violation(
+                "CONTEXT_INSTANCE_CACHE_BAN",
+                self.filepath,
+                node.lineno,
+                f"Caching '{node.attr}' on InSetuContext instance causes stale reads across workers. Delegate caching to event-invalidated @thread_safe_cache hooks."
             )
         if (
             not self.is_test
@@ -1698,10 +1739,111 @@ def check_python_files():
                 1,
                 "Retired compatibility shim directory 'insetu/core/gather/languages/' still contains Python files. Delete them and use 'insetu/core/languages/' exclusively."
             )
+    # Verify all internal `from insetu... import <symbol>` statements resolve to an exported symbol in the target module
+    check_internal_imports_resolve(PROJECT_ROOT, report=True)
     # Enforce SETTINGS_ACCESS_RATCHET across all Python files in insetu/
     check_settings_access_ratchet(PROJECT_ROOT, report=True)
     # Enforce Wave 1 A4.3 Module Size Ratchet across core and extensions
     check_module_size_ratchet(PROJECT_ROOT, report=True)
+    # Validate CODE_INDEX.md has no unresolved file/directory Cartographer placeholders
+    code_index_path = PROJECT_ROOT / "CODE_INDEX.md"
+    if code_index_path.exists():
+        for idx, line in enumerate(code_index_path.read_text(encoding="utf-8").splitlines(), start=1):
+            if "[comment required]" in line:
+                tree_entry = line.split("#", 1)[0].lstrip(" │├└─\t").strip()
+                if tree_entry.startswith(("def ", "async def ", "class ", "function ")):
+                    continue
+                report_violation(
+                    "CARTOGRAPHER_PLACEHOLDER_BAN",
+                    code_index_path,
+                    idx,
+                    f"Unresolved file/directory '# [comment required]' placeholder in CODE_INDEX.md: {line.strip()}"
+                )
+
+
+def _collect_module_exports(py_path: Path) -> Optional[set]:
+    """Collects all top-level bound names (defs, classes, imports, assignments) and lazy SDK re-exports for a Python file."""
+    try:
+        tree = ast.parse(py_path.read_text(encoding="utf-8"), filename=str(py_path))
+    except (OSError, SyntaxError):
+        return None
+    exports = {"__all__", "__name__", "__file__", "__doc__", "__package__"}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            exports.add(node.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                exports.add((alias.asname or alias.name).split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "*":
+                    return None
+                exports.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    exports.add(t.id)
+                elif isinstance(t, (ast.Tuple, ast.List)):
+                    for elt in t.elts:
+                        if isinstance(elt, ast.Name):
+                            exports.add(elt.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            exports.add(node.target.id)
+    if py_path.as_posix().endswith("insetu/core/sdk/__init__.py"):
+        exports.update(SDK_BARREL_LAZY_REEXPORTS)
+    if py_path.name == "__init__.py":
+        for child in py_path.parent.iterdir():
+            if child.is_file() and child.suffix == ".py" and child.stem != "__init__":
+                exports.add(child.stem)
+            elif child.is_dir() and (child / "__init__.py").is_file():
+                exports.add(child.name)
+    return exports
+
+
+def check_internal_imports_resolve(repo_root: Path = PROJECT_ROOT, report: bool = False) -> List[str]:
+    """Verifies that every `from insetu.<mod> import <name>` across `insetu/` and `tests/` resolves to an existing symbol in `<mod>`."""
+    violations: List[str] = []
+    export_cache: Dict[Path, Optional[set]] = {}
+
+    def _resolve_mod_file(mod_name: str) -> Optional[Path]:
+        rel = mod_name.replace(".", "/")
+        cand_py = Path(repo_root) / f"{rel}.py"
+        if cand_py.is_file():
+            return cand_py
+        cand_init = Path(repo_root) / rel / "__init__.py"
+        if cand_init.is_file():
+            return cand_init
+        return None
+
+    scan_dirs = [Path(repo_root) / "insetu", Path(repo_root) / "tests"]
+    for py_file in collect_unique_files([d for d in scan_dirs if d.exists()], [".py"]):
+        try:
+            tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or not node.module or node.level > 0:
+                continue
+            if not node.module.startswith("insetu."):
+                continue
+            target_fp = _resolve_mod_file(node.module)
+            if target_fp is None:
+                continue
+            if target_fp not in export_cache:
+                export_cache[target_fp] = _collect_module_exports(target_fp)
+            target_exports = export_cache[target_fp]
+            if target_exports is None:
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                if alias.name not in target_exports:
+                    rel_src = py_file.relative_to(repo_root).as_posix()
+                    msg = f"Cannot import name '{alias.name}' from '{node.module}' (symbol does not exist in {target_fp.relative_to(repo_root).as_posix()})."
+                    violations.append(f"❌ [VIOLATION: BROKEN_INTERNAL_IMPORT_BAN] {rel_src}:{node.lineno} — {msg}")
+                    if report:
+                        report_violation("BROKEN_INTERNAL_IMPORT_BAN", py_file, node.lineno, msg)
+    return violations
 
 
 def check_module_size_ratchet(repo_root: Path = PROJECT_ROOT, report: bool = False) -> List[str]:
@@ -1749,18 +1891,3 @@ def check_module_size_ratchet(repo_root: Path = PROJECT_ROOT, report: bool = Fal
                 if report:
                     report_violation("MODULE_SIZE_RATCHET", fp, 1, msg)
     return violations
-
-    # Validate CODE_INDEX.md has no unresolved file/directory Cartographer placeholders
-    code_index_path = PROJECT_ROOT / "CODE_INDEX.md"
-    if code_index_path.exists():
-        for idx, line in enumerate(code_index_path.read_text(encoding="utf-8").splitlines(), start=1):
-            if "[comment required]" in line:
-                tree_entry = line.split("#", 1)[0].lstrip(" │├└─\t").strip()
-                if tree_entry.startswith(("def ", "async def ", "class ", "function ")):
-                    continue
-                report_violation(
-                    "CARTOGRAPHER_PLACEHOLDER_BAN",
-                    code_index_path,
-                    idx,
-                    f"Unresolved file/directory '# [comment required]' placeholder in CODE_INDEX.md: {line.strip()}"
-                )

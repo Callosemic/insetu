@@ -16,8 +16,8 @@ from insetu.core.bridge.bridge_fuzzy import (
     rebase_overlapping_block_in_memory,
 )
 from insetu.core.bridge.bridge_vfs import (
-    _process_sync_transaction,
     clear_bridge_eval_cache,
+    process_sync_transaction,
 )
 
 
@@ -34,8 +34,10 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
         self.orig_cwd = akasa_utils.get_daemon_cwd()
         self.orig_env_ctrl = os.environ.get("AKASA_CONTROL_DIR")
         akasa.reset_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
-        (self.control_dir / "system.json").write_text(
-            json.dumps({"port": 5005, "workspaces": {"default": {"config_path": "config.json"}}}), encoding="utf-8"
+        (self.control_dir / "host.json").write_text(json.dumps({"port": 5005}), encoding="utf-8")
+        (self.control_dir / "workspaces.json").write_text(
+            json.dumps({"workspaces": {"default": {"config_path": "config.json"}}, "active_workspace": "default"}),
+            encoding="utf-8",
         )
         (self.control_dir / "config.json").write_text(
             json.dumps({"workspace_root": self.root_path.as_posix(), "extensions": ["config"]}), encoding="utf-8"
@@ -186,7 +188,7 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
             "<<<<<<< FILE: vfs://repo/sample.py\n<<<<<<< ID: cell_2\n<<<<<<< SEARCH\ndef beta():\n    return 2\n=======\ndef beta():\n    return 20\n>>>>>>> REPLACE",
             "<<<<<<< FILE: vfs://repo/sample.py\n<<<<<<< ID: cell_3\n<<<<<<< SEARCH\ndef gamma():\n    return 3\n=======\ndef gamma():\n    return 30\n>>>>>>> REPLACE",
         ])
-        telemetry, buffers, deferred = _process_sync_transaction(
+        telemetry, buffers, deferred = process_sync_transaction(
             vfs,
             workspace_id="default",
             data={
@@ -239,7 +241,7 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
             "<<<<<<< FILE: vfs://repo/order.py\n<<<<<<< ID: cell_2\n<<<<<<< SEARCH\nb = 999\n=======\nb = 20\n>>>>>>> REPLACE",
             "<<<<<<< FILE: vfs://repo/order.py\n<<<<<<< ID: cell_3\n<<<<<<< SEARCH\nc = 3\n=======\nc = 30\n>>>>>>> REPLACE",
         ])
-        telemetry, buffers, deferred = _process_sync_transaction(
+        telemetry, buffers, deferred = process_sync_transaction(
             vfs,
             workspace_id="default",
             data={
@@ -359,6 +361,51 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
         assert is_effectively_identical(["    a", "        b"], ["a", "    b"])
         assert not is_effectively_identical(["a", "", "b"], ["a", "b"])
 
+    def test_locate_closest_window_finds_misindented_blocks_and_populates_actual_anchor(self):
+        """S1.T1 & S1.T4: locate_closest_window finds a target function deep inside a >400-line file even when the SEARCH block is mis-indented (8 spaces vs 4 spaces), and SINGLE_WINDOW_LOCATOR_MANDATE flags raw SequenceMatcher in bridge modules."""
+        import contextlib as _contextlib
+        import io as _io
+        from insetu.core.bridge.bridge_fuzzy import locate_closest_window as _locate_win
+        from tests.fitness.core import FitnessState as _FitnessState
+        from tests.fitness.rules_python import BackendFitnessVisitor as _Visitor
+
+        file_lines = [f"def filler_{i}():\n    return {i}" for i in range(220)]
+        file_lines.extend([
+            "def target_deep_fn(x, y):",
+            "    computed_value = (x * 10) + (y * 20)",
+            "    if computed_value > 100:",
+            "        return computed_value - 5",
+            "    return computed_value",
+        ])
+        full_file = "\n".join(file_lines) + "\n"
+        all_lines = full_file.splitlines()
+
+        # Mis-indented SEARCH block (8/16 spaces instead of 4/8) with a modified line
+        search_lines = [
+            "def target_deep_fn(x, y):",
+            "        computed_value = (x * 10) + (y * 999)",
+            "        if computed_value > 100:",
+            "                return computed_value - 5",
+            "        return computed_value",
+        ]
+        win = _locate_win(all_lines, search_lines)
+        self.assertTrue(win["has_meaningful_line"])
+        self.assertGreaterEqual(win["similarity_ratio"], 0.65)
+        self.assertIn("def target_deep_fn(x, y):", "\n".join(win["actual_lines"]))
+
+        # Verify SINGLE_WINDOW_LOCATOR_MANDATE flags raw difflib.SequenceMatcher in engine_bridge.py
+        prev = _FitnessState.violations_found
+        buf = _io.StringIO()
+        try:
+            fake_bridge = Path(__file__).resolve().parent.parent.parent / "insetu" / "core" / "bridge" / "engine_bridge.py"
+            with _contextlib.redirect_stdout(buf):
+                _Visitor(fake_bridge, fake_bridge.name, is_test=False).visit(
+                    ast.parse("import difflib\nm = difflib.SequenceMatcher(None, ['a'], ['b'])\n")
+                )
+            self.assertIn("SINGLE_WINDOW_LOCATOR_MANDATE", buf.getvalue())
+        finally:
+            _FitnessState.violations_found = prev
+
     def test_stray_two_space_docstring_lines_never_double_four_space_indentation(self):
         """Regression test for Issue E7: a 2-space continuation line inside a docstring or block must not flip the step to 2 and double 4-space indents into 8-space indents."""
         from insetu.core.bridge.parser import get_base_step_and_diffs as _get_step
@@ -422,7 +469,7 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
             "<<<<<<< FILE: vfs://repo/billing.py\n<<<<<<< ID: cell_p1\n<<<<<<< SEARCH\n    subtotal = sum(items)\n    tax = subtotal * 0.08\n    shipping = 5.0\n=======\n    subtotal = sum(items)\n    tax = subtotal * 0.10\n    shipping = 5.0\n>>>>>>> REPLACE",
             "<<<<<<< FILE: vfs://repo/billing.py\n<<<<<<< ID: cell_p2\n<<<<<<< SEARCH\n    tax = subtotal * 0.08\n    shipping = 5.0\n    return subtotal + tax + shipping\n=======\n    tax = subtotal * 0.08\n    shipping = 0.0\n    return subtotal + tax + shipping\n>>>>>>> REPLACE",
         ])
-        telemetry, buffers, deferred = _process_sync_transaction(
+        telemetry, buffers, deferred = process_sync_transaction(
             vfs,
             workspace_id="default",
             data={
@@ -475,8 +522,8 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
         chunk_b_v1 = "<<<<<<< FILE: vfs://repo/file_b.py\n<<<<<<< ID: cell_b_1\n<<<<<<< SEARCH\ndef fn_b():\n    return 100\n=======\ndef fn_b():\n    return 200\n>>>>>>> REPLACE"
 
         from insetu.core.bridge import bridge_vfs as _bvfs
-        with patch.object(_bvfs, "_validate_buffer_syntax", wraps=_bvfs._validate_buffer_syntax) as spy_syntax:
-            tel_1 = _process_sync_transaction(
+        with patch.object(_bvfs, "validate_buffer_syntax", wraps=_bvfs.validate_buffer_syntax) as spy_syntax:
+            tel_1 = process_sync_transaction(
                 vfs,
                 workspace_id="default",
                 data={
@@ -495,7 +542,7 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
             # Pass 2: Triage/modify ONLY file_b while file_a's 5 chunks are unchanged -> file_a hits _FILE_EVAL_CACHE (0 syntax calls for file_a)!
             spy_syntax.reset_mock()
             chunk_b_v2 = "<<<<<<< FILE: vfs://repo/file_b.py\n<<<<<<< ID: cell_b_1\n<<<<<<< SEARCH\ndef fn_b():\n    return 100\n=======\ndef fn_b():\n    return 300\n>>>>>>> REPLACE"
-            tel_2 = _process_sync_transaction(
+            tel_2 = process_sync_transaction(
                 vfs,
                 workspace_id="default",
                 data={
@@ -520,7 +567,7 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
             "<<<<<<< SEARCH\ndef fn_a_4():\n    return 4\n=======\ndef fn_a_4():\n    return 444\n>>>>>>> REPLACE"
         )
         with patch.object(_bvfs, "apply_block_in_memory", wraps=_bvfs.apply_block_in_memory) as spy_apply:
-            tel_3 = _process_sync_transaction(
+            tel_3 = process_sync_transaction(
                 vfs,
                 workspace_id="default",
                 data={
@@ -542,7 +589,7 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
         # 4. Pointer-change invalidation: remapping the pointer to a different target file forces fresh signature evaluation
         vfs.files["vfs://repo/file_a_copy.py"] = file_a
         with patch.object(_bvfs, "apply_block_in_memory", wraps=_bvfs.apply_block_in_memory) as spy_apply_remap:
-            tel_4 = _process_sync_transaction(
+            tel_4 = process_sync_transaction(
                 vfs,
                 workspace_id="default",
                 data={
@@ -579,7 +626,7 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
         active_70 = list(batch_files.keys())
 
         # Warm the cache with Pass 1 (all 70 patches)
-        tel_70_pass1 = _process_sync_transaction(
+        tel_70_pass1 = process_sync_transaction(
             vfs_70,
             workspace_id="default",
             data={"text": "\n\n".join(blocks_70), "active_files": active_70, "dry_run": True, "pinned_repos": ["ALL"]},
@@ -598,7 +645,7 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
         )
         with patch.object(_bvfs, "apply_block_in_memory", wraps=_bvfs.apply_block_in_memory) as spy_apply_70:
             t0 = _time.perf_counter()
-            tel_70_pass2 = _process_sync_transaction(
+            tel_70_pass2 = process_sync_transaction(
                 vfs_70,
                 workspace_id="default",
                 data={"text": "\n\n".join(blocks_70_mutated), "active_files": active_70, "dry_run": True, "pinned_repos": ["ALL"]},
@@ -619,7 +666,7 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
         2. `try: import fastjson as js / except ImportError: def js(): return helper()` before `def helper(): return 1` is valid at import time and passes.
         3. `register(later)` at module top level before `def later(): return 1` raises NameError at import time and is rejected by `_validate_buffer_syntax`.
         """
-        from insetu.core.bridge.bridge_vfs import _validate_buffer_syntax as __validate_buffer_syntax
+        from insetu.core.bridge.bridge_vfs import validate_buffer_syntax as __validate_buffer_syntax
         from insetu.core.system.engine_system import system_bp as _system_bp
 
         ctx = _system_bp.get_context("default")

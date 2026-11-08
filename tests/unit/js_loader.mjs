@@ -28,6 +28,7 @@ if (typeof globalThis.window === 'undefined') {
     const et = new EventTarget();
     globalThis.localStorage = new MemoryStorage();
     globalThis.sessionStorage = new MemoryStorage();
+    globalThis.IDBKeyRange = { only: (val) => val };
     globalThis.CustomEvent = class CustomEvent extends Event {
         constructor(type, opts = {}) {
             super(type, opts);

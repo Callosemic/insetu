@@ -8,6 +8,13 @@ depends_on: ["2026-11-04-system-notices.md", "2026-10-30-repo-facts-and-directiv
 
 > **Status: discussion.** This records the direction agreed on 2026-11-04 and the questions to settle before it becomes sprints. It is P13 Phase 5 (one view with provenance) applied to prompts and directives together.
 
+## Roadmap placement (2026-11-07)
+
+- **Review-ready:** nothing. Moving Language Guidelines into your user-tier `agent.md` can happen any time.
+- **1.0:** rule (a) is frozen with 1.0 (decided 2026-11-04). Nothing else.
+- **After 1.0:** the tree itself (after N1 and P13 Phase 2), prompts that bring their own context, and prompts as compute units.
+
+
 ## Context
 
 P13 Phase 1 moved every difference between repositories into stored variables (`sys.*` landmarks, directives). The per-repository wrapper prompts (`.insetu-data/prompts/session-start-base.md`, `housekeeping-base.md`) now only include a template, so they are window dressing. People still need to make their own versions of a prompt where it matters, and to get back to the original when they want.

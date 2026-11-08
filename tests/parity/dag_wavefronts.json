@@ -1,0 +1,9 @@
+{
+    "pair": "dag_wavefronts",
+    "status": "pending",
+    "why": "Routine Studio previews a routine's execution order while you edit.",
+    "python": "akasa.context:resolve_dag_wavefronts",
+    "javascript": "/static/vendor/sutram/js/utils.js:compileDagWavefronts",
+    "note": "insetu/core/agent/orchestrator.py has a second Python version, _compile_node_wavefronts; merge it into akasa's first.",
+    "cases": []
+}

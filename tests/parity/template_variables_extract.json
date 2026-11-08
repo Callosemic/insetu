@@ -1,0 +1,9 @@
+{
+    "pair": "template_variables_extract",
+    "status": "pending",
+    "why": "Prompt and routine editors list a template's variables while you type.",
+    "python": "akasa.context:extract_template_variables",
+    "javascript": "/static/vendor/sutram/js/utils.js:extractTemplateVariables",
+    "note": "inSetu adds reserved names on the JavaScript side (insetu_sdk.js); check the Python side uses the same list before writing cases.",
+    "cases": []
+}

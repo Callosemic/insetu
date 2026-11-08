@@ -209,6 +209,10 @@ def check_javascript_files():
         r'create(?:Extension|Sutram)Store\s*\(\s*[\'"][^\'"]+[\'"]\s*,\s*\{([\s\S]*?)\}\s*,\s*\{([\s\S]*?)\}\s*\)',
         re.MULTILINE
     )
+    store_self_ref_in_url_parser_pattern = re.compile(
+        r'(?:const|let)\s+([A-Za-z0-9_]+Store)\s*=\s*create(?:Extension|Sutram)Store\s*\([\s\S]*?\burlParser\s*:\s*(?:\([^)]*\)|[a-zA-Z0-9_]+)\s*=>\s*\{([\s\S]*?)\n\s*\}',
+        re.MULTILINE
+    )
     legacy_array_persist_pattern = re.compile(
         r'create(?:Extension|Sutram)Store\s*\(\s*[\'"][^\'"]+[\'"]\s*,\s*\{[\s\S]*?\}\s*,\s*\[\s*[\'"]',
         re.MULTILINE
@@ -554,6 +558,16 @@ def check_javascript_files():
                         line_num,
                         f"Unrecognized or deprecated UI hook '{hook_key}'. Must be an approved 'sutram:*' host contract hook."
                     )
+        for td_match in store_self_ref_in_url_parser_pattern.finditer(full_content):
+            store_var_name, parser_body = td_match.group(1), td_match.group(2)
+            if re.search(r'\b' + re.escape(store_var_name) + r'\b', parser_body):
+                line_num = full_content[:td_match.start()].count('\n') + 1
+                report_violation(
+                    "STORE_INIT_SELF_REFERENCE_BAN",
+                    filepath,
+                    line_num,
+                    f"urlParser inside '{store_var_name}' references '{store_var_name}' before initialization (Temporal Dead Zone). Read from the hydratedState parameter passed to urlParser(_hash, hydratedState) instead."
+                )
         for schema_match in store_persistence_schema_pattern.finditer(full_content):
             init_body, schema_body = schema_match.group(1), schema_match.group(2)
             declared_init_keys = set(re.findall(r'(?:^|[,{\n])\s*([a-zA-Z0-9_]+)\s*:', init_body))

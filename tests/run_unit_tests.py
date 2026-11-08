@@ -6,6 +6,9 @@ from pathlib import Path
 
 # Prevent unittest from dumping entire source files into the terminal on assertion failures
 unittest.util._MAX_LENGTH = 300
+import unittest.case as _unittest_case
+_orig_safe_repr = unittest.util.safe_repr
+_unittest_case.safe_repr = lambda obj, short=True: _orig_safe_repr(obj, short=True)
 
 # Configure module search paths for isolated multi-package execution
 INSETU_REPO_ROOT = Path(__file__).resolve().parent.parent

@@ -10,6 +10,13 @@ status: "active"
 
 *Supersedes the 2026-10-30 settings-unification draft. This blueprint keeps that draft's goal (one settings model, Markdown-as-Code, prose directives beside the fields they belong to) and reaches it in phases, each of which removes legacy code rather than adding a parallel path.*
 
+### Roadmap placement (2026-11-07)
+
+* **Review-ready:** Phase 1 (done).
+* **1.0:** Phase 2, designed together with S5 as one blueprint (step 3 of the road to 1.0). The blueprint also covers the part of Phase 4 that 1.0 needs: the settings write route refuses `human_only` fields from machine origins, so permission settings such as ingest's Allowed Private Hosts can no longer be changed through `system/config` by an MCP client.
+* **After 1.0:** Phases 3 to 6.
+
+
 ### 1. Context & Motivation
 
 Our session templates (`session-start-base.md`, the 7-phase `housekeeping-base.md`) are wrapped once per repository with hardcoded `{{ macro_* }}` parameters. Every one of those parameters falls into one of three groups:

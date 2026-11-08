@@ -15,6 +15,7 @@ from akasa.auth import rotate_master_key, _on_security_settings_updated
 from akasa.extension import SettingsManager, _REGISTERED_SETTINGS_SCHEMAS, MASKED_SECRET_SENTINEL
 from akasa.utils import load_config, load_json_config, save_json_config
 from akasa.workers import _init_worker_schema
+from insetu.core.sdk import reset_kernel_state
 from insetu.core.system.engine_system import (
     SYSTEM_SETTINGS_SCHEMA,
     hydrate_and_migrate_cascade_settings,
@@ -26,14 +27,6 @@ from insetu.core.utils_core import sanitize_workspace_config
 
 class TestConfigurationCascade(unittest.TestCase):
     def setUp(self):
-        for attr in dir(akasa_db):
-            obj = getattr(akasa_db, attr)
-            if hasattr(obj, "connections") and isinstance(obj.connections, dict):
-                for c in list(obj.connections.values()):
-                    try: c.close()
-                    except Exception: pass
-                obj.connections.clear()
-
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root_path = Path(self.temp_dir.name).resolve()
         self.control_dir = self.root_path / ".insetu"
@@ -41,7 +34,7 @@ class TestConfigurationCascade(unittest.TestCase):
 
         self.orig_cwd = akasa_utils.get_daemon_cwd()
         self.orig_env_ctrl = os.environ.get("AKASA_CONTROL_DIR")
-        akasa.reset_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
+        reset_kernel_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
 
         _init_worker_schema("default")
 

@@ -1,0 +1,9 @@
+{
+    "pair": "patch_block_splitting",
+    "status": "pending",
+    "why": "Pasted chat text becomes bridge cells before the server sees it.",
+    "python": "insetu.core.bridge.parser:parse_blocks",
+    "javascript": null,
+    "note": "bridge_store.js splits blocks in four places with separate regexes and exports none of them. The post-diff plan's 1.3 replaces them with one exported splitter; name it here when it lands. fallback_bridge.py is the sanctioned stdlib-only Python copy, held to the core bridge by test_macro_escapes.py.",
+    "cases": []
+}

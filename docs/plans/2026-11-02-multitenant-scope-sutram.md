@@ -18,6 +18,14 @@ tags: [blueprint, rfc, sutram, akasa, insetu, multi-tenancy, state-machine, faul
 
 # RFC: Multi-Tenant Scope Isolation, Ordered Quiescence & Fault-Barrier Architecture
 
+## Roadmap placement (2026-11-07)
+
+- **Review-ready:** nothing. The `/system/config` crash in §1.1 point 3 no longer happens (checked 2026-11-07); Phase 1.1 stays as hardening so it cannot come back.
+- **1.0, Phase 1.1 (akasa):** step 2 of the road to 1.0, in an akasa release.
+- **1.0, Phase 1.2:** step 4, after P13 Phase 2, because it touches settings migration.
+- **1.0, Phases 2 to 4:** after N1 Sprint 1, together with the post-diff plan's 3.2 (`KernelEventBus`). Dictate the swap model (mental-models Task 1.4) before Phase 2.
+
+
 ## 1. Architectural Context & Motivation
 
 When `akasa` (the backend Python micro-kernel) was hardened for multi-tenant isolation and sandboxed resets, we solved three classes of cross-tenant race conditions at the kernel level:

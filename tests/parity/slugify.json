@@ -1,0 +1,93 @@
+{
+    "pair": "slugify",
+    "status": "covered",
+    "why": "An ID made from a title must be the same whether the browser or the server made it.",
+    "python": "akasa.context:slugify",
+    "javascript": "/static/vendor/sutram/js/utils.js:slugify",
+    "cases": [
+        {
+            "args": [
+                "Hello World"
+            ],
+            "expect": "hello_world"
+        },
+        {
+            "args": [
+                "Đà Lạt 2026"
+            ],
+            "expect": "da_lat_2026"
+        },
+        {
+            "args": [
+                "Straße & Ørsted"
+            ],
+            "expect": "strasse_orsted"
+        },
+        {
+            "args": [
+                "Æsir"
+            ],
+            "expect": "aesir"
+        },
+        {
+            "args": [
+                "  --Already-Slugged--  "
+            ],
+            "expect": "--already-slugged--"
+        },
+        {
+            "args": [
+                "a___b"
+            ],
+            "expect": "a_b"
+        },
+        {
+            "args": [
+                "tab\tand\nnewline"
+            ],
+            "expect": "tab_and_newline"
+        },
+        {
+            "args": [
+                "日本語"
+            ],
+            "expect": ""
+        },
+        {
+            "args": [
+                ""
+            ],
+            "expect": ""
+        },
+        {
+            "args": [
+                " _x_ "
+            ],
+            "expect": "x"
+        },
+        {
+            "args": [
+                "Crème Brûlée!"
+            ],
+            "expect": "creme_brulee"
+        },
+        {
+            "args": [
+                "CamelCaseName"
+            ],
+            "expect": "camelcasename"
+        },
+        {
+            "args": [
+                "2026-11-07 notes.md"
+            ],
+            "expect": "2026-11-07_notes_md"
+        },
+        {
+            "args": [
+                null
+            ],
+            "expect": ""
+        }
+    ]
+}

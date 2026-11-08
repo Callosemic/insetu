@@ -446,10 +446,42 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         self.assertNotIn("return 30", healer_prompt)
         # Verify canonical order was preserved so Chunk 3 anchored on top of healed Chunk 2!
         self.assertEqual([p["cell_id"] for p in res["patches"]], ["cell_good_1", "cell_bad_2", "cell_dependent_3"])
+        self.assertIn("cell_bad_2", res.get("healed_cells", {}))
+        self.assertEqual(res["healed_cells"]["cell_bad_2"]["file"], "vfs://alpha/overlap.py")
+        self.assertIn("return 20", res["healed_cells"]["cell_bad_2"]["content"])
         final_disk = target_py.read_text(encoding="utf-8")
         self.assertIn("return 10", final_disk)
         self.assertIn("return 20", final_disk)
         self.assertIn("return 30", final_disk)
+
+        # Verify that if the LLM healer returns a block that still fails to anchor, it is rejected immediately in 1 call (never looping)
+        unhealable_payload = (
+            "<<<<<<< FILE: vfs://alpha/overlap.py\n"
+            "<<<<<<< ID: cell_unhealable\n"
+            "<<<<<<< SEARCH\n"
+            "def nonexistent_fn():\n    return 999\n"
+            "=======\n"
+            "def nonexistent_fn():\n    return 0\n"
+            ">>>>>>> REPLACE"
+        )
+        dud_calls = []
+
+        def fake_dud_healer(provider, api_key, model, messages, system_prompt, base_url="", **kwargs):
+            dud_calls.append(1)
+            return unhealable_payload, None
+
+        with patch("insetu.core.llm.engine_llm._run_single_inference", side_effect=fake_dud_healer):
+            dud_res = sys_ctx.call(
+                "bridge.sync",
+                text=unhealable_payload,
+                active_files=["vfs://alpha/overlap.py"],
+                dry_run=True,
+                auto_heal=True,
+                max_heal_passes=5,
+                wait=True,
+            )
+        self.assertFalse(dud_res.get("can_commit"))
+        self.assertEqual(len(dud_calls), 1, "Unhealable cell must be attempted at most once and halted immediately")
 
     def test_mcp_tool_declaration_schema_contract(self):
         """MCP tools/list enforces that every registered tool exposes an inputSchema with type='object' and defined properties."""

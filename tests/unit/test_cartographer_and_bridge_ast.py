@@ -20,7 +20,7 @@ from insetu.core.bridge.bridge_ast import (
     apply_ast_rename_to_content,
     generate_commit_message_from_ledger,
 )
-from insetu.core.bridge.bridge_vfs import _process_sync_transaction
+from insetu.core.bridge.bridge_vfs import process_sync_transaction
 from insetu.core.bridge.engine_bridge import BRIDGE_SCHEMA, bridge_bp
 from insetu.core.cartographer.cartographer import (
     CARTOGRAPHER_SCHEMA,
@@ -411,7 +411,7 @@ class TestCartographerAndBridgeAst(unittest.TestCase):
 
         # 1. Dry run and live commit must produce identical buffers
         with bridge_ctx.vfs as vfs:
-            dry_tel, dry_buffers, _ = _process_sync_transaction(
+            dry_tel, dry_buffers, _ = process_sync_transaction(
                 vfs,
                 "default",
                 {"text": patch_payload, "dry_run": True, "pinned_repos": ["ALL"]},
@@ -494,7 +494,7 @@ class TestCartographerAndBridgeAst(unittest.TestCase):
         bridge_ctx = bridge_bp.get_context("default")
 
         with bridge_ctx.vfs as vfs:
-            dry_tel, dry_buffers, _ = _process_sync_transaction(
+            dry_tel, dry_buffers, _ = process_sync_transaction(
                 vfs,
                 "default",
                 {"text": patch_payload, "dry_run": True, "pinned_repos": ["ALL"]},
@@ -600,7 +600,7 @@ class TestCartographerAndBridgeAst(unittest.TestCase):
 
                 # 1. Dry-run evaluation
                 with bridge_ctx.vfs as vfs:
-                    dry_tel, dry_buffers, _ = _process_sync_transaction(
+                    dry_tel, dry_buffers, _ = process_sync_transaction(
                         vfs,
                         "default",
                         {"text": payload_text, "dry_run": True, "pinned_repos": ["ALL"]},

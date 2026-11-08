@@ -24,7 +24,6 @@ from insetu.extensions.notes.engine_notes import _resolve_intended_note_uri
 from insetu.extensions.skills.engine_skills import _canonical_skill_uri
 from insetu.core.agent.engine_agent import (
     agent_bp,
-    _background_compile_routine_workflows,
     _handle_routine_response_pre_save,
 )
 from insetu.core.agent.orchestrator import parse_routine_content, load_routine_definition
@@ -41,22 +40,8 @@ from insetu.core.gather.engine_gather import (
     VFS_INDEX_SCHEMA,
 )
 from akasa.extension import ExtensionContext
+from insetu.core.sdk import reset_kernel_state
 from insetu.core.utils_core import execute_binary
-
-
-def _reset_db_connections():
-    for attr in dir(akasa_db):
-        obj = getattr(akasa_db, attr)
-        if hasattr(obj, "connections") and isinstance(obj.connections, dict):
-            for c in list(obj.connections.values()):
-                try: c.close()
-                except Exception: pass
-            obj.connections.clear()
-        elif isinstance(obj, dict) and "conn" in attr.lower():
-            for c in list(obj.values()):
-                try: c.close()
-                except Exception: pass
-            obj.clear()
 
 
 class TestCanonicalURIs(unittest.TestCase):
@@ -68,7 +53,7 @@ class TestCanonicalURIs(unittest.TestCase):
 
         self.orig_cwd = akasa_utils.get_daemon_cwd()
         self.orig_env_ctrl = os.environ.get("AKASA_CONTROL_DIR")
-        akasa.reset_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
+        reset_kernel_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
 
         # Create a sample repo with a file
         self.repo_dir = self.root_path / "alpha"
@@ -285,7 +270,6 @@ class TestCanonicalURIs(unittest.TestCase):
             "includes:\n"
             "  - alpha_context.txt\n"
             "  - alpha_diffs.txt\n"
-            "  - workflow_prep_context.txt\n"
             "  - prompts/system_review.md\n"
             "  - alpha/main.py\n"
             "show_if_exists:\n"
@@ -299,7 +283,6 @@ class TestCanonicalURIs(unittest.TestCase):
             [
                 "ctx://contexts/alpha_context.txt",
                 "ctx://diffs/alpha_diffs.txt",
-                "ctx://workflows/workflow_prep_context.txt",
                 "ctx://prompts/system_review.md",
                 "vfs://alpha/main.py",
             ],
@@ -392,46 +375,40 @@ assert.equal(repoRoot.isRootVolume, true);
 
     def test_multipart_chunk_resolution_and_self_healing_fetch(self):
         """
-        End-to-end verification of multi-part ctx:// chunk resolution and self-healing:
-        1. Compiles a multi-part workflow (> 1 chunk) where the un-suffixed base_uri does not exist on disk.
+        End-to-end verification of multi-part ctx://contexts chunk resolution and self-healing:
+        1. Compiles a multi-part gather context (> 1 chunk) where the un-suffixed base_uri does not exist on disk.
         2. Verifies expand_selection and ctx.read_compiled_context resolve all _partN.txt chunks seamlessly.
         3. Verifies GET /api/default/fs/fetch?file=<base_uri> resolves _part1.txt (200 OK, never 404).
         4. Deletes physical cache files and verifies GET /api/default/fs/fetch self-heals on demand.
         """
         apply_declarative_schema("vfs_index", VFS_INDEX_SCHEMA, "default")
-        _ = gather_bp.get_context("default")
-        wf_ctx = agent_bp.get_context("default")
+        g_ctx = gather_bp.get_context("default")
 
-        # Create two large files (~260 KB each) so the workflow exceeds the 400 KB chunk limit and splits into 2 parts
+        # Create two large files (~260 KB each) so the repo context exceeds the 400 KB chunk limit and splits into 2 parts
         part_a = "A" * 260000
         part_b = "B" * 260000
         (self.repo_dir / "part_a.py").write_text(part_a, encoding="utf-8")
         (self.repo_dir / "part_b.py").write_text(part_b, encoding="utf-8")
+        force_topology_scan(workspace_id="default")
 
-        wf_ctx.vfs.save(
-            "ctx://routines/core_system_wrap.md",
-            "---\nid: core_system_wrap\ntitle: Core System Wrap\ndomain: Workflows\nincludes:\n  - vfs://alpha/part_a.py\n  - vfs://alpha/part_b.py\n---\n",
-        )
+        _background_compile(g_ctx, force_full=True)
         sync_vfs_barrier("default")
 
-        _background_compile_routine_workflows(wf_ctx, force_full=True)
-        sync_vfs_barrier("default")
-
-        base_uri = "ctx://workflows/workflow_core_system_wrap_context.txt"
-        part1_uri = "ctx://workflows/workflow_core_system_wrap_context_part1.txt"
-        part2_uri = "ctx://workflows/workflow_core_system_wrap_context_part2.txt"
+        base_uri = "ctx://contexts/alpha_context.txt"
+        part1_uri = "ctx://contexts/alpha_context_part1.txt"
+        part2_uri = "ctx://contexts/alpha_context_part2.txt"
 
         # Un-suffixed base_uri must NOT exist physically on disk when split into parts, while _part1 and _part2 DO exist
-        self.assertIsNone(wf_ctx.resolve_path(base_uri, must_exist=True))
-        self.assertIsNotNone(wf_ctx.resolve_path(part1_uri, must_exist=True))
-        self.assertIsNotNone(wf_ctx.resolve_path(part2_uri, must_exist=True))
+        self.assertIsNone(g_ctx.resolve_path(base_uri, must_exist=True))
+        self.assertIsNotNone(g_ctx.resolve_path(part1_uri, must_exist=True))
+        self.assertIsNotNone(g_ctx.resolve_path(part2_uri, must_exist=True))
 
         # 1. expand_selection([base_uri]) must return [_part1.txt, _part2.txt]
-        expanded = wf_ctx.expand_selection([base_uri])
+        expanded = g_ctx.expand_selection([base_uri])
         self.assertEqual(expanded, [part1_uri, part2_uri])
 
-        # 2. ctx.read_compiled_context(base_uri) must concatenate both parts seamlessly
-        full_text = wf_ctx.read_compiled_context(base_uri)
+        # 2. ctx.read_compiled_context(base_uri) concatenates both parts seamlessly
+        full_text = g_ctx.read_compiled_context(base_uri)
         self.assertIn(part_a[:1024], full_text)
         self.assertIn(part_b[:1024], full_text)
 
@@ -445,12 +422,12 @@ assert.equal(repoRoot.isRootVolume, true);
         self.assertIn(part_a[:512].encode("utf-8"), res.data)
 
         # 4. Wipe physical _part1.txt and _part2.txt from disk -> GET /api/default/fs/fetch must self-heal and return 200 OK
-        Path(wf_ctx.resolve_path(part1_uri)).unlink()
-        Path(wf_ctx.resolve_path(part2_uri)).unlink()
-        self.assertFalse(wf_ctx.is_context_on_disk(base_uri))
+        Path(g_ctx.resolve_path(part1_uri)).unlink()
+        Path(g_ctx.resolve_path(part2_uri)).unlink()
+        self.assertFalse(g_ctx.is_context_on_disk(base_uri))
         res_healed = client.get(f"/api/default/fs/fetch?file={base_uri}")
         self.assertEqual(res_healed.status_code, 200)
-        self.assertTrue(wf_ctx.is_context_on_disk(base_uri))
+        self.assertTrue(g_ctx.is_context_on_disk(base_uri))
 
     def test_prompts_resolve_get_and_live_post_buffer_with_nested_macros(self):
         """GET and POST /api/default/prompts/resolve expand nested {{include_prompt:...}} blocks and {{ macro_* }} parameters without mutating disk."""

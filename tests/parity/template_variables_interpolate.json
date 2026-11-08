@@ -1,0 +1,9 @@
+{
+    "pair": "template_variables_interpolate",
+    "status": "pending",
+    "why": "Editors preview a filled-in template while you type.",
+    "python": "akasa.context:interpolate_template_variables",
+    "javascript": "/static/vendor/sutram/js/utils.js:interpolateTemplateVariables",
+    "note": "Same reserved-name check as template_variables_extract.",
+    "cases": []
+}

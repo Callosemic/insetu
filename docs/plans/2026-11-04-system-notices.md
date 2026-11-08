@@ -6,6 +6,14 @@ replaces_roadmap_items: [V10, E8, T6]
 ---
 # Plan: System Notices
 
+## Roadmap placement (2026-11-07)
+
+- **1.0:** Sprint 1 in step 2 of the road to 1.0, Sprint 2 in step 3. Neither gates the review-ready cut.
+- **New sources:** hook rules waiting for approval (added to Sprint 2 below), and staged conflicts (`waiting`) once the post-diff plan's 4.4 lands.
+- **Not a source: "server unreachable".** When the server cannot be reached nothing can be pulled from it, so the boot loader shows that state itself (post-diff 3.1 and Gemini's network-drop item).
+- **Placement below predates God-objects Wave 1,** which has shipped. `ui_notices.js` is still a new module.
+
+
 ## Context
 
 The app shell tells you about problems through `insetu-config-banner` (`core/system/components/ui_primitives.js`). It hardcodes four cases, checked in a fixed order, and shows only the first that applies:
@@ -51,6 +59,7 @@ A notice is a plain record:
 ### Sources
 
 - Python sources register through the SDK membrane: `register_notice_source(source_id, fn)`, where `fn(workspace_id)` returns a list of notices. Sources are pulled, never pushed, so the list is always computed from current state and cannot go stale.
+- Extensions declare their sources on their blueprint (`@bp.notice_source("<id>")`), which registers the source when the extension mounts and removes it when the extension is disabled, so a disabled extension never leaves a notice behind. Core modules call `register_notice_source` directly.
 - A source that raises is skipped and logged; it never hides the other notices.
 - When a source's state changes, it calls `notices_changed(scope, workspace_id=None)`. The system recomputes and sends one SSE `notices` event (daemon scope to every tab, workspace scope dropped by tabs on other workspaces, as the multi-tenant plan requires).
 - The boot state carries `notices` in place of the per-case fields.
@@ -82,11 +91,12 @@ New modules from the start: `insetu/core/system/notices.py` and `insetu/core/sys
 - [ ] `ui_notices.js`: the banner and the list. Delete the four render branches, the `_dismissed*` flags, and the `protected_changes_pending` field and `protected_changes` event.
 - [ ] Tests: source failure isolation; tier and scope ordering; extension notices refused at `broken`; dismissal returns when the digest changes; workspace notices do not reach other workspaces.
 
-### Sprint 2: The three new sources
+### Sprint 2: The new sources
 
 - [ ] **Directives (V10):** a `waiting` notice per repository whose shared `agent.md` is unaccepted or changed since acceptance, opening Settings → Agent → Directives. Recomputed after bridge commits and file events under `.insetu-data/settings/`.
 - [ ] **Restart (E8):** the bridge returns `restart_required: [paths]` when a live commit changes a loaded `.py` module in insetu or akasa (tests excluded); an `info` notice with a Restart action.
 - [ ] **Exposure (T6):** an `info` notice at startup with the bound addresses and whether remote access or any exec-class capability is on.
+- [ ] **Hook rules waiting for approval:** a `waiting` notice from the hooks extension (`@hooks_bp.notice_source("hooks_unapproved")`) with the number of rules that have no approval, opening the Hooks panel. Rules saved before hook attestations existed stop running without saying so (found 2026-11-07). Recomputed when a rule is saved, approved or deleted.
 - [ ] Tests for each source.
 
 ## Done when

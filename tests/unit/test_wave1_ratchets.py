@@ -11,8 +11,13 @@ from insetu.core.system import blueprint, ext_manager, memory_profiler, openapi,
 from insetu.core.system.engine_system import system_bp
 import insetu.core.utils_core as utils_core
 from insetu.core.utils_core import execute_binary
+import tempfile
 from tests.fitness.core import FitnessState
-from tests.fitness.rules_python import BackendFitnessVisitor, check_module_size_ratchet
+from tests.fitness.rules_python import (
+    BackendFitnessVisitor,
+    check_internal_imports_resolve,
+    check_module_size_ratchet,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 LOADER_PATH = (Path(__file__).resolve().parent / "js_loader.mjs").resolve()
@@ -102,6 +107,33 @@ class TestWave1Ratchets(unittest.TestCase):
             with contextlib.redirect_stdout(buf3):
                 BackendFitnessVisitor(fake_leaf, fake_leaf.name, is_test=False).visit(ast.parse(bad_leaf))
             self.assertEqual(buf3.getvalue().count("BARREL_CYCLE_BAN"), 1, buf3.getvalue())
+
+            # 4. Calling an unimported/renamed function inside a body flags UNDEFINED_SYMBOL_CALL_BAN
+            bad_call = "def run():\n    return _nonexistent_renamed_helper(1)\n"
+            buf4 = io.StringIO()
+            with contextlib.redirect_stdout(buf4):
+                BackendFitnessVisitor(fake_core, fake_core.name, is_test=False).visit(ast.parse(bad_call))
+            self.assertEqual(buf4.getvalue().count("UNDEFINED_SYMBOL_CALL_BAN"), 1, buf4.getvalue())
+
+            # 5. Caching self.*_cache on InSetuContext in sdk/__init__.py flags CONTEXT_INSTANCE_CACHE_BAN
+            bad_ctx_cache = "class InSetuContext:\n    def m(self):\n        self._manifest_cache = {}\n"
+            fake_sdk = REPO_ROOT / "insetu" / "core" / "sdk" / "__init__.py"
+            buf5 = io.StringIO()
+            with contextlib.redirect_stdout(buf5):
+                BackendFitnessVisitor(fake_sdk, fake_sdk.name, is_test=False).visit(ast.parse(bad_ctx_cache))
+            self.assertEqual(buf5.getvalue().count("CONTEXT_INSTANCE_CACHE_BAN"), 1, buf5.getvalue())
+
+            # 6. Importing a non-existent symbol from an internal insetu.* module flags BROKEN_INTERNAL_IMPORT_BAN
+            self.assertEqual(check_internal_imports_resolve(REPO_ROOT), [])
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_root = Path(tmp)
+                (tmp_root / "insetu" / "core").mkdir(parents=True)
+                (tmp_root / "tests" / "unit").mkdir(parents=True)
+                (tmp_root / "insetu" / "core" / "mod_a.py").write_text("def real_fn():\n    return 1\n", encoding="utf-8")
+                (tmp_root / "tests" / "unit" / "test_a.py").write_text("from insetu.core.mod_a import missing_fn\n", encoding="utf-8")
+                broken = check_internal_imports_resolve(tmp_root)
+                self.assertEqual(len(broken), 1)
+                self.assertIn("BROKEN_INTERNAL_IMPORT_BAN", broken[0])
         finally:
             FitnessState.violations_found = prev
 

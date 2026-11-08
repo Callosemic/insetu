@@ -1,0 +1,9 @@
+{
+    "pair": "uri_canonicalize",
+    "status": "pending",
+    "why": "Every path the client handles is a URI.",
+    "python": "insetu.core.utils_core:InSetuURI.canonicalize",
+    "javascript": "/static/extensions/system/uri.js:InSetuURI.canonicalize",
+    "note": "Signatures differ: Python takes default_prefix='vfs://', JavaScript defaultScheme='vfs'. Existing tests are separate per language (test_canonical_uris.py, test_js_behavioral_units.py); move their cases here. normalizeVfsURI in fs.js should become a call to InSetuURI.canonicalize.",
+    "cases": []
+}

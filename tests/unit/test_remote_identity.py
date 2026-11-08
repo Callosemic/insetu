@@ -178,8 +178,10 @@ class TestRemoteBootstrapIntegration(unittest.TestCase):
         akasa.reset_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
         register_proxy_header(*remote.TAILSCALE_IDENTITY_HEADERS)
         remote.reset_identity_caches()
-        (self.control_dir / "system.json").write_text(
-            json.dumps({"port": 5005, "workspaces": {"default": {"config_path": "config.json"}}}), encoding="utf-8"
+        (self.control_dir / "host.json").write_text(json.dumps({"port": 5005}), encoding="utf-8")
+        (self.control_dir / "workspaces.json").write_text(
+            json.dumps({"workspaces": {"default": {"config_path": "config.json"}}, "active_workspace": "default"}),
+            encoding="utf-8",
         )
         (self.control_dir / "config.json").write_text(
             json.dumps({"workspace_root": self.root_path.as_posix(), "extensions": ["config"]}), encoding="utf-8"
@@ -243,8 +245,10 @@ class TestRemoteSettingsLifecycle(unittest.TestCase):
         self.orig_cwd = akasa_utils.get_daemon_cwd()
         self.orig_env_ctrl = os.environ.get("AKASA_CONTROL_DIR")
         akasa.reset_state(cwd=self.root_path.as_posix(), control_dir=".insetu")
-        (self.control_dir / "system.json").write_text(
-            json.dumps({"port": 5005, "workspaces": {"default": {"config_path": "config.json"}}}), encoding="utf-8"
+        (self.control_dir / "host.json").write_text(json.dumps({"port": 5005}), encoding="utf-8")
+        (self.control_dir / "workspaces.json").write_text(
+            json.dumps({"workspaces": {"default": {"config_path": "config.json"}}, "active_workspace": "default"}),
+            encoding="utf-8",
         )
         (self.control_dir / "config.json").write_text(
             json.dumps({"workspace_root": self.root_path.as_posix()}), encoding="utf-8"

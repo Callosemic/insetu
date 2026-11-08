@@ -1,6 +1,6 @@
 ---
 title: "RFC: Decomposing God Objects & Purifying the System Module Across Akasa, Sutram & inSetu"
-status: "Draft Blueprint"
+status: "active"
 created_at: "2026-11-02"
 target_subsystems:
   - "akasa/akasa/workers/*"
@@ -21,6 +21,23 @@ tags: [blueprint, rfc, architecture, modularity, god-objects, system-cleanup, pr
 ---
 
 # RFC: Decomposing God Objects & Purifying the System Module Across Akasa, Sutram & inSetu
+
+## Roadmap placement (2026-11-07)
+
+Where each part lands on the roadmap: review-ready (the showcase cut), 1.0, or after 1.0.
+
+- **Review-ready:**
+    - Wave 1 (done, released 2026-11-05).
+    - Wave 3.1 (`fs.js`; the post-diff plan's 3.3 is the same work, done once), 3.3 (`agent.js`) and 3.5 (`engine_llm.py`, with §5.3's hidden settings).
+    - The front-end half of 3.4 is already on disk: `bridge_store.js`, `bridge_projections.js` and `bridge_history.js`.
+- **1.0:**
+    - Wave 2. The akasa split (2.1, 2.2) lands before akasa 1.0 (roadmap P11). 2.4 carries §5.4's CSS items.
+    - 3.2 after the routine expression grammar is designed.
+    - The back-end half of 3.4 (`bridge_vfs.py`) after V7's property tests.
+    - Wave 4.1.
+- **Already done:** Wave 4.2's three ratchets shipped as Wave 1's A4, and §5.1 shipped with A1. Keep them; do not add them a second time.
+- **Line counts in §2 and §4 date from 2026-11-02.** On 2026-11-07 `fs.js` is about 3,500 lines, `agent.js` 2,050, `orchestrator.py` 1,770 and `engine_llm.py` 1,540. Measure again before each split.
+
 
 ## 1. Core Architectural Philosophy: Pre-1.0 Purity (Boundary Membranes vs. Legacy Shims)
 
