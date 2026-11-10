@@ -119,15 +119,23 @@ export class InSetuExtHooks extends InSetuElement {
     }
     async saveRule() {
         const { name, command } = this.ruleForm;
-        if (!name || !command) return alert("Rule name and command are required.");
+        if (!name || !command) {
+            this.setStatus("Rule name and command are required.", 3500, true);
+            return;
+        }
         try {
             const payload = { ...this.ruleForm };
             if (this.editingRule) payload.id = this.editingRule.id;
-            await this.api.post('hooks/save', payload);
+            const res = await this.api.post('hooks/save', payload);
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.error || `HTTP ${res.status}`);
+            }
             HooksStore.setState({ ruleModalOpen: false });
             HooksStore.getState().fetchRules();
+            this.setStatus("✅ Automation rule saved.", 2500);
         } catch (e) {
-            alert(`Error saving rule: ${e.message}`);
+            this.setStatus(`❌ Error saving rule: ${e.message}`, 3500, true);
         }
     }
 
@@ -141,41 +149,51 @@ export class InSetuExtHooks extends InSetuElement {
                 throw new Error(body.error || `HTTP ${res.status}`);
             }
             HooksStore.getState().fetchRules();
+            this.setStatus("✅ Rule command approved.", 2500);
         } catch (e) {
-            alert(`Error approving rule: ${e.message}`);
+            this.setStatus(`❌ Error approving rule: ${e.message}`, 3500, true);
             HooksStore.getState().fetchRules();
         }
     }
 
     async toggleRule(rule) {
         try {
-            await this.api.post('hooks/toggle', { id: rule.id, enabled: !rule.enabled });
+            const res = await this.api.post('hooks/toggle', { id: rule.id, enabled: !rule.enabled });
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.error || `HTTP ${res.status}`);
+            }
             HooksStore.getState().fetchRules();
         } catch (e) {
-            alert(`Error toggling rule: ${e.message}`);
+            this.setStatus(`❌ Error toggling rule: ${e.message}`, 3500, true);
         }
     }
 
     async deleteRule(ruleId) {
         if (!confirm("Are you sure you want to delete this automation rule?")) return;
         try {
-            await this.api.post('hooks/delete', { id: ruleId });
+            const res = await this.api.post('hooks/delete', { id: ruleId });
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.error || `HTTP ${res.status}`);
+            }
             HooksStore.getState().fetchRules();
+            this.setStatus("🗑️ Automation rule deleted.", 2500);
         } catch (e) {
-            alert(`Error deleting rule: ${e.message}`);
+            this.setStatus(`❌ Error deleting rule: ${e.message}`, 3500, true);
         }
     }
     _getExecuteRuleAction(ruleId) {
         return this.api.bindJobAction('hooks/execute', { id: ruleId }, {
             onProgress: () => {
-                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("⏳ Executing rule...", null);
+                this.setStatus("⏳ Executing rule...", null);
             },
             onComplete: () => {
                 HooksStore.getState().fetchLogs();
-                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("✅ Rule executed successfully", 2000);
+                this.setStatus("✅ Rule executed successfully", 2000);
             },
             onError: (err) => {
-                alert(`Execution failed: ${err.message}`);
+                this.setStatus(`❌ Execution failed: ${err.message}`, 3500, true);
                 HooksStore.getState().fetchLogs();
             }
         });
@@ -237,7 +255,7 @@ export class InSetuExtHooks extends InSetuElement {
                 ?open=${true} 
                 ?fullscreen=${true}
                 titleText=${this.editingRule ? 'Edit Automation Rule' : 'New Automation Rule'}
-                @sutram-modal-closed=${() => HooksStore.setState({ ruleModalOpen: false })}>
+                @sutram-modal-closed=${(e) => { if (e.target === e.currentTarget) HooksStore.setState({ ruleModalOpen: false }); }}>
 
                 <sutram-stack slot="body" direction="col" gap="md">
                     ${bindStoreInput(HooksStore, 'ruleForm.name', this.ruleForm.name, { label: 'Rule Friendly Title', placeholder: 'e.g., Auto-Compile UI Assets on Save', flush: true })}
