@@ -24,7 +24,8 @@ EDITOR_SCHEMA = [
         "description": "Renders Markdown links as clickable icons in the editor."
     }
 ]
-# Language packs shipped with insetu, served as static files (built by scripts/vendor_codemirror.sh).
+
+# Language packs shipped with insetu, served as static files (built by scripts/vendor_codemirror.sh)
 BUNDLED_CODEMIRROR_DIR = Path(__file__).resolve().parent.parent.parent.joinpath("static", "vendor", "codemirror")
 BUNDLED_CODEMIRROR_ROUTE = "/static/vendor/codemirror"
 _LANGUAGE_MODE_RE = re.compile(r"^[a-z0-9][a-z0-9_+-]{0,39}$")

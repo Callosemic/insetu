@@ -40,6 +40,10 @@ class FileTargetPayload(TypedDict):
 class FileDownloadZipPayload(TypedDict, total=False):
     items: List[Union[str, Dict[str, Any]]]
     archive_name: Optional[str]
+
+
+MAX_ZIP_FILE_COUNT = 5000
+MAX_ZIP_TOTAL_BYTES = 500 * 1024 * 1024  # 500 MB
 _TEXT_MIME_PREFIXES = ('text/', 'application/json', 'application/javascript', 'application/xml', 'application/x-yaml', 'application/toml')
 _TEXT_EXTENSIONS = {'.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.md', '.txt', '.html', '.htm', '.css', '.sh', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.sql', '.rs', '.go', '.c', '.cpp', '.h', '.java', '.rb', '.gitignore', '.gitkeep', '.env'}
 
@@ -120,9 +124,9 @@ def _compute_zip_arcnames(expanded_uris: List[str], raw_items: List[Any]) -> Tup
     return entries, zip_name
 
 
-@fs_bp.route('download_zip', methods=['POST'], request_schema=FileDownloadZipPayload, docstring="[sync] Compresses any selection of VFS/CTX files and folders into a downloadable .zip archive while preserving directory structure.")
+@fs_bp.route('download_zip', methods=['POST'], request_schema=FileDownloadZipPayload, mcp_expose=False, docstring="[sync] Compresses any selection of VFS/CTX files and folders into a downloadable .zip archive while preserving directory structure. Human-only: hidden from MCP and banned in routines.")
 def api_fs_download_zip(ctx):
-    """Expands selected files and folders through the Topology Sieve and streams a deflated .zip archive."""
+    """Expands selected files and folders through the Topology Sieve and streams a deflated .zip archive, capped by file count and total size."""
     data = ctx.payload or {}
     raw_items = data.get("items") or []
     if not raw_items or not isinstance(raw_items, list):
@@ -135,6 +139,29 @@ def api_fs_download_zip(ctx):
     entries, default_zip_name = _compute_zip_arcnames(expanded, raw_items)
     if not entries:
         return {"error": "No downloadable files found in selection."}, 404
+    if len(entries) > MAX_ZIP_FILE_COUNT:
+        return {
+            "error": f"Selection contains {len(entries):,} files, exceeding the {MAX_ZIP_FILE_COUNT:,}-file ZIP export limit. Narrow your selection to a smaller folder."
+        }, 413
+
+    total_bytes = 0
+    resolved_entries: List[Tuple[str, str, Optional[str]]] = []
+    for uri_str, arcname in entries:
+        uri_obj = InSetuURI(uri_str)
+        phys_path = uri_obj.resolve_if_exists(ctx.workspace_id)
+        if phys_path and Path(phys_path).is_file():
+            try:
+                total_bytes += Path(phys_path).stat().st_size
+            except OSError:
+                pass
+            resolved_entries.append((uri_str, arcname, phys_path))
+        else:
+            resolved_entries.append((uri_str, arcname, None))
+        if total_bytes > MAX_ZIP_TOTAL_BYTES:
+            limit_mb = MAX_ZIP_TOTAL_BYTES // (1024 * 1024)
+            return {
+                "error": f"Selection exceeds the {limit_mb} MB uncompressed ZIP export limit. Narrow your selection."
+            }, 413
 
     custom_name = str(data.get("archive_name") or "").strip()
     if custom_name:
@@ -145,16 +172,23 @@ def api_fs_download_zip(ctx):
     spool = tempfile.SpooledTemporaryFile(max_size=16 * 1024 * 1024, mode="w+b")
     written_count = 0
     with zipfile.ZipFile(spool, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for uri_str, arcname in entries:
-            uri_obj = InSetuURI(uri_str)
-            phys_path = uri_obj.resolve_if_exists(ctx.workspace_id)
-            if phys_path and Path(phys_path).is_file():
+        for uri_str, arcname, phys_path in resolved_entries:
+            if phys_path:
                 zf.write(phys_path, arcname=arcname)
                 written_count += 1
                 continue
+            uri_obj = InSetuURI(uri_str)
             content = ctx.vfs.read(str(uri_obj))
             if content is not None:
-                zf.writestr(arcname, content.encode("utf-8") if isinstance(content, str) else content)
+                raw_bytes = content.encode("utf-8") if isinstance(content, str) else content
+                total_bytes += len(raw_bytes)
+                if total_bytes > MAX_ZIP_TOTAL_BYTES:
+                    spool.close()
+                    limit_mb = MAX_ZIP_TOTAL_BYTES // (1024 * 1024)
+                    return {
+                        "error": f"Selection exceeds the {limit_mb} MB uncompressed ZIP export limit. Narrow your selection."
+                    }, 413
+                zf.writestr(arcname, raw_bytes)
                 written_count += 1
 
     if written_count == 0:
