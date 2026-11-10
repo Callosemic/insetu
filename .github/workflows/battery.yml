@@ -1,13 +1,17 @@
-# Callosemic stack battery: akasa -> sutram -> insetu, stopping at the first red suite.
+# Callosemic stack battery. Every repo's CI calls this one workflow.
 #
-# Every repo's CI calls this one workflow, so a push anywhere runs the identical battery.
+# gate   (Python 3.10-3.12, pinned stack): runs ONLY the pushed repo's unit and fitness suites.
+#        A push is red only when the pushed repo itself is red.
+# canary (Python 3.12, main stack): runs every suite against the other repos' default branches.
+#        It may fail without failing the push: during a coordinated release, insetu main is
+#        expected to break against a new akasa until insetu is pushed with the new pin.
+#
 # The pushed repo is always tested at its pushed commit. The other two are resolved per mode:
 #   main   -> their default branch, main or master (what the live workbench runs)
 #   pinned -> their latest release (what a fresh `pip install insetu` gets). akasa is resolved
-#             through insetu's own dependency declaration, so pinning akasa in insetu's
-#             pyproject.toml is picked up automatically. insetu keeps its committed sutram build.
-#             A released sibling is only a dependency here: its own suite already ran when it was
-#             released, so pinned mode runs suites only for the pushed repo and for insetu.
+#             through insetu's own dependency declaration, so an insetu push is tested against
+#             exactly the akasa its pin allows, and insetu keeps its committed sutram build.
+#             That makes the insetu push the place where cross-repo compatibility is gated.
 name: Stack battery
 
 on:
@@ -31,14 +35,19 @@ permissions:
 
 jobs:
   battery:
-    name: ${{ matrix.mode }} · py${{ matrix.python }}
+    name: ${{ matrix.role }} · ${{ matrix.mode }} · py${{ matrix.python }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The canary reports; it never fails the push.
+    continue-on-error: ${{ matrix.role == 'canary' }}
     strategy:
       fail-fast: false
       matrix:
-        mode: [main, pinned]
-        python: ["3.10", "3.11", "3.12"]
+        include:
+          - { role: gate, mode: pinned, python: "3.10" }
+          - { role: gate, mode: pinned, python: "3.11" }
+          - { role: gate, mode: pinned, python: "3.12" }
+          - { role: canary, mode: main, python: "3.12" }
     env:
       ORG_URL: https://github.com/Callosemic
       STACK: ${{ github.workspace }}/stack
@@ -100,7 +109,7 @@ jobs:
           }
 
           {
-            echo "### Stack under test: ${MODE} · py${{ matrix.python }} (triggered by ${TRIGGER_REPO})"
+            echo "### Stack under test: ${{ matrix.role }} · ${MODE} · py${{ matrix.python }} (triggered by ${TRIGGER_REPO})"
             echo "| repo | ref | commit |"
             echo "|---|---|---|"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -145,29 +154,41 @@ jobs:
           bash "$STACK/insetu/scripts/vendor_sutram.sh" "$STACK/sutram"
 
       - name: akasa · unit
-        if: matrix.mode == 'main' || inputs.trigger_repo == 'akasa'
+        if: matrix.role == 'canary' || inputs.trigger_repo == 'akasa'
         working-directory: stack/akasa
         run: python tests/run_unit_tests.py
 
       - name: akasa · fitness
-        if: matrix.mode == 'main' || inputs.trigger_repo == 'akasa'
+        if: matrix.role == 'canary' || inputs.trigger_repo == 'akasa'
         working-directory: stack/akasa
         run: python tests/fitness_functions.py
 
       - name: sutram · unit
-        if: matrix.mode == 'main' || inputs.trigger_repo == 'sutram'
+        if: matrix.role == 'canary' || inputs.trigger_repo == 'sutram'
         working-directory: stack/sutram
         run: python tests/run_unit_tests.py
 
       - name: sutram · fitness
-        if: matrix.mode == 'main' || inputs.trigger_repo == 'sutram'
+        if: matrix.role == 'canary' || inputs.trigger_repo == 'sutram'
         working-directory: stack/sutram
         run: python tests/fitness_functions.py
 
       - name: insetu · unit
+        if: matrix.role == 'canary' || inputs.trigger_repo == 'insetu'
         working-directory: stack/insetu
         run: python tests/run_unit_tests.py
 
       - name: insetu · fitness
+        if: matrix.role == 'canary' || inputs.trigger_repo == 'insetu'
         working-directory: stack/insetu
         run: python tests/fitness_functions.py
+
+      - name: Canary note
+        if: failure() && matrix.role == 'canary'
+        run: |
+          {
+            echo "### Canary failed (does not fail this push)"
+            echo "The ${TRIGGER_REPO} commit is fine on its own (see the gate jobs). The other repos' default"
+            echo "branches do not yet work with it. Expected during a coordinated release until those repos"
+            echo "are pushed (for insetu: with the new pin). Otherwise, it is early warning of a break."
+          } >> "$GITHUB_STEP_SUMMARY"
