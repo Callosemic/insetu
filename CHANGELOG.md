@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.37.1 (2026-11-10)
+
+### Bug Fixes
+
+- Test battery
+  ([`56b0f90`](https://github.com/Callosemic/insetu/commit/56b0f90f1ce34059385da8403a252be381c5ffe2))
+
+
 ## v0.37.0 (2026-11-10)
 
 ### Bug Fixes
