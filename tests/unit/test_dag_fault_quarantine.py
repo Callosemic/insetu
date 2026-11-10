@@ -11,7 +11,7 @@ from flask import Flask
 import akasa
 import akasa.utils as akasa_utils
 import insetu.app as insetu_app
-from insetu.core.sdk import get_workspace_physics
+from insetu.core.sdk import execution_frame, get_workspace_physics
 from insetu.core.system.ext_manager import approve_workspace_extension, snapshot_workspace_extension
 
 
@@ -106,7 +106,8 @@ class TestDagFaultQuarantine(unittest.TestCase):
             encoding="utf-8",
         )
         # Only approved extensions are parsed at all, so approve it to reach the hygiene check.
-        approve_workspace_extension("rogue_ext", snapshot_workspace_extension(rogue_dir))
+        with execution_frame(origin="ui"):
+            approve_workspace_extension("rogue_ext", snapshot_workspace_extension(rogue_dir))
         test_app = Flask("quarantine_rogue_test")
         orig_app = insetu_app.app
         try:

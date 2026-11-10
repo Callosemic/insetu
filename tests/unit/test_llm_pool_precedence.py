@@ -12,12 +12,12 @@ from insetu.core.llm.engine_llm import (
     llm_bp,
     get_compute_pool_and_profiles,
     _resolve_tier_execution_target,
-    _model_provider_prefix,
 )
+from insetu.core.llm.llm_catalog import _model_provider_prefix
 
 
 class TestLlmPoolPrecedence(unittest.TestCase):
-    """Routing precedence: saved pool/profiles, then explicitly saved legacy settings, then the schema's default pool."""
+    """Routing precedence: saved pool/profiles override the schema's default pool across cognitive tiers."""
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -50,40 +50,65 @@ class TestLlmPoolPrecedence(unittest.TestCase):
 
     def test_fresh_install_uses_the_schema_default_pool(self):
         state = get_compute_pool_and_profiles(self.ctx)
-        self.assertEqual([ep["id"] for ep in state["endpoints"]], ["anthropic_main"])
+        self.assertEqual([ep["id"] for ep in state["endpoints"]], ["anthropic_main", "web_chat"])
         fast = _resolve_tier_execution_target(self.ctx, "fast")
         self.assertEqual(fast["endpoint_id"], "anthropic_main")
         self.assertEqual(fast["model"], "claude-3-5-haiku-latest")
 
-    def test_explicit_legacy_settings_win_over_the_default_pool(self):
+    def test_saved_pool_and_profile_tier_fallbacks(self):
         self._save({
-            "provider": "openai_compatible",
-            "base_url": "http://127.0.0.1:11434/v1",
-            "model": "llama-standard",
-            "tier_thinking_model": "llama-thinking",
-        })
-        thinking = _resolve_tier_execution_target(self.ctx, "thinking")
-        self.assertEqual(thinking["endpoint_id"], "default_openai_compatible")
-        self.assertEqual(thinking["model"], "llama-thinking")
-        self.assertEqual(_resolve_tier_execution_target(self.ctx, "standard")["model"], "llama-standard")
-        self.assertEqual(_resolve_tier_execution_target(self.ctx, "fast")["model"], "llama-standard", "Blank fast tier falls back to the standard model")
-
-    def test_saved_pool_wins_over_legacy_settings(self):
-        self._save({"model": "legacy-standard", "tier_thinking_model": "legacy-thinking"})
-        self._save({
-            "compute_endpoints": [{"id": "local_box", "label": "Local", "driver": "openai_compatible", "base_url": "http://127.0.0.1:1234/v1", "models": ["pool-model"]}],
+            "compute_endpoints": [{
+                "id": "local_box",
+                "label": "Local",
+                "driver": "openai_compatible",
+                "base_url": "http://127.0.0.1:11434/v1",
+                "custom_models": ["llama-standard", "llama-thinking"],
+            }],
             "llm_profiles": [{
                 "id": "default",
                 "title": "Default",
                 "tiers": {
-                    "standard": {"endpoint": "local_box", "model": "pool-model"},
-                    "thinking": {"endpoint": "local_box", "model": "pool-model"},
+                    "fast": {"endpoint": "", "model": ""},
+                    "standard": {"endpoint": "local_box", "model": "llama-standard"},
+                    "thinking": {"endpoint": "local_box", "model": "llama-thinking"},
                 },
             }],
         })
         thinking = _resolve_tier_execution_target(self.ctx, "thinking")
         self.assertEqual(thinking["endpoint_id"], "local_box")
-        self.assertEqual(thinking["model"], "pool-model")
+        self.assertEqual(thinking["model"], "llama-thinking")
+        self.assertEqual(_resolve_tier_execution_target(self.ctx, "standard")["model"], "llama-standard")
+        self.assertEqual(_resolve_tier_execution_target(self.ctx, "fast")["model"], "llama-standard", "Blank fast tier falls back to the standard model")
+
+    def test_active_profile_selection_routes_tiers_to_selected_profile(self):
+        self._save({
+            "compute_endpoints": [
+                {"id": "local_box", "label": "Local", "driver": "openai_compatible", "base_url": "http://127.0.0.1:1234/v1", "models": ["pool-model"]},
+                {"id": "cloud_box", "label": "Cloud", "driver": "anthropic", "models": ["claude-3-7-sonnet-latest"]},
+            ],
+            "llm_profiles": [
+                {
+                    "id": "default",
+                    "title": "Default",
+                    "tiers": {
+                        "standard": {"endpoint": "local_box", "model": "pool-model"},
+                        "thinking": {"endpoint": "local_box", "model": "pool-model"},
+                    },
+                },
+                {
+                    "id": "cloud_prof",
+                    "title": "Cloud Profile",
+                    "tiers": {
+                        "standard": {"endpoint": "cloud_box", "model": "claude-3-7-sonnet-latest"},
+                        "thinking": {"endpoint": "cloud_box", "model": "claude-3-7-sonnet-latest"},
+                    },
+                },
+            ],
+            "active_profile_id": "cloud_prof",
+        })
+        thinking = _resolve_tier_execution_target(self.ctx, "thinking")
+        self.assertEqual(thinking["endpoint_id"], "cloud_box")
+        self.assertEqual(thinking["model"], "claude-3-7-sonnet-latest")
 
     def test_model_provider_prefix(self):
         self.assertEqual(_model_provider_prefix("anthropic/claude-3-5-sonnet", "openrouter"), "anthropic")

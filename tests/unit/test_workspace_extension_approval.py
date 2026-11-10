@@ -16,7 +16,7 @@ import insetu.app as insetu_app
 from insetu.core.system import ext_manager as utils_core
 from insetu.core.agent.orchestrator import ROUTINE_BANNED_CAPABILITIES
 from insetu.core.bridge.bridge_vfs import _is_banned_bridge_target
-from insetu.core.sdk import InSetuURI
+from insetu.core.sdk import InSetuURI, execution_frame
 from insetu.core.system import ext_manager as engine_system
 
 ENGINE_SRC = '''from insetu.core.sdk import InSetuExtension
@@ -72,7 +72,8 @@ class TestWorkspaceExtensionApproval(unittest.TestCase):
         return test_app
 
     def _approve_current(self):
-        utils_core.approve_workspace_extension("hello", utils_core.snapshot_workspace_extension(self.ext_dir))
+        with execution_frame(origin="ui"):
+            utils_core.approve_workspace_extension("hello", utils_core.snapshot_workspace_extension(self.ext_dir))
 
     def test_unapproved_extension_is_neither_imported_nor_served(self):
         booted = self._boot()
@@ -108,7 +109,8 @@ class TestWorkspaceExtensionApproval(unittest.TestCase):
         notes_dir = self.control_dir / "extensions" / "notes"
         notes_dir.mkdir()
         (notes_dir / "engine_notes.py").write_text("__depends__ = []\n", encoding="utf-8")
-        utils_core.approve_workspace_extension("notes", utils_core.snapshot_workspace_extension(notes_dir))
+        with execution_frame(origin="ui"):
+            utils_core.approve_workspace_extension("notes", utils_core.snapshot_workspace_extension(notes_dir))
         entry = utils_core.scan_workspace_extensions()["notes"]
         self.assertEqual(entry["status"], "invalid")
         self.assertIn("built-in", entry["reason"])
@@ -123,7 +125,8 @@ class TestWorkspaceExtensionApproval(unittest.TestCase):
         self.assertEqual(code, 409)
         self.assertNotIn("hello", utils_core.get_workspace_extension_approvals())
         current = utils_core.snapshot_workspace_extension(self.ext_dir)["fingerprint"]
-        result = engine_system.api_workspace_extension_approve.__wrapped__(SimpleNamespace(payload={"name": "hello", "fingerprint": current}))
+        with execution_frame(origin="ui"):
+            result = engine_system.api_workspace_extension_approve.__wrapped__(SimpleNamespace(payload={"name": "hello", "fingerprint": current}))
         self.assertEqual(result["status"], "approved")
         self.assertTrue(result["requires_reboot"])
         self.assertEqual(utils_core.scan_workspace_extensions()["hello"]["status"], "approved")

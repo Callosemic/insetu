@@ -351,7 +351,11 @@ assert.throws(
         3. file-preview and editor-toggle-macro-preview entity actions are registered.
         4. prompts.js routes editable cards to previewMode: false and read-only templates to previewMode: true.
         """
-        fs_js = (BACKEND_DIR / "core" / "fs" / "fs.js").read_text(encoding="utf-8")
+        fs_js = "\n".join(
+            (BACKEND_DIR / "core" / "fs" / fname).read_text(encoding="utf-8")
+            for fname in ("fs.js", "fs_store.js", "fs_editor_projection.js")
+            if (BACKEND_DIR / "core" / "fs" / fname).exists()
+        )
         ui_editor_js = (BACKEND_DIR / "core" / "system" / "components" / "ui_editor.js").read_text(encoding="utf-8")
         prompts_js = (BACKEND_DIR / "core" / "prompts" / "prompts.js").read_text(encoding="utf-8")
         self.assertIn("if (!isFS)", fs_js, "fs.js resolveFileFetchUrl must guard insetu:file-fetch-url with if (!isFS)")

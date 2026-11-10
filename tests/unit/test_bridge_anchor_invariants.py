@@ -11,6 +11,7 @@ from unittest.mock import patch
 from insetu.core.bridge.bridge_fuzzy import (
     find_all_block_anchors,
     find_block_anchor,
+    find_sandwich_fuzzy_anchor,
     apply_block_in_memory,
     is_effectively_identical,
     rebase_overlapping_block_in_memory,
@@ -766,6 +767,61 @@ class TestBridgeAnchorInvariants(unittest.TestCase):
                             violations.append(f"{rel}:{lineno} references unimported type annotation '{sub.id}'")
 
         self.assertEqual(violations, [], "Unimported type annotation symbols found:\n" + "\n".join(violations))
+
+    _INVOICE = (
+        "def calculate_invoice_total(items, tax_rate=0.08):\n"
+        "    subtotal = sum(item.price * item.qty for item in items)\n"
+        "    discount = compute_seasonal_discount(subtotal, items)\n"
+        "    taxed = (subtotal - discount) * (1.0 + tax_rate)\n"
+        "    return round(taxed, 2)\n"
+    )
+    _DRIFTED_SEARCH = (
+        "def calculate_invoice_total(items, tax_rate=0.08):\n"
+        "    subtotal = sum(item.price * item.qty for item in items)\n"
+        "    discount = compute_seasonal_discount(subtotal)\n"
+        "    taxed = (subtotal - discount) * (1.0 + tax_rate)\n"
+        "    return round(taxed, 2)"
+    )
+
+    def test_sandwich_anchor_heals_small_interior_drift_and_honors_repair_off(self):
+        """One drifted interior line between verbatim top and bottom lines heals to the exact intended file; with algorithmic repair off it is refused."""
+        replace = (
+            "def calculate_invoice_total(items, tax_rate=0.08):\n"
+            "    subtotal = sum(item.price * item.qty for item in items)\n"
+            "    discount = compute_seasonal_discount(subtotal, items)\n"
+            "    taxed = max(0.0, subtotal - discount) * (1.0 + tax_rate)\n"
+            "    return round(taxed, 2)"
+        )
+        block = {"search": self._DRIFTED_SEARCH, "replace": replace}
+
+        ok_off, content_off, _ = apply_block_in_memory(self._INVOICE, dict(block), silent=True, allow_algorithmic_heal=False)
+        self.assertFalse(ok_off)
+        self.assertEqual(content_off, self._INVOICE)
+
+        ok, healed, status = apply_block_in_memory(self._INVOICE, dict(block), silent=True, allow_algorithmic_heal=True)
+        self.assertTrue(ok)
+        self.assertEqual(status, "sandwich_healed")
+        self.assertEqual(healed, replace + "\n")
+
+    def test_sandwich_anchor_refuses_ambiguous_and_largely_different_blocks(self):
+        """The same function twice is ambiguous, and a rewritten interior is a different block: both are refused, never guessed."""
+        doubled = self._INVOICE + "\n\n" + self._INVOICE
+        self.assertIsNone(find_sandwich_fuzzy_anchor(doubled.splitlines(), self._DRIFTED_SEARCH.splitlines()))
+
+        rewritten = (
+            "def calculate_invoice_total(items, tax_rate=0.08):\n"
+            "    subtotal = 0\n"
+            "    for it in items:\n"
+            "        subtotal += it.cost\n"
+            "    return round(taxed, 2)"
+        )
+        self.assertIsNone(find_sandwich_fuzzy_anchor(self._INVOICE.splitlines(), rewritten.splitlines()))
+        ok, content, status = apply_block_in_memory(
+            self._INVOICE, {"search": rewritten, "replace": "def calculate_invoice_total():\n    return 0"}, silent=True,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(content, self._INVOICE)
+        self.assertNotEqual(status, "sandwich_healed")
 
 
 if __name__ == "__main__":

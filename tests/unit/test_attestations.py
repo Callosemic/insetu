@@ -58,19 +58,21 @@ class TestAttestationStore(_StoreCase):
     """Grant, replace, revoke, expiry, run scope, machine origins refused, and the store refused to the VFS and the bridge."""
 
     def test_grant_check_replace_and_revoke(self):
-        attestations.attest("command", "default|alpha:abc", "alpha:abc", {"command": "make test"})
-        self.assertTrue(attestations.is_attested("command", "default|alpha:abc", "alpha:abc"))
-        self.assertFalse(attestations.is_attested("command", "default|alpha:abc", "alpha:other"), "a different digest is not covered")
-        attestations.attest("command", "default|alpha:abc", "alpha:new")
+        with execution_frame(origin="ui"):
+            attestations.attest("command", "default|alpha:abc", "alpha:abc", {"command": "make test"})
+            self.assertTrue(attestations.is_attested("command", "default|alpha:abc", "alpha:abc"))
+            self.assertFalse(attestations.is_attested("command", "default|alpha:abc", "alpha:other"), "a different digest is not covered")
+            attestations.attest("command", "default|alpha:abc", "alpha:new")
         self.assertEqual([r["digest"] for r in attestations.list_attestations("command")], ["alpha:new"])
         self.assertTrue(attestations.revoke("command", "default|alpha:abc"))
         self.assertFalse(attestations.revoke("command", "default|alpha:abc"))
         self.assertEqual(attestations.list_attestations(), [])
 
     def test_expired_and_earlier_run_grants_count_as_absent_and_are_pruned(self):
-        attestations.attest("lan_lease", "default|a", "d", expires_at=time.time() - 1)
-        attestations.attest("lan_lease", "default|b", "d", until_restart=True)
-        attestations.attest("lan_lease", "default|c", "d", expires_at=time.time() + 600)
+        with execution_frame(origin="ui"):
+            attestations.attest("lan_lease", "default|a", "d", expires_at=time.time() - 1)
+            attestations.attest("lan_lease", "default|b", "d", until_restart=True)
+            attestations.attest("lan_lease", "default|c", "d", expires_at=time.time() + 600)
         self.assertFalse(attestations.is_attested("lan_lease", "default|a"))
         self.assertTrue(attestations.is_attested("lan_lease", "default|b"))
         with patch.object(attestations, "DAEMON_RUN_ID", "a-later-run"):
@@ -78,8 +80,11 @@ class TestAttestationStore(_StoreCase):
             self.assertEqual(attestations.prune(), 2)
         self.assertEqual([r["subject"] for r in self._store_on_disk()["records"]], ["default|c"])
 
-    def test_machine_origins_cannot_approve(self):
-        for origin in ("mcp", "routine", "agent"):
+    def test_machine_and_frameless_origins_cannot_approve(self):
+        # Calls with no execution frame at all (origin=None) are refused
+        with self.assertRaises(attestations.AttestationRefused):
+            approve_command("default", "test", "alpha", "make test")
+        for origin in ("mcp", "routine", "agent", "migration", "worker", "internal"):
             with self.subTest(origin=origin), execution_frame(origin=origin):
                 with self.assertRaises(attestations.AttestationRefused):
                     approve_command("default", "test", "alpha", "make test")
@@ -90,7 +95,8 @@ class TestAttestationStore(_StoreCase):
         self.assertEqual(self._store_on_disk()["records"][0]["approved_by"]["origin"], "ui")
 
     def test_the_store_is_written_only_through_the_confirmed_path(self):
-        attestations.attest("command", "default|alpha:abc", "alpha:abc")
+        with execution_frame(origin="ui"):
+            attestations.attest("command", "default|alpha:abc", "alpha:abc")
         body = execute_vfs_save(
             "default", (self.control_dir / "attestations.json").as_posix(), "{}", {"is_absolute_artifact": True}
         )
@@ -191,6 +197,62 @@ class TestHookRulesNeedAPersonsApproval(_StoreCase):
             body, status = self._call("hooks.approve", {"id": "rule_q", "command": "make deploy"})
         self.assertEqual(status, 403, body)
         self.assertFalse(engine_hooks._is_hook_approved(ctx, "rule_q", "make deploy"))
+
+    def test_hydrating_unapproved_rule_from_rules_json_never_attests_or_enables(self):
+        """A workspace with no hook approvals and a rules.json holding an enabled rule leaves it unattested and disabled after hooks.list, both with origin 'ui' and with no frame."""
+        ctx = engine_hooks.hooks_bp.get_context("default")
+        ctx.store.set("rules.json", "rules", [{
+            "id": "rule_from_json",
+            "name": "Planted Rule",
+            "trigger_type": "repo_update",
+            "trigger_target": "ALL",
+            "command": "echo planted",
+            "enabled": 1,
+            "created_at": "2026-11-08T00:00:00",
+        }])
+        sync_vfs_barrier("default")
+
+        # 1. With no execution frame at all
+        res_no_frame = self._call("hooks.list", {})
+        self.assertEqual(len(res_no_frame["rules"]), 1)
+        self.assertFalse(res_no_frame["rules"][0]["approved"])
+        self.assertEqual(res_no_frame["rules"][0]["enabled"], 0)
+        self.assertFalse(engine_hooks._is_hook_approved(ctx, "rule_from_json", "echo planted"))
+        self.assertEqual(ctx.db.get_by_id("hooks_rules", "rule_from_json")["enabled"], 0)
+
+        # 2. Reset SQLite table and run hooks.list under origin 'ui'
+        ctx.db.delete("hooks_rules", "id", "rule_from_json")
+        with execution_frame(origin="ui"):
+            res_ui = self._call("hooks.list", {})
+        self.assertEqual(len(res_ui["rules"]), 1)
+        self.assertFalse(res_ui["rules"][0]["approved"])
+        self.assertEqual(res_ui["rules"][0]["enabled"], 0)
+        self.assertFalse(engine_hooks._is_hook_approved(ctx, "rule_from_json", "echo planted"))
+        self.assertEqual(ctx.db.get_by_id("hooks_rules", "rule_from_json")["enabled"], 0)
+
+    def test_fitness_rule_bans_execution_frame_origin_in_extensions(self):
+        """Code under insetu/extensions/ must never call execution_frame(origin=...)."""
+        import ast as _ast
+        import contextlib as _contextlib
+        import io as _io
+        from tests.fitness.core import FitnessState as _FitnessState
+        from tests.fitness.rules_python import BackendFitnessVisitor as _Visitor
+
+        fake_ext = Path(__file__).resolve().parent.parent.parent / "insetu" / "extensions" / "hooks" / "engine_hooks.py"
+        code = (
+            "from insetu.core.sdk import execution_frame\n"
+            "def hydrate():\n"
+            "    with execution_frame(origin='migration'):\n"
+            "        pass\n"
+        )
+        prev = _FitnessState.violations_found
+        buf = _io.StringIO()
+        try:
+            with _contextlib.redirect_stdout(buf):
+                _Visitor(fake_ext, fake_ext.name, is_test=False).visit(_ast.parse(code, filename=str(fake_ext)))
+            self.assertIn("EXTENSION_EXECUTION_FRAME_ORIGIN_BAN", buf.getvalue())
+        finally:
+            _FitnessState.violations_found = prev
 
 
 class TestLegacyHostApprovalMigration(_StoreCase):

@@ -15,6 +15,83 @@ LOADER_PATH = (Path(__file__).resolve().parent / "js_loader.mjs").resolve()
 class TestOfflineResilienceContracts(unittest.TestCase):
     """Verifies offline boot invariants across system.js, api.js, index.html, and executes Sutram offline kernel in Node.js."""
 
+    def test_boot_import_retry_and_failure_classification_in_node(self):
+        """An import failing with a fetch TypeError is retried and classified as 'network' (not quarantined), whereas a SyntaxError or 404 is classified as 'code_or_404' (quarantined)."""
+        if not shutil.which("node"):
+            self.skipTest("Node.js binary is not installed in PATH")
+
+        node_script = """
+import assert from 'node:assert/strict';
+import { importModuleWithRetry, classifyBootModuleFailure } from '/static/extensions/system/system.js';
+
+// 1. Transient fetch TypeError retries with backoff and succeeds on 3rd attempt
+let attempts = 0;
+const recovered = await importModuleWithRetry(
+    '/static/extensions/notes/ext_notes.js',
+    async () => {
+        attempts++;
+        if (attempts < 3) throw new TypeError('Failed to fetch dynamically imported module');
+        return { ok: true };
+    },
+    [5, 10]
+);
+assert.equal(attempts, 3, 'importModuleWithRetry must retry transient fetch TypeErrors');
+assert.equal(recovered.ok, true);
+
+// 2. Fetch TypeError when server is unreachable (HEAD throws or returns 502) classifies as 'network' (never quarantined)
+let finalFetchErr = null;
+try {
+    await importModuleWithRetry(
+        '/static/extensions/notes/ext_notes.js',
+        async () => { throw new TypeError('Failed to fetch dynamically imported module'); },
+        [1, 1]
+    );
+} catch (err) {
+    finalFetchErr = err;
+}
+const netKind = await classifyBootModuleFailure(
+    '/static/extensions/notes/ext_notes.js',
+    finalFetchErr,
+    async () => { throw new TypeError('Network unreachable'); }
+);
+assert.equal(netKind, 'network', 'Unreachable server during import() must classify as network, not code_or_404');
+
+// 3. SyntaxError classifies immediately as 'code_or_404' without retrying
+let syntaxAttempts = 0;
+let caughtSyntax = null;
+try {
+    await importModuleWithRetry(
+        '/static/extensions/broken/ext_broken.js',
+        async () => {
+            syntaxAttempts++;
+            throw new SyntaxError('Unexpected token export');
+        },
+        [5, 5]
+    );
+} catch (err) {
+    caughtSyntax = err;
+}
+assert.equal(syntaxAttempts, 1, 'SyntaxError must not be retried');
+const syntaxKind = await classifyBootModuleFailure('/static/extensions/broken/ext_broken.js', caughtSyntax);
+assert.equal(syntaxKind, 'code_or_404', 'SyntaxError must be quarantined');
+
+// 4. Missing file (HEAD returns 404) classifies as 'code_or_404'
+const missingKind = await classifyBootModuleFailure(
+    '/static/extensions/missing/ext_missing.js',
+    new TypeError('Failed to fetch dynamically imported module'),
+    async () => new Response(null, { status: 404 })
+);
+assert.equal(missingKind, 'code_or_404', 'HTTP 404 on HEAD probe must be quarantined');
+process.exit(0);
+"""
+        res = execute_binary(
+            ["node", "--import", LOADER_PATH.as_posix(), "--input-type=module", "-e", node_script],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+        )
+        self.assertEqual(res.returncode, 0, f"Node boot import classification test failed:\n{res.stderr}")
+
     def test_workspace_swap_never_purges_service_worker_caches(self):
         """SessionOrchestrator.transitionToWorkspace in Node.js via js_loader.mjs never invokes caches.delete or unregisters the Service Worker."""
         if not shutil.which("node"):
@@ -81,7 +158,26 @@ process.exit(0);
         sw_src = sw_candidates[0].read_text(encoding="utf-8")
         self.assertIn("APP_SHELL_KEY", sw_src)
         self.assertIn("_extractSameOriginAssetsFromHtml", sw_src)
-        self.assertIn("[502, 503, 504].includes(response.status)", sw_src)
+        self.assertIn("502, 503, 504", sw_src)
+        self.assertIn("_isCacheableResponse", sw_src)
+
+        # Verify loadBatchResilient retries failed imports and probes with HEAD so network drops never quarantine modules
+        sys_src = (REPO_ROOT / "insetu" / "core" / "system" / "system.js").read_text(encoding="utf-8")
+        self.assertIn("classifyBootModuleFailure", sys_src)
+        self.assertIn("Can't reach the inSetu server. Retrying.", sys_src)
+
+        # Verify api.js reverts vfs_cache when an offline save to a protected file returns pending_confirmation
+        api_src = (REPO_ROOT / "insetu" / "core" / "system" / "api.js").read_text(encoding="utf-8")
+        self.assertIn("sutram-outbox-item-synced", api_src)
+        self.assertIn("pending_confirmation", api_src)
+
+        # Verify index.html stamps insetu-build-id and renders Open offline copy / Try again / Reset app / conditional Lifeboat
+        index_src = (REPO_ROOT / "insetu" / "templates" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('name="insetu-build-id"', index_src)
+        self.assertIn("Open offline copy", index_src)
+        self.assertIn("Try again", index_src)
+        self.assertIn("Reset app", index_src)
+        self.assertIn("boot-lifeboat-link", index_src)
 
     def test_offline_http_provider_and_sutram_db_behavioral_in_node(self):
         """
@@ -304,6 +400,8 @@ const compactedPayload = JSON.parse(storesData.sutram_outbox[0].bodyString);
 assert.equal(compactedPayload.content, 'offline_edit_v4');
 assert.equal(compactedPayload.base_hash, 'hash_v2', 'Outbox compaction must preserve original server base_hash');
 assert.equal(compactedPayload.base_content, 'fresh_content_v2', 'Outbox compaction must preserve original server base_content');
+assert.ok(Array.isArray(storesData.sutram_outbox[0].pendingMutations), 'Outbox record must persist pendingMutations array');
+assert.ok(Array.isArray(storesData.sutram_outbox[0].deletedMutations), 'Outbox record must persist deletedMutations array');
 
 // Reading the file while offline must immediately return 'offline_edit_v4' from the atomic vfs_cache overlay!
 navigator.onLine = false;

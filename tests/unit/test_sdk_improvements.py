@@ -177,7 +177,9 @@ class TestSdkImprovements(unittest.TestCase):
         sync_vfs_barrier(self.workspace_id)
 
         llm_ctx = llm_bp.get_context(self.workspace_id)
-        llm_ctx.settings.update({"provider": "anthropic", "api_key": "sk-test"})
+        llm_ctx.settings.update({
+            "compute_endpoints": [{"id": "anthropic_main", "driver": "anthropic", "api_key": "sk-test"}],
+        })
 
         captured_sys = []
 
@@ -238,6 +240,28 @@ class TestSdkImprovements(unittest.TestCase):
                     names = sorted(zf.namelist())
                     self.assertEqual(names, ["alpha/README.md", "alpha/pkg/mod_a.py", "alpha/pkg/mod_b.py"])
                     self.assertEqual(zf.read("alpha/pkg/mod_a.py").decode("utf-8"), "VALUE_A = 1\n")
+
+                # Verify fs.download_zip is mcp_expose=False, routine-banned, and enforces file-count / byte caps
+                import insetu.core.fs.engine_fs as _engine_fs
+                from insetu.core.agent.orchestrator import ROUTINE_BANNED_CAPABILITIES as _BANNED_CAPS
+                self.assertIs(get_registered_capabilities()["fs.download_zip"].get("mcp_expose"), False)
+                self.assertIn("fs.download_zip", _BANNED_CAPS)
+
+                with patch.object(_engine_fs, "MAX_ZIP_FILE_COUNT", 2):
+                    over_count = client.post(
+                        "/api/default/fs/download_zip",
+                        json={"items": [{"filepath": "vfs://alpha/", "folderpath": "vfs://alpha", "isDir": True}]},
+                    )
+                    self.assertEqual(over_count.status_code, 413)
+                    self.assertIn("limit", over_count.get_json()["error"])
+
+                with patch.object(_engine_fs, "MAX_ZIP_TOTAL_BYTES", 8):
+                    over_bytes = client.post(
+                        "/api/default/fs/download_zip",
+                        json={"items": [{"filepath": "vfs://alpha/pkg/mod_a.py"}]},
+                    )
+                    self.assertEqual(over_bytes.status_code, 413)
+                    self.assertIn("MB", over_bytes.get_json()["error"])
 
     def test_python_fitness_linter_catches_redundant_mounts_and_dead_hooks(self):
         """BackendFitnessVisitor flags manual .mount_volumes() calls, manual move_tree_contents(), and dead @on('compile_contexts') hooks."""
@@ -359,7 +383,7 @@ class TestSdkImprovements(unittest.TestCase):
 
         sys_ctx = system_bp.get_context(self.workspace_id)
         llm_ctx = llm_bp.get_context(self.workspace_id)
-        llm_ctx.settings.set("api_key", "mock-test-key")
+        llm_ctx.settings.set("compute_endpoints", [{"id": "anthropic_main", "driver": "anthropic", "api_key": "mock-test-key"}])
 
         # 1. Test ctx.call("llm.complete")
         mock_chunks = [
@@ -367,7 +391,7 @@ class TestSdkImprovements(unittest.TestCase):
             'data: {"text": "<<<<<<< FILE: vfs://alpha/service.py\\n<<<<<<< SEARCH\\nport = 5000\\n=======\\nport = 8080\\n>>>>>>> REPLACE"}\n\n',
             'data: [DONE]\n\n',
         ]
-        with patch("insetu.core.llm.engine_llm._stream_anthropic", return_value=iter(mock_chunks)):
+        with patch("insetu.core.llm.llm_drivers.stream_anthropic", return_value=iter(mock_chunks)):
             res = sys_ctx.call("llm.complete", messages=[{"role": "user", "content": "Update port to 8080"}])
             self.assertIsInstance(res, dict)
             self.assertIn("port = 8080", res.get("text", ""))
@@ -443,13 +467,14 @@ class TestSdkImprovements(unittest.TestCase):
             )
 
         self.assertEqual(result["message"], "Turn complete.")
-        self.assertEqual(result["artifact"]["committed_files"], ["vfs://alpha/calc.py"])
+        self.assertEqual(result["artifact"]["committed_files"], [])
+        self.assertEqual(file_path.read_text(encoding="utf-8"), "def add(a, b):\n    return a - b\n")
         cursor = agent_ctx.db.execute("SELECT * FROM chat_messages WHERE session_id=?", ("ses_test",))
         messages = [dict(r) for r in cursor.fetchall()]
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0]["role"], "assistant")
         self.assertIn("I will fix the subtraction operator.", messages[0]["content"])
-        self.assertIn("Applied patches to 1 file(s).", messages[0]["content"])
+        self.assertIn("Staged 1 patch(es) across 1 file(s) for review.", messages[0]["content"])
         self.assertIn("def add(a, b):", messages[0]["raw_content"])
 
     def test_extension_dependency_resolution_and_whitelist_installer(self):

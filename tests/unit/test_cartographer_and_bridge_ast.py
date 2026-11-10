@@ -196,6 +196,34 @@ class TestCartographerAndBridgeAst(unittest.TestCase):
         self.assertIn("// Helper comment", res_js["source"])
         self.assertTrue(res_js["source"].rstrip().endswith("}"))
 
+        # 4. JS functions with arrow-function default params, destructured object params, and regex braces relocate cleanly
+        tricky_js = (
+            "export function hasMacro(text) {\n"
+            "    return /\\{\\{\\s*macro/.test(text);\n"
+            "}\n\n"
+            "export async function importModuleWithRetry(url, importer = (u) => import(u), retryDelaysMs = [250, 750]) {\n"
+            "    return await importer(url);\n"
+            "}\n\n"
+            "export async function hydrateVfsBuffer(filepath, { isFS = null, forceReload = false } = {}) {\n"
+            "    if (!filepath) return null;\n"
+            "    return { filepath, isFS, forceReload };\n"
+            "}\n"
+        )
+        ok_rel_js, rem_js, dst_js, st_js = apply_ast_relocate_in_memory(
+            tricky_js,
+            "",
+            "vfs://alpha/tricky.js",
+            "vfs://alpha/tricky_out.js",
+            "hasMacro, importModuleWithRetry, hydrateVfsBuffer",
+            comment="Relocate tricky JS functions.",
+        )
+        self.assertTrue(ok_rel_js, st_js)
+        self.assertEqual(rem_js.strip(), "")
+        self.assertIn("export function hasMacro(text)", dst_js)
+        self.assertIn("export async function importModuleWithRetry", dst_js)
+        self.assertIn("export async function hydrateVfsBuffer", dst_js)
+        self.assertTrue(dst_js.rstrip().endswith("}"))
+
     def test_parse_blocks_relocate_and_rename_backward_compatible_envelope(self):
         """parse_blocks parses RELOCATE and RENAME blocks while preserving 'search' and 'replace' keys on block dicts."""
         payload = (

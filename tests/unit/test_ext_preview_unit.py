@@ -10,6 +10,7 @@ import akasa
 import akasa.utils as akasa_utils
 from akasa.hooks import hooks
 from akasa.vfs import mount_volume
+from insetu.core.sdk import execution_frame
 from insetu.core.system.security_io import approve_command
 from insetu.extensions.preview.engine_preview import (
     preview_bp,
@@ -116,7 +117,8 @@ class TestExtPreviewUnit(unittest.TestCase):
 
     def test_startup_crash_probe_captures_logs(self):
         crash_cmd = "python3 -c \"import sys; print('FATAL_BOOT_CRASH_MARKER', flush=True); sys.exit(1)\""
-        approve_command("default", "preview", "demo_app", crash_cmd)
+        with execution_frame(origin="ui"):
+            approve_command("default", "preview", "demo_app", crash_cmd)
         snapshot = start_repo_server(
             self.ctx,
             "demo_app",

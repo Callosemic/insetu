@@ -39,7 +39,7 @@ from insetu.core.cartographer.cartographer import CARTOGRAPHER_SCHEMA, cartograp
 from insetu.core.fs.engine_fs import fs_bp
 from insetu.core.gather.engine_gather import VFS_INDEX_SCHEMA, gather_bp
 from insetu.core.llm.engine_llm import (
-    _resolve_tier_model,
+    _resolve_tier_execution_target,
     llm_bp,
     validate_output_schema,
 )
@@ -101,19 +101,32 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         """engine_llm resolves semantic tiers (fast, standard, thinking, frontier) and self-heals invalid output_schema responses."""
         llm_ctx = llm_bp.get_context("default")
         llm_ctx.settings.update({
-            "provider": "anthropic",
-            "model": "claude-3-5-sonnet-latest",
-            "tier_fast_model": "claude-3-5-haiku-latest",
-            "tier_thinking_model": "claude-3-7-sonnet-thinking",
-            "api_key": "sk-test-key",
+            "compute_endpoints": [{
+                "id": "anthropic_main",
+                "label": "Anthropic Claude API",
+                "driver": "anthropic",
+                "api_key": "sk-test-key",
+                "max_parallel": 4,
+            }],
+            "llm_profiles": [{
+                "id": "default",
+                "title": "Default Configuration",
+                "tiers": {
+                    "decision": {"endpoint": "anthropic_main", "model": "claude-3-5-haiku-latest"},
+                    "fast": {"endpoint": "anthropic_main", "model": "claude-3-5-haiku-latest"},
+                    "standard": {"endpoint": "anthropic_main", "model": "claude-3-5-sonnet-latest"},
+                    "thinking": {"endpoint": "anthropic_main", "model": "claude-3-7-sonnet-thinking"},
+                    "frontier": {"endpoint": "anthropic_main", "model": "claude-3-7-sonnet-thinking"},
+                },
+            }],
         })
-        self.assertEqual(_resolve_tier_model(llm_ctx, "fast"), "claude-3-5-haiku-latest")
-        self.assertEqual(_resolve_tier_model(llm_ctx, "low"), "claude-3-5-haiku-latest")
-        self.assertEqual(_resolve_tier_model(llm_ctx, "thinking"), "claude-3-7-sonnet-thinking")
-        self.assertEqual(_resolve_tier_model(llm_ctx, "high"), "claude-3-7-sonnet-thinking")
-        self.assertEqual(_resolve_tier_model(llm_ctx, "standard"), "claude-3-5-sonnet-latest")
-        self.assertEqual(_resolve_tier_model(llm_ctx, "medium"), "claude-3-5-sonnet-latest")
-        self.assertEqual(_resolve_tier_model(llm_ctx, "frontier"), "claude-3-7-sonnet-thinking")
+        self.assertEqual(_resolve_tier_execution_target(llm_ctx, "fast")["model"], "claude-3-5-haiku-latest")
+        self.assertEqual(_resolve_tier_execution_target(llm_ctx, "low")["model"], "claude-3-5-haiku-latest")
+        self.assertEqual(_resolve_tier_execution_target(llm_ctx, "thinking")["model"], "claude-3-7-sonnet-thinking")
+        self.assertEqual(_resolve_tier_execution_target(llm_ctx, "high")["model"], "claude-3-7-sonnet-thinking")
+        self.assertEqual(_resolve_tier_execution_target(llm_ctx, "standard")["model"], "claude-3-5-sonnet-latest")
+        self.assertEqual(_resolve_tier_execution_target(llm_ctx, "medium")["model"], "claude-3-5-sonnet-latest")
+        self.assertEqual(_resolve_tier_execution_target(llm_ctx, "frontier")["model"], "claude-3-7-sonnet-thinking")
 
         # Validate output_schema bouncer directly
         ok_intent, parsed_intent, _ = validate_output_schema('```json\n{"intent": "EDIT_CODE"}\n```', "intent_classification")
@@ -207,7 +220,7 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         agent_ctx.db.commit()
 
         llm_ctx = llm_bp.get_context("default")
-        llm_ctx.settings.set("api_key", "sk-test")
+        llm_ctx.settings.set("compute_endpoints", [{"id": "anthropic_main", "driver": "anthropic", "api_key": "sk-test"}])
 
         valid_patch = (
             "<<<<<<< FILE: vfs://alpha/math_ops.py\n"
@@ -233,15 +246,18 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
             )
 
         sync_vfs_barrier("default")
-        tx_id = turn_res["artifact"]["transaction_id"]
+        # /code stages its patches for Confirm & Commit: nothing is written and no transaction exists yet
+        self.assertFalse(turn_res["artifact"].get("transaction_id"))
+        self.assertIn("return a + b", target_py.read_text(encoding="utf-8"))
+        # Confirm & Commit: a live bridge.sync of the staged patch, then undo through bridge.revert
+        sys_ctx = system_bp.get_context("default")
+        live_res = sys_ctx.call("bridge.sync", text=valid_patch, dry_run=False, wait=True)
+        sync_vfs_barrier("default")
+        tx_id = live_res["transaction_id"]
         self.assertTrue(tx_id and tx_id.startswith("tx_"))
         self.assertIn("return a * b", target_py.read_text(encoding="utf-8"))
-        # Now invoke agent.undo (or /undo) -> must revert math_ops.py back to 'return a + b'
-        sys_ctx = system_bp.get_context("default")
-        undo_res = sys_ctx.call("agent.undo", session_id="ses_code_1")
+        sys_ctx.call("bridge.revert", transaction_id=tx_id, target_state="initial")
         sync_vfs_barrier("default")
-        self.assertEqual(undo_res["status"], "success")
-        self.assertEqual(undo_res["transaction_id"], tx_id)
         self.assertIn("return a + b", target_py.read_text(encoding="utf-8"))
 
         # Test /yomama DAG: feed a broken-anchor patch -> self-heals against live VFS file -> commits cleanly
@@ -375,10 +391,7 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
 
         llm_ctx = llm_bp.get_context("default")
         llm_ctx.settings.update({
-            "provider": "anthropic",
-            "model": "claude-3-5-sonnet-latest",
-            "tier_fast_model": "claude-3-5-haiku-latest",
-            "api_key": "sk-test",
+            "compute_endpoints": [{"id": "anthropic_main", "driver": "anthropic", "api_key": "sk-test"}],
         })
 
         # Chunk 1 is valid (return 1 -> return 10).
@@ -569,7 +582,9 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         """Executes a 4-branch task-parallel diamond DAG (fetch -> [b1, b2, b3, b4] -> reduce) and a repeat: 3 ensemble node."""
         agent_ctx = agent_bp.get_context("default")
         llm_ctx = llm_bp.get_context("default")
-        llm_ctx.settings.update({"provider": "anthropic", "api_key": "sk-test", "max_parallel_requests": 4})
+        llm_ctx.settings.update({
+            "compute_endpoints": [{"id": "anthropic_main", "driver": "anthropic", "api_key": "sk-test", "max_parallel": 4}],
+        })
 
         diamond_routine_md = (
             "---\n"
@@ -1157,6 +1172,18 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         ]
         self.assertEqual(len(history), 1)
         self.assertIn(f"{c_open} FILE: vfs://alpha/sample.py", history[0]["content"])
+
+    def test_interpolation_resolves_inside_out_and_never_rescans_values(self):
+        """A resolved value is never scanned again: '{{ global.mode }}' inside the user message stays literal, though global.mode exists."""
+        chain_ctx = {
+            "global": {"mode": "auto", "user_message": "Keep {{ global.mode }} literal"},
+            "initial_answer": {"text": "Initial Answer Text"},
+        }
+        rendered = _interpolate_all_syntax(
+            "Msg: {{ inputs.user_message }} | Out: {{ nodes.final_answer.text | {{ nodes.initial_answer.text }} }}",
+            chain_ctx,
+        )
+        self.assertEqual(rendered, "Msg: Keep {{ global.mode }} literal | Out: Initial Answer Text")
 
 
 if __name__ == "__main__":

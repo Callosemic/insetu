@@ -115,7 +115,8 @@ class TestLanLease(_PreviewCase):
 
     def test_run_lease_binds_the_lan_until_restart(self):
         self.ctx.settings.update({"bind_host": "0.0.0.0"}, repo="demo_app")
-        snap = start_repo_server(self.ctx, "demo_app", lan_lease="run")
+        with execution_frame(origin="ui"):
+            snap = start_repo_server(self.ctx, "demo_app", lan_lease="run")
         self.assertEqual(snap["effective_bind_host"], "0.0.0.0")
         self.assertEqual(snap["exposure"], "lan")
         self.assertIsNone(snap["lan_lease_until"])
@@ -125,7 +126,8 @@ class TestLanLease(_PreviewCase):
     def test_timed_lease_expires_back_to_loopback(self):
         self.ctx.settings.update({"bind_host": "0.0.0.0"}, repo="demo_app")
         with patch.dict(engine_preview.LAN_LEASE_DURATIONS, {"test": 1}):
-            snap = start_repo_server(self.ctx, "demo_app", lan_lease="test")
+            with execution_frame(origin="ui"):
+                snap = start_repo_server(self.ctx, "demo_app", lan_lease="test")
             self.assertEqual(snap["exposure"], "lan")
             self.assertIsNotNone(snap["lan_lease_until"])
             deadline = time.time() + 8
@@ -149,7 +151,8 @@ class TestLanLeaseInTheAttestationStore(_PreviewCase):
         self.subject = engine_preview._lease_subject("default", "demo_app")
 
     def test_a_timed_lease_survives_a_daemon_restart(self):
-        start_repo_server(self.ctx, "demo_app", lan_lease="15m")
+        with execution_frame(origin="ui"):
+            start_repo_server(self.ctx, "demo_app", lan_lease="15m")
         record = _attestations.get_attestation("lan_lease", self.subject)
         self.assertEqual(record["detail"]["duration"], "15m")
         cleanup_all_preview_servers()  # what system_shutdown does
@@ -159,7 +162,8 @@ class TestLanLeaseInTheAttestationStore(_PreviewCase):
         self.assertTrue(any("lease granted earlier" in line for line in snap["logs"]))
 
     def test_a_run_lease_ends_with_the_daemon_run(self):
-        start_repo_server(self.ctx, "demo_app", lan_lease="run")
+        with execution_frame(origin="ui"):
+            start_repo_server(self.ctx, "demo_app", lan_lease="run")
         self.assertIsNotNone(_attestations.get_attestation("lan_lease", self.subject))
         with patch.object(_attestations, "DAEMON_RUN_ID", "a-later-run"):
             self.assertIsNone(_attestations.get_attestation("lan_lease", self.subject))
@@ -167,17 +171,20 @@ class TestLanLeaseInTheAttestationStore(_PreviewCase):
             self.assertEqual(start_repo_server(self.ctx, "demo_app")["exposure"], "loopback")
 
     def test_a_lease_lapses_when_the_launch_configuration_changes(self):
-        snap = start_repo_server(self.ctx, "demo_app", lan_lease="1h")
+        with execution_frame(origin="ui"):
+            snap = start_repo_server(self.ctx, "demo_app", lan_lease="1h")
         new_port = snap["port"] + 1
         snap = start_repo_server(self.ctx, "demo_app", overrides={"port": new_port})
         self.assertEqual(snap["exposure"], "loopback")
         self.assertIsNone(_attestations.get_attestation("lan_lease", self.subject))
 
     def test_close_lan_and_stop_end_leases(self):
-        start_repo_server(self.ctx, "demo_app", lan_lease="1h")
+        with execution_frame(origin="ui"):
+            start_repo_server(self.ctx, "demo_app", lan_lease="1h")
         get_registered_capabilities()["preview.close_lan"]["handler"](preview_bp.get_context("default", payload={"repo": "demo_app"}))
         self.assertIsNone(_attestations.get_attestation("lan_lease", self.subject))
-        start_repo_server(self.ctx, "demo_app", lan_lease="run")
+        with execution_frame(origin="ui"):
+            start_repo_server(self.ctx, "demo_app", lan_lease="run")
         engine_preview.stop_repo_server(self.ctx, "demo_app")
         self.assertIsNone(_attestations.get_attestation("lan_lease", self.subject))
 
@@ -196,12 +203,14 @@ class TestCustomCommandApproval(_PreviewCase):
             start_repo_server(self.ctx, "demo_app", overrides={"server_mode": "custom", "entry_target": cmd})
         self.assertEqual(caught.exception.command, cmd)
         self.assertFalse(is_command_approved("default", "preview", "demo_app", cmd), "Refusing must not approve.")
-        approve_command("default", "preview", "demo_app", cmd)
+        with execution_frame(origin="ui"):
+            approve_command("default", "preview", "demo_app", cmd)
         snap = start_repo_server(self.ctx, "demo_app")
         self.assertIn(snap["status"], ("running", "crashed"))
 
     def test_preview_and_test_approvals_are_separate(self):
-        approve_command("default", "test", "demo_app", "make serve")
+        with execution_frame(origin="ui"):
+            approve_command("default", "test", "demo_app", "make serve")
         self.assertFalse(is_command_approved("default", "preview", "demo_app", "make serve"))
 
     def test_refusal_tells_the_ui_what_to_approve(self):

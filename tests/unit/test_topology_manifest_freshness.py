@@ -261,6 +261,33 @@ class TestIncrementalEventsHonorGitignore(_WorkspaceCase):
         idx_conn.commit()
         self.assertEqual(prune_stale_affinity_edges(ctx, grace_period_seconds=3600.0), 1)
 
+        # 3. *.conflict_* fallback files stay out of gather_only packs/contexts, are reported by topology.audit_upkeep,
+        #    and are deleted only through the human-only topology.clean_conflicts route
+        conflict_fp = self.repo_dir / "pkg" / "mod.conflict_1794000000.py"
+        conflict_fp.write_text("CONFLICT_JUNK = 1\n", encoding="utf-8")
+        self._queue_save("pkg/mod.conflict_1794000000.py")
+        resolve_topology_buffer("default")
+        self.assertNotIn("vfs://alpha/pkg/mod.conflict_1794000000.py", ctx.expand_selection(["vfs://alpha/pkg/"], gather_only=True))
+
+        audit_before = ctx.call("topology.audit_upkeep", repo="alpha", scope="docs")
+        self.assertEqual(audit_before["conflict_files"], ["vfs://alpha/pkg/mod.conflict_1794000000.py"])
+
+        self.assertTrue(conflict_fp.exists(), "The audit must never delete anything")
+
+        try:
+            refused = ctx.call("topology.clean_conflicts", files=["vfs://alpha/pkg/mod.py"])
+            refused_body = refused[0] if isinstance(refused, tuple) else refused
+            self.assertIn("refused", refused_body)
+        except Exception as exc:  # some ctx.call paths raise on a 400 instead of returning it
+            self.assertIn("conflict", str(exc))
+
+        cleaned = ctx.call("topology.clean_conflicts", files=["vfs://alpha/pkg/mod.conflict_1794000000.py"])
+        self.assertEqual(cleaned["cleaned_conflicts"], ["vfs://alpha/pkg/mod.conflict_1794000000.py"])
+        self.assertFalse(conflict_fp.exists())
+
+        from insetu.core.agent import orchestrator as _orchestrator
+        self.assertIn("topology.clean_conflicts", _orchestrator.ROUTINE_BANNED_CAPABILITIES)
+
     def test_config_mutated_without_a_sieve_change_does_not_walk_repositories(self):
         """Ordinary settings saves also emit config_mutated; with config.json unchanged, no repository is re-walked."""
         force_topology_scan(workspace_id="default")
