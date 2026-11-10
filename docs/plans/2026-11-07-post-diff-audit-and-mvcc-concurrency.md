@@ -94,7 +94,7 @@ This plan sequences the remaining diff-audit remediations and the **Multi-Actor 
   2. Replace blocking `alert(...)` calls with `this.setStatus(..., 3500, true)`.
   3. If `rule.approved === false`, prompt the user to approve/save the rule first rather than firing an unapproved `POST hooks/execute`.
 
-### 2.2 Declarative Extension SQLite Hydration (`@ext_bp.db_hydrator`) & `ctx.iter_domain_markdown_entities` (Unifies SDK Abstractions `S2.T1`–`S2.T2`)
+### 2.2 Declarative Extension SQLite Hydration (`@ext_bp.db_hydrator`) & `ctx.iter_domain_markdown_entities` (Unifies SDK Abstractions `S2.T1`–`S2.T2` — After 1.0)
 * **Problem:**
   1. `citations`, `hooks`, `notes`, and `skills` each repeat manual `_ensure_<ext>_hydrated(ctx)` calls at the top of every route and hook handler to sync `.insetu/data/` files with `.insetu/cache/db/` SQLite tables.
   2. `notes`, `skills`, and `research` each hand-roll directory + `ws://` shared-mount walking and frontmatter parsing (`2026-11-05-core-extension-sdk-abstractions.md` Abstraction 6).
@@ -106,7 +106,7 @@ This plan sequences the remaining diff-audit remediations and the **Multi-Actor 
   * `vfs://insetu/insetu/extensions/skills/engine_skills.py`
   * `vfs://insetu/insetu/extensions/research/engine_research.py`
 * **Remediation:**
-  1. Add a declarative `hydrate_db` hook on `InSetuExtension` in `sdk/__init__.py` that runs automatically (with per-workspace re-entrancy guard) when `ctx.db` is accessed on an unhydrated workspace, and remove repetitive per-route `_ensure_*_hydrated(ctx)` calls across `citations`, `hooks`, `notes`, and `skills`.
+  1. Declare the database hydrator explicitly on the `InSetuExtension` blueprint (`@ext_bp.db_hydrator` or `db_hydrator=...`) and have the SDK invoke it explicitly before route dispatch (with a per-workspace re-entrancy guard)—**never** lazily as a side-effect of accessing the `ctx.db` property. Hooks hydration must **never** record or migrate any command approvals (and must keep the regression test in `test_attestations.py` proving `hooks.list` leaves unapproved `rules.json` entries disabled and unattested).
   2. Implement `ctx.iter_domain_markdown_entities(domain, exts=['.md'])` on `InSetuContext` in `sdk/__init__.py` (walking `ctx://<domain>`, `vfs://<repo>/.insetu-data/<domain>`, and `ws://` shared mounts). Note: any static context helper must target `@bp.on('gather_declare_topology')` rather than the banned `@bp.on('compile_contexts')` hook.
 
 ### 2.3 Declarative `<insetu-dependency-banner>` & `this.watchVfsMutations` (Fulfills SDK Abstractions `S1.T1`–`S1.T2`)
@@ -144,19 +144,19 @@ This plan sequences the remaining diff-audit remediations and the **Multi-Actor 
 
 ---
 
-## Wave 4: Multi-Actor MVCC & Conflict-Free VFS Architecture (Multi-User + Multi-Process)
+## Wave 4: Multi-Actor MVCC & Conflict-Free VFS Architecture (Multi-Device + Multi-Process)
 
 ### 4.0 Architectural Threat Model: Concurrent Actors in inSetu
-In a multi-user, multi-window, multi-agent Developer OS, **five distinct classes of actors** can read and mutate the same VFS URI concurrently:
-1. **Multiple Human Operators & Windows:** User A on a laptop, User B on a tablet PWA, or multiple pop-out editor windows open on the same file.
-2. **Offline Outbox Reconcilers:** A device reconnecting after offline work and draining queued `fs/save` mutations against a workspace modified by others in the interim.
+In a multi-device, multi-window, multi-agent Developer OS, **five distinct classes of actors** can read and mutate the same VFS URI concurrently on the same `inSetu` instance:
+1. **One Person Across Two or Three Devices (Plus Ad-Hoc Paired Collaborators):** The operator working across a laptop, phone, and tablet PWA (or multiple pop-out editor windows), with groundwork for a second person joining ad hoc on the same `inSetu` daemon ("work on this with me on my other laptop"). Each write's `ActorMeta` names both the `device_id` and `person_id` derived from the S6 paired-device token, so a collaborator is always an authenticated paired device with its own scoped token—never an unauthenticated window, and never cross-instance multi-user merging (multi-tenant deployments remain one `inSetu` instance per tenant).
+2. **Offline Outbox Reconcilers:** A device reconnecting after offline work and draining queued `fs/save` mutations against a workspace modified on another device or by an agent in the interim.
 3. **Yomama Sync Bridge (`bridge/sync`):** Interactive or automated batch transactions applying `SEARCH`/`REPLACE`, `TEXTEDIT`, `JSON_PATCH`, `RELOCATE`, or `RENAME` operations.
 4. **Autonomous Agent Routines (`orchestrator.py` / MCP Clients):** Background DAG wavefronts or external MCP clients invoking `fs.save` or `bridge.sync` in parallel.
 5. **External Host OS Processes (`watchdog.py`):** `git checkout`, `git pull`, code formatters, hook scripts (`engine_hooks.py`), or an external IDE modifying files on disk.
 
-### 4.1 Pillar 1: Unified Ring 0 Revision Ledger `(rev, sha256, actor)` (`akasa.vfs` + `bridge_ledger`)
+### 4.1 Pillar 1: Unified Ring 0 Revision Ledger `(rev, sha256, actor)` (`akasa.vfs` + `bridge_ledger` — After 1.0)
 * **Design:**
-  1. Unify `_VFS_ANCESTOR_RING` (`akasa.vfs`) and `bridge_ledger` (`engine_bridge.py`) into a single canonical revision tracking model where every tracked file has a monotonic integer `rev` and `sha256`, plus `ActorMeta` (`{ actor_type: 'human' | 'bridge' | 'agent' | 'mcp' | 'os_watchdog', client_id, client_seq, user_id }`).
+  1. Unify `_VFS_ANCESTOR_RING` (`akasa.vfs`) and `bridge_ledger` (`engine_bridge.py`) into a single canonical revision tracking model where every tracked file has a monotonic integer `rev` and `sha256`, plus `ActorMeta` (`{ actor_type: 'human' | 'bridge' | 'agent' | 'mcp' | 'os_watchdog', device_id, person_id, client_id, client_seq }`).
   2. Every write (`execute_vfs_save`, `BridgeWorkingTree` commit, or `watchdog.py` external change detection) atomically increments `rev` and records the ancestor snapshot in a bounded ring/table so 3-way merges always resolve the exact common ancestor `base_rev` across daemon restarts and multi-hour offline sessions.
   3. `vfs_mutated` broadcasts `{ filepath, rev, base_hash: sha256, actor: ActorMeta }`. Clients identify their own echoed saves in $O(1)$ via `actor.client_id === myClientId && actor.client_seq <= myLastSentSeq` without WebCrypto SHA-256 hashing or 50-item `ancestorHashes` arrays.
 
@@ -166,14 +166,16 @@ In a multi-user, multi-window, multi-agent Developer OS, **five distinct classes
   2. `reconcileBufferWithDisk` is replaced by a synchronous, 0ms in-memory reducer `reconcileBufferFromMutation(filepath, mutationEvent)` in `fs_store.js`, eliminating the HTTP `GET fs/fetch` round-trip window during which user keystrokes raced with in-flight fetches.
 
 ### 4.3 Pillar 3: Three-Stage Editor Buffer State Machine (`Confirmed` + `InFlight` + `Pending`)
-* **Design (Codified in `docs/models/vfs_occ_and_offline_outbox.md` per Mental Models Sprint 1 Task 1.2):**
+* **Prerequisite:** Waits for human dictation of `docs/models/vfs_occ_and_offline_outbox.md` (Mental Models Sprint 1 Task 1.2; never auto-generated from code) and Claude's Issue #18 `three_way_merge` parity fix (`tests/parity/three_way_merge.json`; do not modify `three_way_merge_text` or `threeWayMergeText` here). Built before 1.0 only if a test demonstrates keystrokes lost while a save is in flight; otherwise after 1.0.
+* **Design:**
   1. In `fs_store.js`, each open file buffer tracks three explicit states:
      * `confirmedText` & `confirmedRev` / `confirmedHash`: Last state acknowledged by the server.
      * `inFlightText` & `inFlightRev`: Snapshot currently in flight in the single active `POST fs/save` request (serialized via a per-file async mutex queue so `blur`, `visibilitychange`, and `autoSave` never race).
      * `pendingText`: Edits typed by the user *after* `inFlightText` was dispatched.
-  2. When the server responds to `inFlight` (or when an inline `vfs_mutated` event arrives from Yomama, another user, or Git), `FsStore` rebases `pendingText` onto the new `confirmedText` via `threeWayMergeText(inFlightText, pendingText, serverConfirmedText)`.
+  2. When the server responds to `inFlight` (or when an inline `vfs_mutated` event arrives from Yomama, another device, or Git), `FsStore` rebases `pendingText` onto the new `confirmedText` via `threeWayMergeText(inFlightText, pendingText, serverConfirmedText)`.
 
 ### 4.4 Pillar 4: Retire Physical `.conflict_<ts>.md` Files in Favor of `VIRTUAL` Ledger Staging & System Notices (Unifies Six-Bucket `S2.T2` / `S6.T1` & System Notices)
+* **Prerequisite (Items 1 & 3):** Item 2 (excluding `*.conflict_*` from packs and adding the cleanup action in `topology.audit_upkeep`) ships in the review-ready cut. Items 1 and 3 wait for human dictation of `docs/models/vfs_occ_and_offline_outbox.md` (Mental Models Task 1.2) and Claude's Issue #18 `three_way_merge` fix, and store staged conflicts in `bridge_ledger` (or a small dedicated table) rather than waiting for 4.1.
 * **Design:**
   1. **Never write `.conflict_<timestamp>.ext` files into the user's repository working tree.**
   2. Exclude `*.conflict_*` from `engine_topology.py` / `engine_gather.py` default RAG context compilation immediately so legacy conflict files never pollute LLM context windows, and add a 1-click cleanup action in `topology.audit_upkeep`.

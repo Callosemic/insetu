@@ -136,16 +136,37 @@ Routines and RAG execution nodes declare what resource lenses they require and h
 * **User-Attachment Precedence:** If the user invokes a routine with explicit attachments matching the dependency (for example, attaching a specific diff bucket or dirty files when invoking `/wrap`), those resources seed `data` under the requested lens.
 * **Deterministic Repo/Scope Fallback:** If no matching user attachment is provided, the dependency resolves its `default` selector against `topology_ledger` (for example, selecting all `git_status != ''` files in the target repository—or within the colon-scoped `:sub_bucket`—and mounting them into `data` with `lens: "diff"`).
 
-### 7.3 Standard Composable RAG Execution Units (`type: exec`)
-Retrieval and context shaping are executed by composable DAG capabilities (deterministic by default, with optional fast-tier LLM augmentation):
-1. **`rag.seed_diffs` (Temporal Seed Unit — Deterministic):** Resolves modified `vfs://` files from user attachments or `topology_ledger` (`git_status != ''`, optionally scoped by repository and sub-bucket) and mounts them into `data` with `lens: "diff"`.
-2. **`rag.scout_tests` (Test Discovery Unit — Deterministic Core + Optional LLM Rerank):**
-    - Inspects the modified files and touched AST symbols currently in `data`.
-    - **Deterministic Pass (0 tokens):** Scores files in `sys.test_dirs` by (a) direct AST `imports` of modified modules, (b) symbol/call-site references to modified functions/classes, (c) filename stem alignment, and (d) Hebbian co-change `affinity_edges`.
-    - **Optional Hybrid Pass:** When `rag_strategy == "llm_scout"` on an active API/local profile, passes the diff summary and `outline` test map to a `decision`/`fast` model to promote indirect integration tests.
-    - **Lens Assignment:** Mounts the top matching unit test files into `data` with `lens: "full"` (for surgical test patching), mounts `sys.fitness_dirs` with `lens: "slice"`, and mounts remaining test files with `lens: "outline"`.
-3. **`rag.blast_radius` (Codebase Context Unit — Deterministic Core + Optional LLM Scout):** Resolves edit targets (`lens: "full"`), upstream callees and downstream callers (`lens: "slice"`), Hebbian affinity peers (`lens: "slice"`), and matching `docs/models/*.md` mental models into `governance`.
-4. **`rag.seed_governance_and_meta` (Constitutional & Backlog Unit — Deterministic):** Populates `governance` (`standards_files`, `contract_files`, active ADRs) and `meta` (live `open`/`active` tracker tickets and active session plan).
+### 7.3 Proximity Filters, Cross-Domain Jumps & Foveated Lens Decay
+*(See `vfs://insetu/docs/models/proximity_filters_and_domain_jumps.md` for the complete formal specification, multiplex schema syntax, and multi-stage pipeline grammar.)*
+
+Rather than hardcoding a single monolithic "blast radius" heuristic, `inSetu` models RAG retrieval as a composable algebra of **Proximity Filters** (within-domain expansion) and **Domain Jumps** (cross-domain projection), grounded in **Multiplex Graph Theory**, **Heterogeneous Information Network (HIN) Meta-Paths**, **Software Traceability**, and **Reciprocal Rank Fusion (RRF)**:
+
+1. **Proximity Filters (Parameterized Traversal Over Multiplex & Continuous Spaces):**
+    A Proximity Filter $F(S_0, \text{basis}, k, \text{lens\_schedule})$ takes a seed set $S_0$ (attached URIs, dirty diff symbols, or a query string), measures distance along a specific algorithmic **`basis`** up to depth/band $k$, and emits ranked `(uri, symbol_or_span, distance_band, score, lens)` tuples across four canonical filter families:
+    - **Syntactic AST Graph (`basis: ast.call_graph` | `ast.module_imports`):** Discrete hop distance ($d = 1, 2, 3\dots$) across Tree-Sitter / `ast` function call graphs and module import trees.
+    - **Evolutionary & Conditioning Graph (`basis: affinity.co_change` | `affinity.conditioning`):** Discrete hop distance weighted by patch-ratified Hebbian co-change (`same_tx`, `adjacent_tx`, `same_session`) and `Read -> Patched` conditioning edges.
+    - **Lexical & Fuzzy String Spectrum (`basis: string.<fuzziness>`):** Continuous lexical distance ($d \in [0.0, 1.0]$) with configurable `fuzziness`: `exact` / `regex` ($d=0.0$), `identifier_parts` (splitting `camelCase`/`snake_case` tokens across language boundaries), `bm25` (SQLite FTS5), and `trigram` / `levenshtein` (surviving typos, diacritics, and near-duplicate code blocks).
+    - **Semantic Vector Space (`basis: vector.cosine`):** Continuous embedding similarity anchored to structural units (`symbol_ledger` functions, `md_records` heading spans, and `governance` subsections) rather than arbitrary character chunks.
+    - **Custom Multiplex Schema Layers (`basis: schema.<name>`):** Repository-declared relational layers in `.insetu-data/schema.yaml` or `settings/topology.md` built from three core relational primitives—`same_property` (equivalence join, e.g., presets sharing a logical `midi_channel`), `numeric_window` (metric adjacency, e.g., a physical `bank_number` $\pm 1$ or `seq_order` $\pm 1$), and `edge_ref` (directed pointer hop, e.g., `Bank Jump` targets or `ur:` links)—allowing the same set of nodes to be traversed along distinct physical vs. logical topologies.
+
+2. **Cross-Domain Jumps (HIN Meta-Paths & Polyglot Traceability):**
+    A **Domain Jump** ($\text{Jump}(S_{\text{origin}}, \text{target\_domain}, \text{bridges})$) projects active nodes from an origin domain (e.g., `source`) across an ontological or language boundary into a target domain (`verification.unit`, `verification.behavioral`, `verification.fitness`, `verification.parity`, `governance`, or `work`). To bridge domains even when they share no programming language or direct AST imports (such as Python behavioral tests executing JS modules via Node, or UX tests querying DOM tags), Domain Jumps combine six **Bridge Linkers** via scale-free **Reciprocal Rank Fusion (RRF)**:
+    - **`bridge.explicit_contracts`:** Parity registries (`tests/parity/*.json`), plan `test_contract:` annotations, and Tracker ticket target links.
+    - **`bridge.cross_lang_refs`:** String-literal specifiers crossing runtime boundaries (`/static/extensions/...` URLs, `<sutram-*>` custom element tags, and `@route` / `ctx.call("<ext>.<verb>")` capability IDs).
+    - **`bridge.ast_symbols`:** Same-language imports and cross-language exported identifier occurrences.
+    - **`bridge.affinity`:** Language-agnostic Hebbian co-change and co-failure edges from `bridge_ledger`.
+    - **`bridge.stem_and_tags`:** Normalized filename/identifier stem alignment and shared frontmatter facets.
+    - **`bridge.vector_intent`:** Semantic similarity between source symbol docstrings and behavioral/UX test docstrings.
+
+3. **Foveated Distance-to-Lens Decay (`full` $\rightarrow$ `slice` $\rightarrow$ `outline`):**
+    To prevent multi-hop graph expansion ($d \ge 2$) from causing an $O(b^k)$ token explosion, every Proximity Filter and Domain Jump maps hop distance (or RRF rank band) directly to a Representational Lens:
+    - **Band 0 (Focal Seeds / Top-K Primary Targets):** Mounted at **`full`** (or **`diff`**) lens.
+    - **Band 1 (1-Hop Callers/Callees, Coupled Tests & Same-Channel Peers):** Mounted at **`slice`** lens (signatures, types, docstrings, and YAML metadata).
+    - **Band 2+ (Extended Perimeter & Suite Map):** Mounted at **`outline`** lens (1-line coordinates), giving `llm` nodes complete topological awareness with 1-hop `QUERY_CONTEXT` authority to promote any perimeter node to `slice` or `full` on demand.
+
+4. **The Two-Speed Lifecycle: LLM-Synthesized Setup, Deterministic Per-Turn Execution:**
+    - **Cold-Start & Major Structural Shifts (LLM-Assisted Schema Authoring):** When a repository is first onboarded—or when `topology.audit_upkeep` detects structural drift (new unmapped directories, new `schema.yaml` kinds/fields, or orphaned test suites with zero bridge edges)—an upkeep/onboarding routine uses the LLM once to propose declarative `proximity_filters` and `domain_jumps` in `.insetu-data/settings/topology.md` or `.insetu-data/schema.yaml` for human review.
+    - **Iterative Everyday Turns (100% Deterministic, 0 Tokens):** Once declared (or using the zero-config default RRF recipe for standard code and `md-db` repos), all per-turn execution in `rag.seed_diffs`, `rag.blast_radius`, and `rag.scout_tests` runs deterministically in milliseconds over SQLite (`topology_ledger`, `symbol_ledger`, `md_records`, `affinity_edges`, and FTS5) as standard `type: exec` DAG units.
 
 ### 7.4 The Coupling Graph: Hebbian Affinity & Asymmetric Conditioning
 To retrieve functionally coupled files and governing documentation that do not share direct AST imports, `rag.blast_radius` and `rag.scout_tests` query a hybrid coupling graph combining **Patch-Ratified Hebbian Affinity** with **Static Citation Anchors**. Raw UI pinning or read-only `/ask` attachments are ignored to prevent conversational noise from polluting the graph.

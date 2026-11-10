@@ -22,6 +22,8 @@ Every model that exists or that a plan needs, so no plan names one that is not t
 | --- | --- | --- | --- |
 | `docs/models/yomama_bridge.md` | Exists. Confirm it is your dictation before the review-ready cut | REVIEWING.md's bridge stop; God-objects 3.4 (`bridge_vfs.py`) | Task 1.0 |
 | `docs/models/agent_orchestrator_and_rag.md` | Exists. Confirm it is your dictation | Six-bucket Sprint 2 (after 1.0) | Task 1.3 |
+| `docs/models/proximity_filters_and_domain_jumps.md` | Exists (dictated 2026-11-08): Proximity Filters, Multiplex Topologies, Cross-Domain Jumps & Two-Speed RAG Lifecycle | Six-bucket Sprints 3 & 4 (after 1.0) | Task 1.3b |
+| `docs/models/mddb_and_tracker.md` | Exists (dictated 2026-11-08): Two-Axis Markdown Database (`md-db`), Sub-Record Spans, Unified Tracker Ontology & 2-Level Folder Law | `2026-11-09-mddb-and-tracker-streamlining.md` & God-Objects Wave 4.1 (after 1.0) | Task 1.3c |
 | `docs/models/vfs_occ_and_offline_outbox.md` | Not written | Post-diff 3.1, 4.3 and 4.4 (1.0) | Task 1.2 |
 | `docs/models/workspace_swap_fsm.md` | Not written | Multi-tenant Phase 2 (1.0) | Task 1.4 |
 | `docs/models/topology_and_gather_pipeline.md` | Not written | Watchdog and gather changes; six-bucket Sprint 3 | Task 1.1 |
@@ -74,3 +76,13 @@ Following the establishment of the `models` landmark (`docs/models/*.md` -> `sys
   - Add `SILENT_WORKER_EXCEPTION_SWALLOW_BAN` to `BackendFitnessVisitor`: flag any `@*.worker`-decorated function whose top-level `try ... except Exception:` block catches `Exception` without either re-raising, emitting `system_error`, or recording `traceback.format_exc()`.
 * **Task 3.2 (`vfs://insetu/insetu/core/` & `vfs://insetu/insetu/extensions/`):**
   - Audit all `@*.worker` functions across Core and Extensions to ensure unexpected worker exceptions emit structured `system_error` telemetry and surface clear diagnostic messages.
+
+### Sprint 4: First-Class `.mjs` Behavioral Test Extraction & `js_loader.mjs` Unification (`insetu` & `sutram`)
+> **Architectural Rationale:** Embedding multi-hundred-line JavaScript test scripts inside Python `r"""..."""` / `f"""..."""` strings hides JS imports and symbol references from `JavaScriptLanguageProvider` / `symbol_ledger` (blinding RAG `bridge.ast_symbols` and `bridge.cross_lang_refs`), bypasses `bridge_vfs.py` JS syntax validation at patch time, and invites Python string-interpolation/indentation collisions and split-brain `globalThis.window` mocks.
+* **Task 4.1 (`vfs://sutram/tests/unit/js/*.mjs` & `vfs://sutram/tests/unit/test_sutram_registry.py`):**
+  - Extract the 5 inline JavaScript test scripts in `test_sutram_registry.py` (`store_registry_lifecycle.mjs`, `chassis_contract.mjs`, `ring0_algorithms.mjs`, `orchestrators.mjs`, `inputs_and_settings.mjs`, `editor_language_loader.mjs`) into standalone `.mjs` files under `vfs://sutram/tests/unit/js/` executed directly in-place via `node --import ./js_loader.mjs` without temporary directories or regex source rewriting.
+* **Task 4.2 (`vfs://insetu/tests/unit/js/*.mjs`, `test_js_behavioral_units.py`, `test_offline_resilience.py`, `test_workspace_swap_fsm.py`, `test_codemirror_bundle.py`):**
+  - Extract embedded Node.js `node -e` / `run_test.mjs` multiline strings from `test_js_behavioral_units.py`, `test_offline_resilience.py`, `test_workspace_swap_fsm.py`, and `test_codemirror_bundle.py` into standalone `.mjs` modules under `vfs://insetu/tests/unit/js/` routed through `vfs://insetu/tests/unit/js_loader.mjs`.
+  - Ensure `JavaScriptLanguageProvider` and Cartographer index `.mjs` files in `tests/unit/js/` so `rag.scout_tests` and `domain_jump` (`verification.behavioral`) trace JS symbols directly from source modules to `.mjs` behavioral tests.
+* **Task 4.3 (`vfs://insetu/tests/fitness/rules_python.py` & `vfs://sutram/tests/fitness/rules_sutram.py`):**
+  - Enforce `DETACHED_WINDOW_MOCK_BAN` (`globalThis.window = {` banned in favor of `js_loader.mjs` `globalThis.window = globalThis`) and `INLINE_NODE_SCRIPT_STRING_BAN` (flagging inline JS test strings `> 15` lines inside Python test files instead of importing standalone `.mjs` test modules).

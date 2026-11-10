@@ -147,14 +147,14 @@ Accepts an array of canonical `vfs://` or `ctx://` URIs, filters out `.gitkeep`/
 
 ---
 
-### Abstraction 6: Backend Markdown Entity Scanner & Static Context Compiler (`InSetuContext`)
+### Abstraction 6: Unified `md-db` Sidecar Indexing & Static Context Compiler (`ctx.mddb` — Merged with `2026-11-09-mddb-and-tracker-streamlining.md`)
 
-* **Core Target:** `vfs://insetu/insetu/core/sdk/__init__.py` (`InSetuContext`)
+> **Unification Note (2026-11-09):** Rather than building a separate `ctx.iter_domain_markdown_entities` frontmatter scanner, all extension sidecar Markdown domains (`notes`, `skills`, `research`, `tracker`) and Primary-Surface `md-db` repositories are indexed directly by the dedicated Tier 2 Core module `insetu/core/mddb/` (`parser.py`, `engine_mddb.py`) into `md_records` and `md_edges` (scoped by `db_scope = "ext:<name>"` vs. `"repo:<repo>"`). Extensions query `ctx.mddb` directly instead of maintaining private SQLite tables and directory-walking loops.
+
+* **Core Target:** `vfs://insetu/insetu/core/mddb/` & `vfs://insetu/insetu/core/sdk/__init__.py` (`InSetuContext.mddb`)
 * **API Contract:**
 ```python
-for entity in ctx.iter_domain_markdown_entities(domain="notes", exts=[".md"]):
-    # entity: {uri, id, title, repo, meta, body, mtime, is_shared, source_workspace}
-
+records = ctx.mddb.query(db_scope="ext:notes", include_shared=True)
 ```
 
 
@@ -195,7 +195,7 @@ ctx.compile_static_domain_context(
 * [x] [S1.T3] `openNewFileModal` (object form) and `window.inSetu.vfs.preCacheFiles` are live in `fs.js` and wired into `ext_ingest.js`, `ext_notes.js` and `config.js`. Left: `ext_ingest.js` passes `fileName`, then `fs.js` drops `filename`. 
 * [ ] [S1.T4] Upgrade `InSetuFrontmatterEditor` in `fs.js` to support declarative `.titleKey` and `.metadataSchema` props, and simplify `ext_notes.js` and `ext_research.js` 
 
-## Sprint 2: Backend `InSetuContext` Entity & Context Compilation Helpers (`sdk/__init__.py`)
+## Sprint 2: Backend `ctx.mddb` Sidecar Unification & Context Compilation Helpers (`insetu/core/mddb/` & `sdk/__init__.py`)
 
-* [ ] [S2.T1] Implement `ctx.iter_domain_markdown_entities` and `ctx.compile_static_domain_context` on `InSetuContext` in `insetu/core/sdk/__init__.py` 
-* [ ] [S2.T2] Refactor `engine_notes.py`, `engine_skills.py`, and `engine_research.py` to use `ctx.iter_domain_markdown_entities` and `ctx.compile_static_domain_context` 
+* [ ] [S2.T1] Expose `ctx.mddb` (backed by `insetu/core/mddb/` from `2026-11-09-mddb-and-tracker-streamlining.md` Sprint 1) and `ctx.compile_static_domain_context` on `InSetuContext` in `insetu/core/sdk/__init__.py`
+* [ ] [S2.T2] Refactor `engine_notes.py`, `engine_skills.py`, and `engine_research.py` to query `ctx.mddb` (`db_scope="ext:<name>"`) and `ctx.compile_static_domain_context`, retiring their bespoke directory walkers and private SQLite metadata tables

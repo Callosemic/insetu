@@ -44,7 +44,7 @@ A notice is a plain record:
 | `id` | Stable within its source, for example `protected_changes` or `repo_directive:insetu` |
 | `source` | The registered source that produced it |
 | `tier` | `broken`, `waiting` or `info` (below) |
-| `scope` | `daemon` or `workspace`; protected changes are daemon-wide, directives are per workspace |
+| `scope` | `daemon`, `workspace` or `device`; protected changes are daemon-wide, directives are per workspace, a staged app update is per device |
 | `title` | One sentence, written by the source |
 | `count` | Optional; for "3 protected changes" |
 | `action` | Optional `{label, open}`; `open` names a human-only screen (a settings page, the review window) |
@@ -63,6 +63,7 @@ A notice is a plain record:
 - A source that raises is skipped and logged; it never hides the other notices.
 - When a source's state changes, it calls `notices_changed(scope, workspace_id=None)`. The system recomputes and sends one SSE `notices` event (daemon scope to every tab, workspace scope dropped by tabs on other workspaces, as the multi-tenant plan requires).
 - The boot state carries `notices` in place of the per-case fields.
+- Some conditions only the browser can see: a newer build staged for the next load (T9), offline mode, changes waiting in the outbox, storage near its quota. Browser sources register in `ui_notices.js` with the same record and the `device` scope, are pulled the same way when their state changes, and merge with the server's list before the banner picks the most urgent. They follow the same tier and action rules; a device notice's action may also be a client action such as Reload.
 
 ### Security rules
 
@@ -89,6 +90,7 @@ New modules from the start: `insetu/core/system/notices.py` and `insetu/core/sys
 - [ ] `notices.py`: notice record, source registry, `notices_changed`, the `notices` boot field and SSE event. Export `register_notice_source` and `notices_changed` on `insetu.core.sdk`.
 - [ ] Sources for quarantine, protected changes, workspace extensions and missing config. `protected_changes` calls `notices_changed("daemon")` where it now sends its own SSE event.
 - [ ] `ui_notices.js`: the banner and the list. Delete the four render branches, the `_dismissed*` flags, and the `protected_changes_pending` field and `protected_changes` event.
+- [ ] Browser sources and the `device` scope, with the first one: T9's staged update as an `info` notice ("An update is ready") with a Reload action, replacing the `setGlobalStatus` call in `system.js`'s `onUpdateReady`. It stays until the person reloads.
 - [ ] Tests: source failure isolation; tier and scope ordering; extension notices refused at `broken`; dismissal returns when the digest changes; workspace notices do not reach other workspaces.
 
 ### Sprint 2: The new sources
