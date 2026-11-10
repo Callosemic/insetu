@@ -5,6 +5,22 @@ import { createExtensionStore } from '/static/extensions/system/insetu_sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 
+export const BRIDGE_BASE_LAYOUT_SLOTS = [
+    {
+        slot: "slots:sub-navigation",
+        targetParent: "edit",
+        id: "bridge",
+        label: "Yomama",
+        icon: "bridge",
+        intent: "highlight",
+        order: 1,
+        headerActionComponent: "insetu-ext-bridge-actions",
+        component: "insetu-ext-bridge"
+    },
+    { slot: "slots:yomama-surface", id: "bridge", label: "Bridge", icon: "bridge", intent: "highlight", order: 10, component: null },
+    { slot: "slots:yomama-surface", id: "receipts", label: "Receipts", icon: "history", intent: "success", order: 40, component: "insetu-ext-bridge-history" }
+];
+
 export const BRIDGE_GATE_UI_MAP = {
     DESTRUCTIVE_DELETE: { label: 'Confirm Delete', intent: 'danger', icon: 'trash-2' },
     OVERWRITE_EXISTING: { label: 'Confirm Overwrite', intent: 'warning', icon: 'file-warning' },
@@ -47,6 +63,7 @@ export const BRIDGE_FLAG_UI_MAP = {
     json_patch: { label: () => 'json patch', intent: 'primary' },
     already_applied: { label: () => 'Already Applied', intent: 'success' },
     rebased_overlap: { label: () => 'Rebased Overlap', intent: 'success' },
+    sandwich_healed: { label: () => '✨ Sandwich Auto-Healed', intent: 'success' },
     code_removal: { label: () => 'Code Removal', intent: 'warning' },
     expansion_risk: { label: () => 'Expansion Risk', intent: 'warning' },
     'confirm-to-overwrite': { label: () => 'Confirm Overwrite', intent: 'warning' },
@@ -61,6 +78,7 @@ export const BridgeStore = createExtensionStore('Bridge', {
     cells: [],
     resolutions: {},
     activeSurface: 'bridge',
+    repairMode: 'algorithmic',
     autoHeal: false,
     fastTierStatus: {
         canAutoHeal: false,
@@ -79,6 +97,23 @@ export const BridgeStore = createExtensionStore('Bridge', {
     historyViewMode: 'transaction',
     editCellId: null,
     editCellOriginalFile: '',
+    setRepairMode: (mode) => {
+        const clean = ['off', 'algorithmic', 'ai_assisted'].includes(mode) ? mode : 'algorithmic';
+        const canAi = Boolean(BridgeStore.getState().fastTierStatus?.canAutoHeal);
+        const finalMode = (clean === 'ai_assisted' && !canAi) ? 'algorithmic' : clean;
+        BridgeStore.setState({
+            repairMode: finalMode,
+            autoHeal: finalMode === 'ai_assisted'
+        });
+    },
+    cycleRepairMode: () => {
+        const st = BridgeStore.getState();
+        const cur = st.repairMode || 'algorithmic';
+        const canAi = Boolean(st.fastTierStatus?.canAutoHeal);
+        const order = canAi ? ['off', 'algorithmic', 'ai_assisted'] : ['off', 'algorithmic'];
+        const nextIdx = (order.indexOf(cur) + 1) % order.length;
+        BridgeStore.getState().setRepairMode(order[nextIdx]);
+    },
     setResolution: (key, patch) => {
         if (!key) return;
         BridgeStore.setState(state => ({
@@ -96,37 +131,10 @@ export const BridgeStore = createExtensionStore('Bridge', {
         const nextIntent = matched?.intent || (target === 'receipts' ? 'success' : 'highlight');
         const nextIcon = matched?.icon || 'bridge';
         if (window.ExtensionRegistry?.setDynamicLayoutSlots) {
-            window.ExtensionRegistry.setDynamicLayoutSlots('bridge', [
-                {
-                    slot: "slots:sub-navigation",
-                    targetParent: "edit",
-                    id: "bridge",
-                    label: "Yomama",
-                    icon: nextIcon,
-                    intent: nextIntent,
-                    order: 1,
-                    headerActionComponent: "insetu-ext-bridge-actions",
-                    component: "insetu-ext-bridge"
-                },
-                {
-                    slot: "slots:yomama-surface",
-                    id: "bridge",
-                    label: "Bridge",
-                    icon: "bridge",
-                    intent: "highlight",
-                    order: 10,
-                    component: null
-                },
-                {
-                    slot: "slots:yomama-surface",
-                    id: "receipts",
-                    label: "Receipts",
-                    icon: "history",
-                    intent: "success",
-                    order: 40,
-                    component: "insetu-ext-bridge-history"
-                }
-            ]);
+            window.ExtensionRegistry.setDynamicLayoutSlots(
+                'bridge',
+                BRIDGE_BASE_LAYOUT_SLOTS.map((slot, idx) => idx === 0 ? { ...slot, icon: nextIcon, intent: nextIntent } : { ...slot })
+            );
         }
     },
     toggleDrawer: () => {
@@ -475,16 +483,22 @@ export const BridgeStore = createExtensionStore('Bridge', {
             if (res.ok) {
                 const data = await res.json();
                 const canAutoHeal = Boolean(data.can_auto_heal);
-                BridgeStore.setState(state => ({
-                    autoHeal: canAutoHeal ? state.autoHeal : false,
-                    fastTierStatus: {
-                        canAutoHeal,
-                        reason: data.auto_heal_reason || (canAutoHeal ? `AI Auto-Repair ready (${data.model})` : 'Fast LLM tier is not configured for programmatic repair.'),
-                        model: data.model || '',
-                        endpointId: data.endpoint_id || '',
-                        isWebChat: Boolean(data.is_web_chat)
-                    }
-                }));
+                BridgeStore.setState(state => {
+                    const nextRepairMode = (!canAutoHeal && state.repairMode === 'ai_assisted')
+                        ? 'algorithmic'
+                        : (state.repairMode || 'algorithmic');
+                    return {
+                        repairMode: nextRepairMode,
+                        autoHeal: nextRepairMode === 'ai_assisted' && canAutoHeal,
+                        fastTierStatus: {
+                            canAutoHeal,
+                            reason: data.auto_heal_reason || (canAutoHeal ? `AI Auto-Repair ready (${data.model})` : 'Fast LLM tier is not configured for programmatic repair.'),
+                            model: data.model || '',
+                            endpointId: data.endpoint_id || '',
+                            isWebChat: Boolean(data.is_web_chat)
+                        }
+                    };
+                });
             }
         } catch (e) {
             console.warn("Failed to resolve fast LLM tier status", e);

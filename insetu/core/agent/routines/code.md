@@ -12,14 +12,14 @@ nodes:
     capability: topology.overview
     parents: []
     order: 5
-    when: "{{ global.has_attached_files }} == False"
+    when: "{{ global.has_code_targets }} == False and {{ sys.helper_mode }} == 'ai_assisted'"
   - id: scout_targets
     type: llm
     tier: fast
     parents:
       - load_overview
     order: 8
-    when: "{{ global.has_attached_files }} == False"
+    when: "{{ global.has_code_targets }} == False and {{ sys.helper_mode }} == 'ai_assisted'"
     output_schema: json
     max_retries: 2
   - id: fetch_context
@@ -45,6 +45,7 @@ nodes:
     order: 30
     payload:
       text: "{{ nodes.generate_patch.text }}"
+      dry_run: true
 ---
 ## scout_targets
 You are the Context Scout for the `/code` routine. The user did not manually attach files.
@@ -55,11 +56,11 @@ Respond ONLY with valid JSON in this exact format:
 Workspace Topology & Symbol Map (`CODE_INDEX.md`):
 {{ nodes.load_overview.overview_text }}
 
+Attached Plan / Documentation Context:
+{{ global.attached_docs_content }}
+
 User Request:
 {{ inputs.user_message }}
 
 ## generate_patch
 Apply the user instruction ({{ inputs.user_message }}) to the workspace codebase using surgical Yomama `<<<<<<< FILE:` blocks (`<<<<<<< SEARCH` / `>>>>>>> REPLACE` for code, `<<<<<<< TEXTEDIT` for inline prose/comments, `<<<<<<< JSON_PATCH` for JSON/YAML frontmatter, or `<<<<<<< RELOCATE` / `<<<<<<< RENAME` for AST refactors).
-
-Context:
-{{ nodes.fetch_context.content }}

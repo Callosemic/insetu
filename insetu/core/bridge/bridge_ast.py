@@ -49,6 +49,22 @@ def apply_ast_relocate_in_memory(
     if source_content is None:
         return False, "", target_content or "", f"Source file '{source_uri}' not found."
 
+    # Support comma-separated multi-symbol relocation (e.g., SYMBOL: fn_a, fn_b, fn_c) atomically
+    if "," in symbol:
+        symbols_list = [s.strip() for s in symbol.split(",") if s.strip()]
+        cur_src = source_content
+        cur_dst = target_content
+        statuses = []
+        for single_sym in symbols_list:
+            ok_s, cur_src, cur_dst, st_s = apply_ast_relocate_in_memory(
+                cur_src, cur_dst, source_uri, target_uri, single_sym, comment=comment
+            )
+            if not ok_s:
+                return False, source_content, target_content or "", st_s
+            statuses.append(st_s)
+        final_status = "idempotent" if all(s == "idempotent" for s in statuses) else "success"
+        return True, cur_src, cur_dst or "", final_status
+
     target_base = target_content or ""
 
     try:

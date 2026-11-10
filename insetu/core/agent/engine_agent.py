@@ -27,28 +27,16 @@ from .orchestrator import (
 
 AGENT_SETTINGS_SCHEMA = [
     {
-        "id": "rag_strategy",
-        "label": "RAG Context Retrieval Strategy",
+        "id": "helper_mode",
+        "label": "Substrate Helper Mode (RAG Scout, History Compaction & Patch Healer)",
         "type": "select",
         "scope": "workspace",
-        "default": "blast_radius",
+        "default": "ai_assisted",
         "options": [
-            {"value": "blast_radius", "label": "Blast Radius (Deterministic AST + Bucket + Affinity Slicer, 0 Tokens)"},
-            {"value": "llm_scout", "label": "LLM Scout (Fast-Tier 1-Hop / 2-Hop Semantic Discovery)"}
+            {"value": "deterministic", "label": "Deterministic Only (0-Token AST Blast Radius, Receipts & Sandwich Healer)"},
+            {"value": "ai_assisted", "label": "AI-Assisted (Fast-Tier LLM Context Scout, Compactor & Patch Auto-Healer)"}
         ],
-        "description": "Governs how context.assemble resolves edit targets and interface slices on each turn."
-    },
-    {
-        "id": "compaction_strategy",
-        "label": "Rolling History Compaction Strategy",
-        "type": "select",
-        "scope": "workspace",
-        "default": "deterministic",
-        "options": [
-            {"value": "deterministic", "label": "Deterministic Micro-Receipts & Summary (0 Tokens, <1ms)"},
-            {"value": "llm_compactor", "label": "Fast-Tier LLM History Summarizer"}
-        ],
-        "description": "Controls how conversation turns older than Turn N-5 are compacted into session.summary."
+        "description": "Single switch governing whether RAG scouting, rolling history compaction, and Yomama patch repair use 0-token deterministic algorithms or Fast-tier LLM assistance."
     },
     {
         "id": "run_tests_on_code",
@@ -79,7 +67,7 @@ AGENT_SCHEMA = {
         "working_set_json": "TEXT DEFAULT '[]'",
         "token_ledger_json": "TEXT DEFAULT '{}'",
         "active_plan_path": "TEXT DEFAULT ''",
-        "checkpoint_json": "TEXT DEFAULT '{}'"
+        "checkpoint_json": "TEXT DEFAULT 'null'"
     },
     "chat_messages": {
         "message_id": "TEXT PRIMARY KEY",
@@ -143,6 +131,7 @@ def _handle_routine_response_pre_save(workspace_id=None, filepath=None, content=
 
 class ChatSessionPayload(TypedDict):
     title: str
+
 class ChatPromptPayload(TypedDict, total=False):
     session_id: str
     prompt: str
@@ -154,7 +143,6 @@ class ChatPromptPayload(TypedDict, total=False):
     transport: str
     handoff_responses: Dict[str, str]
     prior_chain_context: Dict[str, Any]
-
 
 class AgentSessionActionPayload(TypedDict, total=False):
     session_id: str
@@ -446,27 +434,28 @@ def api_agent_run_test(ctx):
     if diag_res.get("status") == "needs_approval":
         return diag_res, 403
     norm_status = "passed" if diag_res.get("exit_code") == 0 else "failed"
-    return {
-        **diag_res,
-        "status": norm_status,
-    }
+    return {**diag_res, "status": norm_status}
+
 @agent_bp.route('sessions', methods=['GET'], docstring="[sync] Retrieves all chat sessions for the active workspace.")
 def get_sessions(ctx):
     rows = ctx.db.get_all("chat_sessions", order_by="updated_at DESC")
-    return {"sessions": rows}
+    constitution = discover_constitution_files(ctx)
+    return {"sessions": rows, "constitution_files": constitution}
 
 @agent_bp.route('sessions', methods=['POST'], request_schema=ChatSessionPayload, docstring="[sync] Creates a new chat session.")
 def create_session(ctx):
     data = ctx.payload or {}
     session_id = f"ses_{uuid.uuid4().hex[:12]}"
-    title = data.get("title", "New Conversation")
+    raw_title = str(data.get("title") or "").strip()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    title = f"New Conversation ({now_str})" if (not raw_title or raw_title == "New Conversation") else raw_title
 
     ctx.db.insert_or_replace("chat_sessions", {
         "session_id": session_id,
         "title": title,
         "updated_at": time.time()
     })
-    return {"status": "success", "session_id": session_id}
+    return {"status": "success", "session_id": session_id, "title": title}
 
 @agent_bp.route('messages/<session_id>', methods=['GET'], docstring="[sync] Retrieves message history, working-set state, token ledger, and plan contracts for a specific chat session.")
 def get_messages(ctx, session_id):
@@ -490,14 +479,27 @@ def get_messages(ctx, session_id):
         except Exception:
             token_ledger = {"prompt_tokens": 0, "completion_tokens": 0, "saved_by_slicing": 0}
         try:
-            checkpoint = json.loads(s_row["checkpoint_json"] or "null")
+            raw_cp = json.loads(s_row["checkpoint_json"] or "null")
+            checkpoint = raw_cp if (isinstance(raw_cp, dict) and raw_cp.get("chain_context") is not None) else None
         except Exception:
             checkpoint = None
         plan_path = s_row["active_plan_path"] or ""
         summary = s_row["summary"] or ""
 
     # Tier 0 Constitution Files: Auto-pin engineering standards resolved via repository landmarks
-    constitution = discover_constitution_files(ctx)
+    ws_repos = {
+        InSetuURI(x.get("filepath", "")).repo
+        for x in working_set
+        if isinstance(x, dict) and x.get("filepath") and InSetuURI(x["filepath"]).repo
+    }
+    if plan_path and InSetuURI(plan_path).repo:
+        ws_repos.add(InSetuURI(plan_path).repo)
+    all_constitution = discover_constitution_files(ctx)
+    constitution = (
+        [f for f in all_constitution if InSetuURI(f).repo in ws_repos]
+        if ws_repos
+        else all_constitution
+    ) or all_constitution
 
     return {
         "messages": messages,
@@ -665,7 +667,8 @@ def _compact_session_history(
 
     updated_summary = existing_summary
     if cold_slice:
-        compaction_mode = str(ctx.settings.get("compaction_strategy", "deterministic") or "deterministic")
+        helper_mode = str(ctx.settings.get("helper_mode", "ai_assisted") or "ai_assisted").strip().lower()
+        compaction_mode = "deterministic" if helper_mode == "deterministic" else "llm_compactor"
         cold_lines = [f"[{m['role']}]: {m['content'][:160].replace(chr(10), ' ')}" for m in cold_slice]
         cold_digest = "\n".join(cold_lines)
         if compaction_mode == "llm_compactor":
@@ -745,10 +748,27 @@ def _execute_agent_turn(
     )
     if routine_result.get("status") == "paused_for_user":
         now = time.time()
-        ctx.db.execute(
-            "UPDATE chat_sessions SET active_job_id=NULL, updated_at=? WHERE session_id=?",
-            (now, session_id),
-        )
+        global_state = (routine_result.get("chain_context") or {}).get("global") or {}
+        paused_ws = []
+        seen_ws = set()
+        for fp in (global_state.get("attached_files") or attached_files or []):
+            if fp and fp not in seen_ws:
+                seen_ws.add(fp)
+                paused_ws.append({"filepath": str(InSetuURI(fp)), "tier": "pinned", "idle_turns": 0, "user_pinned": True})
+        for fp in (global_state.get("read_only_files") or read_only_files or []):
+            if fp and fp not in seen_ws:
+                seen_ws.add(fp)
+                paused_ws.append({"filepath": str(InSetuURI(fp)), "tier": "reference", "idle_turns": 0, "user_pinned": False})
+        if paused_ws:
+            ctx.db.execute(
+                "UPDATE chat_sessions SET active_job_id=NULL, working_set_json=?, updated_at=? WHERE session_id=?",
+                (json.dumps(paused_ws), now, session_id),
+            )
+        else:
+            ctx.db.execute(
+                "UPDATE chat_sessions SET active_job_id=NULL, updated_at=? WHERE session_id=?",
+                (now, session_id),
+            )
         ctx.db.commit()
         return {
             "message": "Routine paused for Web-Chat handoff.",

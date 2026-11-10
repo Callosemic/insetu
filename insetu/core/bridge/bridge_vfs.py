@@ -96,13 +96,14 @@ def compute_patch_eval_signature(
     orig_disk_hash: str,
     block: Dict[str, Any],
     cell_res: Dict[str, Any],
+    repair_mode: str = "algorithmic",
 ) -> str:
     """
     Tier 2 Intra-File Sequential Chunk Signature (PatchEvalSig):
     Models a single chunk evaluation as a pure state transition from `input_buffer_hash` -> `output_buffer_hash`.
     """
     blk_sig = compute_block_signature(block, cell_res)
-    raw = f"{resolved_path}||{input_buffer_hash}||{orig_disk_hash}||{blk_sig}".encode("utf-8")
+    raw = f"{resolved_path}||{input_buffer_hash}||{orig_disk_hash}||{repair_mode}||{blk_sig}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -436,6 +437,10 @@ def process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, ret
     resolutions_map = data.get("resolutions") or {}
     confirmed_map = data.get("confirmed_candidates") or {}
     unattended = bool(data.get("unattended", False))
+    raw_repair_mode = str(data.get("repair_mode") or "").strip().lower()
+    if raw_repair_mode not in ("off", "algorithmic", "ai_assisted"):
+        raw_repair_mode = "ai_assisted" if data.get("auto_heal") else "algorithmic"
+    allow_algo_heal = (raw_repair_mode != "off")
 
     def _get_cell_resolution(cell_id: Optional[str], file_key: str) -> Dict[str, Any]:
         if cell_id and cell_id in resolutions_map and isinstance(resolutions_map[cell_id], dict):
@@ -669,6 +674,7 @@ def process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, ret
             bool(data.get("force")),
             bool(data.get("ignore_syntax") or data.get("ignore_syntax_errors")),
             bool(data.get("allow_deep_search")),
+            raw_repair_mode,
             unattended,
             tuple(sorted(allowed_repos)),
         )
@@ -1286,7 +1292,9 @@ def process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, ret
             # --- PHASE 2: CANONICAL IN-MEMORY TEST LOOP & TIER 2 SIGNATURE MEMOIZATION (PatchEvalSig) ---
             input_buf_hash = compute_vfs_sha256(content)
             orig_file_hash = tree.disk_hash(resolved_path) or ""
-            patch_eval_sig = compute_patch_eval_signature(resolved_path, input_buf_hash, orig_file_hash, b, cell_res)
+            patch_eval_sig = compute_patch_eval_signature(
+                resolved_path, input_buf_hash, orig_file_hash, b, cell_res, repair_mode=raw_repair_mode
+            )
             cached_chunk = _cache_get(_PATCH_EVAL_CACHE, patch_eval_sig)
             apply_stat = "success"
             if cached_chunk is not None and cached_chunk.get("ok"):
@@ -1297,10 +1305,14 @@ def process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, ret
                         patch_tel["flags"].append(flg)
                 ok = True
             else:
-                apply_fn = apply_textedit_in_memory if block_type == "textedit" else apply_block_in_memory
-                ok, new_content, apply_stat = apply_fn(content, dict(b), silent=True)
+                if block_type == "textedit":
+                    ok, new_content, apply_stat = apply_textedit_in_memory(content, dict(b), silent=True)
+                else:
+                    ok, new_content, apply_stat = apply_block_in_memory(
+                        content, dict(b), silent=True, allow_algorithmic_heal=allow_algo_heal
+                    )
                 orig_base = tree.baseline(resolved_path)
-                if not ok and block_type != "textedit" and orig_base and orig_base != content:
+                if not ok and allow_algo_heal and block_type != "textedit" and orig_base and orig_base != content:
                     ok_reb, reb_content, reb_stat = rebase_overlapping_block_in_memory(
                         orig_base, content, dict(b), silent=True
                     )
@@ -1311,6 +1323,8 @@ def process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, ret
                             if "rebased_overlap" not in patch_tel["flags"]:
                                 patch_tel["flags"].append("rebased_overlap")
                 if ok:
+                    if apply_stat == "sandwich_healed" and "sandwich_healed" not in patch_tel["flags"]:
+                        patch_tel["flags"].append("sandwich_healed")
                     _cache_put(_PATCH_EVAL_CACHE, patch_eval_sig, {
                         "ok": True,
                         "new_content": new_content,

@@ -32,6 +32,7 @@ from insetu.core.topology.engine_topology import (
 from insetu.core.gather.context_assemble import (
     assemble_context_payload,
     collect_workspace_secrets as _collect_secret_values_for_scrubbing,
+    discover_constitution_files,
     resolve_query_context,
     scrub_outbound_secrets as _scrub_outbound_secrets,
 )
@@ -44,7 +45,7 @@ DEFAULT_TOKEN_BUDGET = 120000
 _ROUTINES_DRIVER = TemplateOverlayVFSDriver(module_subdir="routines")
 
 ROUTINE_BANNED_CAPABILITIES = frozenset({
-    "dev.exec",
+    "dev.exec", "fs.download_zip", "topology.clean_conflicts",
     "bridge.test.approve",  # P5: only a person approves commands; a routine must never approve its own.
     "preview.approve_command",  # P5: same for custom preview launch commands.
     "system.directives.accept",  # S8: only a person accepts or edits directives through the UI route.
@@ -94,6 +95,7 @@ READ_ONLY_MODE_ALLOWED_CAPABILITIES = frozenset({
     "prompts.resolve",
     "bridge.turn_diff",
     "bridge.commit_message",
+    "bridge.compile_telemetry",
 })
 
 
@@ -818,37 +820,84 @@ def _collect_live_files_for_patch_healing(ctx, parsed_blocks: Dict[str, Any], re
             snippets.append(f"=== CURRENT FILE ON DISK: {canon_uri} ===\n{disk_text}")
     return "\n\n".join(snippets)
 _YOMAMA_BLOCK_STRIP_RE = re.compile(
-    r'(?:^|\n)<<<<<<< FILE:[^\n]*\n[\s\S]*?>>>>>>> (?:REPLACE|EXECUTE)[ \t]*',
+    r'(?:```(?:text|python|javascript|js|json|yaml|markdown|md)?[ \t]*\n)?'
+    r'(?:<<<<<<< FILE:[^\n]*\n)?'
+    r'(?:<<<<<<< ID:[^\n]*\n)?'
+    r'(?:<<<<<<< COMMENT\n[\s\S]*?\n)?'
+    r'<<<<<<< (?:SEARCH(?:\s+REGEX)?|TEXTEDIT|JSON_PATCH|RELOCATE|RENAME|MOVE_FILE|ARCHIVE_FILE|DELETE_FILE)\b[\s\S]*?'
+    r'>>>>>>> (?:REPLACE|EXECUTE)[ \t]*'
+    r'(?:\n```)?',
     re.MULTILINE,
 )
 
 
 def strip_yomama_blocks_keep_prose(raw_text: str) -> str:
-    """Strips raw Yomama <<<<<<< FILE: ... >>>>>>> REPLACE/EXECUTE blocks while preserving surrounding conversational prose."""
+    """Strips raw Yomama patch blocks and empty code fences while preserving surrounding conversational prose."""
     if not raw_text or "<<<<<<<" not in raw_text:
         return (raw_text or "").strip()
     cleaned = _YOMAMA_BLOCK_STRIP_RE.sub("\n", raw_text)
+    cleaned = re.sub(r'^[ \t]*<<<<<<< FILE:[^\n]*$', '', cleaned, flags=re.MULTILINE)
     cleaned = re.sub(r'```(?:text|python|javascript|js|json|yaml|markdown|md)?\s*```', '', cleaned)
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
     return cleaned.strip()
 
 
 def clamp_rag_files_to_topology(ctx, candidate_files: List[str], allowed_repos: Optional[List[str]] = None) -> List[str]:
-    """Clamps LLM-selected RAG file URIs against topology_ledger within allowed_repos (max MAX_RAG_FILES_PER_HOP)."""
+    """
+    Clamps and resolves LLM-selected RAG file URIs against topology_ledger within allowed_repos (max MAX_RAG_FILES_PER_HOP).
+    If the LLM emits a bare filename ('engine_topology.py'), a repo-relative path missing a nested package segment
+    ('vfs://insetu/core/languages/__init__.py'), or a new file to be created ('vfs://insetu/insetu/core/languages/markdown.py'),
+    resolves it via ctx.find_path_candidates or its existing parent package __init__.py.
+    """
     if not candidate_files or ctx is None:
         return []
-    repos = set(allowed_repos or get_sister_repos(ctx.workspace_id))
-    normalized = []
+    repos_list = list(allowed_repos or get_sister_repos(ctx.workspace_id))
+    repos = set(repos_list)
+    resolved_uris: List[str] = []
+
+    def _add_unique(uri_str: str) -> None:
+        if uri_str and uri_str not in resolved_uris:
+            resolved_uris.append(uri_str)
+
     for raw_f in candidate_files:
         if not raw_f or not isinstance(raw_f, str):
             continue
-        try:
-            canon = InSetuURI.canonicalize(raw_f)
-            if InSetuURI(canon).repo in repos:
-                normalized.append(canon)
-        except Exception:
+        clean_f = raw_f.strip().split("#", 1)[0].strip()
+        if not clean_f:
             continue
-    return clamp_uris_to_topology(ctx.workspace_id, normalized, expand_dirs=False)[:MAX_RAG_FILES_PER_HOP]
+        try:
+            canon = InSetuURI.canonicalize(clean_f)
+        except Exception:
+            canon = ""
+
+        # 1. Exact topology_ledger match
+        if canon and InSetuURI(canon).repo in repos:
+            exact = clamp_uris_to_topology(ctx.workspace_id, [canon], expand_dirs=False)
+            if exact:
+                for u in exact:
+                    _add_unique(u)
+                continue
+
+        # 2. If the target is a net-new file inside an existing package directory (e.g. markdown.py in languages/),
+        # include that package's __init__.py and base.py before falling back to global basename search.
+        if canon and InSetuURI(canon).repo in repos:
+            parent_dir = str(InSetuURI(canon).parent_uri).rstrip("/") + "/"
+            siblings = clamp_uris_to_topology(ctx.workspace_id, [parent_dir], expand_dirs=True)
+            if siblings:
+                for preferred_suffix in ("/__init__.py", "/base.py"):
+                    matched_sib = next((s for s in siblings if s.endswith(preferred_suffix)), None)
+                    if matched_sib:
+                        _add_unique(matched_sib)
+                if not any(s.endswith(("/__init__.py", "/base.py")) for s in siblings):
+                    _add_unique(siblings[0])
+                continue
+
+        # 3. Fuzzy / suffix / basename path resolution via SSOT find_path_candidates
+        cands = ctx.find_path_candidates(clean_f, allowed_repos=repos_list)
+        if cands and cands[0].get("score", 0) >= 0.75:
+            _add_unique(cands[0]["filepath"])
+
+    return resolved_uris[:MAX_RAG_FILES_PER_HOP]
 
 
 
@@ -938,11 +987,30 @@ def _execute_declarative_routine_body(
         list(routine.get("includes") or []),
         expand_dirs=True,
     )
+    # Extract any explicit vfs:// URIs mentioned directly in user_prompt (e.g. "from vfs://insetu/docs/plans/...")
+    prompt_mentioned_uris = re.findall(r'vfs://[A-Za-z0-9_./-]+', user_prompt or "")
+    if prompt_mentioned_uris:
+        clamped_prompt_uris = clamp_uris_to_topology(ctx.workspace_id, prompt_mentioned_uris, expand_dirs=False)
+        for p_uri in clamped_prompt_uris:
+            if p_uri not in editable_list and p_uri not in readonly_list:
+                editable_list.append(p_uri)
+
     all_context_files = list(dict.fromkeys(editable_list + readonly_list + routine_includes))
     active_profile_id = str(extra_inputs.get("profile_id") or "").strip() or None
     has_raw_patches = bool(parse_blocks(user_prompt or ""))
     if clean_mode == "auto" and has_raw_patches:
         initial_intent = "APPLY_PATCH"
+    has_code_targets = any(
+        not str(f).lower().endswith((".md", ".markdown", ".txt"))
+        for f in editable_list
+    )
+    attached_docs_snippets = []
+    for doc_fp in all_context_files:
+        if str(doc_fp).lower().endswith((".md", ".markdown", ".txt")):
+            doc_txt = ctx.vfs.read(doc_fp)
+            if doc_txt:
+                attached_docs_snippets.append(f"=== ATTACHED DOCUMENT: {doc_fp} ===\n{doc_txt[:24000]}")
+    attached_docs_content = "\n\n".join(attached_docs_snippets)
     context_nonce = extra_inputs.get("_context_nonce") or secrets.token_hex(4)
     secret_values = _collect_secret_values_for_scrubbing(ctx)
     prior_chain = dict(extra_inputs.get("prior_chain_context") or {})
@@ -951,7 +1019,6 @@ def _execute_declarative_routine_body(
         str(routine.get("transport") or "auto").lower() == "manual"
         or extra_inputs.get("transport") == "manual"
         or extra_inputs.get("execution_mode") == "web_chat"
-        or (hasattr(ctx, "settings") and str(ctx.settings.get("provider", "anthropic")) == "web_chat")
     )
 
     candidate_repo_uris = (
@@ -969,7 +1036,9 @@ def _execute_declarative_routine_body(
     )
     primary_repo_name = sys_landmarks.get("repo_name") or "workspace"
 
-    rag_strategy_val = str(ctx.settings.get("rag_strategy", "blast_radius") if hasattr(ctx, "settings") else "blast_radius")
+    raw_helper_mode = str(ctx.settings.get("helper_mode", "ai_assisted") if hasattr(ctx, "settings") else "ai_assisted").strip().lower()
+    is_ai_assisted = (raw_helper_mode != "deterministic")
+    rag_strategy_val = "llm_scout" if is_ai_assisted else "blast_radius"
     strict_test_val = bool(ctx.settings.get("strict_test_enforcement", False) if hasattr(ctx, "settings") else False)
     run_tests_val = bool(ctx.settings.get("run_tests_on_code", False) if hasattr(ctx, "settings") else False)
 
@@ -979,6 +1048,7 @@ def _execute_declarative_routine_body(
         "sys": {
             **sys_landmarks,
             "routine_name": routine.get("id", routine_id),
+            "helper_mode": "ai_assisted" if is_ai_assisted else "deterministic",
             "rag_strategy": rag_strategy_val,
             "strict_test_enforcement": False if is_manual_transport else strict_test_val,
             "run_tests_on_code": run_tests_val,
@@ -997,6 +1067,8 @@ def _execute_declarative_routine_body(
             "effective_intent": initial_intent,
             "has_raw_patches": has_raw_patches,
             "has_attached_files": bool(all_context_files),
+            "has_code_targets": has_code_targets,
+            "attached_docs_content": attached_docs_content,
             "attached_files": editable_list,
             "read_only_files": readonly_list,
             "selected_files": list(editable_list),
@@ -1174,19 +1246,42 @@ def _execute_declarative_routine_body(
                 )
             if action in ("context.assemble", "gather.context.assemble", "gather.pack_selection"):
                 scout_node = chain_context.get("scout_targets") or {}
-                scouted_files = (
+                scout_parsed = scout_node.get("parsed") if isinstance(scout_node.get("parsed"), dict) else scout_node
+                raw_scout_list = (
                     scout_node.get("requested_files")
-                    or scout_node.get("candidate_files")
-                    or scout_node.get("edit_targets")
+                    or scout_parsed.get("requested_files")
+                    or scout_parsed.get("candidate_files")
+                    or scout_parsed.get("edit_targets")
+                    or scout_parsed.get("files")
                     or []
                 )
+                scouted_files = clamp_rag_files_to_topology(ctx, list(raw_scout_list)) if raw_scout_list else []
+                if not scouted_files and not is_ai_assisted and attached_docs_content:
+                    det_candidates = re.findall(
+                        r'(?:vfs://[A-Za-z0-9_./-]+|`([A-Za-z0-9_./-]+\.(?:py|js|mjs|ts|rs|json|yaml|yml))`)',
+                        attached_docs_content,
+                    )
+                    raw_det = re.findall(r'vfs://[A-Za-z0-9_./-]+', attached_docs_content) + [c for c in det_candidates if c]
+                    scouted_files = clamp_rag_files_to_topology(ctx, raw_det)
                 for sf in scouted_files:
                     if sf and sf not in all_context_files:
                         all_context_files.append(sf)
                     if sf and sf not in editable_list and sf not in readonly_list:
                         editable_list.append(sf)
+                touched_repos = {
+                    InSetuURI(f).repo for f in all_context_files if InSetuURI(f).scheme == "vfs" and InSetuURI(f).repo
+                }
+                if not touched_repos and primary_repo_name and primary_repo_name != "workspace":
+                    touched_repos = {primary_repo_name}
+                all_const = discover_constitution_files(ctx)
+                scoped_const = [cf for cf in all_const if InSetuURI(cf).repo in touched_repos] if touched_repos else all_const[:2]
+                for cf in scoped_const:
+                    if cf not in all_context_files:
+                        all_context_files.append(cf)
+                readonly_non_const = [f for f in readonly_list if f not in all_const]
                 chain_context["global"]["all_context_files"] = list(all_context_files)
                 chain_context["global"]["attached_files"] = list(editable_list)
+                chain_context["global"]["read_only_files"] = readonly_non_const
 
             if action in ("context.assemble", "gather.context.assemble"):
                 assembled = assemble_context_payload(
@@ -1219,8 +1314,9 @@ def _execute_declarative_routine_body(
                 )
                 base_filename = pack_artifact.get("base_filename") if isinstance(pack_artifact, dict) else None
                 packed_text = ctx.read_compiled_context(base_filename) if base_filename else ""
-                if readonly_list:
-                    ro_header = "READ-ONLY REFERENCE FILES (Do NOT generate patches for these files):\n" + "\n".join(f"- {f}" for f in readonly_list) + "\n\n"
+                ro_for_header = list(dict.fromkeys(readonly_list + [f for f in all_context_files if f not in editable_list]))
+                if ro_for_header:
+                    ro_header = "READ-ONLY REFERENCE FILES (Do NOT generate patches for these files):\n" + "\n".join(f"- {f}" for f in ro_for_header) + "\n\n"
                     packed_text = ro_header + packed_text
                 node_out = {"status": "completed", "base_filename": base_filename, "content": packed_text}
                 chain_context[nid] = _vault_if_oversized(ctx, nid, node_out)
@@ -1235,8 +1331,12 @@ def _execute_declarative_routine_body(
                         chain_context[nid] = {"status": "skipped", "can_commit": True, "failed_cells": [], "reason": "No patch blocks in payload"}
                     return
 
-                is_validate_only = bool(node_payload.get("validate_only") or node_payload.get("dry_run"))
-                max_self_heal = 1 if is_validate_only else int(node.get("max_retries", 3) or 3)
+                raw_dry_flag = node_payload.get("validate_only") if "validate_only" in node_payload else node_payload.get("dry_run")
+                if isinstance(raw_dry_flag, str):
+                    is_validate_only = raw_dry_flag.strip().lower() in ("true", "1", "yes")
+                else:
+                    is_validate_only = bool(raw_dry_flag)
+                max_self_heal = 1 if not is_ai_assisted else int(node.get("max_retries", 3) or 3)
                 for heal_attempt in range(max_self_heal):
                     if callable(is_cancelled_fn) and is_cancelled_fn():
                         raise RuntimeError("Agent turn cancelled by user.")
@@ -1251,7 +1351,8 @@ def _execute_declarative_routine_body(
                         text=patch_text,
                         active_files=target_files,
                         dry_run=is_validate_only,
-                        auto_heal=(not is_validate_only and max_self_heal > 1),
+                        repair_mode="ai_assisted" if (is_ai_assisted and max_self_heal > 1) else "algorithmic",
+                        auto_heal=(is_ai_assisted and max_self_heal > 1),
                         max_heal_passes=max(1, max_self_heal - 1),
                         profile_id=active_profile_id,
                         wait=True,
@@ -1305,6 +1406,7 @@ def _execute_declarative_routine_body(
                                         tier="fast",
                                         profile_id=active_profile_id,
                                         output_schema="yomama_patch",
+                                        caller_tag=f"orchestrator:test_heal:{routine.get('id', routine_id)}",
                                         wait=True,
                                     )
                                     patch_text = heal_llm.get("text", "") if isinstance(heal_llm, dict) else str(heal_llm)
@@ -1464,6 +1566,7 @@ def _execute_declarative_routine_body(
                         profile_id=active_profile_id,
                         output_schema=output_schema,
                         decision_questions=decision_questions,
+                        caller_tag=f"routine:{routine.get('id', routine_id)}:{nid}:map_over",
                         wait=True,
                     )
                     return res.get("text", "") if isinstance(res, dict) else str(res)
@@ -1504,6 +1607,7 @@ def _execute_declarative_routine_body(
                         profile_id=active_profile_id,
                         output_schema=output_schema,
                         decision_questions=decision_questions,
+                        caller_tag=f"routine:{routine.get('id', routine_id)}:{nid}:repeat",
                         wait=True,
                     ),
                     list(range(k)),
@@ -1520,6 +1624,7 @@ def _execute_declarative_routine_body(
                     profile_id=active_profile_id,
                     output_schema=output_schema,
                     decision_questions=decision_questions,
+                    caller_tag=f"routine:{routine.get('id', routine_id)}:{nid}",
                     wait=True,
                 )
                 reply_text = llm_res.get("text", "") if isinstance(llm_res, dict) else str(llm_res)
@@ -1546,6 +1651,7 @@ def _execute_declarative_routine_body(
                         profile_id=active_profile_id,
                         output_schema=output_schema,
                         decision_questions=decision_questions,
+                        caller_tag=f"routine:{routine.get('id', routine_id)}:{nid}:query_hop",
                         wait=True,
                     )
                     reply_text = hop_res.get("text", "") if isinstance(hop_res, dict) else str(hop_res)
@@ -1556,10 +1662,24 @@ def _execute_declarative_routine_body(
                 node_record.update(parsed_payload)
                 node_record["parsed"] = parsed_payload
             with context_lock:
-                if isinstance(parsed_payload, dict) and isinstance(parsed_payload.get("requested_files"), list):
-                    clamped_req = clamp_rag_files_to_topology(ctx, parsed_payload["requested_files"])
-                    parsed_payload["requested_files"] = clamped_req
-                    node_record["requested_files"] = clamped_req
+                if isinstance(parsed_payload, dict):
+                    raw_req = (
+                        parsed_payload.get("requested_files")
+                        or parsed_payload.get("candidate_files")
+                        or parsed_payload.get("edit_targets")
+                        or parsed_payload.get("files")
+                    )
+                    if isinstance(raw_req, list):
+                        clamped_req = clamp_rag_files_to_topology(ctx, raw_req)
+                        parsed_payload["requested_files"] = clamped_req
+                        node_record["requested_files"] = clamped_req
+                        for sf in clamped_req:
+                            if sf and sf not in all_context_files:
+                                all_context_files.append(sf)
+                            if sf and sf not in editable_list and sf not in readonly_list:
+                                editable_list.append(sf)
+                        chain_context["global"]["all_context_files"] = list(all_context_files)
+                        chain_context["global"]["attached_files"] = list(editable_list)
                 chain_context[nid] = _vault_if_oversized(ctx, nid, node_record)
                 sets_global = node.get("sets_global")
                 if isinstance(sets_global, dict):
@@ -1639,11 +1759,11 @@ def _execute_declarative_routine_body(
             t_val, sys_p, usr_p = _prepare_llm_prompt_and_system(n, chain_context, include_context=False)
             out_schema = str(n.get("output_schema") or "").strip().lower()
             directive_block = ""
-            if out_schema in ("yomama_patch", "conversational_with_patches") and "<<<<<<< FILE:" not in clean_prompt_only:
+            if out_schema in ("yomama_patch", "conversational_with_patches") and "## Yomama Patch Protocol" not in clean_prompt_only:
+                full_proto = resolve_prompt_text(ctx, target_uri="ctx://prompts/.templates/bridge/yomama_patch_protocol.md", interpolate_vars=False)
                 directive_block = (
                     "\n\n---\n"
-                    "### File Modification Directives (Yomama Patch Protocol)\n"
-                    f"{get_schema_directive('yomama_patch')}"
+                    f"{full_proto.strip() if full_proto else get_schema_directive('yomama_patch')}"
                 )
             elif out_schema and out_schema not in ("freeform", "yomama_patch", "conversational_with_patches"):
                 schema_dir = get_schema_directive(out_schema)
@@ -1691,6 +1811,10 @@ def _execute_declarative_routine_body(
             pending_handoff_branches.append(branch_entry)
 
         if pending_handoff_branches:
+            try:
+                ctx.call("bridge.compile_telemetry", limit=40, wait=False)
+            except Exception:
+                pass
             clean_chain = {k: v for k, v in chain_context.items() if k != "_ctx"}
             first_branch = pending_handoff_branches[0]
             return {
@@ -1742,15 +1866,18 @@ def _execute_declarative_routine_body(
     # strictly at the root egress (_depth == 0) so nested sub-routines always compose raw text.
     unapplied_patches = ""
     display_response_text = final_response_text
-    if _depth == 0 and final_response_text and "<<<<<<<" in final_response_text and parse_blocks(final_response_text):
+    parsed_final_blocks = parse_blocks(final_response_text) if (_depth == 0 and final_response_text and "<<<<<<<" in final_response_text) else {}
+    if parsed_final_blocks:
         prose_only = strip_yomama_blocks_keep_prose(final_response_text)
+        total_chunks = sum(len(blks) for blks in parsed_final_blocks.values())
+        file_count = len(parsed_final_blocks)
         if committed_files:
-            receipt_summary = f"✅ Applied patches to {len(committed_files)} file(s)."
+            receipt_summary = f"✅ Applied {total_chunks} patch(es) across {len(committed_files)} file(s)."
             display_response_text = f"{prose_only}\n\n{receipt_summary}".strip() if prose_only else receipt_summary
         else:
             unapplied_patches = final_response_text
-            if prose_only:
-                display_response_text = prose_only
+            staged_summary = f"📦 Staged {total_chunks} patch(es) across {file_count} file(s) for review. Check and confirm the patch stacks below to commit."
+            display_response_text = f"{prose_only}\n\n{staged_summary}".strip() if prose_only else staged_summary
 
     clean_chain = {k: v for k, v in chain_context.items() if k != "_ctx"}
     return {

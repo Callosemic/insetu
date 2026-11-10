@@ -46,6 +46,25 @@ BRIDGE_SCHEMA = {
         "ttl_expires_at": "REAL",
         "patch_count": "INTEGER DEFAULT 1",
         "chunks_json": "TEXT"
+    },
+    "bridge_heal_audit": {
+        "heal_id": "TEXT PRIMARY KEY",
+        "timestamp": "REAL",
+        "transaction_id": "TEXT",
+        "filepath": "TEXT",
+        "cell_id": "TEXT",
+        "pass_number": "INTEGER DEFAULT 1",
+        "failure_type": "TEXT",
+        "original_error": "TEXT",
+        "original_block": "TEXT",
+        "windowed_context_sent": "TEXT",
+        "instructions_sent": "TEXT",
+        "healer_raw_output": "TEXT",
+        "healed_block": "TEXT",
+        "verification_status": "TEXT",
+        "verification_error": "TEXT",
+        "model": "TEXT",
+        "latency_ms": "INTEGER DEFAULT 0"
     }
 }
 
@@ -235,6 +254,7 @@ class BridgeSyncPayload(TypedDict, total=False):
     resolutions: Dict[str, PatchResolution]
     unattended: bool
     force: bool
+    repair_mode: Literal['off', 'algorithmic', 'ai_assisted']
     auto_heal: bool
     max_heal_passes: int
     target_cell_id: str
@@ -467,6 +487,131 @@ def bridge_turn_diff(ctx):
         "files": touched_files,
         "diff_text": "\n\n".join(diff_blocks),
     }
+
+
+class BridgeCompileTelemetryPayload(TypedDict, total=False):
+    limit: Optional[int]
+
+
+def compile_ai_telemetry_context(ctx, limit: int = 40) -> Dict[str, Any]:
+    """
+    Compiles a Gather-chunked diagnostic context payload (ctx://contexts/ai_telemetry_context.txt)
+    containing tagged LLM telemetry and full before/context/after Bridge AI Auto-Heal case studies.
+    All text is scrubbed through S5 outbound secret scrubbing before writing to ctx://contexts/.
+    """
+    from insetu.core.gather.context_assemble import (
+        collect_workspace_secrets as _collect_secrets,
+        scrub_outbound_secrets as _scrub_secrets,
+    )
+    safe_limit = max(1, min(int(limit or 40), 200))
+    secrets_set = _collect_secrets(ctx)
+    heal_rows = ctx.db.execute(
+        "SELECT * FROM bridge_heal_audit ORDER BY timestamp DESC LIMIT ?",
+        (safe_limit,),
+    ).fetchall()
+    llm_rows = []
+    try:
+        llm_conn = ctx.get_db("llm")
+        llm_rows = llm_conn.execute(
+            "SELECT * FROM llm_telemetry ORDER BY timestamp DESC LIMIT ?",
+            (safe_limit,),
+        ).fetchall()
+    except Exception:
+        pass
+
+    header_lines = [
+        "============================================================",
+        "INSETU AI TELEMETRY & YOMAMA PATCH HEALER AUDIT PAYLOAD",
+        "============================================================",
+        "Purpose: Audit the exact windowed file slices, error diagnostics, and instructions provided",
+        "to inSetu's Fast/Decision/Thinking LLM calls and Yomama Patch Auto-Healer.",
+        "",
+    ]
+
+    text_blocks: List[str] = []
+    if llm_rows:
+        summary_lines = [
+            "=== SECTION 1: RECENT TAGGED LLM CALLS (llm_telemetry) ===",
+            "caller_tag | tier | model | status | attempts | latency_ms | prompt_chars -> resp_chars | error",
+            "-" * 96,
+        ]
+        for r in llm_rows:
+            rk = dict(r)
+            err_short = (rk.get("error_message") or "").replace("\n", " ")[:120]
+            summary_lines.append(
+                f"{rk.get('caller_tag')} | {rk.get('tier')} | {rk.get('model')} | {rk.get('status')} | "
+                f"try={rk.get('attempts')} | {rk.get('latency_ms')}ms | "
+                f"{rk.get('prompt_chars')}->{rk.get('response_chars')} chars"
+                + (f" | ERR: {err_short}" if err_short else "")
+            )
+            if rk.get("status") != "ok" or int(rk.get("attempts") or 1) > 1:
+                summary_lines.append(
+                    f"  [Non-Nominal Call Detail ({rk.get('call_id')})]\n"
+                    f"  Prompt Excerpt:\n{rk.get('prompt_excerpt', '')[:1200]}\n"
+                    f"  Response Excerpt:\n{rk.get('response_excerpt', '')[:1200]}\n"
+                )
+        text_blocks.append(_scrub_secrets("\n".join(summary_lines) + "\n\n", secrets_set))
+
+    if heal_rows:
+        text_blocks.append("=== SECTION 2: YOMAMA PATCH AUTO-HEAL CASE STUDIES (bridge_heal_audit) ===\n\n")
+        for idx, hr in enumerate(heal_rows, 1):
+            hd = dict(hr)
+            case_block = (
+                f"============================================================\n"
+                f"CASE STUDY #{idx}: [{hd.get('verification_status', '').upper()}] {hd.get('filepath')}\n"
+                f"Transaction: {hd.get('transaction_id') or 'uncommitted'} | Pass: {hd.get('pass_number')} | "
+                f"Failure Type: {hd.get('failure_type')} | Model: {hd.get('model')} ({hd.get('latency_ms')}ms)\n"
+                f"============================================================\n\n"
+                f"--- 1. INITIAL FAILURE DIAGNOSTIC ---\n"
+                f"{hd.get('original_error')}\n\n"
+                f"--- 2. ORIGINAL BROKEN PATCH BLOCK (FROM PRIMARY MODEL) ---\n"
+                f"{hd.get('original_block')}\n\n"
+                f"--- 3. EXACT INSTRUCTIONS SENT TO HEALER LLM ---\n"
+                f"{hd.get('instructions_sent')}\n\n"
+                f"--- 4. EXACT WINDOWED BUFFER CONTEXT SENT TO HEALER LLM ---\n"
+                f"{hd.get('windowed_context_sent')}\n\n"
+                f"--- 5. HEALER LLM RAW OUTPUT ---\n"
+                f"{hd.get('healer_raw_output')}\n\n"
+                f"--- 6. VERIFICATION OUTCOME AGAINST B_(k-1) ---\n"
+                f"Status: {hd.get('verification_status')}\n"
+                + (f"Verification Error: {hd.get('verification_error')}\n" if hd.get("verification_error") else "")
+                + "\n"
+            )
+            text_blocks.append(_scrub_secrets(case_block, secrets_set))
+    else:
+        text_blocks.append("=== SECTION 2: YOMAMA PATCH AUTO-HEAL CASE STUDIES ===\nNo AI patch heal events recorded yet.\n")
+
+    base_uri = "ctx://contexts/ai_telemetry_context.txt"
+    compiled_entry = ctx.compile_context(
+        base_uri=base_uri,
+        header_block="\n".join(header_lines),
+        text_blocks=text_blocks,
+        files=[base_uri],
+        meta={
+            "type": "telemetry",
+            "domain": "Diagnostics",
+            "category": "Diagnostics",
+            "title": "AI Telemetry & Patch Healer Audit",
+            "desc": f"{len(heal_rows)} heal case(s), {len(llm_rows)} LLM call(s) — chunked for LLM meta-audit.",
+            "timestamp": time.time(),
+        },
+    )
+    ctx.save_manifest({base_uri: compiled_entry}, is_full_compile=False)
+    return {
+        "status": "success",
+        "context_uri": base_uri,
+        "heal_cases": len(heal_rows),
+        "llm_calls": len(llm_rows),
+        "chunks": compiled_entry.get("chunks", [base_uri]),
+    }
+
+
+@bridge_bp.route('compile_telemetry', methods=['GET', 'POST'], request_schema=BridgeCompileTelemetryPayload, docstring="[sync] Compiles recent LLM call telemetry and Yomama Patch Auto-Heal case studies (including windowed context sent to the healer) into ctx://contexts/ai_telemetry_context.txt, chunked by Gather max_kb.")
+def api_bridge_compile_telemetry(ctx):
+    limit = int((ctx.payload or {}).get("limit") or 40)
+    return compile_ai_telemetry_context(ctx, limit=limit)
+
+
 # 3. Background Workers
 @bridge_bp.worker("sync_task")
 def _background_bridge_sync(
@@ -482,6 +627,7 @@ def _background_bridge_sync(
     force: bool = False,
     ignore_syntax: bool = False,
     ignore_syntax_errors: bool = False,
+    repair_mode: str = "",
     auto_heal: bool = False,
     max_heal_passes: int = 2,
     target_cell_id: Optional[str] = None,
@@ -495,6 +641,10 @@ def _background_bridge_sync(
     If target_cell_id is specified, scopes AI repair strictly to that single patch cell.
     """
     ctx.jobs.update_progress("Analyzing patch matrices and running AST validation...")
+    effective_repair_mode = str(repair_mode or "").strip().lower()
+    if effective_repair_mode not in ("off", "algorithmic", "ai_assisted"):
+        effective_repair_mode = "ai_assisted" if auto_heal else "algorithmic"
+    effective_auto_heal = bool(auto_heal or effective_repair_mode == "ai_assisted")
     current_text = text
     sync_payload = {
         "text": current_text,
@@ -508,6 +658,7 @@ def _background_bridge_sync(
         "force": force,
         "ignore_syntax": ignore_syntax,
         "ignore_syntax_errors": ignore_syntax_errors,
+        "repair_mode": effective_repair_mode,
     }
     sister_repos = get_sister_repos(ctx.workspace_id)
     _, ws_root = get_workspace_physics(ctx.workspace_id)
@@ -518,7 +669,7 @@ def _background_bridge_sync(
                 vfs, ctx.workspace_id, sync_payload, sister_repos, ws_root, return_buffers=True, ctx=ctx
             )
 
-        effective_max_passes = max(1, int(max_heal_passes or 2)) if auto_heal else 0
+        effective_max_passes = max(1, int(max_heal_passes or 2)) if effective_auto_heal else 0
         heal_attempt = 0
         attempted_cell_ids = set()
         healed_cells_map: Dict[str, Any] = {}
@@ -621,6 +772,41 @@ def _background_bridge_sync(
                     + windowed_snippet
                     + f"\n\n{extra_instructions}"
                 )
+                t_heal_start = time.time()
+                failure_kind = (
+                    "syntax_error"
+                    if p_status == "syntax_error"
+                    else (df_entry["patch_tel"].get("resolution_type") or f_blk.get("type") or "anchor_failed")
+                )
+                h_text = ""
+                h_model = ""
+
+                def _log_heal_audit(ver_status: str, ver_err: str = "", healed_yomama_str: str = "") -> None:
+                    try:
+                        elapsed_ms = int(round((time.time() - t_heal_start) * 1000))
+                        ctx.db.insert_or_replace("bridge_heal_audit", {
+                            "heal_id": f"heal_{uuid.uuid4().hex[:12]}",
+                            "timestamp": time.time(),
+                            "transaction_id": sync_data.get("transaction_id") or "",
+                            "filepath": fp_key,
+                            "cell_id": str(f_blk.get("id") or ""),
+                            "pass_number": heal_attempt,
+                            "failure_type": str(failure_kind),
+                            "original_error": str(err_msg),
+                            "original_block": failed_yomama,
+                            "windowed_context_sent": windowed_snippet,
+                            "instructions_sent": extra_instructions,
+                            "healer_raw_output": h_text,
+                            "healed_block": healed_yomama_str,
+                            "verification_status": ver_status,
+                            "verification_error": ver_err,
+                            "model": h_model,
+                            "latency_ms": elapsed_ms,
+                        })
+                        ctx.db.commit()
+                    except Exception:
+                        pass
+
                 try:
                     h_res = ctx.call(
                         "llm.complete",
@@ -633,9 +819,11 @@ def _background_bridge_sync(
                         tier="fast",
                         profile_id=profile_id,
                         output_schema="yomama_patch",
+                        caller_tag=f"bridge:patch_heal:{failure_kind}",
                         wait=True,
                     )
                     h_text = h_res.get("text", "") if isinstance(h_res, dict) else str(h_res)
+                    h_model = (h_res.get("model") or "") if isinstance(h_res, dict) else ""
                     h_parsed = parse_blocks(h_text)
                     repaired_pairs: List[Tuple[str, Dict[str, Any]]] = []
                     for r_fp, r_blks in h_parsed.items():
@@ -643,6 +831,7 @@ def _background_bridge_sync(
                         for rb in r_blks:
                             repaired_pairs.append((canon_r_fp, dict(rb)))
                     if not repaired_pairs:
+                        _log_heal_audit("failed_parse", "LLM healer returned no valid Yomama blocks.")
                         return fp_key, None, "LLM healer returned no valid Yomama blocks."
 
                     base_cell_id = f_blk.get("id")
@@ -670,16 +859,22 @@ def _background_bridge_sync(
                             else:
                                 ok_cand, cand_buf, cand_stat = apply_block_in_memory(buf_for_target, dict(rep_b), silent=True)
                             if not ok_cand or cand_stat == "no_op":
-                                return fp_key, None, f"Healer candidate failed verification on {target_r_fp} ({cand_stat})."
+                                fail_reason = f"Healer candidate failed verification on {target_r_fp} ({cand_stat})."
+                                _log_heal_audit(f"failed_{cand_stat}", fail_reason, h_text)
+                                return fp_key, None, fail_reason
                             if p_status == "syntax_error":
                                 has_syn, syn_msg = _validate_buffer_syntax(ctx, target_r_fp, cand_buf)
                                 if has_syn:
-                                    return fp_key, None, f"Healer candidate still has syntax error ({syn_msg})."
+                                    fail_reason = f"Healer candidate still has syntax error ({syn_msg})."
+                                    _log_heal_audit("failed_syntax", fail_reason, h_text)
+                                    return fp_key, None, fail_reason
                             running_buffers[target_r_fp] = cand_buf
                         verified_pairs.append((target_r_fp, rep_b))
 
+                    _log_heal_audit("verified", "", h_text)
                     return fp_key, verified_pairs, None
                 except Exception as exc:
+                    _log_heal_audit("exception", str(exc), h_text)
                     return fp_key, None, str(exc)
 
             file_items = list(first_failure_by_file.items())
@@ -815,10 +1010,13 @@ def _background_bridge_sync(
 
 @bridge_bp.worker("sweep_ledger")
 def _sweep_ledger_worker(ctx, job_id: Optional[str] = None):
-    """Metronome TTL Housekeeping: Purges historical rows older than 48 hours."""
+    """Metronome TTL Housekeeping: Purges historical rows older than 48 hours and bounds bridge_heal_audit."""
     now = time.time()
     try:
         ctx.db.execute("DELETE FROM bridge_ledger WHERE ttl_expires_at IS NOT NULL AND ttl_expires_at < ?", (now,))
+        ctx.db.execute(
+            "DELETE FROM bridge_heal_audit WHERE heal_id NOT IN (SELECT heal_id FROM bridge_heal_audit ORDER BY timestamp DESC LIMIT 250)"
+        )
         ctx.db.commit()
         ctx.jobs.update_progress("Ledger swept successfully.")
     except Exception as e:

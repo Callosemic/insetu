@@ -11,12 +11,19 @@ nodes:
     capability: topology.overview
     parents: []
     order: 10
+  - id: fetch_context
+    type: exec
+    capability: gather.pack_selection
+    parents: []
+    order: 12
   - id: initial_answer
     type: llm
     tier: medium
     parents:
       - load_topology_overview
+      - fetch_context
     order: 20
+    use_history: true
     output_schema: ask_response_or_need_files
     max_retries: 1
   - id: fetch_requested_files
@@ -35,14 +42,18 @@ nodes:
     parents:
       - fetch_requested_files
     order: 40
+    use_history: true
     condition: "{{ nodes.initial_answer.parsed.status }} == 'NEED_MORE_FILES'"
 ---
 
 ## initial_answer
 You are answering a read-only architectural question about the workspace. Do NOT emit Yomama patch blocks.
-If the attached context and topology overview are sufficient, provide a clear, thorough answer directly.
-If you need to inspect specific source files first, respond ONLY with JSON:
+If the attached context, active plan documents, conversation history, and topology overview are sufficient, provide a clear, thorough answer directly.
+If you need to inspect additional source files first, respond ONLY with JSON:
 {"status": "NEED_MORE_FILES", "requested_files": ["vfs://repo/path/to/file.py"]}
+
+Attached Plan / Documentation Context:
+{{ global.attached_docs_content }}
 
 Workspace Topology Overview:
 {{ nodes.load_topology_overview.overview_text }}

@@ -260,6 +260,157 @@ def find_all_block_anchors(file_lines: List[str], block_lines: List[str], allow_
     return _scan_tier(True)
 
 
+_TRIVIAL_BOUNDARY_LINES = frozenset({
+    "{", "}", "};", ");", "});", "]);", "]", ")", "else:", "try:", "finally:", "pass", "break", "continue", "return",
+})
+
+
+def _is_nontrivial_anchor_line(stripped_line: str) -> bool:
+    clean = stripped_line.strip()
+    if not clean or clean in _TRIVIAL_BOUNDARY_LINES:
+        return False
+    return len(clean) >= 8 or any(tok in clean for tok in ("def ", "class ", "function ", "export ", "return ", "="))
+
+
+def find_sandwich_fuzzy_anchor(file_lines: List[str], block_lines: List[str]) -> Optional[Dict[str, Any]]:
+    """
+    Tier 2 Deterministic Sandwich-Weighted Anchor Healer:
+    Locates candidate windows in `file_lines` where the top k_top and bottom k_bot lines of `block_lines`
+    match verbatim (the 'sandwich bread') and the interior lines have minor whitespace/comment/token drift.
+    Auto-heals only when:
+      1. Both top and bottom boundaries anchor (k_top >= 1 and k_bot >= 1) with at least one non-trivial line
+         (or k_top + k_bot >= 3 with char similarity >= 0.92),
+      2. Window span is within max(3, 25% of block length) of the search block,
+      3. Composite score C = 0.45 * B + 0.55 * I >= 0.90 (and char similarity >= 0.85),
+      4. Unambiguous margin >= 0.15 over any non-overlapping runner-up window.
+    """
+    s_non_empty = [
+        (idx, l.strip())
+        for idx, l in enumerate(block_lines)
+        if l.strip() and l.strip().upper() != "{{UNTIL}}"
+    ]
+    if len(s_non_empty) < 2 or any(l.strip().upper() == "{{UNTIL}}" for l in block_lines):
+        return None
+
+    f_non_empty = [(idx, l.strip()) for idx, l in enumerate(file_lines) if l.strip()]
+    if len(f_non_empty) < len(s_non_empty):
+        return None
+
+    m_len = len(s_non_empty)
+    s_texts = [t for _, t in s_non_empty]
+    s_joined = "\n".join(s_texts)
+    first_s_text = s_texts[0]
+    last_s_text = s_texts[-1]
+    max_span_delta = max(3, int(round(m_len * 0.25)))
+    min_w_len = max(2, m_len - max_span_delta)
+    max_w_len = m_len + max_span_delta
+
+    top_positions = [pos for pos, (_, txt) in enumerate(f_non_empty) if txt == first_s_text]
+    bot_positions = [pos for pos, (_, txt) in enumerate(f_non_empty) if txt == last_s_text]
+
+    candidate_windows: List[Tuple[int, int]] = []
+    seen_win = set()
+    for t_pos in top_positions:
+        for b_pos in bot_positions:
+            w_len = b_pos - t_pos + 1
+            if min_w_len <= w_len <= max_w_len and (t_pos, b_pos) not in seen_win:
+                seen_win.add((t_pos, b_pos))
+                candidate_windows.append((t_pos, b_pos))
+
+    # Also allow windows anchored by >=2 exact top lines or >=2 exact bottom lines when m_len >= 3
+    if m_len >= 3:
+        for t_pos in top_positions:
+            if t_pos + 1 < len(f_non_empty) and f_non_empty[t_pos + 1][1] == s_texts[1]:
+                b_est = min(len(f_non_empty) - 1, t_pos + m_len - 1)
+                if (t_pos, b_est) not in seen_win and (b_est - t_pos + 1) >= min_w_len:
+                    seen_win.add((t_pos, b_est))
+                    candidate_windows.append((t_pos, b_est))
+        for b_pos in bot_positions:
+            if b_pos - 1 >= 0 and f_non_empty[b_pos - 1][1] == s_texts[-2]:
+                t_est = max(0, b_pos - m_len + 1)
+                if (t_est, b_pos) not in seen_win and (b_pos - t_est + 1) >= min_w_len:
+                    seen_win.add((t_est, b_pos))
+                    candidate_windows.append((t_est, b_pos))
+
+    if not candidate_windows or len(candidate_windows) > 60:
+        return None
+
+    scored_candidates: List[Dict[str, Any]] = []
+    for t_pos, b_pos in candidate_windows:
+        w_slice = f_non_empty[t_pos : b_pos + 1]
+        w_texts = [t for _, t in w_slice]
+        w_len = len(w_texts)
+
+        k_top = 0
+        while k_top < min(w_len, m_len) and w_texts[k_top] == s_texts[k_top]:
+            k_top += 1
+
+        k_bot = 0
+        while k_bot < min(w_len - k_top, m_len - k_top) and w_texts[w_len - 1 - k_bot] == s_texts[m_len - 1 - k_bot]:
+            k_bot += 1
+
+        both_ends = (k_top >= 1 and k_bot >= 1)
+        one_strong_end = (k_top >= 2 or k_bot >= 2)
+        if not both_ends and not one_strong_end:
+            continue
+
+        matched_boundary_lines = s_texts[:k_top] + (s_texts[m_len - k_bot :] if k_bot > 0 else [])
+        if not any(_is_nontrivial_anchor_line(l) for l in matched_boundary_lines):
+            continue
+
+        boundary_score = min(
+            1.0,
+            (0.35 if both_ends else 0.15)
+            + 0.15 * min(k_top, 3)
+            + 0.15 * min(k_bot, 3),
+        )
+        line_ratio = difflib.SequenceMatcher(None, s_texts, w_texts).ratio()
+        char_ratio = difflib.SequenceMatcher(None, s_joined, "\n".join(w_texts)).ratio()
+        interior_score = 0.5 * line_ratio + 0.5 * char_ratio
+        composite_score = 0.45 * boundary_score + 0.55 * interior_score
+
+        if char_ratio < 0.85:
+            continue
+        if both_ends and composite_score < 0.90:
+            continue
+        if not both_ends and (composite_score < 0.93 or char_ratio < 0.92):
+            continue
+
+        start_f_idx = w_slice[0][0]
+        end_f_idx = w_slice[-1][0]
+        scored_candidates.append({
+            "match_idx": start_f_idx,
+            "actual_span": (end_f_idx - start_f_idx) + 1,
+            "matched_baseline_f_idx": start_f_idx,
+            "matched_last_content_f_idx": end_f_idx,
+            "baseline_s_idx": s_non_empty[0][0],
+            "last_content_s_idx": s_non_empty[-1][0],
+            "unmatched_first_prefix": "",
+            "unmatched_last_suffix": "",
+            "tier": 2,
+            "sandwich_score": round(composite_score, 4),
+            "k_top": k_top,
+            "k_bot": k_bot,
+        })
+
+    if not scored_candidates:
+        return None
+
+    scored_candidates.sort(key=lambda c: (c["sandwich_score"], c["k_top"] + c["k_bot"]), reverse=True)
+    best = scored_candidates[0]
+    best_start = best["match_idx"]
+    best_end = best_start + best["actual_span"]
+
+    for other in scored_candidates[1:]:
+        o_start = other["match_idx"]
+        o_end = o_start + other["actual_span"]
+        overlaps = not (o_end <= best_start or o_start >= best_end)
+        if not overlaps and (best["sandwich_score"] - other["sandwich_score"]) < 0.15:
+            return None
+
+    return best
+
+
 def find_block_anchor(file_lines, block_lines, allow_boundary_partial: bool = False):
     """
     Backward-compatible single-anchor wrapper around find_all_block_anchors.
@@ -286,7 +437,7 @@ def normalize_patch_payload(text: str, reference_content: str = "") -> str:
     return heal_llm_block_artifacts(expanded, reference_content=reference_content)
 
 
-def apply_block_in_memory(content, block, silent=False):
+def apply_block_in_memory(content, block, silent=False, allow_algorithmic_heal: bool = True):
     content = content.replace('\r\n', '\n').replace('\xa0', ' ')
     file_lines = content.split('\n')
     if block.get("_pre_normalized"):
@@ -331,8 +482,15 @@ def apply_block_in_memory(content, block, silent=False):
                 search_lines = healed_search_lines
                 if not silent:
                     print("  └─ 🛡️  Artifact Heal: Auto-repaired chatbot artifacts in SEARCH block.")
-    if not search_match:
+    if not search_match and allow_algorithmic_heal:
         search_match = find_block_anchor(file_lines, search_lines, allow_boundary_partial=True)
+    if not search_match and allow_algorithmic_heal:
+        search_match = find_sandwich_fuzzy_anchor(file_lines, search_lines)
+        if search_match and not silent:
+            print(
+                f"  └─ 🛡️  Sandwich Anchor Heal: Matched top={search_match.get('k_top')}/bot={search_match.get('k_bot')} "
+                f"(score={search_match.get('sandwich_score')})."
+            )
 
     if search_match and search_match.get("ambiguous_matches"):
         amb_lines = ", ".join(str(ln) for ln in search_match["ambiguous_matches"][:5])
@@ -457,6 +615,8 @@ def apply_block_in_memory(content, block, silent=False):
     if final_content == content:
         if not silent: print("  └─ [ℹ️] Idempotency: Patch resulted in no changes to the file. Skipping chunk.")
         return True, content, "idempotent"
+    if search_match.get("tier") == 2:
+        return True, final_content, "sandwich_healed"
     return True, final_content, "success"
 
 

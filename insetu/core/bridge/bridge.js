@@ -2,6 +2,7 @@ import { html } from 'lit';
 import { InSetuElement } from '/static/extensions/system/insetu_element.js';
 import { sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 import {
+    BRIDGE_BASE_LAYOUT_SLOTS,
     BRIDGE_FLAG_UI_MAP,
     BRIDGE_GATE_UI_MAP,
     BridgeStore,
@@ -14,6 +15,7 @@ import {
 import { InSetuExtBridgeHistory } from '/static/extensions/bridge/bridge_history.js';
 
 export {
+    BRIDGE_BASE_LAYOUT_SLOTS,
     BRIDGE_FLAG_UI_MAP,
     BRIDGE_GATE_UI_MAP,
     BridgeStore,
@@ -28,6 +30,7 @@ export class InSetuExtBridge extends InSetuElement {
     static properties = {
         cells: { type: Array },
         activeSurface: { type: String },
+        repairMode: { type: String },
         autoHeal: { type: Boolean },
         fastTierStatus: { type: Object },
         drawerOpen: { type: Boolean },
@@ -43,6 +46,7 @@ export class InSetuExtBridge extends InSetuElement {
         super();
         this.cells = [];
         this.activeSurface = 'bridge';
+        this.repairMode = BridgeStore.getState().repairMode || 'algorithmic';
         this.autoHeal = false;
         this.fastTierStatus = BridgeStore.getState().fastTierStatus || { canAutoHeal: false, reason: '' };
         this.drawerOpen = false;
@@ -122,6 +126,7 @@ export class InSetuExtBridge extends InSetuElement {
             state => ({
                 cells: state.cells || [],
                 activeSurface: state.activeSurface || 'bridge',
+                repairMode: state.repairMode || 'algorithmic',
                 autoHeal: !!state.autoHeal,
                 fastTierStatus: state.fastTierStatus || { canAutoHeal: false, reason: '' },
                 drawerOpen: !!state.drawerOpen,
@@ -130,10 +135,11 @@ export class InSetuExtBridge extends InSetuElement {
                 viewMode: state.viewMode,
                 telemetry: state.telemetry
             }),
-            ({ cells, activeSurface, autoHeal, fastTierStatus, drawerOpen, drawerCollapsedDesktop, consoleOutput, viewMode, telemetry }) => {
+            ({ cells, activeSurface, repairMode, autoHeal, fastTierStatus, drawerOpen, drawerCollapsedDesktop, consoleOutput, viewMode, telemetry }) => {
                 const cellsChanged = this.cells !== cells;
                 this.cells = cells;
                 this.activeSurface = activeSurface;
+                this.repairMode = repairMode;
                 this.autoHeal = autoHeal;
                 this.fastTierStatus = fastTierStatus;
                 this.drawerOpen = drawerOpen;
@@ -224,6 +230,7 @@ export class InSetuExtBridge extends InSetuElement {
         const bState = BridgeStore.getState();
         this.cells = bState.cells || [];
         this.activeSurface = bState.activeSurface || 'bridge';
+        this.repairMode = bState.repairMode || 'algorithmic';
         this.autoHeal = !!bState.autoHeal;
         this.fastTierStatus = bState.fastTierStatus || { canAutoHeal: false, reason: '' };
         this.drawerOpen = !!bState.drawerOpen;
@@ -304,11 +311,13 @@ export class InSetuExtBridge extends InSetuElement {
             BridgeStore.setState({ viewMode: 'console', consoleOutput: "Dispatching transaction to the Bridge...", telemetry: null });
             const activeFiles = bState.getActiveFiles();
             const activeProfileId = window.inSetu?.stores?.Agent?.getState()?.activeProfileId || undefined;
+            const curRepairMode = bState.repairMode || 'algorithmic';
             const action = this.api.bindJobAction('bridge/sync', {
                 text: textVal,
                 active_files: activeFiles,
                 dry_run: dryRunActive,
-                auto_heal: Boolean(bState.autoHeal),
+                repair_mode: curRepairMode,
+                auto_heal: curRepairMode === 'ai_assisted',
                 profile_id: activeProfileId,
                 pinned_repos: Array.from(this.ecosystem.pinnedRepos),
                 resolutions: bState.resolutions || {},
@@ -1034,17 +1043,15 @@ export class InSetuExtBridge extends InSetuElement {
                         </sutram-btn>
                         ${this.cells.length > 0 && this.viewMode === 'input' ? html`
                             <sutram-btn
-                                intent=${this.autoHeal && this.fastTierStatus?.canAutoHeal ? "highlight" : "neutral"}
-                                ?active=${this.autoHeal && Boolean(this.fastTierStatus?.canAutoHeal)}
-                                ?disabled=${!this.fastTierStatus?.canAutoHeal}
-                                icon="sparkles"
-                                label=${!this.fastTierStatus?.canAutoHeal
-                                    ? (this.fastTierStatus?.isWebChat ? "AI Auto-Repair: Web Chat" : "AI Auto-Repair: No Model")
-                                    : (this.autoHeal ? "AI Auto-Repair: ON" : "AI Auto-Repair: OFF")}
-                                title=${this.fastTierStatus?.reason || "Automatically repair failed anchors or syntax errors in parallel per-file using the Fast LLM tier"}
+                                intent=${this.repairMode === 'ai_assisted' ? 'highlight' : (this.repairMode === 'algorithmic' ? 'primary' : 'neutral')}
+                                ?active=${this.repairMode !== 'off'}
+                                icon=${this.repairMode === 'ai_assisted' ? 'sparkles' : (this.repairMode === 'algorithmic' ? 'cpu' : 'shield-off')}
+                                label=${this.repairMode === 'ai_assisted'
+                                    ? 'Repair: AI-Assisted'
+                                    : (this.repairMode === 'algorithmic' ? 'Repair: Algorithmic' : 'Repair: OFF')}
+                                title=${`Click to cycle Bridge repair mode (OFF → Algorithmic${this.fastTierStatus?.canAutoHeal ? ' → AI-Assisted' : ' [Fast LLM unavailable for AI-Assisted]'}). ${this.fastTierStatus?.reason || ''}`}
                                 @click=${() => {
-                                    if (!this.fastTierStatus?.canAutoHeal) return;
-                                    BridgeStore.setState({ autoHeal: !this.autoHeal });
+                                    BridgeStore.getState().cycleRepairMode();
                                 }}>
                             </sutram-btn>
                         ` : ''}
@@ -1296,19 +1303,5 @@ window.ExtensionRegistry.registerExtension('bridge', {
             }
         }
     ],
-    layoutSlots: [
-        {
-            slot: "slots:sub-navigation",
-            targetParent: "edit",
-            id: "bridge",
-            label: "Yomama",
-            icon: "bridge",
-            intent: "highlight",
-            order: 1,
-            headerActionComponent: "insetu-ext-bridge-actions",
-            component: "insetu-ext-bridge"
-        },
-        { slot: "slots:yomama-surface", id: "bridge", label: "Bridge", icon: "bridge", intent: "highlight", order: 10, component: null },
-        { slot: "slots:yomama-surface", id: "receipts", label: "Receipts", icon: "history", intent: "success", order: 40, component: "insetu-ext-bridge-history" }
-    ]
+    layoutSlots: BRIDGE_BASE_LAYOUT_SLOTS.map(slot => ({ ...slot }))
 });
