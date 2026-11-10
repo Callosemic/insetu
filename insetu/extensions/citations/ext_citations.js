@@ -469,32 +469,19 @@ export class InSetuExtCitationsModals extends InSetuElement {
         }
     }
     async _openCitationNotes(cslId) {
-        try {
-            const res = await this.api.post('fs/search', { q: cslId });
-            if (res.ok) {
-                const data = await res.json();
-                const results = await new Promise((resolve, reject) => {
-                    if (res.status !== 202) return resolve(data.results || []);
-                    this.api.pollJob(data.job_id, {
-                        onComplete: (statusData) => resolve(statusData.artifact?.results || []),
-                        onError: (err) => reject(err)
-                    });
-                });
-
-                if (results && results.length === 1) {
-                    if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(results[0].path, true);
-                } else if (results && results.length > 1) {
-                    if (this.ui && this.ui.openLinkModal) {
-                        this.ui.openLinkModal(cslId, 'deep');
-                    }
+        await this.api.bindJobAction('fs/search', { q: cslId }, {
+            onComplete: (statusData) => {
+                const results = statusData?.artifact?.results || statusData?.results || [];
+                if (results.length === 1 && this.vfs?.viewSourceFile) {
+                    this.vfs.viewSourceFile(results[0].path, true);
+                } else if (results.length > 1 && this.ui?.openLinkModal) {
+                    this.ui.openLinkModal(cslId, 'deep');
                 } else {
                     this.setStatus("No markdown files found referencing this citation ID.", 3000);
                 }
-            }
-        } catch(e) {
-            console.error(e);
-            this.setStatus("Error searching for notes.", 3000, true);
-        }
+            },
+            onError: () => this.setStatus("Error searching for notes.", 3000, true)
+        })();
     }
     _openAttachModal(citation) {
         CitationStore.setState(state => ({

@@ -90,7 +90,7 @@ export class InSetuExtIngestModals extends InSetuElement {
                 if (isNewFileWindowOpen && this.editor?.insertTextAtCursor) {
                     this.editor.insertTextAtCursor(artifact.markdown || '');
                 } else {
-                    this.vfs?.openNewFileModal?.({ filename: suggestedFilename, content: artifact.markdown || '' });
+                    this.vfs?.openNewFileModal?.({ fileName: suggestedFilename, content: artifact.markdown || '' });
                 }
                 this.dispatch('insetu:post-import-url', {
                     ...artifact,
