@@ -25,9 +25,10 @@ self.HOST_BYPASS_PATTERNS = [
     '/auth/',
     '/submit',
     '/recovery',
-    '/api/system/panic'
+    '/api/system/panic',
+    '/api/system/build_id'
 ];
-// Force SW update cycle to activate hardened App Shell vault
-self.OS_CACHE_VERSION = 'v8';
+// Force SW update cycle to activate versioned build cache-first vault
+self.OS_CACHE_VERSION = 'v9';
 
 importScripts('/static/vendor/sutram/js/sw-core.js');

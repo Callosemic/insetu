@@ -1,4 +1,4 @@
-import{Input as x,Select as v,Textarea as y,Toggle as _}from"sutram-chassis";const h=n=>class extends n{connectedCallback(){super.connectedCallback(),this._sutramInputBridged||(this._sutramInputBridged=!0,this.addEventListener("yenvui-input-changed",e=>{e.stopPropagation(),this.dispatchEvent(new CustomEvent("sutram-input-changed",{detail:e.detail,bubbles:!0,composed:!0}))}))}},u=(n,e)=>{typeof customElements<"u"&&(!customElements.get||!customElements.get(n))&&customElements.define(n,e)};export class SutramInput extends h(x){}u("sutram-input",SutramInput);export class SutramSelect extends h(v){}u("sutram-select",SutramSelect);export class SutramTextarea extends h(y){}u("sutram-textarea",SutramTextarea);export class SutramToggle extends h(_){}u("sutram-toggle",SutramToggle);import{html as l,css as m}from"lit";import{SutramElement as g}from"./sutram_sdk.js";import{sharedStyles as b}from"./shared_styles.js";export class SutramCombobox extends g{static properties={label:{type:String},value:{type:String},placeholder:{type:String},options:{type:Array},disabled:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0},inline:{type:Boolean,reflect:!0},_open:{type:Boolean,state:!0},_highlightedIndex:{type:Number,state:!0},_filterText:{type:String,state:!0}};static styles=[b,m`
+import{Input as _,Select as w,Textarea as S,Toggle as $}from"sutram-chassis";const h=n=>class extends n{connectedCallback(){super.connectedCallback(),this._sutramInputBridged||(this._sutramInputBridged=!0,this.addEventListener("yenvui-input-changed",e=>{e.stopPropagation(),this.dispatchEvent(new CustomEvent("sutram-input-changed",{detail:e.detail,bubbles:!0,composed:!0}))}))}},m=(n,e)=>{typeof customElements<"u"&&(!customElements.get||!customElements.get(n))&&customElements.define(n,e)};export class SutramInput extends h(_){}m("sutram-input",SutramInput);export class SutramSelect extends h(w){}m("sutram-select",SutramSelect);export class SutramTextarea extends h(S){}m("sutram-textarea",SutramTextarea);export class SutramToggle extends h($){}m("sutram-toggle",SutramToggle);import{html as l,css as g}from"lit";import{SutramElement as b}from"./sutram_sdk.js";import{sharedStyles as f}from"./shared_styles.js";export class SutramCombobox extends b{static properties={label:{type:String},value:{type:String},placeholder:{type:String},options:{type:Array},disabled:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0},inline:{type:Boolean,reflect:!0},_open:{type:Boolean,state:!0},_highlightedIndex:{type:Number,state:!0},_filterText:{type:String,state:!0}};static styles=[f,g`
         :host {
             display: block;
             margin-bottom: 15px;
@@ -110,7 +110,7 @@ import{Input as x,Select as v,Textarea as y,Toggle as _}from"sutram-chassis";con
             border-radius: 4px;
             flex-shrink: 0;
         }
-    `];constructor(){super(),this.label="",this.value="",this.placeholder="",this.options=[],this.disabled=!1,this.flush=!1,this.inline=!1,this._open=!1,this._highlightedIndex=-1,this._filterText=null}connectedCallback(){super.connectedCallback(),this.registerOutsideClick(()=>{this._open&&(this._open=!1,this._filterText=null)})}_getNormalizedOptions(){return(this.options||[]).map(e=>typeof e=="object"&&e!==null?{value:String(e.value!==void 0?e.value:e.id||e.label||""),label:String(e.label||e.name||e.value||""),badge:e.badge||e.detail||""}:{value:String(e),label:String(e),badge:""})}_getFilteredOptions(){const e=this._getNormalizedOptions(),t=(this._filterText!==null?this._filterText:"").trim().toLowerCase();return t?e.filter(s=>s.value.toLowerCase().includes(t)||s.label.toLowerCase().includes(t)||s.badge&&s.badge.toLowerCase().includes(t)).slice(0,60):e.slice(0,60)}_commitValue(e,t=!0){this.value=e,t&&(this._open=!1,this._filterText=null,this._highlightedIndex=-1),this.dispatchEvent(new CustomEvent("sutram-input-changed",{detail:{value:e},bubbles:!0,composed:!0}))}_handleKeyDown(e){const t=this._getFilteredOptions();e.key==="ArrowDown"?(e.preventDefault(),this._open||(this._open=!0),this._highlightedIndex=t.length>0?(this._highlightedIndex+1)%t.length:-1):e.key==="ArrowUp"?(e.preventDefault(),this._open||(this._open=!0),this._highlightedIndex=t.length>0?(this._highlightedIndex-1+t.length)%t.length:-1):e.key==="Enter"&&this._open&&this._highlightedIndex>=0&&t[this._highlightedIndex]?(e.preventDefault(),this._commitValue(t[this._highlightedIndex].value,!0)):e.key==="Escape"&&this._open&&(e.preventDefault(),this._open=!1,this._filterText=null)}render(){const e=this._open?this._getFilteredOptions():[];return l`
+    `];constructor(){super(),this.label="",this.value="",this.placeholder="",this.options=[],this.disabled=!1,this.flush=!1,this.inline=!1,this._open=!1,this._highlightedIndex=-1,this._filterText=null}connectedCallback(){super.connectedCallback(),this.registerOutsideClick(()=>{this._open&&(this._open=!1,this._filterText=null)})}_getNormalizedOptions(){return(this.options||[]).map(e=>typeof e=="object"&&e!==null?{value:String(e.value!==void 0?e.value:e.id||e.label||""),label:String(e.label||e.name||e.value||""),badge:e.badge||e.detail||""}:{value:String(e),label:String(e),badge:""})}_getFilteredOptions(){const e=this._getNormalizedOptions(),t=(this._filterText!==null?this._filterText:"").trim().toLowerCase();return t?e.filter(i=>i.value.toLowerCase().includes(t)||i.label.toLowerCase().includes(t)||i.badge&&i.badge.toLowerCase().includes(t)).slice(0,60):e.slice(0,60)}_commitValue(e,t=!0){this.value=e,t&&(this._open=!1,this._filterText=null,this._highlightedIndex=-1),this.dispatchEvent(new CustomEvent("sutram-input-changed",{detail:{value:e},bubbles:!0,composed:!0}))}_handleKeyDown(e){const t=this._getFilteredOptions();e.key==="ArrowDown"?(e.preventDefault(),this._open||(this._open=!0),this._highlightedIndex=t.length>0?(this._highlightedIndex+1)%t.length:-1):e.key==="ArrowUp"?(e.preventDefault(),this._open||(this._open=!0),this._highlightedIndex=t.length>0?(this._highlightedIndex-1+t.length)%t.length:-1):e.key==="Enter"&&this._open&&this._highlightedIndex>=0&&t[this._highlightedIndex]?(e.preventDefault(),this._commitValue(t[this._highlightedIndex].value,!0)):e.key==="Escape"&&this._open&&(e.preventDefault(),this._open=!1,this._filterText=null)}render(){const e=this._open?this._getFilteredOptions():[];return l`
             ${this.label?l`<label class="combo-label">${this.label}</label>`:""}
             <div class="combo-wrap">
                 <input
@@ -120,7 +120,7 @@ import{Input as x,Select as v,Textarea as y,Toggle as _}from"sutram-chassis";con
                     placeholder=${this.placeholder||""}
                     ?disabled=${this.disabled}
                     @focus=${()=>{this.disabled||(this._open=!0,this._filterText="")}}
-                    @input=${t=>{const s=t.target.value;this._filterText=s,this._open=!0,this._highlightedIndex=0,this._commitValue(s,!1)}}
+                    @input=${t=>{const i=t.target.value;this._filterText=i,this._open=!0,this._highlightedIndex=0,this._commitValue(i,!1)}}
                     @keydown=${t=>this._handleKeyDown(t)}
                 />
                 <button
@@ -134,18 +134,18 @@ import{Input as x,Select as v,Textarea as y,Toggle as _}from"sutram-chassis";con
             </div>
             ${this._open&&e.length>0?l`
                 <div class="combo-menu">
-                    ${e.map((t,s)=>l`
+                    ${e.map((t,i)=>l`
                         <button
                             type="button"
-                            class="combo-option ${s===this._highlightedIndex?"highlighted":""}"
-                            @pointerdown=${i=>{i.preventDefault(),i.stopPropagation(),this._commitValue(t.value,!0)}}>
+                            class="combo-option ${i===this._highlightedIndex?"highlighted":""}"
+                            @pointerdown=${s=>{s.preventDefault(),s.stopPropagation(),this._commitValue(t.value,!0)}}>
                             <span class="combo-option-main">${t.label}</span>
                             ${t.badge?l`<span class="combo-option-badge">${t.badge}</span>`:""}
                         </button>
                     `)}
                 </div>
             `:""}
-        `}}typeof customElements<"u"&&!customElements.get("sutram-combobox")&&customElements.define("sutram-combobox",SutramCombobox);export class SutramTargetBinding extends g{static properties={label:{type:String},value:{type:Object},endpoints:{type:Array},models:{type:Array},endpointKey:{type:String},modelKey:{type:String},endpointPlaceholder:{type:String},modelPlaceholder:{type:String},allowEmptyEndpoint:{type:Boolean},disabled:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0}};static styles=[b,m`
+        `}}typeof customElements<"u"&&!customElements.get("sutram-combobox")&&customElements.define("sutram-combobox",SutramCombobox);export class SutramTargetBinding extends b{static properties={label:{type:String},value:{type:Object},endpoints:{type:Array},models:{type:Array},endpointKey:{type:String},modelKey:{type:String},endpointPlaceholder:{type:String},modelPlaceholder:{type:String},allowEmptyEndpoint:{type:Boolean},disabled:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0}};static styles=[f,g`
         :host {
             display: flex;
             flex-direction: column;
@@ -175,26 +175,26 @@ import{Input as x,Select as v,Textarea as y,Toggle as _}from"sutram-chassis";con
                 grid-template-columns: 1fr;
             }
         }
-    `];constructor(){super(),this.label="",this.value={endpoint:"",model:""},this.endpoints=[],this.models=[],this.endpointKey="endpoint",this.modelKey="model",this.endpointPlaceholder="Select endpoint...",this.modelPlaceholder="Select or type model...",this.allowEmptyEndpoint=!1,this.disabled=!1,this.flush=!1}_normalizeValue(){const e=this.endpointKey||"endpoint",t=this.modelKey||"model",s=this.value;if(typeof s=="string"){if(s.includes("::")){const[i,o]=s.split("::");return{[e]:i.trim(),[t]:o.trim()}}return{[e]:"",[t]:s.trim()}}return s&&typeof s=="object"?{[e]:String(s[e]||s.endpoint_id||""),[t]:String(s[t]||"")}:{[e]:"",[t]:""}}_emitBinding(e){this.value=e,this.dispatchEvent(new CustomEvent("sutram-input-changed",{detail:{value:e},bubbles:!0,composed:!0}))}render(){const e=this.endpointKey||"endpoint",t=this.modelKey||"model",s=this._normalizeValue(),i=[];this.allowEmptyEndpoint&&i.push({value:"",label:this.endpointPlaceholder||"Fallback / None"}),(this.endpoints||[]).forEach(r=>{if(typeof r=="object"&&r!==null){const a=String(r.value!==void 0?r.value:r.id||""),d=String(r.label||r.title||a);a&&i.push({value:a,label:d})}else r&&i.push({value:String(r),label:String(r)})});const o=s[e]||!this.allowEmptyEndpoint&&i[0]?.value||"",c=typeof this.models=="function"?this.models(o):Array.isArray(this.models)?this.models:[];return l`
+    `];constructor(){super(),this.label="",this.value={endpoint:"",model:""},this.endpoints=[],this.models=[],this.endpointKey="endpoint",this.modelKey="model",this.endpointPlaceholder="Select endpoint...",this.modelPlaceholder="Select or type model...",this.allowEmptyEndpoint=!1,this.disabled=!1,this.flush=!1}_normalizeValue(){const e=this.endpointKey||"endpoint",t=this.modelKey||"model",i=this.value;if(typeof i=="string"){if(i.includes("::")){const[s,r]=i.split("::");return{[e]:s.trim(),[t]:r.trim()}}return{[e]:"",[t]:i.trim()}}return i&&typeof i=="object"?{[e]:String(i[e]||i.endpoint_id||""),[t]:String(i[t]||"")}:{[e]:"",[t]:""}}_emitBinding(e){this.value=e,this.dispatchEvent(new CustomEvent("sutram-input-changed",{detail:{value:e},bubbles:!0,composed:!0}))}render(){const e=this.endpointKey||"endpoint",t=this.modelKey||"model",i=this._normalizeValue(),s=[];this.allowEmptyEndpoint&&s.push({value:"",label:this.endpointPlaceholder||"Fallback / None"}),(this.endpoints||[]).forEach(o=>{if(typeof o=="object"&&o!==null){const a=String(o.value!==void 0?o.value:o.id||""),u=String(o.label||o.title||a);a&&s.push({value:a,label:u})}else o&&s.push({value:String(o),label:String(o)})});const r=i[e]||!this.allowEmptyEndpoint&&s[0]?.value||"",d=typeof this.models=="function"?this.models(r):Array.isArray(this.models)?this.models:[];return l`
             ${this.label?l`<span class="binding-label">${this.label}</span>`:""}
             <div class="binding-grid">
                 <sutram-select
                     ?flush=${!0}
                     ?disabled=${this.disabled}
-                    .value=${o}
-                    .options=${i}
-                    @sutram-input-changed=${r=>{const a=r.detail.value,d=typeof this.models=="function"?this.models(a):this.models||[],p=d[0]?typeof d[0]=="object"?d[0].value:d[0]:"",f=a&&(s[t]||p)||"";this._emitBinding({[e]:a,[t]:f})}}>
+                    .value=${r}
+                    .options=${s}
+                    @sutram-input-changed=${o=>{o.stopPropagation();const a=o.detail.value,c=(typeof this.models=="function"?this.models(a):this.models||[]).map(p=>String(typeof p=="object"&&p!==null?p.value??p.id??"":p)),x=c[0]||"",v=i[t]&&(c.length===0||c.includes(i[t])),y=a?v?i[t]:x||i[t]||"":"";this._emitBinding({[e]:a,[t]:y})}}>
                 </sutram-select>
                 <sutram-combobox
                     ?flush=${!0}
-                    ?disabled=${this.disabled||!o&&this.allowEmptyEndpoint}
-                    .value=${s[t]||""}
+                    ?disabled=${this.disabled||!r&&this.allowEmptyEndpoint}
+                    .value=${i[t]||""}
                     .placeholder=${this.modelPlaceholder||"Select or type model..."}
-                    .options=${c}
-                    @sutram-input-changed=${r=>{this._emitBinding({[e]:o,[t]:r.detail.value})}}>
+                    .options=${d}
+                    @sutram-input-changed=${o=>{o.stopPropagation(),this._emitBinding({[e]:r,[t]:o.detail.value})}}>
                 </sutram-combobox>
             </div>
-        `}}typeof customElements<"u"&&!customElements.get("sutram-target-binding")&&customElements.define("sutram-target-binding",SutramTargetBinding);export class SutramComposer extends g{static properties={value:{type:String},placeholder:{type:String},triggerPrefix:{type:String},triggers:{type:Array},activeTrigger:{type:Object},intent:{type:String,reflect:!0},disabled:{type:Boolean,reflect:!0},_menuOpen:{type:Boolean,state:!0},_focused:{type:Boolean,state:!0,reflect:!0}};static styles=[b,m`
+        `}}typeof customElements<"u"&&!customElements.get("sutram-target-binding")&&customElements.define("sutram-target-binding",SutramTargetBinding);export class SutramComposer extends b{static properties={value:{type:String},placeholder:{type:String},triggerPrefix:{type:String},triggers:{type:Array},activeTrigger:{type:Object},intent:{type:String,reflect:!0},disabled:{type:Boolean,reflect:!0},_menuOpen:{type:Boolean,state:!0},_focused:{type:Boolean,state:!0,reflect:!0}};static styles=[f,g`
         :host {
             display: block;
             width: 100%;
@@ -253,7 +253,7 @@ import{Input as x,Select as v,Textarea as y,Toggle as _}from"sutram-chassis";con
         .trigger-pill:hover {
             border-color: var(--composer-accent);
         }
-    `];constructor(){super(),this.value="",this.placeholder="Type a message or /command...",this.triggerPrefix="/",this.triggers=[],this.activeTrigger=null,this.intent="primary",this.disabled=!1,this._menuOpen=!1,this._focused=!1}_selectTrigger(e,t=null){this.activeTrigger=e||null,this._menuOpen=!1,t!==null&&(this.value=t),this.dispatchEvent(new CustomEvent("sutram-trigger-changed",{detail:{trigger:this.activeTrigger,remainingText:this.value},bubbles:!0,composed:!0}))}_handleTextInput(e){let t=e.detail?.value??"";const s=this.triggerPrefix??"/",i=this.shadowRoot?.querySelector("sutram-dropdown");if(s&&Array.isArray(this.triggers)&&this.triggers.length>0&&t.startsWith(s)){const o=t.indexOf(" ");if(o>s.length){const c=t.slice(s.length,o).trim().toLowerCase(),r=this.triggers.find(a=>{const d=String(a.token||a.id||"").replace(/^\//,"").toLowerCase(),p=String(a.altToken||"").replace(/^\//,"").toLowerCase();return d===c||p&&p===c});r&&(t=t.slice(o+1),this._selectTrigger(r,t),i&&(i.open=!1,i._searchQuery=""))}else if(o===-1){const c=t.slice(s.length).trim();this._menuOpen=!0,i&&(i.open=!0,i._searchQuery=c)}}else this._menuOpen&&i&&!t.startsWith(s)&&(this._menuOpen=!1,i.open=!1,i._searchQuery="");this.value=t,this.dispatchEvent(new CustomEvent("sutram-input-changed",{detail:{value:this.value,activeTrigger:this.activeTrigger},bubbles:!0,composed:!0}))}_handleKeyDown(e){if((e.ctrlKey||e.metaKey)&&e.key==="Enter"){e.preventDefault(),this.disabled||this.dispatchEvent(new CustomEvent("sutram-composer-submit",{detail:{value:this.value,activeTrigger:this.activeTrigger},bubbles:!0,composed:!0}));return}if(e.key==="Backspace"&&this.activeTrigger){const t=this.shadowRoot?.querySelector("sutram-textarea")?.querySelector("textarea")||e.target;(t&&t.selectionStart!==void 0?t.selectionStart===0&&t.selectionEnd===0:!this.value)&&(e.preventDefault(),this._selectTrigger(null))}}render(){const e=this.triggerPrefix??"/",t=Array.isArray(this.triggers)&&this.triggers.length>0,s=(this.triggers||[]).map(i=>({id:i.id||i.token,token:i.token||i.id,label:i.label||`${e}${i.token||i.id}`,icon:i.icon||"terminal",badge:i.badge||(i.token?`${e}${i.token}`:""),description:i.description||"",onClick:()=>{const o=(this.value||"").replace(/^\/(?:user:[a-zA-Z0-9_:-]*|[a-zA-Z0-9_:-]*)\s*/,"");this._selectTrigger(i,o)}}));return l`
+    `];constructor(){super(),this.value="",this.placeholder="Type a message or /command...",this.triggerPrefix="/",this.triggers=[],this.activeTrigger=null,this.intent="primary",this.disabled=!1,this._menuOpen=!1,this._focused=!1}_syncInnerTextareaValue(e){const t=this.shadowRoot?.querySelector("sutram-textarea");if(t){t.value=e;const i=t.shadowRoot?.querySelector("textarea, input")||t.querySelector?.("textarea, input");i&&i.value!==e&&(i.value=e)}}_selectTrigger(e,t=null){this.activeTrigger=e||null,this._menuOpen=!1,t!==null&&(this.value=t,this._syncInnerTextareaValue(t)),this.dispatchEvent(new CustomEvent("sutram-trigger-changed",{detail:{trigger:this.activeTrigger,remainingText:this.value},bubbles:!0,composed:!0}))}_handleTextInput(e){e&&typeof e.stopPropagation=="function"&&e.stopPropagation();let t=e.detail?.value??"";const i=this.triggerPrefix??"/",s=this.shadowRoot?.querySelector("sutram-dropdown");if(i&&Array.isArray(this.triggers)&&this.triggers.length>0&&t.startsWith(i)){const r=t.indexOf(" ");if(r>i.length){const d=t.slice(i.length,r).trim().toLowerCase(),o=this.triggers.find(a=>{const u=String(a.token||a.id||"").replace(/^\//,"").toLowerCase(),c=String(a.altToken||"").replace(/^\//,"").toLowerCase();return u===d||c&&c===d});o&&(t=t.slice(r+1),this._selectTrigger(o,t),s&&(s.open=!1,s._searchQuery=""))}else if(r===-1){const d=t.slice(i.length).trim();this._menuOpen=!0,s&&(s.open=!0,s._searchQuery=d)}}else this._menuOpen&&s&&!t.startsWith(i)&&(this._menuOpen=!1,s.open=!1,s._searchQuery="");this.value=t,this._syncInnerTextareaValue(t),this.dispatchEvent(new CustomEvent("sutram-input-changed",{detail:{value:this.value,activeTrigger:this.activeTrigger},bubbles:!0,composed:!0}))}_handleKeyDown(e){if((e.ctrlKey||e.metaKey)&&e.key==="Enter"){e.preventDefault(),this.disabled||this.dispatchEvent(new CustomEvent("sutram-composer-submit",{detail:{value:this.value,activeTrigger:this.activeTrigger},bubbles:!0,composed:!0}));return}if(e.key==="Backspace"&&this.activeTrigger){const t=this.shadowRoot?.querySelector("sutram-textarea")?.querySelector("textarea")||e.target;(t&&t.selectionStart!==void 0?t.selectionStart===0&&t.selectionEnd===0:!this.value)&&(e.preventDefault(),this._selectTrigger(null))}}render(){const e=this.triggerPrefix??"/",t=Array.isArray(this.triggers)&&this.triggers.length>0,i=(this.triggers||[]).map(s=>({id:s.id||s.token,token:s.token||s.id,label:s.label||`${e}${s.token||s.id}`,icon:s.icon||"terminal",badge:s.badge||(s.token?`${e}${s.token}`:""),description:s.description||"",onClick:()=>{const r=(this.value||"").replace(/^\/(?:user:[a-zA-Z0-9_:-]*|[a-zA-Z0-9_:-]*)\s*/,"");this._selectTrigger(s,r)}}));return l`
             <div class="composer-shell"
                 @focusin=${()=>{this._focused=!0}}
                 @focusout=${()=>{this._focused=!1}}>
@@ -262,7 +262,7 @@ import{Input as x,Select as v,Textarea as y,Toggle as _}from"sutram-chassis";con
                     <slot name="prefix">
                         ${t?l`
                             <sutram-dropdown
-                                .items=${s}
+                                .items=${i}
                                 .open=${this._menuOpen}
                                 ?searchable=${!0}
                                 searchPlaceholder="Search commands..."
@@ -282,8 +282,8 @@ import{Input as x,Select as v,Textarea as y,Toggle as _}from"sutram-chassis";con
                         ?disabled=${this.disabled}
                         .value=${this.value||""}
                         .placeholder=${this.placeholder||""}
-                        @keydown=${i=>this._handleKeyDown(i)}
-                        @sutram-input-changed=${i=>this._handleTextInput(i)}>
+                        @keydown=${s=>this._handleKeyDown(s)}
+                        @sutram-input-changed=${s=>this._handleTextInput(s)}>
                     </sutram-textarea>
                 </div>
                 <slot name="footer"></slot>

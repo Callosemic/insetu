@@ -3,6 +3,7 @@ import os
 import sys
 import io
 import re
+import hashlib
 import random
 import datetime
 import ast
@@ -753,6 +754,30 @@ def recovery_ui():
     </html>
     """
     return html
+def compute_build_id() -> str:
+    """Short deterministic content/mtime digest of the frontend boot shell, core modules, and extension entrypoints."""
+    root = Path(app.root_path)
+    digest = hashlib.sha256()
+    tracked_files = [
+        root / "templates" / "index.html",
+        root / "static" / "sw.js",
+        root / "static" / "vendor.json",
+        root / "static" / "js" / "app.js",
+    ]
+    for sub in ("core", "extensions"):
+        sub_dir = root / sub
+        if sub_dir.is_dir():
+            tracked_files.extend(sorted(sub_dir.rglob("*.js")))
+    for fp in tracked_files:
+        try:
+            st = fp.stat()
+            digest.update(f"{fp.relative_to(root).as_posix()}:{st.st_size}:{st.st_mtime_ns}\n".encode("utf-8"))
+        except OSError:
+            continue
+    return digest.hexdigest()[:12]
+
+
+
 @app.route('/')
 def index():
     cfg = load_config()
@@ -763,8 +788,19 @@ def index():
     mounted_extensions = [ext for ext in extensions if ext == "config" or ext in app.blueprints]
 
     import_map = resolve_js_vendors(mounted_extensions)
-
-    return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=mounted_extensions, import_map=json.dumps({"imports": import_map}), core_modules=list(CORE_MODULES_TUPLE))
+    build_id = compute_build_id()
+    html = render_template(
+        'index.html',
+        title=instance_title,
+        emoji=instance_emoji,
+        extensions=mounted_extensions,
+        import_map=json.dumps({"imports": import_map}),
+        core_modules=list(CORE_MODULES_TUPLE),
+        build_id=build_id,
+    )
+    resp = Response(html, mimetype='text/html')
+    resp.headers['X-InSetu-Build-ID'] = build_id
+    return resp
 # Ignite active workspace feature components JIT at application startup
 load_workspace_extensions()
 
