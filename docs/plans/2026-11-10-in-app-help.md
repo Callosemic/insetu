@@ -7,7 +7,7 @@ created: "2026-11-10"
 
 # Plan: In-App Help
 
-Draft by Claude, 2026-11-10, from the user's decisions the same day. Questions marked **OPEN** are the user's.
+Draft by Claude, 2026-11-10, from the user's decisions the same day. The user has answered its questions.
 
 ## Roadmap placement (2026-11-10)
 
@@ -31,14 +31,12 @@ Most people who install insetu never mount the insetu repository, so help cannot
 5. **Easy to leave, for power users** (decided 2026-11-10): the tutorial never opens on its own after the first run; "Skip tutorial" ends it in one click from any step; a dismissed tutorial stays dismissed per device; it can be resumed from Help; and a setting turns first-run guidance off entirely.
 6. **Context-sensitive entry points:** a "?" on each panel opens that module's page; notices can link to a help anchor; the chat agent can read `ctx://help/` as a context source.
 
-**OPEN:** the menu label: "Help" or "Documentation"? Suggestion: "Help", since that is what people look for when stuck.
-
-**OPEN:** after the checklist, guided highlights in the UI, or is the checklist enough?
+**Decided 2026-11-10:** the menu item is called "Help". Guided highlights in the UI are not planned; the checklist is the tutorial.
 
 ## Sprints
 
 ### Sprint 1: The route works (review ready)
-- [ ] System gear -> Help (or Documentation) opens a page rendering a bundled overview and getting-started text from the package.
+- [ ] System gear -> Help opens a page rendering a bundled overview and getting-started text from the package.
 - [ ] A test that the route renders and that every bundled link resolves.
 
 ### Sprint 2: Declared help on ctx://help/ (demo ready)
