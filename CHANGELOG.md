@@ -2,6 +2,59 @@
 
 <!-- version list -->
 
+## v0.37.0 (2026-11-10)
+
+### Bug Fixes
+
+- **core_system**: Enforce HUMAN_ORIGINS attestation allowlist, boot import retry classification,
+  and single-scan mustache interpolation
+  ([`eeb4060`](https://github.com/Callosemic/insetu/commit/eeb4060018d072ba89f291d5066ce45d1a39c82f))
+
+- **deps**: Update akasa version pin
+  ([`0b166c5`](https://github.com/Callosemic/insetu/commit/0b166c5cec3990265563807c48ec2157be9e9f4b))
+
+- **ext_knowledge**: Migrate citations search to bindJobAction and fix ingest new-file modal
+  property
+  ([`671bc7c`](https://github.com/Callosemic/insetu/commit/671bc7c6cc749c2f4d7621fc1d9617a90ee18139))
+
+- **ext_management**: Replace blocking alerts with status notifications and guard modal close in
+  ext_hooks.js
+  ([`7c0ccef`](https://github.com/Callosemic/insetu/commit/7c0ccef668a3076251b25fe12cd6cb9e2d50ab6d))
+
+### Documentation
+
+- **insetu**: Update CODE_INDEX.md, engineering standards, topology inventory, and ADR 0104
+  ([`179798c`](https://github.com/Callosemic/insetu/commit/179798c2f706d8f1360722b2e9827c42913aa0a9))
+
+### Features
+
+- **app_shell**: Stamp deterministic build IDs and add offline/lifeboat boot recovery controls
+  ([`866a2f4`](https://github.com/Callosemic/insetu/commit/866a2f46959cf3688632e815044c8e3e52f0b1bd))
+
+- **core_ai_bridge**: Decompose agent/llm modules, add 3-tier bridge repair, sandwich healer, and
+  staged patch stacks
+  ([`44fb329`](https://github.com/Callosemic/insetu/commit/44fb3297776e4dbcdc943ed49ca2081c8be4bdc5))
+
+- **core_pipeline**: Add MarkdownLanguageProvider, tree-sitter JS extraction, ctx_events, and
+  clean_conflicts
+  ([`ede97e8`](https://github.com/Callosemic/insetu/commit/ede97e857d8db600309056af185c197a814c7add))
+
+### Refactoring
+
+- **core_vfs_editor**: Extract fs_store.js and fs_editor_projection.js and cap human-only
+  fs/download_zip
+  ([`bc9603b`](https://github.com/Callosemic/insetu/commit/bc9603b43ace776bc39b6e7c4a59b367701e7161))
+
+### Testing
+
+- **tests_fitness**: Add EXTENSION_EXECUTION_FRAME_ORIGIN_BAN and update Wave 3 module line ratchets
+  ([`324eb86`](https://github.com/Callosemic/insetu/commit/324eb865e3517a62305814d7982b9bf91432f985))
+
+- **tests_unit**: Add Markdown AST, 16-DB pool, sandwich healer, boot import retry, and
+  HUMAN_ORIGINS tests
+  ([`da46693`](https://github.com/Callosemic/insetu/commit/da466932cd58f4a5aeeaa31266470b6248a07c44))
+
+
 ## v0.36.0 (2026-11-08)
 
 ### Features
