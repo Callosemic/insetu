@@ -1,6 +1,6 @@
 Review the attach source code diffs and perform the following analysis:
 
-1) Did the changes introduce any new technical debt, anti-patterns, or regressions?
+1) Did the changes introduce any new technical debt, anti-patterns, dead code, or regressions?
 2) Did the changes introduce any new domain leaks or DRY violations?
 3) If the diffs introduce any new capabilities, do we need to review how they affect the broader codebase (e.g. they affect a contract surface between different domains), or are they self-contained?
 4) Do the changes violate our engineering standards?

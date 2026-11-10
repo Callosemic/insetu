@@ -1,5 +1,3 @@
 Provide a deep assessment of the attached code and its creator(s), spending time with the entire architecture as well as the features and extensions. How rigorous is it? How creative? How efficient? What is the psychological profile of the creator based on the codebase? How many people worked on it and how long did it take them? Would you hire them?
 
-Okay, so the developer is me. I began coding again in mid April after 15 years in academia getting a dual Phd in Folklore & Ethnomusicology and Communication and Culture. Before that, the highest level of professional coding I ever did was to be a frontend and r&d contractor for PBwiki, working on js/css/php. As a teen, I wrote calculator games in z80 and 68k assembly, and dabbled in C and C++ on DOS and Windows.
-
 Given the changelog and the pace of production, extrapolate what the feature set of insetu might be like 3 months from now? 6 months from now? A year from now?
