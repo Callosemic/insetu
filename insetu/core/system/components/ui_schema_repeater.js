@@ -15,6 +15,47 @@ export function _evaluateFieldCondition(cond, itemData = {}, rootData = {}) {
     return true;
 }
 
+export function cascadeRepeaterIdRename(fullSchema = [], formData = {}, repeaterId = '', oldId = '', newId = '') {
+    if (!repeaterId || !oldId || !newId || oldId === newId || !formData || typeof formData !== 'object') {
+        return formData;
+    }
+    const nextData = { ...formData };
+    (fullSchema || []).forEach(field => {
+        if (!field || !field.id) return;
+        if (field.options_from && field.options_from.field === repeaterId && nextData[field.id] === oldId) {
+            nextData[field.id] = newId;
+        }
+        if (field.type === 'repeater' && Array.isArray(nextData[field.id]) && Array.isArray(field.item_schema)) {
+            nextData[field.id] = nextData[field.id].map(row => {
+                if (!row || typeof row !== 'object') return row;
+                let rowCopy = { ...row };
+                field.item_schema.forEach(sf => {
+                    if (!sf || !sf.id) return;
+                    if (sf.options_from && sf.options_from.field === repeaterId && rowCopy[sf.id] === oldId) {
+                        rowCopy[sf.id] = newId;
+                    } else if (sf.type === 'target_binding' && (sf.endpoint_source || 'compute_endpoints') === repeaterId) {
+                        if (rowCopy[sf.id]?.endpoint === oldId) {
+                            rowCopy[sf.id] = { ...rowCopy[sf.id], endpoint: newId };
+                        }
+                    } else if (sf.type === 'record' && Array.isArray(sf.fields) && rowCopy[sf.id] && typeof rowCopy[sf.id] === 'object') {
+                        const recCopy = { ...rowCopy[sf.id] };
+                        sf.fields.forEach(cf => {
+                            if (cf?.type === 'target_binding' && (cf.endpoint_source || 'compute_endpoints') === repeaterId) {
+                                if (recCopy[cf.id]?.endpoint === oldId) {
+                                    recCopy[cf.id] = { ...recCopy[cf.id], endpoint: newId };
+                                }
+                            }
+                        });
+                        rowCopy[sf.id] = recCopy;
+                    }
+                });
+                return rowCopy;
+            });
+        }
+    });
+    return nextData;
+}
+
 export function _buildDefaultItemFromSchema(itemSchema = [], index = 1) {
     const obj = {};
     (itemSchema || []).forEach(f => {
@@ -78,10 +119,10 @@ export class InSetuSchemaRepeater extends InSetuElement {
         return `${rawSlug}_${suffix}`;
     }
 
-    _emitChange(nextItems) {
+    _emitChange(nextItems, renamedId = null) {
         this.items = nextItems;
         this.dispatchEvent(new CustomEvent('insetu-repeater-changed', {
-            detail: { id: this.field.id, value: nextItems },
+            detail: { id: this.field.id, value: nextItems, renamedId },
             bubbles: true,
             composed: true
         }));
@@ -145,23 +186,33 @@ export class InSetuSchemaRepeater extends InSetuElement {
         // Implicit Repeater Identity Synchronization (id_key & slug_source)
         const implicitIdKey = this.field.id_key;
         const implicitSlugSource = this.field.slug_source;
-        if (implicitIdKey && implicitSlugSource === subField.id) {
+        let renamedId = null;
+        if (implicitIdKey && implicitSlugSource === subField.id && !item.is_system) {
             const prevSlug = this.utils.slugify(String(prevSourceVal || ''));
             const curId = item[implicitIdKey] || '';
-            if (!curId || curId === prevSlug || curId.startsWith(`${prevSlug}_`)) {
-                item[implicitIdKey] = this._deriveUniqueSlug(val, idx, current);
+            if (!curId || curId === prevSlug || curId.startsWith(`${prevSlug}_`) || /^item_\d+$/.test(curId) || /^endpoint_\d+$/.test(curId)) {
+                const nextId = this._deriveUniqueSlug(val, idx, current);
+                if (curId && nextId !== curId) {
+                    renamedId = { from: curId, to: nextId };
+                }
+                item[implicitIdKey] = nextId;
             }
         }
 
         // Auto-populate any dependent slug field if it hasn't been manually customized
         (this.field.item_schema || []).forEach(sf => {
             if (sf.type === 'slug' && sf.source_key === subField.id) {
-                item[sf.id] = this.utils.slugify(String(val || '')) || item[sf.id] || `item_${idx + 1}`;
+                const oldSlug = item[sf.id];
+                const nextSlug = this.utils.slugify(String(val || '')) || item[sf.id] || `item_${idx + 1}`;
+                if (oldSlug && nextSlug !== oldSlug) {
+                    renamedId = { from: oldSlug, to: nextSlug };
+                }
+                item[sf.id] = nextSlug;
             }
         });
 
         current[idx] = item;
-        this._emitChange(current);
+        this._emitChange(current, renamedId);
     }
 
     _updateNestedRecordField(idx, recordField, childField, rawVal) {
@@ -187,10 +238,22 @@ export class InSetuSchemaRepeater extends InSetuElement {
         }
         if (fType === 'target_binding') {
             const epSourceKey = subField.endpoint_source || 'compute_endpoints';
-            const epList = Array.isArray(this.rootFormData?.[epSourceKey]) ? this.rootFormData[epSourceKey] : [];
+            const rawEpList = Array.isArray(this.rootFormData?.[epSourceKey]) ? [...this.rootFormData[epSourceKey]] : [];
+            if (epSourceKey === 'compute_endpoints' && !rawEpList.some(e => e && (e.id === 'web_chat' || e.driver === 'web_chat'))) {
+                rawEpList.push({
+                    id: 'web_chat',
+                    label: 'External Web Chatbot (Copy Context + Prompt Handoff)',
+                    driver: 'web_chat',
+                    custom_models: ['chatbot'],
+                    models: ['chatbot'],
+                    is_system: true
+                });
+            }
+            const epList = rawEpList;
+            const enrichedRootData = { ...(this.rootFormData || {}), [epSourceKey]: epList };
             const resolveModels = (epId) => {
                 if (typeof this.optionResolver === 'function') {
-                    return this.optionResolver(subField, epId, this.rootFormData, itemData);
+                    return this.optionResolver(subField, epId, enrichedRootData, itemData);
                 }
                 return this.datalistOptions || [];
             };
@@ -204,7 +267,11 @@ export class InSetuSchemaRepeater extends InSetuElement {
                     .models=${resolveModels}
                     .endpointPlaceholder=${subField.endpoint_placeholder || 'Select endpoint...'}
                     .modelPlaceholder=${subField.placeholder || 'Select or type model...'}
-                    @sutram-input-changed=${e => onChange(e.detail.value)}>
+                    @sutram-input-changed=${e => {
+                        if (e.target !== e.currentTarget) return;
+                        if (!e.detail?.value || typeof e.detail.value !== 'object') return;
+                        onChange(e.detail.value);
+                    }}>
                 </sutram-target-binding>
             `;
         }

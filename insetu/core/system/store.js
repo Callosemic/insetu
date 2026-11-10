@@ -1,6 +1,6 @@
 // insetu/static/js/store.js
 // Strict Unidirectional Data Flow (UDF) State Manager
-import { createExtensionStore, StatusStore, ToastStore, SelectionStore } from '/static/extensions/system/insetu_sdk.js';
+import { createExtensionStore, StatusStore, ToastStore, SelectionStore, SutramCacheWarmer } from '/static/extensions/system/insetu_sdk.js';
 
 export { StatusStore, ToastStore, SelectionStore };
 
@@ -112,12 +112,15 @@ export const AppStore = createExtensionStore('App', {
         }
     },
     browserConfig: { mode: 'view', callback: null },
-    warmingQueue: new Set(),
-    enqueueWarming: (urls) => AppStore.setState(s => {
-        const q = new Set(s.warmingQueue);
-        urls.forEach(u => q.add(u));
-        return { warmingQueue: q };
-    }),
+    enqueueWarming: (urls) => {
+        const activeWs = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';
+        if (typeof SutramCacheWarmer?.enqueue === 'function') {
+            SutramCacheWarmer.enqueue(activeWs, urls || [], async (url, wsId) => {
+                const res = await window.inSetu?.api?.request?.(url, { priority: 'low', onlyIfMissing: true }, wsId);
+                if (res && res.status === 204) SutramCacheWarmer.clear();
+            });
+        }
+    },
     resolvingLocks: {},
     setResolvingLock: (path, action) => AppStore.setState(s => ({ resolvingLocks: { ...s.resolvingLocks, [path]: { action, expires: Date.now() + 10000 } } })),
     clearResolvingLock: (path) => AppStore.setState(s => { const newLocks = { ...s.resolvingLocks }; delete newLocks[path]; return { resolvingLocks: newLocks }; }),

@@ -766,61 +766,65 @@ def resolve_context_var_path(path_expr: str, context: Dict[str, Any], ctx=None) 
     return val
 
 
+_MUSTACHE_HELD_RE = re.compile(r'\x00MUSTACHE(\d+)\x00')
+
+
 def interpolate_mustache_chain(template_str: str, context: Dict[str, Any], ctx=None) -> str:
     """
     Single Source of Truth evaluator for `{{ var | sys.fallback | literal }}` placeholders across
     both standalone Prompt resolution (`prompts/resolve`) and Agent DAG routines (`orchestrator.py`).
+    Nested tags resolve inside out (`{{ a | {{ b }} }}`). A resolved value is held aside and never
+    scanned again, so placeholder text inside a value (a patch, a user message) is never interpolated.
     """
     if not template_str:
         return ""
     text = str(template_str)
     inputs_map = (context.get("inputs") if isinstance(context, dict) else None) or {}
+    held: List[str] = []
+
+    def _hold(value: str) -> str:
+        held.append(value)
+        return f"\x00MUSTACHE{len(held) - 1}\x00"
+
+    def _held_value(seg: str) -> Optional[str]:
+        m_held = _MUSTACHE_HELD_RE.fullmatch(seg)
+        return held[int(m_held.group(1))] if m_held else None
 
     def _replace_tag(m: re.Match) -> str:
         inner = m.group(1).strip()
         if any(inner.startswith(p) for p in ("include_prompt", "ymm:", "triple", "UNTIL", "+", "-")):
-            return m.group(0)
+            return _hold(m.group(0))
         segments = [seg.strip() for seg in inner.split("|") if seg.strip()]
         if not segments:
-            return m.group(0)
+            return _hold(m.group(0))
         for idx, seg in enumerate(segments):
+            held_val = _held_value(seg)
+            if held_val is not None:
+                if held_val != "":
+                    return _hold(held_val)
+                continue
             clean_seg = seg[6:].strip() if seg.startswith("macro_") else seg
             if clean_seg in inputs_map and inputs_map[clean_seg] not in (None, "", []):
-                return str(inputs_map[clean_seg]).replace("\\n", "\n")
+                return _hold(str(inputs_map[clean_seg]))
             looked_up = resolve_context_var_path(clean_seg, context, ctx=ctx)
             if looked_up not in (None, "", []):
-                return str(looked_up).replace("\\n", "\n")
+                return _hold(str(looked_up))
             if idx == len(segments) - 1 and idx > 0 and not clean_seg.startswith(("sys.", "global.", "inputs.", "nodes.")):
-                return seg.strip('\'"').replace("\\n", "\n")
-        if len(segments) == 1 and segments[0].startswith("sys."):
+                return _hold(seg.strip('\'"').replace("\\n", "\n"))
+        if len(segments) == 1 and segments[0].startswith(("sys.", "global.", "inputs.", "nodes.")):
             return ""
-        return m.group(0) if len(segments) == 1 else ""
+        return _hold(m.group(0)) if len(segments) == 1 else ""
 
-    for _ in range(2):
+    for _ in range(text.count("{{") + 1):
         next_text = _CHAINED_MUSTACHE_RE.sub(_replace_tag, text)
         if next_text == text:
             break
         text = next_text
-
-    protected_tokens: List[str] = []
-
-    def _shield_literal_macros(m: re.Match) -> str:
-        inner = m.group(1).strip()
-        if inner.startswith(("ymm:", "+", "-")) or "ymm:" in inner:
-            idx = len(protected_tokens)
-            protected_tokens.append(m.group(0))
-            return f"\x00__YMM_LIT_{idx}__\x00"
-        return m.group(0)
-
-    shielded = _CHAINED_MUSTACHE_RE.sub(_shield_literal_macros, text)
-    interpolated = interpolate_template_variables(
-        shielded,
-        values=inputs_map,
-        resolver=lambda expr: resolve_context_var_path(expr, context, ctx=ctx),
-    )
-    for idx, tok in enumerate(protected_tokens):
-        interpolated = interpolated.replace(f"\x00__YMM_LIT_{idx}__\x00", tok)
-    return interpolated
+    for _ in range(len(held) + 1):
+        if "\x00MUSTACHE" not in text:
+            break
+        text = _MUSTACHE_HELD_RE.sub(lambda m_held: held[int(m_held.group(1))], text)
+    return text
 
 
 def clean_date_str(val):
@@ -1246,6 +1250,11 @@ def find_path_candidates(query_path=None, workspace_id=None, allowed_repos=None,
     clean_query = (f"{q_uri.repo}/{q_uri.path}".strip('/') if q_uri.repo else q_uri.path).replace('\\', '/').strip('/')
     query_basename = Path(clean_query).name.lower()
 
+    query_lower = clean_query.lower()
+    query_parts = [p for p in query_lower.split('/') if p]
+    query_tail_without_repo = "/".join(query_parts[1:]) if len(query_parts) > 1 else query_lower
+    query_dir_tokens = set(query_parts[:-1])
+
     omniscient = _get_omniscient_workspace_files(workspace_id, allowed_repos)
     candidates = []
     for cand_basename, cand_fp in omniscient:
@@ -1254,13 +1263,25 @@ def find_path_candidates(query_path=None, workspace_id=None, allowed_repos=None,
         cand_rel = f"{c_uri.repo}/{c_uri.path}".strip('/') if c_uri.repo else c_uri.path
         cand_basename_lower = cand_basename.lower()
         cand_rel_lower = cand_rel.lower()
-        if cand_rel_lower == clean_query.lower():
+        cand_parts = [p for p in cand_rel_lower.split('/') if p]
+        cand_dir_tokens = set(cand_parts[:-1])
+        shared_dirs = len(query_dir_tokens & cand_dir_tokens)
+        dir_bonus = min(0.09, shared_dirs * 0.03)
+
+        if cand_rel_lower == query_lower:
             candidates.append({"filepath": cand_canonical, "score": 1.0, "match_type": "exact_match"})
         elif cand_basename_lower == query_basename:
-            score = 0.9 if clean_query.lower() in cand_rel_lower else 0.8
+            if query_lower in cand_rel_lower or (query_tail_without_repo and cand_rel_lower.endswith(query_tail_without_repo)):
+                score = round(0.92 + dir_bonus, 4)
+            elif shared_dirs > 0:
+                score = round(0.84 + dir_bonus, 4)
+            else:
+                score = 0.8
             candidates.append({"filepath": cand_canonical, "score": score, "match_type": "basename_match"})
-        elif clean_query.lower() in cand_rel_lower or cand_rel_lower.endswith(clean_query.lower()):
-            candidates.append({"filepath": cand_canonical, "score": 0.7, "match_type": "subpath_match"})
+        elif query_lower in cand_rel_lower or cand_rel_lower.endswith(query_lower) or (
+            query_tail_without_repo and len(query_tail_without_repo) > 4 and cand_rel_lower.endswith(query_tail_without_repo)
+        ):
+            candidates.append({"filepath": cand_canonical, "score": round(0.75 + dir_bonus, 4), "match_type": "subpath_match"})
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
     return candidates

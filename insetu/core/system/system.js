@@ -7,31 +7,20 @@ import {
     initShortcutRouter,
     createJobPoller
 } from '/static/extensions/system/insetu_sdk.js';
-import {
-    checkManifestVersion,
-    refreshManifest
-} from '/static/extensions/system/manifest_sync.js';
+import { checkManifestVersion, refreshManifest, importModuleWithRetry, classifyBootModuleFailure } from '/static/extensions/system/manifest_sync.js';
+export { importModuleWithRetry, classifyBootModuleFailure };
 
 const CORE_COMPONENT_SCRIPTS = [
-    '/static/extensions/system/system.js',
-    '/static/extensions/system/api.js',
-    '/static/extensions/system/store.js',
-    '/static/extensions/system/insetu_sdk.js',
-    '/static/extensions/system/insetu_element.js',
-    '/static/extensions/system/uri.js',
-    '/static/extensions/system/manifest_sync.js',
-    '/static/extensions/system/components/ui_file_tree.js',
-    '/static/extensions/system/components/ui_system_settings.js',
-    '/static/extensions/system/components/ui_filter_pills.js',
-    '/static/extensions/system/components/ui_primitives.js',
-    '/static/extensions/system/components/ui_protected_changes.js',
-    '/static/extensions/system/components/ui_schema_repeater.js',
-    '/static/extensions/system/components/ui_editor.js',
-    '/static/extensions/fs/fs_modals.js',
-    '/static/extensions/bridge/bridge_store.js',
-    '/static/extensions/bridge/bridge_projections.js',
-    '/static/extensions/bridge/bridge_history.js',
-    '/static/vendor/codemirror/languages.json'
+    '/static/extensions/system/system.js', '/static/extensions/system/api.js', '/static/extensions/system/store.js',
+    '/static/extensions/system/insetu_sdk.js', '/static/extensions/system/insetu_element.js', '/static/extensions/system/uri.js',
+    '/static/extensions/system/manifest_sync.js', '/static/extensions/system/components/ui_file_tree.js',
+    '/static/extensions/system/components/ui_system_settings.js', '/static/extensions/system/components/ui_filter_pills.js',
+    '/static/extensions/system/components/ui_primitives.js', '/static/extensions/system/components/ui_protected_changes.js',
+    '/static/extensions/system/components/ui_schema_repeater.js', '/static/extensions/system/components/ui_editor.js',
+    '/static/extensions/fs/fs_store.js', '/static/extensions/fs/fs_editor_projection.js', '/static/extensions/fs/fs_modals.js',
+    '/static/extensions/agent/agent_store.js', '/static/extensions/agent/agent_routine_studio.js',
+    '/static/extensions/bridge/bridge_store.js', '/static/extensions/bridge/bridge_projections.js',
+    '/static/extensions/bridge/bridge_history.js', '/static/vendor/codemirror/languages.json'
 ];
 
 function _collectOfflineBootModuleUrls() {
@@ -44,27 +33,13 @@ function _collectOfflineBootModuleUrls() {
 
 export function bootServiceWorker() {
     bootSutramServiceWorker({
-        swUrl: '/sw.js',
-        staticPathPrefix: '/static/',
-        excludePathPrefix: '/api/',
+        swUrl: '/sw.js', staticPathPrefix: '/static/', excludePathPrefix: '/api/',
         additionalAssets: _collectOfflineBootModuleUrls,
         isReconciling: () => Boolean(window.inSetu?.stores?.App?.getState()?.isReconciling),
-        subscribeReconciling: (cb) => {
-            if (window.inSetu?.stores?.App) {
-                window.inSetu.stores.App.subscribe(s => s.isReconciling, cb);
-            }
-        },
-        onStatus: (msg, timeout) => {
-            if (window.inSetu?.ui?.setGlobalStatus) {
-                window.inSetu.ui.setGlobalStatus(msg, timeout);
-            }
-        },
-        onLog: (msg, type) => {
-            window.inSetu?.offlineLog?.(msg, type);
-        },
-        onError: (msg) => {
-            alert(msg);
-        }
+        subscribeReconciling: (cb) => window.inSetu?.stores?.App?.subscribe(s => s.isReconciling, cb),
+        onStatus: (msg, timeout) => window.inSetu?.ui?.setGlobalStatus?.(msg, timeout),
+        onLog: (msg, type) => window.inSetu?.offlineLog?.(msg, type),
+        onError: (msg) => alert(msg)
     });
 }
 // Single reactive bridge: keep Sutram's EnvironmentStore.isOffline in lockstep with AppStore.isOffline
@@ -192,12 +167,20 @@ async function bootExtensions() {
         .filter(ext => !(window.inSetu?.isCore && window.inSetu.isCore(ext)) && !quarantinedMap[ext])
         .map(ext => `/static/extensions/${ext}/ext_${ext}.js`);
 
+    let networkDropDetected = false;
+
     const loadBatchResilient = async (urls, tierLabel) => {
         await Promise.all((urls || []).map(async (url) => {
             try {
-                await import(url);
+                await importModuleWithRetry(url);
             } catch (err) {
+                const failureKind = await classifyBootModuleFailure(url, err);
                 const modId = url.split('/').slice(-2, -1)[0] || url.split('/').pop().replace(/^ext_|\.js$/g, '');
+                if (failureKind === 'network') {
+                    networkDropDetected = true;
+                    console.warn(`📡 [Boot Network Drop] Could not reach ${url}; skipping quarantine for [${modId}].`, err);
+                    return;
+                }
                 console.error(`⚠️ [Frontend Fault Quarantine] Failed to import ${url}:`, err);
                 quarantinedMap[modId] = {
                     id: modId,
@@ -216,6 +199,14 @@ async function bootExtensions() {
     await loadBatchResilient(coreComponents, 'core');
     await loadBatchResilient(coreUrls, 'core');
     await loadBatchResilient(extensionUrls, 'ext');
+
+    if (networkDropDetected) {
+        AppStore.setState({ isOffline: true });
+        window.inSetu.sys = window.inSetu.sys || {};
+        window.inSetu.sys.retryBootModules = () => bootExtensions();
+        window.inSetu?.ui?.setGlobalStatus?.("Can't reach the inSetu server. Retrying.", 8000, true);
+        (window.inSetu?.stores?.Toast || window.Sutram?.stores?.Toast)?.getState?.()?.addToast?.("Can't reach the inSetu server. Retrying.", 'warning', 8000);
+    }
 
     if (Object.keys(quarantinedMap).length > 0) {
         AppStore.setState({ quarantinedModules: quarantinedMap });
@@ -332,15 +323,15 @@ async function executeSecurityHandshake() {
         }
     };
 
-    // Fast-track offline boot if the browser natively reports no network connection
-    if (!navigator.onLine) {
-        window.inSetu?.offlineLog?.("Browser reports offline status. Fast-tracking offline boot.", "info");
+    let forceOffline = false;
+    try {
+        forceOffline = sessionStorage.getItem('insetu_force_offline_boot') === '1' || new URLSearchParams(window.location.search).get('offline') === '1';
+        if (forceOffline) sessionStorage.removeItem('insetu_force_offline_boot');
+    } catch (_) {}
+    if (!navigator.onLine || forceOffline) {
         const cachedToken = getOfflineFallbackToken();
-        if (cachedToken) {
-            AppStore.setState({ authToken: cachedToken, isOffline: true });
-            return true;
-        }
-        return false;
+        if (cachedToken) { AppStore.setState({ authToken: cachedToken, isOffline: true }); return true; }
+        if (!navigator.onLine) return false;
     }
 
     try {
@@ -1021,9 +1012,13 @@ async function _hydrateWorkspaceEnvironment(targetWs, previousExts = []) {
         _reconcileExtensionsAndSettings(previousExts, window.ACTIVE_EXTENSIONS);
         if (typeof window.inSetu?.sys?.ensureAppShellCached === 'function') {
             window.inSetu.sys.ensureAppShellCached({
+                buildId: window.INSETU_BUILD_ID || null,
+                buildIdHeader: 'X-InSetu-Build-ID',
+
                 staticPathPrefix: '/static/',
                 excludePathPrefix: '/api/',
-                additionalAssets: _collectOfflineBootModuleUrls
+                additionalAssets: _collectOfflineBootModuleUrls,
+                onUpdateReady: (id) => window.inSetu?.ui?.setGlobalStatus?.(`Update ready (${id}), reload to apply.`, 10000)
             }).catch(() => {});
         }
     }
@@ -1418,7 +1413,7 @@ async function fullRefresh() {
         window.inSetu.sse.disconnect();
     }
     if (window.inSetu?.ui?.setGlobalStatus) {
-        window.inSetu.ui.setGlobalStatus("Rebooting Frontend & Purging Caches...", 2000);
+        window.inSetu.ui.setGlobalStatus("Rebooting Frontend & Purging JS Module Caches...", 2000);
     }
     try {
         // 1. Purge stale legacy UI state keys without wiping active tenant layout or pinned repo filters
@@ -1428,11 +1423,25 @@ async function fullRefresh() {
                 localStorage.removeItem(k);
             }
         });
-        // 2. Unregister Service Workers and clear CacheStorage via Sutram offline kernel
-        await purgeSutramCaches();
-
-        // 4. Hard reload browser
-        window.location.reload(true);
+        // 2. Unregister Service Workers and clear CacheStorage via Sutram offline kernel (forcing purge)
+        await purgeSutramCaches({ forceWhenOffline: true });
+        if (typeof caches !== 'undefined' && caches.keys) {
+            const cacheNames = await caches.keys();
+            await Promise.all(cacheNames.map(name => caches.delete(name)));
+        }
+        if (navigator.serviceWorker?.getRegistrations) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map(r => r.unregister()));
+        }
+        // 3. Force browser HTTP cache reload on all core and active extension JS modules
+        const allModuleUrls = _collectOfflineBootModuleUrls();
+        await Promise.allSettled(
+            allModuleUrls.map(u => fetch(u, { cache: 'reload', credentials: 'same-origin' }))
+        );
+        // 4. Hard reload browser with cache-busting query param
+        const url = new URL(window.location.href);
+        url.searchParams.set('_refresh', String(Date.now()));
+        window.location.replace(url.toString());
     } catch (error) {
         console.error("Error during full UI refresh:", error);
         window.location.reload();

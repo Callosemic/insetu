@@ -2,7 +2,7 @@ import { html } from 'lit';
 import { InSetuElement } from '/static/extensions/system/insetu_element.js';
 import { sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 import { AppStore } from '/static/extensions/system/store.js';
-import '/static/extensions/system/components/ui_schema_repeater.js';
+import { cascadeRepeaterIdRename } from '/static/extensions/system/components/ui_schema_repeater.js';
 
 export class InSetuSystemSettings extends InSetuElement {
     static get extensionName() { return 'system'; }
@@ -148,16 +148,26 @@ export class InSetuSystemSettings extends InSetuElement {
             if (res.ok) {
                 const data = await res.json();
                 const merged = { ...data };
-                if (preserveNonRepoEdits) {
-                    const prevForm = this._extForms[extName] || {};
-                    const allSchemas = { ...window.inSetu.settingsSchemas, ...window.inSetu.serverSchemas, ...(this._sysConfigMeta?.settings_schemas || {}) };
-                    const schema = allSchemas[extName] || [];
-                    schema.forEach(f => {
-                        if (f && f.id && f.scope !== 'repo' && prevForm[f.id] !== undefined && prevForm[f.id] !== data[f.id]) {
+                const allSchemas = { ...window.inSetu.settingsSchemas, ...window.inSetu.serverSchemas, ...(this._sysConfigMeta?.settings_schemas || {}) };
+                const schema = allSchemas[extName] || [];
+                schema.forEach(f => {
+                    if (f && f.type === 'repeater' && Array.isArray(f.pinned_items) && f.pinned_items.length > 0) {
+                        const curList = Array.isArray(merged[f.id]) ? [...merged[f.id]] : [];
+                        const idKey = f.id_key || 'id';
+                        f.pinned_items.forEach(pin => {
+                            if (pin && pin[idKey] && !curList.some(it => it && (it[idKey] === pin[idKey] || (pin.driver && it.driver === pin.driver)))) {
+                                curList.push({ ...pin });
+                            }
+                        });
+                        merged[f.id] = curList;
+                    }
+                    if (preserveNonRepoEdits && f && f.id && f.scope !== 'repo') {
+                        const prevForm = this._extForms[extName] || {};
+                        if (prevForm[f.id] !== undefined && prevForm[f.id] !== data[f.id]) {
                             merged[f.id] = prevForm[f.id];
                         }
-                    });
-                }
+                    }
+                });
                 this._extForms = { ...this._extForms, [extName]: merged };
                 this.requestUpdate();
             }
@@ -377,6 +387,19 @@ export class InSetuSystemSettings extends InSetuElement {
                     if (profData?.driver_tier_defaults && typeof profData.driver_tier_defaults === 'object') {
                         this._driverTierDefaults = { ...this._driverTierDefaults, ...profData.driver_tier_defaults };
                     }
+                    if (Array.isArray(profData?.endpoints) && profData.endpoints.length > 0) {
+                        const curLlmForm = this._extForms.llm || {};
+                        const curEps = Array.isArray(curLlmForm.compute_endpoints) ? [...curLlmForm.compute_endpoints] : [];
+                        profData.endpoints.forEach(ep => {
+                            if (ep && ep.id && !curEps.some(e => e && e.id === ep.id)) {
+                                curEps.push({ ...ep });
+                            }
+                        });
+                        this._extForms = {
+                            ...this._extForms,
+                            llm: { ...curLlmForm, compute_endpoints: curEps }
+                        };
+                    }
                 }
                 if (catRes && catRes.ok) {
                     const catData = await catRes.json();
@@ -410,8 +433,9 @@ export class InSetuSystemSettings extends InSetuElement {
     _isModelForeignToDriver(modelId, driver) {
         const m = String(modelId || '').trim().toLowerCase();
         if (!m) return true;
-        if (driver === 'web_chat') return !m.startsWith('web-chat');
-        if (m.startsWith('web-chat') && driver !== 'web_chat') return true;
+        const isWebChatToken = m === 'chatbot' || m === 'web_chat' || m === 'manual' || m.startsWith('web-chat');
+        if (driver === 'web_chat') return !isWebChatToken;
+        if (isWebChatToken && driver !== 'web_chat') return true;
         if (driver === 'gemini') return m.startsWith('claude-') || m.startsWith('anthropic/');
         if (driver === 'anthropic' || driver === 'claude_cli') return m.startsWith('gemini-') || m.startsWith('google/');
         if (driver === 'decisions') return !m.includes('jev') && !m.includes('drex') && !m.includes('liquid');
@@ -436,7 +460,22 @@ export class InSetuSystemSettings extends InSetuElement {
     _healProfileTiersForEndpoints() {
         const llmForm = this._extForms?.llm;
         if (!llmForm) return;
-        const endpoints = Array.isArray(llmForm.compute_endpoints) ? llmForm.compute_endpoints : [];
+        const rawEndpoints = Array.isArray(llmForm.compute_endpoints) ? [...llmForm.compute_endpoints] : [];
+        if (!rawEndpoints.some(e => e && (e.id === 'web_chat' || e.driver === 'web_chat'))) {
+            rawEndpoints.push({
+                id: 'web_chat',
+                label: 'External Web Chatbot (Copy Context + Prompt Handoff)',
+                driver: 'web_chat',
+                base_url: '',
+                api_key: '',
+                custom_models: ['chatbot'],
+                models: ['chatbot'],
+                max_parallel: 1,
+                enabled: true,
+                is_system: true
+            });
+        }
+        const endpoints = rawEndpoints;
         const profiles = Array.isArray(llmForm.llm_profiles) ? llmForm.llm_profiles : [];
         if (endpoints.length === 0 || profiles.length === 0) return;
 
@@ -493,10 +532,10 @@ export class InSetuSystemSettings extends InSetuElement {
             return prof;
         });
 
-        if (mutated) {
+        if (mutated || endpoints.length !== (llmForm.compute_endpoints || []).length) {
             this._extForms = {
                 ...this._extForms,
-                llm: { ...llmForm, llm_profiles: nextProfiles }
+                llm: { ...llmForm, compute_endpoints: endpoints, llm_profiles: nextProfiles }
             };
         }
     }
@@ -1087,6 +1126,10 @@ export class InSetuSystemSettings extends InSetuElement {
             }
         };
 
+        if (driver === 'web_chat') {
+            addModelOption('chatbot', null, 'MANUAL HANDOFF', true);
+            return tierMatchedOptions;
+        }
         customModels.forEach(m => addModelOption(m, null, 'CUSTOM', true));
         if (recommendedDefaultForTier) {
             addModelOption(recommendedDefaultForTier, null, '', true);
@@ -1162,10 +1205,19 @@ export class InSetuSystemSettings extends InSetuElement {
                     .rootFormData=${extForm}
                     .optionResolver=${boundResolver}
                     @insetu-repeater-changed=${(e) => {
-                        const nextExtForm = {
+                        let nextExtForm = {
                             ...(this._extForms[activeExtModule.id] || {}),
                             [e.detail.id]: e.detail.value
                         };
+                        if (e.detail.renamedId?.from && e.detail.renamedId?.to) {
+                            nextExtForm = cascadeRepeaterIdRename(
+                                fullSchema,
+                                nextExtForm,
+                                e.detail.id,
+                                e.detail.renamedId.from,
+                                e.detail.renamedId.to
+                            );
+                        }
                         if (activeExtModule.id === 'llm' && e.detail.id === 'llm_profiles') {
                             const profiles = Array.isArray(e.detail.value) ? e.detail.value : [];
                             if (profiles.length > 0 && !profiles.some(p => p && p.id === nextExtForm.active_profile_id)) {
@@ -1173,7 +1225,7 @@ export class InSetuSystemSettings extends InSetuElement {
                             }
                         }
                         this._extForms = { ...this._extForms, [activeExtModule.id]: nextExtForm };
-                        if (activeExtModule.id === 'llm' && e.detail.id === 'compute_endpoints') {
+                        if (activeExtModule.id === 'llm' && (e.detail.id === 'compute_endpoints' || e.detail.id === 'llm_profiles')) {
                             this._healProfileTiersForEndpoints();
                         }
                         this.requestUpdate();

@@ -4,6 +4,29 @@
 import { SutramDB, SutramCacheWarmer } from 'sutram';
 import { AppStore } from '/static/extensions/system/store.js';
 
+export async function importModuleWithRetry(url, importer = (u) => import(u), retryDelaysMs = [250, 750]) {
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+        try {
+            return await importer(attempt === 0 ? url : `${url}${url.includes('?') ? '&' : '?'}retry=${attempt}_${Date.now()}`);
+        } catch (err) {
+            lastErr = err;
+            if (err instanceof SyntaxError || err instanceof ReferenceError) throw err;
+            if (attempt < retryDelaysMs.length) await new Promise(r => setTimeout(r, retryDelaysMs[attempt]));
+        }
+    }
+    throw lastErr;
+}
+
+export async function classifyBootModuleFailure(url, err, fetchImpl = fetch) {
+    if (err instanceof SyntaxError || err instanceof ReferenceError) return 'code_or_404';
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return 'network';
+    try {
+        const r = await fetchImpl(url, { method: 'HEAD', cache: 'no-store', credentials: 'same-origin', signal: AbortSignal.timeout(2000) });
+        return (r.status >= 500 || r.redirected) ? 'network' : 'code_or_404';
+    } catch (_) { return 'network'; }
+}
+
 // --- DECENTRALIZED MANIFEST SYNC & KERNEL HEARTBEAT ---
 export async function checkManifestVersion() {
     if (!window.BOOT_COMPLETE) return;
@@ -103,11 +126,7 @@ export async function checkManifestVersion() {
                     delete localCtxSignatures[path];
                     SutramDB.deleteVFSBlob(activeWs, fetchUrl).catch(()=>{});
                     manifestUpdated = true;
-                    AppStore.setState(s => {
-                        const newQ = new Set(s.warmingQueue);
-                        const filtered = new Set(Array.from(newQ).filter(u => !u.startsWith(fetchUrl)));
-                        return { warmingQueue: filtered };
-                    });
+                    SutramCacheWarmer.removeByPrefix?.(activeWs, fetchUrl);
                 } else if (localCtxSignatures[path] !== ts) {
                     const entryRes = await window.inSetu.api.get(`gather/manifest/entry?path=${encodeURIComponent(path)}`);
                     if (window.inSetu.utils.getActiveWorkspace() !== activeWs) return;
@@ -178,57 +197,19 @@ export async function checkManifestVersion() {
             }
 
             if (pathsToWarm.length > 0) {
-                AppStore.getState().enqueueWarming(pathsToWarm);
-            }
-        }
-        // Phase 5: Drain the Global Cache Warming Queue (Background Priority Threads)
-        // Guardrail: Suspend warming during active I/O (is_pipeline_active) and for 2.5 minutes after backend boot
-        const backendUptimeSeconds = deltaData.timestamp - (deltaData.backend_boot_ts || deltaData.timestamp);
-        const isBootSettled = backendUptimeSeconds > 150;
-        const isSystemSettled = !deltaData.is_pipeline_active && isBootSettled;
-        if (!AppStore.getState().isOffline && navigator.connection?.saveData !== true && isSystemSettled) {
-            const q = Array.from(AppStore.getState().warmingQueue);
-            if (q.length > 0) {
-                // Dynamic Throttle: Keep background warming gentle so local WSGI/Werkzeug threads are never starved
-                let chunkSize = 10; 
-
-                if (navigator.connection) {
-                    if (navigator.connection.effectiveType === '2g' || navigator.connection.effectiveType === '3g') {
-                        chunkSize = 4;
-                    } else if (navigator.connection.downlink) {
-                        const mbps = navigator.connection.downlink;
-                        if (mbps < 2) chunkSize = 5;
-                        else if (mbps < 10) chunkSize = 8;
-                        else chunkSize = 10;
+                const backendUptimeSeconds = deltaData.timestamp - (deltaData.backend_boot_ts || deltaData.timestamp);
+                const isSystemSettled = !deltaData.is_pipeline_active && backendUptimeSeconds > 150;
+                if (!AppStore.getState().isOffline && navigator.connection?.saveData !== true && isSystemSettled) {
+                    const Warmer = SutramCacheWarmer || window.Sutram?.SutramCacheWarmer;
+                    if (typeof Warmer?.enqueue === 'function') {
+                        Warmer.enqueue(activeWs, pathsToWarm, async (url, wsId) => {
+                            const res = await window.inSetu?.api?.request?.(url, { priority: 'low', onlyIfMissing: true }, wsId);
+                            if (res && res.status === 204) {
+                                Warmer.clear();
+                            }
+                        });
                     }
                 }
-
-                const chunk = q.slice(0, chunkSize);
-                const activeWs = window.inSetu.utils.getActiveWorkspace();
-
-                const Warmer = SutramCacheWarmer || window.Sutram?.SutramCacheWarmer;
-                if (typeof Warmer?.enqueue === 'function') {
-                    Warmer.enqueue(activeWs, chunk, async (url, wsId) => {
-                        const res = await window.inSetu?.api?.request?.(url, { priority: 'low', onlyIfMissing: true }, wsId);
-                        if (res && res.status === 204) {
-                            Warmer.clear();
-                            AppStore.setState({ warmingQueue: new Set() });
-                        }
-                    });
-                } else {
-                    const staggerMs = Math.floor(2500 / chunkSize);
-                    chunk.forEach((p, index) => {
-                        setTimeout(() => {
-                            window.inSetu?.api?.request?.(p, { priority: 'low', onlyIfMissing: true }, activeWs).catch(() => {});
-                        }, index * staggerMs);
-                    });
-                }
-
-                AppStore.setState(s => {
-                    const newQ = new Set(s.warmingQueue);
-                    chunk.forEach(u => newQ.delete(u));
-                    return { warmingQueue: newQ };
-                });
             }
         }
         if (deltaData.active_modules !== undefined && JSON.stringify(AppStore.getState().activeModules) !== JSON.stringify(deltaData.active_modules)) {

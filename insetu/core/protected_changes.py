@@ -397,7 +397,7 @@ def list_pending() -> List[Dict[str, Any]]:
 
 def _refuse_machine_origin(change: Optional[Dict[str, Any]], verb: str) -> Optional[Tuple[Dict[str, Any], int]]:
     origin = get_current_origin()
-    if origin in _attestations.NON_HUMAN_ORIGINS:
+    if origin not in _attestations.HUMAN_ORIGINS:
         _audit(f"{verb}_refused", change, reason=f"origin '{origin}'")
         return _refusal(f"Only a person can {verb} a protected change; this call came from '{origin}'.")
     return None

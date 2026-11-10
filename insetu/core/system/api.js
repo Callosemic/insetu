@@ -250,10 +250,16 @@ window.inSetu.api = {
             res = await offlineProvider.executeMutation(url, method, bodyString, options, scopeId);
         }
 
-        // 2. Auth Retry Intercept
+        // 2. Auth Retry Intercept & Build Version Mismatch Gate
         if (res.status === 401) {
             const retryRes = await this._attemptReAuthAndRetry(url, options, scopeId !== 'default');
             if (retryRes) res = retryRes;
+        } else if (res.status === 426) {
+            if (window.inSetu?.ui?.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus('Reload to update', 10000, true);
+            }
+            const toastStore = window.inSetu?.stores?.Toast || window.Sutram?.stores?.Toast;
+            toastStore?.getState?.()?.addToast?.('Reload to update', 'warning', 10000);
         }
 
         // 3. Soft Refresh Evaluation
@@ -539,15 +545,23 @@ window.inSetu.utils.syncOutboxMutationMarkers = async function(workspaceId = nul
         const pendingSet = new Set();
         const deletedSet = new Set();
         outbox.forEach(item => {
-            try {
-                const payload = item.bodyString ? JSON.parse(item.bodyString) : {};
-                const fp = payload.filepath || payload.dest_path;
-                if (fp) {
-                    const isDelete = item.method === 'DELETE' || (item.path && item.path.includes('fs/delete')) || (item.path && item.path.includes('fs/move'));
-                    if (isDelete) deletedSet.add(fp);
-                    else pendingSet.add(fp);
-                }
-            } catch (_) {}
+            if (Array.isArray(item.pendingMutations) && item.pendingMutations.length > 0) {
+                item.pendingMutations.forEach(p => { if (p) pendingSet.add(p); });
+            }
+            if (Array.isArray(item.deletedMutations) && item.deletedMutations.length > 0) {
+                item.deletedMutations.forEach(d => { if (d) deletedSet.add(d); });
+            }
+            if ((!item.pendingMutations || item.pendingMutations.length === 0) && (!item.deletedMutations || item.deletedMutations.length === 0)) {
+                try {
+                    const payload = item.bodyString ? JSON.parse(item.bodyString) : {};
+                    const fp = payload.filepath || payload.dest_path;
+                    if (fp) {
+                        const isDelete = item.method === 'DELETE' || (item.path && item.path.includes('fs/delete')) || (item.path && item.path.includes('fs/move'));
+                        if (isDelete) deletedSet.add(fp);
+                        else pendingSet.add(fp);
+                    }
+                } catch (_) {}
+            }
         });
         window.inSetu.stores.App.setState({ outboxCount: outbox.length, pendingMutations: pendingSet, deletedMutations: deletedSet });
         return outbox.length;
@@ -555,6 +569,48 @@ window.inSetu.utils.syncOutboxMutationMarkers = async function(workspaceId = nul
         return 0;
     }
 };
+
+// S8 Offline Protected-File Reversion: when an offline save to a protected file drains and returns
+// 202 with status: 'pending_confirmation', restore vfs_cache to the server's current content so an
+// unconfirmed edit never appears as written.
+window.addEventListener('sutram-outbox-item-synced', async (e) => {
+    const { scopeId, bodyString, responseData } = e.detail || {};
+    if (!responseData || responseData.status !== 'pending_confirmation') return;
+    const ws = scopeId || window.inSetu?.utils?.getActiveWorkspace?.() || 'default';
+    let targetFp = responseData.filepath || '';
+    if (!targetFp && bodyString) {
+        try {
+            const parsed = JSON.parse(bodyString);
+            targetFp = parsed.filepath || '';
+        } catch (_) {}
+    }
+    if (window.inSetu?.stores?.App) {
+        const curPending = Number(window.inSetu.stores.App.getState().protectedChangesPending || 0);
+        window.inSetu.stores.App.setState({ protectedChangesPending: Math.max(1, curPending + 1) });
+    }
+    if (!targetFp) return;
+    const normFp = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(targetFp) : targetFp;
+    const cacheKeyUrl = `/api/${ws}/fs/fetch?file=${encodeURIComponent(normFp)}`;
+    try {
+        const headers = window.inSetu.api._getHeaders(ws !== 'default');
+        const liveRes = await fetch(cacheKeyUrl, { method: 'GET', headers, cache: 'no-store' });
+        if (liveRes.ok) {
+            const liveText = await liveRes.text();
+            const liveBlob = new Blob([liveText], { type: liveRes.headers.get('content-type') || 'text/plain;charset=utf-8' });
+            await SutramDB.cacheVFSBlob(ws, cacheKeyUrl, liveBlob);
+            const fsStore = window.inSetu?.stores?.Fs;
+            if (fsStore?.getState?.()?.activeBuffers?.[normFp]) {
+                fsStore.getState().updateBuffer(normFp, { content: liveText, originalContent: liveText, fullText: liveText });
+            }
+        } else if (liveRes.status === 404) {
+            await SutramDB.deleteVFSBlob(ws, cacheKeyUrl);
+        }
+    } catch (_) {}
+    if (window.inSetu?.ui?.setGlobalStatus) {
+        const baseName = new InSetuURI(normFp).basename || normFp;
+        window.inSetu.ui.setGlobalStatus(`🔒 Protected file '${baseName}' held for confirmation.`, 5000);
+    }
+});
 
 const networkManager = new NetworkHysteresisManager('/api/system/openapi.json?t={t}', 3);
 let lastCacheCheck = 0;

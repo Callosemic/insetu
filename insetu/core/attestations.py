@@ -31,7 +31,9 @@ from insetu.core.sdk import (
 
 ATTESTATIONS_FILENAME = "attestations.json"
 ATTESTATION_KINDS = frozenset({"command", "workspace_extension", "lan_lease", "repo_directive"})
-# Origins that may propose but never approve: work started by a model, an MCP client or a routine.
+# Only origins in HUMAN_ORIGINS may record an approval; calls with no execution frame (None) or machine origins are refused.
+HUMAN_ORIGINS = frozenset({"ui", "cli"})
+# Kept as an informational constant for callers checking known machine origins.
 NON_HUMAN_ORIGINS = frozenset({"mcp", "routine", "agent"})
 # Identifies this daemon process. A grant made "until restart" is valid only in the run that made it.
 DAEMON_RUN_ID = uuid.uuid4().hex
@@ -180,7 +182,7 @@ def attest(
     if not subject or not digest:
         raise ValueError("An attestation needs a subject and a digest.")
     origin = get_current_origin()
-    if origin in NON_HUMAN_ORIGINS:
+    if origin not in HUMAN_ORIGINS:
         raise AttestationRefused(f"Approvals are made by a person; this call came from '{origin}'.")
     with _STORE_LOCK:
         data = _load()
