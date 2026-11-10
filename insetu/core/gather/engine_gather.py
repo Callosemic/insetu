@@ -32,7 +32,7 @@ from insetu.core.utils_core import (
     BucketAddress,
     InSetuURI,
 )
-from insetu.core.topology.engine_topology import resolve_file_bucket
+from insetu.core.topology.engine_topology import is_conflict_artifact_path, resolve_file_bucket
 from .context_assemble import (
     ContextAssemblePayload,
     ContextAssembleResponse,
@@ -396,8 +396,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
         if not os.path.exists(repo_path):  
             debug_log_lines.append(f"\n[REPO SKIP] {repo_dir} (Path not found: {repo_path})")
             continue
-        # Pull canonical vfs:// URIs strictly from the SSOT Topology Ledger, avoiding disk I/O
-        final_list = _get_topology_files_for_repo(workspace_id, repo_dir)
+        final_list = [f for f in _get_topology_files_for_repo(workspace_id, repo_dir) if not is_conflict_artifact_path(f)]
 
         debug_log_lines.append(f"\n[REPO] {repo_dir} (Path: {repo_path})")
         debug_log_lines.append(f"  - Total files from Topology Ledger: {len(final_list)}")
@@ -818,10 +817,8 @@ def _pack_selection_worker(
     if not items:
         return {"message": "No valid files selected for compilation."}
     ctx.jobs.update_progress("Compiling selected files into context payload...")
-    files = ctx.expand_selection(items, gather_only=gather_only)
-    if not files and gather_only:
-        files = ctx.expand_selection(items, gather_only=False)
-    files = [str(InSetuURI(f)) for f in files if isinstance(f, str) and not str(f).endswith('/')]
+    files = ctx.expand_selection(items, gather_only=gather_only) or (ctx.expand_selection(items, gather_only=False) if gather_only else [])
+    files = [str(InSetuURI(f)) for f in files if isinstance(f, str) and not str(f).endswith('/') and not is_conflict_artifact_path(f)]
     clean_tree_files = []
     for f in files:
         f_uri = InSetuURI(f)

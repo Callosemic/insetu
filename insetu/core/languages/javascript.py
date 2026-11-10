@@ -3,12 +3,35 @@
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+import threading
+
 from .base import (
     BaseLanguageProvider,
     compute_normalized_text_body_hash,
     find_brace_balanced_end,
     first_sentence,
 )
+
+try:
+    from tree_sitter import Language as _TSLanguage, Parser as _TSParser
+    import tree_sitter_javascript as _ts_javascript
+except ImportError:
+    _TSLanguage = None
+    _TSParser = None
+    _ts_javascript = None
+
+_JS_TS_LOCAL = threading.local()
+
+
+def _get_js_ts_parser():
+    if not _TSLanguage or not _TSParser or not _ts_javascript:
+        return None
+    parser = getattr(_JS_TS_LOCAL, "parser", None)
+    if parser is None:
+        parser = _TSParser(_TSLanguage(_ts_javascript.language()))
+        _JS_TS_LOCAL.parser = parser
+    return parser
+
 
 _JS_PATH_COMMENT_RE = re.compile(r'^//\s*[\w./@-]+\.(?:js|mjs|ts|tsx)\s*$')
 
@@ -27,8 +50,8 @@ _DEFINITION_RE = re.compile(
     r'^(?P<indent>[ \t]*)'
     r'(?:export\s+(?:default\s+)?)?'
     r'(?:(?P<async>async)\s+)?'
-    r'(?:(?P<kind>class|function)\s+(?P<name>[A-Za-z][A-Za-z0-9_]*)\s*(?P<params>\([^;{]*\))?'
-    r'|const\s+(?P<cname>[A-Za-z][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?(?P<cparams>\([^=;]*\)|[A-Za-z0-9_]+)\s*=>)',
+    r'(?:(?P<kind>class|function)\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\s*(?P<params>\([^\n]*\))?'
+    r'|(?:const|let|var)\s+(?P<cname>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s*)?(?:(?P<cparams>\([^=;]*\)|[A-Za-z0-9_$]+)\s*=>|(?P<ccall>[A-Za-z0-9_$.]+\s*\()))',
     re.MULTILINE,
 )
 
@@ -139,7 +162,102 @@ class JavaScriptLanguageProvider(BaseLanguageProvider):
                         results.append({"name": clean, "kind": "export", "line": line_no})
         return results
 
-    def definitions(self, filepath: str, content: str) -> List[Dict[str, Any]]:
+    def _definitions_via_treesitter(self, content: str, include_private: bool = False) -> Optional[List[Dict[str, Any]]]:
+        parser = _get_js_ts_parser()
+        if parser is None:
+            return None
+        source_bytes = (content or "").encode("utf-8")
+        tree = parser.parse(source_bytes)
+        lines = (content or "").splitlines()
+        symbols: List[Dict[str, Any]] = []
+        seen_names: Set[str] = set()
+
+        def _node_text(n) -> str:
+            return source_bytes[n.start_byte:n.end_byte].decode("utf-8", errors="replace")
+
+        for top_node in tree.root_node.children:
+            stmt_node = top_node
+            inner = top_node
+            if top_node.type == "export_statement":
+                decl = top_node.child_by_field_name("declaration")
+                if decl is not None:
+                    inner = decl
+                else:
+                    continue
+
+            name = ""
+            kind = "function"
+            sig = ""
+
+            if inner.type in ("function_declaration", "generator_function_declaration"):
+                name_node = inner.child_by_field_name("name")
+                name = _node_text(name_node).strip() if name_node else ""
+                params_node = inner.child_by_field_name("parameters")
+                raw_params = _node_text(params_node).strip() if params_node else "()"
+                clean_params = re.sub(r'\s+', ' ', raw_params)
+                if len(clean_params) > 36:
+                    clean_params = clean_params[:33].rstrip() + "...)"
+                sig = f"function {name}{clean_params}"
+            elif inner.type == "class_declaration":
+                name_node = inner.child_by_field_name("name")
+                name = _node_text(name_node).strip() if name_node else ""
+                kind = "class"
+                sig = f"class {name}"
+            elif inner.type in ("lexical_declaration", "variable_declaration"):
+                declarators = [c for c in inner.children if c.type == "variable_declarator"]
+                if len(declarators) != 1:
+                    continue
+                decl_node = declarators[0]
+                name_node = decl_node.child_by_field_name("name")
+                val_node = decl_node.child_by_field_name("value")
+                if not name_node or name_node.type != "identifier" or not val_node:
+                    continue
+                name = _node_text(name_node).strip()
+                if val_node.type == "arrow_function":
+                    params_node = val_node.child_by_field_name("parameters") or val_node.child_by_field_name("parameter")
+                    raw_params = _node_text(params_node).strip() if params_node else "()"
+                    if not raw_params.startswith("("):
+                        raw_params = f"({raw_params})"
+                    clean_params = re.sub(r'\s+', ' ', raw_params)
+                    if len(clean_params) > 36:
+                        clean_params = clean_params[:33].rstrip() + "...)"
+                    sig = f"function {name}{clean_params}"
+                elif include_private:
+                    kind = "variable"
+                    sig = f"const {name}"
+                else:
+                    continue
+            else:
+                continue
+
+            if not name or name in seen_names:
+                continue
+            if not include_private and name.startswith("_"):
+                continue
+            seen_names.add(name)
+
+            line_idx = stmt_node.start_point[0]
+            end_line = stmt_node.end_point[0] + 1
+            doc, start_line = extract_preceding_jsdoc(lines, line_idx)
+            full_slice = "\n".join(lines[max(0, line_idx):min(len(lines), end_line)])
+            snippet = "\n".join(lines[max(0, start_line - 1):min(len(lines), start_line - 1 + 30)])
+            symbols.append({
+                "name": name,
+                "kind": kind,
+                "signature": sig,
+                "docstring": doc,
+                "start_line": start_line,
+                "end_line": end_line,
+                "snippet": snippet,
+                "body_hash": compute_normalized_text_body_hash(full_slice),
+                "top_level": not name.startswith("_") and kind in ("class", "function"),
+            })
+        return symbols
+
+    def definitions(self, filepath: str, content: str, include_private: bool = False) -> List[Dict[str, Any]]:
+        ts_defs = self._definitions_via_treesitter(content or "", include_private=include_private)
+        if ts_defs is not None:
+            return ts_defs
         lines = (content or "").splitlines()
         symbols: List[Dict[str, Any]] = []
         seen_names = set()
@@ -148,13 +266,17 @@ class JavaScriptLanguageProvider(BaseLanguageProvider):
             if len(indent) > 0:
                 continue
             name = m.group("name") or m.group("cname") or ""
-            if not name or name.startswith("_") or name in seen_names:
+            if not name or (not include_private and name.startswith("_")) or name in seen_names:
+                continue
+            if m.group("ccall") and not include_private:
                 continue
             seen_names.add(name)
             line_idx = content.count("\n", 0, m.start())
             kind = m.group("kind")
             if kind == "class":
                 sig = f"class {name}"
+            elif m.group("ccall"):
+                sig = f"const {name}"
             else:
                 raw_params = (m.group("params") or m.group("cparams") or "()").strip()
                 if not raw_params.startswith("("):
@@ -176,13 +298,13 @@ class JavaScriptLanguageProvider(BaseLanguageProvider):
                 "end_line": end_line,
                 "snippet": snippet,
                 "body_hash": compute_normalized_text_body_hash(full_slice),
-                "top_level": True,
+                "top_level": not name.startswith("_"),
             })
         return symbols
 
     def extract_symbol_slice(self, filepath: str, content: str, symbol_query: str) -> Optional[Dict[str, Any]]:
         clean_query = symbol_query.strip()
-        if clean_query.startswith(("def ", "async def ", "class ", "function ")):
+        if clean_query.startswith(("def ", "async def ", "class ", "function ", "const ", "let ", "var ")):
             clean_query = clean_query.split("(")[0].split()[-1].strip()
         elif "(" in clean_query:
             clean_query = clean_query.split("(", 1)[0].strip()
@@ -190,22 +312,24 @@ class JavaScriptLanguageProvider(BaseLanguageProvider):
         lines = (content or "").splitlines()
         target_class, _, target_member = clean_query.partition(".")
         search_name = target_member or target_class
-        for sym in self.definitions(filepath, content):
-            if sym["name"] == search_name:
-                s_line = sym["start_line"]
-                e_line = sym["end_line"]
-                return {
-                    "symbol": sym["name"],
-                    "signature": sym["signature"],
-                    "start_line": s_line,
-                    "end_line": e_line,
-                    "source": "\n".join(lines[s_line - 1:e_line]),
-                }
+        if not target_member:
+            for sym in self.definitions(filepath, content, include_private=True):
+                if sym["name"] == search_name:
+                    s_line = sym["start_line"]
+                    e_line = sym["end_line"]
+                    return {
+                        "symbol": sym["name"],
+                        "signature": sym["signature"],
+                        "start_line": s_line,
+                        "end_line": e_line,
+                        "source": "\n".join(lines[s_line - 1:e_line]),
+                    }
 
         method_pat = re.compile(
-            r'^[ \t]*(?:export\s+)?(?:static\s+)?(?:async\s+)?(?:function\s+|class\s+)?'
+            r'^[ \t]*(?:export\s+(?:default\s+)?)?(?:static\s+)?(?:async\s+)?'
+            r'(?:(?:function|class|const|let|var)\s+)?'
             + re.escape(search_name)
-            + r'\s*(?:\([^;{]*\))?\s*\{',
+            + r'\b[ \t]*(?:\(|=|\{ extends\b)',
             re.MULTILINE,
         )
         m = method_pat.search(content or "")

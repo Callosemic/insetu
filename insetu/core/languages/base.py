@@ -45,12 +45,30 @@ def compute_normalized_text_body_hash(source_slice: str) -> str:
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:8]
 
 
+_REGEX_PRECEDING_KEYWORDS = frozenset({
+    "return", "typeof", "void", "delete", "case", "in", "of", "instanceof", "throw", "yield", "await", "new",
+})
+_REGEX_PRECEDING_CHARS = frozenset("({[=,;:!&|?~^%+*-<>")
+
+
 def find_brace_balanced_end(lines: List[str], start_idx: int) -> int:
-    """Scans forward from start_idx (0-based) to find the closing line (1-based) of a brace-delimited block."""
-    depth = 0
-    opened = False
-    in_str = None
+    """
+    Scans forward from start_idx (0-based) to find the closing line (1-based) of a declaration or brace-delimited block.
+    Tracks paren/bracket/brace depth, regex literals (with [...] character classes), and nested `${...}` template stacks.
+    """
+    brace_depth = 0
+    paren_depth = 0
+    bracket_depth = 0
+    opened_body = False
+    saw_progress = False
+    in_str: Optional[str] = None
     in_block_comment = False
+    in_regex = False
+    in_regex_class = False
+    template_expr_stack: List[int] = []
+    prev_sig_char = ""
+    prev_word = ""
+
     for idx in range(start_idx, len(lines)):
         line = lines[idx]
         i = 0
@@ -65,39 +83,124 @@ def find_brace_balanced_end(lines: List[str], start_idx: int) -> int:
                     continue
                 i += 1
                 continue
-            if in_str:
+            if in_regex:
                 if ch == "\\":
+                    i += 2
+                    continue
+                if ch == "[":
+                    in_regex_class = True
+                elif ch == "]" and in_regex_class:
+                    in_regex_class = False
+                elif ch == "/" and not in_regex_class:
+                    in_regex = False
+                    prev_sig_char = "/"
+                    prev_word = ""
+                i += 1
+                continue
+            if in_str is not None:
+                if ch == "\\":
+                    i += 2
+                    continue
+                if in_str == "`" and ch == "$" and nxt == "{":
+                    template_expr_stack.append(1)
+                    in_str = None
+                    prev_sig_char = "{"
+                    prev_word = ""
                     i += 2
                     continue
                 if ch == in_str:
                     in_str = None
+                    prev_sig_char = ch
+                    prev_word = ""
                 i += 1
                 continue
+
             if ch == "/" and nxt == "/":
                 break
             if ch == "/" and nxt == "*":
                 in_block_comment = True
                 i += 2
                 continue
+            if ch == "/":
+                can_start_regex = (
+                    not prev_sig_char
+                    or prev_sig_char in _REGEX_PRECEDING_CHARS
+                    or prev_word in _REGEX_PRECEDING_KEYWORDS
+                )
+                if can_start_regex:
+                    in_regex = True
+                    in_regex_class = False
+                    i += 1
+                    continue
             if ch in ('"', "'", "`"):
                 in_str = ch
                 i += 1
                 continue
-            if ch == "{":
-                depth += 1
-                opened = True
-            elif ch == "}":
-                depth -= 1
-                if opened and depth <= 0:
-                    return idx + 1
+
+            if template_expr_stack:
+                if ch == "{":
+                    template_expr_stack[-1] += 1
+                elif ch == "}":
+                    template_expr_stack[-1] -= 1
+                    if template_expr_stack[-1] <= 0:
+                        template_expr_stack.pop()
+                        in_str = "`"
+                        i += 1
+                        continue
+
+            if ch.isalpha() or ch in ("_", "$"):
+                prev_word += ch
+            else:
+                if not ch.isspace():
+                    prev_sig_char = ch
+                    if not ch.isalnum():
+                        prev_word = ""
+
+            if not template_expr_stack:
+                if ch == "(":
+                    paren_depth += 1
+                    saw_progress = True
+                elif ch == ")":
+                    paren_depth = max(0, paren_depth - 1)
+                elif ch == "[":
+                    bracket_depth += 1
+                    saw_progress = True
+                elif ch == "]":
+                    bracket_depth = max(0, bracket_depth - 1)
+                elif ch == "=" and nxt == ">":
+                    saw_progress = True
+                elif ch == "{":
+                    if paren_depth == 0:
+                        brace_depth += 1
+                        opened_body = True
+                        saw_progress = True
+                elif ch == "}":
+                    if paren_depth == 0 and opened_body:
+                        brace_depth -= 1
+                        if brace_depth <= 0 and bracket_depth == 0:
+                            return idx + 1
             i += 1
-        if not opened and line.rstrip().endswith(";"):
+        in_regex = False
+        in_regex_class = False
+        if (
+            in_str is None
+            and not in_block_comment
+            and not template_expr_stack
+            and paren_depth == 0
+            and bracket_depth == 0
+            and brace_depth <= 0
+            and (opened_body or saw_progress or "=" in line)
+            and line.rstrip().endswith(";")
+        ):
             return idx + 1
     return min(len(lines), start_idx + 1)
 
 
 class BaseLanguageProvider(ABC):
     """Abstract interface contract for language-specific AST inspection, symbol indexing, and interface slicing."""
+
+    # False for document languages: parsed for retrieval and links, never mapped into CODE_INDEX.md.
+    indexes_code_symbols: bool = True
 
     @abstractmethod
     def imports(self, filepath: str, content: str) -> List[Dict[str, Any]]:

@@ -14,6 +14,7 @@ from .base import (
     first_sentence,
 )
 from .javascript import JavaScriptLanguageProvider
+from .markdown import MarkdownLanguageProvider
 from .python import PythonLanguageProvider
 from .rust import RustLanguageProvider
 
@@ -26,9 +27,11 @@ _PROVIDERS: Dict[str, BaseLanguageProvider] = {
     ".tsx": JavaScriptLanguageProvider(),
     ".jsx": JavaScriptLanguageProvider(),
     ".rs": RustLanguageProvider(),
+    ".md": MarkdownLanguageProvider(),
+    ".markdown": MarkdownLanguageProvider(),
 }
 
-SUPPORTED_SYMBOL_EXTENSIONS = frozenset(_PROVIDERS.keys())
+SUPPORTED_SYMBOL_EXTENSIONS = frozenset(ext for ext, provider in _PROVIDERS.items() if provider.indexes_code_symbols)
 
 
 def get_language_provider(filepath: str) -> Optional[BaseLanguageProvider]:
@@ -40,6 +43,8 @@ def get_language_provider(filepath: str) -> Optional[BaseLanguageProvider]:
 
 
 def extract_file_symbols(filepath: str, content: str) -> Optional[List[Dict[str, Any]]]:
+    if Path(filepath).suffix.lower() not in SUPPORTED_SYMBOL_EXTENSIONS:
+        return None
     """
     Extracts public top-level symbols for supported languages (.py, .js/.ts/.mjs/.tsx, .rs).
     Returns None if a syntax error prevented parsing so callers can preserve cached symbols.
@@ -434,6 +439,7 @@ def format_interleaved_file_diff(
 
 __all__ = [
         "BaseLanguageProvider",
+        "MarkdownLanguageProvider",
         "PythonLanguageProvider",
         "JavaScriptLanguageProvider",
         "RustLanguageProvider",

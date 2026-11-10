@@ -43,6 +43,12 @@ from insetu.core.utils_core import (
 )
 
 _TARGET_REPOS_KEY = "target_repos"
+_CONFLICT_ARTIFACT_RE = re.compile(r'\.conflict(?:ed)?_\d+(?:\.[^./]+)?$')
+
+
+def is_conflict_artifact_path(path_or_uri: str) -> bool:
+    """True when a path or URI is an OCC fallback file (`*.conflict_<timestamp>.*`)."""
+    return bool(path_or_uri and _CONFLICT_ARTIFACT_RE.search(str(path_or_uri)))
 
 
 def _target_repo_configs(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -367,7 +373,8 @@ def clamp_uris_to_topology(
             tracked_list = [
                 str(InSetuURI(r["filepath"]))
                 for r in rows
-                if not excluded_b or (r["bucket_id"] or "main") not in excluded_b
+                if (not excluded_b or (r["bucket_id"] or "main") not in excluded_b)
+                and not (gather_only and is_conflict_artifact_path(r["filepath"]))
             ]
             if not rows and r_cfg:
                 r_path = get_repo_path(r_dir, wid)
@@ -375,6 +382,8 @@ def clamp_uris_to_topology(
                     rel_valid = get_valid_workspace_files(r_path, r_cfg, wid)
                     sub_b = r_cfg.get("sub_buckets", [])
                     for f in rel_valid:
+                        if gather_only and is_conflict_artifact_path(f):
+                            continue
                         b, mod = resolve_file_bucket(f, sub_b, repo_dir=r_dir)
                         b_id = mod if (b and mod) else (b.get("id") if b else "main")
                         if not excluded_b or b_id not in excluded_b:
@@ -427,6 +436,7 @@ def clamp_uris_to_topology(
     return out
 _TOPOLOGY_RAM_QUEUE = queue.Queue()
 _TOPOLOGY_SLEW_THREAD = None
+_IGNORED_CTX_VOLUMES = frozenset({"contexts", "diffs"})
 def _topology_slew_limiter_loop():
     while True:
         try:
@@ -544,25 +554,29 @@ def broadcast_cross_workspace_mutations(mutations=None, workspace_id=None, **kwa
 @topology_bp.on('vfs_mutated', priority=10)
 def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
     """
-    Stage 1 Slew Limiter: Catches high-velocity disk/watchdog mutations 
-    and buffers them in RAM to absorb the I/O storm before hitting SQLite.
+    Stage 1 Slew Limiter: Catches high-velocity disk/watchdog mutations (including sovereign ctx://
+    data volumes and ws:// mounts, while excluding compiled ctx://contexts/ and ctx://diffs/)
+    and buffers them in RAM to absorb I/O storms before hitting SQLite.
     """
     global _TOPOLOGY_SLEW_THREAD
     if _TOPOLOGY_SLEW_THREAD is None or not _TOPOLOGY_SLEW_THREAD.is_alive():
         _TOPOLOGY_SLEW_THREAD = threading.Thread(target=_topology_slew_limiter_loop, daemon=True)
         _TOPOLOGY_SLEW_THREAD.start()
 
-    if not mutations: return
+    if not mutations:
+        return
     for m in mutations:
         if m.get("ignore_ledger"):
             continue
         filepath = m.get("filepath")
-        if not filepath or str(filepath).startswith(("ws://", "ctx://")):
+        if not filepath:
             continue
 
         is_dir = str(filepath).endswith(('/', '\\'))
         uri = InSetuURI(filepath)
-        if uri.scheme and uri.scheme != "vfs":
+        if uri.scheme == "ctx" and uri.volume in _IGNORED_CTX_VOLUMES:
+            continue
+        if uri.scheme and uri.scheme not in ("vfs", "ctx", "ws"):
             continue
         norm_path = str(uri)
         if is_dir and not norm_path.endswith('/'):
@@ -733,12 +747,18 @@ def resolve_topology_buffer(workspace_id):
     target_repos_map = {r.get("repo_dir"): r for r in _target_repo_configs(ctx.config) if r.get("repo_dir")}
 
     final_events = []
+    ctx_events = []
     # Safely expand directories without iterating over a mutating list
     for e in events:
         raw_fp = e["filepath"]
         op = e["mutation_type"]
 
         uri = InSetuURI(raw_fp)
+        if uri.scheme in ("ctx", "ws"):
+            if uri.scheme == "ctx" and uri.volume in _IGNORED_CTX_VOLUMES:
+                continue
+            ctx_events.append({"filepath": str(uri), "mutation_type": op})
+            continue
         naive_repo, naive_rel = uri.repo, uri.path
         clean_fp = f"{naive_repo}/{naive_rel}".strip('/')
 
@@ -909,14 +929,15 @@ def resolve_topology_buffer(workspace_id):
     hook_request_vfs_manifest.invalidate(workspace_id=workspace_id)
 
     hooks.emit(
-        'topology_resolved', 
-        workspace_id=workspace_id, 
-        dirty_repos=list(dirty_repos), 
-        dirty_buckets=list(dirty_buckets), 
-        events=final_events
+        'topology_resolved',
+        workspace_id=workspace_id,
+        dirty_repos=list(dirty_repos),
+        dirty_buckets=list(dirty_buckets),
+        events=final_events,
+        ctx_events=ctx_events,
     )
 
-    return final_events
+    return final_events + ctx_events
 @topology_bp.on('mutate_workspace_config')
 def mount_topology_volumes_dynamically(cfg, workspace_id=None, **kwargs):
     """Dynamically remounts VFS volumes and projects repo-scoped offline_capable settings whenever configuration changes."""
@@ -1414,50 +1435,12 @@ _REPO_TIER_CACHE_LOCK = threading.Lock()
 # shape: "files" (every matching file), "dir" (the first existing directory), "paths" (matching directories or files).
 # default_pick: "first" keeps only the first default that matches; "all" keeps every match.
 CORE_LANDMARK_KINDS: List[Dict[str, Any]] = [
-    {
-        "id": "standards",
-        "label": "Engineering Standards",
-        "shape": "files",
-        "output": "standards_files",
-        "defaults": ["docs/standards/*.md", "docs/*engineering_standards*.md", "*engineering_standards*.md", "CONTRIBUTING.md"],
-    },
-    {
-        "id": "contracts",
-        "label": "API and Architectural Contracts",
-        "shape": "files",
-        "output": "contract_files",
-        "defaults": ["docs/*contract*.md", "*contract*.md", "README.md"],
-    },
-    {
-        "id": "models",
-        "label": "Mental Models & Subsystem Invariants",
-        "shape": "files",
-        "output": "model_files",
-        "defaults": ["docs/models/*.md", "docs/*mental_model*.md", "*mental_model*.md"],
-    },
-    {
-        "id": "adrs",
-        "label": "ADR Directory",
-        "shape": "dir",
-        "output": "adr_dir",
-        "defaults": ["docs/adrs", "docs/adr", "adr"],
-    },
-    {
-        "id": "tests",
-        "label": "Unit Test Directories",
-        "shape": "paths",
-        "output": "test_dirs",
-        "defaults": ["tests/unit", "tests", "test"],
-        "default_pick": "first",
-    },
-    {
-        "id": "fitness",
-        "label": "Fitness Suites",
-        "shape": "paths",
-        "output": "fitness_dirs",
-        "defaults": ["tests/fitness", "tests/fitness_functions.py"],
-        "default_pick": "all",
-    },
+    {"id": "standards", "label": "Engineering Standards", "shape": "files", "output": "standards_files", "defaults": ["docs/standards/*.md", "docs/*engineering_standards*.md", "*engineering_standards*.md", "CONTRIBUTING.md"]},
+    {"id": "contracts", "label": "API and Architectural Contracts", "shape": "files", "output": "contract_files", "defaults": ["docs/*contract*.md", "*contract*.md", "README.md"]},
+    {"id": "models", "label": "Mental Models & Subsystem Invariants", "shape": "files", "output": "model_files", "defaults": ["docs/models/*.md", "docs/*mental_model*.md", "*mental_model*.md"]},
+    {"id": "adrs", "label": "ADR Directory", "shape": "dir", "output": "adr_dir", "defaults": ["docs/adrs", "docs/adr", "adr"]},
+    {"id": "tests", "label": "Unit Test Directories", "shape": "paths", "output": "test_dirs", "defaults": ["tests/unit", "tests", "test"], "default_pick": "first"},
+    {"id": "fitness", "label": "Fitness Suites", "shape": "paths", "output": "fitness_dirs", "defaults": ["tests/fitness", "tests/fitness_functions.py"], "default_pick": "all"},
 ]
 _LANDMARK_SHAPES = frozenset({"files", "dir", "paths"})
 _LANDMARK_RESERVED_OUTPUTS = frozenset({"repo_name", "repo_title", "notices", "landmarks"})
@@ -1953,7 +1936,6 @@ class AuditUpkeepPayload(TypedDict, total=False):
     god_object_min_lines: Optional[int]
     god_object_min_symbols: Optional[int]
 
-
 @topology_bp.route('audit_upkeep', methods=['GET', 'POST'], request_schema=AuditUpkeepPayload, docstring="[sync] Deterministically audits workspace documentation/symbol drift, oversized God-object decomposition candidates, and test suite relevance.")
 def api_topology_audit_upkeep(ctx):
     """Deterministically audits workspace documentation/symbol drift, God-object candidates, and test relevance."""
@@ -1985,13 +1967,17 @@ def api_topology_audit_upkeep(ctx):
     except Exception:
         pass
 
-    missing_comments: List[Dict[str, Any]] = []
-    stale_comments: List[Dict[str, Any]] = []
-    broken_doc_targets: List[Dict[str, str]] = []
-    god_objects: List[Dict[str, Any]] = []
-    stale_test_imports: List[Dict[str, Any]] = []
-    untested_capabilities: List[Dict[str, str]] = []
-    target_files: List[str] = []
+    missing_comments, stale_comments, broken_doc_targets = [], [], []
+    god_objects, stale_test_imports, untested_capabilities = [], [], []
+    conflict_files, target_files = [], []
+    skip_dirs = {".git", "node_modules", "__pycache__", "venv", ".venv"}
+    for r_dir in active_repos:
+        r_path = get_repo_path(r_dir, ctx.workspace_id)
+        if r_path and Path(r_path).exists():
+            rp = Path(r_path)
+            for p in sorted(rp.rglob("*.conflict*")):
+                if p.is_file() and not skip_dirs.intersection(p.parts) and is_conflict_artifact_path(p.name):
+                    conflict_files.append(f"vfs://{r_dir}/{p.relative_to(rp).as_posix()}")
 
     def _add_target(uri_str: str):
         if uri_str and uri_str not in target_files and len(target_files) < 12:
@@ -2183,28 +2169,34 @@ def api_topology_audit_upkeep(ctx):
                             "symbols": sym_names[:5],
                         })
 
-    summary_counts = {
-        "missing_comments": len(missing_comments),
-        "stale_comments": len(stale_comments),
-        "broken_doc_targets": len(broken_doc_targets),
-        "god_objects": len(god_objects),
-        "stale_test_imports": len(stale_test_imports),
-        "untested_capabilities": len(untested_capabilities),
-    }
+    summary_counts = {"missing_comments": len(missing_comments), "stale_comments": len(stale_comments), "broken_doc_targets": len(broken_doc_targets), "god_objects": len(god_objects), "stale_test_imports": len(stale_test_imports), "untested_capabilities": len(untested_capabilities), "conflict_files": len(conflict_files)}
+    return {"status": "success", "scope": scope, "summary": summary_counts, "conflict_files": conflict_files, "docs_drift": {"missing_comments": missing_comments[:30], "stale_comments": stale_comments[:15], "broken_doc_targets": broken_doc_targets[:20]}, "god_objects": god_objects, "test_relevance": {"stale_test_imports": stale_test_imports[:20], "untested_capabilities": untested_capabilities[:20]}, "target_files": target_files}
 
-    return {
-        "status": "success",
-        "scope": scope,
-        "summary": summary_counts,
-        "docs_drift": {
-            "missing_comments": missing_comments[:30],
-            "stale_comments": stale_comments[:15],
-            "broken_doc_targets": broken_doc_targets[:20],
-        },
-        "god_objects": god_objects,
-        "test_relevance": {
-            "stale_test_imports": stale_test_imports[:20],
-            "untested_capabilities": untested_capabilities[:20],
-        },
-        "target_files": target_files,
-    }
+
+class CleanConflictsPayload(TypedDict):
+    files: List[str]
+
+
+@topology_bp.route('clean_conflicts', methods=['POST'], request_schema=CleanConflictsPayload, mcp_expose=False, docstring="[sync] Deletes the listed *.conflict_* fallback files a person reviewed (from topology.audit_upkeep's conflict_files). Any other path is refused. Human-only: hidden from MCP and banned in routines.")
+def api_topology_clean_conflicts(ctx):
+    """Human-only: deletes the listed *.conflict_* files and refuses any other path, so it can never delete an ordinary file."""
+    requested = (ctx.payload or {}).get("files") or []
+    if not isinstance(requested, list) or not requested:
+        return {"error": "List the conflict files to delete."}, 400
+    refused = [
+        str(f) for f in requested
+        if not (isinstance(f, str) and f.startswith("vfs://") and ".." not in f.split("/") and is_conflict_artifact_path(f))
+    ]
+    if refused:
+        return {"error": "Only *.conflict_* files can be deleted here.", "refused": refused}, 400
+    cleaned, failed = [], []
+    for c_uri in dict.fromkeys(requested):
+        try:
+            ctx.vfs.delete(c_uri)
+            cleaned.append(c_uri)
+        except Exception as exc:
+            failed.append({"filepath": c_uri, "error": str(exc)})
+    if cleaned:
+        ctx.sync_vfs_barrier()
+        resolve_topology_buffer(ctx.workspace_id)
+    return {"status": "success" if not failed else "partial", "cleaned_conflicts": cleaned, "failed": failed}
