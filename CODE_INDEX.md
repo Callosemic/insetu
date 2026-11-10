@@ -4,6 +4,10 @@ This index serves as the architectural map. It outlines the core directories and
 
 ```text
 insetu/
+├── .github/                        # [comment required]
+│   └── workflows/                  # [comment required]
+│       ├── battery.yml             # Callosemic stack battery: akasa -> sutram -> insetu, stopping at the first red suite.
+│       └── ci.yml                  # Runs the shared Callosemic stack battery (akasa -> sutram -> insetu) on every push to main.
 ├── .gitignore                      # Git ignore rules.
 ├── .gitkeep                        # Git folder retention.
 ├── CHANGELOG.md                    # Auto-generated semantic release changelog.
@@ -241,17 +245,24 @@ insetu/
 │   │   │   │   └── def attach_routine_problems(ctx, routines) # Adds a `problems` list to each routine summary (as listed for Routine Studio).
 │   │   │   ├── routines/           # Co-located Git declarative DAG routines (/audit and /closeout).
 │   │   │   │   ├── ask.md          # Answers architectural and codebase questions using a 2-stage context expansion funnel without mutating files.
+│   │   │   │   ├── ask.yaml        # [comment required]
 │   │   │   │   ├── bugfix.md       # Performs root-cause analysis on a bug report or stack trace and applies a minimal, non-regressive Yomama fix.
 │   │   │   │   ├── code.md         # Scouts relevant workspace files, generates surgical Yomama patches, and applies them atomically.
+│   │   │   │   ├── code.yaml       # [comment required]
 │   │   │   │   ├── debt_ratchet.md # Audits newly committed turn diffs for duplicate helpers, dead code, or boundary leaks and applies a surgical cleanup patch if needed.
 │   │   │   │   ├── implement.md    # Executes an architectural plan or ticket into concrete Yomama code patches and runs the Debt Ratchet audit.
+│   │   │   │   ├── map_reduce_audit.yaml # [comment required]
 │   │   │   │   ├── plan.md         # Drafts or refines a persistent Markdown architectural plan using Yomama patches and verifies all referenced file targets via Cartographer.
+│   │   │   │   ├── plan.yaml       # [comment required]
 │   │   │   │   ├── refactor.md     # Executes behavior-preserving structural refactorings using Yomama RELOCATE, RENAME, and SEARCH/REPLACE blocks.
 │   │   │   │   ├── scout_context.md # Scores candidate workspace files in parallel using the fast model tier to prune irrelevant context before synthesis.
+│   │   │   │   ├── symbol_refactor.yaml # [comment required]
 │   │   │   │   ├── test.md         # Resolves and runs the repository test suite in a bounded loop, triaging and patching failures automatically.
 │   │   │   │   ├── upkeep.md       # Two-stage maintenance routine for documentation/symbol drift, zero-logic God-object modularization, and test suite relevance.
 │   │   │   │   ├── workspace_turn.md # Classifies turn intent, synthesizes response and Yomama patches, and applies code/plan mutations atomically.
-│   │   │   │   └── yomama.md       # Validates and commits Yomama patch blocks, automatically healing failed hunks against live VFS file contents in a bounded loop.
+│   │   │   │   ├── workspace_turn.yaml # [comment required]
+│   │   │   │   ├── yomama.md       # Validates and commits Yomama patch blocks, automatically healing failed hunks against live VFS file contents in a bounded loop.
+│   │   │   │   └── yomama.yaml     # [comment required]
 │   │   │   └── schemas/            # Zero-dependency formal response schema registry and prompt directives.
 │   │   │       ├── __init__.py     # Central formal response schema registry and prompt directive dispatcher.
 │   │   │       │   ├── def register_schema(name, directive_fn, validator_fn) # Registers a formal response schema contract.
