@@ -131,9 +131,9 @@ import{html as s,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
             gap: 6px;
             flex: 1 1 35%;
             min-width: 0;
+            white-space: nowrap;
             overflow: hidden;
-            overflow-wrap: anywhere;
-            word-break: break-word;
+            text-overflow: ellipsis;
         }
         .card-header-actions {
             display: flex;

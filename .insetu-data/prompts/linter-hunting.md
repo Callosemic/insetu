@@ -4,7 +4,7 @@ Review these linter and tests results to check all the violations picked up by o
 
 2)
 - a) if this is NOT a real violation, because the linter/test logic is actually wrong or because it is running against the wrong file/function, determine whether you need to whitelist the function or file, rewrite the linter/test function, or report back to me to make a decision.
-- b) if this IS a real violation, fix it in an architecturally pure way, that doesn’t introduce technical debt, logic problems, domain leaks, etc. If this requires deeper thinking and decision making, report back to me instead of patching.
+- b) if this IS a real violation, fix it in an architecturally pure way, that doesn’t introduce technical debt, logic problems, domain leaks, etc. If this requires deeper thinking and decision making, report back to me.
 
 3) if patching, let me know if the provided solution is enough or whether a deeper abstraction is necessary to truly resolve the issue
 
