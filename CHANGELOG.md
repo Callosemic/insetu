@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v0.38.0 (2026-11-13)
+
+### Bug Fixes
+
+- **update,hooks**: Tag status artifacts with repo and guard against stale repository status replies
+  ([`7977616`](https://github.com/Callosemic/insetu/commit/797761640558a766e6725fb5803efd591fa207f9))
+
+### Features
+
+- **agent**: Decompose agent/llm orchestrators and add web-chat delta packing and dual-track session
+  ledger
+  ([`e4a468e`](https://github.com/Callosemic/insetu/commit/e4a468e8bcaa819e562bd66b3f985e5c683f5040))
+
+- **core**: Add shared-clone index claims, multi-scheme lens projector, VFS share cache, and python
+  floor gates
+  ([`32ccc13`](https://github.com/Callosemic/insetu/commit/32ccc13223a18675a9c9bbecfa5c4488b979a535))
+
+
 ## v0.37.1 (2026-11-10)
 
 ### Bug Fixes
