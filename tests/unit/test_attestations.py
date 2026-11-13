@@ -198,6 +198,37 @@ class TestHookRulesNeedAPersonsApproval(_StoreCase):
         self.assertEqual(status, 403, body)
         self.assertFalse(engine_hooks._is_hook_approved(ctx, "rule_q", "make deploy"))
 
+    def test_unapproved_hook_skip_notice_is_logged_once_per_command(self):
+        """process_vfs_triggers logs the unapproved-rule warning once per (workspace, rule, command) and re-logs if the command changes."""
+        import contextlib as _contextlib
+        import io as _io
+
+        engine_hooks._REPORTED_UNAPPROVED.clear()
+        ctx = engine_hooks.hooks_bp.get_context("default")
+        ctx.db.insert_or_replace("hooks_rules", {
+            "id": "rule_once", "name": "Once Rule", "trigger_type": "repo_update", "trigger_target": "ALL",
+            "command": "echo first", "enabled": 1, "created_at": "2026-11-10T00:00:00",
+        })
+        ctx.db.commit()
+
+        events = [{"filepath": "vfs://alpha/a.py", "operation": "save"}]
+        buf1 = _io.StringIO()
+        with _contextlib.redirect_stdout(buf1):
+            engine_hooks.process_vfs_triggers(dirty_repos=["alpha"], workspace_id="default", events=events)
+        self.assertIn("Skipping rule 'Once Rule'", buf1.getvalue())
+
+        buf2 = _io.StringIO()
+        with _contextlib.redirect_stdout(buf2):
+            engine_hooks.process_vfs_triggers(dirty_repos=["alpha"], workspace_id="default", events=events)
+        self.assertEqual(buf2.getvalue(), "")
+
+        ctx.db.execute("UPDATE hooks_rules SET command = ? WHERE id = ?", ("echo second", "rule_once"))
+        ctx.db.commit()
+        buf3 = _io.StringIO()
+        with _contextlib.redirect_stdout(buf3):
+            engine_hooks.process_vfs_triggers(dirty_repos=["alpha"], workspace_id="default", events=events)
+        self.assertIn("Skipping rule 'Once Rule'", buf3.getvalue())
+
     def test_hydrating_unapproved_rule_from_rules_json_never_attests_or_enables(self):
         """A workspace with no hook approvals and a rules.json holding an enabled rule leaves it unattested and disabled after hooks.list, both with origin 'ui' and with no frame."""
         ctx = engine_hooks.hooks_bp.get_context("default")

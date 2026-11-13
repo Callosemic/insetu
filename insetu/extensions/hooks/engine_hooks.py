@@ -24,6 +24,9 @@ HOOKS_SCHEMA = {
         "created_at": "TEXT NOT NULL"
     }
 }
+# Unapproved rules already reported in this process, so the notice appears once per command and not on every file event.
+_REPORTED_UNAPPROVED: set = set()
+
 hooks_bp = InSetuExtension(
     'hooks', 
     __name__, 
@@ -92,12 +95,9 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
     """Event Bus Hook: Evaluates active automation rules based on resolved topology boundaries."""
     if not events:
         return
-    print(f"🔎 [HOOKS TELEMETRY] process_vfs_triggers triggered. dirty_repos: {dirty_repos}, events count: {len(events)}")
     # Security/Noise Guardrail: Do not trigger automations for system-level ledger-ignored writes
     # (e.g. CODE_INDEX.md cartography, or contexts/ payload generation)
-    has_valid_event = any(not e.get("ignore_ledger") for e in events)
-    print(f"🔎 [HOOKS TELEMETRY] has_valid_event: {has_valid_event}")
-    if not has_valid_event:
+    if not any(not e.get("ignore_ledger") for e in events):
         return
     ctx = hooks_bp.get_context(workspace_id)
 
@@ -107,9 +107,8 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
         active_rules = ctx.db.execute(
             "SELECT * FROM hooks_rules WHERE enabled = 1"
         ).fetchall()
-        print(f"🔎 [HOOKS TELEMETRY] Found {len(active_rules)} active rules.")
     except Exception as e:
-        print(f"🔎 [HOOKS TELEMETRY] Failed to fetch active rules: {e}")
+        print(f"⚠️ [Hooks] Could not read the active rules: {e}")
         return
 
     if not active_rules:
@@ -121,7 +120,10 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
     # Evaluate rules against touched targets
     for rule in active_rules:
         if not _is_hook_approved(ctx, rule['id'], rule['command']):
-            print(f"🔒 [Hooks] Skipping rule '{rule['name']}': its command has not been approved by a person.")
+            unapproved = (ctx.workspace_id, _hook_signature(rule['id'], rule['command']))
+            if unapproved not in _REPORTED_UNAPPROVED:
+                _REPORTED_UNAPPROVED.add(unapproved)
+                print(f"🔒 [Hooks] Skipping rule '{rule['name']}': its command has not been approved by a person.")
             continue
         r_type = rule['trigger_type']
         r_target = rule['trigger_target']
@@ -133,15 +135,12 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
         elif r_type == 'repo_bucket_update':
             if r_target in touched_buckets or (r_target.startswith('ALL::') and any(b.endswith('::' + r_target.split('::')[1]) for b in touched_buckets)):
                 should_trigger = True
-        print(f"🔎 [HOOKS TELEMETRY] Evaluating Rule: '{rule['name']}'. Type: {r_type}, Target: {r_target}. should_trigger: {should_trigger}")
         if should_trigger:
             try:
                 if ctx.jobs.is_in_flight("execute_rule_task", args_like=f'%"rule_id": "{rule["id"]}"%', window_sec=3.0):
-                    print(f"🔎 [HOOKS TELEMETRY] Skipping Rule '{rule['name']}' due to active/recent debounce lock.")
                     continue
             except Exception as db_err:
                 print(f"⚠️ [Hooks] Warning: Deduplication query failed: {db_err}")
-            print(f"🔎 [HOOKS TELEMETRY] Submitting Rule '{rule['name']}' to worker queue.")
             ctx.jobs.submit(
                 "execute_rule_task", 
                 rule_id=rule['id'], 
@@ -149,6 +148,8 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
                 command=rule['command'],
                 job_category="system_background"
             )
+
+
 def _hook_signature(rule_id: str, command: str) -> str:
     """Approval key for one rule running one exact command."""
     return f"{rule_id}:{hashlib.sha256(command.encode('utf-8')).hexdigest()[:16]}"

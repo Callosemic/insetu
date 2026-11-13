@@ -32,6 +32,7 @@ export const UpdateStore = createExtensionStore('Update', {
     lastPublishTime: 0,
     latestBuildArtifact: null,
     isPrerelease: false,
+    statusRepo: '',
     _runPreviewJob: async (repo, endpoint, actionType, defaultOutput, defaultChangelog, tab, defaultCaption, extraPayload = {}) => {
         if (!repo) return;
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('update')) return;
@@ -104,7 +105,7 @@ export const UpdateStore = createExtensionStore('Update', {
                             layout.openWindow({
                                 id: 'update:preview',
                                 component: 'sutram-report-projection',
-                                label: actionType === 'log_view' ? 'Release Execution Log' : 'Release Preview',
+                                label: actionType === 'log_view' ? 'Release Execution Log' : `Release Preview · ${repo}`,
                                 icon: 'package',
                                 intent: 'success',
                                 extName: 'update',
@@ -213,8 +214,7 @@ export const UpdateStore = createExtensionStore('Update', {
     },
     _executeFetchRepoStatus: async (repo, silent = false) => {
         if (!repo) return;
-        const state = UpdateStore.getState();
-        if (state.isBackendMissing) return;
+        if (UpdateStore.getState().isBackendMissing) return;
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('update')) return;
         if (!silent) UpdateStore.setState({ repoLoading: true });
         try {
@@ -227,10 +227,11 @@ export const UpdateStore = createExtensionStore('Update', {
                 const data = await res.json();
                 window.inSetu.utils.pollJob(data.job_id, {
                     onComplete: (statusData) => {
+                        if (statusData.artifact.repo !== UpdateStore.getState().targetRepo) return; // a repository no longer selected (#21)
                         const versionStr = statusData.artifact.version || '';
                         const isExistingPrerelease = Boolean(versionStr && (versionStr.includes('-') || /[a-zA-Z]/.test(versionStr)));
                         UpdateStore.setState({ 
-                            repoVersion: statusData.artifact.version, 
+                            repoVersion: statusData.artifact.version, statusRepo: statusData.artifact.repo,
                             nextVersion: statusData.artifact.next_version || null,
                             hasPendingBump: statusData.artifact.has_pending_bump === true,
                             bumpReason: statusData.artifact.bump_reason || '',
@@ -552,7 +553,7 @@ export class InSetuExtUpdate extends InSetuElement {
                 nextVersion: state.nextVersion,
                 hasPendingBump: !!state.hasPendingBump,
                 bumpReason: state.bumpReason || '',
-                repoLoading: !!state.repoLoading,
+                repoLoading: !!state.repoLoading || (!!state.targetRepo && !state.isBackendMissing && state.statusRepo !== state.targetRepo),
                 repoConfigured: state.repoConfigured,
                 hasPyproject: state.hasPyproject !== false,
                 isClean: state.isClean !== false,
@@ -592,24 +593,22 @@ export class InSetuExtUpdate extends InSetuElement {
                 }
             }
         );
-const initRepos = AppStore.getState()?.allRepos || this.ecosystem?.allRepos || [];
-this.allRepos = initRepos;
-if (!UpdateStore.getState().targetRepo && initRepos.length > 0) {
-    this.targetRepo = initRepos[0];
-    UpdateStore.setState({ targetRepo: initRepos[0] });
-    UpdateStore.getState().fetchRepoStatus(initRepos[0]);
-}
-
-this.subscribe(
-    AppStore,
-    state => state.allRepos || [],
-    (allRepos) => {
-        this.allRepos = allRepos;
-        if (!this.targetRepo && allRepos.length > 0) {
-            UpdateStore.setState({ targetRepo: allRepos[0] });
+        const initRepos = AppStore.getState()?.allRepos || this.ecosystem?.allRepos || [];
+        this.allRepos = initRepos;
+        if (!UpdateStore.getState().targetRepo && initRepos.length > 0) {
+            UpdateStore.setState({ targetRepo: initRepos[0] });
         }
-    }
-);
+
+        this.subscribe(
+            AppStore,
+            state => state.allRepos || [],
+            (allRepos) => {
+                this.allRepos = allRepos;
+                if (!this.targetRepo && allRepos.length > 0) {
+                    UpdateStore.setState({ targetRepo: allRepos[0] });
+                }
+            }
+        );
 
         this.registerGlobalListener('insetu:git:diffs-refreshed', window, () => {
             if (this.targetRepo) {
@@ -781,7 +780,7 @@ this.subscribe(
                                         <sutram-async-btn 
                                             ?compact=${true}
                                             icon="zap"
-                                            label="Bump to v${this.nextVersion}" 
+                                            label="Bump ${this.targetRepo} to v${this.nextVersion}" 
                                             intent="success" 
                                             .onClick=${async () => await UpdateStore.getState().previewBump(this.targetRepo)}>
                                         </sutram-async-btn>
@@ -960,7 +959,7 @@ this.subscribe(
                             <sutram-async-btn 
                                 ?fullWidth=${true} 
                                 icon="package"
-                                label="${this.hasPendingBump ? 'Step 1: Bump to v' + this.nextVersion : 'Step 1: Bump & Tag'}" 
+                                label="${this.hasPendingBump ? `Step 1: Bump ${this.targetRepo} to v${this.nextVersion}` : `Step 1: Bump & Tag ${this.targetRepo}`}" 
                                 intent="${this.hasPendingBump ? 'success' : 'primary'}" 
                                 ?disabled=${!this.repoConfigured || !this.isClean}
                                 .onClick=${async () => await UpdateStore.getState().previewBump(this.targetRepo)}>

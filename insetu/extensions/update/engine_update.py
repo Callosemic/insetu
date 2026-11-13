@@ -642,7 +642,7 @@ def _background_status_task(ctx, repo: str):
             print(f"⚠️ [Semantic Update] PyPI validation ping failed for '{package_name}': {e}")
             pypi_published = False
             pypi_package_exists = False
-    return {"message": "Status resolved.", "artifact": {
+    return {"message": "Status resolved.", "artifact": {"repo": repo,
         "version": version, 
         "next_version": next_version,
         "has_pending_bump": has_pending_bump,
@@ -782,7 +782,7 @@ def api_update_status(ctx):
     if not repo: 
         return {"error": "Repo required"}, 400
 
-    job_id = ctx.jobs.submit("status_task", repo=repo, job_category="system_background", coalesce=True)
+    job_id = ctx.jobs.submit("status_task", repo=repo, job_category="system_background", coalesce="args")
     return {"status": "accepted", "job_id": job_id}, 202
 @update_bp.worker("force_version_task")
 def _background_force_version(ctx, repo: str, new_version: str):
