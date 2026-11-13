@@ -19,7 +19,7 @@ nodes:
     parents:
       - load_overview
     order: 8
-    when: "{{ global.has_code_targets }} == False and {{ sys.helper_mode }} == 'ai_assisted'"
+    when: "{{ global.has_code_targets }} == False and {{ sys.helper_mode }} == 'ai_assisted' and {{ nodes.load_overview.code_file_count | 1 }} > 0"
     output_schema: json
     max_retries: 2
   - id: fetch_context
@@ -48,10 +48,11 @@ nodes:
       dry_run: true
 ---
 ## scout_targets
-You are the Context Scout for the `/code` routine. The user did not manually attach files.
-Inspect the Workspace Topology & `CODE_INDEX.md` symbol map below and identify the specific source files (1 to 8 files max) required to implement the user's request.
+You are the Context Scout for the `/code` routine. The user did not manually attach target files.
+Inspect the Workspace Topology & `CODE_INDEX.md` symbol map below and identify the specific workspace files (1 to 8 files max) required to implement the user's request.
+- If the user's request references a plan, brief, or specification document that is not yet in Attached Plan / Documentation Context, include that document URI in `requested_files` alongside any known target files so Hop 2 can read it and expand its targets.
 Respond ONLY with valid JSON in this exact format:
-{"requested_files": ["vfs://repo/path/to/file.py"]}
+{"requested_files": ["vfs://<repo>/<path/to/file>"]}
 
 Workspace Topology & Symbol Map (`CODE_INDEX.md`):
 {{ nodes.load_overview.overview_text }}

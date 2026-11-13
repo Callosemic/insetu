@@ -1,6 +1,6 @@
 ## Yomama Patch Protocol
 
-Provide all workspace file modifications exclusively using Yomama Bridge directives inside standard `text` code blocks. Always use canonical `vfs://<repo>/<path>` or `ctx://<volume>/<path>` URIs in `<<<<<<< FILE:` headers.
+Provide all workspace file modifications and `QUERY_CONTEXT` probes exclusively inside fenced ```` ```text ```` code blocks (never emit bare `<<<<<<<` or `>>>>>>>` lines outside a code fence, as web-chat Markdown renderers corrupt `>>>>>>>` into nested `> > >` blockquotes). Always use canonical `vfs://<repo>/<path>` or `ctx://<volume>/<path>` URIs in `<<<<<<< FILE:` headers, and escape any literal triple backticks or 7-chevron markers *inside* a patch body using `{{ymm:`x3}}`, `{{ymm:<x7}}`, `{{ymm:=x7}}`, and `{{ymm:>x7}}`.
 
 ### 1. Standard Code Blocks (`SEARCH` / `REPLACE`)
 ```text

@@ -5,15 +5,25 @@ shows up in Routine Studio instead of running with an empty prompt.
 It resolves prompts through the same functions a run uses (`read_prompt_with_cascade`, `resolve_prompt_text`), so a
 routine the check passes resolves the same way at run time.
 """
+import hashlib
+import json
 import re
-from typing import Any, Dict, List, Optional
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
-from insetu.core.agent.orchestrator import load_routine_definition
+from insetu.core.agent.routine_loader import load_routine_definition
 from insetu.core.prompts.engine_prompts import read_prompt_with_cascade, resolve_prompt_text
 from insetu.core.utils_core import InSetuURI, get_sister_repos
 
 _MISSING_INCLUDE = re.compile(r"\[!\] MACRO TARGET NOT FOUND: (\S+)")
 _DASHES_ONLY = re.compile(r"[-\s]+")
+# Results of the last check per (workspace, routine): (checked at, summary fingerprint, problems). A result depends on
+# the routine and on every prompt it reaches, so it is dropped when any Markdown or YAML file is saved in the workspace,
+# and it expires on its own to pick up edits made outside insetu.
+PROBLEMS_CACHE_SECONDS = 30.0
+_PROBLEMS_CACHE: Dict[Tuple[str, str], Tuple[float, str, List[Dict[str, Any]]]] = {}
+_PROBLEMS_CACHE_LOCK = threading.Lock()
 
 
 def _finding(severity: str, code: str, node_id: Optional[str], uri: Optional[str], message: str) -> Dict[str, Any]:
@@ -85,12 +95,35 @@ def check_routine(ctx, routine: Dict[str, Any]) -> List[Dict[str, Any]]:
     return findings
 
 
+def forget_routine_problems(workspace_id: Optional[str] = None, saved_path: Optional[str] = None) -> None:
+    """Drops remembered check results: for one workspace when a prompt or routine file may have changed, or all of them."""
+    if saved_path is not None and not str(saved_path).lower().endswith((".md", ".yaml", ".yml")):
+        return
+    with _PROBLEMS_CACHE_LOCK:
+        for key in [k for k in _PROBLEMS_CACHE if workspace_id is None or k[0] == (workspace_id or "default")]:
+            del _PROBLEMS_CACHE[key]
+
+
 def attach_routine_problems(ctx, routines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Adds a `problems` list to each routine summary (as listed for Routine Studio). A routine that cannot be loaded gets one error saying why."""
+    workspace = getattr(ctx, "workspace_id", None) or "default"
+    now = time.monotonic()
     for summary in routines:
         ref = summary.get("filepath") if str(summary.get("filepath") or "").startswith(("ctx://", "ws://", "vfs://")) else summary.get("id")
+        described = {k: v for k, v in summary.items() if k != "problems"}
+        fingerprint = hashlib.sha256(json.dumps(described, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        key = (workspace, str(ref))
+        with _PROBLEMS_CACHE_LOCK:
+            cached = _PROBLEMS_CACHE.get(key)
+        if cached and cached[1] == fingerprint and 0 <= now - cached[0] < PROBLEMS_CACHE_SECONDS:
+            summary["problems"] = [dict(p) for p in cached[2]]
+            continue
         try:
-            summary["problems"] = check_routine(ctx, load_routine_definition(ctx, ref))
+            problems = check_routine(ctx, load_routine_definition(ctx, ref))
         except Exception as exc:
             summary["problems"] = [_finding("error", "routine_unreadable", None, summary.get("filepath"), f"The routine could not be loaded: {exc}")]
+            continue
+        with _PROBLEMS_CACHE_LOCK:
+            _PROBLEMS_CACHE[key] = (now, fingerprint, [dict(p) for p in problems])
+        summary["problems"] = problems
     return routines

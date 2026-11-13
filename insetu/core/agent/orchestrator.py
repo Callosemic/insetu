@@ -1,903 +1,57 @@
-import ast
-from datetime import datetime
 import json
 import re
 import secrets
 import threading
-from pathlib import Path
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
-from insetu.core.sdk import (
-    TemplateOverlayVFSDriver,
-    execution_frame,
-    CycleError,
-    resolve_dag_wavefronts,
-    extract_template_variables,
-    slugify,
-)
+from insetu.core.sdk import execution_frame, get_dynamic_read_only_capabilities, get_dynamic_routine_banned_capabilities
 from insetu.core.utils_core import (
-    InSetuURI,
-    interpolate_mustache_chain as _interpolate_all_syntax,
-    load_yaml_string,
-    parse_frontmatter,
+    InSetuURI, get_sister_repos, interpolate_mustache_chain as _interpolate_all_syntax,
     resolve_context_var_path as _resolve_var_path,
-    update_frontmatter,
-    get_sister_repos,
 )
 from insetu.core.bridge.parser import parse_blocks, serialize_block_chunk
 from insetu.core.prompts.engine_prompts import require_prompt_text, resolve_prompt_text
-from insetu.core.topology.engine_topology import (
-    build_sys_landmarks_context,
-    clamp_uris_to_topology,
-)
+from insetu.core.topology.engine_topology import build_sys_landmarks_context, clamp_uris_to_topology
 from insetu.core.gather.context_assemble import (
-    assemble_context_payload,
-    collect_workspace_secrets as _collect_secret_values_for_scrubbing,
-    discover_constitution_files,
-    resolve_query_context,
-    scrub_outbound_secrets as _scrub_outbound_secrets,
+    assemble_context_payload, collect_workspace_secrets as _collect_secret_values_for_scrubbing,
+    discover_constitution_files, project_resource_lens, resolve_query_context,
+    scrub_outbound_secrets as _scrub_outbound_secrets, slice_code_index_for_blast_radius,
+)
+from insetu.core.agent.envelope import RoutineEnvelope, record_trace_step
+from insetu.core.agent.expressions import (
+    evaluate_when_condition, normalize_condition_expr as _normalize_condition_expr,
+    strip_yomama_blocks_keep_prose, vault_if_oversized as _vault_if_oversized,
 )
 from insetu.core.agent.schemas import extract_query_context_directives, get_schema_directive
-
-SCRATCH_VAULT_THRESHOLD_BYTES = 256 * 1024
-MAX_RAG_FILES_PER_HOP = 15
+from insetu.core.agent.routine_loader import (
+    MAX_RAG_FILES_PER_HOP, build_context_file_metrics, clamp_rag_files_to_topology,
+    collect_live_files_for_patch_healing as _collect_live_files_for_patch_healing,
+    compile_node_wavefronts as _compile_node_wavefronts, extract_doc_referenced_files,
+    is_prose_document_uri, load_routine_definition, persist_routine_response as _persist_routine_response,
+    resolve_routine_mode,
+)
 DEFAULT_STEP_BUDGET = 25
 DEFAULT_TOKEN_BUDGET = 120000
-_ROUTINES_DRIVER = TemplateOverlayVFSDriver(module_subdir="routines")
 
 ROUTINE_BANNED_CAPABILITIES = frozenset({
     "dev.exec", "fs.download_zip", "topology.clean_conflicts",
-    "bridge.test.approve",  # P5: only a person approves commands; a routine must never approve its own.
-    "preview.approve_command",  # P5: same for custom preview launch commands.
-    "system.directives.accept",  # S8: only a person accepts or edits directives through the UI route.
-    "system.directives.revoke",
-    "system.directives.save",
-    "preview.open_lan",  # S2: LAN exposure is a person's grant, never a routine's.
-    "dev.sql.query",
-    "system.reboot",
-    "system.panic",
-    "system.workspaces.delete",
-    "system.extensions.install_deps",
-    "system.extensions.workspace.approve",  # S8: only a person approves code that insetu will run.
-    "system.extensions.workspace.revoke",
-    "system.protected.confirm",  # S8: only a person confirms a change to a protected file.
-    "system.protected.discard",
-    "system.UpdateConfig",
-    "system.CreateWorkspace",
-    "system.DeleteWorkspace",
-    "system.SwitchWorkspace",
-    "system.RebootServer",
-    "system.UpdateHostTopology",
-    "hooks.save",
-    "hooks.toggle", "hooks.approve",  # S8: enabling or approving a rule approves its command.
-    "hooks.execute",
-    "cronic.schedule",
-    "cronic.run_now",
+    "bridge.test.approve", "preview.approve_command",  # P5: only a person approves commands.
+    "system.directives.accept", "system.directives.revoke", "system.directives.save",  # S8: human-only directives.
+    "preview.open_lan", "dev.sql.query", "system.reboot", "system.panic", "system.workspaces.delete",
+    "system.extensions.install_deps", "system.extensions.workspace.approve", "system.extensions.workspace.revoke",
+    "system.protected.confirm", "system.protected.discard", "system.UpdateConfig", "system.CreateWorkspace",
+    "system.DeleteWorkspace", "system.SwitchWorkspace", "system.RebootServer", "system.UpdateHostTopology",
+    "hooks.save", "hooks.toggle", "hooks.approve", "hooks.execute", "cronic.schedule", "cronic.run_now",
+    "agent.messages.append", "agent.ingest_reply", "cartographer.claim_index",
 })
 READ_ONLY_MODE_ALLOWED_CAPABILITIES = frozenset({
-    "topology.overview",
-    "topology.landmarks",
-    "topology.verify_plan_targets",
-    "topology.audit_upkeep",
-    "context.assemble",
-    "gather.context.assemble",
-    "gather.context.query",
-    "gather.pack_selection",
-    "cartographer.extract",
-    "cartographer.verify_plan_targets",
-    "agent.ensure_plan_file",
-    "agent.resolve_test_command",
-    "fs.fetch",
-    "fs.exists",
-    "fs.git_diff",
-    "fs.search",
-    "git.compile_diffs",
-    "git.list_dirty_diff_buckets",
-    "prompts.resolve",
-    "bridge.turn_diff",
-    "bridge.commit_message",
-    "bridge.compile_telemetry",
+    "topology.overview", "topology.landmarks", "topology.verify_plan_targets", "topology.audit_upkeep",
+    "context.assemble", "gather.context.assemble", "gather.context.query", "gather.pack_selection",
+    "cartographer.extract", "cartographer.verify_plan_targets", "agent.ensure_plan_file",
+    "agent.resolve_test_command", "fs.fetch", "fs.exists", "fs.git_diff", "fs.search",
+    "git.compile_diffs", "git.list_dirty_diff_buckets", "prompts.resolve", "bridge.turn_diff",
+    "bridge.commit_message", "bridge.compile_telemetry",
 })
-
-
-
-ROUTINE_RESPONSE_DOCUMENT_EXTENSIONS = frozenset({".md", ".markdown", ".txt", ".json", ".yaml", ".yml", ".csv"})
-
-
-def _response_path_error(response_path: Any) -> Optional[str]:
-    """Returns an error message when a routine's response_path does not target a document file, else None."""
-    if not response_path:
-        return None
-    if not isinstance(response_path, str):
-        return "Routine response_path must be a string URI."
-    try:
-        target_name = InSetuURI(InSetuURI.canonicalize(response_path.replace("{date}", "date"))).basename
-    except (ValueError, TypeError):
-        return f"Routine response_path '{response_path}' is not a valid URI."
-    suffix = Path(target_name).suffix.lower()
-    if suffix not in ROUTINE_RESPONSE_DOCUMENT_EXTENSIONS:
-        allowed = ", ".join(sorted(ROUTINE_RESPONSE_DOCUMENT_EXTENSIONS))
-        return (
-            f"Routine response_path '{response_path}' must target a document ({allowed}). "
-            "Code changes must go through bridge.sync so they are validated and recorded."
-        )
-    return None
-
-
-def _persist_routine_response(ctx, routine: Dict[str, Any], response_text: str) -> Optional[str]:
-    """
-    Saves a routine's declared report (response_path) directly through the VFS and returns its URI.
-    Only document targets are allowed, so response_path can never bypass bridge.sync for code.
-    """
-    resp_path_tpl = routine.get("response_path")
-    if not (resp_path_tpl and response_text and isinstance(resp_path_tpl, str)):
-        return None
-    err = _response_path_error(resp_path_tpl)
-    if err:
-        raise PermissionError(err)
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    resolved_resp_uri = InSetuURI.canonicalize(resp_path_tpl.replace("{date}", date_str))
-    save_meta: Dict[str, Any] = {"original_response_path": resp_path_tpl}
-    if routine.get("archive_path"):
-        save_meta["archive_path"] = routine["archive_path"]
-    ctx.vfs.save(resolved_resp_uri, response_text, data=save_meta)
-    return resolved_resp_uri
-
-
-def validate_routine_definition(routine_dict: Dict[str, Any]) -> Tuple[bool, str, List[List[str]]]:
-    """
-    Validates a parsed routine definition dictionary:
-    1. Verifies slug-safe 'id' and non-empty 'nodes' list.
-    2. Compiles topological wavefronts via Ring 0 resolve_dag_wavefronts (rejecting unknown parents or cycles).
-    3. Validates every node's 'when'/'condition' and 'until' expression via ast.parse(..., mode='eval').
-    Returns (is_valid, error_message, wavefront_id_groups).
-    """
-    if not isinstance(routine_dict, dict):
-        return False, "Routine definition must be a dictionary.", []
-    rid = str(routine_dict.get("id") or "").strip()
-    if not rid or not re.match(r'^[a-zA-Z0-9_-]+$', rid):
-        return False, f"Invalid or missing routine id '{rid}'.", []
-    response_err = _response_path_error(routine_dict.get("response_path"))
-    if response_err:
-        return False, response_err, []
-    nodes = routine_dict.get("nodes")
-    if not isinstance(nodes, list) or len(nodes) == 0:
-        if routine_dict.get("includes") or routine_dict.get("include_prompt"):
-            return True, "", []
-        return False, f"Routine '{rid}' must define a non-empty 'nodes' list.", []
-    def _validate_expr_syntax(expr_str: Optional[str], label: str) -> Optional[str]:
-        if not expr_str or not str(expr_str).strip():
-            return None
-        s_expr, _ = _normalize_condition_expr(str(expr_str).strip(), chain_context=None)
-        try:
-            ast.parse(s_expr, mode="eval")
-            return None
-        except SyntaxError as se:
-            return f"Invalid {label} expression '{expr_str}': {se.msg}"
-
-    try:
-        waves = _compile_node_wavefronts(nodes)
-        wave_ids = [[n["id"] for n in w] for w in waves]
-    except (CycleError, ValueError) as e:
-        return False, f"DAG Topology Error in routine '{rid}': {e}", []
-
-    for n in nodes:
-        if not isinstance(n, dict):
-            continue
-        nid = n.get("id", "unknown")
-        for cond_key in ("when", "condition", "until"):
-            err = _validate_expr_syntax(n.get(cond_key), f"node '{nid}' {cond_key}")
-            if err:
-                return False, err, []
-        if str(n.get("type") or "").lower() == "loop":
-            body_nodes = n.get("body") or n.get("nodes") or []
-            if isinstance(body_nodes, list) and body_nodes:
-                try:
-                    _compile_node_wavefronts(body_nodes)
-                except (CycleError, ValueError) as e:
-                    return False, f"DAG Topology Error in loop '{nid}': {e}", []
-                for bn in body_nodes:
-                    if isinstance(bn, dict):
-                        for ck in ("when", "condition", "until"):
-                            err = _validate_expr_syntax(bn.get(ck), f"loop node '{bn.get('id')}' {ck}")
-                            if err:
-                                return False, err, []
-
-    return True, "", wave_ids
-def _extract_markdown_node_sections(body_text: str) -> Dict[str, str]:
-    """Splits a Markdown-as-Code routine body by top-level `## <node_id>` headings, ignoring empty `---` artifacts and preserving unheaded bodies under 'execute_prompt'."""
-    if not body_text or not body_text.strip():
-        return {}
-    cleaned_body = re.sub(r'^(?:\s*---\s*\n)+', '', body_text.replace("\r\n", "\n")).strip()
-    if not cleaned_body:
-        return {}
-    sections: Dict[str, List[str]] = {}
-    preamble_lines: List[str] = []
-    current_node_id: Optional[str] = None
-    heading_re = re.compile(r'^##\s+([a-zA-Z0-9_-]+)\s*(?:<!--.*?-->)?\s*$')
-    for line in cleaned_body.split("\n"):
-        m = heading_re.match(line.strip())
-        if m:
-            current_node_id = m.group(1).strip()
-            sections.setdefault(current_node_id, [])
-        elif current_node_id is not None:
-            sections[current_node_id].append(line)
-        else:
-            preamble_lines.append(line)
-    if not sections and preamble_lines:
-        clean_preamble = "\n".join(preamble_lines).strip()
-        if clean_preamble:
-            return {"execute_prompt": clean_preamble}
-    return {nid: "\n".join(lines).strip() for nid, lines in sections.items()}
-
-
-def parse_routine_content(raw_text: str, fallback_id: str = "routine", is_markdown: bool = True) -> Dict[str, Any]:
-    """
-    Parses either a Markdown-as-Code (.md) routine (YAML frontmatter + ## <node_id> sections)
-    or a YAML (.yaml/.yml) routine into a normalized definition dict with compiled wavefronts.
-    """
-    if not raw_text or not raw_text.strip():
-        raise ValueError(f"Routine '{fallback_id}' is empty.")
-
-    section_prompts: Dict[str, str] = {}
-    if is_markdown or raw_text.lstrip().startswith("---"):
-        yaml_meta, body, fm_match = parse_frontmatter(raw_text)
-        if fm_match and isinstance(yaml_meta, dict):
-            defn = dict(yaml_meta)
-            section_prompts = _extract_markdown_node_sections(body)
-        else:
-            parsed_yaml = load_yaml_string(raw_text)
-            defn = dict(parsed_yaml) if isinstance(parsed_yaml, dict) else {}
-    else:
-        parsed_yaml = load_yaml_string(raw_text)
-        defn = dict(parsed_yaml) if isinstance(parsed_yaml, dict) else {}
-
-    rid = str(defn.get("id") or fallback_id).strip()
-    defn["id"] = rid
-    title_val = defn.get("title") or defn.get("name") or rid.replace("_", " ").title()
-    defn["title"] = str(title_val)
-    defn["name"] = str(defn.get("name") or title_val)
-    defn["domain"] = str(defn.get("domain") or "Routines")
-    defn["description"] = str(defn.get("description") or "")
-    slash_cmd = defn.get("slash_command")
-    defn["slash_command"] = str(slash_cmd) if slash_cmd else f"/{rid}"
-    for arr_key in ("includes", "show_if_exists", "show_if_missing"):
-        val = defn.get(arr_key)
-        if isinstance(val, list):
-            defn[arr_key] = [InSetuURI.canonicalize(str(x)) for x in val if str(x).strip()]
-        elif isinstance(val, str) and val.strip():
-            defn[arr_key] = [InSetuURI.canonicalize(val.strip())]
-        else:
-            defn[arr_key] = []
-
-    if defn.get("include_prompt") and isinstance(defn["include_prompt"], str):
-        defn["include_prompt"] = InSetuURI.canonicalize(defn["include_prompt"], default_prefix="ctx://prompts/")
-
-    raw_nodes = defn.get("nodes")
-    nodes: List[Dict[str, Any]] = []
-    if isinstance(raw_nodes, list) and raw_nodes:
-        for idx, n in enumerate(raw_nodes):
-            if not isinstance(n, dict) or not n.get("id"):
-                continue
-            node_copy = dict(n)
-            nid = str(node_copy["id"]).strip()
-            node_copy["id"] = nid
-            parents = node_copy.get("parents") or node_copy.get("depends_on") or []
-            if isinstance(parents, str):
-                parents = [p.strip() for p in parents.split(",") if p.strip()]
-            node_copy["parents"] = [str(p).strip() for p in parents if str(p).strip()]
-            node_copy.setdefault("order", (idx + 1) * 10)
-            if node_copy.get("prompt_uri") and isinstance(node_copy["prompt_uri"], str):
-                node_copy["prompt_uri"] = InSetuURI.canonicalize(node_copy["prompt_uri"], default_prefix="ctx://prompts/")
-            if nid in section_prompts and section_prompts[nid]:
-                node_copy["prompt"] = section_prompts[nid]
-            elif (
-                idx == 0
-                and str(node_copy.get("type", "llm")).lower() == "llm"
-                and not node_copy.get("prompt")
-                and not node_copy.get("prompt_uri")
-            ):
-                if "execute_prompt" in section_prompts and len(section_prompts) == 1:
-                    node_copy["prompt"] = section_prompts["execute_prompt"]
-                elif defn.get("include_prompt"):
-                    node_copy["prompt_uri"] = str(defn["include_prompt"])
-            nodes.append(node_copy)
-    elif defn.get("include_prompt") or section_prompts or defn.get("includes"):
-        first_section_id = next(iter(section_prompts.keys()), "execute_prompt")
-        single_node: Dict[str, Any] = {
-            "id": first_section_id,
-            "type": "llm",
-            "tier": str(defn.get("tier") or "standard"),
-            "parents": [],
-            "order": 10,
-        }
-        if defn.get("include_prompt"):
-            single_node["prompt_uri"] = str(defn["include_prompt"])
-        if first_section_id in section_prompts:
-            single_node["prompt"] = section_prompts[first_section_id]
-        nodes.append(single_node)
-
-    defn["nodes"] = nodes
-    if nodes:
-        try:
-            waves = resolve_dag_wavefronts(nodes, id_key="id", parents_key="parents", order_key="order")
-            defn["wavefronts"] = [[n["id"] for n in w] for w in waves]
-        except (CycleError, ValueError):
-            defn["wavefronts"] = [[n["id"]] for n in nodes]
-    else:
-        defn["wavefronts"] = []
-    var_sources = [raw_text]
-    for n in nodes:
-        if isinstance(n.get("prompt"), str):
-            var_sources.append(n["prompt"])
-    defn["variables"] = extract_template_variables("\n".join(var_sources))
-    return defn
-
-
-def serialize_routine_to_markdown(defn: Dict[str, Any]) -> str:
-    """Serializes a routine definition dict into Markdown-as-Code (YAML frontmatter + ## <node_id> sections)."""
-    rid = str(defn.get("id") or slugify(defn.get("title") or defn.get("name") or "routine") or "routine")
-    title = str(defn.get("title") or defn.get("name") or rid)
-    fm_data: Dict[str, Any] = {
-        "id": rid,
-        "title": title,
-        "domain": str(defn.get("domain") or "Routines"),
-        "description": str(defn.get("description") or ""),
-        "slash_command": str(defn.get("slash_command") or f"/{rid}"),
-    }
-    for opt_key in ("scopes", "includes", "show_if_exists", "show_if_missing", "include_prompt", "response_path", "archive_path", "mcp_expose", "transport", "intent_key", "intent_description", "modes", "default_mode", "output"):
-        if opt_key in defn and defn[opt_key] not in (None, [], ""):
-            fm_data[opt_key] = defn[opt_key]
-
-    nodes_list = defn.get("nodes") or []
-    clean_nodes = []
-    body_sections = []
-    for n in nodes_list:
-        if not isinstance(n, dict) or not n.get("id"):
-            continue
-        n_copy = dict(n)
-        prompt_body = str(n_copy.pop("prompt", "") or "").strip()
-        clean_nodes.append(n_copy)
-        if prompt_body:
-            body_sections.append(f"## {n_copy['id']}\n{prompt_body}")
-    if clean_nodes:
-        fm_data["nodes"] = clean_nodes
-    body_str = "\n\n".join(body_sections)
-    return update_frontmatter(body_str, fm_data)
-
-
-def _format_routine_summary(rid: str, loaded: Dict[str, Any]) -> Dict[str, Any]:
-    modes_dict = loaded.get("modes") or {}
-    modes_list = [
-        {
-            "id": m_id,
-            "label": m_cfg.get("label") or f"/{m_id}",
-            "routine": m_cfg.get("routine") or rid,
-            "description": m_cfg.get("description") or "",
-            "effective_intent": m_cfg.get("effective_intent"),
-        }
-        for m_id, m_cfg in modes_dict.items()
-        if isinstance(m_cfg, dict)
-    ]
-    nodes_list = loaded.get("nodes") or []
-    wavefronts = loaded.get("wavefronts")
-    if not wavefronts and nodes_list:
-        try:
-            waves = resolve_dag_wavefronts(nodes_list, id_key="id", parents_key="parents", order_key="order")
-            wavefronts = [[n["id"] for n in w] for w in waves]
-        except Exception:
-            wavefronts = [[n.get("id")] for n in nodes_list if isinstance(n, dict) and n.get("id")]
-
-    title_val = loaded.get("title") or loaded.get("name") or rid.replace("_", " ").title()
-    return {
-        "id": loaded.get("id") or rid,
-        "name": loaded.get("name") or title_val,
-        "title": title_val,
-        "domain": loaded.get("domain") or "Routines",
-        "slash_command": loaded.get("slash_command") or f"/{rid}",
-        "scopes": list(loaded.get("scopes") or []),
-        "description": loaded.get("description") or "",
-        "default_mode": loaded.get("default_mode") or "auto",
-        "transport": loaded.get("transport") or "auto",
-        "intent_key": loaded.get("intent_key"),
-        "intent_description": loaded.get("intent_description"),
-        "modes": modes_list,
-        "nodes": nodes_list,
-        "node_count": len(nodes_list),
-        "wavefronts": wavefronts or [],
-        "variables": loaded.get("variables") or [],
-        "includes": loaded.get("includes") or [],
-        "show_if_exists": loaded.get("show_if_exists") or [],
-        "show_if_missing": loaded.get("show_if_missing") or [],
-        "include_prompt": loaded.get("include_prompt"),
-        "response_path": loaded.get("response_path"),
-        "archive_path": loaded.get("archive_path"),
-        "filepath": loaded.get("filepath") or f"ctx://routines/.templates/agent/{rid}.md",
-        "source": loaded.get("source") or "builtin",
-        "has_override": bool(loaded.get("has_override", False)),
-        "is_shared": bool(loaded.get("is_shared", False)),
-        "source_workspace": loaded.get("source_workspace"),
-    }
-
-
-def _iter_module_routine_files(ctx) -> List[Tuple[str, str, Path]]:
-    results: List[Tuple[str, str, Path]] = []
-    active_mods = ctx.get_active_modules() if ctx is not None else ["agent"]
-    if "agent" not in active_mods:
-        active_mods = ["agent"] + list(active_mods)
-    seen = set()
-    for mod_name in active_mods:
-        if mod_name in seen:
-            continue
-        seen.add(mod_name)
-        mod_dir = _ROUTINES_DRIVER.resolve_module_dir(mod_name, ctx.workspace_id if ctx else "default")
-        if not mod_dir or not mod_dir.exists():
-            continue
-        for ext in ("*.md", "*.yaml", "*.yml"):
-            for p in sorted(mod_dir.glob(ext)):
-                if p.is_file():
-                    results.append((mod_name, p.stem, p))
-    return results
-def _read_routine_uri_or_path(ctx, uri_str: str, fallback_path: Optional[Path] = None) -> Optional[str]:
-    """Reads a routine through the VFS write-through cache first, falling back to VFS absolute artifact read."""
-    if ctx is not None:
-        val = ctx.vfs.read(uri_str)
-        if val is not None:
-            return val
-        if fallback_path is not None:
-            return ctx.vfs.read(fallback_path.as_posix(), is_absolute_artifact=True)
-        return None
-    if fallback_path is not None and fallback_path.is_file():
-        return fallback_path.read_text(encoding="utf-8")
-    return None
-
-
-def list_available_routines(ctx=None) -> List[Dict[str, Any]]:
-    """Discovers all declarative routines (.md and .yaml) across Built-in Module .templates, Global User Templates, Workspace Overrides, and Shared Mounts."""
-    routines_map: Dict[str, Dict[str, Any]] = {}
-
-    # 1. Built-in Module files (.templates/<mod>/*.md)
-    for mod_name, stem, fpath in _iter_module_routine_files(ctx):
-        try:
-            tpl_uri = f"ctx://routines/.templates/{mod_name}/{fpath.name}"
-            raw = _read_routine_uri_or_path(ctx, tpl_uri, fpath)
-            if not raw:
-                continue
-            parsed = parse_routine_content(raw, fallback_id=stem, is_markdown=(fpath.suffix.lower() == ".md"))
-            rid = parsed["id"]
-            parsed["source"] = "builtin"
-            parsed["module"] = mod_name
-            parsed["filepath"] = tpl_uri
-            routines_map[rid] = _format_routine_summary(rid, parsed)
-        except Exception:
-            continue
-
-    # 3. Global User Templates (.templates/user/)
-    try:
-        user_dir = _ROUTINES_DRIVER.ensure_global_user_templates_dir(ctx.workspace_id if ctx else "default")
-        if user_dir.exists():
-            for ext in ("*.md", "*.yaml", "*.yml"):
-                for p in sorted(user_dir.glob(ext)):
-                    if not p.is_file():
-                        continue
-                    try:
-                        user_uri = f"ctx://routines/.templates/user/{p.name}"
-                        raw = _read_routine_uri_or_path(ctx, user_uri, p)
-                        if not raw:
-                            continue
-                        parsed = parse_routine_content(raw, fallback_id=p.stem, is_markdown=(p.suffix.lower() == ".md"))
-                        rid = parsed["id"]
-                        parsed["has_override"] = rid in routines_map
-                        parsed["source"] = "user_template"
-                        parsed["filepath"] = user_uri
-                        routines_map[rid] = _format_routine_summary(rid, parsed)
-                    except Exception:
-                        continue
-    except Exception:
-        pass
-
-    # 4. Workspace Overrides (ctx://routines/ and legacy .insetu/routines/)
-    if ctx is not None:
-        ws_uris = list(ctx.vfs.walk("ctx://routines", exts=[".md", ".yaml", ".yml"]))
-        for ws_uri in sorted(ws_uris):
-            if "/.templates/" in ws_uri:
-                continue
-            try:
-                raw = ctx.vfs.read(ws_uri)
-                if not raw:
-                    continue
-                fname = InSetuURI(ws_uri).basename
-                stem = Path(fname).stem
-                parsed = parse_routine_content(raw, fallback_id=stem, is_markdown=fname.lower().endswith(".md"))
-                rid = parsed["id"]
-                parsed["has_override"] = rid in routines_map
-                parsed["source"] = "workspace"
-                parsed["filepath"] = f"ctx://routines/{fname}"
-                routines_map[rid] = _format_routine_summary(rid, parsed)
-            except Exception:
-                continue
-
-        legacy_dir = Path(ctx.paths["control_dir"]).joinpath("routines")
-        if legacy_dir.exists() and legacy_dir.is_dir():
-            for ext in ("*.md", "*.yaml", "*.yml"):
-                for fpath in sorted(legacy_dir.glob(ext)):
-                    if not fpath.is_file():
-                        continue
-                    try:
-                        ws_uri = f"ctx://routines/{fpath.name}"
-                        raw = _read_routine_uri_or_path(ctx, ws_uri, fpath)
-                        if not raw:
-                            continue
-                        parsed = parse_routine_content(raw, fallback_id=fpath.stem, is_markdown=(fpath.suffix.lower() == ".md"))
-                        rid = parsed["id"]
-                        if rid in routines_map and routines_map[rid].get("source") == "workspace":
-                            continue
-                        parsed["has_override"] = rid in routines_map
-                        parsed["source"] = "workspace"
-                        parsed["filepath"] = ws_uri
-                        routines_map[rid] = _format_routine_summary(rid, parsed)
-                    except Exception:
-                        continue
-        # 5. Peer Workspace Shared Mounts
-        for domain_name in ("agent",):
-            try:
-                for target_ws, ws_uri in ctx.iter_shared_mount_files(domain=domain_name, exts=[".md", ".yaml", ".yml"]):
-                    raw = ctx.vfs.read(ws_uri)
-                    if not raw:
-                        continue
-                    try:
-                        parsed = parse_routine_content(raw, fallback_id=Path(ws_uri).stem, is_markdown=ws_uri.endswith(".md"))
-                        rid = f"{target_ws}__{parsed['id']}"
-                        parsed["id"] = rid
-                        parsed["title"] = f"[🌐 {target_ws}] {parsed.get('title') or rid}"
-                        parsed["name"] = parsed["title"]
-                        parsed["filepath"] = ws_uri
-                        parsed["source"] = "shared"
-                        parsed["is_shared"] = True
-                        parsed["source_workspace"] = target_ws
-                        routines_map[rid] = _format_routine_summary(rid, parsed)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-    return list(routines_map.values())
-def resolve_routine_mode(routine: Dict[str, Any], requested_mode: Optional[str] = None) -> Tuple[str, str, Optional[str]]:
-    """
-    Resolves a requested slash mode against the routine's declarative `modes:` block.
-    Returns (canonical_mode_id, initial_effective_intent, handoff_routine_id).
-    """
-    modes_map = routine.get("modes") or {}
-    default_mode = str(routine.get("default_mode") or "auto").strip().lower()
-    raw = str(requested_mode or default_mode).strip().lower().lstrip("/")
-
-    if raw in modes_map and isinstance(modes_map[raw], dict):
-        m_cfg = modes_map[raw]
-        target_routine = m_cfg.get("routine")
-        return raw, str(m_cfg.get("effective_intent") or "EDIT_CODE"), target_routine
-
-    if default_mode in modes_map and isinstance(modes_map[default_mode], dict):
-        m_cfg = modes_map[default_mode]
-        return default_mode, str(m_cfg.get("effective_intent") or "EDIT_CODE"), m_cfg.get("routine")
-    return raw or "auto", "EDIT_CODE", None
-
-
-def load_routine_definition(ctx, routine_id: str = "workspace_turn") -> Dict[str, Any]:
-    """
-    Loads a declarative routine (.md or .yaml) across the 3-Tier Same-Name Override Cascade:
-    1. Workspace Override (ctx://routines/<id>.md|.yaml or .insetu/routines/<id>.yaml)
-    2. Global User Template (ctx://routines/.templates/user/<id>.md|.yaml)
-    3. Built-in Module Template (ctx://routines/.templates/<mod>/<id>.md|.yaml or _BUILTIN_ROUTINES)
-    """
-    raw_input = str(routine_id or "workspace_turn").strip()
-    if ctx is not None and raw_input.startswith(("ctx://", "ws://", "vfs://")):
-        raw_content = ctx.vfs.read(raw_input)
-        if raw_content:
-            parsed = parse_routine_content(raw_content, fallback_id=Path(raw_input).stem, is_markdown=raw_input.endswith(".md"))
-            parsed["filepath"] = raw_input
-            return parsed
-
-    clean_id = re.sub(r'[^a-zA-Z0-9_-]', '', raw_input.lstrip("/"))
-    if not clean_id:
-        clean_id = "workspace_turn"
-    if ctx is not None:
-        # 1. Workspace Overrides
-        for ext in (".md", ".yaml", ".yml"):
-            ws_uri = f"ctx://routines/{clean_id}{ext}"
-            raw_ws = ctx.vfs.read(ws_uri)
-            if raw_ws:
-                parsed = parse_routine_content(raw_ws, fallback_id=clean_id, is_markdown=(ext == ".md"))
-                parsed["filepath"] = ws_uri
-                parsed["source"] = "workspace"
-                return parsed
-            legacy_path = Path(ctx.paths["control_dir"]).joinpath("routines", f"{clean_id}{ext}")
-            if legacy_path.exists():
-                raw_leg = ctx.vfs.read(legacy_path.as_posix(), is_absolute_artifact=True)
-                if raw_leg:
-                    parsed = parse_routine_content(raw_leg, fallback_id=clean_id, is_markdown=(ext == ".md"))
-                    parsed["filepath"] = f"ctx://routines/{clean_id}{ext}"
-                    parsed["source"] = "workspace"
-                    return parsed
-        # 2. Global User Template Override
-        for ext in (".md", ".yaml", ".yml"):
-            user_uri = f"ctx://routines/.templates/user/{clean_id}{ext}"
-            raw_user = ctx.vfs.read(user_uri)
-            if raw_user:
-                parsed = parse_routine_content(raw_user, fallback_id=clean_id, is_markdown=(ext == ".md"))
-                parsed["filepath"] = user_uri
-                parsed["source"] = "user_template"
-                return parsed
-
-    # 3. Built-in Read-Only Module Templates (ctx://routines/.templates/<mod>/<id>.md)
-    for mod_name, stem, fpath in _iter_module_routine_files(ctx):
-        if stem == clean_id:
-            tpl_uri = f"ctx://routines/.templates/{mod_name}/{fpath.name}"
-            raw = _read_routine_uri_or_path(ctx, tpl_uri, fpath)
-            if not raw:
-                continue
-            parsed = parse_routine_content(raw, fallback_id=clean_id, is_markdown=(fpath.suffix.lower() == ".md"))
-            parsed["filepath"] = tpl_uri
-            parsed["source"] = "builtin"
-            parsed["module"] = mod_name
-            return parsed
-
-    raise FileNotFoundError(f"Agent routine '{clean_id}' not found.")
-_MUSTACHE_COND_RE = re.compile(r'\{\{\s*([a-zA-Z0-9_.\[\]-]+)(?:\s*\|\s*([^{}]*?))?\s*\}\}')
-
-
-def _normalize_condition_expr(
-    raw_expr: str,
-    chain_context: Optional[Dict[str, Any]] = None,
-) -> Tuple[str, Dict[str, Any]]:
-    """
-    Token-safe normalizer for routine 'when' / 'condition' / 'until' expressions:
-    1. Binds {{ path.to.var | fallback }} to synthetic __var_N__ identifiers.
-    2. Rewrites 'LHS contains RHS' -> '(RHS in LHS)' outside string literals.
-    """
-    var_bindings: Dict[str, Any] = {}
-    counter = 0
-
-    def _sub_mustache(m):
-        nonlocal counter
-        expr = m.group(1).strip()
-        fallback = m.group(2).strip() if m.group(2) is not None else None
-        key = f"__var_{counter}__"
-        counter += 1
-        if chain_context is not None:
-            val = _resolve_var_path(expr, chain_context)
-            if (val is None or val == "") and fallback is not None:
-                val = fallback.strip('\'"')
-            var_bindings[key] = val
-        else:
-            var_bindings[key] = None
-        return key
-
-    sanitized = _MUSTACHE_COND_RE.sub(_sub_mustache, str(raw_expr or "").strip())
-    if " contains " in sanitized:
-        sanitized = re.sub(
-            r'(\b__var_\d+__|\b[A-Za-z_][A-Za-z0-9_]*)\s+contains\s+("[^"]*"|\'[^\']*\'|\b__var_\d+__|\b[A-Za-z0-9_.-]+)',
-            r'(\2 in \1)',
-            sanitized,
-        )
-    return sanitized, var_bindings
-
-
-def evaluate_when_condition(when_expr: Optional[str], chain_context: Dict[str, Any]) -> bool:
-    """
-    AST-restricted, zero-eval conditional evaluator for 'when' / 'condition' / 'until' expressions.
-    Supports ==, !=, in, not in, contains, and, or, not over {{ var | default }} references and literals.
-    """
-    if not when_expr or not str(when_expr).strip():
-        return True
-
-    sanitized_expr, var_bindings = _normalize_condition_expr(str(when_expr).strip(), chain_context)
-    try:
-        tree = ast.parse(sanitized_expr, mode="eval")
-    except SyntaxError:
-        return False
-
-    def _eval_node(node: ast.AST) -> Any:
-        if isinstance(node, ast.Expression):
-            return _eval_node(node.body)
-        if isinstance(node, ast.Constant):
-            return node.value
-        if isinstance(node, ast.Name):
-            if node.id in var_bindings:
-                return var_bindings[node.id]
-            if node.id == "true":
-                return True
-            if node.id == "false":
-                return False
-            if node.id == "null":
-                return None
-            return node.id
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-            return not bool(_eval_node(node.operand))
-        if isinstance(node, ast.BoolOp):
-            if isinstance(node.op, ast.And):
-                return all(bool(_eval_node(v)) for v in node.values)
-            if isinstance(node.op, ast.Or):
-                return any(bool(_eval_node(v)) for v in node.values)
-        if isinstance(node, ast.List):
-            return [_eval_node(elt) for elt in node.elts]
-        if isinstance(node, ast.Tuple):
-            return tuple(_eval_node(elt) for elt in node.elts)
-        if isinstance(node, ast.Compare):
-            left = _eval_node(node.left)
-            for op, comp in zip(node.ops, node.comparators):
-                right = _eval_node(comp)
-                if isinstance(op, ast.Eq) and not (left == right):
-                    return False
-                elif isinstance(op, ast.NotEq) and not (left != right):
-                    return False
-                elif isinstance(op, ast.Gt):
-                    try:
-                        if not (float(left) > float(right)):
-                            return False
-                    except (TypeError, ValueError):
-                        return False
-                elif isinstance(op, ast.GtE):
-                    try:
-                        if not (float(left) >= float(right)):
-                            return False
-                    except (TypeError, ValueError):
-                        return False
-                elif isinstance(op, ast.Lt):
-                    try:
-                        if not (float(left) < float(right)):
-                            return False
-                    except (TypeError, ValueError):
-                        return False
-                elif isinstance(op, ast.LtE):
-                    try:
-                        if not (float(left) <= float(right)):
-                            return False
-                    except (TypeError, ValueError):
-                        return False
-                elif isinstance(op, ast.In) and not (right is not None and left in right):
-                    return False
-                elif isinstance(op, ast.NotIn) and not (right is None or left not in right):
-                    return False
-                left = right
-            return True
-        return False
-
-    return bool(_eval_node(tree))
-
-
-def _vault_if_oversized(ctx, node_id: str, output_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    256KB Hybrid Memory Vaulting:
-    Payloads < 256KB stay in-memory; strings >= 256KB are written to ephemeral scratch storage
-    via ctx.vfs.save with ignore_ledger=True and referenced via _uri.
-    """
-    content_str = output_dict.get("content") or output_dict.get("text") or ""
-    if not isinstance(content_str, str):
-        return output_dict
-    byte_len = len(content_str.encode("utf-8"))
-    if byte_len < SCRATCH_VAULT_THRESHOLD_BYTES:
-        return output_dict
-    scratch_file = ctx.jobs.write_scratch(f"scratch_{node_id}.txt", content_str, ttl_seconds=3600, owner="agent_scratch")
-
-    vaulted = dict(output_dict)
-    vaulted["_uri"] = scratch_file
-    vaulted["_vaulted_bytes"] = byte_len
-    return vaulted
-def _compile_node_wavefronts(nodes: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
-    """Compiles routine nodes into level-order topological wavefronts via Ring 0 resolve_dag_wavefronts."""
-    valid_nodes = []
-    for idx, n in enumerate(nodes or []):
-        if not isinstance(n, dict) or not n.get("id"):
-            continue
-        nc = dict(n)
-        parents = nc.get("parents") or nc.get("depends_on") or []
-        if isinstance(parents, str):
-            parents = [p.strip() for p in parents.split(",") if p.strip()]
-        nc["parents"] = [str(p).strip() for p in parents if str(p).strip()]
-        nc.setdefault("order", (idx + 1) * 10)
-        valid_nodes.append(nc)
-    if not valid_nodes:
-        return []
-    return resolve_dag_wavefronts(valid_nodes, id_key="id", parents_key="parents", order_key="order")
-
-
-def _collect_live_files_for_patch_healing(ctx, parsed_blocks: Dict[str, Any], readonly_list: List[str]) -> str:
-    """Reads current disk contents of files targeted by a failed Yomama patch so the healing LLM has exact anchors."""
-    snippets: List[str] = []
-    for raw_file in parsed_blocks.keys():
-        if raw_file in readonly_list:
-            continue
-        try:
-            canon_uri = str(InSetuURI(raw_file))
-        except Exception:
-            continue
-        disk_text = ctx.vfs.read(canon_uri)
-        if disk_text is None:
-            candidates = ctx.find_path_candidates(canon_uri)
-            if candidates:
-                canon_uri = candidates[0]["filepath"]
-                disk_text = ctx.vfs.read(canon_uri)
-        if disk_text is not None:
-            snippets.append(f"=== CURRENT FILE ON DISK: {canon_uri} ===\n{disk_text}")
-    return "\n\n".join(snippets)
-_YOMAMA_BLOCK_STRIP_RE = re.compile(
-    r'(?:```(?:text|python|javascript|js|json|yaml|markdown|md)?[ \t]*\n)?'
-    r'(?:<<<<<<< FILE:[^\n]*\n)?'
-    r'(?:<<<<<<< ID:[^\n]*\n)?'
-    r'(?:<<<<<<< COMMENT\n[\s\S]*?\n)?'
-    r'<<<<<<< (?:SEARCH(?:\s+REGEX)?|TEXTEDIT|JSON_PATCH|RELOCATE|RENAME|MOVE_FILE|ARCHIVE_FILE|DELETE_FILE)\b[\s\S]*?'
-    r'>>>>>>> (?:REPLACE|EXECUTE)[ \t]*'
-    r'(?:\n```)?',
-    re.MULTILINE,
-)
-
-
-def strip_yomama_blocks_keep_prose(raw_text: str) -> str:
-    """Strips raw Yomama patch blocks and empty code fences while preserving surrounding conversational prose."""
-    if not raw_text or "<<<<<<<" not in raw_text:
-        return (raw_text or "").strip()
-    cleaned = _YOMAMA_BLOCK_STRIP_RE.sub("\n", raw_text)
-    cleaned = re.sub(r'^[ \t]*<<<<<<< FILE:[^\n]*$', '', cleaned, flags=re.MULTILINE)
-    cleaned = re.sub(r'```(?:text|python|javascript|js|json|yaml|markdown|md)?\s*```', '', cleaned)
-    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-    return cleaned.strip()
-
-
-def clamp_rag_files_to_topology(ctx, candidate_files: List[str], allowed_repos: Optional[List[str]] = None) -> List[str]:
-    """
-    Clamps and resolves LLM-selected RAG file URIs against topology_ledger within allowed_repos (max MAX_RAG_FILES_PER_HOP).
-    If the LLM emits a bare filename ('engine_topology.py'), a repo-relative path missing a nested package segment
-    ('vfs://insetu/core/languages/__init__.py'), or a new file to be created ('vfs://insetu/insetu/core/languages/markdown.py'),
-    resolves it via ctx.find_path_candidates or its existing parent package __init__.py.
-    """
-    if not candidate_files or ctx is None:
-        return []
-    repos_list = list(allowed_repos or get_sister_repos(ctx.workspace_id))
-    repos = set(repos_list)
-    resolved_uris: List[str] = []
-
-    def _add_unique(uri_str: str) -> None:
-        if uri_str and uri_str not in resolved_uris:
-            resolved_uris.append(uri_str)
-
-    for raw_f in candidate_files:
-        if not raw_f or not isinstance(raw_f, str):
-            continue
-        clean_f = raw_f.strip().split("#", 1)[0].strip()
-        if not clean_f:
-            continue
-        try:
-            canon = InSetuURI.canonicalize(clean_f)
-        except Exception:
-            canon = ""
-
-        # 1. Exact topology_ledger match
-        if canon and InSetuURI(canon).repo in repos:
-            exact = clamp_uris_to_topology(ctx.workspace_id, [canon], expand_dirs=False)
-            if exact:
-                for u in exact:
-                    _add_unique(u)
-                continue
-
-        # 2. If the target is a net-new file inside an existing package directory (e.g. markdown.py in languages/),
-        # include that package's __init__.py and base.py before falling back to global basename search.
-        if canon and InSetuURI(canon).repo in repos:
-            parent_dir = str(InSetuURI(canon).parent_uri).rstrip("/") + "/"
-            siblings = clamp_uris_to_topology(ctx.workspace_id, [parent_dir], expand_dirs=True)
-            if siblings:
-                for preferred_suffix in ("/__init__.py", "/base.py"):
-                    matched_sib = next((s for s in siblings if s.endswith(preferred_suffix)), None)
-                    if matched_sib:
-                        _add_unique(matched_sib)
-                if not any(s.endswith(("/__init__.py", "/base.py")) for s in siblings):
-                    _add_unique(siblings[0])
-                continue
-
-        # 3. Fuzzy / suffix / basename path resolution via SSOT find_path_candidates
-        cands = ctx.find_path_candidates(clean_f, allowed_repos=repos_list)
-        if cands and cands[0].get("score", 0) >= 0.75:
-            _add_unique(cands[0]["filepath"])
-
-    return resolved_uris[:MAX_RAG_FILES_PER_HOP]
 
 
 
@@ -921,6 +75,7 @@ def _execute_declarative_routine_body(
     history_messages: Optional[List[Dict[str, str]]] = None,
     routine_id: str = "workspace_turn",
     inputs: Optional[Dict[str, Any]] = None,
+    envelope: Optional[RoutineEnvelope] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
     is_cancelled_fn: Optional[Callable[[], bool]] = None,
     _depth: int = 0,
@@ -954,14 +109,21 @@ def _execute_declarative_routine_body(
             read_only_files=read_only_files,
             history_messages=history_messages,
             routine_id=handoff_routine,
+            inputs=inputs,
+            envelope=envelope.fork_sub_routine(handoff_routine) if envelope is not None else None,
+            progress_callback=progress_callback,
             is_cancelled_fn=is_cancelled_fn,
             _depth=_depth + 1,
         )
     extra_inputs = dict(inputs or {})
+    prior_chain = dict(extra_inputs.get("prior_chain_context") or {})
+    prior_global = dict(prior_chain.get("global") or {}) if isinstance(prior_chain.get("global"), dict) else {}
     if not user_prompt and extra_inputs.get("user_message"):
         user_prompt = str(extra_inputs["user_message"])
     elif not user_prompt and extra_inputs.get("user_prompt"):
         user_prompt = str(extra_inputs["user_prompt"])
+    if (user_prompt or "").strip() == "Resume Routine Handoff" and prior_global.get("user_prompt"):
+        user_prompt = str(prior_global["user_prompt"])
     routine_id_variants = {
         str(routine.get("id") or "").strip().lstrip("/").lower(),
         str(routine_id or "").strip().lstrip("/").lower(),
@@ -974,12 +136,12 @@ def _execute_declarative_routine_body(
     ordered_nodes = [n for wave in wavefronts for n in wave]
     editable_list = clamp_uris_to_topology(
         ctx.workspace_id,
-        list(attached_files or extra_inputs.get("attached_files") or []),
+        list(attached_files or extra_inputs.get("attached_files") or prior_global.get("attached_files") or []),
         expand_dirs=True,
     )
     readonly_list = clamp_uris_to_topology(
         ctx.workspace_id,
-        list(read_only_files or extra_inputs.get("read_only_files") or []),
+        list(read_only_files or extra_inputs.get("read_only_files") or prior_global.get("read_only_files") or []),
         expand_dirs=True,
     )
     routine_includes = clamp_uris_to_topology(
@@ -987,34 +149,197 @@ def _execute_declarative_routine_body(
         list(routine.get("includes") or []),
         expand_dirs=True,
     )
-    # Extract any explicit vfs:// URIs mentioned directly in user_prompt (e.g. "from vfs://insetu/docs/plans/...")
+    # Extract any explicit vfs:// URIs or bare .md/.txt plan filenames mentioned in user_prompt (preserving Day-0 genesis targets)
     prompt_mentioned_uris = re.findall(r'vfs://[A-Za-z0-9_./-]+', user_prompt or "")
     if prompt_mentioned_uris:
-        clamped_prompt_uris = clamp_uris_to_topology(ctx.workspace_id, prompt_mentioned_uris, expand_dirs=False)
+        clamped_prompt_uris = clamp_rag_files_to_topology(ctx, prompt_mentioned_uris, allow_genesis=True)
         for p_uri in clamped_prompt_uris:
             if p_uri not in editable_list and p_uri not in readonly_list:
                 editable_list.append(p_uri)
+    prompt_file_names = re.findall(
+        r'(?<![A-Za-z0-9_./:-])[A-Za-z][A-Za-z0-9_.-]*\.[A-Za-z][A-Za-z0-9]{0,9}\b',
+        user_prompt or "",
+    )
+    if prompt_file_names:
+        for file_cand in clamp_rag_files_to_topology(ctx, prompt_file_names):
+            if file_cand not in editable_list and file_cand not in readonly_list:
+                editable_list.append(file_cand)
 
     all_context_files = list(dict.fromkeys(editable_list + readonly_list + routine_includes))
+    all_sister_repos = get_sister_repos(ctx.workspace_id)
+
+    def _infer_relevant_repos(docs_text: str) -> List[str]:
+        """Infers which mounted repositories are relevant based on attached files, prompt text, and plan/brief text."""
+        explicit_repos = {
+            InSetuURI(f).repo
+            for f in all_context_files
+            if InSetuURI(f).scheme == "vfs" and InSetuURI(f).repo in all_sister_repos
+        }
+        combined_haystack = f"{user_prompt or ''}\n{docs_text or ''}".lower()
+        mentioned_repos = {
+            r for r in all_sister_repos
+            if re.search(rf'(?<![a-z0-9_-]){re.escape(r.lower())}(?![a-z0-9_-])', combined_haystack)
+        }
+        relevant = explicit_repos | mentioned_repos
+        return [r for r in all_sister_repos if r in relevant] if relevant else list(all_sister_repos)
+
+    handoff_responses = dict(extra_inputs.get("handoff_responses") or {})
+    prior_sent_hashes: Dict[str, str] = dict(
+        extra_inputs.get("web_chat_sent_hashes")
+        or prior_global.get("web_chat_sent_hashes")
+        or {}
+    )
+    # When resuming a handoff, ratify the staged_sent_hashes that were presented in that handoff card
+    if handoff_responses and isinstance(prior_global.get("web_chat_staged_hashes"), dict):
+        prior_sent_hashes.update(prior_global["web_chat_staged_hashes"])
+
+    web_chat_window_mode = str(
+        extra_inputs.get("web_chat_window_mode")
+        or prior_global.get("web_chat_window_mode")
+        or (ctx.settings.get("web_chat_window_mode", "same_window") if hasattr(ctx, "settings") else "same_window")
+        or "same_window"
+    ).strip().lower()
+    if web_chat_window_mode not in ("same_window", "new_window"):
+        web_chat_window_mode = "same_window"
+
+    envelope = (
+        envelope.fork_sub_routine(routine.get("id", routine_id))
+        if envelope is not None
+        else RoutineEnvelope(
+            session_id=session_id,
+            routine_id=routine.get("id", routine_id),
+            user_prompt=user_prompt,
+            web_chat_window_mode="same_window" if web_chat_window_mode == "same_window" else "new_window",
+            sent_hashes=prior_sent_hashes,
+        )
+    )
+    envelope.user_prompt = user_prompt
+    envelope.apply_working_set_delta(
+        add=editable_list,
+        slice_uris=readonly_list,
+        source="user_pinned",
+    )
+    if routine_includes:
+        envelope.apply_working_set_delta(add=routine_includes, source="routine_include")
+
+    def _pack_working_set_selection(target_nid: str = "fetch_context") -> Tuple[Optional[str], str]:
+        """
+        Packs all_context_files + neighborhood CODE_INDEX outline + compacted session transcript
+        in memory without mid-turn ctx.vfs.save calls (Law 2), and computes Same-Window Delta metadata.
+        """
+        if not all_context_files:
+            return None, ""
+        pack_items = [{"filepath": f} for f in all_context_files]
+        outline_sub = slice_code_index_for_blast_radius(ctx, editable_list or all_context_files)
+        pack_artifact = ctx.call(
+            "gather.pack_selection",
+            items=pack_items,
+            gather_only=True,
+            wait=True,
+        )
+        base_filename = pack_artifact.get("base_filename") if isinstance(pack_artifact, dict) else None
+        packed_text = ctx.read_compiled_context(base_filename) if base_filename else ""
+        if outline_sub and "NEIGHBORHOOD CODE_INDEX SUBSET" not in packed_text:
+            packed_text = f"{packed_text}\n\n{outline_sub}"
+
+        routine_uses_history = any(bool(n.get("use_history")) for n in ordered_nodes if isinstance(n, dict))
+        if routine_uses_history and history_messages and len(history_messages) > 1:
+            hist_lines = [
+                f"--- {hm.get('role', 'user').upper()} ---\n{hm.get('content', '')}"
+                for hm in history_messages[:-1]
+                if hm.get("content")
+            ]
+            if hist_lines:
+                hist_block = (
+                    "============================================================\n"
+                    "SESSION TRANSCRIPT (Compacted History & Recallable Receipts)\n"
+                    "============================================================\n\n"
+                    + "\n\n".join(hist_lines)
+                )
+                packed_text = f"{hist_block}\n\n{packed_text}"
+
+        rendered_blocks: List[Tuple[str, str, str]] = []
+        genesis_blocks: List[str] = []
+        for f_uri in all_context_files:
+            lens_u = "slice" if f_uri in readonly_list and f_uri not in editable_list else "full"
+            proj = project_resource_lens(ctx, f_uri, lens="full" if f_uri.startswith("ctx://") else lens_u)
+            served_l = proj.get("served_lens") or lens_u
+            if proj.get("content"):
+                rendered_blocks.append((f_uri, served_l, f"=== {f_uri} [{served_l.upper()}] ===\n{proj['content']}"))
+                if served_l == "genesis":
+                    genesis_blocks.append(f"=== {f_uri} [GENESIS] ===\n{proj['content']}")
+        if genesis_blocks:
+            packed_text = "\n\n".join(genesis_blocks) + ("\n\n" + packed_text if packed_text else "")
+        if outline_sub:
+            rendered_blocks.append(("ctx://contexts/neighborhood_code_index_outline.txt", "outline", outline_sub))
+        recalled_txt = envelope.holding.get("recalled_messages_text")
+        if recalled_txt:
+            packed_text = f"{recalled_txt}\n\n{packed_text}"
+            rendered_blocks.append(("ctx://contexts/recalled_session_messages.txt", "full", recalled_txt))
+
+        _, delta_text, next_hashes, delta_meta = envelope.partition_full_vs_delta_blocks(rendered_blocks)
+        chain_context["global"]["web_chat_sent_hashes"] = dict(envelope.sent_hashes)
+        chain_context["global"]["web_chat_staged_hashes"] = dict(next_hashes)
+        chain_context["global"]["web_chat_window_mode"] = envelope.web_chat_window_mode
+        chain_context["global"]["web_chat_delta_meta"] = delta_meta
+
+        delta_base_filename = base_filename
+        if base_filename and delta_meta.get("unchanged_count", 0) > 0 and delta_text:
+            try:
+                delta_uri = re.sub(r'_context\.txt$', '_delta_context.txt', base_filename)
+                delta_entry = ctx.compile_context(
+                    base_uri=delta_uri,
+                    header_block="SAME-WINDOW INCREMENTAL DELTA CONTEXT\n",
+                    text_blocks=[delta_text],
+                    files=list(delta_meta.get("changed_uris") or all_context_files),
+                    meta={"type": "gather", "title": "Quickpack (Delta)", "domain": "Quickpacks", "desc": "Same-window incremental delta context."},
+                    is_ephemeral=True,
+                )
+                ctx.sync_vfs_barrier()
+                ctx.save_manifest({delta_uri: delta_entry}, is_full_compile=False)
+                for d_ch in delta_entry.get("chunks", [delta_uri]):
+                    out_dp = ctx.resolve_path(d_ch)
+                    if out_dp:
+                        ctx.jobs.register_ephemeral(out_dp, ttl_seconds=86400, owner="quick_pack")
+                delta_base_filename = delta_uri
+            except Exception:
+                delta_base_filename = base_filename
+
+        ro_for_header = list(dict.fromkeys(readonly_list + [f for f in all_context_files if f not in editable_list]))
+        if ro_for_header:
+            ro_header = "READ-ONLY REFERENCE FILES (Do NOT generate patches for these files):\n" + "\n".join(f"- {f}" for f in ro_for_header) + "\n\n"
+            packed_text = ro_header + packed_text
+        node_out = {
+            "status": "completed",
+            "base_filename": base_filename,
+            "delta_base_filename": delta_base_filename,
+            "delta_meta": delta_meta,
+            "content": packed_text,
+            "delta_content": delta_text,
+            "total_tokens_estimated": len(packed_text) // 4,
+        }
+        vaulted_out = _vault_if_oversized(ctx, target_nid, node_out)
+        chain_context[target_nid] = vaulted_out
+        chain_context["nodes"][target_nid] = vaulted_out
+        return base_filename, packed_text
+
     active_profile_id = str(extra_inputs.get("profile_id") or "").strip() or None
     has_raw_patches = bool(parse_blocks(user_prompt or ""))
     if clean_mode == "auto" and has_raw_patches:
         initial_intent = "APPLY_PATCH"
     has_code_targets = any(
-        not str(f).lower().endswith((".md", ".markdown", ".txt"))
+        not is_prose_document_uri(f)
         for f in editable_list
     )
     attached_docs_snippets = []
     for doc_fp in all_context_files:
-        if str(doc_fp).lower().endswith((".md", ".markdown", ".txt")):
+        if is_prose_document_uri(doc_fp):
             doc_txt = ctx.vfs.read(doc_fp)
             if doc_txt:
                 attached_docs_snippets.append(f"=== ATTACHED DOCUMENT: {doc_fp} ===\n{doc_txt[:24000]}")
     attached_docs_content = "\n\n".join(attached_docs_snippets)
-    context_nonce = extra_inputs.get("_context_nonce") or secrets.token_hex(4)
+    context_nonce = extra_inputs.get("_context_nonce") or prior_global.get("_context_nonce") or secrets.token_hex(4)
     secret_values = _collect_secret_values_for_scrubbing(ctx)
-    prior_chain = dict(extra_inputs.get("prior_chain_context") or {})
-    handoff_responses = dict(extra_inputs.get("handoff_responses") or {})
     is_manual_transport = (
         str(routine.get("transport") or "auto").lower() == "manual"
         or extra_inputs.get("transport") == "manual"
@@ -1042,9 +367,15 @@ def _execute_declarative_routine_body(
     strict_test_val = bool(ctx.settings.get("strict_test_enforcement", False) if hasattr(ctx, "settings") else False)
     run_tests_val = bool(ctx.settings.get("run_tests_on_code", False) if hasattr(ctx, "settings") else False)
 
+    prior_nodes_map = dict(prior_chain.get("nodes") or {}) if isinstance(prior_chain.get("nodes"), dict) else {}
+    for pk, pv in prior_chain.items():
+        if pk not in ("_ctx", "sys", "global", "inputs", "nodes", "loop") and isinstance(pv, dict):
+            prior_nodes_map.setdefault(pk, pv)
+
     chain_context: Dict[str, Any] = {
         **prior_chain,
         "_ctx": ctx,
+        "nodes": prior_nodes_map,
         "sys": {
             **sys_landmarks,
             "routine_name": routine.get("id", routine_id),
@@ -1089,8 +420,13 @@ def _execute_declarative_routine_body(
     last_transaction_id = None
     turn_transaction_ids: List[str] = []
     committed_files: List[str] = []
-    context_lock = threading.Lock()
+    context_lock = threading.RLock()
     step_counter = [0]
+
+    def _set_node_state(nid_key: str, val: Dict[str, Any]) -> Dict[str, Any]:
+        chain_context[nid_key] = val
+        chain_context["nodes"][nid_key] = val
+        return val
 
     def _resolve_raw_node_prompt(node: Dict[str, Any]) -> str:
         raw_p = str(node.get("prompt") or node.get("user_message") or "").strip()
@@ -1170,12 +506,19 @@ def _execute_declarative_routine_body(
         when_clause = node.get("when") or node.get("condition")
         if not evaluate_when_condition(when_clause, chain_context):
             with context_lock:
-                chain_context[nid] = {"status": "skipped"}
+                _set_node_state(nid, {"status": "skipped"})
             return
 
         with context_lock:
             step_counter[0] += 1
             cur_step = step_counter[0]
+        node_t0 = time.time()
+        node_cap = str(node.get("action") or node.get("capability") or "").strip()
+        node_tier_hint = str(node.get("tier") or "") if ntype == "llm" else ""
+        record_trace_step(
+            chain_context, context_lock, nid,
+            node_type=ntype, tier=node_tier_hint, capability=node_cap, status="running",
+        )
         step_msg = f"Step {cur_step}/{total_nodes} [{nid}]: Running..."
         ctx.jobs.update_progress(step_msg)
         if callable(progress_callback):
@@ -1189,10 +532,14 @@ def _execute_declarative_routine_body(
                 else (_resolve_var_path(routine_key_expr, chain_context) or routine_key_expr)
             )
             routine_map = node.get("routine_map") or {}
-            target_sub_routine = routine_map.get(str(resolved_key)) or node.get("routine")
+            target_sub_routine = (
+                routine_map.get(str(resolved_key))
+                or node.get("routine")
+                or (routine_map.get("EDIT_CODE") if routine_map else None)
+            )
             if not target_sub_routine:
                 with context_lock:
-                    chain_context[nid] = {"status": "skipped", "reason": f"No sub-routine mapped for key '{resolved_key}'"}
+                    _set_node_state(nid, {"status": "skipped", "reason": f"No sub-routine mapped for key '{resolved_key}'"})
                 return
 
             ctx.jobs.update_progress(f"Step {cur_step}/{total_nodes} [{nid}]: Handing off to '{target_sub_routine}' DAG...")
@@ -1206,16 +553,14 @@ def _execute_declarative_routine_body(
                 history_messages=history_messages,
                 routine_id=target_sub_routine,
                 inputs=extra_inputs,
+                envelope=envelope.fork_sub_routine(target_sub_routine),
+                progress_callback=progress_callback,
                 is_cancelled_fn=is_cancelled_fn,
                 _depth=_depth + 1,
             )
             with context_lock:
                 if sub_res.get("status") == "paused_for_user":
-                    chain_context[nid] = {
-                        "status": "paused_for_user",
-                        "sub_routine": target_sub_routine,
-                        "paused_result": sub_res,
-                    }
+                    _set_node_state(nid, {"status": "paused_for_user", "sub_routine": target_sub_routine, "paused_result": sub_res})
                     return
                 final_response_text = sub_res.get("raw_response") or sub_res.get("response") or final_response_text
                 if sub_res.get("transaction_id"):
@@ -1225,22 +570,22 @@ def _execute_declarative_routine_body(
                 for cf in (sub_res.get("committed_files") or []):
                     if cf not in committed_files:
                         committed_files.append(cf)
-                chain_context[nid] = {
+                _set_node_state(nid, {
                     "status": "completed",
                     "sub_routine": target_sub_routine,
                     "response": final_response_text,
                     "transaction_id": last_transaction_id,
                     "sub_context": sub_res.get("chain_context", {}),
-                }
+                })
             return
         # --- 1. EXEC NODE (Deterministic Capability Invocation via ctx.call) ---
         if ntype == "exec":
             action = str(node.get("action") or node.get("capability") or "").strip()
-            if action in ROUTINE_BANNED_CAPABILITIES:
+            if action in ROUTINE_BANNED_CAPABILITIES or action in get_dynamic_routine_banned_capabilities():
                 raise PermissionError(
                     f"Security Guardrail: Capability '{action}' in node '{nid}' is restricted and cannot be invoked by a declarative routine."
                 )
-            if clean_mode == "ask" and action not in READ_ONLY_MODE_ALLOWED_CAPABILITIES:
+            if clean_mode == "ask" and action not in READ_ONLY_MODE_ALLOWED_CAPABILITIES and action not in get_dynamic_read_only_capabilities():
                 raise PermissionError(
                     f"Security Guardrail: Mutating capability '{action}' in node '{nid}' is not permitted in read-only '{clean_mode}' mode."
                 )
@@ -1255,33 +600,140 @@ def _execute_declarative_routine_body(
                     or scout_parsed.get("files")
                     or []
                 )
-                scouted_files = clamp_rag_files_to_topology(ctx, list(raw_scout_list)) if raw_scout_list else []
-                if not scouted_files and not is_ai_assisted and attached_docs_content:
-                    det_candidates = re.findall(
-                        r'(?:vfs://[A-Za-z0-9_./-]+|`([A-Za-z0-9_./-]+\.(?:py|js|mjs|ts|rs|json|yaml|yml))`)',
-                        attached_docs_content,
-                    )
-                    raw_det = re.findall(r'vfs://[A-Za-z0-9_./-]+', attached_docs_content) + [c for c in det_candidates if c]
-                    scouted_files = clamp_rag_files_to_topology(ctx, raw_det)
+                relevant_repos = _infer_relevant_repos(attached_docs_content)
+                hop1_files = clamp_rag_files_to_topology(ctx, list(raw_scout_list), allowed_repos=relevant_repos, allow_genesis=True) if raw_scout_list else []
+                scouted_files = list(hop1_files)
+                dropped_hop1: List[str] = []
+                # Hop 2 (AI-Assisted Doc -> Target Expansion): If Hop 1 discovered plan/brief/documentation files
+                # whose contents were not yet in attached_docs_content, read those discovered documents and run a
+                # second fast-tier pass over CODE_INDEX.md that can both add targets and drop Hop-1 guesses.
+                newly_discovered_docs = [
+                    sf for sf in scouted_files
+                    if is_prose_document_uri(sf)
+                    and f"ATTACHED DOCUMENT: {sf}" not in (attached_docs_content or "")
+                ]
+                combined_docs_str = attached_docs_content or ""
+                if newly_discovered_docs and is_ai_assisted:
+                    hop2_t0 = time.time()
+                    hop2_doc_blocks = [attached_docs_content] if attached_docs_content else []
+                    for nd_fp in newly_discovered_docs[:4]:
+                        nd_txt = ctx.vfs.read(nd_fp)
+                        if nd_txt:
+                            hop2_doc_blocks.append(f"=== DISCOVERED DOCUMENT: {nd_fp} ===\n{nd_txt[:24000]}")
+                    combined_docs_str = "\n\n".join(b for b in hop2_doc_blocks if b)
+                    relevant_repos = _infer_relevant_repos(combined_docs_str)
+                    for sf in list(scouted_files):
+                        if InSetuURI(sf).scheme == "vfs" and InSetuURI(sf).repo not in relevant_repos:
+                            scouted_files.remove(sf)
+                            dropped_hop1.append(sf)
+                    overview_txt = (chain_context.get("load_overview") or {}).get("overview_text") or ""
+                    if combined_docs_str and overview_txt:
+                        try:
+                            hop2_prompt = (
+                                "You are the Hop-2 Context Scout. Using the discovered plan/specification document(s) below "
+                                "and the Workspace Topology (`CODE_INDEX.md`), identify the exact implementation and verification files "
+                                f"(1 to 10 files max, strictly within repositories {relevant_repos}) required to execute the user's request, "
+                                f"and list any tentative Hop-1 files ({hop1_files}) that should be dropped.\n"
+                                'Respond ONLY with valid JSON: {"requested_files": ["vfs://<repo>/<path>"], "drop_files": ["vfs://<repo>/<irrelevant>"]}\n\n'
+                                f"Discovered Plan / Specification Content:\n{combined_docs_str}\n\n"
+                                f"Workspace Topology & Symbol Map (`CODE_INDEX.md`):\n{overview_txt}\n\n"
+                                f"User Request:\n{user_prompt}"
+                            )
+                            hop2_res = ctx.call(
+                                "llm.complete",
+                                messages=[{"role": "user", "content": hop2_prompt}],
+                                tier="fast",
+                                profile_id=active_profile_id,
+                                output_schema="json",
+                                caller_tag=f"routine:{routine.get('id', routine_id)}:scout_targets:hop2",
+                                wait=True,
+                            )
+                            hop2_parsed = hop2_res.get("parsed") if isinstance(hop2_res, dict) else None
+                            if isinstance(hop2_parsed, dict):
+                                hop2_raw = (
+                                    hop2_parsed.get("requested_files")
+                                    or hop2_parsed.get("candidate_files")
+                                    or hop2_parsed.get("edit_targets")
+                                    or hop2_parsed.get("files")
+                                    or []
+                                )
+                                hop2_drops = set(clamp_rag_files_to_topology(ctx, list(hop2_parsed.get("drop_files") or [])))
+                                hop2_added = clamp_rag_files_to_topology(ctx, list(hop2_raw), allowed_repos=relevant_repos, allow_genesis=True)
+                                if hop2_added:
+                                    for sf in list(scouted_files):
+                                        if not is_prose_document_uri(sf) and (sf in hop2_drops or sf not in hop2_added):
+                                            scouted_files.remove(sf)
+                                            if sf not in dropped_hop1:
+                                                dropped_hop1.append(sf)
+                                    for h2_sf in hop2_added:
+                                        if h2_sf and h2_sf not in scouted_files:
+                                            scouted_files.append(h2_sf)
+                                record_trace_step(
+                                    chain_context, context_lock, "scout_targets",
+                                    node_type="llm", tier="fast", status="completed",
+                                    summary=f"Hop 1 + Hop 2: +{len(scouted_files)} file(s), -{len(dropped_hop1)} dropped",
+                                    added_files=scouted_files, dropped_files=dropped_hop1,
+                                    children=[{
+                                        "id": "scout_targets:hop2",
+                                        "type": "llm",
+                                        "tier": "fast",
+                                        "status": "completed",
+                                        "elapsed_ms": int((time.time() - hop2_t0) * 1000),
+                                        "summary": f"Read {len(newly_discovered_docs)} doc(s) -> +{len(hop2_added)} target(s), -{len(dropped_hop1)} dropped",
+                                    }],
+                                )
+                        except Exception:
+                            pass
+
+                if combined_docs_str:
+                    for doc_ref_fp in extract_doc_referenced_files(ctx, user_prompt, combined_docs_str):
+                        if doc_ref_fp and doc_ref_fp not in scouted_files:
+                            scouted_files.append(doc_ref_fp)
+                        if (
+                            doc_ref_fp
+                            and is_prose_document_uri(doc_ref_fp)
+                            and f"DOCUMENT: {doc_ref_fp}" not in (chain_context["global"].get("attached_docs_content") or "")
+                        ):
+                            sub_doc_txt = ctx.vfs.read(doc_ref_fp)
+                            if sub_doc_txt:
+                                cur_docs = chain_context["global"].get("attached_docs_content") or ""
+                                chain_context["global"]["attached_docs_content"] = (
+                                    f"{cur_docs}\n\n=== REFERENCED DOCUMENT: {doc_ref_fp} ===\n{sub_doc_txt[:24000]}".strip()
+                                )
+                envelope.apply_working_set_delta(
+                    add=scouted_files,
+                    drop=dropped_hop1,
+                    source="scout_hop2" if newly_discovered_docs else "scout_hop1",
+                )
                 for sf in scouted_files:
-                    if sf and sf not in all_context_files:
-                        all_context_files.append(sf)
                     if sf and sf not in editable_list and sf not in readonly_list:
                         editable_list.append(sf)
-                touched_repos = {
-                    InSetuURI(f).repo for f in all_context_files if InSetuURI(f).scheme == "vfs" and InSetuURI(f).repo
+                # Prune irrelevant repositories: when implementation/verification targets were discovered,
+                # scope touched_repos strictly to the repositories containing those non-prose targets.
+                candidate_all = list(dict.fromkeys(editable_list + readonly_list + routine_includes))
+                code_target_repos = {
+                    InSetuURI(f).repo
+                    for f in candidate_all
+                    if InSetuURI(f).scheme == "vfs"
+                    and InSetuURI(f).repo
+                    and not is_prose_document_uri(f)
+                }
+                touched_repos = code_target_repos or {
+                    InSetuURI(f).repo for f in candidate_all if InSetuURI(f).scheme == "vfs" and InSetuURI(f).repo
                 }
                 if not touched_repos and primary_repo_name and primary_repo_name != "workspace":
                     touched_repos = {primary_repo_name}
                 all_const = discover_constitution_files(ctx)
                 scoped_const = [cf for cf in all_const if InSetuURI(cf).repo in touched_repos] if touched_repos else all_const[:2]
-                for cf in scoped_const:
-                    if cf not in all_context_files:
-                        all_context_files.append(cf)
                 readonly_non_const = [f for f in readonly_list if f not in all_const]
+                envelope.sync_lists(editable_list, readonly_non_const, all_context_files, scoped_const=scoped_const)
                 chain_context["global"]["all_context_files"] = list(all_context_files)
                 chain_context["global"]["attached_files"] = list(editable_list)
-                chain_context["global"]["read_only_files"] = readonly_non_const
+                chain_context["global"]["read_only_files"] = list(readonly_non_const)
+                chain_context["global"]["constitution_files"] = list(scoped_const)
+                chain_context["global"]["file_token_map"] = build_context_file_metrics(
+                    ctx, scoped_const, readonly_non_const, editable_list
+                )
 
             if action in ("context.assemble", "gather.context.assemble"):
                 assembled = assemble_context_payload(
@@ -1293,33 +745,27 @@ def _execute_declarative_routine_body(
                     session_id=session_id,
                 )
                 with context_lock:
-                    chain_context["fetch_context"] = _vault_if_oversized(ctx, "fetch_context", {
+                    fc_val = _vault_if_oversized(ctx, "fetch_context", {
                         "status": "completed",
                         "base_filename": assembled.get("context_uri"),
                         "content": assembled.get("content", ""),
                         **assembled,
                     })
-                    chain_context[nid] = chain_context["fetch_context"]
+                    _set_node_state("fetch_context", fc_val)
+                    _set_node_state(nid, fc_val)
                 return
             if action == "gather.pack_selection":
                 if not all_context_files:
                     with context_lock:
-                        chain_context[nid] = {"status": "completed", "content": "", "base_filename": None}
+                        _set_node_state(nid, {"status": "completed", "content": "", "base_filename": None})
                     return
-                pack_artifact = ctx.call(
-                    "gather.pack_selection",
-                    items=[{"filepath": f} for f in all_context_files],
-                    gather_only=True,
-                    wait=True,
+                _, packed_text = _pack_working_set_selection(nid)
+                record_trace_step(
+                    chain_context, context_lock, nid,
+                    node_type="exec", capability=action, status="completed",
+                    elapsed_ms=int((time.time() - node_t0) * 1000),
+                    summary=f"Packed {len(all_context_files)} file(s) + neighborhood index (~{len(packed_text) // 4:,} tok)",
                 )
-                base_filename = pack_artifact.get("base_filename") if isinstance(pack_artifact, dict) else None
-                packed_text = ctx.read_compiled_context(base_filename) if base_filename else ""
-                ro_for_header = list(dict.fromkeys(readonly_list + [f for f in all_context_files if f not in editable_list]))
-                if ro_for_header:
-                    ro_header = "READ-ONLY REFERENCE FILES (Do NOT generate patches for these files):\n" + "\n".join(f"- {f}" for f in ro_for_header) + "\n\n"
-                    packed_text = ro_header + packed_text
-                node_out = {"status": "completed", "base_filename": base_filename, "content": packed_text}
-                chain_context[nid] = _vault_if_oversized(ctx, nid, node_out)
             elif action == "bridge.sync":
                 node_payload = node.get("args") or node.get("payload") or {}
                 raw_payload_arg = node_payload.get("text")
@@ -1328,7 +774,7 @@ def _execute_declarative_routine_body(
                 patch_text = arg_patch_text or gen_out.get("text") or final_response_text or (user_prompt if has_raw_patches else "")
                 if "<<<<<<< " not in patch_text:
                     with context_lock:
-                        chain_context[nid] = {"status": "skipped", "can_commit": True, "failed_cells": [], "reason": "No patch blocks in payload"}
+                        _set_node_state(nid, {"status": "skipped", "can_commit": True, "failed_cells": [], "reason": "No patch blocks in payload"})
                     return
 
                 raw_dry_flag = node_payload.get("validate_only") if "validate_only" in node_payload else node_payload.get("dry_run")
@@ -1428,13 +874,13 @@ def _execute_declarative_routine_body(
                                         + f"\n\n⏪ **Strict Test Gate Failed — Rolled Back Transaction (`{committed_tx_id}`):**\n```\n{fail_tail[:1500]}\n```"
                                     )
                                     with context_lock:
-                                        chain_context[nid] = {
+                                        _set_node_state(nid, {
                                             "status": "failed",
                                             "can_commit": False,
                                             "rolled_back": True,
                                             "test_diagnostics": test_diag_res,
                                             "error": f"Strict test gate failed: {fail_tail[:500]}",
-                                        }
+                                        })
                                     break
 
                         with context_lock:
@@ -1460,6 +906,7 @@ def _execute_declarative_routine_body(
                                 "bridge_telemetry": bridge_res,
                                 "test_diagnostics": test_diag_res,
                             }
+                            chain_context["nodes"][nid] = chain_context[nid]
                         break
 
                     failed_cells_list = []
@@ -1491,6 +938,7 @@ def _execute_declarative_routine_body(
                             "error": err_details,
                             "bridge_telemetry": bridge_res,
                         }
+                        chain_context["nodes"][nid] = chain_context[nid]
                     break
             else:
                 raw_args = node.get("args") or node.get("payload") or {}
@@ -1499,10 +947,16 @@ def _execute_declarative_routine_body(
                     for k, v in raw_args.items()
                 }
                 exec_res = ctx.call(action, wait=True, **resolved_args)
-                if isinstance(exec_res, dict):
-                    chain_context[nid] = {"status": "completed", **exec_res, "result": exec_res}
-                else:
-                    chain_context[nid] = {"status": "completed", "result": exec_res}
+                _set_node_state(
+                    nid,
+                    {"status": "completed", **exec_res, "result": exec_res} if isinstance(exec_res, dict) else {"status": "completed", "result": exec_res},
+                )
+                record_trace_step(
+                    chain_context, context_lock, nid,
+                    node_type="exec", capability=action, status="completed",
+                    elapsed_ms=int((time.time() - node_t0) * 1000),
+                    summary=f"Executed {action}",
+                )
         # --- 1.5 LOOP NODE (Bounded Iterative Convergence Sub-DAG) ---
         elif ntype == "loop":
             max_iters = min(int(node.get("max_iterations", 3) or 3), 10)
@@ -1516,6 +970,7 @@ def _execute_declarative_routine_body(
                     chain_context["loop"] = {"iteration": it_idx, "max_iterations": max_iters}
                     for bnode in body_nodes:
                         chain_context.pop(bnode["id"], None)
+                        chain_context["nodes"].pop(bnode["id"], None)
                 for b_wave in body_waves:
                     if len(b_wave) == 1:
                         _run_single_dag_node(b_wave[0])
@@ -1525,7 +980,7 @@ def _execute_declarative_routine_body(
                     loop_status = "converged"
                     break
             with context_lock:
-                chain_context[nid] = {"status": loop_status, "iterations": it_idx}
+                _set_node_state(nid, {"status": "completed" if loop_status == "converged" else loop_status, "iterations": it_idx})
         # --- 2. LLM NODE (Probabilistic Reasoning via ctx.call('llm.complete')) ---
         elif ntype == "llm":
             tier = _interpolate_all_syntax(str(node.get("tier", "standard")), chain_context) or "standard"
@@ -1573,7 +1028,17 @@ def _execute_declarative_routine_body(
 
                 mapped_results = ctx.jobs.map_parallel(_run_mapped_item, list(enumerate(items_to_map)))
                 with context_lock:
-                    chain_context[nid] = {"status": "completed", "items": mapped_results, "text": "\n\n".join(mapped_results)}
+                    _set_node_state(nid, {"status": "completed", "items": mapped_results, "text": "\n\n".join(mapped_results)})
+                record_trace_step(
+                    chain_context, context_lock, nid,
+                    node_type="llm", tier=tier, status="completed",
+                    elapsed_ms=int((time.time() - node_t0) * 1000),
+                    summary=f"Fan-out ({len(items_to_map)} shards)",
+                    children=[
+                        {"id": f"{nid}[{idx_m}]", "type": "llm", "tier": tier, "status": "completed", "summary": f"Shard {idx_m + 1}: {str(it_m)[:48]}"}
+                        for idx_m, it_m in enumerate(items_to_map[:12])
+                    ],
+                )
                 return
 
             tier, node_system, rendered_prompt = _prepare_llm_prompt_and_system(node, chain_context)
@@ -1587,6 +1052,66 @@ def _execute_declarative_routine_body(
                 msgs = [{"role": "user", "content": rendered_prompt or user_prompt}]
             if pre_supplied_handoff is not None:
                 reply_text = str(pre_supplied_handoff)
+                query_hop_used_key = f"_query_hop_used_{nid}"
+                handoff_queries = (
+                    extract_query_context_directives(reply_text)
+                    if not chain_context["global"].get(query_hop_used_key)
+                    else []
+                )
+                if handoff_queries and not parse_blocks(reply_text):
+                    clamped_q, clamped_drop = envelope.resolve_query_directives(
+                        ctx, handoff_queries, clamp_rag_files_to_topology
+                    )
+                    with context_lock:
+                        chain_context["global"][query_hop_used_key] = True
+                        if isinstance(chain_context["global"].get("handoff_responses"), dict):
+                            chain_context["global"]["handoff_responses"].pop(nid, None)
+                        if clamped_drop:
+                            all_context_files[:] = [f for f in all_context_files if f not in clamped_drop]
+                            editable_list[:] = [f for f in editable_list if f not in clamped_drop]
+                            readonly_list[:] = [f for f in readonly_list if f not in clamped_drop]
+                        for qf in clamped_q:
+                            if qf and qf not in all_context_files:
+                                all_context_files.append(qf)
+                            if qf and qf not in editable_list and qf not in readonly_list:
+                                editable_list.append(qf)
+                        hop_repos = {
+                            InSetuURI(f).repo
+                            for f in all_context_files
+                            if InSetuURI(f).scheme == "vfs" and InSetuURI(f).repo and not is_prose_document_uri(f)
+                        } or {
+                            InSetuURI(f).repo
+                            for f in all_context_files
+                            if InSetuURI(f).scheme == "vfs" and InSetuURI(f).repo
+                        }
+                        for cf in discover_constitution_files(ctx):
+                            if (not hop_repos or InSetuURI(cf).repo in hop_repos) and cf not in all_context_files:
+                                all_context_files.append(cf)
+                        all_const_q = discover_constitution_files(ctx)
+                        scoped_const_q = [cf for cf in all_const_q if cf in all_context_files]
+                        ro_non_const_q = [f for f in readonly_list if f not in all_const_q]
+                        envelope.sync_lists(editable_list, ro_non_const_q, all_context_files, scoped_const=scoped_const_q)
+                        chain_context["global"]["all_context_files"] = list(all_context_files)
+                        chain_context["global"]["attached_files"] = list(editable_list)
+                        chain_context["global"]["read_only_files"] = ro_non_const_q
+                        chain_context["global"]["constitution_files"] = scoped_const_q
+                        chain_context["global"]["file_token_map"] = build_context_file_metrics(
+                            ctx, scoped_const_q, ro_non_const_q, editable_list
+                        )
+                        if all_context_files:
+                            _pack_working_set_selection("fetch_context")
+                        record_trace_step(
+                            chain_context, context_lock, nid,
+                            node_type="llm", tier=tier, status="paused",
+                            elapsed_ms=int((time.time() - node_t0) * 1000),
+                            summary=f"Epistemic probe (1/1): +{len(clamped_q)} added, -{len(clamped_drop)} dropped",
+                            added_files=clamped_q, dropped_files=list(clamped_drop),
+                        )
+                        _set_node_state(nid, {
+                            "status": "paused_for_query_hop",
+                            "requested_files": clamped_q,
+                        })
+                    return
                 if output_schema:
                     from insetu.core.llm.engine_llm import validate_output_schema as _validate_schema
                     ok_s, parsed_s, err_s = _validate_schema(reply_text, output_schema)
@@ -1633,6 +1158,7 @@ def _execute_declarative_routine_body(
                 # Bounded Single-Hop Symbolic Read Directives (<<<<<<< QUERY_CONTEXT, max_query_hops = 1)
                 query_directives = extract_query_context_directives(reply_text)
                 if query_directives:
+                    envelope.resolve_query_directives(ctx, query_directives, clamp_rag_files_to_topology)
                     resolved_reads = [resolve_query_context(ctx, q_dir) for q_dir in query_directives[:3]]
                     read_expansion_msg = (
                         "[SYSTEM CONTEXT EXPANSION (Hop 1/1)]:\n"
@@ -1680,7 +1206,23 @@ def _execute_declarative_routine_body(
                                 editable_list.append(sf)
                         chain_context["global"]["all_context_files"] = list(all_context_files)
                         chain_context["global"]["attached_files"] = list(editable_list)
-                chain_context[nid] = _vault_if_oversized(ctx, nid, node_record)
+                _set_node_state(nid, _vault_if_oversized(ctx, nid, node_record))
+                existing_tr = next(
+                    (t for t in (chain_context["global"].get("execution_trace") or []) if t.get("id") == nid),
+                    None,
+                )
+                record_trace_step(
+                    chain_context, context_lock, nid,
+                    node_type="llm", tier=tier, status="completed",
+                    elapsed_ms=int((time.time() - node_t0) * 1000),
+                    summary=(
+                        f"Scouted {len(node_record.get('requested_files') or [])} candidate file(s)"
+                        if "requested_files" in node_record
+                        else f"Completed ({len(reply_text) // 4:,} out tok)"
+                    ),
+                    added_files=node_record.get("requested_files"),
+                    children=existing_tr.get("children") if existing_tr else None,
+                )
                 sets_global = node.get("sets_global")
                 if isinstance(sets_global, dict):
                     for g_key, g_expr in sets_global.items():
@@ -1727,7 +1269,7 @@ def _execute_declarative_routine_body(
                 continue
             w_clause = n.get("when") or n.get("condition")
             if not evaluate_when_condition(w_clause, chain_context):
-                chain_context[nid] = {"status": "skipped"}
+                _set_node_state(nid, {"status": "skipped"})
                 continue
             active_wave_nodes.append(n)
 
@@ -1761,9 +1303,25 @@ def _execute_declarative_routine_body(
             directive_block = ""
             if out_schema in ("yomama_patch", "conversational_with_patches") and "## Yomama Patch Protocol" not in clean_prompt_only:
                 full_proto = resolve_prompt_text(ctx, target_uri="ctx://prompts/.templates/bridge/yomama_patch_protocol.md", interpolate_vars=False)
+                hop_already_used = bool(chain_context["global"].get(f"_query_hop_used_{n['id']}"))
+                query_hop_note = (
+                    ""
+                    if hop_already_used
+                    else (
+                        "\n\n### Epistemic Context Probe (1 Request Allowed)\n"
+                        "If a target file required to complete this request is missing from the attached Context payload, "
+                        "do NOT guess its contents. Instead, use your 1 allowed context request by responding ONLY with a fenced `text` block:\n"
+                        "```text\n"
+                        "<<<<<<< QUERY_CONTEXT\n"
+                        "vfs://<repo>/<path/to/missing_file>\n"
+                        ">>>>>>> EXECUTE\n"
+                        "```\n"
+                    )
+                )
                 directive_block = (
                     "\n\n---\n"
                     f"{full_proto.strip() if full_proto else get_schema_directive('yomama_patch')}"
+                    f"{query_hop_note}"
                 )
             elif out_schema and out_schema not in ("freeform", "yomama_patch", "conversational_with_patches"):
                 schema_dir = get_schema_directive(out_schema)
@@ -1771,9 +1329,10 @@ def _execute_declarative_routine_body(
                     directive_block = f"\n\n{schema_dir}"
 
             wf_batch_uri = (chain_context.get("fetch_context") or {}).get("base_filename")
-            if not wf_batch_uri and routine_includes:
+            existing_inc = [f for f in (routine_includes or []) if ctx.vfs.read(f) is not None or ctx.is_context_on_disk(f)]
+            if not wf_batch_uri and existing_inc:
                 try:
-                    packed_inc = ctx.call("gather.pack_selection", items=[{"filepath": f} for f in routine_includes], gather_only=False, wait=True)
+                    packed_inc = ctx.call("gather.pack_selection", items=[{"filepath": f} for f in existing_inc], gather_only=False, wait=True)
                     if isinstance(packed_inc, dict) and packed_inc.get("base_filename"):
                         wf_batch_uri = packed_inc["base_filename"]
                         chain_context.setdefault("fetch_context", {"status": "completed", "base_filename": wf_batch_uri, "content": ctx.read_compiled_context(wf_batch_uri)})
@@ -1787,6 +1346,9 @@ def _execute_declarative_routine_body(
                 except Exception:
                     pass
             has_wf_uri = bool(wf_batch_uri and (not is_manual_transport or ctx.is_context_on_disk(wf_batch_uri) or ctx.vfs.read(wf_batch_uri) is not None))
+            fetch_ctx_obj = chain_context.get("fetch_context") or {}
+            delta_batch_uri = fetch_ctx_obj.get("delta_base_filename") or wf_batch_uri
+            delta_meta_obj = fetch_ctx_obj.get("delta_meta") or chain_context["global"].get("web_chat_delta_meta") or {}
             context_uris = [wf_batch_uri] if has_wf_uri else list(all_context_files)
             prompt_text = f"{clean_prompt_only}{directive_block}".strip() if directive_block else clean_prompt_only
             compiled_prompt = prompt_text or usr_p
@@ -1801,6 +1363,10 @@ def _execute_declarative_routine_body(
                 "compiled_prompt": compiled_prompt,
                 "context_uris": context_uris,
                 "workflow_context_uri": wf_batch_uri,
+                "full_context_uri": wf_batch_uri,
+                "delta_context_uri": delta_batch_uri,
+                "delta_meta": delta_meta_obj,
+                "web_chat_window_mode": envelope.web_chat_window_mode,
                 "includes": list(routine_includes if is_manual_transport else all_context_files),
                 "output_schema": n.get("output_schema"),
             }
@@ -1811,10 +1377,13 @@ def _execute_declarative_routine_body(
             pending_handoff_branches.append(branch_entry)
 
         if pending_handoff_branches:
-            try:
-                ctx.call("bridge.compile_telemetry", limit=40, wait=False)
-            except Exception:
-                pass
+            for pb in pending_handoff_branches:
+                record_trace_step(
+                    chain_context, context_lock, pb["node_id"],
+                    node_type="llm", tier=pb.get("tier") or "thinking",
+                    wavefront_index=w_idx, status="paused",
+                    summary="Paused for Web-Chat Handoff",
+                )
             clean_chain = {k: v for k, v in chain_context.items() if k != "_ctx"}
             first_branch = pending_handoff_branches[0]
             return {
@@ -1838,14 +1407,71 @@ def _execute_declarative_routine_body(
             }
 
         total_steps_executed += len(active_wave_nodes)
+        pre_wave_uris = envelope.snapshot_wavefront_uris() if len(active_wave_nodes) > 1 else None
         if len(active_wave_nodes) == 1:
             _run_single_dag_node(active_wave_nodes[0])
         else:
             ctx.jobs.map_parallel(_run_single_dag_node, active_wave_nodes)
+            if pre_wave_uris is not None:
+                envelope.settle_wavefront_uris(pre_wave_uris)
 
         for n in active_wave_nodes:
             n_state = chain_context.get(n["id"])
             if isinstance(n_state, dict):
+                if n_state.get("status") == "paused_for_query_hop":
+                    handoff_responses.pop(n["id"], None)
+                    chain_context.pop(n["id"], None)
+                    chain_context["nodes"].pop(n["id"], None)
+                    wf_batch_uri = (chain_context.get("fetch_context") or {}).get("base_filename")
+                    raw_p = _resolve_raw_node_prompt(n)
+                    clean_prompt_only = _interpolate_all_syntax(raw_p, chain_context) or user_prompt
+                    t_val, sys_p, usr_p = _prepare_llm_prompt_and_system(n, chain_context, include_context=False)
+                    full_proto = resolve_prompt_text(ctx, target_uri="ctx://prompts/.templates/bridge/yomama_patch_protocol.md", interpolate_vars=False)
+                    prompt_text = (
+                        f"{clean_prompt_only}\n\n---\n"
+                        f"{full_proto.strip() if full_proto else get_schema_directive('yomama_patch')}"
+                    ).strip()
+                    fetch_ctx_hop = chain_context.get("fetch_context") or {}
+                    delta_hop_uri = fetch_ctx_hop.get("delta_base_filename") or wf_batch_uri
+                    delta_hop_meta = fetch_ctx_hop.get("delta_meta") or chain_context["global"].get("web_chat_delta_meta") or {}
+                    hop_branch = {
+                        "node_id": n["id"],
+                        "routine_title": routine.get("title") or routine.get("name") or routine.get("id", routine_id),
+                        "wavefront_index": w_idx,
+                        "tier": t_val,
+                        "system_prompt": sys_p,
+                        "user_message": usr_p,
+                        "prompt_text": prompt_text,
+                        "compiled_prompt": prompt_text or usr_p,
+                        "context_uris": [wf_batch_uri] if wf_batch_uri else list(all_context_files),
+                        "workflow_context_uri": wf_batch_uri,
+                        "full_context_uri": wf_batch_uri,
+                        "delta_context_uri": delta_hop_uri,
+                        "delta_meta": delta_hop_meta,
+                        "web_chat_window_mode": envelope.web_chat_window_mode,
+                        "includes": list(all_context_files),
+                        "output_schema": n.get("output_schema"),
+                    }
+                    clean_chain = {k: v for k, v in chain_context.items() if k != "_ctx"}
+                    return {
+                        "status": "paused_for_user",
+                        "routine_id": routine.get("id", routine_id),
+                        "routine_title": hop_branch["routine_title"],
+                        "wavefront_index": w_idx,
+                        "wavefronts": [[nd["id"] for nd in w] for w in wavefronts],
+                        "pending_handoff": {
+                            **hop_branch,
+                            "branches": [hop_branch],
+                        },
+                        "response": "",
+                        "effective_intent": chain_context["global"].get("effective_intent"),
+                        "mode": clean_mode,
+                        "transaction_id": last_transaction_id,
+                        "transaction_ids": turn_transaction_ids,
+                        "committed_files": committed_files,
+                        "chain_context": clean_chain,
+                        "state": clean_chain,
+                    }
                 if n_state.get("status") == "paused_for_user" and n_state.get("paused_result"):
                     return n_state["paused_result"]
                 if isinstance(n_state.get("total_tokens_estimated"), int):
@@ -1881,18 +1507,11 @@ def _execute_declarative_routine_body(
 
     clean_chain = {k: v for k, v in chain_context.items() if k != "_ctx"}
     return {
-        "status": "completed",
-        "routine_id": routine.get("id", routine_id),
+        "status": "completed", "routine_id": routine.get("id", routine_id),
         "wavefronts": [[n["id"] for n in w] for w in wavefronts],
-        "response": display_response_text,
-        "raw_response": final_response_text,
-        "unapplied_patches": unapplied_patches,
-        "output": display_response_text,
-        "effective_intent": chain_context["global"].get("effective_intent"),
-        "mode": clean_mode,
-        "transaction_id": last_transaction_id,
-        "transaction_ids": turn_transaction_ids,
-        "committed_files": committed_files,
-        "chain_context": clean_chain,
-        "state": clean_chain,
+        "response": display_response_text, "raw_response": final_response_text,
+        "unapplied_patches": unapplied_patches, "output": display_response_text,
+        "effective_intent": chain_context["global"].get("effective_intent"), "mode": clean_mode,
+        "transaction_id": last_transaction_id, "transaction_ids": turn_transaction_ids,
+        "committed_files": committed_files, "chain_context": clean_chain, "state": clean_chain,
     }

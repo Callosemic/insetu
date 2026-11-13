@@ -147,7 +147,8 @@ def stream_gemini(api_key: str, model: str, messages: list, system_prompt: str) 
                 continue
             break
         except Exception as e:
-            yield f"data: {json.dumps({'error': f'Gemini API error for model \"{cand_mod}\": {str(e)}'})}\n\n"
+            gemini_error = f'Gemini API error for model "{cand_mod}": {e}'
+            yield f"data: {json.dumps({'error': gemini_error})}\n\n"
             return
 
     if last_http_err is not None:
@@ -158,7 +159,8 @@ def stream_gemini(api_key: str, model: str, messages: list, system_prompt: str) 
         except Exception:
             pass
         detail = f" ({err_body})" if err_body else ""
-        yield f"data: {json.dumps({'error': f'Gemini API HTTP {he.code} for model \"{failed_mod}\": {he.reason}{detail}'})}\n\n"
+        gemini_http_error = f'Gemini API HTTP {he.code} for model "{failed_mod}": {he.reason}{detail}'
+        yield f"data: {json.dumps({'error': gemini_http_error})}\n\n"
 
 
 def stream_openai_compatible(base_url: str, api_key: str, model: str, messages: list, system_prompt: str) -> Generator[str, None, None]:

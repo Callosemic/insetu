@@ -28,18 +28,10 @@ export {
 export class InSetuExtBridge extends InSetuElement {
     static get extensionName() { return 'bridge'; }
     static properties = {
-        cells: { type: Array },
-        activeSurface: { type: String },
-        repairMode: { type: String },
-        autoHeal: { type: Boolean },
-        fastTierStatus: { type: Object },
-        drawerOpen: { type: Boolean },
-        drawerCollapsedDesktop: { type: Boolean },
-        consoleOutput: { type: String },
-        viewMode: { type: String },
-        telemetry: { type: Object },
-        _fileVerificationCache: { type: Object },
-        _autoSwaps: { type: Object }
+        cells: { type: Array }, activeSurface: { type: String }, repairMode: { type: String },
+        autoHeal: { type: Boolean }, fastTierStatus: { type: Object }, drawerOpen: { type: Boolean },
+        drawerCollapsedDesktop: { type: Boolean }, consoleOutput: { type: String }, viewMode: { type: String },
+        telemetry: { type: Object }, _fileVerificationCache: { type: Object }, _autoSwaps: { type: Object }
     };
     static styles = [sharedStyles];
     constructor() {
@@ -55,49 +47,37 @@ export class InSetuExtBridge extends InSetuElement {
         this.viewMode = 'input';
         this._fileVerificationCache = {};
         this._autoSwaps = {};
+        this._lastQueryQuickpack = null;
         this._rejectedAutoSwaps = new Set();
     }
 
     _getRegisteredSurfaces() {
-        const slots = window.ExtensionRegistry?.getLayoutSlots?.() || [];
-        return slots
-            .filter(s => s.slot === 'slots:yomama-surface')
-            .sort((a, b) => (a.order || 99) - (b.order || 99));
+        return (window.ExtensionRegistry?.getLayoutSlots?.() || []).filter(s => s.slot === 'slots:yomama-surface').sort((a, b) => (a.order || 99) - (b.order || 99));
     }
 
     _getRegisteredDrawerWidgets() {
-        const slots = window.ExtensionRegistry?.getLayoutSlots?.() || [];
-        return slots
-            .filter(s => s.slot === 'slots:yomama-drawer')
-            .sort((a, b) => (a.order || 99) - (b.order || 99));
+        return (window.ExtensionRegistry?.getLayoutSlots?.() || []).filter(s => s.slot === 'slots:yomama-drawer').sort((a, b) => (a.order || 99) - (b.order || 99));
+    }
+
+    _isFileCreatedByBatch(file, fileCells = null) {
+        return BridgeStore.getState().isFileCreatedByBatch(file, fileCells);
+    }
+
+    _findCandidateFilesForMissingTarget(file, fileCells = null) {
+        return BridgeStore.getState().findCandidateFilesForMissingTarget(file, fileCells, this.ecosystem?.allRepos || []);
     }
 
     _evaluateAutoSwaps() {
-        if (!this.vfs || !this.vfs.getGlobalManifest) return;
+        if (!this.vfs?.getGlobalManifest) return;
         const cells = BridgeStore.getState().cells || [];
         if (cells.length === 0) {
             this._autoSwaps = {};
             this._rejectedAutoSwaps.clear();
             return;
         }
-
-        const mFiles = this.vfs.getGlobalManifest().filter(f => !f.endsWith('.gitkeep'));
-        const files = Array.from(new Set(cells.map(c => c.file)));
-
-        files.forEach(file => {
-            const fileCells = cells.filter(c => c.file === file);
-            const isAllGenesis = fileCells.length > 0 && fileCells.every(c => /<<<<<<< SEARCH\s*=======/.test(c.content));
-            if (isAllGenesis) return;
+        Array.from(new Set(cells.map(c => c.file))).forEach(file => {
             if (this._fileVerificationCache[file] === false && !this._rejectedAutoSwaps.has(file)) {
-                const cleanFile = file.replace(/\s*\(\d+\)(?=\.[^.\/]+$|$)/, '').trim();
-                const cleanFileLower = cleanFile.toLowerCase();
-                const basename = new window.inSetu.utils.InSetuURI(cleanFile).basename.toLowerCase();
-
-                let cands = mFiles.filter(f => f.toLowerCase().endsWith(cleanFileLower));
-                if (cands.length === 0) {
-                    cands = mFiles.filter(f => f.toLowerCase().endsWith('/' + basename) || f.toLowerCase() === basename);
-                }
-                cands = cands.filter(f => f !== file);
+                const cands = this._findCandidateFilesForMissingTarget(file, cells.filter(c => c.file === file));
                 if (cands.length === 1) {
                     const newPath = cands[0];
                     this._autoSwaps = { ...this._autoSwaps, [newPath]: file };
@@ -169,18 +149,14 @@ export class InSetuExtBridge extends InSetuElement {
         this.registerGlobalListener('paste', window, (e) => {
             if (this.activeSurface !== 'bridge' || !this.offsetParent) return;
             const path = this.getEventPath(e);
-            if (path.some(el => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))) return;
+            const isEditingBridgeInput = path.some(el =>
+                el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) && this.shadowRoot?.contains(el)
+            );
+            if (isEditingBridgeInput) return;
             const text = e.clipboardData?.getData('text') || '';
-            if (text && (
-                text.includes('<<<<<<< FILE:') ||
-                text.includes('<<<<<<< RELOCATE') ||
-                text.includes('<<<<<<< RENAME') ||
-                text.includes('<<<<<<< MOVE_FILE') ||
-                text.includes('<<<<<<< ARCHIVE_FILE') ||
-                text.includes('<<<<<<< DELETE_FILE')
-            )) {
+            if (this._hasBridgeDirective(text)) {
                 e.preventDefault();
-                BridgeStore.getState().parseAndAppendCells(text);
+                this._ingestBridgeText(text);
             }
         });
         this.subscribe(
@@ -246,6 +222,29 @@ export class InSetuExtBridge extends InSetuElement {
     }
     disconnectedCallback() {
         super.disconnectedCallback();
+    }
+
+    _hasBridgeDirective(text) {
+        return Boolean(text && typeof text === 'string' && /^[ \t]*(?:<[ \t]*){3,}(?:FILE:|SEARCH|TEXTEDIT|JSON_PATCH|RELOCATE|RENAME|MOVE_FILE|ARCHIVE_FILE|DELETE_FILE|QUERY_CONTEXT)\b/m.test(text));
+    }
+
+    async _ingestBridgeText(text) {
+        if (!text || typeof text !== 'string') return;
+        BridgeStore.getState().parseAndAppendCells(text);
+        if (/^[ \t]*(?:<[ \t]*){3,}QUERY_CONTEXT[ \t]*$/m.test(text)) {
+            this.setStatus('⏳ Compiling Query Quickpack...', null);
+            try {
+                const res = await this.api.postJson('gather/context/query', { raw_text: text, compile_quickpack: true });
+                if (res?.quickpack?.base_filename) {
+                    this._lastQueryQuickpack = res.quickpack;
+                    this.requestUpdate();
+                    if (this.vfs?.fetchAndCopy) this.vfs.fetchAndCopy(res.quickpack.base_filename);
+                    this.setStatus(`📦 Compiled Query Quickpack (${res.quickpack.file_count} item(s))!`, 3500);
+                }
+            } catch (err) {
+                this.setStatus(`⚠️ Query Quickpack failed: ${err.message}`, 4000, true);
+            }
+        }
     }
     _openEditorModal(cell) {
         BridgeStore.setState({ editCellId: cell.id, editCellOriginalFile: cell.file });
@@ -380,54 +379,7 @@ export class InSetuExtBridge extends InSetuElement {
         };
     }
     async _copyWebChatRepairPrompt(targetFileFilter = null) {
-        const bState = BridgeStore.getState();
-        const tel = bState.telemetry;
-        if (!tel || !Array.isArray(tel.patches)) return;
-        const failedPatches = tel.patches.filter(p => {
-            const isFailed = p.status !== 'resolved' && p.status !== 'auto_skipped';
-            if (!isFailed) return false;
-            if (!targetFileFilter) return true;
-            return (p.resolved_file === targetFileFilter || p.original_file === targetFileFilter);
-        });
-        if (failedPatches.length === 0) return;
-
-        const cellsById = new Map((bState.cells || []).map(c => [c.id, c]));
-        const postBuffers = tel.post_valid_buffers || {};
-        const filesNeeded = Array.from(new Set(failedPatches.map(p => p.resolved_file || p.original_file).filter(Boolean)));
-        const bufferSections = [];
-
-        for (const fp of filesNeeded) {
-            let fileText = postBuffers[fp];
-            if (fileText === undefined) {
-                try {
-                    const res = await this.api.get(`fs/fetch?file=${encodeURIComponent(fp)}`);
-                    if (res.ok) fileText = await res.text();
-                } catch (_) {}
-            }
-            if (fileText !== undefined) {
-                bufferSections.push(`=== CURRENT FILE STATE (AFTER APPLYING VALID PATCHES): ${fp} ===\n${fileText}`);
-            }
-        }
-
-        const failedBlocksText = failedPatches.map(p => {
-            const cell = cellsById.get(p.cell_id);
-            const fp = p.resolved_file || p.original_file || cell?.file || 'vfs://';
-            const errNote = p.error_message ? `# Diagnostic: ${p.error_message}` : '';
-            const rawChunk = cell ? cell.content : '';
-            return `${errNote}\n<<<<<<< FILE: ${fp}\n${rawChunk}`.trim();
-        }).join('\n\n');
-
-        const promptText = [
-            "All other patches in the batch applied cleanly. The following Yomama patch block(s) failed to anchor or had a syntax error against the updated file buffer(s):",
-            "",
-            failedBlocksText,
-            "",
-            ...bufferSections,
-            "",
-            "Please output ONLY the repaired Yomama patch block(s) (`<<<<<<< FILE:` / `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE`) matching the exact lines in the file state above."
-        ].join('\n');
-
-        await this.utils.copyRawText(promptText, "📋 Copied Web-Chat Repair Prompt!");
+        return BridgeStore.getState().copyWebChatRepairPrompt(this.api, this.utils, targetFileFilter);
     }
 
     async _commitCleanFilesOnly() {
@@ -874,6 +826,32 @@ export class InSetuExtBridge extends InSetuElement {
     _renderBridgeSurface(groupedCells) {
         return html`
             <sutram-view>
+                ${this._lastQueryQuickpack && this._lastQueryQuickpack.base_filename ? html`
+                    <sutram-card
+                        .filename=${this._lastQueryQuickpack.base_filename}
+                        .titleText=${`Query Quickpack (${this._lastQueryQuickpack.file_count || 1} item(s))`}
+                        .descriptionText=${(this._lastQueryQuickpack.files || []).map(f => new this.utils.InSetuURI(f).basename).join(', ')}
+                        .detailText=${(this._lastQueryQuickpack.files || []).join(', ')}
+                        icon="package"
+                        intent="highlight"
+                        entityType="file:context"
+                        .entityData=${{
+                            filepath: this._lastQueryQuickpack.base_filename,
+                            isFS: false,
+                            chunks: this._lastQueryQuickpack.chunks || [this._lastQueryQuickpack.base_filename],
+                            suppress: ['file-edit', 'file-browse']
+                        }}
+                        ?disableSelection=${true}>
+                        <sutram-btn
+                            slot="header-actions"
+                            ?compact=${true}
+                            intent="neutral"
+                            icon="x"
+                            title="Dismiss Quickpack card"
+                            @click=${() => { this._lastQueryQuickpack = null; this.requestUpdate(); }}>
+                        </sutram-btn>
+                    </sutram-card>
+                ` : ''}
                 ${this.viewMode === 'input' ? html`
                     ${this.cells.length === 0 ? html`
                         <sutram-surface variant="dropzone" intent="highlight"
@@ -881,7 +859,7 @@ export class InSetuExtBridge extends InSetuElement {
                             @drop=${async e => {
                                 e.preventDefault();
                                 const text = e.dataTransfer.getData('text');
-                                if (text) BridgeStore.getState().parseAndAppendCells(text);
+                                if (text) await this._ingestBridgeText(text);
                             }}>
                             <sutram-stack direction="col" align="center" gap="sm">
                                 <sutram-icon name="bridge" size="xl" intent="highlight"></sutram-icon>
@@ -894,16 +872,18 @@ export class InSetuExtBridge extends InSetuElement {
                         ${Object.entries(groupedCells).map(([file, groupCells]) => {
                             const selectedCount = groupCells.filter(c => c.active).length;
                             const totalCount = groupCells.length;
+                            const isCreatedByBatch = this._isFileCreatedByBatch(file, groupCells);
+                            const isMissingTarget = this._fileVerificationCache[file] === false && !isCreatedByBatch;
                             return html`
                                 <sutram-surface variant="ghost" border="bottom" padding="sm">
                                     <sutram-card-group ?stacked=${true} ?accordion=${true}>
                                     <!-- Target File Card (Top of Stack) -->
                                     <sutram-card
                                         .titleText=${"Target File:"}
-                                        .descriptionText=${this._fileVerificationCache[file] === false ? "⚠️ Target file not found in workspace." : ""}
+                                        .descriptionText=${isMissingTarget ? "⚠️ Target file not found in workspace." : (isCreatedByBatch && this._fileVerificationCache[file] === false ? "✨ New file (will be created on commit)." : "")}
                                         .detailText=${""}
                                         icon="file-code-2"
-                                        intent=${this._fileVerificationCache[file] === false ? 'danger' : 'highlight'}
+                                        intent=${isMissingTarget ? 'danger' : (isCreatedByBatch && this._fileVerificationCache[file] === false ? 'success' : 'highlight')}
                                         entityType="file"
                                         .entityData=${{ filepath: file, isFS: true, suppress: ['file-browse'] }}
                                         selectionStoreKey="none"
@@ -949,20 +929,8 @@ export class InSetuExtBridge extends InSetuElement {
                                                 ` : ''}
                                             </sutram-stack>
                                         </sutram-stack>
-                                        ${this._fileVerificationCache[file] === false && !this._autoSwaps[file] ? (() => {
-                                            let cands = [];
-                                            if (this.vfs && this.vfs.getGlobalManifest) {
-                                                const mFiles = this.vfs.getGlobalManifest().filter(f => !f.endsWith('.gitkeep'));
-                                                const cleanFile = file.replace(/\s*\(\d+\)(?=\.[^.\/]+$|$)/, '').trim();
-                                                const cleanFileLower = cleanFile.toLowerCase();
-                                                const basename = new window.inSetu.utils.InSetuURI(cleanFile).basename.toLowerCase();
-
-                                                cands = mFiles.filter(f => f.toLowerCase().endsWith(cleanFileLower));
-                                                if (cands.length === 0) {
-                                                    cands = mFiles.filter(f => f.toLowerCase().endsWith('/' + basename) || f.toLowerCase() === basename);
-                                                }
-                                                cands = cands.filter(f => f !== file);
-                                            }
+                                        ${isMissingTarget && !this._autoSwaps[file] ? (() => {
+                                            const cands = this._findCandidateFilesForMissingTarget(file, groupCells);
                                             if (cands.length > 0) {
                                                 return html`
                                                     <sutram-surface variant="ghost" border="top" padding="xs" gap="xs">
@@ -1063,7 +1031,7 @@ export class InSetuExtBridge extends InSetuElement {
                                 }
                                 try {
                                     const t = await navigator.clipboard.readText();
-                                    BridgeStore.getState().parseAndAppendCells(t);
+                                    await this._ingestBridgeText(t);
                                 } catch(e) { 
                                     alert('Clipboard access denied.\\n\\nPlease press Ctrl+V (or Cmd+V) anywhere on this screen to paste.'); 
                                 }

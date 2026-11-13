@@ -28,6 +28,7 @@ from .llm_drivers import (
     stream_gemini as _stream_gemini,
     stream_openai_compatible as _stream_openai_compatible,
 )
+from .llm_telemetry import LLM_TELEMETRY_TABLE_SCHEMA, record_llm_call_telemetry
 
 COGNITIVE_TIERS = ("decision", "fast", "standard", "thinking", "frontier")
 
@@ -249,27 +250,7 @@ LLM_SETTINGS_SCHEMA = [
         "description": "Fetches live model lists and token pricing from OpenRouter, Models.dev, and your registered local Ollama instances into .insetu/cache/llm/model_catalog.json."
     }
 ]
-LLM_SCHEMA = {
-    "llm_telemetry": {
-        "call_id": "TEXT PRIMARY KEY",
-        "timestamp": "REAL",
-        "caller_tag": "TEXT",
-        "tier": "TEXT",
-        "endpoint_id": "TEXT",
-        "provider": "TEXT",
-        "model": "TEXT",
-        "output_schema": "TEXT",
-        "prompt_chars": "INTEGER DEFAULT 0",
-        "system_chars": "INTEGER DEFAULT 0",
-        "response_chars": "INTEGER DEFAULT 0",
-        "attempts": "INTEGER DEFAULT 1",
-        "latency_ms": "INTEGER DEFAULT 0",
-        "status": "TEXT",
-        "error_message": "TEXT",
-        "prompt_excerpt": "TEXT",
-        "response_excerpt": "TEXT"
-    }
-}
+LLM_SCHEMA = {"llm_telemetry": LLM_TELEMETRY_TABLE_SCHEMA}
 
 llm_bp = InSetuExtension(
     'llm',
@@ -553,46 +534,15 @@ def api_llm_complete(ctx):
 
     caller_tag = str(data.get("caller_tag") or (f"schema:{output_schema}" if isinstance(output_schema, str) and output_schema else f"tier:{target['tier']}")).strip()
     prompt_joined = "\n".join(str(m.get("content") or "") for m in messages if isinstance(m, dict))
-    prompt_chars = len(prompt_joined)
-    system_chars = len(system_prompt)
     t_start = time.time()
 
     def _record_llm_telemetry(status_str: str, attempts_used: int, resp_str: str, err_str: str = "") -> None:
-        try:
-            from insetu.core.gather.context_assemble import (
-                collect_workspace_secrets as _collect_secrets,
-                scrub_outbound_secrets as _scrub_secrets,
-            )
-            elapsed_ms = int(round((time.time() - t_start) * 1000))
-            secrets_set = _collect_secrets(ctx)
-            safe_prompt = _scrub_secrets(prompt_joined[:4000], secrets_set)
-            safe_resp = _scrub_secrets((resp_str or "")[:4000], secrets_set)
-            safe_err = _scrub_secrets((err_str or "")[:1000], secrets_set)
-            ctx.db.insert_or_replace("llm_telemetry", {
-                "call_id": f"llm_{uuid.uuid4().hex[:12]}",
-                "timestamp": time.time(),
-                "caller_tag": caller_tag,
-                "tier": target["tier"],
-                "endpoint_id": endpoint_id,
-                "provider": provider,
-                "model": model,
-                "output_schema": str(output_schema or ""),
-                "prompt_chars": prompt_chars,
-                "system_chars": system_chars,
-                "response_chars": len(resp_str or ""),
-                "attempts": attempts_used,
-                "latency_ms": elapsed_ms,
-                "status": status_str,
-                "error_message": safe_err,
-                "prompt_excerpt": safe_prompt,
-                "response_excerpt": safe_resp,
-            })
-            ctx.db.execute(
-                "DELETE FROM llm_telemetry WHERE call_id NOT IN (SELECT call_id FROM llm_telemetry ORDER BY timestamp DESC LIMIT 500)"
-            )
-            ctx.db.commit()
-        except Exception:
-            pass
+        record_llm_call_telemetry(
+            ctx, t_start=t_start, caller_tag=caller_tag, tier=target["tier"], endpoint_id=endpoint_id,
+            provider=provider, model=model, output_schema=output_schema, prompt_joined=prompt_joined,
+            system_prompt=system_prompt, status_str=status_str, attempts_used=attempts_used,
+            resp_str=resp_str, err_str=err_str,
+        )
 
     working_messages = list(messages)
     last_error = ""

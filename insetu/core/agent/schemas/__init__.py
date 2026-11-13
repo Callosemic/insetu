@@ -181,16 +181,31 @@ def _directive_conversational_with_patches() -> str:
 
 
 _QUERY_CONTEXT_RE = re.compile(
-    r'<<<<<<< QUERY_CONTEXT[ \t]*\r?\n([\s\S]*?)>>>>>>> (?:EXECUTE|REPLACE)',
+    r'^[ \t]*(?:<[ \t]*){3,}QUERY_CONTEXT[ \t]*\r?\n([\s\S]*?)^[ \t]*(?:>[ \t]*){1,}(?:EXECUTE|REPLACE|QUERY_CONTEXT)[ \t]*$',
     re.MULTILINE,
 )
 
 
 def extract_query_context_directives(raw_text: str) -> List[str]:
-    """Extracts bounded <<<<<<< QUERY_CONTEXT read directives from an LLM response."""
-    if not raw_text or "<<<<<<< QUERY_CONTEXT" not in raw_text:
+    """Extracts bounded <<<<<<< QUERY_CONTEXT read directives from an LLM response, tolerating web-chat chevron meltdown."""
+    if not raw_text or "QUERY_CONTEXT" not in raw_text:
         return []
-    return [m.group(1).strip() for m in _QUERY_CONTEXT_RE.finditer(raw_text) if m.group(1).strip()]
+    norm = re.sub(
+        r'\{\{\s*ymm:(.)[x*](\d+)\s*\}\}',
+        lambda m: m.group(1) * int(m.group(2)),
+        raw_text.replace('\r\n', '\n').replace('\xa0', ' '),
+    )
+    directives: List[str] = []
+    for m in _QUERY_CONTEXT_RE.finditer(norm):
+        body = m.group(1).strip()
+        if not body:
+            continue
+        lines = [ln.strip().lstrip("-* ").strip("`'") for ln in body.splitlines() if ln.strip()]
+        if len(lines) > 1 and all(ln.startswith(("vfs://", "ctx://")) for ln in lines):
+            directives.extend(lines)
+        else:
+            directives.append(body)
+    return directives
 
 
 def _validate_conversational_with_patches(raw_text: str) -> Tuple[bool, Any, str]:

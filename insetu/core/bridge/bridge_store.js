@@ -143,7 +143,8 @@ export const BridgeStore = createExtensionStore('Bridge', {
             drawerCollapsedDesktop: !s.drawerCollapsedDesktop
         }));
     },
-    parseAndAppendCells: (text) => {
+    parseAndAppendCells: (text, options = {}) => {
+        const stayOnCurrentSurface = Boolean(options?.stayOnCurrentSurface);
         const val = (text || '').replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
         const lines = val.split('\n');
         const newCells = [];
@@ -281,12 +282,15 @@ export const BridgeStore = createExtensionStore('Bridge', {
                 return {
                     cells: mergedCells,
                     viewMode: 'input',
-                    activeSurface: 'bridge',
+                    activeSurface: stayOnCurrentSurface ? (state.activeSurface || 'chat') : 'bridge',
                     drawerOpen: false
                 };
             });
-            BridgeStore.getState().setActiveSurface('bridge');
+            if (!stayOnCurrentSurface) {
+                BridgeStore.getState().setActiveSurface('bridge');
+            }
         }
+        return newCells.length;
     },
     recomputeOptimisticTelemetry: () => {
         const state = BridgeStore.getState();
@@ -522,6 +526,79 @@ export const BridgeStore = createExtensionStore('Bridge', {
     },
     getActiveFiles: () => {
         return Array.from(new Set(BridgeStore.getState().cells.filter(c => c.active).map(c => c.file)));
+    },
+    copyWebChatRepairPrompt: async (api, utils, targetFileFilter = null) => {
+        const bState = BridgeStore.getState();
+        const tel = bState.telemetry;
+        if (!tel || !Array.isArray(tel.patches)) return;
+        const failedPatches = tel.patches.filter(p => (p.status !== 'resolved' && p.status !== 'auto_skipped') && (!targetFileFilter || p.resolved_file === targetFileFilter || p.original_file === targetFileFilter));
+        if (failedPatches.length === 0) return;
+        const cellsById = new Map((bState.cells || []).map(c => [c.id, c]));
+        const postBuffers = tel.post_valid_buffers || {};
+        const filesNeeded = Array.from(new Set(failedPatches.map(p => p.resolved_file || p.original_file).filter(Boolean)));
+        const bufferSections = [];
+        for (const fp of filesNeeded) {
+            let fileText = postBuffers[fp];
+            if (fileText === undefined) {
+                try {
+                    const res = await api.get(`fs/fetch?file=${encodeURIComponent(fp)}`);
+                    if (res.ok) fileText = await res.text();
+                } catch (_) {}
+            }
+            if (fileText !== undefined) bufferSections.push(`=== CURRENT FILE STATE (AFTER APPLYING VALID PATCHES): ${fp} ===\n${fileText}`);
+        }
+        const failedBlocksText = failedPatches.map(p => {
+            const cell = cellsById.get(p.cell_id);
+            const fp = p.resolved_file || p.original_file || cell?.file || 'vfs://';
+            const errNote = p.error_message ? `# Diagnostic: ${p.error_message}` : '';
+            return `${errNote}\n<<<<<<< FILE: ${fp}\n${cell ? cell.content : ''}`.trim();
+        }).join('\n\n');
+        const promptText = [
+            "All other patches in the batch applied cleanly. The following Yomama patch block(s) failed to anchor or had a syntax error against the updated file buffer(s):",
+            "", failedBlocksText, "", ...bufferSections, "",
+            "Please output ONLY the repaired Yomama patch block(s) matching the exact lines in the file state above."
+        ].join('\n');
+        await utils.copyRawText(promptText, "📋 Copied Web-Chat Repair Prompt!");
+    },
+    isFileCreatedByBatch: (file, fileCells = null) => {
+        const allCells = BridgeStore.getState().cells || [];
+        const group = fileCells || allCells.filter(c => c.file === file);
+        if (group.some(c => /<<<<<<< SEARCH[ \t]*\r?\n=======/.test(c.content || ''))) return true;
+        return allCells.some(c => {
+            if (!c.content || (!c.content.includes('<<<<<<< RELOCATE') && !c.content.includes('<<<<<<< MOVE_FILE'))) return false;
+            const toMatch = c.content.match(/^\s*(?:TO|DEST)\s*:\s*(.+)$/im);
+            if (!toMatch) return false;
+            const rawTo = toMatch[1].trim();
+            const normTo = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(rawTo) : rawTo;
+            return normTo === file;
+        });
+    },
+    findCandidateFilesForMissingTarget: (file, fileCells = null, allRepos = []) => {
+        if (!window.inSetu?.vfs?.getGlobalManifest || BridgeStore.getState().isFileCreatedByBatch(file, fileCells)) return [];
+        const UriCls = window.inSetu.utils.InSetuURI;
+        const mFiles = window.inSetu.vfs.getGlobalManifest().filter(f => !f.endsWith('.gitkeep') && f !== file);
+        const cleanFile = file.replace(/\s*\(\d+\)(?=\.[^.\/]+$|$)/, '').trim();
+        const uri = new UriCls(cleanFile);
+        const targetRepo = (uri.repo || '').toLowerCase();
+        const knownRepos = new Set((allRepos || []).map(r => String(r).toLowerCase()));
+        const scopedFiles = (targetRepo && knownRepos.has(targetRepo))
+            ? mFiles.filter(f => (new UriCls(f).repo || '').toLowerCase() === targetRepo)
+            : mFiles;
+        const relPath = (uri.relativePath || uri.logicalPath || '').toLowerCase();
+        const segs = uri.pathSegments.map(s => s.toLowerCase());
+        const basename = (uri.basename || '').toLowerCase();
+        if (!basename) return [];
+        if (relPath) {
+            const exactRel = scopedFiles.filter(f => f.toLowerCase().endsWith('/' + relPath));
+            if (exactRel.length > 0) return exactRel;
+        }
+        if (segs.length >= 2) {
+            const parentAndBase = segs.slice(-2).join('/');
+            const tailMatches = scopedFiles.filter(f => f.toLowerCase().endsWith('/' + parentAndBase));
+            if (tailMatches.length > 0) return tailMatches;
+        }
+        const baseMatches = scopedFiles.filter(f => f.toLowerCase().endsWith('/' + basename) || f.toLowerCase() === basename);
+        return (segs.length >= 2 && baseMatches.length > 1) ? [] : baseMatches;
     }
 }, {
     onEvict: {

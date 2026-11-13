@@ -14,7 +14,8 @@ from insetu.core.utils_core import (
     parse_frontmatter,
     typeddict_to_openapi,
 )
-from insetu.core.agent.orchestrator import list_available_routines, execute_declarative_routine
+from insetu.core.agent.orchestrator import execute_declarative_routine
+from insetu.core.agent.routine_loader import list_available_routines
 from insetu.core.prompts.engine_prompts import read_prompt_with_cascade, resolve_prompt_text
 from insetu.core.topology.engine_topology import resolve_repo_code_index_uri
 

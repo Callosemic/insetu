@@ -3,6 +3,26 @@
  */
 import { createExtensionStore } from '/static/extensions/system/insetu_sdk.js';
 
+export const CORE_MODE_ROUTINES = {
+    auto: 'workspace_turn',
+    code: 'code',
+    plan: 'plan',
+    ask: 'ask',
+    yomama: 'yomama',
+    undo: 'workspace_turn'
+};
+export const ONE_SHOT_ROUTINES = new Set(['test', 'wrap', 'close_session', 'upkeep', 'debt_ratchet', 'yomama', 'undo']);
+
+export function preWarmHandoffContext(handoffWrapper) {
+    const ph = handoffWrapper?.pending_handoff || handoffWrapper;
+    if (!ph || !window.inSetu?.vfs?.preWarmShareArtifact) return;
+    const branches = Array.isArray(ph.branches) && ph.branches.length > 0 ? ph.branches : [ph];
+    branches.forEach(b => {
+        const uri = b?.full_context_uri || b?.workflow_context_uri || b?.delta_context_uri;
+        if (uri) window.inSetu.vfs.preWarmShareArtifact(uri, null, false);
+    });
+}
+
 export const AgentStore = createExtensionStore('Agent', {
     sessions: [],
     routines: [],
@@ -18,7 +38,9 @@ export const AgentStore = createExtensionStore('Agent', {
     constitutionFiles: [],
     referenceFiles: [],
     pinnedFiles: [],
-    tokenLedger: { prompt_tokens: 0, completion_tokens: 0, saved_by_slicing: 0 },
+    fileTokenMap: {},
+    executionTrace: [],
+    tokenLedger: { prompt_tokens: 0, completion_tokens: 0, saved_by_slicing: 0, by_tier: {}, total_cost_usd: 0 },
     activePlan: null,
     activePlanPath: '',
     pendingCheckpoint: null,
@@ -33,23 +55,15 @@ export const AgentStore = createExtensionStore('Agent', {
         strict_test_enforcement: false
     },
     promptInput: '',
+    webChatWindowMode: 'same_window',
     pendingHandoff: null,
     handoffBranchIdx: 0,
     handoffBranchResponses: {},
-    handoffPasteText: '',
     lastTurnCommittedFiles: [],
     setModePrefix: (modeId, explicitRoutineId = null, explicitScope = null) => {
         const st = AgentStore.getState();
         const raw = st.promptInput || '';
         const stripped = raw.replace(/^\/(?:user:[a-zA-Z0-9_:-]*|[a-zA-Z0-9_:-]+)\s*/, '');
-        const CORE_MODE_ROUTINES = {
-            auto: 'workspace_turn',
-            code: 'code',
-            plan: 'plan',
-            ask: 'ask',
-            yomama: 'yomama',
-            undo: 'workspace_turn'
-        };
         if (modeId === 'auto') {
             AgentStore.setState({
                 agentRoutineId: 'workspace_turn',
@@ -89,12 +103,11 @@ export const AgentStore = createExtensionStore('Agent', {
     },
     selectRoutine: ({ routineId, mode } = {}) => {
         if (!routineId) return;
-        const CORE_MODES = new Set(['auto', 'code', 'plan', 'ask', 'yomama']);
-        if (routineId === 'workspace_turn' && (!mode || CORE_MODES.has(mode))) {
+        if (routineId === 'workspace_turn' && (!mode || CORE_MODE_ROUTINES[mode])) {
             AgentStore.getState().setModePrefix(mode || 'auto');
             return;
         }
-        if (CORE_MODES.has(routineId)) {
+        if (CORE_MODE_ROUTINES[routineId]) {
             AgentStore.getState().setModePrefix(routineId);
             return;
         }
@@ -115,19 +128,31 @@ export const AgentStore = createExtensionStore('Agent', {
                     prompt_tokens: Number(rawLedger.prompt_tokens || 0),
                     completion_tokens: Number(rawLedger.completion_tokens || 0),
                     saved_by_slicing: Number(rawLedger.saved_by_slicing ?? rawLedger.saved_by_slicing_tokens ?? 0),
-                    saved_by_slicing_tokens: Number(rawLedger.saved_by_slicing_tokens ?? rawLedger.saved_by_slicing ?? 0)
+                    saved_by_slicing_tokens: Number(rawLedger.saved_by_slicing_tokens ?? rawLedger.saved_by_slicing ?? 0),
+                    by_tier: rawLedger.by_tier || {},
+                    total_cost_usd: Number(rawLedger.total_cost_usd || 0)
                 };
+                const cp = (data.checkpoint && data.checkpoint.chain_context) ? data.checkpoint : null;
+                const isPausedHandoff = Boolean(cp && cp.pending_handoff);
+                const cpTrace = cp?.chain_context?.global?.execution_trace || [];
                 AgentStore.setState({
                     messages: data.messages || [],
                     workingSetRaw: wsList,
+                    fileTokenMap: data.file_token_map || {},
                     pinnedFiles: pinned,
                     referenceFiles: ref,
                     constitutionFiles: data.constitution_files || [],
                     tokenLedger: normalizedLedger,
                     activePlanPath: data.active_plan_path || '',
-                    pendingCheckpoint: (data.checkpoint && data.checkpoint.chain_context) ? data.checkpoint : null,
+                    pendingHandoff: isPausedHandoff ? cp : null,
+                    pendingCheckpoint: (cp && !isPausedHandoff) ? cp : null,
+                    executionTrace: cpTrace,
+                    handoffBranchIdx: 0,
+                    handoffBranchResponses: {},
+                    lastTurnCommittedFiles: [],
                     sessionSummary: data.summary || '',
                 });
+                if (isPausedHandoff) preWarmHandoffContext(cp);
             }
         } catch (e) {
             console.error("Failed to fetch messages:", e);
@@ -142,62 +167,67 @@ export const AgentStore = createExtensionStore('Agent', {
             console.warn("Failed to persist active LLM profile:", e);
         }
     },
-    fetchSessions: async () => {
-        AgentStore.setState({ loading: true });
-        try {
-            const [sesRes, routRes, profRes, setRes] = await Promise.all([
-                window.inSetu.api.get('agent/sessions'),
-                window.inSetu.api.get('agent/routines'),
-                window.inSetu.api.get('llm/profiles'),
-                window.inSetu.api.get('agent/settings').catch(() => null)
-            ]);
-            const patch = {};
-            if (sesRes && sesRes.ok) {
-                const data = await sesRes.json();
-                patch.sessions = data.sessions || [];
-                if (Array.isArray(data.constitution_files)) {
-                    patch.constitutionFiles = data.constitution_files;
-                }
-            }
-            if (routRes && routRes.ok) {
-                const rData = await routRes.json();
-                patch.routines = rData.routines || [];
-                patch.availableOptions = {
-                    contexts: rData.available_contexts || [],
-                    diffs: rData.available_diffs || [],
-                    prompts: rData.available_prompts || []
+    hydrateCatalog: window.inSetu.utils.coalescedAsync(async () => {
+        const [routRes, profRes, setRes] = await Promise.all([
+            window.inSetu.api.get('agent/routines'),
+            window.inSetu.api.get('llm/profiles'),
+            window.inSetu.api.get('agent/settings').catch(() => null)
+        ]);
+        const patch = {};
+        if (routRes && routRes.ok) {
+            const rData = await routRes.json();
+            patch.routines = rData.routines || [];
+            patch.availableOptions = {
+                contexts: rData.available_contexts || [],
+                diffs: rData.available_diffs || [],
+                prompts: rData.available_prompts || []
+            };
+        }
+        if (profRes && profRes.ok) {
+            const pData = await profRes.json();
+            patch.llmProfiles = pData.profiles || [];
+            patch.llmEndpoints = pData.endpoints || [];
+            patch.activeProfileId = pData.active_profile_id || 'default';
+        }
+        if (setRes && setRes.ok) {
+            const sData = await setRes.json();
+            if (sData && sData.settings) {
+                patch.agentSettings = {
+                    helper_mode: sData.settings.helper_mode || 'ai_assisted',
+                    rag_strategy: sData.settings.rag_strategy || 'blast_radius',
+                    compaction_strategy: sData.settings.compaction_strategy || 'deterministic',
+                    run_tests_on_code: Boolean(sData.settings.run_tests_on_code),
+                    strict_test_enforcement: Boolean(sData.settings.strict_test_enforcement)
                 };
             }
-            if (profRes && profRes.ok) {
-                const pData = await profRes.json();
-                patch.llmProfiles = pData.profiles || [];
-                patch.llmEndpoints = pData.endpoints || [];
-                patch.activeProfileId = pData.active_profile_id || 'default';
-            }
-            if (setRes && setRes.ok) {
-                const sData = await setRes.json();
-                if (sData && sData.settings) {
-                    const hMode = sData.settings.helper_mode || 'ai_assisted';
-                    patch.agentSettings = {
-                        helper_mode: hMode,
-                        rag_strategy: sData.settings.rag_strategy || 'blast_radius',
-                        compaction_strategy: sData.settings.compaction_strategy || 'deterministic',
-                        run_tests_on_code: Boolean(sData.settings.run_tests_on_code),
-                        strict_test_enforcement: Boolean(sData.settings.strict_test_enforcement)
-                    };
+        }
+        AgentStore.setState(patch);
+    }),
+    fetchSessions: window.inSetu.utils.coalescedAsync(async (forceFull = false) => {
+        const curState = AgentStore.getState();
+        const needsMetadata = forceFull || !(curState.routines && curState.routines.length > 0);
+        if (needsMetadata) AgentStore.setState({ loading: true });
+        try {
+            const [sesRes] = await Promise.all([
+                window.inSetu.api.get('agent/sessions'),
+                needsMetadata ? AgentStore.getState().hydrateCatalog() : Promise.resolve()
+            ]);
+            if (sesRes && sesRes.ok) {
+                const data = await sesRes.json();
+                const sessions = data.sessions || [];
+                const patch = { sessions };
+                if (Array.isArray(data.constitution_files)) patch.constitutionFiles = data.constitution_files;
+                AgentStore.setState(patch);
+                if (!AgentStore.getState().activeSessionId && sessions.length > 0) {
+                    await AgentStore.getState().selectSession(sessions[0].session_id);
                 }
-            }
-            AgentStore.setState(patch);
-            const curActive = AgentStore.getState().activeSessionId;
-            if (!curActive && patch.sessions && patch.sessions.length > 0) {
-                await AgentStore.getState().selectSession(patch.sessions[0].session_id);
             }
         } catch (e) {
             console.error("Failed to fetch chat sessions:", e);
         } finally {
             AgentStore.setState({ loading: false });
         }
-    },
+    }),
     openRoutineStudio: (routine = null, forkMode = false) => {
         const isNew = !routine;
         const baseNodes = (routine && Array.isArray(routine.nodes) && routine.nodes.length > 0)

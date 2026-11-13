@@ -1,181 +1,63 @@
 import { html } from 'lit';
 import { InSetuElement } from '/static/extensions/system/insetu_element.js';
 import { sharedStyles } from '/static/extensions/system/insetu_sdk.js';
-import { AgentStore, classifyRoutineTargetUri } from '/static/extensions/agent/agent_store.js';
+import { AgentStore, ONE_SHOT_ROUTINES, classifyRoutineTargetUri, preWarmHandoffContext } from '/static/extensions/agent/agent_store.js';
+import { InSetuAgentRoutineProjection, InSetuCoreAgentRoutines } from '/static/extensions/agent/agent_routine_studio.js';
 import {
-    InSetuAgentRoutineProjection,
-    InSetuCoreAgentRoutines,
-} from '/static/extensions/agent/agent_routine_studio.js';
+    InSetuAgentExecutionTrace, InSetuAgentHandoffPanel, InSetuAgentStagedStacks,
+    InSetuCoreAgentSessions, hasYomamaPatchBlocks,
+} from '/static/extensions/agent/agent_staged_stacks.js';
 
 export {
-    AgentStore,
-    classifyRoutineTargetUri,
-    InSetuAgentRoutineProjection,
-    InSetuCoreAgentRoutines,
+    AgentStore, classifyRoutineTargetUri, InSetuAgentRoutineProjection, InSetuCoreAgentRoutines,
+    InSetuCoreAgentSessions, InSetuAgentExecutionTrace, InSetuAgentHandoffPanel, InSetuAgentStagedStacks,
 };
-
-export class InSetuCoreAgentSessions extends InSetuElement {
-    static get extensionName() { return 'agent'; }
-    static properties = {
-        sessions: { type: Array },
-        activeSessionId: { type: String }
-    };
-    static styles = [sharedStyles];
-
-    constructor() {
-        super();
-        this.sessions = [];
-        this.activeSessionId = null;
-    }
-
-    connectedCallback() {
-        super.connectedCallback();
-        this.bindStore(
-            AgentStore,
-            state => ({
-                sessions: state.sessions || [],
-                activeSessionId: state.activeSessionId
-            }),
-            { autoFetch: 'fetchSessions' }
-        );
-    }
-    render() {
-        return html`
-            <sutram-stack direction="col" gap="sm" ?flex=${true}>
-                <sutram-async-btn 
-                    label="New Chat" 
-                    icon="plus" 
-                    intent="primary" 
-                    ?fullWidth=${true}
-                    .onClick=${async () => {
-                        const ts = this.utils.formatDate ? this.utils.formatDate(new Date()) : new Date().toLocaleString();
-                        const res = await this.api.post('agent/sessions', { title: `New Conversation (${ts})` });
-                        if (res.ok) {
-                            const data = await res.json();
-                            await AgentStore.getState().fetchSessions();
-                            await AgentStore.getState().selectSession(data.session_id);
-                            this.dispatch('insetu:yomama:navigate', { surface: 'chat', sessionId: data.session_id });
-                        }
-                    }}>
-                </sutram-async-btn>
-                <sutram-label text="CONVERSATIONS"></sutram-label>
-                <sutram-stack direction="col" gap="xs" ?flex=${true} ?scrollable=${true}>
-                    ${this.sessions.length === 0 ? html`
-                        <sutram-empty-state text="No conversations yet."></sutram-empty-state>
-                    ` : this.sessions.map(s => html`
-                        <sutram-surface
-                            variant=${this.activeSessionId === s.session_id ? 'tinted' : 'ghost'}
-                            intent="primary"
-                            padding="xs"
-                            ?interactive=${true}
-                            @click=${async () => {
-                                await AgentStore.getState().selectSession(s.session_id);
-                                this.dispatch('insetu:yomama:navigate', { surface: 'chat', sessionId: s.session_id });
-                            }}>
-                            <sutram-stack direction="row" align="center" gap="sm">
-                                <sutram-icon name="message-square" size="sm" intent="primary"></sutram-icon>
-                                <sutram-label intent="neutral" ?truncate=${true} .text=${s.title}></sutram-label>
-                            </sutram-stack>
-                        </sutram-surface>
-                    `)}
-                </sutram-stack>
-            </sutram-stack>
-        `;
-    }
-}
-customElements.define('insetu-core-agent-sessions', InSetuCoreAgentSessions);
 
 export class InSetuCoreAgent extends InSetuElement {
     static get extensionName() { return 'agent'; }
     static properties = {
-        sessions: { type: Array },
-        routines: { type: Array },
-        llmProfiles: { type: Array },
-        activeProfileId: { type: String },
-        activeSessionId: { type: String },
-        messages: { type: Array },
-        loading: { type: Boolean },
-        constitutionFiles: { type: Array },
-        referenceFiles: { type: Array },
-        pinnedFiles: { type: Array },
-        tokenLedger: { type: Object },
-        activePlanPath: { type: String },
-        pendingCheckpoint: { type: Object },
-        agentRoutineId: { type: String },
-        agentMode: { type: String },
-        agentScope: { type: String },
-        agentSettings: { type: Object },
-        promptInput: { type: String },
-        activeJobMessage: { type: String },
-        pendingHandoff: { type: Object },
+        sessions: { type: Array }, routines: { type: Array }, llmProfiles: { type: Array },
+        activeProfileId: { type: String }, activeSessionId: { type: String }, messages: { type: Array },
+        loading: { type: Boolean }, constitutionFiles: { type: Array }, referenceFiles: { type: Array },
+        pinnedFiles: { type: Array }, fileTokenMap: { type: Object }, executionTrace: { type: Array },
+        tokenLedger: { type: Object }, activePlanPath: { type: String }, pendingCheckpoint: { type: Object },
+        agentRoutineId: { type: String }, agentMode: { type: String }, agentScope: { type: String },
+        agentSettings: { type: Object }, promptInput: { type: String }, webChatWindowMode: { type: String },
+        activeJobMessage: { type: String }, pendingHandoff: { type: Object }, _lastQueryQuickpack: { type: Object, state: true },
         _hudExpanded: { type: Boolean, state: true }
     };
-
     static styles = [sharedStyles];
     constructor() {
         super();
-        this.sessions = [];
-        this.routines = [];
-        this.llmProfiles = [];
-        this.activeProfileId = 'default';
-        this.activeSessionId = null;
-        this.messages = [];
-        this.loading = false;
-        this.constitutionFiles = [];
-        this.referenceFiles = [];
-        this.pinnedFiles = [];
-        this.tokenLedger = { prompt_tokens: 0, completion_tokens: 0, saved_by_slicing: 0 };
-        this.activePlanPath = '';
-        this.pendingCheckpoint = null;
-        this.agentRoutineId = 'workspace_turn';
-        this.agentMode = 'auto';
-        this.agentScope = '';
-        this.agentSettings = {
-            rag_strategy: 'blast_radius',
-            compaction_strategy: 'deterministic',
-            run_tests_on_code: false,
-            strict_test_enforcement: false
-        };
-        this.promptInput = '';
-        this.activeJobMessage = '';
-        this.pendingHandoff = null;
-        this._handoffBranchIdx = 0;
-        this._handoffBranchResponses = {};
-        this._lastTurnCommittedFiles = [];
-        this._stagedBridgeCells = [];
-        this._hudExpanded = false;
+        Object.assign(this, {
+            sessions: [], routines: [], llmProfiles: [], activeProfileId: 'default', activeSessionId: null,
+            messages: [], loading: false, constitutionFiles: [], referenceFiles: [], pinnedFiles: [],
+            fileTokenMap: {}, executionTrace: [], activePlanPath: '', pendingCheckpoint: null,
+            tokenLedger: { prompt_tokens: 0, completion_tokens: 0, saved_by_slicing: 0, by_tier: {}, total_cost_usd: 0 },
+            agentRoutineId: 'workspace_turn', agentMode: 'auto', agentScope: '', promptInput: '',
+            agentSettings: { rag_strategy: 'blast_radius', compaction_strategy: 'deterministic', run_tests_on_code: false, strict_test_enforcement: false },
+            webChatWindowMode: 'same_window', activeJobMessage: '', pendingHandoff: null, _handoffBranchIdx: 0,
+            _handoffBranchResponses: {}, _lastTurnCommittedFiles: [], _lastQueryQuickpack: null, _stagedBridgeCells: [], _hudExpanded: false
+        });
     }
 
     connectedCallback() {
         super.connectedCallback();
-        this.bindStore(
-            AgentStore,
-            state => ({
-                sessions: state.sessions || [],
-                routines: state.routines || [],
-                llmProfiles: state.llmProfiles || [],
-                activeProfileId: state.activeProfileId || 'default',
-                activeSessionId: state.activeSessionId,
-                messages: state.messages || [],
-                loading: !!state.loading,
-                constitutionFiles: state.constitutionFiles || [],
-                referenceFiles: state.referenceFiles || [],
-                pinnedFiles: state.pinnedFiles || [],
-                tokenLedger: state.tokenLedger || { prompt_tokens: 0, completion_tokens: 0, saved_by_slicing: 0 },
-                activePlanPath: state.activePlanPath || '',
-                pendingCheckpoint: state.pendingCheckpoint || null,
-                agentRoutineId: state.agentRoutineId || 'workspace_turn',
-                agentMode: state.agentMode || 'auto',
-                agentScope: state.agentScope || '',
-                agentSettings: state.agentSettings || { rag_strategy: 'blast_radius', compaction_strategy: 'deterministic', run_tests_on_code: false, strict_test_enforcement: false },
-                promptInput: state.promptInput || '',
-                pendingHandoff: state.pendingHandoff || null,
-                _handoffBranchIdx: state.handoffBranchIdx || 0,
-                _handoffBranchResponses: state.handoffBranchResponses || {},
-                _lastTurnCommittedFiles: state.lastTurnCommittedFiles || []
-            }),
-            { autoFetch: 'fetchSessions' }
-        );
+        this.bindStore(AgentStore, state => ({
+            sessions: state.sessions || [], routines: state.routines || [], llmProfiles: state.llmProfiles || [],
+            activeProfileId: state.activeProfileId || 'default', activeSessionId: state.activeSessionId,
+            messages: state.messages || [], loading: !!state.loading, constitutionFiles: state.constitutionFiles || [],
+            referenceFiles: state.referenceFiles || [], pinnedFiles: state.pinnedFiles || [],
+            fileTokenMap: state.fileTokenMap || {}, executionTrace: state.executionTrace || [],
+            tokenLedger: state.tokenLedger || { prompt_tokens: 0, completion_tokens: 0, saved_by_slicing: 0, by_tier: {}, total_cost_usd: 0 },
+            activePlanPath: state.activePlanPath || '', pendingCheckpoint: state.pendingCheckpoint || null,
+            agentRoutineId: state.agentRoutineId || 'workspace_turn', agentMode: state.agentMode || 'auto',
+            agentScope: state.agentScope || '', promptInput: state.promptInput || '',
+            agentSettings: state.agentSettings || { rag_strategy: 'blast_radius', compaction_strategy: 'deterministic', run_tests_on_code: false, strict_test_enforcement: false },
+            webChatWindowMode: state.webChatWindowMode || 'same_window', pendingHandoff: state.pendingHandoff || null,
+            _handoffBranchIdx: state.handoffBranchIdx || 0, _handoffBranchResponses: state.handoffBranchResponses || {},
+            _lastTurnCommittedFiles: state.lastTurnCommittedFiles || []
+        }), { autoFetch: 'fetchSessions' });
 
         this.registerGlobalListener('sutram-compile-progress', window, (e) => {
             if (e.detail && e.detail.ext_name === 'agent') {
@@ -185,6 +67,23 @@ export class InSetuCoreAgent extends InSetuElement {
         this.registerGlobalListener('insetu:yomama:select-routine', window, (e) => {
             if (e.detail?.routineId) {
                 AgentStore.getState().selectRoutine(e.detail);
+            }
+        });
+        this.registerGlobalListener('paste', window, (e) => {
+            if (!this.offsetParent) return;
+            const activeSurf = window.inSetu?.stores?.Bridge?.getState()?.activeSurface || 'bridge';
+            if (activeSurf !== 'chat') return;
+            if (this.pendingHandoff && this.pendingHandoff.pending_handoff) return;
+            const path = this.getEventPath(e);
+            const isEditingExternalInput = path.some(el =>
+                el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) && !this.shadowRoot?.contains(el)
+            );
+            if (isEditingExternalInput) return;
+            const text = e.clipboardData?.getData('text') || '';
+            if (text && !text.trim().startsWith('/yomama') && hasYomamaPatchBlocks(text)) {
+                e.preventDefault();
+                e.stopPropagation();
+                this._ingestPastedPatchesAndProse(text);
             }
         });
         if (window.inSetu?.stores?.Bridge) {
@@ -322,6 +221,7 @@ export class InSetuCoreAgent extends InSetuElement {
             }
 
             const priorCtx = this.pendingHandoff.chain_context || {};
+            const origPrompt = priorCtx?.global?.user_prompt || 'Resume Routine Handoff';
             const targetRoutineId = this.pendingHandoff.routine_id || this.agentRoutineId;
             const sesId = await this._ensureActiveSession();
             if (!sesId) return;
@@ -330,20 +230,21 @@ export class InSetuCoreAgent extends InSetuElement {
                 promptInput: '',
                 pendingHandoff: null,
                 handoffBranchIdx: 0,
-                handoffBranchResponses: {},
-                handoffPasteText: ''
+                handoffBranchResponses: {}
             });
             this.activeJobMessage = "Processing response...";
             const resumeJob = this.api.bindJobAction(
                 'agent/prompt',
                 {
                     session_id: sesId,
-                    prompt: 'Resume Routine Handoff',
+                    prompt: origPrompt,
                     mode: this.agentMode,
                     routine_id: targetRoutineId,
                     transport: 'manual',
-                    handoff_responses: nextMap,
-                    prior_chain_context: priorCtx
+                    attached_files: this.pinnedFiles,
+                    read_only_files: this.referenceFiles,
+                    web_chat_window_mode: this.webChatWindowMode,
+                    handoff_responses: nextMap
                 },
                 {
                     onProgress: (msg) => {
@@ -353,21 +254,34 @@ export class InSetuCoreAgent extends InSetuElement {
                         this.activeJobMessage = '';
                         const art = sData?.artifact || sData;
                         if (art?.status === 'paused_for_user' && art.pending_handoff) {
-                            AgentStore.setState({ pendingHandoff: art, handoffBranchIdx: 0, handoffBranchResponses: {}, handoffPasteText: '' });
+                            const gCtx = art.chain_context?.global || {};
+                            AgentStore.setState(s => ({
+                                pendingHandoff: art,
+                                pinnedFiles: Array.isArray(gCtx.attached_files) ? gCtx.attached_files : this.pinnedFiles,
+                                referenceFiles: Array.isArray(gCtx.read_only_files) ? gCtx.read_only_files : this.referenceFiles,
+                                fileTokenMap: { ...(s.fileTokenMap || {}), ...(art.file_token_map || gCtx.file_token_map || {}) },
+                                executionTrace: art.execution_trace || gCtx.execution_trace || s.executionTrace || [],
+                                handoffBranchIdx: 0,
+                                handoffBranchResponses: {}
+                            }));
+                            preWarmHandoffContext(art);
                         } else {
                             if (art?.unapplied_patches && window.inSetu?.stores?.Bridge?.getState()?.parseAndAppendCells) {
                                 window.inSetu.stores.Bridge.getState().clearPayload();
-                                window.inSetu.stores.Bridge.getState().parseAndAppendCells(art.unapplied_patches);
-                                window.inSetu.stores.Bridge.setState({ activeSurface: 'chat' });
+                                window.inSetu.stores.Bridge.getState().parseAndAppendCells(art.unapplied_patches, { stayOnCurrentSurface: true });
                             }
-                            AgentStore.setState({ lastTurnCommittedFiles: art?.committed_files || [] });
+                            AgentStore.setState(s => ({
+                                lastTurnCommittedFiles: art?.committed_files || [],
+                                fileTokenMap: { ...(s.fileTokenMap || {}), ...(art?.file_token_map || {}) },
+                                executionTrace: art?.execution_trace || s.executionTrace || []
+                            }));
                             await AgentStore.getState().fetchSessions();
                             await AgentStore.getState().selectSession(sesId);
                         }
                     },
                     onError: (err) => {
                         this.activeJobMessage = '';
-                        alert("Routine Error: " + err.message);
+                        this.setStatus(`⚠️ Routine Error: ${err.message}`, 4000, true);
                     }
                 }
             );
@@ -379,18 +293,40 @@ export class InSetuCoreAgent extends InSetuElement {
             return;
         }
 
-        if (this.agentMode === 'undo') {
+        const liveState = AgentStore.getState();
+        let effectiveMode = liveState.agentMode || this.agentMode || 'auto';
+        let effectiveRoutineId = liveState.agentRoutineId || this.agentRoutineId || 'workspace_turn';
+        let effectiveScope = liveState.agentScope || this.agentScope || '';
+        let cleanedInput = rawInput;
+
+        const leadingSlash = rawInput.match(/^(\/(?:user:[a-zA-Z0-9_:-]+|[a-zA-Z0-9_:-]+))(?:\s+([\s\S]*))?$/);
+        if (leadingSlash) {
+            const typedSlash = leadingSlash[1].toLowerCase();
+            const matchedOpt = this._getAllCommandOptions().find(
+                o => (o.slash || '').toLowerCase() === typedSlash || (o.altSlash || '').toLowerCase() === typedSlash
+            );
+            if (matchedOpt) {
+                effectiveMode = matchedOpt.mode;
+                effectiveRoutineId = matchedOpt.routineId || 'workspace_turn';
+                effectiveScope = matchedOpt.scope || '';
+                cleanedInput = (leadingSlash[2] || '').trim();
+            }
+        }
+
+        if (effectiveMode === 'undo') {
             AgentStore.getState().setModePrefix('auto');
             await this._undoLastTurn();
             return;
         }
-        const isCustomRoutine = this.agentRoutineId && this.agentRoutineId !== 'workspace_turn';
-        if (!rawInput && !isCustomRoutine) return;
-        const activePill = this._getActiveCommandPillText();
-        const displayUserBubble = rawInput
-            ? (this.agentMode !== 'auto' ? `${activePill} ${rawInput}` : rawInput)
+        const isCustomRoutine = effectiveRoutineId && effectiveRoutineId !== 'workspace_turn';
+        if (!cleanedInput && !isCustomRoutine) return;
+        const activePill = (effectiveMode === 'user' && effectiveRoutineId && effectiveRoutineId !== 'workspace_turn')
+            ? `/${effectiveRoutineId}${effectiveScope ? ':' + effectiveScope : ''}`
+            : `/${effectiveMode || 'auto'}`;
+        const displayUserBubble = cleanedInput
+            ? (effectiveMode !== 'auto' ? `${activePill} ${cleanedInput}` : cleanedInput)
             : activePill;
-        const userText = rawInput || activePill;
+        const userText = cleanedInput || activePill;
 
         // If a budget checkpoint is pending and user confirms resume:
         let priorContext = null;
@@ -399,25 +335,24 @@ export class InSetuCoreAgent extends InSetuElement {
             AgentStore.setState({ pendingCheckpoint: null });
         }
 
-        // If user pasted raw Yomama patch blocks without an explicit /yomama prefix, hand off to the Bridge staging surface immediately
         if (
             !userText.trim().startsWith('/yomama') &&
-            (userText.includes('<<<<<<< FILE:') || userText.includes('<<<<<<< RELOCATE') || userText.includes('<<<<<<< RENAME')) &&
+            hasYomamaPatchBlocks(userText) &&
             window.inSetu?.stores?.Bridge?.getState()?.parseAndAppendCells
         ) {
-            AgentStore.setState({ promptInput: '' });
-            window.inSetu.stores.Bridge.getState().parseAndAppendCells(userText);
+            await this._ingestPastedPatchesAndProse(userText);
             return;
         }
 
         const sesId = await this._ensureActiveSession();
         if (!sesId) return;
 
+        const isOneShot = ONE_SHOT_ROUTINES.has(effectiveRoutineId) || ONE_SHOT_ROUTINES.has(effectiveMode);
         AgentStore.setState(s => ({
             promptInput: '',
-            agentMode: 'auto',
-            agentRoutineId: 'workspace_turn',
-            agentScope: '',
+            agentMode: isOneShot ? 'auto' : effectiveMode,
+            agentRoutineId: isOneShot ? 'workspace_turn' : effectiveRoutineId,
+            agentScope: isOneShot ? '' : effectiveScope,
             messages: [...(s.messages || []), { role: 'user', content: displayUserBubble, timestamp: Date.now() / 1000 }]
         }));
         this.activeJobMessage = "Submitting prompt...";
@@ -426,12 +361,13 @@ export class InSetuCoreAgent extends InSetuElement {
             {
                 session_id: sesId,
                 prompt: userText,
-                mode: this.agentMode,
-                scope: this.agentScope || undefined,
+                mode: effectiveMode,
+                scope: effectiveScope || undefined,
                 profile_id: this.activeProfileId,
-                routine_id: this.agentRoutineId,
+                routine_id: effectiveRoutineId,
                 attached_files: this.pinnedFiles,
                 read_only_files: this.referenceFiles,
+                web_chat_window_mode: this.webChatWindowMode,
                 prior_chain_context: priorContext
             },
             {
@@ -445,14 +381,18 @@ export class InSetuCoreAgent extends InSetuElement {
                         const globalCtx = art.chain_context?.global || {};
                         const nextPinned = Array.isArray(globalCtx.attached_files) ? globalCtx.attached_files : this.pinnedFiles;
                         const nextRef = Array.isArray(globalCtx.read_only_files) ? globalCtx.read_only_files : this.referenceFiles;
-                        AgentStore.setState({
+                        const nextConst = Array.isArray(globalCtx.constitution_files) ? globalCtx.constitution_files : this.constitutionFiles;
+                        AgentStore.setState(s => ({
                             pendingHandoff: art,
+                            constitutionFiles: nextConst,
                             pinnedFiles: nextPinned,
                             referenceFiles: nextRef,
+                            fileTokenMap: { ...(s.fileTokenMap || {}), ...(art.file_token_map || globalCtx.file_token_map || {}) },
+                            executionTrace: art.execution_trace || globalCtx.execution_trace || [],
                             handoffBranchIdx: 0,
-                            handoffBranchResponses: {},
-                            handoffPasteText: ''
-                        });
+                            handoffBranchResponses: {}
+                        }));
+                        preWarmHandoffContext(art);
                         return;
                     }
                     if (art?.status === 'paused_for_budget') {
@@ -463,19 +403,20 @@ export class InSetuCoreAgent extends InSetuElement {
                     }
                     if (art?.unapplied_patches && window.inSetu?.stores?.Bridge?.getState()?.parseAndAppendCells) {
                         window.inSetu.stores.Bridge.getState().clearPayload();
-                        window.inSetu.stores.Bridge.getState().parseAndAppendCells(art.unapplied_patches);
-                        window.inSetu.stores.Bridge.setState({ activeSurface: 'chat' });
+                        window.inSetu.stores.Bridge.getState().parseAndAppendCells(art.unapplied_patches, { stayOnCurrentSurface: true });
                     }
-                    AgentStore.setState({
+                    AgentStore.setState(s => ({
                         pendingHandoff: null,
-                        lastTurnCommittedFiles: art?.committed_files || []
-                    });
+                        lastTurnCommittedFiles: art?.committed_files || [],
+                        fileTokenMap: { ...(s.fileTokenMap || {}), ...(art?.file_token_map || {}) },
+                        executionTrace: art?.execution_trace || s.executionTrace || []
+                    }));
                     await AgentStore.getState().fetchSessions();
                     await AgentStore.getState().selectSession(sesId);
                 },
                 onError: (err) => {
                     this.activeJobMessage = '';
-                    alert("Agent Turn Error: " + err.message);
+                    this.setStatus(`⚠️ Agent Turn Error: ${err.message}`, 4000, true);
                 }
             }
         );
@@ -483,6 +424,55 @@ export class InSetuCoreAgent extends InSetuElement {
             await runTurn();
         } catch (e) {
             this.activeJobMessage = '';
+        }
+    }
+
+    async _ingestPastedPatchesAndProse(rawText) {
+        AgentStore.setState({ promptInput: '' });
+        this._clearComposerDomValue(null, '');
+        const bStore = window.inSetu?.stores?.Bridge?.getState();
+        const stagedCount = bStore?.parseAndAppendCells
+            ? bStore.parseAndAppendCells(rawText, { stayOnCurrentSurface: true })
+            : 0;
+        const sesId = await this._ensureActiveSession();
+        const res = await this.api.postJson('agent/ingest_reply', {
+            session_id: sesId || '',
+            role: 'assistant',
+            raw_text: rawText
+        }).catch(() => null);
+        if (res?.quickpack?.base_filename) {
+            this._lastQueryQuickpack = res.quickpack;
+            this.requestUpdate();
+        }
+        if (res && res.status === 'success' && res.content) {
+            AgentStore.setState(s => ({
+                messages: [...(s.messages || []), {
+                    message_id: res.message_id,
+                    seq: res.seq,
+                    role: 'assistant',
+                    content: res.content,
+                    receipt: res.receipt,
+                    compaction_tier: 'hot',
+                    timestamp: res.timestamp || (Date.now() / 1000)
+                }]
+            }));
+        }
+        if (res?.quickpack?.base_filename && stagedCount > 0) {
+            this.setStatus(`📦 Staged ${stagedCount} patch(es) & compiled Query Quickpack (${res.quickpack.file_count} file(s)).`, 3000);
+        } else if (res?.quickpack?.base_filename) {
+            this.setStatus(`📦 Compiled Query Quickpack (${res.quickpack.file_count} file(s)).`, 3000);
+        } else {
+            this.setStatus(`📦 Staged ${stagedCount || ''} patch block(s) in Chat.`, 2500);
+        }
+    }
+
+    async _removeMessageBubble(msg, idx) {
+        const msgId = msg?.message_id;
+        AgentStore.setState(s => ({
+            messages: (s.messages || []).filter((m, i) => (msgId ? m.message_id !== msgId : i !== idx))
+        }));
+        if (msgId) {
+            await this.api.delete(`agent/messages/${encodeURIComponent(msgId)}`).catch(() => {});
         }
     }
 
@@ -501,12 +491,14 @@ export class InSetuCoreAgent extends InSetuElement {
             this.setStatus("⏪ Reverted last agent patch transaction.", 2500);
         } else {
             const err = await res.json().catch(() => ({}));
-            alert(err.error || "Nothing to undo for this session.");
+            this.setStatus(`⚠️ ${err.error || "Nothing to undo for this session."}`, 4000, true);
         }
     }
 
     _estimateFileTokens(filepath, tier = 'pinned') {
         if (!filepath) return 0;
+        const mapVal = this.fileTokenMap?.[filepath];
+        if (Number(mapVal) > 0) return Number(mapVal);
         const activeBuffers = window.inSetu?.stores?.Fs?.getState?.()?.activeBuffers || {};
         const buf = activeBuffers[filepath];
         if (buf && typeof buf.content === 'string' && buf.content !== 'Loading...') {
@@ -520,7 +512,7 @@ export class InSetuCoreAgent extends InSetuElement {
         }
         if (tier === 'constitution') return 450;
         if (tier === 'reference') return 200;
-        return 1500;
+        return 800;
     }
 
     _getScopedConstitutionFiles() {
@@ -575,6 +567,11 @@ export class InSetuCoreAgent extends InSetuElement {
 
         const totalContextFiles = scopedConstitution.length + (this.referenceFiles?.length || 0) + (this.pinnedFiles?.length || 0);
         const compactTokStr = tokenEst.total >= 1000 ? `${(tokenEst.total / 1000).toFixed(1)}k` : `${tokenEst.total}`;
+        const activeNodeName = this.pendingHandoff?.pending_handoff?.node_id
+            || (this.executionTrace || []).find(s => s.status === 'running')?.id
+            || 'next turn';
+        const byTier = this.tokenLedger?.by_tier || {};
+        const totalCostUsd = Number(this.tokenLedger?.total_cost_usd || 0);
 
         return html`
             <sutram-view>
@@ -588,61 +585,80 @@ export class InSetuCoreAgent extends InSetuElement {
                     .open=${this._hudExpanded}
                     @sutram-hud-toggled=${(e) => { this._hudExpanded = e.detail.open; }}>
                     <sutram-tag slot="header" .text=${tokenIntent === 'danger' ? 'Over Soft Budget' : (tokenIntent === 'warning' ? 'Near Ceiling' : 'Optimal')} .intent=${tokenIntent}></sutram-tag>
-                    <sutram-stack direction="col" gap="xs">
-                        <sutram-label .text=${`Session: ${(this.tokenLedger?.prompt_tokens || 0).toLocaleString()} in / ${(this.tokenLedger?.completion_tokens || 0).toLocaleString()} out / ~${(this.tokenLedger?.saved_by_slicing ?? this.tokenLedger?.saved_by_slicing_tokens ?? 0).toLocaleString()} saved`}></sutram-label>
-                        <sutram-label .text=${`Breakdown: Constitution ${tokenEst.constitution} tok · Reference Slices ${tokenEst.references} tok · Pinned Targets ${tokenEst.pinned} tok · Prompt ${tokenEst.prompt} tok`}></sutram-label>
-                        ${totalContextFiles > 0 ? html`
-                            <sutram-stack direction="row" gap="xs" ?wrap=${true}>
-                                ${scopedConstitution.map(f => html`
-                                    <sutram-pill
-                                        labelText=${this._formatContextPillLabel(f, 'constitution', this._estimateFileTokens(f, 'constitution'))}
-                                        pillId=${f}
-                                        title=${`${f} — Tier 0 Constitution File (Auto-Pinned Architectural Standards)`}
-                                        ?active=${true}>
-                                    </sutram-pill>
-                                `)}
-                                ${(this.referenceFiles || []).filter(f => !scopedConstitution.includes(f)).map(f => html`
-                                    <sutram-pill
-                                        labelText=${this._formatContextPillLabel(f, 'reference', this._estimateFileTokens(f, 'reference'))}
-                                        pillId=${f}
-                                        title="${f} — Tier 1 Reference Interface (Click to promote to Full Source, Shift+Click to dismiss)"
-                                        ?active=${false}
-                                        @sutram-pill-toggled=${(e) => {
-                                            if (e.detail?.originalEvent?.shiftKey) {
-                                                AgentStore.setState({
-                                                    referenceFiles: this.referenceFiles.filter(x => x !== f)
-                                                });
-                                            } else {
-                                                AgentStore.setState({
-                                                    referenceFiles: this.referenceFiles.filter(x => x !== f),
-                                                    pinnedFiles: [...this.pinnedFiles, f]
-                                                });
-                                            }
-                                        }}>
-                                    </sutram-pill>
-                                `)}
-                                ${(this.pinnedFiles || []).filter(f => !scopedConstitution.includes(f)).map(f => html`
-                                    <sutram-pill
-                                        labelText=${this._formatContextPillLabel(f, 'pinned', this._estimateFileTokens(f, 'pinned'))}
-                                        pillId=${f}
-                                        title="${f} — Tier 2 Pinned Edit Target (Click to demote to AST Slice, Shift+Click to dismiss)"
-                                        ?active=${true}
-                                        @sutram-pill-toggled=${(e) => {
-                                            if (e.detail?.originalEvent?.shiftKey) {
-                                                AgentStore.setState({
-                                                    pinnedFiles: this.pinnedFiles.filter(x => x !== f)
-                                                });
-                                            } else {
-                                                AgentStore.setState({
-                                                    pinnedFiles: this.pinnedFiles.filter(x => x !== f),
-                                                    referenceFiles: [...this.referenceFiles, f]
-                                                });
-                                            }
-                                        }}>
-                                    </sutram-pill>
-                                `)}
+                    <sutram-stack direction="col" gap="sm">
+                        <sutram-surface variant="inset" padding="xs" gap="xs">
+                            <sutram-stack direction="row" justify="between" align="center" gap="xs">
+                                <strong>1. Working Context (→ ${activeNodeName})</strong>
+                                <sutram-tag .text=${`~${tokenEst.total.toLocaleString()} tok`} .intent=${tokenIntent}></sutram-tag>
                             </sutram-stack>
-                        ` : html`<sutram-label text="Working set empty. Use [+] below to attach files or run a turn to auto-populate."></sutram-label>`}
+                            <sutram-label .text=${`Constitution ${tokenEst.constitution.toLocaleString()} · Slices ${tokenEst.references.toLocaleString()} · Pinned ${tokenEst.pinned.toLocaleString()} · Prompt ${tokenEst.prompt.toLocaleString()} tok`}></sutram-label>
+                            ${totalContextFiles > 0 ? html`
+                                <sutram-stack direction="row" gap="xs" ?wrap=${true}>
+                                    ${scopedConstitution.map(f => html`
+                                        <sutram-pill
+                                            labelText=${this._formatContextPillLabel(f, 'constitution', this._estimateFileTokens(f, 'constitution'))}
+                                            pillId=${f}
+                                            title=${`${f} — Tier 0 Constitution File (Auto-Pinned Architectural Standards)`}
+                                            ?active=${true}>
+                                        </sutram-pill>
+                                    `)}
+                                    ${(this.referenceFiles || []).filter(f => !scopedConstitution.includes(f)).map(f => html`
+                                        <sutram-pill
+                                            labelText=${this._formatContextPillLabel(f, 'reference', this._estimateFileTokens(f, 'reference'))}
+                                            pillId=${f}
+                                            title="${f} — Tier 1 Reference Interface (Click to promote to Full Source, Shift+Click to dismiss)"
+                                            ?active=${false}
+                                            @sutram-pill-toggled=${(e) => {
+                                                if (e.detail?.originalEvent?.shiftKey) {
+                                                    AgentStore.setState({
+                                                        referenceFiles: this.referenceFiles.filter(x => x !== f)
+                                                    });
+                                                } else {
+                                                    AgentStore.setState({
+                                                        referenceFiles: this.referenceFiles.filter(x => x !== f),
+                                                        pinnedFiles: [...this.pinnedFiles, f]
+                                                    });
+                                                }
+                                            }}>
+                                        </sutram-pill>
+                                    `)}
+                                    ${(this.pinnedFiles || []).filter(f => !scopedConstitution.includes(f)).map(f => html`
+                                        <sutram-pill
+                                            labelText=${this._formatContextPillLabel(f, 'pinned', this._estimateFileTokens(f, 'pinned'))}
+                                            pillId=${f}
+                                            title="${f} — Tier 2 Pinned Edit Target (Click to demote to AST Slice, Shift+Click to dismiss)"
+                                            ?active=${true}
+                                            @sutram-pill-toggled=${(e) => {
+                                                if (e.detail?.originalEvent?.shiftKey) {
+                                                    AgentStore.setState({
+                                                        pinnedFiles: this.pinnedFiles.filter(x => x !== f)
+                                                    });
+                                                } else {
+                                                    AgentStore.setState({
+                                                        pinnedFiles: this.pinnedFiles.filter(x => x !== f),
+                                                        referenceFiles: [...this.referenceFiles, f]
+                                                    });
+                                                }
+                                            }}>
+                                        </sutram-pill>
+                                    `)}
+                                </sutram-stack>
+                            ` : html`<sutram-label text="Working set empty. Use [+] below to attach files or run a turn to auto-populate."></sutram-label>`}
+                        </sutram-surface>
+
+                        <sutram-surface variant="inset" padding="xs" gap="xs">
+                            <sutram-stack direction="row" justify="between" align="center" gap="xs">
+                                <strong>2. Session Token & Cost Ledger</strong>
+                                <sutram-tag .text=${`~$${totalCostUsd.toFixed(4)}`} intent="highlight"></sutram-tag>
+                            </sutram-stack>
+                            <sutram-label .text=${`Cumulative: ${(this.tokenLedger?.prompt_tokens || 0).toLocaleString()} in / ${(this.tokenLedger?.completion_tokens || 0).toLocaleString()} out · ~${(this.tokenLedger?.saved_by_slicing ?? this.tokenLedger?.saved_by_slicing_tokens ?? 0).toLocaleString()} tok saved by slicing`}></sutram-label>
+                            ${Object.entries(byTier).filter(([, info]) => info && info.calls > 0).map(([tierKey, info]) => html`
+                                <sutram-stack direction="row" justify="between" align="center" gap="xs">
+                                    <sutram-tag .text=${tierKey} intent="neutral"></sutram-tag>
+                                    <sutram-label ?monospace=${true} .text=${`${info.calls} call(s) · ${(info.prompt_tokens || 0).toLocaleString()} in / ${(info.completion_tokens || 0).toLocaleString()} out · ~$${Number(info.cost_usd || 0).toFixed(4)}`}></sutram-label>
+                                </sutram-stack>
+                            `)}
+                        </sutram-surface>
                     </sutram-stack>
                 </sutram-floating-hud>
 
@@ -674,11 +690,30 @@ export class InSetuCoreAgent extends InSetuElement {
                                 <sutram-label text="Ask a question, run a declarative routine (/code, /plan, /ask, /yomama), or paste a patch sandwich at the bottom."></sutram-label>
                             </sutram-stack>
                         </sutram-surface>
-                    ` : this.messages.map(m => html`
+                    ` : this.messages.map((m, mIdx) => html`
                         <sutram-surface
                             variant="bubble"
                             intent=${m.role === 'user' ? 'primary' : 'neutral'}>
-                            <sutram-label .text=${m.role === 'user' ? 'You' : 'Yomama Agent'}></sutram-label>
+                            <sutram-stack direction="row" justify="between" align="center" gap="sm">
+                                <sutram-stack direction="row" align="center" gap="xs">
+                                    <sutram-label .text=${m.role === 'user' ? 'You' : 'Yomama Agent'}></sutram-label>
+                                    ${m.seq ? html`<sutram-tag .text=${`#${m.seq}`} intent="neutral" title=${m.message_id || ''}></sutram-tag>` : ''}
+                                    ${m.compaction_tier ? html`
+                                        <sutram-tag
+                                            .text=${m.compaction_tier === 'hot' ? 'Hot • Full' : (m.compaction_tier === 'warm' ? 'Warm • Receipt' : 'Cold • Summary')}
+                                            intent=${m.compaction_tier === 'hot' ? 'success' : (m.compaction_tier === 'warm' ? 'highlight' : 'neutral')}
+                                            title=${m.receipt ? `Receipt: ${m.receipt}` : ''}>
+                                        </sutram-tag>
+                                    ` : ''}
+                                </sutram-stack>
+                                <sutram-btn
+                                    ?compact=${true}
+                                    intent="neutral"
+                                    icon="x"
+                                    title="Remove message from transcript & compaction view"
+                                    @click=${() => this._removeMessageBubble(m, mIdx)}>
+                                </sutram-btn>
+                            </sutram-stack>
                             <sutram-label intent="neutral" ?multiline=${true} .text=${m.content}></sutram-label>
                         </sutram-surface>
                     `)}
@@ -713,118 +748,17 @@ export class InSetuCoreAgent extends InSetuElement {
                             </sutram-stack>
                         </sutram-surface>
                     ` : ''}
-                    ${this._stagedBridgeCells && this._stagedBridgeCells.length > 0 ? (() => {
-                        const grouped = this._stagedBridgeCells.reduce((acc, cell) => {
-                            if (!acc[cell.file]) acc[cell.file] = [];
-                            acc[cell.file].push(cell);
-                            return acc;
-                        }, {});
-                        const activeCount = this._stagedBridgeCells.filter(c => c.active).length;
-                        return html`
-                            <sutram-surface variant="panel" intent="highlight" padding="md" gap="md">
-                                <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
-                                    <sutram-stack direction="row" align="center" gap="xs">
-                                        <sutram-icon name="layers" size="md" intent="highlight"></sutram-icon>
-                                        <strong>Staged Patch Stacks (${activeCount} of ${this._stagedBridgeCells.length} selected)</strong>
-                                    </sutram-stack>
-                                    <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true}>
-                                        <sutram-btn
-                                            ?compact=${true}
-                                            intent="neutral"
-                                            icon="bridge"
-                                            label="Open in Bridge"
-                                            @click=${() => window.inSetu?.stores?.Bridge?.getState()?.setActiveSurface('bridge')}>
-                                        </sutram-btn>
-                                        <sutram-btn
-                                            ?compact=${true}
-                                            intent="danger"
-                                            icon="trash-2"
-                                            label="Discard"
-                                            @click=${() => window.inSetu?.stores?.Bridge?.getState()?.clearPayload()}>
-                                        </sutram-btn>
-                                        <sutram-async-btn
-                                            ?compact=${true}
-                                            intent="success"
-                                            icon="zap"
-                                            label="Confirm & Commit (${activeCount})"
-                                            ?disabled=${activeCount === 0}
-                                            .onClick=${async () => {
-                                                const bStore = window.inSetu?.stores?.Bridge?.getState();
-                                                if (!bStore) return;
-                                                const textVal = bStore.getCompiledPayload();
-                                                const activeFiles = bStore.getActiveFiles();
-                                                const commitJob = this.api.bindJobAction('bridge/sync', {
-                                                    text: textVal,
-                                                    active_files: activeFiles,
-                                                    dry_run: false,
-                                                    repair_mode: bStore.repairMode === 'off' ? 'off' : 'algorithmic',
-                                                    auto_heal: false,
-                                                    profile_id: this.activeProfileId
-                                                }, {
-                                                    onComplete: async (sData) => {
-                                                        const tel = sData?.artifact;
-                                                        if (tel?.can_commit && tel?.mode === 'live') {
-                                                            bStore.clearPayload();
-                                                            bStore.fetchHistory();
-                                                            AgentStore.setState({ lastTurnCommittedFiles: activeFiles });
-                                                            this.setStatus(`✅ Committed ${activeFiles.length} file(s)!`, 2500);
-                                                        } else {
-                                                            window.inSetu.stores.Bridge.setState({ telemetry: tel, viewMode: 'console' });
-                                                            bStore.setActiveSurface('bridge');
-                                                        }
-                                                    }
-                                                });
-                                                await commitJob();
-                                            }}>
-                                        </sutram-async-btn>
-                                    </sutram-stack>
-                                </sutram-stack>
-                                <sutram-stack direction="col" gap="sm">
-                                    ${Object.entries(grouped).map(([file, groupCells]) => {
-                                        const selInFile = groupCells.filter(c => c.active).length;
-                                        return html`
-                                            <sutram-card-group ?stacked=${true} ?accordion=${true}>
-                                                <sutram-card
-                                                    .titleText=${new this.utils.InSetuURI(file).basename}
-                                                    .descriptionText=${`${selInFile} of ${groupCells.length} patch(es) selected`}
-                                                    .detailText=${file}
-                                                    icon="file-code-2"
-                                                    intent=${selInFile > 0 ? 'highlight' : 'neutral'}
-                                                    selectionStoreKey="none"
-                                                    ?selected=${selInFile > 0}
-                                                    @sutram-card-select-toggled=${(e) => {
-                                                        e.stopPropagation();
-                                                        window.inSetu?.stores?.Bridge?.getState()?.toggleGroupActive(file, selInFile === 0);
-                                                    }}>
-                                                </sutram-card>
-                                                ${groupCells.map((c, idx) => {
-                                                    const commentMatch = c.content.match(/<<<<<<< COMMENT\r?\n([\s\S]*?)\r?\n<<<<<<< /);
-                                                    const commentStr = commentMatch && commentMatch[1] ? commentMatch[1].trim() : `Patch #${idx + 1}`;
-                                                    return html`
-                                                        <sutram-card
-                                                            .titleText=${`Patch ${idx + 1} of ${groupCells.length}`}
-                                                            .descriptionText=${commentStr}
-                                                            icon="git-commit"
-                                                            intent=${c.active ? 'success' : 'neutral'}
-                                                            selectionStoreKey="none"
-                                                            ?selected=${c.active}
-                                                            @sutram-card-select-toggled=${(e) => {
-                                                                e.stopPropagation();
-                                                                window.inSetu?.stores?.Bridge?.getState()?.toggleCellActive(c.id);
-                                                            }}
-                                                            @card-clicked=${() => {
-                                                                window.inSetu?.stores?.Bridge?.getState()?.setActiveSurface('bridge');
-                                                            }}>
-                                                        </sutram-card>
-                                                    `;
-                                                })}
-                                            </sutram-card-group>
-                                        `;
-                                    })}
-                                </sutram-stack>
-                            </sutram-surface>
-                        `;
-                    })() : ''}
+                    <insetu-agent-execution-trace
+                        .trace=${this.executionTrace}
+                        .activeJobMessage=${this.activeJobMessage}
+                        .loading=${this.loading}>
+                    </insetu-agent-execution-trace>
+                    <insetu-agent-staged-stacks
+                        .cells=${this._stagedBridgeCells}
+                        .activeProfileId=${this.activeProfileId}
+                        .quickpack=${this._lastQueryQuickpack}
+                        @insetu-dismiss-quickpack=${() => { this._lastQueryQuickpack = null; this.requestUpdate(); }}>
+                    </insetu-agent-staged-stacks>
                     ${this._lastTurnCommittedFiles && this._lastTurnCommittedFiles.length > 0 ? html`
                         <sutram-stack direction="col" gap="xs">
                             ${this._lastTurnCommittedFiles.map(fp => html`
@@ -843,126 +777,22 @@ export class InSetuCoreAgent extends InSetuElement {
                             `)}
                         </sutram-stack>
                     ` : ''}
-                    ${this.activeJobMessage ? html`
-                        <sutram-surface variant="panel" intent="primary" padding="sm">
-                            <sutram-spinner .text=${this.activeJobMessage}></sutram-spinner>
-                        </sutram-surface>
-                    ` : ''}
                 </sutram-stack>
 
-                ${this.pendingHandoff && this.pendingHandoff.pending_handoff ? (() => {
-                    const ph = this.pendingHandoff.pending_handoff;
-                    const branches = Array.isArray(ph.branches) && ph.branches.length > 0 ? ph.branches : [ph];
-                    const safeIdx = Math.min(this._handoffBranchIdx || 0, branches.length - 1);
-                    const activeBranch = branches[safeIdx] || ph;
-                    const routineObj = (this.routines || []).find(r => r.id === (this.pendingHandoff.routine_id || this.agentRoutineId));
-                    const displayTitle = this.pendingHandoff.routine_title || activeBranch.routine_title || routineObj?.title || routineObj?.name || this.pendingHandoff.routine_id || 'Routine';
-                    const wfCtxUri = activeBranch.workflow_context_uri || '';
-                    const promptToCopy = activeBranch.prompt_text || activeBranch.compiled_prompt || '';
-                    return html`
-                        <sutram-surface slot="footer" variant="tinted" intent="warning" border="top" padding="md" gap="sm">
-                            <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
-                                <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true}>
-                                    <sutram-icon name="zap" size="sm" intent="warning"></sutram-icon>
-                                    <strong>External LLM Handoff • ${displayTitle} (${activeBranch.node_id})</strong>
-                                    ${activeBranch.tier ? html`<sutram-tag text=${activeBranch.tier} intent="warning"></sutram-tag>` : ''}
-                                </sutram-stack>
-                                <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true}>
-                                    ${wfCtxUri ? (() => {
-                                        const chunks = this.vfs?.getChunks ? this.vfs.getChunks(wfCtxUri) : [wfCtxUri];
-                                        const ctxEntityData = {
-                                            filepath: wfCtxUri,
-                                            isFS: false,
-                                            chunks,
-                                            suppress: ['file-edit', 'file-browse', 'file-view', 'file-window']
-                                        };
-                                        const rawActions = window.ExtensionRegistry?.getEntityActions
-                                            ? window.ExtensionRegistry.getEntityActions('file:context', ctxEntityData)
-                                            : [];
-                                        const shareActions = rawActions.filter(a =>
-                                            !a.bulkOnly && ['file-copy', 'file-download', 'file-share'].includes(a.id)
-                                        );
-                                        const menuItems = shareActions.map(act => ({
-                                            label: typeof act.label === 'function' ? act.label(ctxEntityData) : act.label,
-                                            icon: act.icon,
-                                            intent: act.intent,
-                                            onClick: (e) => {
-                                                if (window.ExtensionRegistry?.executeEntityAction) {
-                                                    return window.ExtensionRegistry.executeEntityAction(act, ctxEntityData, e);
-                                                }
-                                                if (act.onClick) return act.onClick(ctxEntityData, e);
-                                                if (act.asyncAction) return act.asyncAction(ctxEntityData, e);
-                                            }
-                                        }));
-                                        return html`
-                                            <sutram-dropdown align="left" direction="up" .items=${menuItems}>
-                                                <sutram-btn
-                                                    slot="trigger"
-                                                    ?compact=${true}
-                                                    intent="highlight"
-                                                    icon="package"
-                                                    label="Context">
-                                                </sutram-btn>
-                                            </sutram-dropdown>
-                                        `;
-                                    })() : ''}
-                                    <sutram-btn
-                                        ?compact=${true}
-                                        intent="primary"
-                                        icon="clipboard"
-                                        label="Copy Prompt + Directives"
-                                        @click=${() => this.utils.copyRawText(promptToCopy, "📋 Prompt & directives copied!").catch(() => {})}>
-                                    </sutram-btn>
-                                </sutram-stack>
-                            </sutram-stack>
-                            ${branches.length > 1 ? html`
-                                <sutram-stack direction="row" gap="xs" ?wrap=${true}>
-                                    ${branches.map((b, bIdx) => {
-                                        const isDone = Boolean((this._handoffBranchResponses[b.node_id] || '').trim());
-                                        return html`
-                                            <sutram-btn
-                                                ?compact=${true}
-                                                intent=${bIdx === safeIdx ? 'warning' : (isDone ? 'success' : 'neutral')}
-                                                ?active=${bIdx === safeIdx}
-                                                label="${isDone ? '●' : '○'} Step ${bIdx + 1}: ${b.node_id}"
-                                                @click=${() => { AgentStore.setState({ handoffBranchIdx: bIdx }); }}>
-                                            </sutram-btn>
-                                        `;
-                                    })}
-                                </sutram-stack>
-                            ` : ''}
-                            <sutram-textarea
-                                placeholder=${`Paste the external LLM's response for "${activeBranch.node_id}" here (prose & Yomama patches will split automatically)...`}
-                                .value=${this.promptInput}
-                                ?flush=${true}
-                                @sutram-input-changed=${e => AgentStore.setState({ promptInput: e.detail.value })}>
-                            </sutram-textarea>
-                            <sutram-action-bar collapse="sm" align="between">
-                                <sutram-btn
-                                    intent="neutral"
-                                    icon="x"
-                                    label="Cancel Handoff"
-                                    @click=${() => {
-                                        AgentStore.setState({
-                                            promptInput: '',
-                                            pendingHandoff: null,
-                                            handoffBranchIdx: 0,
-                                            handoffBranchResponses: {},
-                                            handoffPasteText: ''
-                                        });
-                                    }}>
-                                </sutram-btn>
-                                <sutram-async-btn
-                                    label="Ingest Reply & Continue"
-                                    icon="corner-down-left"
-                                    intent="warning"
-                                    ?grow=${true}
-                                    .onClick=${() => this._sendPrompt()}>
-                                </sutram-async-btn>
-                            </sutram-action-bar>
-                        </sutram-surface>
-                    `;
-                })() : html`
+                ${this.pendingHandoff && this.pendingHandoff.pending_handoff ? html`
+                    <insetu-agent-handoff-panel
+                        slot="footer"
+                        .pendingHandoff=${this.pendingHandoff}
+                        .routines=${this.routines}
+                        .agentRoutineId=${this.agentRoutineId}
+                        .webChatWindowMode=${this.webChatWindowMode}
+                        .handoffBranchIdx=${this._handoffBranchIdx}
+                        .handoffBranchResponses=${this._handoffBranchResponses}
+                        .promptInput=${this.promptInput}
+                        .totalTokensEst=${tokenEst.total}
+                        .onSendPrompt=${() => this._sendPrompt()}>
+                    </insetu-agent-handoff-panel>
+                ` : html`
                 <sutram-surface slot="footer" variant="tinted" intent="primary" border="top" padding="sm" gap="sm">
                     <sutram-composer
                         placeholder="Ask Yomama."
@@ -1050,7 +880,24 @@ export class InSetuCoreAgent extends InSetuElement {
                                             .checked=${Boolean(this.agentSettings?.run_tests_on_code)}
                                             @sutram-input-changed=${e => AgentStore.getState().updateAgentSetting('run_tests_on_code', e.detail.value)}>
                                         </sutram-toggle>
-                                        <sutram-stack direction="row" gap="xs">
+                                        <sutram-stack direction="row" gap="xs" ?wrap=${true}>
+                                            <sutram-btn
+                                                ?compact=${true}
+                                                intent="highlight"
+                                                icon="activity"
+                                                label="Compile AI Telemetry"
+                                                ?grow=${true}
+                                                @click=${async () => {
+                                                    this.setStatus('⏳ Compiling AI Telemetry context...', null);
+                                                    try {
+                                                        const res = await this.api.postJson('bridge/compile_telemetry', { limit: 40 });
+                                                        if (window.inSetu?.sys?.refreshManifest) await window.inSetu.sys.refreshManifest();
+                                                        this.setStatus(`📊 Compiled AI Telemetry (${res.llm_calls || 0} LLM calls, ${res.heal_cases || 0} heal cases) to Gather!`, 3500);
+                                                    } catch (err) {
+                                                        this.setStatus(`⚠️ Telemetry compile failed: ${err.message}`, 4000, true);
+                                                    }
+                                                }}>
+                                            </sutram-btn>
                                             <sutram-btn
                                                 ?compact=${true}
                                                 intent="neutral"
@@ -1247,30 +1094,8 @@ window.ExtensionRegistry.registerExtension('agent', {
         }
     ],
     layoutSlots: [
-        {
-            slot: "slots:yomama-surface",
-            id: "chat",
-            label: "Chat",
-            icon: "message-square",
-            intent: "primary",
-            order: 20,
-            component: "insetu-core-agent"
-        },
-        {
-            slot: "slots:yomama-surface",
-            id: "routines",
-            label: "Routines",
-            icon: "workflow",
-            intent: "warning",
-            order: 30,
-            component: "insetu-core-agent-routines"
-        },
-        {
-            slot: "slots:yomama-drawer",
-            id: "agent-sessions",
-            label: "Conversations",
-            order: 10,
-            component: "insetu-core-agent-sessions"
-        }
+        { slot: "slots:yomama-surface", id: "chat", label: "Chat", icon: "message-square", intent: "primary", order: 20, component: "insetu-core-agent" },
+        { slot: "slots:yomama-surface", id: "routines", label: "Routines", icon: "workflow", intent: "warning", order: 30, component: "insetu-core-agent-routines" },
+        { slot: "slots:yomama-drawer", id: "agent-sessions", label: "Conversations", order: 10, component: "insetu-core-agent-sessions" }
     ]
 });

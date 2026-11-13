@@ -49,8 +49,8 @@ nodes:
 ## initial_answer
 You are answering a read-only architectural question about the workspace. Do NOT emit Yomama patch blocks.
 If the attached context, active plan documents, conversation history, and topology overview are sufficient, provide a clear, thorough answer directly.
-If you need to inspect additional source files first, respond ONLY with JSON:
-{"status": "NEED_MORE_FILES", "requested_files": ["vfs://repo/path/to/file.py"]}
+If you need to inspect additional workspace files first, respond ONLY with JSON:
+{"status": "NEED_MORE_FILES", "requested_files": ["vfs://<repo>/<path/to/file>"]}
 
 Attached Plan / Documentation Context:
 {{ global.attached_docs_content }}
