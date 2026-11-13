@@ -146,7 +146,7 @@ Reusable workflow blueprints ("Shadow Boards") are first-class citizens in `md-d
 
 ## 4. Multiplex Proximity Filters & Cross-Domain RAG Integration
 
-Because `md_records` and `md_edges` live in the workspace SQLite index alongside `topology_ledger`, `symbol_ledger`, and `affinity_edges`, any `md-db` repository automatically participates in `inSetu`'s **Proximity Filter** and **Domain Jump** algebra (`docs/models/agent_orchestrator_and_rag.md` §7.3):
+Because `md_records` and `md_edges` live in the workspace SQLite index alongside `topology_ledger`, `symbol_ledger`, and `affinity_edges`, any `md-db` repository automatically participates in `inSetu`'s **Proximity Filter** and **Domain Jump** algebra (`docs/models/agent_orchestrator_and_rag.md` §8.3):
 
 1. **Zero-Config Containment & Ur-Record Proximity:**
    - **Containment Adjacency (`hierarchy.container`):** Expanding from a Level-2 sub-record span (`show:pbn_088_track_05#seg_2`) at depth $k=1$ pulls its enclosing parent record (`show:pbn_088_track_05`) and adjacent sibling spans (`seq_order` $\pm 1$, `numeric_window`) at `slice` or `full` lens.

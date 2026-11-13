@@ -167,15 +167,35 @@ Decided 2026-11-09: runs need base commits, worktrees, run branches, merge and r
 
 **Name (decided 2026-11-09):** the extension becomes **Bonsai** (id `bonsai`; shaping branches). Its UI label is "Bonsai · Source Control", and the README and REVIEWING.md introduce it once as "Bonsai, the source-control extension", so the front door stays plain (R6). If it ever ships as its own package, check PyPI and npm for the name first.
 
-### Sprint 1: Runs and the staged stack (with Wave 3.2)
-- [ ] A `Run` record (id, contract, status, budgets used, base commit) and its folder under `.insetu/data/agent/runs/`.
+### Sprint 1: Runs, the `RoutineEnvelope` working-set state machine, and the staged stack (with Wave 3.2)
+- [ ] A `Run` record (id, contract, status, budgets used, base commit) and its folder under `.insetu/data/agent/runs/`, paired with the unified `RoutineEnvelope` (`insetu/core/agent/envelope.py`, shared with Six-Bucket Sprint 2 `S2.T1`):
+  - Partitioned namespaces (`sys`, `inputs`, `nodes[node_id]`, `trace[node_id]`, `holding[branch_id]`) so node IDs never collide with reserved top-level keys.
+  - Single working-set state machine (`apply_working_set_delta(add=..., drop=..., lens=..., source=...)`) tracking `{uri, lens, source, tokens}` across hops and wavefronts (protecting `user_pinned` files while allowing Hop 2 or `QUERY_CONTEXT` probes to drop tentative `scout_hop1` suggestions, and evicting non-promoted branch files when `1 -> N` / `map_over` wavefronts settle), exposing read-only `editable_files`, `readonly_files`, and `all_context_files` properties so `orchestrator.py` never maintains parallel mutable file lists or drops `inputs` across `envelope.fork_sub_routine(handoff_routine)` hops.
+- [ ] Server-authoritative checkpoint resumption for `web_chat` handoffs, epistemic probes (`<<<<<<< QUERY_CONTEXT`), and budget pauses:
+  - Persist the `Run` / `RoutineEnvelope` checkpoint on the server (`.insetu/data/agent/runs/<run_id>/` and `chat_sessions.checkpoint_json`) whenever a step pauses (`paused_for_user` or `paused_for_budget`).
+  - Resuming a handoff sends only `{session_id, run_id, handoff_responses}` from the browser—eliminating client-echoed `prior_chain_context` payloads, `"Resume Routine Handoff"` prompt clobbering, and duplicate `pre_supplied_handoff` vs. API probe branches.
+- [ ] Single context-compilation seam (`gather.context.assemble`) & Day-0 Genesis Target Handling:
+  - Register `turn_<hash>_context.txt` in `manifest_ledger` inside `assemble_context_payload` (`context_assemble.py`)—projecting Tier 0 Constitution (`governance`), Blast-Radius `CODE_INDEX.md` subtrees (`hierarchy` at `outline` lens), 1-hop AST interfaces (`data` at `slice` lens), focal edit targets (`data` at `full` lens), and net-new uncreated file targets (`data` at `genesis` lens)—and retire the duplicate `gather.pack_selection` special-case branch in `orchestrator.py` (closing Post-Diff Audit Wave 1.2).
+  - Harden routines (`/plan`, `/code`, `/implement`) for empty / Day-0 repositories: when a target `vfs://<repo>/<path>` does not exist in `topology_ledger` yet (or when a repository is newly initialized with 0 code files), `clamp_rag_files_to_topology` preserves valid repo-scoped paths as `genesis` targets (`[NEW FILE TO CREATE: vfs://<repo>/<path>]`) and short-circuits redundant `scout_targets` LLM calls on empty indexes.
+- [ ] Per-session, per-tier token and cost attribution (`llm_telemetry.py` & HUD Section 2):
+  - Record `session_id` (and `run_id`) on `llm_telemetry` rows (extracted into `insetu/core/llm/llm_telemetry.py` per God-Objects §2.6), including token estimates for manual `web_chat` handoff steps, feeding the Two-Part Context Budget HUD and Collapsible Execution Trace (`agent_staged_stacks.js`).
+- [ ] CQRS $O(1)$ Session Loading, Catalog Separation & UDF Composer State (`agent_store.js`, `agent.js`, `engine_agent.py`):
+  - **Catalog vs. Session Separation:** Decouple boot-time catalog hydration (`hydrateCatalog`: `agent/routines`, `llm/profiles`, `agent/settings`) from session switching (`selectSession`, `createSession`). `POST agent/sessions` returns the ready session envelope in 1 request, and `GET agent/messages/<session_id>` is a pure $O(1)$ SQLite read of `chat_messages` and `chat_sessions` (`working_set_json`, `token_ledger_json`, `checkpoint_json`) with zero synchronous `vfs.read()`, AST slicing, or `model_catalog.json` disk parsing on the HTTP read path.
+  - **UDF Composer & Sticky Mode Contract:** Eliminate imperative shadow-DOM clearing (`_clearComposerDomValue`) in `agent.js`. Route `@sutram-composer-submit` through a pure `AgentStore` action that parses leading `/command:scope:stage` tokens synchronously, preserves sticky conversational modes (`/code`, `/plan`, `/ask`, `/yolo` per `agent_orchestrator_and_rag.md` §11.1) across turns while resetting one-shot task routines (`/test`, `/wrap`, `/upkeep`) to the prior mode, and refuses to insert blank `assistant` rows into `chat_messages` if a routine yields empty output.
+- [ ] The working set speaks only the lens contract (`docs/plans/2026-11-12-lens-contract.md`, P25 Sprint 1): `apply_working_set_delta` stores what `project` returned, including `served_lens` and tokens, and neither `orchestrator.py` nor `envelope.py` imports a lens implementation directly.
+- [ ] **Shared-engine constraints (decided 2026-11-12).** The parts of the run that a second consumer of the routine engine will share are built domain-neutral now, so nothing has to be undone later; everything else in this plan (worktrees, Bonsai, the run manager, Staged Patch Stacks) is inSetu's own and is built freely:
+  - **Run state is data.** A step takes a routine and the serialized run state and returns the next state and the nodes now ready; nothing a later step needs lives only in a thread or a local variable. The server checkpoint above is this state.
+  - **Domain work goes through capabilities.** The orchestrator's inline patch, test and heal sequence (`bridge.sync`, then the test diagnostic, then the heal call, then `bridge.revert`) becomes routine nodes or a capability with the `verify.stage` and `sensor.run` shape, not orchestrator code.
+  - **The routine grammar carries no code-specific fields.** Anything code-specific is a capability argument or a node's `action`.
+  - **One set of model tier names**, mapped once to providers; the mapping is configuration, not code.
+  - **Output validation is one mechanism:** schema check, then an isolated repair pass on the failing part, then fail. The same shape serves Pydantic models and JSON Schemas.
 - [ ] The run contract: proposed in the plan step, approved or edited by the person before any edit; a chat turn gets an implicit one-step contract.
 - [ ] Agent and routine `bridge.sync` steps apply to staged buffers; nothing reaches disk before approval.
-- [ ] The Staged Patch Stacks show the run's stack; approval commits through the bridge.
+- [ ] The Staged Patch Stacks (`agent_staged_stacks.js`) show the run's stack; approval commits through the bridge.
 - [ ] The transcript file.
 - [ ] Undo follows the run: a stack committed with Confirm & Commit records its transaction on the run and session, so `/undo` reverts it (today `agent.undo` only knows turns that committed themselves).
-- [ ] Wave 3.2: split `orchestrator.py` along the run's seams (planning, gathering, editing, testing, stopping).
-- Done when: a chat turn and a routine both end as a staged stack that commits on approval, and the transcript explains each step.
+- [ ] Wave 3.2: split `orchestrator.py` along the run's seams (`routine_loader.py`, `expressions.py`, `envelope.py`, `orchestrator.py`) with zero backward-compatibility re-export shims (per God-Objects §1.2 Rule B), rewiring `engine_agent.py`, `engine_mcp.py`, `routine_check.py`, and unit tests directly to the canonical modules.
+- Done when: a chat turn and a routine both end as a staged stack that commits on approval, resuming a `web_chat` handoff or `QUERY_CONTEXT` probe restores state strictly from the server checkpoint, and the transcript and execution trace explain each step.
 
 ### Sprint 2: The scratch worktree and stale stacks
 - [ ] Materialise the stack in a `git worktree`; run named tests there; clean up.
@@ -198,7 +218,7 @@ Decided 2026-11-09: runs need base commits, worktrees, run branches, merge and r
 - Done when: a golden task runs unattended to a branch, passes every guard, and merges only on a yes; a task that edits its own done test is refused.
 
 ### Sprint 5: Golden tasks in CI
-- [ ] A fixture repository with five or so fixed tasks: a one-line fix, a two-file change, a fix whose first attempt fails a test, a patch that needs repair, a protected-file edit that must stop.
+- [ ] A fixture repository with six fixed tasks: a Day-0 genesis task on an empty repo (`/plan` -> `/code` creating the initial module + test and bootstrapping `CODE_INDEX.md`), a one-line fix, a two-file change, a fix whose first attempt fails a test, a patch that needs repair, and a protected-file edit that must stop.
 - [ ] Each task replayed in CI with a recorded model (saved replies), so it checks the plumbing deterministically, not the model's quality.
 - Done when: all golden tasks pass in CI, and the same tasks make the agent demo repeatable.
 

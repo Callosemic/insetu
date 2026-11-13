@@ -22,16 +22,18 @@ The roadmap now has four goalposts: a) review ready, b) demo ready, c) 1.0, d) a
 5. *(Removed 2026-11-10: "Update ready" becomes an N1 notice from a browser-side source, in Claude's N1 Sprint 1. Leave the status message as it is until then.)*
 
 6. **Pay back the size ceilings.** The Nov 9 round grew eleven modules past the `MODULE_LINE_RATCHET` ceilings you had just set. To unblock the release, Claude raised them to the real sizes and marked each "Nov 9" in `tests/fitness/rules_python.py`. Bring the big ones back down by splitting, not trimming:
-    - `agent.js` (1,276; was 1,085): move the Staged Patch Stacks and helper-mode panels into their own components.
+    - *(Done in Lane A, 2026-11-12: `agent.js` is 1,115 after `agent_staged_stacks.js`; the helper-mode panel comes with A3.)*
     - `engine_bridge.py` (1,023; was 825): move `compile_ai_telemetry_context`, its route and the heal-audit logging into a `bridge_telemetry.py`.
     - `bridge_fuzzy.py` (974; was 815): the sandwich fuzzy anchor into its own module.
-    - `engine_llm.py` (921; was 812): LLM call telemetry next to `llm_drivers.py`.
-    - `orchestrator.py` (1,902; was 1,771): Wave 3.2, with agent plan Sprint 1.
-    - The small overruns (`engine_topology.py`, `ui_system_settings.js`, `bridge_vfs.py`, `system.js`, `bridge.js`, `engine_agent.py`) come down as those files are next touched.
+    - *(Done in Lane A: `engine_llm.py` is 871 after `llm_telemetry.py`, and `orchestrator.py` is 1,530 after A1.)*
+    - The small overruns (`engine_topology.py`, `ui_system_settings.js`, `bridge_vfs.py`, `system.js`) come down as those files are next touched. `bridge.js` and `engine_agent.py` are already paid back.
+    - Split along the code's seams, never to fit the ceiling (decided 2026-11-12): no module should end a split within about 5% of its ceiling.
     Lower each ceiling to the new size in the same change.
 7. **What else the test run found** (fixed by Claude, so you know): `MarkdownLanguageProvider` lacked `call_sites`; its wikilink pattern had `\vert` where `|` was meant; registering it for `.md` made the cartographer map document headings into CODE_INDEX.md, so providers now declare `indexes_code_symbols` (False for Markdown); mustache interpolation lost nested fallbacks, now resolved inside out with values never rescanned; `compaction_strategy` and `rag_strategy` were still read after being removed from the schema.
 
 ## 3. P19: helper modes (chat and agent, small)
+
+*Moved 2026-11-12: P19 is implemented in Lane A, Sprint A3 (`gemini_agent_harness_and_rag_lane.md`), because its files are Lane A's. The requirements below stand; this lane does not start it.*
 
 Replace the single `helper_mode` choice with three: `deterministic`, `ai_assisted`, `custom`. `custom` shows one setting per helper:
 

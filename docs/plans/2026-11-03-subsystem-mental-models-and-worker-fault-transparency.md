@@ -71,11 +71,14 @@ Following the establishment of the `models` landmark (`docs/models/*.md` -> `sys
 * **Task 2.2 (`vfs://insetu/tests/unit/test_repo_landmarks.py`):**
   - Add unit test verifying that `assemble_context_payload` automatically includes `docs/models/yomama_bridge.md` when `insetu/core/bridge/bridge_vfs.py` is in `edit_targets`, and omits it when editing an unrelated file.
 
-### Sprint 3: Worker Fault Transparency & Fitness Ratchet (`rules_python.py`)
+### Sprint 3: Worker Fault Transparency, Job Finalizers & Polymorphic Provider Fitness (`rules_python.py`, `akasa`, `sutram`)
 * **Task 3.1 (`vfs://insetu/tests/fitness/rules_python.py`):**
   - Add `SILENT_WORKER_EXCEPTION_SWALLOW_BAN` to `BackendFitnessVisitor`: flag any `@*.worker`-decorated function whose top-level `try ... except Exception:` block catches `Exception` without either re-raising, emitting `system_error`, or recording `traceback.format_exc()`.
-* **Task 3.2 (`vfs://insetu/insetu/core/` & `vfs://insetu/insetu/extensions/`):**
+  - Add `LANGUAGE_PROVIDER_METHOD_AND_ARG_ORDER_CHECK` to `BackendFitnessVisitor`: verify that any method called on a `get_language_provider(...)` variable (`definitions`, `imports`, `exports`, `call_sites`, `scope_boundaries`, `slice_interface`, `extract_symbol_slice`, `validate_syntax`) exists on `BaseLanguageProvider` and does not pass a literal filename string as the `content` first argument.
+* **Task 3.2 (`vfs://insetu/insetu/core/`, `vfs://insetu/insetu/extensions/`, `vfs://akasa/akasa/workers/immediate.py`, `vfs://sutram/sutram/js/client.js`):**
   - Audit all `@*.worker` functions across Core and Extensions to ensure unexpected worker exceptions emit structured `system_error` telemetry and surface clear diagnostic messages.
+  - Emit a guaranteed `worker_job_settled` hook (`status="completed" | "failed"`, `job_id`, `error`) inside `_execute_immediate_job`'s `finally:` block in `akasa` so extensions tracking `active_job_id` pointers (such as `chat_sessions.active_job_id`) always clean up on crash.
+  - Update `createJobPoller` (`sutram`) to tolerate up to 2 consecutive transient network poll errors (surviving mobile/Tailscale handoffs) and surface the backend worker's `status_message` / exception reason in `onError` instead of a generic `"Sync failed"` string.
 
 ### Sprint 4: First-Class `.mjs` Behavioral Test Extraction & `js_loader.mjs` Unification (`insetu` & `sutram`)
 > **Architectural Rationale:** Embedding multi-hundred-line JavaScript test scripts inside Python `r"""..."""` / `f"""..."""` strings hides JS imports and symbol references from `JavaScriptLanguageProvider` / `symbol_ledger` (blinding RAG `bridge.ast_symbols` and `bridge.cross_lang_refs`), bypasses `bridge_vfs.py` JS syntax validation at patch time, and invites Python string-interpolation/indentation collisions and split-brain `globalThis.window` mocks.

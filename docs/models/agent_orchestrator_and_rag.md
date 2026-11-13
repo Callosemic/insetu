@@ -76,9 +76,32 @@ Not every node in a Routine should pay the token cost or suffer the attention di
   - **Self-Contained Patch Healers:** Project strictly `[data.target_file, telemetry.bridge_error, prompt.failed_patch]`—giving the healer the complete `n-1` target file buffer, the single failed patch block, and the exact diagnostic error while omitting `governance`, `hierarchy`, `meta`, and all other untouched files in the batch.
 * **Declarative Mutation (`writes`):** Nodes explicitly target which bucket their output updates (e.g., `writes: data` for a context assembler, `writes: telemetry` for a test runner or bridge verifier).
 
+### 4.1 Multi-Hop Scouting, Working-Set Pruning & Subsetted `CODE_INDEX` Projection
+1. **Two-Hop Scouting & Working-Set Revision:**
+   - A fast model inspects the `CODE_INDEX.md` maps in Hop 1 to pull candidate files (including any plan or specification documents referenced by the prompt).
+   - Once the pulled files are read, irrelevant repositories are dropped, and Hop 2 can explicitly add newly discovered target files and **drop** tentative suggestions from Hop 1 that do not belong in the working set before passing the refined RAG payload to the thinking model.
+   - The thinking model retains a bounded 1-request allowance (`QUERY_CONTEXT`) to pull missing files or drop unneeded ones before producing its final output.
+2. **Subsetted `CODE_INDEX` Slices for Thinking Models (No Full-Index Dumps):**
+   - Because a repository's full `CODE_INDEX.md` can exceed 200 KB, full `CODE_INDEX.md` files belong to fast-tier scouting rather than thinking-tier synthesis.
+   - Thinking models receive a targeted subset of the index derived from an expanded blast-radius walk around the active working set.
+3. **Node-by-Node & Wavefront Working-Set Lifecycle:**
+   - The active working set is dynamic across the DAG rather than static for the whole turn: it updates as each node adds or removes files.
+   - When execution splits into a parallel wavefront (`1 -> N` or `map_over`), the working context reflects all files added across that wavefront while it runs, and evicts branch-local files that are not carried forward into the working set of subsequent nodes.
+
 ---
 
-## 5. Self-Contained Healing Loops (Epistemic Reconciliation)
+## 5. Observability: Two-Part Context Budget HUD & Collapsible Node Trace
+
+1. **Two-Part Context Budget HUD:**
+   - **Part 1 — Live Working Context:** Displays the exact live representation of the context currently inside (or about to enter) the active/next node, with accurate token counts that update dynamically as files are added to or removed from the working set across nodes and wavefronts.
+   - **Part 2 — Session Token & Cost Ledger:** Tracks cumulative tokens in and out at each cognitive tier across the entire conversation alongside the estimated cost per tier and total session cost.
+2. **Collapsible Per-Node Execution Trace ("Thinking"):**
+   - Each turn surfaces a collapsible execution trace showing what the current node is, which nodes have already run, and which node is currently running.
+   - When a step fans out into parallel branches or shards, the child executions are listed nested under the parent step.
+
+---
+
+## 6. Self-Contained Healing Loops (Epistemic Reconciliation)
 
 Outputs from `llm` nodes are treated as **hypotheses** until ratified by a deterministic `exec` sensor (`topology`, `bridge.sync`, or `bridge.test`). Whenever a hypothesis meets a physical system boundary, reconciliation occurs through a **self-contained healing loop**:
 
@@ -90,7 +113,7 @@ Outputs from `llm` nodes are treated as **hypotheses** until ratified by a deter
 
 ---
 
-## 6. Envelope Seeding, Deterministic Capabilities & JIT Compute Materialization
+## 7. Envelope Seeding, Deterministic Capabilities & JIT Compute Materialization
 
 1. **Everything Deterministic Is a Routine Step (`type: exec`) & No-Intervention Paths:**
     - Any deterministic sequence of operations in `inSetu` exposed as a capability (scouting relevant tests for a diff, auditing symbol drift, assembling blast-radius slices, running tests, committing patches, or executing `git.commit` / `git.push` at a milestone sink) must be composable as standard `type: exec` nodes within a Routine DAG.
@@ -106,16 +129,31 @@ Outputs from `llm` nodes are treated as **hypotheses** until ratified by a deter
     1. **The JIT Context Payload (Buckets 1–5):** The volatility-ordered serialization of `governance`, `hierarchy`, `meta`, `data`, and `telemetry` (materialized as an ephemeral, chunk-aware `ctx://contexts/turn_*_context.txt` artifact).
     2. **The Prompt Payload (Bucket 6):** The resolved node instructions, `incoming` pipe data, and formal output schema directives—never polluted with raw `<workspace_context>` file dumps.
     - **Automated Drivers (`anthropic`, `gemini`, `openrouter`, `openai_compatible`, `claude_cli`):** Transmit `(JIT Context Payload, Prompt Payload)` directly to the model endpoint and advance the DAG upon completion.
-    - **External Chatbot Driver (`web_chat` / `transport: manual`):** Pauses execution at the `llm` node boundary and surfaces the exact same two JIT artifacts in the Handoff UI (**Context** action menu + **Copy Prompt + Directives** button). Pasting the external model's response fulfills the node contract and resumes downstream DAG execution identically to an automated driver.
+    - **External Chatbot Driver (`web_chat` / `transport: manual` — Same-Window Delta vs. New-Window Full Packing):**
+      Pauses execution at the `llm` node boundary and surfaces the JIT **Context** menu + **Copy Prompt + Directives** button under two selectable window modes:
+      - **New Chat Window (`new_window`):** Packs the complete projected context across all active buckets (`Full Context`).
+      - **Same Chat Window (`same_window`):** Compares each artifact's content-addressed `(lens, sha256)` against what was already sent to that external chat window earlier in the session/turn (`web_chat_sent_hashes`), packing **only newly added, lens-promoted, or modified context artifacts** (`Delta Context`) while listing unchanged artifacts as already present in the external thread.
+      Pasting the external model's response fulfills the node contract and resumes downstream DAG execution identically to an automated driver.
 
 ---
 
-## 7. Representational Lenses & Composable RAG Execution Units
+## 8. Universal Context Artifacts, Representational Lenses & Composable RAG
 
-### 7.1 Resource Identity vs. Representational Lens
-Every item in the `data` (or `governance` / `telemetry`) bucket is anchored by its canonical VFS resource URI (`vfs://<repo>/<path>`) paired with a **Representational Lens (`lens`)**. A diff, an AST skeleton, a rendered viewport image, or an audio transcript is not a separate entity from the file—it is a deterministic projection of that resource:
+### 8.1 Everything in Context Is a URI-Addressed Artifact (`URI` + `Lens` + `Decay`)
+Every item mounted across the 6 buckets—whether a physical source file (`vfs://`), a compiled context (`ctx://`), a conversation turn (`msg://`), a structured database record (`mddb://`), or a diagnostic sensor reading (`tel://`)—is modeled uniformly as a **Context Artifact** anchored by its canonical URI and projected through a **Representational Lens (`lens`)**:
 
 $$\text{Project}(\text{URI}, \text{lens}, \text{params}) \rightarrow \text{Context Representation}$$
+
+| Artifact Scheme | `full` Lens (Focal / Hot) | `diff` Lens (Temporal Delta) | `slice` Lens (Structural / Warm) | `outline` Lens (Coordinate / Cold) | Decay Axis |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`vfs://` / `ctx://`** *(Files & Docs)* | Complete current file text | Interleaved AST diff (`head..live`, `live..virtual`, `head..virtual`) | AST interface signatures & docstrings (`slice_interface`) | 1-line `CODE_INDEX.md` subtree coordinates | **Working-Set Idle Turns & Graph Hop Distance** |
+| **`msg://`** *(Session Transcript)* | Verbatim message prose (or `raw_content` with `raw=true`) | Committed turn patch diff (`bridge.turn_diff` for `transaction_id`) | 1-line turn micro-receipt (`receipt` + `files_patched`) | Cold summary block (`compacted_view_json`) | **Turn Age** (Hot $\rightarrow$ Warm $\rightarrow$ Cold) |
+| **`mddb://`** *(Tracker / Notes / Records)* | Full Markdown + YAML frontmatter + sub-spans | Record field/body delta | YAML frontmatter + roll-ups + heading tree | 1-line record coordinate (`[id] title • status`) | **Containment / Ur-Graph Distance** |
+| **`tel://`** *(Test / Bridge / DOM Sensors)* | Full failure traceback + `pre_buffer` window | Anchor / expected-vs-actual diff | Structured failure batch (`TestDiagnosticSchema`) | 1-line loop ledger receipt (`meta.loop_ledger`) | **Loop Iteration Age** (Markovian $O(1)$) |
+
+Because every artifact shares the same `(URI, bucket, lens, tokens)` contract:
+* **Uniform Foveated Decay (Level-of-Detail Mipmapping):** As an artifact moves further from the current focal point (in turn age, loop iteration, or graph hop distance), its lens automatically steps down (`full` $\rightarrow$ `slice` $\rightarrow$ `outline`) rather than either bloating the window or vanishing without a trace.
+* **Uniform In-Place Promotion (`QUERY_CONTEXT`):** Any `outline` or `slice` artifact across any scheme (`vfs://...`, `msg://...`, `mddb://...`, `tel://...`) can be promoted back to `full` or `diff` in-place via `<<<<<<< QUERY_CONTEXT`.
 
 * **Standard Code & Document Lenses:**
     1. **`full` (Pure Semantic Data):** The complete current content of the resource on disk. Used for primary edit targets and self-contained `n-1` patch healing.
@@ -131,12 +169,14 @@ $$\text{Project}(\text{URI}, \text{lens}, \text{params}) \rightarrow \text{Conte
 
 Because the canonical URI stays invariant across lenses, a Routine step or user HUD action can **promote or demote** a resource in-place (e.g., `outline` $\rightarrow$ `slice` $\rightarrow$ `diff` $\rightarrow$ `full`) without duplicating entries or losing provenance.
 
-### 7.2 Declarative Input Dependencies (`requires:`) & Default Fallbacks
+**The provider contract.** Every scheme above, and any domain provider outside code, implements one lens contract: `project`, `neighbours`, `outline_root` and `resolve`, with distance bands owned by the envelope rather than the provider. See `vfs://insetu/docs/plans/2026-11-12-lens-contract.md` (roadmap P25).
+
+### 8.2 Declarative Input Dependencies (`requires:`) & Default Fallbacks
 Routines and RAG execution nodes declare what resource lenses they require and how to populate them when the user does not attach explicit overrides:
 * **User-Attachment Precedence:** If the user invokes a routine with explicit attachments matching the dependency (for example, attaching a specific diff bucket or dirty files when invoking `/wrap`), those resources seed `data` under the requested lens.
 * **Deterministic Repo/Scope Fallback:** If no matching user attachment is provided, the dependency resolves its `default` selector against `topology_ledger` (for example, selecting all `git_status != ''` files in the target repository—or within the colon-scoped `:sub_bucket`—and mounting them into `data` with `lens: "diff"`).
 
-### 7.3 Proximity Filters, Cross-Domain Jumps & Foveated Lens Decay
+### 8.3 Proximity Filters, Cross-Domain Jumps & Foveated Lens Decay
 *(See `vfs://insetu/docs/models/proximity_filters_and_domain_jumps.md` for the complete formal specification, multiplex schema syntax, and multi-stage pipeline grammar.)*
 
 Rather than hardcoding a single monolithic "blast radius" heuristic, `inSetu` models RAG retrieval as a composable algebra of **Proximity Filters** (within-domain expansion) and **Domain Jumps** (cross-domain projection), grounded in **Multiplex Graph Theory**, **Heterogeneous Information Network (HIN) Meta-Paths**, **Software Traceability**, and **Reciprocal Rank Fusion (RRF)**:
@@ -168,7 +208,7 @@ Rather than hardcoding a single monolithic "blast radius" heuristic, `inSetu` mo
     - **Cold-Start & Major Structural Shifts (LLM-Assisted Schema Authoring):** When a repository is first onboarded—or when `topology.audit_upkeep` detects structural drift (new unmapped directories, new `schema.yaml` kinds/fields, or orphaned test suites with zero bridge edges)—an upkeep/onboarding routine uses the LLM once to propose declarative `proximity_filters` and `domain_jumps` in `.insetu-data/settings/topology.md` or `.insetu-data/schema.yaml` for human review.
     - **Iterative Everyday Turns (100% Deterministic, 0 Tokens):** Once declared (or using the zero-config default RRF recipe for standard code and `md-db` repos), all per-turn execution in `rag.seed_diffs`, `rag.blast_radius`, and `rag.scout_tests` runs deterministically in milliseconds over SQLite (`topology_ledger`, `symbol_ledger`, `md_records`, `affinity_edges`, and FTS5) as standard `type: exec` DAG units.
 
-### 7.4 The Coupling Graph: Hebbian Affinity & Asymmetric Conditioning
+### 8.4 The Coupling Graph: Hebbian Affinity & Asymmetric Conditioning
 To retrieve functionally coupled files and governing documentation that do not share direct AST imports, `rag.blast_radius` and `rag.scout_tests` query a hybrid coupling graph combining **Patch-Ratified Hebbian Affinity** with **Static Citation Anchors**. Raw UI pinning or read-only `/ask` attachments are ignored to prevent conversational noise from polluting the graph.
 
 1. **Symmetric Write $\leftrightarrow$ Write Coupling (3-Tier Patch Co-Occurrence):**
@@ -185,7 +225,7 @@ To retrieve functionally coupled files and governing documentation that do not s
     - During topology scans, the indexer deterministically links `docs/models/*.md`, ADRs, and contracts to the `vfs://` files, directories, and module stems they explicitly cite in prose or frontmatter.
     - These structural edges carry **zero time decay**, guaranteeing that subsystem mental models remain permanently wired to their target modules even before the first session turn is executed.
 
-### 7.5 Cross-Repository Federated RAG (`vfs://<repo>/` Boundary Crossing)
+### 8.5 Cross-Repository Federated RAG (`vfs://<repo>/` Boundary Crossing)
 In a multi-repository workspace (such as `insetu`, `sutram`, and `akasa`), architectural changes routinely span repository boundaries—for example, updating a `<sutram-*>` web component in `vfs://sutram/`, a shared schema in `vfs://akasa/`, and a consumer view or capability route in `vfs://insetu/`. Because every URI in the 6-bucket envelope is canonically qualified as `vfs://<repo>/<path>` and indexed in a shared workspace SQLite ledger, RAG units operate natively across repository boundaries:
 
 1. **Workspace-Global Hebbian & Citation Graph:**
@@ -204,20 +244,43 @@ In a multi-repository workspace (such as `insetu`, `sutram`, and `akasa`), archi
 
 ---
 
-## 8. The Session Thread Ledger: Conversational Loops vs. One-Shot Routines
+## 9. The Session Thread Ledger: Conversational Loops vs. One-Shot Routines
 
 Every Chat Session (`chat_sessions`) is a persistent state ledger maintaining two coupled channels across turns:
-1. **The Thread Transcript (`meta.history`):** The chronological log of turns, where each turn records the user prompt (or routine invocation summary), the assistant's clean prose answer, and the explicit list of `files_patched` (`transaction_id`).
+1. **The Thread Transcript (`meta.history` — Canonical Procession + Active Compacted View):**
+   - **Canonical Procession:** The session maintains the complete, ordered procession of original messages (`user` prompts, `assistant` prose, `raw_content` patches, and `transaction_id` receipts), each with a stable identifier.
+   - **Active Compacted View:** In parallel, the session maintains the current compacted representation injected into prompts (recent turns verbatim, intermediate turns as concise receipts, and older turns condensed into a session summary), retaining references to the original message IDs so any earlier turn can always be referenced or recalled in full by the user or agent.
+   - Removing a message from the transcript removes it from both the canonical procession and the compacted view.
 2. **The Session Working Set (`data.working_set` & `meta.active_plan`):** The rolling set of files attached or modified across recent turns (`a.py, b.py, c.py, d.py`), governed by the 5-turn TTL lens decay (`full` for 5 turns $\rightarrow$ `slice` at turn 6 $\rightarrow$ evicted at turn 9, with user-pinned files exempt).
+
+---
+
+## 10. Execution Threading, `ctx://`, and `vfs://` I/O Contracts
+
+To prevent worker-pool starvation, mid-turn VFS write echoes, and unmounted-volume failures across production and unit tests, the Agent Harness and RAG pipeline obey four strict execution and storage boundaries:
+
+1. **Law 1 — Single-Hop Worker Dispatch & No Unawaited Routine Jobs:**
+   - **HTTP Boundary (`202 Accepted`):** Top-level user actions (`POST agent/prompt`, `POST bridge/sync`, `POST gather/pack_selection`) submit a background job via `ctx.jobs.submit(..., job_category="ui_blocking")` so the HTTP thread returns immediately.
+   - **In-Process Composition (`ctx.call(..., wait=True)`):** When a worker or routine invokes a capability in-process, it MUST call `ctx.call(..., wait=True)`. Declarative routines (`orchestrator.py`) execute deterministically wavefront-by-wavefront and MUST NEVER fire unawaited `ctx.call(..., wait=False)` background tasks that outlive the turn or test boundary.
+2. **Law 2 — In-Memory `RoutineEnvelope` & Scratch vs. Published `ctx://contexts/` Artifacts:**
+   - **In-Flight Turn State (`RoutineEnvelope` & `ctx.jobs.write_scratch`):** Intermediate context projections (`neighborhood_code_index_outline`, `session_transcript_history`, `delta_content`, and node outputs `< 256 KB`) remain **in memory** inside `RoutineEnvelope` and `chain_context`. Node outputs $\ge 256\text{ KB}$ spill to `ctx.jobs.write_scratch(...)` (`.insetu/cache/scratch/`), which bypasses the VFS write queue, `topology_ledger`, and `manifest_ledger`.
+   - **Published Context Packs (`ctx://contexts/`):** The `ctx://contexts/` volume is reserved exclusively for compiled, manifest-registered context packs written via `ctx.compile_context` (`gather.pack_selection` and `context.assemble`). `orchestrator.py` MUST NOT call raw `ctx.vfs.save("ctx://contexts/...", ...)` during node execution.
+   - **Topological Buckets vs. Recipe Snapshots (`manifest_ledger` Lifecycle):** Published `ctx://contexts/` entries divide into two lifecycles: (a) **Topological Buckets** (`meta.type == "gather"`, excluding `Quickpacks` / `Exported Contexts`), which track repository `dirtyBuckets` watermarks and self-heal via `generate_context_file()`; and (b) **Recipe Snapshots** (`meta.domain` in `{"Quickpacks", "Exported Contexts"}` or `meta.type == "telemetry"`), which are point-in-time snapshots that never trigger full-workspace recompiles in the UI and self-heal on cache miss directly from their recorded `manifest_ledger` `files` recipe (or `bridge.compile_telemetry`).
+3. **Law 3 — Read-Only `vfs://` Orchestrator Boundary:**
+   - During a routine turn, `orchestrator.py` and `context_assemble.py` treat `vfs://<repo>/...` as strictly read-only (`ctx.vfs.read`). All repository mutations flow exclusively through `ctx.call("bridge.sync", ...)` (for code and patches) or `_persist_routine_response` / `agent.ensure_plan_file` (for declared document outputs).
+4. **Law 4 — Lazy Declarative Volume Self-Healing (`vfs_mount_missing`):**
+   - If a `ctx://<volume>` URI (`ctx://routines`, `ctx://prompts`, `ctx://contexts`, `ctx://diffs`, `ctx://settings`) is read or written before ` workspace_boot` or after a test-harness reset, the `vfs_mount_missing` hook delegates directly to the owning `InSetuExtension.mount_volumes(workspace_id)` so `TemplateOverlayVFSDriver` and custom volume drivers are preserved without clobbering scheme drivers.
+
+## 11. Routine Archetypes: How Routines Read the Session
 
 All Routines execute within this session ledger and **write** their final turn receipt and any newly patched files back into the session. However, Routines divide into two execution archetypes based on how they **read** from the session and how they leave the composer state:
 
-### 8.1 Sticky Conversational Loop Routines (`/auto`, `/yolo`, `/code`, `/ask`, `/plan`)
+### 11.1 Sticky Conversational Loop Routines (`/auto`, `/yolo`, `/code`, `/ask`, `/plan`)
 * **Purpose:** Iterative, multi-turn human-AI collaboration where each turn builds on the conversational thread (`/yolo` operating as the zero-gate autonomous variant that auto-commits patches and runs bounded test/repair loops without confirmation pauses).
 * **Reads Thread History (`use_history: true`):** Ingests the compacted Thread Transcript (4 hot verbatim messages + warm turn receipts including `files_patched` + cold `<session_summary>`) alongside the active Working Set (`data.working_set`).
 * **Sticky Composer Behavior (`sticky: true`):** Remains active as the selected mode across consecutive turns so the developer can iterate naturally over the thread without re-selecting `/yolo`, `/code`, or `/plan`.
 
-### 8.2 One-Shot Task Routines (`/test`, `/wrap`, `/closeout`, `/audit`, `/upkeep`, `/ratchet`)
+### 11.2 One-Shot Task Routines (`/test`, `/wrap`, `/closeout`, `/audit`, `/upkeep`, `/ratchet`)
 * **Purpose:** Focused, self-contained engineering pipelines invoked at milestones during a session.
 * **Ignores Conversational Chatter (`use_history: false`):** Does **not** inject the conversational prompt/answer history into its LLM nodes, preventing prior chat prose from polluting or biasing the task.
 * **Pulls Context Selectively from Session & Workspace (`requires:`):** Pulls only the concrete artifacts it needs from the session (for example, `/test` pulls the session's modified/working-set files `a.py, b.py, c.py, d.py` and runs `rag.scout_tests` to attach their relevant unit tests; `/wrap` pulls dirty repository diffs and scouts their tests).
@@ -226,11 +289,11 @@ All Routines execute within this session ledger and **write** their final turn r
 
 ---
 
-## 9. Bounded Continuous Convergence Loops (`type: loop`)
+## 12. Bounded Continuous Convergence Loops (`type: loop`)
 
 Routines support bounded autonomous iteration (`max_iterations: M`, `until: "<condition>"`) across two operational scales without suffering context-window inflation:
 
-### 9.1 The Two Loop Scales
+### 12.1 The Two Loop Scales
 1. **Inner Tactical Convergence Loops (e.g., `max_iterations: 5` — Test & Lint Clearing):**
   - **Objective:** Drive a concrete empirical sensor in `telemetry` to zero errors (`until: "{{ telemetry.test_diagnostics.exit_code }} == 0"`).
   - **Cycle:** `exec (bridge.test)` $\rightarrow$ `llm (triage_and_fix)` $\rightarrow$ `exec (bridge.sync)` $\rightarrow$ repeat until `exit_code == 0` or `iteration == 5`.
@@ -238,12 +301,12 @@ Routines support bounded autonomous iteration (`max_iterations: M`, `until: "<co
   - **Objective:** Autonomously step through a multi-task architectural plan (`meta.active_plan`) until all tasks are complete (`until: "{{ meta.active_plan.unchecked_count }} == 0"`).
   - **Cycle:** On iteration $k$, a deterministic cursor selects the next unchecked task `- [ ] [S1.T_k]` from `meta.active_plan`, rotates the `data` bucket to mount that task's `targets` (`full` lens), blast-radius interfaces (`slice` lens), and `test_contract` (`full` lens), executes the edit and inner test verification, marks `[x] [S1.T_k] (tx_...)` in `meta.active_plan`, and advances to iteration $k+1$.
 
-### 9.2 Markovian $O(1)$ Context Invariant Across Iterations
+### 12.2 Markovian $O(1)$ Context Invariant Across Iterations
 Bounded loops must **never** accumulate raw LLM outputs or full test logs from prior iterations into a growing transcript:
 * **In-Place Bucket Refresh:** At the start of iteration $k$, `data` reflects the current post-patch VFS files on disk and `telemetry` is **overwritten** with the latest sensor reading (e.g., only the tests still failing on iteration $k$).
 * **Compact Episodic Loop Ledger (`meta.loop_ledger`):** Prior iterations are represented solely by a 1-line-per-iteration micro-receipt in `meta.loop_ledger` (e.g., `[Iter 2/5]: Patched c.py (tx_9b2c) -> failed_count dropped 3 -> 1; remaining: test_edge_case`), preventing the model from repeating a failed hypothesis while keeping token usage flat ($O(1)$) from Iteration 1 through Iteration 20.
 
-### 9.3 Loop Safety & Termination Guardrails
+### 12.3 Loop Safety & Termination Guardrails
 Every bounded loop enforces three deterministic circuit breakers in addition to `max_iterations`:
 1. **Stagnation & Oscillation Circuit Breaker:** The orchestrator fingerprints `(data_hash, telemetry_failure_signature)` after each iteration. If two consecutive iterations yield an identical failure signature (stagnation) or revisit a prior state hash (A $\leftrightarrow$ B oscillation), the loop halts early (`status: "halted_stagnant"`) rather than burning the remaining turn budget.
 2. **Pre-Loop Rollback Anchor (`pre_loop_tx_anchor`):** Before Iteration 1 mutates any file, the orchestrator records a keyframe transaction boundary in `bridge_ledger`. Each iteration's `bridge.sync` commit is appended to the loop's transaction chain, enabling either single-iteration step-back (if an iteration increases failure count) or atomic full-loop rollback (`on_exhaustion: "rollback"`) if the loop fails to converge under `strict_test_enforcement`.
@@ -251,7 +314,7 @@ Every bounded loop enforces three deterministic circuit breakers in addition to 
 
 ---
 
-## 10. In-Node Epistemic Probes & Scoped Capability Invocation (`QUERY_CONTEXT` & `CALL_CAPABILITY`)
+## 13. In-Node Epistemic Probes & Scoped Capability Invocation (`QUERY_CONTEXT` & `CALL_CAPABILITY`)
 
 While predictable pipeline stages (`bridge.sync`, test gates, upfront RAG scouting) are modeled as explicit `type: exec` nodes in the Routine DAG, an `llm` node frequently needs to pull a missing file/symbol into `data` mid-inference or invoke a whitelisted domain capability (such as querying or transitioning a Tracker ticket, extracting a symbol slice, or inspecting a diff) without requiring a hardcoded multi-node sub-graph.
 
