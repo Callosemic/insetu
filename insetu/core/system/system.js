@@ -1,12 +1,5 @@
 import { AppStore, StatusStore } from '/static/extensions/system/store.js';
-import {
-    CORE_UI_SCRIPTS,
-    SutramDB,
-    bootSutramServiceWorker,
-    purgeSutramCaches,
-    initShortcutRouter,
-    createJobPoller
-} from '/static/extensions/system/insetu_sdk.js';
+import { CORE_UI_SCRIPTS, SutramDB, bootSutramServiceWorker, purgeSutramCaches, initShortcutRouter, createJobPoller } from '/static/extensions/system/insetu_sdk.js';
 import { checkManifestVersion, refreshManifest, importModuleWithRetry, classifyBootModuleFailure } from '/static/extensions/system/manifest_sync.js';
 export { importModuleWithRetry, classifyBootModuleFailure };
 
@@ -19,6 +12,7 @@ const CORE_COMPONENT_SCRIPTS = [
     '/static/extensions/system/components/ui_schema_repeater.js', '/static/extensions/system/components/ui_editor.js',
     '/static/extensions/fs/fs_store.js', '/static/extensions/fs/fs_editor_projection.js', '/static/extensions/fs/fs_modals.js',
     '/static/extensions/agent/agent_store.js', '/static/extensions/agent/agent_routine_studio.js',
+    '/static/extensions/agent/agent_staged_stacks.js',
     '/static/extensions/bridge/bridge_store.js', '/static/extensions/bridge/bridge_projections.js',
     '/static/extensions/bridge/bridge_history.js', '/static/vendor/codemirror/languages.json'
 ];

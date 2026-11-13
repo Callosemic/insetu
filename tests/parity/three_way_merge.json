@@ -1,14 +1,16 @@
 {
     "pair": "three_way_merge",
-    "status": "diverges",
+    "status": "covered",
     "why": "The offline outbox merges without the server; the server merges on save.",
-    "python": "akasa.vfs:three_way_merge_text",
-    "javascript": "/static/vendor/sutram/js/utils.js:threeWayMergeText",
+    "python": "akasa.merge:three_way_merge_text",
+    "javascript": "/static/vendor/sutram/js/merge.js:threeWayMergeText",
     "adapter": "merge",
-    "note": "Python takes (base, disk, incoming) and returns (clean, merged). JavaScript takes (base, local, remote) and returns {merged, clean}; local is the incoming side. The adapter maps both to {clean, merged}. On 3,000 seeded random cases the two disagree about a quarter of the time (2026-11-07), so the differential test is an expected failure until one algorithm is ported to the other.",
+    "note": "Python takes (base, disk, incoming) and returns (clean, merged). JavaScript takes (base, local, remote) and returns {merged, clean}; local is the incoming side. The adapter maps both to {clean, merged}. One algorithm since 2026-11-10 (issue #18): akasa/merge.py and sutram/js/merge.js are the same steps line for line, and the differential checks they agree on 3,000 small and 2,000 harder seeded inputs. Change one side only with the other.",
     "differential": {
         "seed": 7,
-        "count": 3000
+        "count": 3000,
+        "wide_seed": 11,
+        "wide_count": 2000
     },
     "cases": [
         {
@@ -92,8 +94,103 @@
             "expect": {
                 "clean": true,
                 "merged": "d\nf\nf\nb*"
-            },
-            "known_bug": "Python reports a clean merge but returns the disk text unchanged, dropping incoming's deletion (issue #18, found 2026-11-07 by the differential test)."
+            }
+        },
+        {
+            "label": "disk is an earlier save of incoming's new lines (late acknowledgement)",
+            "args": [
+                "a\nb",
+                "a\nx\nb",
+                "a\nx\ny\nb"
+            ],
+            "expect": {
+                "clean": true,
+                "merged": "a\nx\ny\nb"
+            }
+        },
+        {
+            "label": "two different insertions at the same place",
+            "args": [
+                "a\nb",
+                "a\nx\nb",
+                "a\ny\nb"
+            ],
+            "expect": {
+                "clean": false,
+                "merged": "a\ny\nb"
+            }
+        },
+        {
+            "label": "an insertion next to a changed line",
+            "args": [
+                "a\nb\nc",
+                "a\nB\nc",
+                "a\nb\nn\nc"
+            ],
+            "expect": {
+                "clean": true,
+                "merged": "a\nB\nn\nc"
+            }
+        },
+        {
+            "label": "neighbouring lines changed",
+            "args": [
+                "a\nb\nc\nd",
+                "a\nB\nc\nd",
+                "a\nb\nC\nd"
+            ],
+            "expect": {
+                "clean": true,
+                "merged": "a\nB\nC\nd"
+            }
+        },
+        {
+            "label": "one side deletes a line the other changed",
+            "args": [
+                "a\nb\nc",
+                "a\nc",
+                "a\nB\nc"
+            ],
+            "expect": {
+                "clean": false,
+                "merged": "a\nB\nc"
+            }
+        },
+        {
+            "label": "disk uses Windows line endings and both changed",
+            "args": [
+                "a\r\nb\r\nc\r\nd",
+                "A\r\nb\r\nc\r\nd",
+                "a\r\nb\r\nc\r\nD"
+            ],
+            "expect": {
+                "clean": true,
+                "merged": "A\r\nb\r\nc\r\nD"
+            }
+        },
+        {
+            "label": "a trailing newline is kept",
+            "args": [
+                "a\nb\n",
+                "A\nb\n",
+                "a\nb\nc\n"
+            ],
+            "expect": {
+                "clean": true,
+                "merged": "A\nb\nc\n"
+            }
+        },
+        {
+            "label": "a deleted repeated line is merged with a change to its twin, not dropped",
+            "args": [
+                "c\nc",
+                "c",
+                "c*\nc"
+            ],
+            "expect": {
+                "clean": true,
+                "merged": "c*"
+            }
         }
     ]
 }

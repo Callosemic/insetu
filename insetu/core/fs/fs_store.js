@@ -62,6 +62,7 @@ export const FsStore = createExtensionStore('Fs', {
     searchQuery: '',
     activeBuffers: {}, // Maps canonical filepath -> buffer state for multi-projection editing
     shareTextCache: new Map(),
+    shareCacheTimestamps: new Map(),
     reconcilingPaths: new Set(),
     savingPaths: new Set(),
     hydratingPromises: {},
@@ -69,6 +70,7 @@ export const FsStore = createExtensionStore('Fs', {
     clearPayload: () => {
         const st = FsStore.getState();
         st.shareTextCache?.clear();
+        st.shareCacheTimestamps?.clear();
         st.savingPaths?.clear();
         if (st.autoSaveTimers) {
             st.autoSaveTimers.forEach(autoSaveTimer => clearTimeout(autoSaveTimer));
@@ -262,22 +264,12 @@ export const FsStore = createExtensionStore('Fs', {
 
 export function injectTextToBuffer(filepath, text, isMarkdown, isFS, forceAllowEdit = false) {
     const TRUNCATE_LIMIT = 200000;
-    let content = text;
-    let isTruncated = false;
-
-    if (text.length > TRUNCATE_LIMIT) {
-        isTruncated = true;
-        content = text.substring(0, TRUNCATE_LIMIT) + '\n\n... [CONTENT TRUNCATED FOR PERFORMANCE] ...';
-    }
+    const isTruncated = text.length > TRUNCATE_LIMIT;
+    const content = isTruncated ? text.substring(0, TRUNCATE_LIMIT) + '\n\n... [CONTENT TRUNCATED FOR PERFORMANCE] ...' : text;
     const curRev = (FsStore.getState().activeBuffers?.[filepath]?.docRevision || 0) + 1;
     FsStore.getState().updateBuffer(filepath, {
-        content,
-        originalContent: content,
-        fullText: text,
-        isTruncated,
-        forceEdit: forceAllowEdit,
-        docRevision: curRev,
-        savedRevision: curRev
+        content, originalContent: content, fullText: text, isTruncated,
+        forceEdit: forceAllowEdit, docRevision: curRev, savedRevision: curRev
     });
 }
 
@@ -676,6 +668,86 @@ export function getChunks(filepath) {
     const manifest = AppStore.getState().manifest || {};
     const isContext = filepath.startsWith('ctx://') || filepath.endsWith('_context.txt') || filepath.endsWith('_diffs.txt');
     return extractManifestFiles(manifest, filepath, isContext ? 'ctx' : 'vfs');
+}
+
+const MAX_SHARE_CACHE_ITEMS = 24;
+const SHARE_CACHE_TTL_MS = 3600 * 1000;
+
+export function cacheShareText(filepath, text) {
+    if (!filepath || typeof text !== 'string') return;
+    const { shareTextCache: cache, shareCacheTimestamps: tsMap } = FsStore.getState();
+    if (!cache) return;
+    if (cache.has(filepath)) cache.delete(filepath);
+    cache.set(filepath, text);
+    tsMap?.set(filepath, Date.now());
+    while (cache.size > MAX_SHARE_CACHE_ITEMS) {
+        const oldestKey = cache.keys().next().value;
+        if (!oldestKey) break;
+        cache.delete(oldestKey);
+        tsMap?.delete(oldestKey);
+    }
+}
+
+export function getCachedShareText(filepath) {
+    if (!filepath) return null;
+    const { shareTextCache: cache, shareCacheTimestamps: tsMap } = FsStore.getState();
+    if (!cache || !cache.has(filepath)) return null;
+    const ts = tsMap?.get(filepath) || 0;
+    if (ts > 0 && (Date.now() - ts) > SHARE_CACHE_TTL_MS) {
+        cache.delete(filepath);
+        tsMap?.delete(filepath);
+        return null;
+    }
+    return cache.get(filepath);
+}
+
+export function invalidateShareCache(filepath = null) {
+    const { shareTextCache: cache, shareCacheTimestamps: tsMap } = FsStore.getState();
+    if (!cache) return;
+    if (!filepath) {
+        cache.clear();
+        tsMap?.clear();
+        return;
+    }
+    cache.delete(filepath);
+    tsMap?.delete(filepath);
+    if (filepath.startsWith('vfs://')) {
+        for (const k of Array.from(cache.keys())) {
+            if (k.startsWith('ctx://contexts/') && !k.includes('/quickpack_') && !k.includes('/selection_')) {
+                cache.delete(k);
+                tsMap?.delete(k);
+            }
+        }
+    }
+}
+
+export async function preWarmShareArtifact(baseFile, chunks = null, isFS = false) {
+    if (!baseFile) return [];
+    try {
+        const activeWs = window.inSetu.utils.getActiveWorkspace();
+        const manifestChunks = getChunks(baseFile);
+        const targetFiles = (manifestChunks && manifestChunks.length > 0)
+            ? manifestChunks
+            : ((Array.isArray(chunks) && chunks.length > 0) ? chunks : [baseFile]);
+        const warmed = [];
+        for (const fp of targetFiles) {
+            const existing = getCachedShareText(fp);
+            if (existing !== null) {
+                warmed.push(fp);
+                continue;
+            }
+            const fileIsFS = (targetFiles.length > 1) ? false : isFS;
+            const fetchUrl = resolveFileFetchUrl(fp, fileIsFS);
+            const text = await window.inSetu.api.fetchImmutableText(fetchUrl, { onlyIfMissing: true }, activeWs);
+            if (typeof text === 'string') {
+                cacheShareText(fp, text);
+                warmed.push(fp);
+            }
+        }
+        return warmed;
+    } catch (_) {
+        return [];
+    }
 }
 
 

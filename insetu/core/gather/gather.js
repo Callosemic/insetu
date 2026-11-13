@@ -133,10 +133,19 @@ window.addEventListener('insetu:ensure-fresh-artifact', (e) => {
     if (!filePath || !filePath.startsWith('ctx://contexts/')) return;
     const baseUri = filePath.replace(/_part\d+\.txt$/, '.txt');
     const appState = AppStore.getState();
-    const dirtyRepos = appState.dirtyRepos || new Set();
-    const dirtyBuckets = appState.dirtyBuckets || new Set();
     const manifestObj = appState.manifest?.ctx?.[baseUri] || appState.manifest?.ctx?.[filePath];
     const meta = manifestObj?.meta || {};
+    if (
+        filePath.includes('/quickpack_') ||
+        filePath.includes('/selection_') ||
+        meta.domain === 'Quickpacks' ||
+        meta.domain === 'Exported Contexts' ||
+        meta.type === 'telemetry'
+    ) {
+        return;
+    }
+    const dirtyRepos = appState.dirtyRepos || new Set();
+    const dirtyBuckets = appState.dirtyBuckets || new Set();
     const addr = window.inSetu.utils.BucketAddress ? window.inSetu.utils.BucketAddress.fromFilepath(baseUri, meta) : null;
     const itemRepos = Array.isArray(meta.repos) ? meta.repos : (meta.repo ? [meta.repo] : []);
 
@@ -302,6 +311,9 @@ const packSelectionPayload = async (items) => {
                     _lastPackItemsHash = '';
                     _lastPackSelection = null;
                 }
+                if (artifact.base_filename && window.inSetu?.vfs?.preWarmShareArtifact) {
+                    window.inSetu.vfs.preWarmShareArtifact(artifact.base_filename, artifact.chunks, false);
+                }
                 resolve(artifact);
             },
             onError: (err) => reject(err)
@@ -420,7 +432,7 @@ export class InSetuExtGather extends InSetuElement {
         const enrichedFiles = this.manifestFiles.map(file => {
                 const manifestObj = ctxManifest[file] || {};
                 const meta = manifestObj.meta || { title: file, domain: "Workspaces", desc: "Context payload." };
-                if (meta.type && meta.type !== 'gather') return null;
+                if (meta.type && meta.type !== 'gather' && meta.type !== 'telemetry') return null;
                 const repoDir = meta.repo || null;
                 const repoCfg = repoDir ? targetConfigs.find(r => r && r.repo_dir === repoDir) : null;
                 const parentDomain = (repoCfg?.domain || '').trim() || 'Workspaces';

@@ -32,12 +32,35 @@ def _iter_tests(suite):
             yield item
 
 
+def _run_fitness(quiet):
+    """Runs the architectural fitness functions and returns the number of violations found."""
+    import contextlib as _contextlib
+    import io as _io
+    from tests.fitness import run_all as _run_all
+    from tests.fitness.core import FitnessState as _FitnessState
+
+    _FitnessState.violations_found = 0
+    if not quiet:
+        print("\n============================================================")
+        print("      inSetu Architectural Fitness Functions Validator      ")
+        print("============================================================\n")
+        _run_all()
+        return _FitnessState.violations_found
+    captured = _io.StringIO()
+    with _contextlib.redirect_stdout(captured):
+        _run_all()
+    if _FitnessState.violations_found:
+        print(captured.getvalue())
+    return _FitnessState.violations_found
+
+
 if __name__ == "__main__":
     import json as _json
 
     raw_args = sys.argv[1:]
     only_last_failed = any(a in ("--lf", "--failed", "--last-failed") for a in raw_args)
     quiet_mode = any(a in ("-q", "--quiet") for a in raw_args)
+    skip_fitness = "--no-fitness" in raw_args
     patterns = []
     skip_next = False
     for idx, a in enumerate(raw_args):
@@ -102,11 +125,22 @@ if __name__ == "__main__":
     except Exception:
         pass
 
+    # A full run also runs the fitness functions; a filtered run is someone working on particular tests.
+    fitness_violations = None
+    if not (skip_fitness or only_last_failed or patterns):
+        fitness_violations = _run_fitness(quiet_mode)
+
     print("\n============================================================")
-    if result.wasSuccessful():
-        print(f"✅ SUCCESS: All {result.testsRun} unit test(s) passed.")
+    if result.wasSuccessful() and not fitness_violations:
+        fitness_note = "" if fitness_violations is None else " Fitness functions: no violations."
+        print(f"✅ SUCCESS: All {result.testsRun} unit test(s) passed.{fitness_note}")
         sys.exit(0)
+    elif result.wasSuccessful():
+        print(f"❌ FAILED: All {result.testsRun} unit test(s) passed, but the fitness functions found {fitness_violations} violation(s) (listed above).")
+        sys.exit(1)
     else:
+        if fitness_violations:
+            print(f"❌ The fitness functions also found {fitness_violations} violation(s) (listed above).")
         failures = len(result.failures)
         errors = len(result.errors)
         print(f"❌ FAILED: {failures} failure(s), {errors} error(s) out of {result.testsRun} test(s).")

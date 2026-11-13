@@ -1,8 +1,8 @@
 import unittest
 
-from insetu.core.agent.orchestrator import (
-    _persist_routine_response,
-    _response_path_error,
+from insetu.core.agent.routine_loader import (
+    persist_routine_response as _persist_routine_response,
+    response_path_error as _response_path_error,
     validate_routine_definition,
 )
 

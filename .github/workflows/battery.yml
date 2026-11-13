@@ -176,7 +176,7 @@ jobs:
       - name: insetu · unit
         if: matrix.role == 'canary' || inputs.trigger_repo == 'insetu'
         working-directory: stack/insetu
-        run: python tests/run_unit_tests.py
+        run: python tests/run_unit_tests.py --no-fitness
 
       - name: insetu · fitness
         if: matrix.role == 'canary' || inputs.trigger_repo == 'insetu'

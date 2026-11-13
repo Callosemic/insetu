@@ -127,6 +127,65 @@ def random_merge_inputs(seed: int, count: int) -> List[List[str]]:
     return inputs
 
 
+def wide_merge_inputs(seed: int, count: int) -> List[List[str]]:
+    """Seeded harder three-way inputs: files of up to 200 lines mixing distinct and repeated lines, block edits,
+    duplicated and swapped lines, one side built on the other, trailing newlines and Windows line endings."""
+    rng = random.Random(seed)
+
+    def line(repeated: float) -> str:
+        if rng.random() < repeated:
+            return rng.choice(["", "}", "    pass", "end", "x", "    return x"])
+        return f"line {rng.randint(0, 10 ** 6)}"
+
+    def mutate(lines: List[str], edits: int) -> List[str]:
+        out = list(lines)
+        for _ in range(edits):
+            op = rng.choice(["insert", "delete", "change", "block_insert", "block_delete", "duplicate", "swap"])
+            i = rng.randint(0, len(out))
+            if op == "insert":
+                out.insert(i, line(0.3))
+            elif op == "block_insert":
+                out[i:i] = [line(0.3) for _ in range(rng.randint(2, 6))]
+            elif out and i < len(out):
+                if op == "delete":
+                    del out[i]
+                elif op == "block_delete":
+                    del out[i:i + rng.randint(2, 6)]
+                elif op == "change":
+                    out[i] = out[i] + rng.choice(["*", " # edit", "!"])
+                elif op == "duplicate":
+                    out.insert(i, out[i])
+                elif op == "swap" and i + 1 < len(out):
+                    out[i], out[i + 1] = out[i + 1], out[i]
+        return out
+
+    inputs = []
+    for _ in range(count):
+        repeated = rng.choice([0.0, 0.2, 0.6, 1.0])
+        base = [line(repeated) for _ in range(rng.choice([0, 1, 3, 8, 20, 60, 200]))]
+        disk = mutate(base, rng.randint(1, 5))
+        incoming = mutate(disk if rng.random() < 0.15 else base, rng.randint(1, 5))
+        texts = ["\n".join(base), "\n".join(disk), "\n".join(incoming)]
+        if rng.random() < 0.2:
+            texts = [text + "\n" for text in texts]
+        for index in range(3):
+            if rng.random() < 0.1:
+                texts[index] = texts[index].replace("\n", "\r\n")
+        inputs.append(texts)
+    return inputs
+
+
+def differential_inputs(entry: Dict[str, Any]) -> List[List[str]]:
+    """The seeded random inputs an entry's differential block asks for."""
+    spec = entry["differential"]
+    if entry.get("adapter") != "merge":
+        return []
+    inputs = random_merge_inputs(spec["seed"], spec["count"])
+    if spec.get("wide_count"):
+        inputs += wide_merge_inputs(spec.get("wide_seed", spec["seed"]), spec["wide_count"])
+    return inputs
+
+
 class TestParallelLogicRegistry(unittest.TestCase):
     """The registry itself: complete entries whose named definitions exist on both sides."""
 
@@ -194,39 +253,36 @@ class TestParallelLogicCases(unittest.TestCase):
                     self.assertNotIn("error", result, result.get("error"))
                     self.assertTrue(matches(case["expect"], result["value"]), f"expected {case['expect']!r}, got {result['value']!r}")
 
-    @unittest.expectedFailure
-    def test_known_bugs_are_fixed(self):
-        """Cases marked known_bug pass on both sides. Expected to fail until they are fixed; then remove the markers and this decorator."""
+    def test_known_bugs_still_fail(self):
+        """A case marked known_bug is expected to fail in Python. When one passes, the bug is fixed: remove its marker so the case is enforced."""
         for entry in self._entries():
             cases = [c for c in entry["cases"] if "known_bug" in c]
             for case, actual in zip(cases, self._python_results(entry, [c["args"] for c in cases])):
-                self.assertTrue(matches(case["expect"], actual), f"{entry['pair']}: {case['known_bug']}")
-        if not any("known_bug" in c for e in self._entries() for c in e["cases"]):
-            raise AssertionError("no known bugs are registered; remove @expectedFailure from this test")
+                with self.subTest(pair=entry["pair"], case=case.get("label", case["args"])):
+                    self.assertFalse(matches(case["expect"], actual), f"{entry['pair']}: this known bug now passes; remove its known_bug marker ({case['known_bug']})")
 
     @unittest.skipUnless(shutil.which("node"), "Node.js binary is not installed in PATH")
     def test_covered_pairs_agree_on_seeded_random_inputs(self):
         """For covered pairs with a differential block, both sides give the same result on every seeded random input."""
-        self._run_differential(status="covered")
+        for entry in [e for e in load_pairs() if e["status"] == "covered" and e.get("differential")]:
+            inputs, py_results, js_results = self._differential(entry)
+            for args, py, js in zip(inputs, py_results, js_results):
+                self.assertEqual(py, js.get("value"), f"{entry['pair']} differs on {args!r}")
 
     @unittest.skipUnless(shutil.which("node"), "Node.js binary is not installed in PATH")
-    @unittest.expectedFailure
-    def test_diverging_pairs_agree_on_seeded_random_inputs(self):
-        """Pairs marked diverges disagree today. Expected to fail until they agree; then mark them covered and this stays green with nothing to run."""
-        self._run_differential(status="diverges")
+    def test_diverging_pairs_still_diverge(self):
+        """A pair marked diverges is expected to disagree somewhere. When the two sides agree on every input, mark the pair covered so agreement is enforced."""
+        for entry in [e for e in load_pairs() if e["status"] == "diverges" and e.get("differential")]:
+            inputs, py_results, js_results = self._differential(entry)
+            differing = sum(1 for py, js in zip(py_results, js_results) if py != js.get("value"))
+            self.assertGreater(differing, 0, f"{entry['pair']}: the two sides now agree on all {len(inputs)} inputs; mark the pair covered")
 
-    def _run_differential(self, status: str):
-        entries = [e for e in load_pairs() if e["status"] == status and e.get("differential")]
-        if status == "diverges" and not entries:
-            raise AssertionError("no pair is marked diverges; remove @expectedFailure from this test")
-        for entry in entries:
-            spec = entry["differential"]
-            inputs = random_merge_inputs(spec["seed"], spec["count"]) if entry.get("adapter") == "merge" else []
-            py_results = self._python_results(entry, inputs)
-            js_results = run_javascript([{"pair": entry["pair"], "javascript": entry["javascript"], "adapter": entry.get("adapter"), "inputs": inputs}])[entry["pair"]]["results"]
-            for args, py, js in zip(inputs, py_results, js_results):
-                self.assertEqual(py, js.get("value"), f"{entry['pair']} differs (seed {spec['seed']}) on {args!r}")
-
+    def _differential(self, entry):
+        inputs = differential_inputs(entry)
+        py_results = self._python_results(entry, inputs)
+        js_results = run_javascript([{"pair": entry["pair"], "javascript": entry["javascript"], "adapter": entry.get("adapter"), "inputs": inputs}])[entry["pair"]]["results"]
+        self.assertEqual(len(js_results), len(inputs))
+        return inputs, py_results, js_results
 
 if __name__ == "__main__":
     unittest.main()

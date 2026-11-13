@@ -111,6 +111,8 @@ export const subscribeWithSelector = (fn) => (set, get, api) => {
 };
 """, encoding="utf-8")
             shutil.copy2(sutram_utils_path, tmp_path / "utils.mjs")
+            for sibling_js in active_sutram_dir.glob("*.js"):
+                shutil.copy2(sibling_js, tmp_path / sibling_js.name)
             sdk_src = sutram_sdk_path.read_text(encoding="utf-8")
             sdk_src = sdk_src.replace('from"lit"', 'from"./lit_stub.mjs"').replace("from 'lit'", "from './lit_stub.mjs'")
             sdk_src = sdk_src.replace('from"zustand/vanilla"', 'from"./vanilla.mjs"').replace("from 'zustand/vanilla'", "from './vanilla.mjs'")

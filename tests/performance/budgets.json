@@ -1,0 +1,20 @@
+{
+  "about": "Response-time budgets for the running app, checked by perf_check.py. 'total' is the whole request as the caller sees it; every other key is a part the app reports in the response's timings_ms. Budgets are about double what was measured, so ordinary variation does not trip them. When a part gets faster for good, lower its budget.",
+  "checks": [
+    {
+      "name": "Routines listing, warm",
+      "path": "agent/routines",
+      "why": "Every open of the chat panel requests this. Measured 2026-11-10 on the author's workspace after the routine-check and parse caches: total about 300 to 400 ms (it was about 1,000 ms), list_routines 175 to 230, check_routines about 1, diffs 50 to 140, contexts 50 to 90, prompts about 20.",
+      "warmups": 1,
+      "samples": 3,
+      "budget_ms": {
+        "total": 800,
+        "list_routines": 400,
+        "check_routines": 20,
+        "diffs": 250,
+        "contexts": 150,
+        "prompts": 60
+      }
+    }
+  ]
+}

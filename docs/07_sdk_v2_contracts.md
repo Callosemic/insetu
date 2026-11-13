@@ -38,7 +38,7 @@ ctx = my_ext_bp.get_context(workspace_id)
 
 ### 1.2 The `ExtensionContext` (`ctx`) Object
 
-Route handlers (`@my_ext_bp.route('path')`) and background workers (`@my_ext_bp.worker('task_name')`) receive a `ctx` object to safely interface with the OS.
+Route handlers (`@my_ext_bp.route('path', methods=['POST'], risk='ui_only'|'read')`) and background workers (`@my_ext_bp.worker('task_name')`) receive a `ctx` object to safely interface with the OS. Declaring `risk='ui_only'` (or registering a `DELETE` route without an explicit `mcp_expose`) automatically sets `mcp_expose=False` and adds the capability to `get_dynamic_routine_banned_capabilities()`, while `risk='read'` adds the capability to `get_dynamic_read_only_capabilities()`.
 * **`ctx.workspace_id`** *(String)*: The active multi-tenant tracking scope.
 * **`ctx.config`** *(Dict)*: Lazy configuration access to the active workspace configuration map.
 * **`ctx.paths`** *(Dict)*: Platform paths directory mappings (e.g., `ctx.paths['workspace_root']`).
@@ -99,7 +99,7 @@ Extensions are strictly forbidden from relative-importing OS chassis functions. 
 * **`this.manifest`**: Accessor reading the live partitioned system manifest dictionary (`{"vfs": {...}, "ctx": {...}}`) from `AppStore`.
 * **`.setStatus(msg, timeout, isError)`**: Base helper to emit global status updates via `this.ui.setGlobalStatus`.
 * **`.compileSystem()`**: Base helper to trigger background system compilations via `this.sys.executeSystemCompile`.
-* **`this.vfs`**: `.viewSourceFile(path)`, `.viewFileGitDiff(path)`, `.isFileGitModified(path)`, `.fetchAndCopy(path)`, `.downloadFile(url)`, `.shareFiles(file, chunks)`, `.normalizeVfsURI(path)`, `.executeBulkMove(items)`, `.executeBulkArchive(items)`, `.executeBulkDelete(items)`
+* **`this.vfs`**: `.viewSourceFile(path)`, `.viewFileGitDiff(path)`, `.isFileGitModified(path)`, `.fetchAndCopy(path)`, `.downloadFile(url)`, `.shareFiles(file, chunks)`, `.preWarmShareArtifact(baseFile, chunks, isFS)`, `.normalizeVfsURI(path)`, `.executeBulkMove(items)`, `.executeBulkArchive(items)`, `.executeBulkDelete(items)`
 * **`this.ui`**: `.openWorkspaceBrowser(options)`, `.openFolderBrowser(cb)`, `.setGlobalStatus(msg)`, `.viewTextBlob(title, content, suggestedFilename)`, `.popoutProjection(filepath)`
 * **`this.sys`**: `.executeWorkspaceMutation(path, payload)`, `.executeSystemCompile()`, `.switchTab(tabId)`, `.refreshManifest()`
 * **`AppStore.getState().getBrowsePath(subId)`** / **`setBrowsePath(pathArray, subId)`**: Retrieves or updates active browse paths scoped strictly to a designated sub-tab identifier, reflecting navigation into the URL hash without cross-tab interference.

@@ -37,6 +37,7 @@ from .context_assemble import (
     ContextAssemblePayload,
     ContextAssembleResponse,
     assemble_context_payload,
+    compile_query_quickpack,
     resolve_query_context,
 )
 
@@ -64,44 +65,19 @@ VFS_INDEX_SCHEMA = {
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
 GATHER_SETTINGS_SCHEMA = [
     {
-        "id": "max_context_size_kb",
-        "label": "Max Context Size (KB)",
-        "type": "number",
-        "scope": "workspace",
-        "default": 0,
+        "id": "max_context_size_kb", "label": "Max Context Size (KB)", "type": "number", "scope": "workspace", "default": 0,
         "description": "Set to 0 to use the default 400 KB chunk limit. Context files exceeding this limit will be cleanly split into numbered parts."
     },
     {
-        "id": "domain_colors",
-        "label": "Domain Intent Colors",
-        "type": "intent_map",
-        "scope": "workspace",
-        "default": {
-            "primary": ["core", "workspace"],
-            "success": [],
-            "warning": ["quickpack"],
-            "danger": [],
-            "highlight": ["doc"],
-            "neutral": []
-        },
+        "id": "domain_colors", "label": "Domain Intent Colors", "type": "intent_map", "scope": "workspace",
+        "default": {"primary": ["core", "workspace"], "success": [], "warning": ["quickpack"], "danger": [], "highlight": ["doc"], "neutral": []},
         "description": "Map semantic intent colors to arrays of title keywords.",
         "intent_legend": ["primary", "success", "warning", "danger", "highlight", "neutral"]
     }
 ]
 gather_bp = InSetuExtension(
-    'gather',
-    __name__,
-    core=True,
-    settings_schema=GATHER_SETTINGS_SCHEMA,
-    extra_schemas={'vfs_index': VFS_INDEX_SCHEMA},
-    volumes={
-        'contexts': {
-            'tier': 'cache',
-            'scheme': 'ctx',
-            'path_key': 'contexts_dir',
-            'legacy_dirs': ['ext/gather/data/contexts', 'cache/contexts'],
-        }
-    },
+    'gather', __name__, core=True, settings_schema=GATHER_SETTINGS_SCHEMA, extra_schemas={'vfs_index': VFS_INDEX_SCHEMA},
+    volumes={'contexts': {'tier': 'cache', 'scheme': 'ctx', 'path_key': 'contexts_dir', 'legacy_dirs': ['ext/gather/data/contexts', 'cache/contexts']}},
 )
 __depends__ = ['topology']
 def _split_oversized_block(block: str, budget_bytes: int) -> List[str]:
@@ -861,39 +837,30 @@ def _pack_selection_worker(
     return {
         "message": "Compilation successful.",
         "artifact": {
-            "base_filename": base_uri,
-            "file": base_uri,
-            "filename": base_uri,
-            "filepath": base_uri,
-            "out_file": base_uri,
+            "base_filename": base_uri, "file": base_uri, "filename": base_uri, "filepath": base_uri, "out_file": base_uri,
             "url": f"/api/{ctx.workspace_id}/fs/fetch?file={base_uri}&download=1",
-            "chunks": chunks,
-            "files": chunks,
-            "manifest_entry": manifest_entry
-        }
+            "chunks": chunks, "files": chunks, "manifest_entry": manifest_entry,
+        },
     }
 
-class QueryContextPayload(TypedDict):
+class QueryContextPayload(TypedDict, total=False):
     query: str
+    raw_text: str
+    compile_quickpack: bool
 
 @gather_bp.route('context/assemble', methods=['POST'], request_schema=ContextAssemblePayload, response_schema=ContextAssembleResponse, docstring="[sync] Assembles live workspace context via 'blast_radius' or 'llm_scout' with soft-budget AST interface slicing.")
 def api_gather_context_assemble(ctx):
-    data = ctx.payload or {}
-    return assemble_context_payload(
-        ctx,
-        edit_targets=data.get("edit_targets", []),
-        user_message=str(data.get("user_message") or ""),
-        strategy=data.get("strategy"),
-        session_id=data.get("session_id"),
-        history_summary=str(data.get("history_summary") or ""),
-        reference_files=data.get("reference_files"),
-        constitution_files=data.get("constitution_files"),
-    )
+    d = ctx.payload or {}
+    return assemble_context_payload(ctx, edit_targets=d.get("edit_targets", []), user_message=str(d.get("user_message") or ""), strategy=d.get("strategy"), session_id=d.get("session_id"), history_summary=str(d.get("history_summary") or ""), reference_files=d.get("reference_files"), constitution_files=d.get("constitution_files"))
 
-@gather_bp.route('context/query', methods=['POST'], request_schema=QueryContextPayload, docstring="[sync] Resolves single-hop symbolic read directives (symbol_def, file_slice, symbol_search).")
+@gather_bp.route('context/query', methods=['POST'], request_schema=QueryContextPayload, docstring="[sync] Resolves single-hop symbolic read directives or compiles a standalone Quickpack when compile_quickpack=True.")
 def api_gather_context_query(ctx):
-    data = ctx.payload or {}
-    return resolve_query_context(ctx, str(data.get("query") or ""))
+    d = ctx.payload or {}
+    raw_q = str(d.get("raw_text") or d.get("query") or "").strip()
+    if d.get("compile_quickpack"):
+        qp = compile_query_quickpack(ctx, raw_q)
+        return ({"status": "success", "quickpack": qp} if qp else ({"status": "empty", "quickpack": None, "error": "No valid files resolved from QUERY_CONTEXT."}, 404))
+    return resolve_query_context(ctx, raw_q)
 
 class ClearQuickpacksResponse(TypedDict):
     status: str
@@ -1292,8 +1259,30 @@ def _resolve_or_heal_compiled_ctx_artifact(filename=None, workspace_id=None, **k
     # Self-heal cold/wiped cache on demand for the requested domain
     try:
         _LOCAL_HEAL_GUARD.active = True
-        generate_context_file(wid)
-        ctx.sync_vfs_barrier()
+        conn = ctx.get_db("vfs_index")
+        row = conn.execute("SELECT entry_json FROM manifest_ledger WHERE filepath=?", (base_uri,)).fetchone()
+        parsed_entry = json.loads(row["entry_json"]) if (row and row["entry_json"]) else {}
+        entry_meta = (parsed_entry.get("meta") or {}) if isinstance(parsed_entry, dict) else {}
+        if parsed.basename == "ai_telemetry_context.txt" or entry_meta.get("type") == "telemetry":
+            ctx.call("bridge.compile_telemetry", limit=40, wait=True)
+        elif parsed.basename.startswith(("quickpack_", "selection_")) or entry_meta.get("domain") in ("Quickpacks", "Exported Contexts"):
+            qp_files: List[str] = [
+                str(InSetuURI(f))
+                for f in ((parsed_entry.get("files") or []) if isinstance(parsed_entry, dict) else [])
+                if isinstance(f, str) and "://" in f
+            ]
+            if qp_files:
+                clean_tree = [f"{InSetuURI(f).volume}/{InSetuURI(f).path}".strip("/") if InSetuURI(f).volume else InSetuURI(f).path for f in qp_files]
+                hdr = "============================================================\nINSETU AD-HOC CONTEXT PAYLOAD (Selection)\n============================================================\n\n" + generate_ascii_tree(clean_tree) + "\n\n"
+                blks = [f"{'='*60}\n>>>NEW FILE :: {fp} | Selection\n{'='*60}\n\n{ctx.vfs.read(fp) or '[Error reading file: Not found]'}\n\n" for fp in qp_files]
+                m_entry = compile_context_payload(wid, None, base_uri, hdr, blks, qp_files, entry_meta or {"type": "gather", "title": "Quickpack", "domain": "Quickpacks", "desc": "Ad-hoc context export."}, is_ephemeral=True)
+                ctx.sync_vfs_barrier()
+                ctx.save_manifest({base_uri: m_entry}, is_full_compile=False)
+                for ch in m_entry.get("chunks", [base_uri]):
+                    ctx.jobs.register_ephemeral(ctx.resolve_path(ch) or resolve_system_artifact_path(ch, wid), ttl_seconds=86400, owner="quick_pack")
+        else:
+            generate_context_file(wid)
+            ctx.sync_vfs_barrier()
         hook_request_manifest.invalidate(workspace_id=wid)
 
         healed_phys = ctx.resolve_path(canon_uri, must_exist=True, allow_heal=False)

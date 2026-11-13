@@ -20,11 +20,15 @@ from insetu.core.agent.engine_agent import (
     agent_bp,
 )
 from insetu.core.agent import orchestrator as _orch_mod
-from insetu.core.agent.orchestrator import (
+from insetu.core.agent.expressions import (
     SCRATCH_VAULT_THRESHOLD_BYTES,
-    _interpolate_all_syntax,
     evaluate_when_condition,
+)
+from insetu.core.agent.orchestrator import (
+    _interpolate_all_syntax,
     execute_declarative_routine,
+)
+from insetu.core.agent.routine_loader import (
     list_available_routines,
     load_routine_definition,
 )
@@ -1184,6 +1188,257 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
             chain_ctx,
         )
         self.assertEqual(rendered, "Msg: Keep {{ global.mode }} literal | Out: Initial Answer Text")
+
+    def test_dual_track_message_ledger_invariants(self):
+        """
+        Verifies the 5 dual-track message ledger invariants from Sprint A1 item 4 + P25 lens contract:
+        1) ingest_reply refuses client-supplied message_id so existing messages can never be overwritten.
+        2) Deleting the newest message never reuses its seq number (chat_sessions.seq_counter).
+        3) Deleting a message in block 1 drops block 1 and block 2, resets watermark to 0,
+           clears compacted_into_id on surviving messages, and re-summarizes on next turn.
+        4) Assistant turns record context_hashes_json matching bridge_ledger.post_patch_hash.
+        5) Dropping compacted_view_json and running deterministic compaction rebuilds equivalent blocks.
+        """
+        from insetu.core.agent.session_ledger import (
+            capture_turn_context_hashes as _capture_hashes,
+            compact_session_history as _compact_history,
+            next_session_seq as _next_seq,
+        )
+        from insetu.core.agent.routine_loader import validate_routine_definition as _validate_routine
+        from insetu.core.gather.context_assemble import (
+            parse_message_uri as _parse_msg_uri,
+            project_resource_lens as _project_lens,
+        )
+        from insetu.core.utils_core import compute_vfs_sha256 as _compute_sha256
+
+        agent_ctx = agent_bp.get_context("default")
+        sid = "sess_ledger_invariants"
+        now = time.time()
+        agent_ctx.db.execute(
+            "INSERT INTO chat_sessions (session_id, title, updated_at, seq_counter) VALUES (?, ?, ?, ?)",
+            (sid, "Ledger Invariants", now, 0),
+        )
+        agent_ctx.db.commit()
+
+        app = Flask(__name__)
+        app.register_blueprint(agent_bp.bp)
+        client = app.test_client()
+
+        # Invariant 1 & 2: Server-minted message_id + refusal of client-supplied message_id + monotonic seq_counter
+        r1 = client.post(
+            "/api/default/agent/ingest_reply",
+            json={"session_id": sid, "role": "user", "raw_text": "Original text"},
+        )
+        self.assertEqual(r1.status_code, 200)
+        msg_id_1 = r1.get_json()["message_id"]
+        first_seq = int(r1.get_json()["seq"])
+
+        # Attempting to supply an existing message_id to overwrite a row is refused
+        r_dup = client.post(
+            "/api/default/agent/ingest_reply",
+            json={"session_id": sid, "message_id": msg_id_1, "role": "user", "raw_text": "Clobbered text"},
+        )
+        self.assertIn(r_dup.status_code, (400, 409))
+        row_1 = agent_ctx.db.execute(
+            "SELECT seq, content FROM chat_messages WHERE message_id=?", (msg_id_1,)
+        ).fetchone()
+        self.assertEqual(row_1["content"], "Original text")
+
+        # Delete newest message and insert a new one -> seq must be strictly higher than first_seq
+        del_r1 = client.delete(f"/api/default/agent/messages/{msg_id_1}")
+        self.assertEqual(del_r1.status_code, 200)
+
+        r2 = client.post(
+            "/api/default/agent/ingest_reply",
+            json={"session_id": sid, "role": "user", "raw_text": "Second message"},
+        )
+        self.assertEqual(r2.status_code, 200)
+        msg_id_2 = r2.get_json()["message_id"]
+        self.assertGreater(int(r2.get_json()["seq"]), first_seq)
+        client.delete(f"/api/default/agent/messages/{msg_id_2}")
+
+        # Invariant 3 & 5: Two cold blocks -> delete from first block -> watermark drops to 0 & rebuilds
+        agent_ctx.settings.set("helper_mode", "deterministic")
+        for idx in range(1, 15):
+            s_num = _next_seq(agent_ctx, sid)
+            agent_ctx.db.execute(
+                "INSERT INTO chat_messages (message_id, session_id, seq, role, content, raw_content, receipt, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (f"m_cold_{idx}", sid, s_num, "user" if idx % 2 else "assistant", f"Turn {idx} body", f"Turn {idx} body", f"[Turn #{s_num}]: Turn {idx}", now + idx),
+            )
+        agent_ctx.db.commit()
+
+        raw_rows_14 = [
+            dict(r) for r in agent_ctx.db.execute(
+                "SELECT message_id, seq, role, content, raw_content, receipt, transaction_id FROM chat_messages WHERE session_id=? ORDER BY seq ASC",
+                (sid,),
+            ).fetchall()
+        ]
+        _, _, cv_step1 = _compact_history(agent_ctx, sid, raw_rows_14, "", {"compacted_up_to_seq": 0, "blocks": []})
+        self.assertEqual(len(cv_step1.get("blocks", [])), 1)
+        self.assertEqual(cv_step1["compacted_up_to_seq"], raw_rows_14[1]["seq"])
+
+        # Add 6 more messages so a second cold block is formed
+        for idx in range(15, 21):
+            s_num = _next_seq(agent_ctx, sid)
+            agent_ctx.db.execute(
+                "INSERT INTO chat_messages (message_id, session_id, seq, role, content, raw_content, receipt, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (f"m_cold_{idx}", sid, s_num, "user" if idx % 2 else "assistant", f"Turn {idx} body", f"Turn {idx} body", f"[Turn #{s_num}]: Turn {idx}", now + idx),
+            )
+        agent_ctx.db.commit()
+        raw_rows_20 = [
+            dict(r) for r in agent_ctx.db.execute(
+                "SELECT message_id, seq, role, content, raw_content, receipt, transaction_id FROM chat_messages WHERE session_id=? ORDER BY seq ASC",
+                (sid,),
+            ).fetchall()
+        ]
+        _, _, cv_step2 = _compact_history(agent_ctx, sid, raw_rows_20, "", cv_step1)
+        self.assertEqual(len(cv_step2.get("blocks", [])), 2)
+        agent_ctx.db.execute(
+            "UPDATE chat_sessions SET compacted_view_json=? WHERE session_id=?",
+            (json.dumps(cv_step2), sid),
+        )
+        agent_ctx.db.commit()
+
+        # Delete a message from the first block (m_cold_1)
+        del_res = client.delete("/api/default/agent/messages/m_cold_1")
+        self.assertEqual(del_res.status_code, 200)
+
+        sess_after_del = agent_ctx.db.execute(
+            "SELECT compacted_view_json FROM chat_sessions WHERE session_id=?", (sid,)
+        ).fetchone()
+        cv_after_del = json.loads(sess_after_del["compacted_view_json"])
+        self.assertEqual(cv_after_del.get("blocks"), [])
+        self.assertEqual(cv_after_del.get("compacted_up_to_seq"), 0)
+
+        non_empty_compacted = agent_ctx.db.execute(
+            "SELECT COUNT(*) AS cnt FROM chat_messages WHERE session_id=? AND compacted_into_id != ''",
+            (sid,),
+        ).fetchone()["cnt"]
+        self.assertEqual(non_empty_compacted, 0)
+
+        # Next turn re-summarizes all surviving cold messages
+        surviving_rows = [
+            dict(r) for r in agent_ctx.db.execute(
+                "SELECT message_id, seq, role, content, raw_content, receipt, transaction_id FROM chat_messages WHERE session_id=? ORDER BY seq ASC",
+                (sid,),
+            ).fetchall()
+        ]
+        surviving_cold_ids = [r["message_id"] for r in surviving_rows[:-12]]
+        _, _, cv_rebuilt = _compact_history(agent_ctx, sid, surviving_rows, "", cv_after_del)
+        rebuilt_covered_ids = [mid for b in cv_rebuilt.get("blocks", []) for mid in b.get("message_ids", [])]
+        self.assertEqual(rebuilt_covered_ids, surviving_cold_ids)
+
+        # Invariant 5: Dropping compacted_view_json and rebuilding from chat_messages alone produces identical coverage
+        agent_ctx.db.execute("UPDATE chat_messages SET compacted_into_id='' WHERE session_id=?", (sid,))
+        agent_ctx.db.commit()
+        _, _, cv_from_scratch = _compact_history(agent_ctx, sid, surviving_rows, "", {})
+        scratch_covered_ids = [mid for b in cv_from_scratch.get("blocks", []) for mid in b.get("message_ids", [])]
+        self.assertEqual(scratch_covered_ids, surviving_cold_ids)
+
+        # Invariant 4: Assistant turn context_hashes_json matches bridge_ledger.post_patch_hash
+        patch_target = "vfs://alpha/hash_check.py"
+        patch_text = (
+            f"<<<<<<< FILE: {patch_target}\n"
+            f"<<<<<<< SEARCH\n=======\ndef verified():\n    return 42\n>>>>>>> REPLACE"
+        )
+        sys_ctx = system_bp.get_context("default")
+        sync_res = sys_ctx.call("bridge.sync", text=patch_text, dry_run=False, wait=True)
+        sync_vfs_barrier("default")
+        self.assertTrue(sync_res.get("can_commit"))
+
+        bridge_db = agent_ctx.get_db("bridge")
+        ledger_row = bridge_db.execute(
+            "SELECT post_patch_hash FROM bridge_ledger WHERE filepath=? ORDER BY timestamp DESC LIMIT 1",
+            (patch_target,),
+        ).fetchone()
+        self.assertIsNotNone(ledger_row)
+
+        recorded_hashes = _capture_hashes(agent_ctx, [patch_target])
+        self.assertEqual(recorded_hashes.get(patch_target), ledger_row["post_patch_hash"])
+        self.assertEqual(recorded_hashes.get(patch_target), _compute_sha256("def verified():\n    return 42\n"))
+
+        # Verify P25 canonical msg:// parser, projection shape, genesis lens, and reserved node ID check
+        self.assertEqual(_parse_msg_uri("msg://sess_1/m_cold_2 [raw]"), ("msg://m_cold_2", "m_cold_2", True))
+        self.assertEqual(_parse_msg_uri("m_cold_2"), ("msg://m_cold_2", "m_cold_2", False))
+        msg_proj = _project_lens(agent_ctx, "msg://sess_ledger_invariants/m_cold_2", lens="slice")
+        self.assertEqual(msg_proj["uri"], "msg://m_cold_2")
+        self.assertEqual(msg_proj["served_lens"], "slice")
+        self.assertTrue(msg_proj["sha256"])
+
+        gen_proj = _project_lens(agent_ctx, "vfs://alpha/uncreated_day0.py", lens="full")
+        self.assertEqual(gen_proj["served_lens"], "genesis")
+        self.assertIn("GENESIS TARGET: vfs://alpha/uncreated_day0.py", gen_proj["text"])
+
+        ok_reserved, err_reserved, _ = _validate_routine({
+            "id": "bad_reserved",
+            "nodes": [{"id": "global", "type": "llm", "parents": []}],
+        })
+        self.assertFalse(ok_reserved)
+        self.assertIn("reserved envelope namespace", err_reserved)
+
+    def test_routine_envelope_delta_packing_and_doc_reference_extraction(self):
+        """RoutineEnvelope partitions unchanged vs. changed blocks in same_window mode, protects user_pinned files from probe drops, and extract_doc_referenced_files resolves Markdown headings and links."""
+        from insetu.core.agent.envelope import RoutineEnvelope as _RoutineEnvelope
+        from insetu.core.agent.routine_loader import extract_doc_referenced_files as _extract_doc_refs
+
+        # 1. Same-Window vs. New-Window Web-Chat delta partitioning
+        env = _RoutineEnvelope(session_id="ses_delta", web_chat_window_mode="same_window")
+        blocks_t1 = [
+            ("vfs://alpha/README.md", "full", "=== vfs://alpha/README.md [FULL] ===\n# Alpha\n"),
+            ("vfs://alpha/app.py", "full", "=== vfs://alpha/app.py [FULL] ===\nx = 1\n"),
+        ]
+        full_1, delta_1, staged_1, meta_1 = env.partition_full_vs_delta_blocks(blocks_t1)
+        self.assertEqual(delta_1, full_1)
+        self.assertEqual((meta_1["changed_count"], meta_1["unchanged_count"]), (2, 0))
+
+        # Ratify Turn 1 hashes and modify only app.py on Turn 2
+        env.sent_hashes.update(staged_1)
+        blocks_t2 = [
+            ("vfs://alpha/README.md", "full", "=== vfs://alpha/README.md [FULL] ===\n# Alpha\n"),
+            ("vfs://alpha/app.py", "full", "=== vfs://alpha/app.py [FULL] ===\nx = 2\n"),
+        ]
+        _, delta_2, _, meta_2 = env.partition_full_vs_delta_blocks(blocks_t2)
+        self.assertEqual(meta_2["unchanged_uris"], ["vfs://alpha/README.md"])
+        self.assertEqual(meta_2["changed_uris"], ["vfs://alpha/app.py"])
+        self.assertIn("ALREADY IN YOUR CHAT WINDOW", delta_2)
+        self.assertIn("x = 2", delta_2)
+        self.assertNotIn("# Alpha", delta_2)
+
+        # In new_window mode, all blocks are emitted even when sent_hashes match
+        env.web_chat_window_mode = "new_window"
+        full_3, delta_3, _, meta_3 = env.partition_full_vs_delta_blocks(blocks_t2)
+        self.assertEqual(delta_3, full_3)
+        self.assertEqual(meta_3["unchanged_count"], 0)
+
+        # 2. QUERY_CONTEXT directives: user_pinned survives scout drops while probe drops and additions apply
+        (self.repo_dir / "pinned.py").write_text("PINNED = 1\n", encoding="utf-8")
+        (self.repo_dir / "extra.py").write_text("EXTRA = 1\n", encoding="utf-8")
+        (self.repo_dir / "docs").mkdir(parents=True, exist_ok=True)
+        (self.repo_dir / "docs" / "spec.md").write_text("# Spec\n", encoding="utf-8")
+        force_topology_scan("default")
+
+        env.apply_working_set_delta(add=["vfs://alpha/pinned.py"], source="user_pinned")
+        _, dropped_by_scout = env.apply_working_set_delta(drop=["vfs://alpha/pinned.py"], source="scout_hop2")
+        self.assertEqual(dropped_by_scout, [], "Scout passes must never drop user_pinned files")
+
+        agent_ctx = agent_bp.get_context("default")
+        added_q, _ = env.resolve_query_directives(
+            agent_ctx,
+            ["+ vfs://alpha/extra.py"],
+            lambda c, uris: [u for u in uris if u.startswith("vfs://alpha/")],
+        )
+        self.assertEqual(added_q, ["vfs://alpha/extra.py"])
+        self.assertIn("vfs://alpha/extra.py", env.artifacts)
+
+        # 3. extract_doc_referenced_files resolves Markdown links and explicit URIs via MarkdownLanguageProvider
+        plan_text = (
+            "# 1. Storage Layer\n"
+            "Update [Spec](docs/spec.md) and `vfs://alpha/pinned.py`.\n\n"
+            "# 2. Unrelated Section\n"
+            "Leave `vfs://alpha/extra.py` alone.\n"
+        )
+        refs = _extract_doc_refs(agent_ctx, "Implement Section 1.1 Storage Layer", plan_text)
+        self.assertIn("vfs://alpha/pinned.py", refs)
 
 
 if __name__ == "__main__":

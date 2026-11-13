@@ -191,6 +191,18 @@ const filteredByPin = dummyEl.filterItems(sampleItems);
 assert.equal(filteredByPin.length, 1);
 assert.equal(filteredByPin[0].repo, 'alpha');
 
+// 7. VFS LRU/TTL share text cache & selective invalidation
+const { cacheShareText, getCachedShareText, invalidateShareCache } = await import('/static/extensions/fs/fs_store.js');
+invalidateShareCache();
+cacheShareText('vfs://alpha/service.py', 'service body');
+cacheShareText('ctx://contexts/alpha_context.txt', 'repo bucket');
+cacheShareText('ctx://contexts/quickpack_123_context.txt', 'quickpack snapshot');
+assert.equal(getCachedShareText('vfs://alpha/service.py'), 'service body');
+invalidateShareCache('vfs://alpha/service.py');
+assert.equal(getCachedShareText('vfs://alpha/service.py'), null);
+assert.equal(getCachedShareText('ctx://contexts/alpha_context.txt'), null, 'Topological context must invalidate when a vfs:// file mutates');
+assert.equal(getCachedShareText('ctx://contexts/quickpack_123_context.txt'), 'quickpack snapshot', 'Point-in-time Quickpack snapshot must survive');
+
 console.log('JS_BEHAVIORAL_UNITS_OK');
 """
         res = execute_binary(

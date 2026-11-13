@@ -38,6 +38,7 @@ from .cartographer_enrich import (
     execute_cartographer_enrich,
     parse_enrich_reply_map as _enrich_reply_map,
 )
+from .index_claim import index_rules_fingerprint, may_write_index, warn_index_owned_elsewhere
 
 CARTOGRAPHER_SETTINGS_SCHEMA = [
     {
@@ -382,6 +383,22 @@ def api_cartographer_verify_symbols(ctx):
     return {"status": "success", "verified_count": updated}
 
 
+class CartographerClaimIndexPayload(TypedDict):
+    repo: str
+
+
+@cartographer_bp.route('claim_index', methods=['POST'], request_schema=CartographerClaimIndexPayload, risk="ui_only", docstring="[sync] Makes this workspace the writer of a repository's CODE_INDEX.md when other workspaces mount the same clone with different index settings, then maps it.")
+def api_cartographer_claim_index(ctx):
+    repo = str((ctx.payload or {}).get("repo") or "").strip()
+    if not repo:
+        return {"error": "'repo' is required."}, 400
+    with _CARTOGRAPHER_CACHE_LOCK:
+        _CARTOGRAPHER_SIG_CACHE.pop((ctx.workspace_id or "default", repo), None)
+    map_repositories(ctx.workspace_id, target_repos=[repo], claim_index=True)
+    ctx.sync_vfs_barrier()
+    return {"status": "success", "repo": repo}
+
+
 class CartographerEnrichPayload(TypedDict, total=False):
     repo: Optional[str]
 
@@ -461,7 +478,7 @@ def _remember_index_descriptions(ctx, repo_dir, present_files, present_dirs, com
         print(f"⚠️ [Cartographer] Could not remember index descriptions for {repo_dir}: {exc}")
 
 
-def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_comments=None):
+def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_comments=None, claim_index=False):
     if not silent: print(f"\n{'-'*50}\n🚀 inSetu: Mapping Repository Topologies\n{'-'*50}")
     ctx = cartographer_bp.get_context(workspace_id)
     cfg = ctx.config
@@ -703,6 +720,12 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
             if live_vfs_index is not None and not extra_comments and _CARTOGRAPHER_SIG_CACHE.get(cache_key) == pre_sig:
                 return
 
+        # Other workspaces or insetu instances may mount this clone with different index rules; one of them writes (#22).
+        rules = index_rules_fingerprint(config, cfg, include_symbols)
+        allowed, holder = may_write_index(repo_path, workspace_id, rules, take_over=claim_index)
+        if not allowed:
+            warn_index_owned_elsewhere(repo_dir, workspace_id, holder)
+            return
         tree_dict = build_tree_dict(filtered_files)
         os.makedirs(Path(index_path).parent, exist_ok=True)
 

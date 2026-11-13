@@ -175,13 +175,45 @@ export class InSetConfigBanner extends InSetuElement {
     _inspectQuarantineReport() {
         const entries = Object.values(this.quarantinedModules || {});
         if (entries.length === 0) return;
-        const lines = entries.map(e => (
+        const reportText = entries.map(e => (
             `=== [${(e.tier || 'mod').toUpperCase()}] ${e.id} (${e.status}) ===\n` +
             `Reason: ${e.reason || 'Unknown'}\n` +
             (e.traceback ? `\nTraceback:\n${e.traceback}\n` : '')
-        ));
+        )).join('\n\n');
+        const layout = window.Sutram?.stores?.Layout?.getState?.();
+        if (layout && typeof layout.openWindow === 'function') {
+            layout.openWindow({
+                id: 'system:quarantine-report',
+                component: 'sutram-report-projection',
+                label: 'Degraded Boot Traceback',
+                icon: 'shield-alert',
+                intent: 'danger',
+                extName: 'system',
+                windowOnly: true,
+                props: {
+                    caption: 'One or more modules failed to load during boot and were quarantined.',
+                    content: reportText,
+                    suggestedFilename: 'quarantined_modules_report.txt',
+                    actions: [
+                        {
+                            label: 'Copy Traceback',
+                            icon: 'clipboard',
+                            intent: 'primary',
+                            onClick: () => window.inSetu?.utils?.copyRawText?.(reportText, '📋 Traceback copied!')
+                        },
+                        {
+                            label: 'Close',
+                            icon: 'x',
+                            intent: 'neutral',
+                            onClick: () => layout.closeWindow('system:quarantine-report')
+                        }
+                    ]
+                }
+            }, layout.focusedColumn || 'center', 1);
+            return;
+        }
         if (window.inSetu?.ui?.viewTextBlob) {
-            window.inSetu.ui.viewTextBlob('Degraded Boot: Quarantined Modules Report', lines.join('\n\n'), 'quarantined_modules_report.txt');
+            window.inSetu.ui.viewTextBlob('Degraded Boot: Quarantined Modules Report', reportText, 'quarantined_modules_report.txt');
         }
     }
     _pendingWorkspaceExtensions() {

@@ -1,79 +1,32 @@
 import { LitElement, html } from 'lit';
 import {
-    InSetuElement,
-    createExtensionStore,
-    sharedStyles,
-    buildFileTree,
-    resolveDirectoryState,
-    downloadFile as sutramDownloadFile,
-    downloadBlob,
-    bindGhostDrag
+    InSetuElement, createExtensionStore, sharedStyles, buildFileTree, resolveDirectoryState,
+    downloadFile as sutramDownloadFile, downloadBlob, bindGhostDrag
 } from '/static/extensions/system/insetu_sdk.js';
-
 import { resolveEditorMode, insertLinkToEditor, openEditorLinkTarget, isMarkdownLinksEnabled } from '/static/extensions/system/components/ui_editor.js';
 import { AppStore, SelectionStore } from '/static/extensions/system/store.js';
 import {
-    FsStore,
-    normalizeVfsURI,
-    isBufferReadOnly,
-    hasMacroSyntax,
-    canPreviewFileMacros,
-    resolveLiveBufferPreview,
-    injectTextToBuffer,
-    prepareBufferSavePayload,
-    rebaseConcurrentText,
-    saveBufferFile,
-    reconcileBufferWithDisk,
-    flushAllDirtyBuffers,
-    renameFileTracking,
-    hydrateVfsBuffer,
-    extractManifestFiles,
-    resolveFileFetchUrl,
-    getChunks,
-    syncVirtualBuffer,
-    preCacheFiles,
+    FsStore, normalizeVfsURI, isBufferReadOnly, hasMacroSyntax, canPreviewFileMacros,
+    resolveLiveBufferPreview, injectTextToBuffer, prepareBufferSavePayload, rebaseConcurrentText,
+    saveBufferFile, reconcileBufferWithDisk, flushAllDirtyBuffers, renameFileTracking,
+    hydrateVfsBuffer, extractManifestFiles, resolveFileFetchUrl, getChunks, cacheShareText,
+    getCachedShareText, invalidateShareCache, preWarmShareArtifact, syncVirtualBuffer, preCacheFiles,
 } from '/static/extensions/fs/fs_store.js';
+import { InSetuEditorProjection, InSetuFrontmatterEditor, InSetuFileDiffProjection } from '/static/extensions/fs/fs_editor_projection.js';
 import {
-    InSetuEditorProjection,
-    InSetuFrontmatterEditor,
-    InSetuFileDiffProjection,
-} from '/static/extensions/fs/fs_editor_projection.js';
-import {
-    InSetuBrowserProjection,
-    InSetuLinkInsertProjection,
-    InSetuMoveFileProjection,
-    InSetuNewFileProjection,
-    InSetuNewFolderProjection,
+    InSetuBrowserProjection, InSetuLinkInsertProjection, InSetuMoveFileProjection,
+    InSetuNewFileProjection, InSetuNewFolderProjection,
 } from '/static/extensions/fs/fs_modals.js';
 
 export {
-    FsStore,
-    normalizeVfsURI,
-    isBufferReadOnly,
-    hasMacroSyntax,
-    canPreviewFileMacros,
-    resolveLiveBufferPreview,
-    injectTextToBuffer,
-    prepareBufferSavePayload,
-    rebaseConcurrentText,
-    saveBufferFile,
-    reconcileBufferWithDisk,
-    flushAllDirtyBuffers,
-    renameFileTracking,
-    hydrateVfsBuffer,
-    extractManifestFiles,
-    resolveFileFetchUrl,
-    getChunks,
-    syncVirtualBuffer,
-    preCacheFiles,
-    InSetuEditorProjection,
-    InSetuFrontmatterEditor,
-    InSetuFileDiffProjection,
-    InSetuBrowserProjection,
-    InSetuLinkInsertProjection,
-    InSetuMoveFileProjection,
-    InSetuNewFileProjection,
-    InSetuNewFolderProjection,
+    FsStore, normalizeVfsURI, isBufferReadOnly, hasMacroSyntax, canPreviewFileMacros,
+    resolveLiveBufferPreview, injectTextToBuffer, prepareBufferSavePayload, rebaseConcurrentText,
+    saveBufferFile, reconcileBufferWithDisk, flushAllDirtyBuffers, renameFileTracking,
+    hydrateVfsBuffer, extractManifestFiles, resolveFileFetchUrl, getChunks, cacheShareText,
+    getCachedShareText, invalidateShareCache, preWarmShareArtifact, syncVirtualBuffer, preCacheFiles,
+    InSetuEditorProjection, InSetuFrontmatterEditor, InSetuFileDiffProjection,
+    InSetuBrowserProjection, InSetuLinkInsertProjection, InSetuMoveFileProjection,
+    InSetuNewFileProjection, InSetuNewFolderProjection,
 };
 export function bindDownloadDrag(e, filename, fetchUrl) {
     const absoluteUrl = window.location.origin + fetchUrl;
@@ -263,11 +216,18 @@ export async function fetchAndCopy(filePath, explicitUrl = null) {
         const activeWs = window.inSetu.utils.getActiveWorkspace();
         const resolvedChunks = getChunks(filePath);
         const targetFile = (resolvedChunks && resolvedChunks.length > 0) ? resolvedChunks[0] : filePath;
+        const cachedText = !explicitUrl ? getCachedShareText(targetFile) : null;
+        if (cachedText !== null) {
+            await navigator.clipboard.writeText(cachedText);
+            window.inSetu.ui.setGlobalStatus("✅ Copied!", 2000);
+            return;
+        }
         const fetchUrl = (targetFile === filePath && explicitUrl) ? explicitUrl : resolveFileFetchUrl(targetFile, false);
         const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
 
         if (!res.ok) throw new Error("File not found on disk.");
         const text = await res.text();
+        cacheShareText(targetFile, text);
         await navigator.clipboard.writeText(text);
         window.inSetu.ui.setGlobalStatus("✅ Copied!", 2000);
     } catch (e) {
@@ -294,11 +254,11 @@ export function shareFiles(baseFile, chunks = null, isFS = false) {
         ? manifestChunks
         : ((chunks && chunks.length > 0) ? chunks : [baseFile]);
 
-    // Synchronous Fast-Path
-    if (filesToFetch.length > 0 && filesToFetch.every(fp => window.inSetu.vfs.shareTextCache.has(fp))) {
+    // Synchronous Fast-Path (0ms user-gesture-safe execution when pre-warmed or previously fetched)
+    if (filesToFetch.length > 0 && filesToFetch.every(fp => getCachedShareText(fp) !== null)) {
         try {
             const fileObjects = filesToFetch.map(filepath => ({
-                content: window.inSetu.vfs.shareTextCache.get(filepath),
+                content: getCachedShareText(filepath),
                 filename: new window.inSetu.utils.InSetuURI(filepath).basename
             }));
 
@@ -329,7 +289,7 @@ export function shareFiles(baseFile, chunks = null, isFS = false) {
                 const fetchUrl = resolveFileFetchUrl(filepath, fileIsFS);
 
                 const textContent = await window.inSetu.api.fetchImmutableText(fetchUrl, { onlyIfMissing: true }, activeWs);
-                window.inSetu.vfs.shareTextCache.set(filepath, textContent);
+                cacheShareText(filepath, textContent);
                 fileObjects.push({
                     content: textContent,
                     filename: new window.inSetu.utils.InSetuURI(filepath).basename
@@ -340,7 +300,7 @@ export function shareFiles(baseFile, chunks = null, isFS = false) {
                 await window.inSetu.utils.nativeShareFiles(fileObjects);
             } catch (err) {
                 if (err.name === 'NotAllowedError' || err.message?.includes('Permission') || err.message?.includes('activation')) {
-                    if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚠️ Files ready. Please click Share again.", 4000);
+                    if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Context cached locally — Tap Share again to open sheet.", 4500);
                     return;
                 }
                 throw err;
@@ -420,9 +380,7 @@ export function updateManifestState(mutations) {
         const isRelocatedSave = Boolean(m.relocated_from || fallbackMoveSource);
 
         // Centralized Cache Invalidation
-        if (window.inSetu?.vfs?.shareTextCache?.has(normPath)) {
-            window.inSetu.vfs.shareTextCache.delete(normPath);
-        }
+        invalidateShareCache(normPath);
         const nowSec = Date.now() / 1000;
         if (m.operation === 'delete') {
             ['vfs', 'ctx'].forEach(manifestKey => {
@@ -1891,6 +1849,7 @@ window.inSetu.vfs.openPartsModal = openPartsModal;
 window.inSetu.vfs.openVirtualFile = openVirtualFile;
 window.inSetu.vfs.openNewFileModal = openNewFileModal;
 window.inSetu.vfs.syncVirtualBuffer = syncVirtualBuffer;
+window.inSetu.vfs.preWarmShareArtifact = preWarmShareArtifact;
 window.inSetu.vfs.preCacheFiles = preCacheFiles;
 window.inSetu.vfs.fetchAndCopy = fetchAndCopy;
 window.inSetu.vfs.fetchAndDownloadState = fetchAndDownloadState;

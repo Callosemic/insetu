@@ -165,25 +165,22 @@ def reset_kernel_state(*args, **kwargs) -> None:
     Protected targets and the protected-write handler survive akasa's reset; tests that need the handler install it.
     """
     import akasa.db as _akasa_db
-    for attr in dir(_akasa_db):
-        obj = getattr(_akasa_db, attr)
-        if hasattr(obj, "connections") and isinstance(obj.connections, dict):
-            for c in list(obj.connections.values()):
-                try:
-                    c.close()
-                except Exception:
-                    pass
-            obj.connections.clear()
-        elif isinstance(obj, dict) and "conn" in attr.lower():
-            for c in list(obj.values()):
-                try:
-                    c.close()
-                except Exception:
-                    pass
-            obj.clear()
+    if hasattr(_akasa_db, "reset"):
+        _akasa_db.reset()
     _akasa.reset_state(*args, **kwargs)
     for ext in _REGISTERED_EXTENSION_INSTANCES:
         ext._mounted_workspaces.clear()
+
+
+def mount_declared_volume(workspace_id: str, scheme: str, volume: str) -> bool:
+    """Mounts `volume` via its owning InSetuExtension if declared, preserving TemplateOverlayVFSDriver."""
+    wid = workspace_id or "default"
+    for ext in _REGISTERED_EXTENSION_INSTANCES:
+        vols = getattr(ext, "volumes", None) or {}
+        if volume in vols and vols[volume].get("scheme", "ctx") == scheme:
+            ext.mount_volumes(wid, force=True)
+            return True
+    return False
 
 
 hooks.register_trusted_namespace("insetu.core.")
@@ -698,3 +695,31 @@ class InSetuExtension(AkasaExtension):
 
         _declarative_workspace_shutdown.__name__ = f"_declarative_workspace_shutdown_{self.name}"
         self.on('workspace_shutdown')(_declarative_workspace_shutdown)
+
+    def route(self, rule: str, **options):
+        risk = str(options.pop("risk", "") or "").strip().lower()
+        methods = [str(m).upper() for m in (options.get("methods") or ["GET"])]
+        clean_parts = [seg for seg in rule.strip("/").split("/") if seg and not (seg.startswith("<") and seg.endswith(">"))]
+        cap_sub = ".".join(clean_parts)
+        raw_sub = rule.strip("/").replace("/", ".")
+        cap_ids = {f"{self.name}.{s}" if s else self.name for s in (cap_sub, raw_sub)}
+        if risk == "ui_only" or ("DELETE" in methods and "mcp_expose" not in options):
+            options["mcp_expose"] = False
+            _DYNAMIC_ROUTINE_BANNED_CAPABILITIES.update(cap_ids)
+        elif risk == "read":
+            _DYNAMIC_READ_ONLY_SAFE_CAPABILITIES.update(cap_ids)
+        return super().route(rule, **options)
+
+
+_DYNAMIC_ROUTINE_BANNED_CAPABILITIES: set = set()
+_DYNAMIC_READ_ONLY_SAFE_CAPABILITIES: set = set()
+
+
+def get_dynamic_routine_banned_capabilities() -> frozenset:
+    """Returns capability IDs dynamically banned from routine invocation via risk='ui_only' or 'exec'."""
+    return frozenset(_DYNAMIC_ROUTINE_BANNED_CAPABILITIES)
+
+
+def get_dynamic_read_only_capabilities() -> frozenset:
+    """Returns capability IDs dynamically marked safe for read-only (/ask) mode via risk='read'."""
+    return frozenset(_DYNAMIC_READ_ONLY_SAFE_CAPABILITIES)

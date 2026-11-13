@@ -26,7 +26,7 @@ from insetu.core.agent.engine_agent import (
     agent_bp,
     _handle_routine_response_pre_save,
 )
-from insetu.core.agent.orchestrator import parse_routine_content, load_routine_definition
+from insetu.core.agent.routine_loader import parse_routine_content, load_routine_definition
 from akasa.vfs import sync_vfs_barrier
 from akasa.vfs import VFSTransaction
 from flask import Flask
@@ -486,6 +486,51 @@ assert.equal(repoRoot.isRootVolume, true);
         })
         self.assertEqual(def_res.status_code, 200)
         self.assertEqual(def_res.data.decode("utf-8").strip(), "Role: Staff Engineer")
+
+    def test_query_context_topology_confinement_and_resource_lenses(self):
+        """resolve_query_context and compile_query_quickpack refuse files outside topology_ledger, and project_resource_lens serves full, slice, outline, and genesis lenses."""
+        from insetu.core.gather.context_assemble import (
+            compile_query_quickpack as _compile_qq,
+            project_resource_lens as _project_lens,
+            resolve_query_context as _resolve_qc,
+        )
+
+        apply_declarative_schema("vfs_index", VFS_INDEX_SCHEMA, "default")
+        (self.repo_dir / "tracked.py").write_text("def public_api(x: int) -> int:\n    return x + 1\n", encoding="utf-8")
+        (self.repo_dir / "untracked_secret.env").write_text("SECRET_TOKEN=xyz\n", encoding="utf-8")
+        force_topology_scan(workspace_id="default")
+
+        g_ctx = gather_bp.get_context("default")
+        # 1. Tracked file succeeds; untracked file is refused across direct URI, file_slice, and symbol_def
+        ok_read = _resolve_qc(g_ctx, "vfs://alpha/tracked.py")
+        self.assertEqual(ok_read["type"], "file_read")
+        self.assertIn("def public_api", ok_read["content"])
+
+        for blocked_q in (
+            "vfs://alpha/untracked_secret.env",
+            '{"type": "file_slice", "filepath": "vfs://alpha/untracked_secret.env", "start_line": 1, "end_line": 5}',
+            '{"type": "symbol_def", "target": "vfs://alpha/untracked_secret.env#SECRET_TOKEN"}',
+        ):
+            blocked_res = _resolve_qc(g_ctx, blocked_q)
+            self.assertIn("error", blocked_res)
+            self.assertIn("outside this workspace's topology", blocked_res["error"])
+
+        # 2. compile_query_quickpack compiles only topology-tracked files
+        marker = "<" * 7
+        close_exe = ">" * 7 + " EXECUTE"
+        raw_probe = f"{marker} QUERY_CONTEXT\nvfs://alpha/tracked.py\nvfs://alpha/untracked_secret.env\n{close_exe}"
+        qp = _compile_qq(g_ctx, raw_probe)
+        self.assertIsNotNone(qp)
+        self.assertEqual(qp["files"], ["vfs://alpha/tracked.py"])
+
+        # 3. project_resource_lens serves slice and genesis projections cleanly
+        slice_proj = _project_lens(g_ctx, "vfs://alpha/tracked.py", lens="slice")
+        self.assertEqual(slice_proj["served_lens"], "slice")
+        self.assertIn("def public_api", slice_proj["text"])
+
+        genesis_proj = _project_lens(g_ctx, "vfs://alpha/brand_new.py", lens="full")
+        self.assertEqual(genesis_proj["served_lens"], "genesis")
+        self.assertIn("GENESIS TARGET: vfs://alpha/brand_new.py", genesis_proj["text"])
 
 
 if __name__ == "__main__":

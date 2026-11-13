@@ -312,26 +312,25 @@ MAX_UNLISTED_MODULE_LINES = 800
 MODULE_LINE_RATCHET: Dict[str, int] = {
     # Ceilings marked "Nov 9" were raised to the files' real sizes after the Nov 9 round added features
     # past the ceilings Gemini had just set. Each is owed back by a split (gemini_offline_bridge_followup.md).
-    "insetu/core/fs/fs.js": 2068,
+    "insetu/core/fs/fs.js": 2016,
     "insetu/extensions/tracker/ext_tracker.js": 2932,
     "insetu/core/topology/engine_topology.py": 2202,  # Nov 9 (was 2170)
-    "insetu/core/agent/agent.js": 1276,  # Nov 9 (was 1085): Staged Patch Stacks and helper-mode panels to extract
+    "insetu/core/agent/agent.js": 1115,  # Nov 12: Extracted InSetuAgentHandoffPanel into agent_staged_stacks.js
     "insetu/core/system/components/ui_system_settings.js": 1864,  # Nov 9 (was 1812)
-    "insetu/core/agent/orchestrator.py": 1902,  # Nov 9 (was 1771): Wave 3.2 with agent plan Sprint 1
+    "insetu/core/agent/orchestrator.py": 1530,  # Nov 9 (was 1771): Wave 3.2 with agent plan Sprint 1
     "insetu/core/bridge/bridge_vfs.py": 1617,  # Nov 9 (was 1603)
-    "insetu/core/llm/engine_llm.py": 921,  # Nov 9 (was 812): LLM telemetry to extract
+    "insetu/core/llm/engine_llm.py": 871,  # Nov 12 (was 921): Extracted llm_telemetry.py
     "insetu/core/utils_core.py": 1495,  # Nov 9 (was 1476): inside-out interpolation that never rescans values
     "insetu/extensions/tracker/engine_tracker.py": 1464,
     "insetu/core/system/system.js": 1467,  # Nov 9 (was 1458)
     "insetu/core/gather/engine_gather.py": 1430,
-    "insetu/core/bridge/bridge.js": 1307,  # Nov 9 (was 1302)
+    "insetu/core/bridge/bridge.js": 1275,  # Nov 11 (Nov 9: 1307)
     "insetu/extensions/git/ext_git.js": 1277,
     "insetu/extensions/git/engine_git.py": 1168,
     "insetu/core/config/config.js": 1110,
     "insetu/extensions/update/ext_update.js": 1120,
     "insetu/extensions/update/engine_update.py": 957,
     "insetu/extensions/preview/engine_preview.py": 928,
-    "insetu/core/agent/engine_agent.py": 938,  # Nov 9 (was 913)
     "insetu/extensions/skills/ext_skills.js": 828,
     "insetu/core/bridge/engine_bridge.py": 1023,  # Nov 9 (was 825): telemetry compile and heal audit to extract
     "insetu/core/bridge/bridge_fuzzy.py": 974,  # Nov 9 (was 815): sandwich anchor to its own module
@@ -340,11 +339,10 @@ MODULE_LINE_RATCHET: Dict[str, int] = {
     "sutram/sutram/js/primitives.js": 2853,
     "sutram/sutram/js/sutram_sdk.js": 1916,
     "sutram/sutram/js/app_shell.js": 1423,
-    "akasa/akasa/vfs.py": 1246,
+    "akasa/akasa/vfs.py": 1117,  # Nov 11: the three-way merge moved to akasa/merge.py
     "akasa/akasa/extension.py": 1223,
     "akasa/akasa/workers/__init__.py": 1200,
     "sutram/sutram/js/offline.js": 1018,
-    "sutram/sutram/js/utils.js": 818,
 }
 
 _CROSS_MODULE_PRIVATE_REFS = None
@@ -1576,11 +1574,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 report_violation("DB_CONNECTION_BAN", self.filepath, node.lineno, "Direct sqlite3 import detected. Use 'from insetu.db import get_connection'.")
 def check_python_files():
     print("🔍 Sweeping Python Backend (AST Analysis)...")
-    scan_roots = [BACKEND_DIR]
+    # Tests are app code run under the app's rules. scripts/ holds standalone developer tools that run without the
+    # app (no VFS, no execute_binary), so the backend's runtime rules do not apply to them.
+    scan_roots = [BACKEND_DIR] + [root for root in (PROJECT_ROOT / "tests",) if root.exists()]
     for filepath in collect_unique_files(scan_roots, [".py"]):
         for file in [filepath.name]:
             if file.endswith(".py"):
-                if "venv" in str(filepath) or "__pycache__" in str(filepath):
+                if "venv" in str(filepath) or "__pycache__" in str(filepath) or "fitness" in filepath.parts:
                     continue
                 with open(filepath, "r", encoding="utf-8") as f:
                     try:
