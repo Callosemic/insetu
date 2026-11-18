@@ -1,8 +1,9 @@
+import functools
 import os
 import time
 from pathlib import Path
 from typing import TypedDict, Optional
-from insetu.core.sdk import InSetuExtension, ExtensionContext
+from insetu.core.sdk import InSetuExtension, ExtensionContext, get_current_origin
 from insetu.core.utils_core import InSetuURI, execute_binary, resolve_system_artifact_path
 
 __depends__ = []
@@ -38,8 +39,31 @@ dev_bp = InSetuExtension(
             'payload': 'TEXT',
             'timestamp': 'REAL'
         }
-}
+},
+    enable_requires_restart=True,
 )
+# Dev mode switches on only with a restart: workspaces whose boot ran with dev enabled, in this process.
+_DEV_ENABLED_AT_BOOT = set()
+CLIENT_ERRORS_PER_MINUTE = 60
+SYSTEM_ERRORS_ROW_CAP = 2000
+
+
+@dev_bp.on('workspace_boot')
+def record_dev_enabled_at_boot(ctx, workspace_id=None, **kwargs):
+    """Runs only where dev is enabled at boot: the event bus skips extensions a workspace has not enabled."""
+    _DEV_ENABLED_AT_BOOT.add(workspace_id or ctx.workspace_id)
+
+
+def _requires_boot_enablement(view):
+    """Denies a dev route unless dev was enabled when the workspace booted, and always for the public origin."""
+    @functools.wraps(view)
+    def gated(ctx, *args, **kwargs):
+        if get_current_origin() == "public":
+            return {"error": "403 Forbidden: dev routes never serve the public origin."}, 403
+        if ctx.workspace_id not in _DEV_ENABLED_AT_BOOT:
+            return {"error": "403 Forbidden: the dev extension was enabled after this workspace booted. Restart inSetu to turn it on."}, 403
+        return view(ctx, *args, **kwargs)
+    return gated
 # 2. Intercept Ecosystem Hooks
 @dev_bp.on('vfs_mutated')
 def log_vfs_telemetry(ctx, mutations=None, workspace_id="default", **kwargs):
@@ -111,6 +135,7 @@ class CmdExecResponse(TypedDict):
     stdout: str
     stderr: str
 @dev_bp.route('exec', methods=['POST'], request_schema=CmdExecPayload, response_schema=CmdExecResponse, mcp_expose=False, docstring="Executes an arbitrary shell command in the workspace for testing and verification. Hidden from MCP and banned in routines until S5 sets per-surface policy.")
+@_requires_boot_enablement
 def api_dev_exec(ctx):
     """Executes an arbitrary shell command within the workspace sandbox for testing and verification."""
     data = ctx.payload or {}
@@ -135,6 +160,7 @@ def api_dev_exec(ctx):
             "stderr": str(e)
         }, 500
 @dev_bp.route('metrics', methods=['GET'], docstring="Retrieves system telemetry metrics, including file thrashing limits and bridge errors.")
+@_requires_boot_enablement
 def get_dev_metrics(ctx):
     """Retrieves system telemetry metrics, including file thrashing limits and bridge errors."""
     now = time.time()
@@ -198,6 +224,7 @@ def get_dev_metrics(ctx):
         "system_errors": [dict(r) for r in system_error_rows]
     }
 @dev_bp.route('sql/databases', methods=['GET'], docstring="Lists all available SQLite databases within the tenant cache/db directory.")
+@_requires_boot_enablement
 def list_sql_databases(ctx):
     """Lists all available SQLite databases within the tenant cache/db directory."""
     db_dir = Path(ctx.paths['control_dir']).joinpath("cache", "db")
@@ -211,6 +238,7 @@ class SqlQueryPayload(TypedDict, total=False):
     query: str
 
 @dev_bp.route('sql/query', methods=['POST'], request_schema=SqlQueryPayload, docstring="Executes a constrained SQL query against a target workspace database.")
+@_requires_boot_enablement
 def execute_sql_query(ctx):
     """Executes a constrained SQL query against a target workspace database."""
     data = ctx.payload or {}
@@ -255,6 +283,7 @@ def execute_sql_query(ctx):
             "error": str(e)
         }, 400
 @dev_bp.route('logs', methods=['GET'], docstring="Retrieves the systemd journal logs for the background backend daemon.")
+@_requires_boot_enablement
 def get_backend_logs(ctx):
     """Retrieves the systemd journal logs for the background backend daemon."""
     try:
@@ -316,6 +345,7 @@ class ClientErrorPayload(TypedDict, total=False):
 
 
 @dev_bp.route('client_error', methods=['POST'], request_schema=ClientErrorPayload, mcp_expose=False, docstring="[sync] Records an uncaught frontend JavaScript exception or unhandled promise rejection in system_errors.")
+@_requires_boot_enablement
 def api_dev_client_error(ctx):
     """Records a client-side JavaScript error into the system_errors ledger for mobile debugging."""
     data = ctx.payload or {}
@@ -326,6 +356,12 @@ def api_dev_client_error(ctx):
     payload_str = str(data.get("payload") or "").strip()[:4000]
     if not message:
         return {"status": "skipped"}, 200
+    recent = ctx.db.execute(
+        "SELECT COUNT(*) FROM system_errors WHERE source LIKE 'Browser:%' AND timestamp >= ?",
+        (time.time() - 60,),
+    ).fetchone()[0]
+    if recent >= CLIENT_ERRORS_PER_MINUTE:
+        return {"status": "throttled"}, 200
     log_system_error(ctx, source=source, error_type=error_type, message=message, traceback=tb, payload=payload_str)
     return {"status": "success"}
 
@@ -334,6 +370,7 @@ class DownloadLogsPayload(TypedDict, total=False):
     pass
 
 @dev_bp.route('logs/download', methods=['POST'], request_schema=DownloadLogsPayload, docstring="Exports the current backend daemon invocation logs to a downloadable text file.")
+@_requires_boot_enablement
 def api_download_logs(ctx):
     """Exports the current backend daemon invocation logs to a downloadable text file."""
     job_id = ctx.jobs.submit("download_boot_logs_task", job_category="ui_blocking")
@@ -348,6 +385,10 @@ def sweep_telemetry_worker(ctx):
     week_cutoff = time.time() - (86400 * 7)
     ctx.db.execute("DELETE FROM bridge_errors WHERE timestamp < ?", (week_cutoff,))
     ctx.db.execute("DELETE FROM system_errors WHERE timestamp < ?", (week_cutoff,))
+    ctx.db.execute(
+        "DELETE FROM system_errors WHERE id NOT IN (SELECT id FROM system_errors ORDER BY id DESC LIMIT ?)",
+        (SYSTEM_ERRORS_ROW_CAP,),
+    )
 
     ctx.db.commit()
     return "Telemetry swept."

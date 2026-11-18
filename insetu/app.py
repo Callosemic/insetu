@@ -882,11 +882,17 @@ use_reloader = os.environ.get("INSETU_RELOADER", "0") == "1"
 is_cli_serve = "serve" in sys.argv
 boot_kernel(skip_if_reloader_parent=(is_cli_serve and use_reloader))
 def run_app():
+    _URL_CREDENTIAL_RE = re.compile(r'([?&](?:token|ticket)=)[^&\s"]+')
+
     class QuietPollingFilter(logging.Filter):
         def filter(self, record):
+            msg = record.getMessage()
+            # Credentials passed in URLs never reach the log, debug mode included.
+            if "token=" in msg or "ticket=" in msg:
+                msg = _URL_CREDENTIAL_RE.sub(r'\1[redacted]', msg)
+                record.msg, record.args = msg, ()
             if os.environ.get("INSETU_DEBUG") == "1":
                 return True
-            msg = record.getMessage()
             # Filter standard polling heartbeat paths and manifest lookups
             if any(p in msg for p in ['/system/deltas', '/system/jobs/', '/gather/manifest/entry', '/git/sweep/status']):
                 return False

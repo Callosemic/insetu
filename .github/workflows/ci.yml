@@ -23,4 +23,5 @@ jobs:
     with:
       trigger_repo: insetu
       trigger_sha: ${{ github.sha }}
-    secrets: inherit
+    secrets:
+      STACK_READ_TOKEN: ${{ secrets.STACK_READ_TOKEN }}

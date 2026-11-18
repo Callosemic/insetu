@@ -595,6 +595,7 @@ class InSetuExtension(AkasaExtension):
         external_binaries: Optional[List[str]] = None,
         post_install_commands: Optional[List[List[str]]] = None,
         requires_reboot_on_install: bool = False,
+        enable_requires_restart: bool = False,
     ):
         super().__init__(
             name,
@@ -611,6 +612,7 @@ class InSetuExtension(AkasaExtension):
         self.external_binaries = list(external_binaries or [])
         self.post_install_commands = list(post_install_commands or [])
         self.requires_reboot_on_install = bool(requires_reboot_on_install)
+        self.enable_requires_restart = bool(enable_requires_restart)
         self._mounted_workspaces = set()
         _REGISTERED_EXTENSION_INSTANCES.append(self)
         if self.volumes:

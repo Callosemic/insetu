@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, TypedDict
 import insetu.core.attestations as _attestations
 from insetu.core.sdk import (
     CORE_MODULES_TUPLE,
+    is_extension_enabled,
     resolve_external_dependency_spec,
 )
 from insetu.core.system.blueprint import system_bp
@@ -261,6 +262,14 @@ def _resolve_extension_module_and_bp(ext_name: str, include_error: bool = False)
     if include_error:
         return mod, bp_obj, err
     return mod, bp_obj
+
+
+def enabling_requires_restart(ext_name: str, workspace_id: str) -> bool:
+    """True when ext_name is not yet enabled in workspace_id and its extension declares enable_requires_restart."""
+    if is_extension_enabled(ext_name, workspace_id):
+        return False
+    _, bp_obj = _resolve_extension_module_and_bp(ext_name)
+    return bool(getattr(bp_obj, "enable_requires_restart", False))
 
 
 def _get_whitelisted_extension_packages(ext_name: str) -> List[str]:

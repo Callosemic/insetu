@@ -44,7 +44,7 @@ from insetu.core.utils_core import (
 )
 from insetu.core.system.blueprint import SYSTEM_SETTINGS_SCHEMA, system_bp
 import insetu.core.system.ext_manager as _ext_manager  # noqa: F401 - Registers extension routes and worker on system_bp
-from insetu.core.system.ext_manager import _inspect_or_resolve_extension_meta
+from insetu.core.system.ext_manager import _inspect_or_resolve_extension_meta, enabling_requires_restart
 from insetu.core.system.memory_profiler import collect_process_memory_telemetry
 from insetu.core.system.openapi import build_system_openapi_spec
 import insetu.core.attestations as _attestations
@@ -423,7 +423,7 @@ def api_system_config(ctx):
             from flask import current_app as _current_app
             requires_reboot = False
             for ext in payload.get("extensions", []):
-                if ext != "config" and ext not in _current_app.blueprints:
+                if ext != "config" and (ext not in _current_app.blueprints or enabling_requires_restart(ext, ctx.workspace_id)):
                     requires_reboot = True
 
             save_system_config(ctx.workspace_id, payload)

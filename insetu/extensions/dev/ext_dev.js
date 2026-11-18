@@ -69,6 +69,63 @@ function _appendBrowserJsLog(level, args, stack = '') {
     }
 }
 
+const CLIENT_ERROR_WINDOW_MS = 60000;
+const CLIENT_ERROR_MAX_PER_WINDOW = 20;
+const _clientErrorReports = { windowStart: 0, sent: 0, seen: new Set() };
+
+function _reportClientError(body) {
+    const st = _clientErrorReports;
+    const now = Date.now();
+    if (now - st.windowStart > CLIENT_ERROR_WINDOW_MS) {
+        st.windowStart = now;
+        st.sent = 0;
+        st.seen.clear();
+    }
+    const signature = `${body.error_type}|${body.message}|${String(body.traceback || '').slice(0, 200)}`;
+    if (st.seen.has(signature) || st.sent >= CLIENT_ERROR_MAX_PER_WINDOW) return;
+    st.seen.add(signature);
+    st.sent += 1;
+    try {
+        const pending = window.inSetu?.api?.post?.('dev/client_error', body);
+        if (pending && typeof pending.catch === 'function') pending.catch(() => {});
+    } catch (_) {}
+}
+
+const _handledWindowEvents = new WeakSet();
+
+// Every open Dev Logs view registers these through registerGlobalListener; the WeakSet makes each
+// window event count once, however many views are open.
+function _handleWindowError(e) {
+    if (_handledWindowEvents.has(e)) return;
+    _handledWindowEvents.add(e);
+    const loc = e.filename ? `${e.filename}:${e.lineno || 0}:${e.colno || 0}` : '';
+    const msg = e.message || 'Uncaught JavaScript Error';
+    const stack = e.error?.stack || loc;
+    _appendBrowserJsLog('error', [`[Uncaught] ${msg}`], stack);
+    _reportClientError({
+        source: 'Browser:onerror',
+        error_type: e.error?.name || 'UncaughtError',
+        message: msg,
+        traceback: stack,
+        payload: loc
+    });
+}
+
+function _handleUnhandledRejection(e) {
+    if (_handledWindowEvents.has(e)) return;
+    _handledWindowEvents.add(e);
+    const reason = e.reason;
+    const msg = reason instanceof Error ? reason.message : _formatConsoleArg(reason);
+    const stack = reason instanceof Error ? (reason.stack || '') : '';
+    _appendBrowserJsLog('error', [`[UnhandledRejection] ${msg}`], stack);
+    _reportClientError({
+        source: 'Browser:Promise',
+        error_type: reason?.name || 'UnhandledRejection',
+        message: String(msg || 'Unhandled Promise Rejection'),
+        traceback: stack
+    });
+}
+
 function _installBrowserConsoleInterceptor() {
     if (typeof window === 'undefined' || window.__inSetuConsoleIntercepted) return;
     window.__inSetuConsoleIntercepted = true;
@@ -353,31 +410,8 @@ export class InSetuExtDevLogs extends InSetuElement {
             }),
             { autoFetch: () => this.fetchLogs() }
         );
-        this.registerGlobalListener('error', window, (e) => {
-            const loc = e.filename ? `${e.filename}:${e.lineno || 0}:${e.colno || 0}` : '';
-            const msg = e.message || 'Uncaught JavaScript Error';
-            const stack = e.error?.stack || loc;
-            _appendBrowserJsLog('error', [`[Uncaught] ${msg}`], stack);
-            this.api.post('dev/client_error', {
-                source: 'Browser:onerror',
-                error_type: e.error?.name || 'UncaughtError',
-                message: msg,
-                traceback: stack,
-                payload: loc
-            }).catch(() => {});
-        });
-        this.registerGlobalListener('unhandledrejection', window, (e) => {
-            const reason = e.reason;
-            const msg = reason instanceof Error ? reason.message : _formatConsoleArg(reason);
-            const stack = reason instanceof Error ? (reason.stack || '') : '';
-            _appendBrowserJsLog('error', [`[UnhandledRejection] ${msg}`], stack);
-            this.api.post('dev/client_error', {
-                source: 'Browser:Promise',
-                error_type: reason?.name || 'UnhandledRejection',
-                message: String(msg || 'Unhandled Promise Rejection'),
-                traceback: stack
-            }).catch(() => {});
-        });
+        this.registerGlobalListener('error', window, _handleWindowError);
+        this.registerGlobalListener('unhandledrejection', window, _handleUnhandledRejection);
     }
 
     onViewActivated() { this.fetchLogs(); }

@@ -202,7 +202,7 @@ insetu/
 │   │   ├── def compute_build_id()  # [stale?] Short deterministic content/mtime digest of the frontend boot shell, core modules, and extension entrypoints.
 │   │   ├── def index()             # [stale?] Renders the main SPA entry point with the active importmap, extensions, and X-InSetu-Build-ID header.
 │   │   ├── def inject_bypassed_extensions(cfg, workspace_id, **kwargs) # Injects quarantined and bypassed extension diagnostic metadata into the workspace config payload.
-│   │   └── def run_app()           # Starts the Flask/Werkzeug server with kernel initialization and background worker ignition.
+│   │   └── def run_app()           # [stale?] Starts the Flask/Werkzeug server with kernel initialization and background worker ignition.
 │   ├── cli.py                      # [Daemon & Process Management]
 │   │   ├── def scaffold_profiles(cwd) # Minimal zero-dependency profile bootstrapper for the Immutable Recovery Bootloader.
 │   │   ├── def load_recovery_app(cwd) # The lifeboat's run_recovery_app, or the last-good copy's when the current lifeboat will not import (S8).
@@ -939,6 +939,7 @@ insetu/
 │   │   │   │   ├── def revoke_workspace_extension(name) # Removes a person's approval for one extension; it stops loading at the next restart.
 │   │   │   │   ├── def describe_workspace_extension(name, snapshot, approval, reserved) # Status of one workspace extension for the review screen: approved, changed, unapproved, or invalid.
 │   │   │   │   ├── def scan_workspace_extensions(reserved_names, with_contents) # Every folder in .insetu/extensions/ with its status; with_contents adds the "snapshot" for approved ones.
+│   │   │   │   ├── def enabling_requires_restart(ext_name, workspace_id) # True when ext_name is not yet enabled in workspace_id and its extension declares enable_requires_restart.
 │   │   │   │   ├── class ExtensionInstallDepsPayload(TypedDict) # Request payload naming the extension whose declared Python dependencies should be installed.
 │   │   │   │   ├── class WorkspaceExtensionApprovePayload(TypedDict) # Request payload naming a workspace extension and the SHA-256 fingerprint the person reviewed.
 │   │   │   │   ├── class WorkspaceExtensionRevokePayload(TypedDict) # Request payload naming a workspace extension whose approval should be revoked.
@@ -1136,6 +1137,7 @@ insetu/
 │   │   │   │   ├── class InSetuExtDevSql # [comment required]
 │   │   │   │   └── class InSetuExtDevMemory # [comment required]
 │   │   │   ├── engine_dev.py       # Bridges and VFS performance logging.
+│   │   │   │   ├── def record_dev_enabled_at_boot(ctx, workspace_id, **kwargs) # Runs only where dev is enabled at boot: the event bus skips extensions a workspace has not enabled.
 │   │   │   │   ├── def log_vfs_telemetry(ctx, mutations, workspace_id, **kwargs) # [comment required]
 │   │   │   │   ├── def log_bridge_error(ctx, filepath, error_type, details, ...) # [comment required]
 │   │   │   │   ├── def log_system_error(ctx, source, error_type, message, ...) # [comment required]
@@ -1149,7 +1151,7 @@ insetu/
 │   │   │   │   ├── def get_backend_logs(ctx) # Retrieves the systemd journal logs for the background backend daemon.
 │   │   │   │   ├── def download_boot_logs_worker(ctx) # [comment required]
 │   │   │   │   ├── class ClientErrorPayload(TypedDict) # [comment required]
-│   │   │   │   ├── def api_dev_client_error(ctx) # Records a client-side JavaScript error into the system_errors ledger for mobile debugging.
+│   │   │   │   ├── def api_dev_client_error(ctx) # [stale?] Records a client-side JavaScript error into the system_errors ledger for mobile debugging.
 │   │   │   │   ├── class DownloadLogsPayload(TypedDict) # [comment required]
 │   │   │   │   ├── def api_download_logs(ctx) # Exports the current backend daemon invocation logs to a downloadable text file.
 │   │   │   │   ├── def sweep_telemetry_worker(ctx) # [comment required]
@@ -1576,7 +1578,8 @@ insetu/
         ├── test_dev_exec_exposure.py # Tests that MCP neither lists nor calls dev.exec and that routines cannot use it.
         │   └── class TestDevExecExposure(unittest.TestCase) # MCP neither lists nor calls dev.exec, and routines cannot use it.
         ├── test_dev_telemetry_and_scrubbing.py # Unit tests verifying S9 secret scrubbing in dev error logs, dev/client_error ingestion, dev/metrics payload truncation, and extension Bounde...
-        │   └── class TestDevTelemetryAndScrubbing(unittest.TestCase) # [stale?] Verifies S9 secret scrubbing on dev.db error tables, client_error ingestion, bounded get_dev_metrics previews, and extension BoundedCache pu...
+        │   ├── class TestDevTelemetryAndScrubbing(unittest.TestCase) # [stale?] Verifies S9 secret scrubbing on dev.db error tables, client_error ingestion, bounded get_dev_metrics previews, and extension BoundedCache pu...
+        │   └── class TestDevModeGate(unittest.TestCase) # Dev routes switch on only with a restart: enabling dev in config at runtime does not open them.
         ├── test_directives.py      # New test suite verifying 4-tier directive assembly, acceptance logic, and protected target configuration.
         │   └── class TestDirectivesAndAcceptance(unittest.TestCase) # [stale?] Verifies 4-tier directive assembly, attestation acceptance, route guards, and S8 VFS protection.
         ├── test_editor_vendorize.py # S4 tests: bundled and local language descriptors resolve, local entries cannot shadow bundled ids, unknown packs are not downloaded, and invalid names are refused.

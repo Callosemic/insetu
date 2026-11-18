@@ -12,10 +12,12 @@ import akasa
 from akasa.extension import SettingsManager
 from akasa.workers import _init_worker_schema
 from insetu.core.sdk import reset_kernel_state
+from insetu.extensions.dev import engine_dev as _engine_dev
 from insetu.extensions.dev.engine_dev import (
     dev_bp,
     log_bridge_error,
     log_system_error,
+    record_dev_enabled_at_boot,
 )
 from insetu.extensions.git import engine_git as _engine_git
 from insetu.extensions.notes import engine_notes as _engine_notes
@@ -76,6 +78,7 @@ class TestDevTelemetryAndScrubbing(unittest.TestCase):
                 payload=f"{{\"key\": \"{secret_val}\"}}",
             )
 
+            record_dev_enabled_at_boot(dev_ctx, workspace_id="default")
             app = Flask(__name__)
             app.register_blueprint(dev_bp.bp)
             client = app.test_client()
@@ -134,6 +137,42 @@ class TestDevTelemetryAndScrubbing(unittest.TestCase):
             _engine_git._DIFF_FILE_CACHE.get(("default", "/tmp/a.py"), revision=(1.0, 10, "M"))
         )
         self.assertIsNone(_engine_notes._SYNCED_NOTES_WORKSPACES.get("default"))
+
+
+class TestDevModeGate(unittest.TestCase):
+    """Dev routes switch on only with a restart: enabling dev in config at runtime does not open them."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        akasa.reset_state(cwd=str(self.root), control_dir=".insetu")
+        control = self.root / ".insetu"
+        control.mkdir(parents=True, exist_ok=True)
+        (control / "workspaces.json").write_text(
+            json.dumps({"workspaces": {"default": {"config_path": "config.json"}}}), encoding="utf-8"
+        )
+        (control / "config.json").write_text(
+            json.dumps({"workspace_root": self.root.as_posix(), "extensions": ["dev"]}), encoding="utf-8"
+        )
+        _init_worker_schema("default")
+        _engine_dev._DEV_ENABLED_AT_BOOT.discard("default")
+
+    def tearDown(self):
+        _engine_dev._DEV_ENABLED_AT_BOOT.discard("default")
+        reset_kernel_state()
+        self.temp_dir.cleanup()
+
+    def test_dev_routes_stay_off_until_enabled_at_boot(self):
+        app = Flask(__name__)
+        app.register_blueprint(dev_bp.bp)
+        client = app.test_client()
+
+        # Enabled in config, but not at boot: the routes stay closed.
+        self.assertEqual(client.get("/api/default/dev/metrics").status_code, 403)
+        self.assertEqual(client.post("/api/default/dev/exec", json={"command": "true"}).status_code, 403)
+
+        record_dev_enabled_at_boot(dev_bp.get_context("default"), workspace_id="default")
+        self.assertEqual(client.get("/api/default/dev/metrics").status_code, 200)
 
 
 if __name__ == "__main__":
