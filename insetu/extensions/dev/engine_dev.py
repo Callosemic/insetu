@@ -69,7 +69,14 @@ def log_bridge_error(ctx, filepath=None, error_type=None, details=None, file_con
         conn = ctx.db
         conn.execute(
             "INSERT INTO bridge_errors (filepath, error_type, details, file_content, patch_payload, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-            (filepath, error_type, details, file_content, patch_payload, time.time())
+            (
+                filepath,
+                error_type,
+                ctx.scrub_secrets(details),
+                ctx.scrub_secrets(file_content),
+                ctx.scrub_secrets(patch_payload),
+                time.time(),
+            )
         )
         conn.commit()
     except Exception as e:
@@ -80,7 +87,14 @@ def log_system_error(ctx, source="unknown", error_type="Exception", message="", 
         conn = ctx.db
         conn.execute(
             "INSERT INTO system_errors (source, error_type, message, traceback, payload, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-            (source, error_type, message, traceback, payload, time.time())
+            (
+                source,
+                error_type,
+                ctx.scrub_secrets(message),
+                ctx.scrub_secrets(traceback),
+                ctx.scrub_secrets(payload),
+                time.time(),
+            )
         )
         conn.commit()
     except Exception as e:
@@ -154,13 +168,16 @@ def get_dev_metrics(ctx):
             })
 
     thrashing_data.sort(key=lambda x: x['peak_mutations'], reverse=True)
+    # Previews only: the full content and patch stay in bridge_errors (dev SQL panel), so the list stays small.
     error_rows = ctx.db.execute("""
-        SELECT 
+        SELECT
             GROUP_CONCAT(DISTINCT filepath) as filepath,
-            error_type, 
-            MAX(details) as details, 
-            MAX(file_content) as file_content, 
-            patch_payload, 
+            error_type,
+            substr(MAX(details), 1, 4000) as details,
+            substr(MAX(file_content), 1, 4000) as file_content,
+            length(MAX(file_content)) as file_content_length,
+            substr(patch_payload, 1, 4000) as patch_payload,
+            length(patch_payload) as patch_payload_length,
             MAX(timestamp) as timestamp,
             COUNT(*) as attempt_count
         FROM bridge_errors
@@ -290,6 +307,29 @@ def download_boot_logs_worker(ctx):
             "url": f"/api/{ctx.workspace_id}/fs/fetch?file={out_file}&download=1"
         }
     }
+class ClientErrorPayload(TypedDict, total=False):
+    source: str
+    error_type: str
+    message: str
+    traceback: str
+    payload: str
+
+
+@dev_bp.route('client_error', methods=['POST'], request_schema=ClientErrorPayload, mcp_expose=False, docstring="[sync] Records an uncaught frontend JavaScript exception or unhandled promise rejection in system_errors.")
+def api_dev_client_error(ctx):
+    """Records a client-side JavaScript error into the system_errors ledger for mobile debugging."""
+    data = ctx.payload or {}
+    source = str(data.get("source") or "Browser:JS").strip()[:120]
+    error_type = str(data.get("error_type") or "JSError").strip()[:120]
+    message = str(data.get("message") or "").strip()[:4000]
+    tb = str(data.get("traceback") or "").strip()[:8000]
+    payload_str = str(data.get("payload") or "").strip()[:4000]
+    if not message:
+        return {"status": "skipped"}, 200
+    log_system_error(ctx, source=source, error_type=error_type, message=message, traceback=tb, payload=payload_str)
+    return {"status": "success"}
+
+
 class DownloadLogsPayload(TypedDict, total=False):
     pass
 

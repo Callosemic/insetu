@@ -245,6 +245,15 @@ def check_javascript_files():
     bespoke_subtab_selection_menu_pattern = re.compile(
         r'getAggregatableActions\s*\([\s\S]{0,400}?<sutram-dropdown\b'
     )
+    manual_entity_dropdown_map_pattern = re.compile(
+        r'getEntityActions\s*\([\s\S]{0,600}?<sutram-dropdown\b'
+    )
+    hand_picked_utils_getter_pattern = re.compile(
+        r'get\s+utils\s*\(\s*\)\s*\{\s*return\s*\{'
+    )
+    legacy_chain_context_pattern = re.compile(
+        r'\b(?:chain_context|prior_chain_context)\b'
+    )
     entity_action_obj_pattern = re.compile(r'\{\s*targetEntit(?:y|ies)\s*:[\s\S]*?\n\s*\}', re.MULTILINE)
     quickpack_share_allowed_files = {"gather.js", "fs.js", "agent.js", "prompts.js"}
     fs_domain_coupling_pattern = re.compile(
@@ -535,6 +544,29 @@ def check_javascript_files():
                 1,
                 "Bespoke sub-tab bulk selection dropdown detected. Declare bulkActionGroup, bulkEntityTypes, and menuActions on the slots:sub-navigation slot instead."
             )
+        if manual_entity_dropdown_map_pattern.search(full_content) and file not in ("primitives.js", "sutram_sdk.js", "insetu_sdk.js"):
+            report_violation(
+                "ENTITY_ACTION_DROPDOWN_HELPER_MANDATE",
+                filepath,
+                1,
+                "Manual getEntityActions() mapping into <sutram-dropdown> detected. Use this.utils.getDropdownEntityActions(entityType, entityData, filterFn) or <sutram-entity-actions> instead."
+            )
+        if file == "insetu_element.js" and hand_picked_utils_getter_pattern.search(full_content):
+            report_violation(
+                "INSETU_ELEMENT_UTILS_SSOT_MANDATE",
+                filepath,
+                1,
+                "InSetuElement 'get utils()' constructs a manual subset object literal. Return 'window.inSetu.utils' directly to preserve 100% SDK utility parity."
+            )
+        if "core" in filepath.parts and "agent" in filepath.parts:
+            for m in legacy_chain_context_pattern.finditer(full_content):
+                line_num = full_content[:m.start()].count('\n') + 1
+                report_violation(
+                    "LEGACY_CHAIN_CONTEXT_BAN",
+                    filepath,
+                    line_num,
+                    f"Legacy '{m.group(0)}' reference in frontend agent module is retired (ADR 0106); read top-level RoutineEnvelope fields directly."
+                )
         if file not in quickpack_share_allowed_files:
             for act_match in entity_action_obj_pattern.finditer(full_content):
                 act_block = act_match.group(0)

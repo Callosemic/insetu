@@ -16,7 +16,7 @@ Draft by Claude, 2026-11-10. Questions marked **OPEN** are yours to answer; dict
 
 - **b) Demo ready (minimum):** Sprints 0 to 3. Stage and approve only; no unattended mode.
 - **c) 1.0:** Sprint 4 (unattended runs to a run branch, merge on a yes, after S5; tests needing the terminal after S7) and Sprint 5 (golden tasks in CI).
-- **Prerequisites:** Sprint 0 (git in core) before Sprint 1; the merge fix (issue #18) before Sprint 2's rebase; Wave 3.2 (splitting `orchestrator.py`) lands with Sprint 1.
+- **Prerequisites:** Sprint 0 (git in core) before the `Run` record's base commit and Sprint 2; the rest of Sprint 1, including staged buffers and approval, does not wait for it (decided 2026-11-13). The merge fix (issue #18, released 2026-11-13) before Sprint 2's rebase. Wave 3.2 (splitting `orchestrator.py`) lands with Sprint 1.
 - **Replaces:** the separate P18 design note asked for in Gemini's Nov 9 brief, and issue #19.
 
 ## Principle and layers
@@ -75,14 +75,14 @@ A chat turn that proposes patches is a run of one step. A routine is a run whose
 
 ## 2. The loop
 
-Steps, each recorded in the transcript:
+Steps, each recorded in the transcript (with each task $T_k$ reducing dynamically to $\text{StepState}(T_k) = (\text{EpistemicMode}, \text{Scope}, \text{ActiveDomains}(B_{\text{data}}))$ per `agent_orchestrator_and_rag.md` §4.3):
 
-1. **Plan:** restate the task, list the files to read and the files likely to change, and name the tests that should prove it.
-2. **Gather:** the six-bucket envelope and retrieval units (six-bucket plan Sprints 2 and 3). Requests for more files ("I need these files too") are clamped to the topology, as today.
-3. **Edit:** the model emits Yomama cells; they apply to the sandbox, not the disk (section 3).
-4. **Test:** run the named tests in the scratch worktree.
-5. **Triage and fix:** on failure, feed back the failure, then edit again. Repairs (section 4) happen here.
-6. **Stop:** when tests pass, a budget runs out, or a stop condition hits.
+1. **Plan (`plan`):** restate the task, list the resources to read and the target artifacts to change, and name the verification contract (`test_contract`: unit/behavioral tests for `code`, schema/link/upkeep checks for `mddb` and `prose`). Non-blocking scope ambiguities on the fast tier attach as `clarifications` pills on `active_plan`.
+2. **Gather (`explore` / `fetch_context`):** the six-bucket envelope and retrieval units (six-bucket plan Sprints 2 and 3), scoped to `Scope` (`step` during `T1..TN` execution; automatically widening to `plan` cumulative `bridge.turn_diff` when all steps are `[x]` complete for `audit` / `explain`, or `backlog` for *"what's next?"*). Requests for missing files (`<<<<<<< QUERY_CONTEXT`) are clamped to the topology, and genuine architectural/product forks pause via `<<<<<<< ASK_USER` (`<insetu-agent-decision-card>`).
+3. **Execute (`edit` / `audit` / `explain`):** the prompt compiler projects only the **Domain Craft Lenses** matching `ActiveDomains(B_data)` (`code`, `mddb`, `prose`); for `edit` steps, the model emits Yomama cells (`SEARCH/REPLACE`, `TEXTEDIT`, `JSON_PATCH`, `RELOCATE`, `RENAME`) which apply to the sandbox, not the disk (section 3).
+4. **Verify (`verify`):** run the domain sensors matching `ActiveDomains(B_data)` — named tests + fitness ratchets in the scratch worktree for `code`, `ctx.mddb.audit_upkeep` for `mddb`, and link/citation/heading checks for `prose`.
+5. **Triage and fix:** on sensor failure, feed back the failure into `Bucket 5: telemetry`, then edit again. Repairs (section 4) happen here.
+6. **Stop:** when the done test / sensors pass, a budget runs out, or a stop condition hits.
 
 **Budgets** (per run; defaults in agent settings, overridable per routine): steps, tokens, wall time, test runs. Six-bucket Sprint 5's loop circuit breakers are the mechanism: one set of limits, not two.
 
@@ -94,7 +94,12 @@ Steps, each recorded in the transcript:
 
 **OPEN:** default budgets. Suggestion: 25 steps, 120k tokens, 15 minutes, 5 test runs, matching today's `DEFAULT_STEP_BUDGET` and `DEFAULT_TOKEN_BUDGET`.
 
-**OPEN:** does Plan always run, or only for tasks above a size? A one-file fix doesn't need a plan step.
+**Decided 2026-11-16 (Interleaved `(scout_targets -> plan_tasks)` convergence loop [up to 3 cycles] & continuous thinking-loop plan evaluation, `agent_orchestrator_and_rag.md` §4.1–4.2):**
+- **Interleaved `(scout_targets -> plan_tasks)` Fast Loop (`scout_and_plan_loop`, `max_iterations: 3`):** Each cycle alternates between `scout_targets` (focused solely on discovering `requested_files`, `global_files`, and unread `inspect_files`) and `plan_tasks` (focused solely on mapping requested items into `tasks` with step-pinned `targets` and flagging any missing context in `missing_context_notes` / `inspect_files`). If Cycle 1's `plan_tasks` flags an unread linked plan or missing target file (`status: "need_context"`), Cycle 2's `scout_targets` reads the gap notes and newly loaded docs to fetch the missing targets before Cycle 2's `plan_tasks` locks in the plan (`status: "ready"`).
+- **Continuous Plan Evaluation in the Thinking Loop (`generate_patch` + `<<<<<<< TASK_MANAGE`):** The first thinking step edits/refines the plan via `<<<<<<< TASK_MANAGE` (`UPDATE` / `ADD` / `DROP` / `COMPLETE` / `ACTIVE`) if necessary and implements the active step (`[T1]`). Subsequent turns continue evaluating and editing the plan (checking off steps, updating targets, or breaking complex steps into sub-steps) until all steps are complete.
+- Ephemeral plans live in `chat_sessions.active_plan_json` without rewriting narrative briefs on disk, and offer a 1-click **Upgrade to Plan File** (`docs/plans/*.md`) when complexity crosses $\ge 4$ tasks or $\ge 6$ target files.
+- Each turn scopes `Bucket 4: data` strictly to the active step's `targets` (`full`) and 1-hop blast-radius neighbours (`slice`), while `Bucket 3: meta` projects the active step at `full` lens and deferred steps at `outline` lens.
+- Committing a step's staged stack (`Confirm & Commit`) records `transaction_id` on the active `PlanTask` and either shows a 1-click **"Mark [ID] Done & Start Next Step"** button in `<insetu-agent-plan-stepper>` (default) or auto-advances (`auto_complete_plan_tasks=True`) into the next step's turn/handoff.
 
 ## 3. The sandbox
 
@@ -155,7 +160,7 @@ Standing contracts stay as decided: they run nothing executable, including tests
 
 ## 7. Sprints
 
-### Sprint 0: Git in core, and the extension renamed Bonsai (before Sprint 1)
+### Sprint 0: Git in core, and the extension renamed Bonsai (before Sprint 1's run record and Sprint 2)
 Decided 2026-11-09: runs need base commits, worktrees, run branches, merge and revert, so git plumbing moves into core and the extension keeps the workflow.
 - [ ] `insetu/core/git/`: one `run_git` on `child_env` and `execute_binary`, plus typed operations. What core uses today: status, `HEAD:` blob, `ls-files`, `check-ignore`, repository root. What runs need: worktree add and remove, base commit, commit to a run branch, merge, revert.
 - [ ] Move the six direct `git` calls in core (the cartographer, `engine_fs.py`, topology) onto it; a fitness rule bans the `git` binary anywhere else.
@@ -189,7 +194,7 @@ Decided 2026-11-09: runs need base commits, worktrees, run branches, merge and r
   - **The routine grammar carries no code-specific fields.** Anything code-specific is a capability argument or a node's `action`.
   - **One set of model tier names**, mapped once to providers; the mapping is configuration, not code.
   - **Output validation is one mechanism:** schema check, then an isolated repair pass on the failing part, then fail. The same shape serves Pydantic models and JSON Schemas.
-- [ ] The run contract: proposed in the plan step, approved or edited by the person before any edit; a chat turn gets an implicit one-step contract.
+- [x] The unified `active_plan` stepper (`schemas/plan.py`, `session_ledger.py`, `<insetu-agent-plan-stepper>` in `agent_staged_stacks.js`): normalizes multi-step requests and briefs into `PlanTask` batches (`explore | edit | verify`) with fast-tier coverage verification, scopes each turn's working set to the active step, and advances step-by-step on Bridge commit (with optional 1-click promotion of complex ephemeral plans to `docs/plans/*.md`). Full run-contract gating for unattended runs lands with Sprint 3/4.
 - [ ] Agent and routine `bridge.sync` steps apply to staged buffers; nothing reaches disk before approval.
 - [ ] The Staged Patch Stacks (`agent_staged_stacks.js`) show the run's stack; approval commits through the bridge.
 - [ ] The transcript file.
@@ -206,6 +211,8 @@ Decided 2026-11-09: runs need base commits, worktrees, run branches, merge and r
 
 ### Sprint 3: The loop
 - [ ] Plan, test, triage and fix steps; budgets and stop conditions (six-bucket Sprint 5's breakers).
+- [ ] **Continuous & Exploratory Plan Amendments via `<<<<<<< TASK_MANAGE` (`ADD`, `UPDATE`, `DROP`, `COMPLETE`, `ACTIVE`):** `kind: "explore"` and `edit` steps across both automated API turns and `web_chat` reply ingestion (`agent/ingest_reply`) use the single canonical `<<<<<<< TASK_MANAGE` directive (upgraded in Sprint A2.7 with `UPDATE:` and in-place `ADD:` upserts/sub-step insertion) to add, split, refine, or drop unchecked `PlanTask` items (`id`, `kind`, `description`, `targets`, `test_contract`) in `chat_sessions.active_plan_json` while preserving completed `[x]` tasks and their `transaction_id` receipts (retiring the separate `ctx://plan/active_plan.md` `JSON_PATCH` mechanism).
+- [ ] **Semi-Deterministic Normalization of Unstructured Plans (`agent.normalize_plan` — In-Place Staged Rewrite & Companion File Promotion):** When a user references an unstructured or headingless `.md`/`.txt` document as a plan (`parse_plan_markdown == False` and $\ge 2$ scouted tasks), Turn 1 proceeds immediately using the ephemeral `active_plan` while `<insetu-agent-plan-stepper>` offers two 1-click actions: (a) **Rewrite In-Place (Stage Diff)**, which preserves all non-task background prose under `## Context & Invariants`, formats work items into topology-clamped `- [ ] [ID] ... <!-- targets: ..., test_contract: ... -->` checklists, and stages the rewrite in `BridgeStore` for human approval; and (b) **Save as Companion Plan (`docs/plans/*.md`)**, which leaves the source brief untouched and writes the canonical plan file with `source_uri` provenance.
 - [ ] Repairs as marked micro-steps (section 4); P19's helper resolution.
 - [ ] The agent as a routine: a loop step whose next action the model picks, ending at `until:` (the done test), on the Vector A grammar.
 - [ ] The run manager: runs by status with contract, budget used, transcript and stack; approve, resume, extend, cancel.

@@ -93,6 +93,60 @@ class TestRoutineCheck(unittest.TestCase):
         """exec and loop steps have no prompt to resolve."""
         self.assertEqual(self._check(_routine({"id": "refresh", "type": "exec", "capability": "git.compile_diffs"})), [])
 
+    def test_unknown_field_on_typed_exec_node_is_reported(self):
+        """A step referencing nodes.<exec_id>.<field> not in the capability's response_schema TypedDict is flagged."""
+        class FakeOverviewSchema:
+            __annotations__ = {"repos": list, "code_file_count": int, "overview_text": str}
+
+        routine = _routine(
+            {"id": "load_overview", "type": "exec", "capability": "topology.overview"},
+            {
+                "id": "scout_targets",
+                "type": "llm",
+                "parents": ["load_overview"],
+                "when": "{{ nodes.load_overview.nonexistent_field | 1 }} > 0",
+                "prompt": "Inspect {{ nodes.load_overview.overview_text }}",
+            },
+        )
+        cascade = _FakeCascade({})
+        ctx = SimpleNamespace(
+            workspace_id="default",
+            get_registered_capabilities=lambda: {"topology.overview": {"response_schema": FakeOverviewSchema}},
+        )
+        with patch.object(routine_check, "read_prompt_with_cascade", cascade.read), \
+                patch.object(routine_check, "resolve_prompt_text", cascade.resolve), \
+                patch.object(routine_check, "get_sister_repos", lambda ws: ["insetu"]):
+            findings = routine_check.check_routine(ctx, routine)
+        self.assertEqual([f["code"] for f in findings], ["unknown_node_output_field"])
+        self.assertEqual(findings[0]["node"], "scout_targets")
+        self.assertIn("nodes.load_overview.nonexistent_field", findings[0]["message"])
+
+    def test_declared_field_on_typed_exec_node_is_clean(self):
+        """A step referencing only declared response_schema fields on an exec node produces no findings."""
+        class FakeOverviewSchema:
+            __annotations__ = {"repos": list, "code_file_count": int, "overview_text": str}
+
+        routine = _routine(
+            {"id": "load_overview", "type": "exec", "capability": "topology.overview"},
+            {
+                "id": "scout_targets",
+                "type": "llm",
+                "parents": ["load_overview"],
+                "when": "{{ nodes.load_overview.code_file_count | 1 }} > 0",
+                "prompt": "Inspect {{ nodes.load_overview.overview_text }}",
+            },
+        )
+        cascade = _FakeCascade({})
+        ctx = SimpleNamespace(
+            workspace_id="default",
+            get_registered_capabilities=lambda: {"topology.overview": {"response_schema": FakeOverviewSchema}},
+        )
+        with patch.object(routine_check, "read_prompt_with_cascade", cascade.read), \
+                patch.object(routine_check, "resolve_prompt_text", cascade.resolve), \
+                patch.object(routine_check, "get_sister_repos", lambda ws: ["insetu"]):
+            findings = routine_check.check_routine(ctx, routine)
+        self.assertEqual(findings, [])
+
 
 class TestCascadeReportsWhereItFoundAPrompt(unittest.TestCase):
     """read_prompt_with_cascade tells the check whether a prompt was found directly or only by file name."""

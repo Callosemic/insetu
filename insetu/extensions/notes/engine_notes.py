@@ -5,10 +5,10 @@ import uuid
 import shutil
 from typing import TypedDict, Optional
 from datetime import datetime
-from insetu.core.sdk import InSetuExtension, ExtensionContext, DefaultVFSDriver
+from insetu.core.sdk import BoundedCache, InSetuExtension, ExtensionContext, DefaultVFSDriver
 from insetu.core.utils_core import parse_frontmatter, InSetuURI
 
-_SYNCED_NOTES_WORKSPACES = set()
+_SYNCED_NOTES_WORKSPACES = BoundedCache("notes_synced_workspaces", max_entries=64, copy_mode="none")
 
 class NotesVFSDriver(DefaultVFSDriver):
     """VFS Driver for ctx://notes that transparently resolves notes relocated to <repo>/.insetu-data/notes/."""
@@ -92,7 +92,7 @@ def _sync_all_notes_to_db(ctx):
     for row in existing_rows:
         if row["id"] not in seen_ids:
             ctx.db.delete("notes_ledger", "id", row["id"])
-    _SYNCED_NOTES_WORKSPACES.add(ctx.workspace_id)
+    _SYNCED_NOTES_WORKSPACES.put(ctx.workspace_id, True)
 @notes_bp.on('mutate_workspace_config')
 def inject_notes_config(cfg, workspace_id=None, **kwargs):
     if "notes" not in cfg.get("extensions", []): return
@@ -215,7 +215,7 @@ def _discover_mounted_notes(ctx) -> list:
 def api_notes_list(ctx):
     """CQRS read-path: Fetches notes from DB, ensuring post-migration paths are synchronized."""
     count_check = ctx.db.execute("SELECT count(*) FROM notes_ledger").fetchone()[0]
-    if count_check == 0 or ctx.workspace_id not in _SYNCED_NOTES_WORKSPACES:
+    if count_check == 0 or _SYNCED_NOTES_WORKSPACES.get(ctx.workspace_id) is not True:
         _sync_all_notes_to_db(ctx)
 
     rows = ctx.db.get_all("notes_ledger", order_by="updated_at DESC")

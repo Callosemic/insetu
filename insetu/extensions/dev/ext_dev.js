@@ -5,10 +5,85 @@ export const DevStore = createExtensionStore('Dev', {
     bridgeErrors: [],
     systemErrors: [],
     backendLogs: '',
+    jsLogs: [],
+    _inConsoleHook: false,
+    _pendingJsLogs: [],
+    _flushScheduled: false,
     memoryTelemetry: null,
     lastUpdate: null,
-    forceRefreshTick: 0
+    forceRefreshTick: 0,
+    setMemoryTelemetry: (memoryTelemetry) => DevStore.setState({ memoryTelemetry })
 });
+
+const MAX_JS_CONSOLE_LOGS = 250;
+
+function _formatConsoleArg(arg) {
+    if (arg === null) return 'null';
+    if (arg === undefined) return 'undefined';
+    if (arg instanceof Error) {
+        return `${arg.name || 'Error'}: ${arg.message || ''}${arg.stack ? `\n${arg.stack}` : ''}`;
+    }
+    if (typeof arg === 'object') {
+        try {
+            return JSON.stringify(arg, null, 2);
+        } catch (_) {
+            return String(arg);
+        }
+    }
+    return String(arg);
+}
+
+function _flushBrowserJsLogs() {
+    const st = DevStore.getState();
+    st._flushScheduled = false;
+    if (!Array.isArray(st._pendingJsLogs) || st._pendingJsLogs.length === 0) return;
+    const batch = st._pendingJsLogs.splice(0, st._pendingJsLogs.length);
+    try {
+        const cur = st.jsLogs || [];
+        DevStore.setState({ jsLogs: [...batch.reverse(), ...cur].slice(0, MAX_JS_CONSOLE_LOGS) });
+    } catch (_) {}
+}
+
+function _appendBrowserJsLog(level, args, stack = '') {
+    const st = DevStore.getState();
+    if (!st || st._inConsoleHook) return;
+    st._inConsoleHook = true;
+    try {
+        const text = Array.from(args || []).map(_formatConsoleArg).join(' ');
+        if (!text && !stack) return;
+        if (!Array.isArray(st._pendingJsLogs)) st._pendingJsLogs = [];
+        st._pendingJsLogs.push({
+            id: `js_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            level,
+            timestamp: Date.now(),
+            text: text.slice(0, 6000),
+            stack: stack ? String(stack).slice(0, 6000) : ''
+        });
+        if (!st._flushScheduled) {
+            st._flushScheduled = true;
+            queueMicrotask(_flushBrowserJsLogs);
+        }
+    } catch (_) {
+    } finally {
+        st._inConsoleHook = false;
+    }
+}
+
+function _installBrowserConsoleInterceptor() {
+    if (typeof window === 'undefined' || window.__inSetuConsoleIntercepted) return;
+    window.__inSetuConsoleIntercepted = true;
+    ['log', 'info', 'warn', 'error'].forEach(level => {
+        const orig = console[level] ? console[level].bind(console) : null;
+        if (!orig) return;
+        console[level] = (...args) => {
+            orig(...args);
+            if (DevStore.getState()?._inConsoleHook) return;
+            const errObj = args.find(a => a instanceof Error);
+            _appendBrowserJsLog(level, args, errObj?.stack || '');
+        };
+    });
+}
+_installBrowserConsoleInterceptor();
 export class InSetuExtDevDash extends InSetuElement {
     static get extensionName() { return 'dev'; }
     static properties = {
@@ -68,8 +143,14 @@ export class InSetuExtDevDash extends InSetuElement {
     onViewActivated() {
         this.fetchMetrics();
     }
+    _prettyJson(text) {
+        try { return JSON.stringify(JSON.parse(text), null, 2); } catch (_) { return text; }
+    }
     async fetchMetrics() {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('dev')) return;
+        const startedAt = Date.now();
+        if (this._lastMetricsFetchAt && startedAt - this._lastMetricsFetchAt < 1500) return;
+        this._lastMetricsFetchAt = startedAt;
         try {
             const res = await this.api.get('dev/metrics');
             if (res.ok) {
@@ -224,7 +305,7 @@ export class InSetuExtDevDash extends InSetuElement {
                                             <sutram-collapsible titleText="🔍 View Full Context" intent="neutral">
                                                 <sutram-stack direction="col" gap="sm">
                                                     <sutram-label text="Patch Payload:"></sutram-label>
-                                                    <sutram-textarea readonly ?monospace=${true} .value=${err.patch_payload ? (typeof err.patch_payload === 'string' && (err.patch_payload.startsWith('{') || err.patch_payload.startsWith('[')) ? JSON.stringify(JSON.parse(err.patch_payload), null, 2) : err.patch_payload) : 'N/A'}></sutram-textarea>
+                                                    <sutram-textarea readonly ?monospace=${true} .value=${err.patch_payload ? (typeof err.patch_payload === 'string' && (err.patch_payload.startsWith('{') || err.patch_payload.startsWith('[')) ? this._prettyJson(err.patch_payload) : err.patch_payload) : 'N/A'}></sutram-textarea>
                                                     <sutram-label text="Target File Content:"></sutram-label>
                                                     <sutram-textarea readonly ?monospace=${true} .value=${err.file_content || 'N/A'}></sutram-textarea>
                                                 </sutram-stack>
@@ -245,22 +326,58 @@ export class InSetuExtDevLogs extends InSetuElement {
     static get extensionName() { return 'dev'; }
     static properties = {
         backendLogs: { type: String },
-        loading: { type: Boolean }
+        jsLogs: { type: Array },
+        loading: { type: Boolean },
+        _logSource: { type: String, state: true },
+        _levelFilter: { type: String, state: true },
+        _searchQuery: { type: String, state: true }
     };
     static styles = [sharedStyles];
 
     constructor() {
         super();
         this.backendLogs = '';
+        this.jsLogs = [];
         this.loading = false;
+        this._logSource = 'js';
+        this._levelFilter = 'all';
+        this._searchQuery = '';
     }
     connectedCallback() {
         super.connectedCallback();
         this.bindStore(
             DevStore,
-            state => ({ backendLogs: state.backendLogs || '' }),
+            state => ({
+                backendLogs: state.backendLogs || '',
+                jsLogs: state.jsLogs || []
+            }),
             { autoFetch: () => this.fetchLogs() }
         );
+        this.registerGlobalListener('error', window, (e) => {
+            const loc = e.filename ? `${e.filename}:${e.lineno || 0}:${e.colno || 0}` : '';
+            const msg = e.message || 'Uncaught JavaScript Error';
+            const stack = e.error?.stack || loc;
+            _appendBrowserJsLog('error', [`[Uncaught] ${msg}`], stack);
+            this.api.post('dev/client_error', {
+                source: 'Browser:onerror',
+                error_type: e.error?.name || 'UncaughtError',
+                message: msg,
+                traceback: stack,
+                payload: loc
+            }).catch(() => {});
+        });
+        this.registerGlobalListener('unhandledrejection', window, (e) => {
+            const reason = e.reason;
+            const msg = reason instanceof Error ? reason.message : _formatConsoleArg(reason);
+            const stack = reason instanceof Error ? (reason.stack || '') : '';
+            _appendBrowserJsLog('error', [`[UnhandledRejection] ${msg}`], stack);
+            this.api.post('dev/client_error', {
+                source: 'Browser:Promise',
+                error_type: reason?.name || 'UnhandledRejection',
+                message: String(msg || 'Unhandled Promise Rejection'),
+                traceback: stack
+            }).catch(() => {});
+        });
     }
 
     onViewActivated() { this.fetchLogs(); }
@@ -278,10 +395,25 @@ export class InSetuExtDevLogs extends InSetuElement {
             this.loading = false;
         }
     }
+    _getFilteredJsLogs() {
+        const all = Array.isArray(this.jsLogs) ? this.jsLogs : [];
+        const byLevel = this._levelFilter === 'all'
+            ? all
+            : all.filter(item => item.level === this._levelFilter);
+        const q = (this._searchQuery || '').trim().toLowerCase();
+        if (!q) return byLevel;
+        return byLevel.filter(item =>
+            (item.text || '').toLowerCase().includes(q) ||
+            (item.stack || '').toLowerCase().includes(q)
+        );
+    }
     async copyLogs() {
-        if (!this.backendLogs) return;
+        const textToCopy = this._logSource === 'js'
+            ? this._getFilteredJsLogs().map(item => `[${new Date(item.timestamp).toISOString()}] [${item.level.toUpperCase()}] ${item.text}${item.stack ? `\n${item.stack}` : ''}`).join('\n\n')
+            : this.backendLogs;
+        if (!textToCopy) return;
         try {
-            await this.utils.copyRawText(this.backendLogs);
+            await this.utils.copyRawText(textToCopy);
             if (window.inSetu?.ui?.setGlobalStatus) {
                 window.inSetu.ui.setGlobalStatus("📋 Logs copied to clipboard!", 2000);
             }
@@ -310,370 +442,118 @@ export class InSetuExtDevLogs extends InSetuElement {
     }
 
     render() {
+        const isJs = this._logSource === 'js';
+        const filteredJs = isJs ? this._getFilteredJsLogs() : [];
+        const errCount = (this.jsLogs || []).filter(x => x.level === 'error').length;
+        const warnCount = (this.jsLogs || []).filter(x => x.level === 'warn').length;
+
         return html`
-            <sutram-view size="wide" titleText="Daemon Logs" descriptionText="Recent systemd output for insetu.service.">
-                ${this.loading ? html`<sutram-spinner slot="header-actions" text="Fetching..."></sutram-spinner>` : ''}
-                <sutram-btn slot="header-actions" ?compact=${true} icon="copy" label="Copy" intent="neutral" @click=${this.copyLogs}></sutram-btn>
-                <sutram-async-btn
+            <sutram-view
+                size="wide"
+                .titleText=${isJs ? "Browser JS Console" : "Daemon Logs"}
+                .descriptionText=${isJs ? "Live mobile/browser console.log, warn, error, and uncaught exception stream." : "Recent systemd output for insetu.service."}>
+                ${this.loading && !isJs ? html`<sutram-spinner slot="header-actions" text="Fetching..."></sutram-spinner>` : ''}
+                <sutram-btn
                     slot="header-actions"
                     ?compact=${true}
-                    icon="download"
-                    label="Export Boot Logs"
-                    intent="primary"
-                    .onClick=${this._getDownloadLogsAction()}>
-                </sutram-async-btn>
-                <sutram-surface variant="panel" padding="md">
-                    <pre>${this.backendLogs || 'No logs available.'}</pre>
-                </sutram-surface>
+                    icon="terminal"
+                    label=${`JS Console (${(this.jsLogs || []).length})`}
+                    intent=${isJs ? 'primary' : 'neutral'}
+                    ?active=${isJs}
+                    @click=${() => { this._logSource = 'js'; }}>
+                </sutram-btn>
+                <sutram-btn
+                    slot="header-actions"
+                    ?compact=${true}
+                    icon="server"
+                    label="Daemon Logs"
+                    intent=${!isJs ? 'primary' : 'neutral'}
+                    ?active=${!isJs}
+                    @click=${() => { this._logSource = 'daemon'; this.fetchLogs(); }}>
+                </sutram-btn>
+                <sutram-btn slot="header-actions" ?compact=${true} icon="copy" label="Copy" intent="neutral" @click=${() => this.copyLogs()}></sutram-btn>
+                ${isJs ? html`
+                    <sutram-btn
+                        slot="header-actions"
+                        ?compact=${true}
+                        icon="trash-2"
+                        label="Clear"
+                        intent="danger"
+                        @click=${() => DevStore.setState({ jsLogs: [] })}>
+                    </sutram-btn>
+                ` : html`
+                    <sutram-async-btn
+                        slot="header-actions"
+                        ?compact=${true}
+                        icon="download"
+                        label="Export Boot Logs"
+                        intent="primary"
+                        .onClick=${this._getDownloadLogsAction()}>
+                    </sutram-async-btn>
+                `}
+
+                ${isJs ? html`
+                    <sutram-stack direction="col" gap="sm">
+                        <sutram-surface variant="panel" padding="xs" gap="xs">
+                            <sutram-stack direction="row" justify="between" align="center" gap="xs" ?wrap=${true}>
+                                <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true}>
+                                    <sutram-pill ?compact=${true} labelText=${`All (${(this.jsLogs || []).length})`} ?active=${this._levelFilter === 'all'} @sutram-pill-toggled=${() => { this._levelFilter = 'all'; }}></sutram-pill>
+                                    <sutram-pill ?compact=${true} labelText=${`Errors (${errCount})`} ?active=${this._levelFilter === 'error'} @sutram-pill-toggled=${() => { this._levelFilter = 'error'; }}></sutram-pill>
+                                    <sutram-pill ?compact=${true} labelText=${`Warnings (${warnCount})`} ?active=${this._levelFilter === 'warn'} @sutram-pill-toggled=${() => { this._levelFilter = 'warn'; }}></sutram-pill>
+                                    <sutram-pill ?compact=${true} labelText="Info / Log" ?active=${this._levelFilter === 'log'} @sutram-pill-toggled=${() => { this._levelFilter = 'log'; }}></sutram-pill>
+                                </sutram-stack>
+                                <sutram-input
+                                    ?flush=${true}
+                                    ?grow=${true}
+                                    placeholder="Filter console output..."
+                                    .value=${this._searchQuery}
+                                    @sutram-input-changed=${e => { this._searchQuery = e.detail.value; }}>
+                                </sutram-input>
+                            </sutram-stack>
+                        </sutram-surface>
+
+                        ${filteredJs.length === 0 ? html`
+                            <sutram-empty-state text="No browser console entries match the current filter."></sutram-empty-state>
+                        ` : filteredJs.map(entry => {
+                            const levelIntent = entry.level === 'error' ? 'danger' : (entry.level === 'warn' ? 'warning' : 'neutral');
+                            return html`
+                                <sutram-surface variant="inset" .intent=${levelIntent} border="left" padding="xs" gap="xs">
+                                    <sutram-stack direction="row" justify="between" align="center" gap="xs">
+                                        <sutram-stack direction="row" align="center" gap="xs">
+                                            <sutram-tag .text=${entry.level.toUpperCase()} .intent=${levelIntent}></sutram-tag>
+                                            <sutram-label ?monospace=${true} .text=${this.utils.formatDate(entry.timestamp)}></sutram-label>
+                                        </sutram-stack>
+                                        <sutram-btn
+                                            ?compact=${true}
+                                            intent="neutral"
+                                            icon="clipboard"
+                                            label="Copy"
+                                            @click=${() => this.utils.copyRawText(`${entry.text}${entry.stack ? `\n${entry.stack}` : ''}`, "📋 Console entry copied!")}>
+                                        </sutram-btn>
+                                    </sutram-stack>
+                                    <sutram-label ?monospace=${true} ?multiline=${true} .intent=${levelIntent === 'neutral' ? 'neutral' : levelIntent} .text=${entry.text}></sutram-label>
+                                    ${entry.stack ? html`
+                                        <sutram-collapsible ?compact=${true} ?open=${false} intent="neutral" titleText="Stack Trace">
+                                            <pre>${entry.stack}</pre>
+                                        </sutram-collapsible>
+                                    ` : ''}
+                                </sutram-surface>
+                            `;
+                        })}
+                    </sutram-stack>
+                ` : html`
+                    <sutram-surface variant="panel" padding="md">
+                        <pre>${this.backendLogs || 'No logs available.'}</pre>
+                    </sutram-surface>
+                `}
             </sutram-view>
         `;
     }
 }
 customElements.define('insetu-ext-dev-logs', InSetuExtDevLogs);
 
-export class InSetuExtDevSql extends InSetuElement {
-    static get extensionName() { return 'dev'; }
-    static properties = {
-        databases: { type: Array },
-        selectedDb: { type: String },
-        query: { type: String },
-        result: { type: Object },
-        loading: { type: Boolean }
-    };
-    static styles = [sharedStyles];
-
-    constructor() {
-        super();
-        this.databases = ['workers', 'vfs_index', 'topology', 'tracker', 'dev'];
-        this.selectedDb = 'workers';
-        this.query = 'SELECT * FROM immediate_jobs ORDER BY created_at DESC LIMIT 20;';
-        this.result = null;
-        this.loading = false;
-    }
-    connectedCallback() {
-        super.connectedCallback();
-        this._fetchDatabases();
-    }
-
-    onWorkspaceLoad(workspaceId) { this._fetchDatabases(); }
-    onViewActivated() { this._fetchDatabases(); }
-    onForceRefresh() { this._fetchDatabases(); }
-    async _fetchDatabases() {
-        try {
-            const res = await this.api.get('dev/sql/databases');
-            if (res.ok) {
-                const data = await res.json();
-                if (data.databases && data.databases.length > 0) {
-                    this.databases = data.databases;
-                    if (!this.databases.includes(this.selectedDb)) {
-                        this.selectedDb = this.databases[0];
-                    }
-                }
-            }
-        } catch (e) {
-            console.warn("Failed to fetch database list", e);
-        }
-    }
-    async _executeQuery() {
-        if (!this.query.trim()) return;
-        this.loading = true;
-        this.result = null;
-        try {
-            const res = await this.api.post('dev/sql/query', {
-                db_name: this.selectedDb,
-                query: this.query
-            });
-            const data = await res.json();
-            this.result = data;
-        } catch (e) {
-            this.result = { status: 'error', error: e.message };
-        } finally {
-            this.loading = false;
-        }
-    }
-
-    _applyPreset(queryStr, dbName = null) {
-        if (dbName && this.databases.includes(dbName)) {
-            this.selectedDb = dbName;
-        }
-        this.query = queryStr;
-    }
-    render() {
-        return html`
-            <sutram-view size="wide" titleText="SQL Console" descriptionText="Execute queries directly against workspace SQLite databases.">
-                <sutram-stack direction="col" gap="md">
-
-                    <sutram-surface variant="panel" padding="md" gap="md">
-                        <sutram-stack direction="row" align="center" gap="md" ?wrap=${true}>
-                            <sutram-select 
-                                label="Target Database" 
-                                ?flush=${true}
-                                .value=${this.selectedDb} 
-                                .options=${this.databases.map(db => ({ value: db, label: `${db}.db` }))} 
-                                @sutram-input-changed=${e => this.selectedDb = e.detail.value}>
-                            </sutram-select>
-                            <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true} ?flex=${true}>
-                                <sutram-label text="Quick Presets:"></sutram-label>
-                                <sutram-btn ?compact=${true} intent="neutral" label="Topology Ledger" @click=${() => this._applyPreset('SELECT * FROM topology_ledger ORDER BY timestamp DESC LIMIT 20;', 'topology')}></sutram-btn>
-                                <sutram-btn ?compact=${true} intent="neutral" label="Manifest Ledger" @click=${() => this._applyPreset('SELECT * FROM manifest_ledger ORDER BY timestamp DESC LIMIT 20;', 'vfs_index')}></sutram-btn>
-                                <sutram-btn ?compact=${true} intent="neutral" label="VFS Event Log" @click=${() => this._applyPreset('SELECT * FROM vfs_event_log ORDER BY timestamp DESC LIMIT 20;', 'workers')}></sutram-btn>
-                                <sutram-btn ?compact=${true} intent="neutral" label="Immediate Jobs" @click=${() => this._applyPreset('SELECT * FROM immediate_jobs ORDER BY created_at DESC LIMIT 20;', 'workers')}></sutram-btn>
-                                <sutram-btn ?compact=${true} intent="neutral" label="System Errors" @click=${() => this._applyPreset('SELECT * FROM system_errors ORDER BY timestamp DESC LIMIT 20;', 'dev')}></sutram-btn>
-                                <sutram-btn ?compact=${true} intent="neutral" label="Bridge Errors" @click=${() => this._applyPreset('SELECT * FROM bridge_errors ORDER BY timestamp DESC LIMIT 20;', 'dev')}></sutram-btn>
-                            </sutram-stack>
-                        </sutram-stack>
-
-                        <sutram-textarea 
-                            label="SQL Query" 
-                            ?flush=${true}
-                            .value=${this.query} 
-                            ?monospace=${true} 
-                            @sutram-input-changed=${e => this.query = e.detail.value}>
-                        </sutram-textarea>
-
-                        <sutram-stack direction="row" justify="end">
-                            <sutram-async-btn 
-                                label="▶ Execute Query" 
-                                intent="primary" 
-                                ?disabled=${this.loading} 
-                                .onClick=${() => this._executeQuery()}>
-                            </sutram-async-btn>
-                        </sutram-stack>
-                    </sutram-surface>
-
-                    ${this.loading ? html`<sutram-spinner text="Executing query..."></sutram-spinner>` : ''}
-
-                    ${this.result ? html`
-                        <sutram-surface variant="tinted" intent=${this.result.status === 'success' ? 'success' : 'danger'} padding="xs">
-                            ${this.result.status === 'success' ? html`
-                                <strong>✅ ${this.result.type === 'select' ? `${this.result.row_count} row(s) returned` : `${this.result.affected_rows} row(s) affected`} (${this.result.elapsed_ms}ms)</strong>
-                            ` : html`
-                                <strong>❌ Query Error: ${this.result.error}</strong>
-                            `}
-                        </sutram-surface>
-
-                        ${this.result.status === 'success' && this.result.type === 'select' ? html`
-                            <sutram-surface variant="panel" padding="sm">
-                                <sutram-scrub-track>
-                                ${this.result.rows.length === 0 ? html`
-                                    <sutram-empty-state text="Query returned 0 rows."></sutram-empty-state>
-                                ` : html`
-                                    <table style="width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.8rem;">
-                                        <thead>
-                                            <tr>
-                                                ${this.result.columns.map(col => html`<th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">${col}</th>`)}
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            ${this.result.rows.map(row => html`
-                                                <tr>
-                                                    ${this.result.columns.map(col => {
-                                                        const val = row[col];
-                                                        const displayVal = typeof val === 'object' && val !== null ? JSON.stringify(val) : String(val ?? '');
-                                                        return html`<td style="padding: 8px 12px; border-bottom: 1px solid var(--border); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${displayVal}">${displayVal}</td>`;
-                                                    })}
-                                                </tr>
-                                            `)}
-                                        </tbody>
-                                    </table>
-                                `}
-                                </sutram-scrub-track>
-                            </sutram-surface>
-                        ` : ''}
-                    ` : ''}
-                </sutram-stack>
-            </sutram-view>
-        `;
-    }
-}
-customElements.define('insetu-ext-dev-sql', InSetuExtDevSql);
-
-export class InSetuExtDevMemory extends InSetuElement {
-    static get extensionName() { return 'dev'; }
-    static properties = {
-        memoryData: { type: Object },
-        loading: { type: Boolean }
-    };
-    static styles = [sharedStyles];
-
-    constructor() {
-        super();
-        this.memoryData = DevStore.getState().memoryTelemetry || null;
-        this.loading = false;
-    }
-
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(
-            DevStore,
-            state => state.memoryTelemetry,
-            (memoryTelemetry) => {
-                this.memoryData = memoryTelemetry;
-            }
-        );
-        this.fetchMemory();
-    }
-
-    onViewActivated() { this.fetchMemory(); }
-    onForceRefresh() { this.fetchMemory(); }
-    async fetchMemory(action = null) {
-        this.loading = true;
-        try {
-            const res = action
-                ? await this.api.post('system/memory', { action })
-                : await this.api.get('system/memory?t=' + Date.now());
-            if (res.ok) {
-                const data = await res.json();
-                DevStore.setState({ memoryTelemetry: data });
-                if (action === 'trim' && this.ui?.setGlobalStatus) {
-                    this.ui.setGlobalStatus("🧹 Garbage collection & glibc malloc_trim completed", 2500);
-                }
-            }
-        } catch (e) {
-            console.error("Failed to fetch memory telemetry:", e);
-        } finally {
-            this.loading = false;
-        }
-    }
-
-    _formatKbToMb(valStr) {
-        if (!valStr) return 'N/A';
-        const match = String(valStr).match(/(\d+)/);
-        if (!match) return valStr;
-        const mb = (parseInt(match[1], 10) / 1024).toFixed(1);
-        return `${mb} MB`;
-    }
-
-    render() {
-        const proc = this.memoryData?.process || {};
-        const caches = this.memoryData?.caches || {};
-        const threadsList = this.memoryData?.threads || [];
-        const topObjects = this.memoryData?.top_object_types || [];
-        const traceActive = !!this.memoryData?.tracemalloc_active;
-        const traceTop = this.memoryData?.tracemalloc_top || [];
-
-        return html`
-            <sutram-view
-                size="wide"
-                titleText="Backend Memory & Heap Profiler"
-                descriptionText="Live resident set size (RSS), glibc arena footprint, VFS cache occupancy, and Python GC object tables.">
-                <sutram-btn slot="header-actions" ?compact=${true} icon="refresh-cw" label="Refresh" intent="neutral" @click=${() => this.fetchMemory()}></sutram-btn>
-                <sutram-async-btn slot="header-actions" ?compact=${true} icon="sparkles" label="GC + Trim Heap" intent="success" .onClick=${() => this.fetchMemory('trim')}></sutram-async-btn>
-                <sutram-async-btn
-                    slot="header-actions"
-                    ?compact=${true}
-                    icon=${traceActive ? 'square' : 'activity'}
-                    label=${traceActive ? 'Stop Tracemalloc' : 'Start Tracemalloc'}
-                    intent=${traceActive ? 'danger' : 'highlight'}
-                    .onClick=${() => this.fetchMemory(traceActive ? 'tracemalloc_stop' : 'tracemalloc_start')}>
-                </sutram-async-btn>
-                <sutram-stack direction="col" gap="lg">
-                    ${this.loading && !this.memoryData ? html`<sutram-spinner text="Inspecting backend heap..."></sutram-spinner>` : ''}
-
-                    <sutram-stack direction="grid" ?compact=${true}>
-                        <sutram-surface variant="panel" padding="md" gap="xs">
-                            <sutram-label text="RESIDENT RAM (VMRSS)"></sutram-label>
-                            <h3>${this._formatKbToMb(proc.VmRSS)}</h3>
-                            <sutram-label text="Physical memory actively in use"></sutram-label>
-                        </sutram-surface>
-                        <sutram-surface variant="panel" padding="md" gap="xs">
-                            <sutram-label text="HEAP / STACK DATA (VMDATA)"></sutram-label>
-                            <h3>${this._formatKbToMb(proc.VmData)}</h3>
-                            <sutram-label text="Virtual heap + thread stack arenas"></sutram-label>
-                        </sutram-surface>
-                        <sutram-surface variant="panel" padding="md" gap="xs">
-                            <sutram-label text="ACTIVE OS THREADS"></sutram-label>
-                            <h3>${proc.Threads || 'N/A'}</h3>
-                            <sutram-label text="Worker pool + Watchdog + WSGI"></sutram-label>
-                        </sutram-surface>
-                        <sutram-surface variant="panel" padding="md" gap="xs">
-                            <sutram-label text="VFS READ CACHE"></sutram-label>
-                            <h3>${caches.vfs_read_cache_mb ?? 0} MB</h3>
-                            <sutram-label .text=${`${caches.vfs_read_cache_files ?? 0} files cached in RAM`}></sutram-label>
-                        </sutram-surface>
-                        <sutram-surface variant="panel" padding="md" gap="xs">
-                            <sutram-label text="JSON CONFIG CACHE"></sutram-label>
-                            <h3>${caches.json_config_cache_kb ?? 0} KB</h3>
-                            <sutram-label .text=${`${caches.json_config_cache_files ?? 0} config files`}></sutram-label>
-                        </sutram-surface>
-                    </sutram-stack>
-
-                    ${threadsList.length > 0 ? html`
-                        <sutram-collapsible titleText="Active OS Threads Breakdown (${proc.Threads || threadsList.reduce((a, b) => a + b.count, 0)})" intent="neutral" ?open=${true}>
-                            <sutram-surface variant="panel" padding="sm">
-                                <table style="width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.8rem;">
-                                    <thead>
-                                        <tr>
-                                            <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Thread Class / Pool Prefix</th>
-                                            <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Active Count</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        ${threadsList.map(t => html`
-                                            <tr>
-                                                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: bold;">${t.group}</td>
-                                                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border);">${t.count}</td>
-                                            </tr>
-                                        `)}
-                                    </tbody>
-                                </table>
-                            </sutram-surface>
-                        </sutram-collapsible>
-                    ` : ''}
-
-                    <sutram-collapsible titleText="Top Python Object Types in GC" intent="primary" ?open=${true}>
-                        <sutram-surface variant="panel" padding="sm">
-                            <table style="width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.8rem;">
-                                <thead>
-                                    <tr>
-                                        <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Python Type</th>
-                                        <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Instance Count</th>
-                                        <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Shallow Size (MB)</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    ${topObjects.map(obj => html`
-                                        <tr>
-                                            <td style="padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: bold;">${obj.type}</td>
-                                            <td style="padding: 8px 12px; border-bottom: 1px solid var(--border);">${obj.count.toLocaleString()}</td>
-                                            <td style="padding: 8px 12px; border-bottom: 1px solid var(--border);">${obj.shallow_mb} MB</td>
-                                        </tr>
-                                    `)}
-                                </tbody>
-                            </table>
-                        </sutram-surface>
-                    </sutram-collapsible>
-
-                    ${traceActive ? html`
-                        <sutram-collapsible titleText="Tracemalloc Top Line Allocations (Active)" intent="highlight" ?open=${true}>
-                            <sutram-surface variant="panel" padding="sm">
-                                <table style="width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.8rem;">
-                                    <thead>
-                                        <tr>
-                                            <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Source File & Line</th>
-                                            <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Allocations</th>
-                                            <th style="text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);">Size (MB)</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        ${traceTop.map(row => html`
-                                            <tr>
-                                                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border);">${row.location}</td>
-                                                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border);">${row.count.toLocaleString()}</td>
-                                                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: bold;">${row.size_mb} MB</td>
-                                            </tr>
-                                        `)}
-                                    </tbody>
-                                </table>
-                            </sutram-surface>
-                        </sutram-collapsible>
-                    ` : ''}
-                </sutram-stack>
-            </sutram-view>
-        `;
-    }
-}
-customElements.define('insetu-ext-dev-memory', InSetuExtDevMemory);
+import { InSetuExtDevMemory, InSetuExtDevSql } from '/static/extensions/dev/dev_sql_and_memory.js';
+export { InSetuExtDevMemory, InSetuExtDevSql };
 
 window.ExtensionRegistry.registerExtension('dev', {
     name: "Developer Tools",

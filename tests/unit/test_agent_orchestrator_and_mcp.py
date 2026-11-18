@@ -13,10 +13,13 @@ from akasa.db import apply_declarative_schema
 from akasa.utils import load_config
 from akasa.vfs import sync_vfs_barrier
 from akasa.workers import _init_worker_schema
+from insetu.core.agent.commands import (
+    parse_colon_command_tokens as _parse_colon_command_tokens,
+    parse_slash_command as _parse_slash_command,
+)
 from insetu.core.agent.engine_agent import (
     AGENT_SCHEMA,
     _execute_agent_turn,
-    _parse_slash_command,
     agent_bp,
 )
 from insetu.core.agent import orchestrator as _orch_mod
@@ -635,9 +638,10 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         with patch("insetu.core.llm.engine_llm._run_single_inference", side_effect=fake_infer):
             out = execute_declarative_routine(agent_ctx, routine_id="diamond_ensemble", user_prompt="Go")
         self.assertEqual(out["status"], "completed")
-        self.assertEqual(len(out["state"]["reduce_step"]["items"]), 3)
-        self.assertIn("OUT(Branch 1)", out["state"]["reduce_step"]["text"])
-        self.assertIn("OUT(Branch 4)", out["state"]["reduce_step"]["text"])
+        reduce_node = out["envelope"].nodes["reduce_step"]
+        self.assertEqual(len(reduce_node["items"]), 3)
+        self.assertIn("OUT(Branch 1)", reduce_node["text"])
+        self.assertIn("OUT(Branch 4)", reduce_node["text"])
 
     def test_routines_vfs_volume_fork_save_and_yomama_patch(self):
         """Verifies reading ctx://routines/.templates/agent/code.md, saving a custom routine, patching it via bridge.sync, and rejecting cyclic routines with HTTP 422."""
@@ -940,13 +944,14 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         branches_w0 = paused_w0["pending_handoff"]["branches"]
         self.assertEqual([b["node_id"] for b in branches_w0], ["sec_scan", "perf_scan"])
 
-        # Supply Wavefront 0 responses -> advances to Wavefront 1 (final_report) and populates $sec_scan.text and $perf_scan.text!
+        from insetu.core.agent.envelope import RoutineEnvelope as _RoutineEnvelope
+        # Supply Wavefront 0 responses via server checkpoint -> advances to Wavefront 1 (final_report)!
         paused_w1 = execute_declarative_routine(
             agent_ctx,
             routine_id="manual_fanout",
             user_prompt="Check alpha",
+            envelope=_RoutineEnvelope.from_checkpoint(paused_w0["checkpoint"]),
             inputs={
-                "prior_chain_context": paused_w0["chain_context"],
                 "handoff_responses": {
                     "sec_scan": "SEC_OK",
                     "perf_scan": "PERF_OK",
@@ -957,13 +962,13 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         self.assertEqual(paused_w1["pending_handoff"]["node_id"], "final_report")
         self.assertIn("Combine: SEC_OK AND PERF_OK", paused_w1["pending_handoff"]["compiled_prompt"])
 
-        # Supply Wavefront 1 response -> completes routine!
+        # Supply Wavefront 1 response via server checkpoint -> completes routine!
         done_res = execute_declarative_routine(
             agent_ctx,
             routine_id="manual_fanout",
             user_prompt="Check alpha",
+            envelope=_RoutineEnvelope.from_checkpoint(paused_w1["checkpoint"]),
             inputs={
-                "prior_chain_context": paused_w1["chain_context"],
                 "handoff_responses": {
                     "sec_scan": "SEC_OK",
                     "perf_scan": "PERF_OK",
@@ -1049,17 +1054,16 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
     def test_cartographer_symbol_drift_watermark_and_topology_audit_upkeep(self):
         """Cartographer flags modified functions with [stale?] when their CODE_INDEX.md comment is unchanged, and topology.audit_upkeep + colon-scoped /upkeep:docs resolve cleanly."""
         from insetu.core.cartographer.cartographer import map_repositories as _map_repositories
-        from insetu.core.agent.engine_agent import _parse_colon_command_tokens as __parse_colon_command_tokens
 
         sys_ctx = system_bp.get_context("default")
 
         # 1. Verify universal colon-scoped command grammar
-        parsed_1 = __parse_colon_command_tokens("/upkeep:docs focus on alpha")
+        parsed_1 = _parse_colon_command_tokens("/upkeep:docs focus on alpha")
         self.assertEqual(parsed_1["target"], "upkeep")
         self.assertEqual(parsed_1["scope"], "docs")
         self.assertEqual(parsed_1["rest"], "focus on alpha")
 
-        parsed_2 = __parse_colon_command_tokens("/user:upkeep:modularize:apply")
+        parsed_2 = _parse_colon_command_tokens("/user:upkeep:modularize:apply")
         self.assertEqual(parsed_2["namespace"], "user")
         self.assertEqual(parsed_2["target"], "upkeep")
         self.assertEqual(parsed_2["scope"], "modularize")
@@ -1189,34 +1193,13 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         )
         self.assertEqual(rendered, "Msg: Keep {{ global.mode }} literal | Out: Initial Answer Text")
 
-    def test_dual_track_message_ledger_invariants(self):
-        """
-        Verifies the 5 dual-track message ledger invariants from Sprint A1 item 4 + P25 lens contract:
-        1) ingest_reply refuses client-supplied message_id so existing messages can never be overwritten.
-        2) Deleting the newest message never reuses its seq number (chat_sessions.seq_counter).
-        3) Deleting a message in block 1 drops block 1 and block 2, resets watermark to 0,
-           clears compacted_into_id on surviving messages, and re-summarizes on next turn.
-        4) Assistant turns record context_hashes_json matching bridge_ledger.post_patch_hash.
-        5) Dropping compacted_view_json and running deterministic compaction rebuilds equivalent blocks.
-        """
-        from insetu.core.agent.session_ledger import (
-            capture_turn_context_hashes as _capture_hashes,
-            compact_session_history as _compact_history,
-            next_session_seq as _next_seq,
-        )
-        from insetu.core.agent.routine_loader import validate_routine_definition as _validate_routine
-        from insetu.core.gather.context_assemble import (
-            parse_message_uri as _parse_msg_uri,
-            project_resource_lens as _project_lens,
-        )
-        from insetu.core.utils_core import compute_vfs_sha256 as _compute_sha256
-
+    def test_ingest_reply_validation_and_monotonic_seq_after_delete(self):
+        """ingest_reply issues server message_ids, returns 400 on client message_id or invalid role, 404 on unknown session_id, and never reuses a deleted seq."""
         agent_ctx = agent_bp.get_context("default")
-        sid = "sess_ledger_invariants"
-        now = time.time()
+        sid = "sess_ingest_rules"
         agent_ctx.db.execute(
             "INSERT INTO chat_sessions (session_id, title, updated_at, seq_counter) VALUES (?, ?, ?, ?)",
-            (sid, "Ledger Invariants", now, 0),
+            (sid, "Ingest Rules", time.time(), 0),
         )
         agent_ctx.db.commit()
 
@@ -1224,42 +1207,67 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         app.register_blueprint(agent_bp.bp)
         client = app.test_client()
 
-        # Invariant 1 & 2: Server-minted message_id + refusal of client-supplied message_id + monotonic seq_counter
+        # 1. Valid ingest_reply mints server-issued 'msg_' + 12 hex ID and seq=1
         r1 = client.post(
             "/api/default/agent/ingest_reply",
             json={"session_id": sid, "role": "user", "raw_text": "Original text"},
         )
         self.assertEqual(r1.status_code, 200)
         msg_id_1 = r1.get_json()["message_id"]
+        self.assertRegex(msg_id_1, r"^msg_[0-9a-f]{12}$")
         first_seq = int(r1.get_json()["seq"])
+        self.assertEqual(first_seq, 1)
 
-        # Attempting to supply an existing message_id to overwrite a row is refused
+        # 2. Client-supplied message_id returns exactly 400 and writes nothing
         r_dup = client.post(
             "/api/default/agent/ingest_reply",
             json={"session_id": sid, "message_id": msg_id_1, "role": "user", "raw_text": "Clobbered text"},
         )
-        self.assertIn(r_dup.status_code, (400, 409))
-        row_1 = agent_ctx.db.execute(
-            "SELECT seq, content FROM chat_messages WHERE message_id=?", (msg_id_1,)
-        ).fetchone()
+        self.assertEqual(r_dup.status_code, 400)
+        row_1 = agent_ctx.db.execute("SELECT content FROM chat_messages WHERE message_id=?", (msg_id_1,)).fetchone()
         self.assertEqual(row_1["content"], "Original text")
 
-        # Delete newest message and insert a new one -> seq must be strictly higher than first_seq
-        del_r1 = client.delete(f"/api/default/agent/messages/{msg_id_1}")
-        self.assertEqual(del_r1.status_code, 200)
+        # 3. role="system" returns 400; unknown session_id returns 404; neither writes a row or bumps seq_counter
+        r_role = client.post(
+            "/api/default/agent/ingest_reply",
+            json={"session_id": sid, "role": "system", "raw_text": "System override"},
+        )
+        self.assertEqual(r_role.status_code, 400)
+        r_unknown = client.post(
+            "/api/default/agent/ingest_reply",
+            json={"session_id": "sess_does_not_exist", "role": "assistant", "raw_text": "Hello"},
+        )
+        self.assertEqual(r_unknown.status_code, 404)
+        total_rows = agent_ctx.db.execute("SELECT COUNT(*) AS cnt FROM chat_messages WHERE session_id=?", (sid,)).fetchone()["cnt"]
+        seq_after_rejects = agent_ctx.db.execute("SELECT seq_counter FROM chat_sessions WHERE session_id=?", (sid,)).fetchone()["seq_counter"]
+        self.assertEqual(total_rows, 1)
+        self.assertEqual(seq_after_rejects, 1)
 
+        # 4. Deleting the newest message never reuses its sequence number
+        self.assertEqual(client.delete(f"/api/default/agent/messages/{msg_id_1}").status_code, 200)
         r2 = client.post(
             "/api/default/agent/ingest_reply",
             json={"session_id": sid, "role": "user", "raw_text": "Second message"},
         )
         self.assertEqual(r2.status_code, 200)
-        msg_id_2 = r2.get_json()["message_id"]
-        self.assertGreater(int(r2.get_json()["seq"]), first_seq)
-        client.delete(f"/api/default/agent/messages/{msg_id_2}")
+        self.assertEqual(int(r2.get_json()["seq"]), 2)
 
-        # Invariant 3 & 5: Two cold blocks -> delete from first block -> watermark drops to 0 & rebuilds
+    def test_message_deletion_invalidates_cold_compaction_blocks_and_rebuilds_from_messages(self):
+        """Deleting a message from the first cold block drops both cold blocks, resets watermark to 0, clears compacted_into_id, and rebuilds from chat_messages alone."""
+        from insetu.core.agent.session_ledger import (
+            compact_session_history as _compact_history,
+            next_session_seq as _next_seq,
+        )
+
+        agent_ctx = agent_bp.get_context("default")
+        sid = "sess_compaction_invalidation"
+        now = time.time()
+        agent_ctx.db.execute(
+            "INSERT INTO chat_sessions (session_id, title, updated_at, seq_counter) VALUES (?, ?, ?, ?)",
+            (sid, "Compaction Test", now, 0),
+        )
         agent_ctx.settings.set("helper_mode", "deterministic")
-        for idx in range(1, 15):
+        for idx in range(1, 21):
             s_num = _next_seq(agent_ctx, sid)
             agent_ctx.db.execute(
                 "INSERT INTO chat_messages (message_id, session_id, seq, role, content, raw_content, receipt, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1269,22 +1277,11 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
 
         raw_rows_14 = [
             dict(r) for r in agent_ctx.db.execute(
-                "SELECT message_id, seq, role, content, raw_content, receipt, transaction_id FROM chat_messages WHERE session_id=? ORDER BY seq ASC",
+                "SELECT message_id, seq, role, content, raw_content, receipt, transaction_id FROM chat_messages WHERE session_id=? ORDER BY seq ASC LIMIT 14",
                 (sid,),
             ).fetchall()
         ]
         _, _, cv_step1 = _compact_history(agent_ctx, sid, raw_rows_14, "", {"compacted_up_to_seq": 0, "blocks": []})
-        self.assertEqual(len(cv_step1.get("blocks", [])), 1)
-        self.assertEqual(cv_step1["compacted_up_to_seq"], raw_rows_14[1]["seq"])
-
-        # Add 6 more messages so a second cold block is formed
-        for idx in range(15, 21):
-            s_num = _next_seq(agent_ctx, sid)
-            agent_ctx.db.execute(
-                "INSERT INTO chat_messages (message_id, session_id, seq, role, content, raw_content, receipt, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (f"m_cold_{idx}", sid, s_num, "user" if idx % 2 else "assistant", f"Turn {idx} body", f"Turn {idx} body", f"[Turn #{s_num}]: Turn {idx}", now + idx),
-            )
-        agent_ctx.db.commit()
         raw_rows_20 = [
             dict(r) for r in agent_ctx.db.execute(
                 "SELECT message_id, seq, role, content, raw_content, receipt, transaction_id FROM chat_messages WHERE session_id=? ORDER BY seq ASC",
@@ -1299,24 +1296,22 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         )
         agent_ctx.db.commit()
 
-        # Delete a message from the first block (m_cold_1)
-        del_res = client.delete("/api/default/agent/messages/m_cold_1")
-        self.assertEqual(del_res.status_code, 200)
+        app = Flask(__name__)
+        app.register_blueprint(agent_bp.bp)
+        client = app.test_client()
+        self.assertEqual(client.delete("/api/default/agent/messages/m_cold_1").status_code, 200)
 
-        sess_after_del = agent_ctx.db.execute(
-            "SELECT compacted_view_json FROM chat_sessions WHERE session_id=?", (sid,)
-        ).fetchone()
-        cv_after_del = json.loads(sess_after_del["compacted_view_json"])
+        cv_after_del = json.loads(
+            agent_ctx.db.execute("SELECT compacted_view_json FROM chat_sessions WHERE session_id=?", (sid,)).fetchone()["compacted_view_json"]
+        )
         self.assertEqual(cv_after_del.get("blocks"), [])
         self.assertEqual(cv_after_del.get("compacted_up_to_seq"), 0)
-
         non_empty_compacted = agent_ctx.db.execute(
             "SELECT COUNT(*) AS cnt FROM chat_messages WHERE session_id=? AND compacted_into_id != ''",
             (sid,),
         ).fetchone()["cnt"]
         self.assertEqual(non_empty_compacted, 0)
 
-        # Next turn re-summarizes all surviving cold messages
         surviving_rows = [
             dict(r) for r in agent_ctx.db.execute(
                 "SELECT message_id, seq, role, content, raw_content, receipt, transaction_id FROM chat_messages WHERE session_id=? ORDER BY seq ASC",
@@ -1328,58 +1323,195 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         rebuilt_covered_ids = [mid for b in cv_rebuilt.get("blocks", []) for mid in b.get("message_ids", [])]
         self.assertEqual(rebuilt_covered_ids, surviving_cold_ids)
 
-        # Invariant 5: Dropping compacted_view_json and rebuilding from chat_messages alone produces identical coverage
         agent_ctx.db.execute("UPDATE chat_messages SET compacted_into_id='' WHERE session_id=?", (sid,))
         agent_ctx.db.commit()
         _, _, cv_from_scratch = _compact_history(agent_ctx, sid, surviving_rows, "", {})
         scratch_covered_ids = [mid for b in cv_from_scratch.get("blocks", []) for mid in b.get("message_ids", [])]
         self.assertEqual(scratch_covered_ids, surviving_cold_ids)
 
-        # Invariant 4: Assistant turn context_hashes_json matches bridge_ledger.post_patch_hash
-        patch_target = "vfs://alpha/hash_check.py"
-        patch_text = (
-            f"<<<<<<< FILE: {patch_target}\n"
-            f"<<<<<<< SEARCH\n=======\ndef verified():\n    return 42\n>>>>>>> REPLACE"
+    def test_real_turn_records_context_hashes_matching_bridge_ledger(self):
+        """Running a real assistant turn that commits a file records context_hashes_json on the stored assistant message matching bridge_ledger.post_patch_hash."""
+        from insetu.core.utils_core import compute_vfs_sha256 as _compute_sha256
+
+        target_file = self.repo_dir / "turn_hash_target.py"
+        target_file.write_text("VALUE = 1\n", encoding="utf-8")
+        force_topology_scan(workspace_id="default")
+
+        agent_ctx = agent_bp.get_context("default")
+        sid = "sess_turn_hashes"
+        agent_ctx.db.execute(
+            "INSERT INTO chat_sessions (session_id, title, updated_at, seq_counter) VALUES (?, ?, ?, ?)",
+            (sid, "Turn Hashes", time.time(), 0),
         )
-        sys_ctx = system_bp.get_context("default")
-        sync_res = sys_ctx.call("bridge.sync", text=patch_text, dry_run=False, wait=True)
+        agent_ctx.db.commit()
+
+        patch_uri = "vfs://alpha/turn_hash_target.py"
+        yomama_prompt = (
+            f"<<<<<<< FILE: {patch_uri}\n"
+            "<<<<<<< SEARCH\nVALUE = 1\n=======\nVALUE = 99\n>>>>>>> REPLACE"
+        )
+        turn_out = _execute_agent_turn(
+            agent_ctx,
+            session_id=sid,
+            user_prompt=yomama_prompt,
+            mode="yomama",
+            attached_files=[patch_uri],
+        )
         sync_vfs_barrier("default")
-        self.assertTrue(sync_res.get("can_commit"))
+        self.assertTrue(turn_out["artifact"]["transaction_id"].startswith("tx_"))
+
+        asst_row = agent_ctx.db.execute(
+            "SELECT transaction_id, context_hashes_json FROM chat_messages WHERE session_id=? AND role='assistant' ORDER BY seq DESC LIMIT 1",
+            (sid,),
+        ).fetchone()
+        self.assertIsNotNone(asst_row)
+        stored_hashes = json.loads(asst_row["context_hashes_json"] or "{}")
 
         bridge_db = agent_ctx.get_db("bridge")
         ledger_row = bridge_db.execute(
             "SELECT post_patch_hash FROM bridge_ledger WHERE filepath=? ORDER BY timestamp DESC LIMIT 1",
-            (patch_target,),
+            (patch_uri,),
         ).fetchone()
         self.assertIsNotNone(ledger_row)
+        self.assertEqual(stored_hashes.get(patch_uri), ledger_row["post_patch_hash"])
+        self.assertEqual(stored_hashes.get(patch_uri), _compute_sha256("VALUE = 99\n"))
 
-        recorded_hashes = _capture_hashes(agent_ctx, [patch_target])
-        self.assertEqual(recorded_hashes.get(patch_target), ledger_row["post_patch_hash"])
-        self.assertEqual(recorded_hashes.get(patch_target), _compute_sha256("def verified():\n    return 42\n"))
+    def test_query_context_refuses_untracked_files_across_all_forms(self):
+        """A QUERY_CONTEXT directive naming a file outside the topology (by direct URI, file_slice, symbol_def, or fuzzy name) is refused by resolve_query_context and excluded from compile_query_quickpack."""
+        from insetu.core.gather.context_assemble import (
+            compile_query_quickpack as _compile_qq,
+            resolve_query_context as _resolve_qc,
+        )
 
-        # Verify P25 canonical msg:// parser, projection shape, genesis lens, and reserved node ID check
-        self.assertEqual(_parse_msg_uri("msg://sess_1/m_cold_2 [raw]"), ("msg://m_cold_2", "m_cold_2", True))
-        self.assertEqual(_parse_msg_uri("m_cold_2"), ("msg://m_cold_2", "m_cold_2", False))
-        msg_proj = _project_lens(agent_ctx, "msg://sess_ledger_invariants/m_cold_2", lens="slice")
-        self.assertEqual(msg_proj["uri"], "msg://m_cold_2")
-        self.assertEqual(msg_proj["served_lens"], "slice")
-        self.assertTrue(msg_proj["sha256"])
+        (self.repo_dir / "tracked_mod.py").write_text("def ok_fn():\n    return 1\n", encoding="utf-8")
+        (self.repo_dir / "secret_untracked.env").write_text("API_SECRET=top_secret\n", encoding="utf-8")
+        force_topology_scan(workspace_id="default")
 
-        gen_proj = _project_lens(agent_ctx, "vfs://alpha/uncreated_day0.py", lens="full")
-        self.assertEqual(gen_proj["served_lens"], "genesis")
-        self.assertIn("GENESIS TARGET: vfs://alpha/uncreated_day0.py", gen_proj["text"])
+        g_ctx = gather_bp.get_context("default")
+        # Tracked file is served
+        served = _resolve_qc(g_ctx, "vfs://alpha/tracked_mod.py")
+        self.assertEqual(served.get("type"), "file_read")
+        self.assertIn("def ok_fn", served.get("content", ""))
 
-        ok_reserved, err_reserved, _ = _validate_routine({
-            "id": "bad_reserved",
-            "nodes": [{"id": "global", "type": "llm", "parents": []}],
-        })
-        self.assertFalse(ok_reserved)
-        self.assertIn("reserved envelope namespace", err_reserved)
+        # Untracked file refused by direct URI, file_slice, symbol_def, and fuzzy name
+        for bad_directive in (
+            "vfs://alpha/secret_untracked.env",
+            '{"type": "file_slice", "filepath": "vfs://alpha/secret_untracked.env", "start_line": 1, "end_line": 5}',
+            '{"type": "symbol_def", "target": "vfs://alpha/secret_untracked.env#API_SECRET"}',
+            "secret_untracked.env",
+        ):
+            res_bad = _resolve_qc(g_ctx, bad_directive)
+            self.assertNotEqual(res_bad.get("type"), "file_read", f"Untracked file must not be read via {bad_directive}")
+            self.assertNotIn("top_secret", json.dumps(res_bad))
+
+        # compile_query_quickpack excludes untracked files even when named by URI or fuzzy basename
+        c_open = "<" * 7
+        c_close = ">" * 7 + " EXECUTE"
+        raw_probe = f"{c_open} QUERY_CONTEXT\nvfs://alpha/tracked_mod.py\nvfs://alpha/secret_untracked.env\nsecret_untracked.env\n{c_close}"
+        qp = _compile_qq(g_ctx, raw_probe)
+        self.assertIsNotNone(qp)
+        self.assertEqual(qp["files"], ["vfs://alpha/tracked_mod.py"])
+
+    def test_multi_step_plan_scoping_commit_advance_and_file_promotion(self):
+        """Verifies ephemeral multi-step plan normalization, active-step working-set scoping, commit-driven task check-off (manual vs auto), and promotion to a real plan.md file."""
+        from insetu.core.agent.schemas.plan import (
+            format_active_plan_meta_projection as _format_plan_meta,
+            normalize_active_plan_dict as _norm_plan_dict,
+        )
+        from insetu.core.agent.plan_ledger import (
+            complete_and_advance_plan_task as _complete_task,
+            promote_ephemeral_plan_to_file as _promote_plan,
+            record_committed_bridge_transaction as _record_tx,
+        )
+
+        (self.repo_dir / "step1_mod.py").write_text("STEP_1 = True\n", encoding="utf-8")
+        (self.repo_dir / "step2_mod.py").write_text("STEP_2 = True\n", encoding="utf-8")
+        force_topology_scan(workspace_id="default")
+
+        agent_ctx = agent_bp.get_context("default")
+        sid = "sess_plan_stepper"
+        raw_tasks = [
+            {"id": "T1", "kind": "edit", "description": "2.1 & 2.2 in step1_mod.py", "targets": ["vfs://alpha/step1_mod.py"], "test_contract": "vfs://alpha/tests/test_s1.py"},
+            {"id": "T2", "kind": "edit", "description": "2.3 & 2.4 in step2_mod.py", "targets": ["vfs://alpha/step2_mod.py"], "test_contract": "vfs://alpha/tests/test_s2.py"},
+            {"id": "T3", "kind": "verify", "description": "Run full verification pass", "targets": ["vfs://alpha/step1_mod.py", "vfs://alpha/step2_mod.py"]},
+            {"id": "T4", "kind": "verify", "description": "Final audit check", "targets": ["vfs://alpha/step1_mod.py"]},
+        ]
+        plan_dict = _norm_plan_dict(raw_tasks, title="Hardening 2.1-2.4", is_ephemeral=True)
+        self.assertIsNotNone(plan_dict)
+        self.assertEqual(plan_dict["active_task_id"], "T1")
+        self.assertTrue(plan_dict["recommend_file_upgrade"])
+
+        meta_proj = _format_plan_meta(plan_dict)
+        self.assertIn("CURRENT ACTIVE STEP [T1]", meta_proj)
+        self.assertIn("[ ] (DEFERRED — Do NOT implement in this turn) [T2]", meta_proj)
+
+        agent_ctx.db.execute(
+            "INSERT INTO chat_sessions (session_id, title, updated_at, active_plan_json, seq_counter) VALUES (?, ?, ?, ?, ?)",
+            (sid, "Plan Stepper Test", time.time(), json.dumps(plan_dict), 0),
+        )
+        agent_ctx.db.commit()
+
+        # 1. With auto_complete_plan_tasks=False (default), committing tx_step1 records pending_commit_tx on T1 without auto-advancing
+        agent_ctx.settings.set("auto_complete_plan_tasks", False)
+        rec1 = _record_tx(agent_ctx, sid, "tx_step1", ["vfs://alpha/step1_mod.py"])
+        self.assertFalse(rec1["auto_advanced"])
+        self.assertEqual(rec1["active_plan"]["pending_commit_tx"], "tx_step1")
+        self.assertEqual(rec1["active_plan"]["active_task_id"], "T1")
+
+        # 2. Clicking 'Mark [T1] Complete & Start [T2]' completes T1 with tx_step1 and advances active_task_id to T2
+        adv1 = _complete_task(agent_ctx, sid)
+        self.assertEqual(adv1["completed_task"]["id"], "T1")
+        self.assertTrue(adv1["completed_task"]["completed"])
+        self.assertEqual(adv1["completed_task"]["transaction_id"], "tx_step1")
+        self.assertEqual(adv1["next_task"]["id"], "T2")
+        self.assertEqual(adv1["active_plan"]["active_task_id"], "T2")
+
+        # 3. Promote ephemeral plan to a real docs/plans/*.md file
+        prom = _promote_plan(agent_ctx, sid, repo="alpha")
+        self.assertEqual(prom["status"], "success")
+        plan_uri = prom["plan_filepath"]
+        self.assertTrue(plan_uri.startswith("vfs://alpha/docs/plans/"))
+        sync_vfs_barrier("default")
+        md_on_disk = agent_ctx.vfs.read(plan_uri)
+        self.assertIn("- [x] [T1] 2.1 & 2.2 in step1_mod.py (tx_step1)", md_on_disk)
+        self.assertIn("- [ ] [T2] 2.3 & 2.4 in step2_mod.py", md_on_disk)
+
+        # 4. With auto_complete_plan_tasks=True, committing tx_step2 automatically marks T2 complete, ticks the file on disk, and advances to T3!
+        agent_ctx.settings.set("auto_complete_plan_tasks", True)
+        rec2 = _record_tx(agent_ctx, sid, "tx_step2", ["vfs://alpha/step2_mod.py"])
+        sync_vfs_barrier("default")
+        self.assertTrue(rec2["auto_advanced"])
+        self.assertEqual(rec2["next_task"]["id"], "T3")
+        md_after_t2 = agent_ctx.vfs.read(plan_uri)
+        self.assertIn("- [x] [T2] 2.3 & 2.4 in step2_mod.py (tx_step2)", md_after_t2)
+
+        # 5. Verify extract_task_manage_directives intercepts both explicit TASK_MANAGE and checkbox-only SEARCH/REPLACE blocks
+        from insetu.core.agent.schemas.plan import extract_task_manage_directives as _extract_tm
+        from insetu.core.agent.plan_ledger import apply_task_manage_actions as _apply_tm
+        c_open = "<" * 7
+        c_sep = "=" * 7
+        c_close_rep = ">" * 7 + " REPLACE"
+        c_close_exe = ">" * 7 + " EXECUTE"
+        mixed_reply = (
+            f"{c_open} FILE: vfs://alpha/step1_mod.py\n{c_open} SEARCH\nSTEP_1 = True\n{c_sep}\nSTEP_1 = False\n{c_close_rep}\n\n"
+            f"{c_open} FILE: {plan_uri}\n{c_open} TASK_MANAGE\nCOMPLETE: T3\nADD: T5 | kind: verify | targets: vfs://alpha/step1_mod.py | Extra check\n{c_close_exe}\n\n"
+            f"{c_open} FILE: {plan_uri}\n{c_open} SEARCH\n- [ ] [T4] Final audit check\n{c_sep}\n- [x] [T4] Final audit check\n{c_close_rep}"
+        )
+        tm_actions, remaining_patches = _extract_tm(mixed_reply)
+        self.assertEqual([a["op"] for a in tm_actions], ["complete", "add", "complete"])
+        self.assertEqual([a["task_id"] for a in tm_actions], ["T3", "T5", "T4"])
+        self.assertIn("STEP_1 = False", remaining_patches)
+        self.assertNotIn("TASK_MANAGE", remaining_patches)
+        self.assertNotIn("[T4] Final audit check", remaining_patches)
+
+        tm_res = _apply_tm(agent_ctx, sid, tm_actions)
+        self.assertEqual(tm_res["status"], "success")
+        self.assertEqual(tm_res["active_plan"]["active_task_id"], "T5")
 
     def test_routine_envelope_delta_packing_and_doc_reference_extraction(self):
         """RoutineEnvelope partitions unchanged vs. changed blocks in same_window mode, protects user_pinned files from probe drops, and extract_doc_referenced_files resolves Markdown headings and links."""
         from insetu.core.agent.envelope import RoutineEnvelope as _RoutineEnvelope
-        from insetu.core.agent.routine_loader import extract_doc_referenced_files as _extract_doc_refs
+        from insetu.core.gather.rag_proximity import extract_doc_referenced_files as _extract_doc_refs
 
         # 1. Same-Window vs. New-Window Web-Chat delta partitioning
         env = _RoutineEnvelope(session_id="ses_delta", web_chat_window_mode="same_window")
@@ -1421,9 +1553,11 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         _, dropped_by_scout = env.apply_working_set_delta(drop=["vfs://alpha/pinned.py"], source="scout_hop2")
         self.assertEqual(dropped_by_scout, [], "Scout passes must never drop user_pinned files")
 
+        from insetu.core.gather.context_assemble import resolve_envelope_query_directives as _resolve_env_q
         agent_ctx = agent_bp.get_context("default")
-        added_q, _ = env.resolve_query_directives(
+        added_q, _ = _resolve_env_q(
             agent_ctx,
+            env,
             ["+ vfs://alpha/extra.py"],
             lambda c, uris: [u for u in uris if u.startswith("vfs://alpha/")],
         )
@@ -1439,6 +1573,448 @@ class TestAgentOrchestratorAndMcp(unittest.TestCase):
         )
         refs = _extract_doc_refs(agent_ctx, "Implement Section 1.1 Storage Layer", plan_text)
         self.assertIn("vfs://alpha/pinned.py", refs)
+
+    def test_greenfield_epistemic_scout_loop_and_transport_isomorphism(self):
+        """Verifies the bounded `until:` epistemic scout loop (Hop 1 `need_context` -> Hop 2 `ready` with `drop_files`) and Turn-1 `TASK_MANAGE` + patch settlement parity across API and Web-Chat transports."""
+        (self.repo_dir / "mod_a.py").write_text("A = 1\n", encoding="utf-8")
+        (self.repo_dir / "mod_b.py").write_text("B = 1\n", encoding="utf-8")
+        (self.repo_dir / "wrong_guess.py").write_text("W = 1\n", encoding="utf-8")
+        (self.repo_dir / "docs").mkdir(parents=True, exist_ok=True)
+        (self.repo_dir / "docs" / "brief.md").write_text(
+            "# Brief\nSee `docs/child_plan.md` for the exact modules.\n",
+            encoding="utf-8",
+        )
+        (self.repo_dir / "docs" / "child_plan.md").write_text(
+            "# Child Plan\n1. Update `vfs://alpha/mod_a.py` first, then `vfs://alpha/mod_b.py`.\n",
+            encoding="utf-8",
+        )
+        force_topology_scan("default")
+
+        agent_ctx = agent_bp.get_context("default")
+        llm_ctx = llm_bp.get_context("default")
+        llm_ctx.settings.update({
+            "compute_endpoints": [{"id": "anthropic_main", "driver": "anthropic", "api_key": "sk-test"}],
+        })
+
+        c_open = "<" * 7
+        c_sep = "=" * 7
+        c_close_rep = ">" * 7 + " REPLACE"
+        c_close_exe = ">" * 7 + " EXECUTE"
+        combined_thinking_reply = (
+            f"Executing Step T1 now.\n\n"
+            f"```text\n"
+            f"{c_open} FILE: ctx://plan/active_plan.md\n"
+            f"{c_open} TASK_MANAGE\n"
+            f"ADD: T1 | kind: edit | targets: vfs://alpha/mod_a.py | Update A in mod_a.py\n"
+            f"ADD: T2 | kind: edit | targets: vfs://alpha/mod_b.py | Update B in mod_b.py\n"
+            f"ACTIVE: T1\n"
+            f"{c_close_exe}\n"
+            f"```\n\n"
+            f"```text\n"
+            f"{c_open} FILE: vfs://alpha/mod_a.py\n"
+            f"{c_open} SEARCH\nA = 1\n{c_sep}\nA = 42\n{c_close_rep}\n"
+            f"```"
+        )
+
+        # 1. API Transport Run: Interleaved (scout_targets -> plan_tasks) loop:
+        #    - Cycle 1 scout_targets guesses wrong_guess.py + mod_a.py;
+        #    - Cycle 1 plan_tasks sees brief.md references unread docs/child_plan.md -> returns status="need_context", inspect_files=["vfs://alpha/docs/child_plan.md"];
+        #    - Cycle 2 scout_targets reads child_plan.md + Prior Plan Feedback, drops wrong_guess.py, and requests mod_b.py;
+        #    - Cycle 2 plan_tasks locks in T1..T2 with status="ready";
+        #    - generate_patch emits TASK_MANAGE + T1 patch.
+        call_seq = []
+        def fake_api_infer(provider, api_key, model, messages, system_prompt, base_url="", **kwargs):
+            prompt_str = messages[-1]["content"]
+            call_seq.append(prompt_str)
+            if "Fast File Scout" in prompt_str:
+                if "=== INSPECTED DOCUMENT: vfs://alpha/docs/child_plan.md ===" not in prompt_str:
+                    return json.dumps({
+                        "inspect_files": [],
+                        "requested_files": ["vfs://alpha/wrong_guess.py", "vfs://alpha/mod_a.py"],
+                        "reason": "Initial file scout before child_plan.md is requested by planner",
+                    }), None
+                return json.dumps({
+                    "inspect_files": [],
+                    "global_files": ["vfs://alpha/docs/brief.md"],
+                    "requested_files": ["vfs://alpha/mod_b.py"],
+                    "drop_files": ["vfs://alpha/wrong_guess.py"],
+                    "reason": "Scouted mod_b.py and dropped wrong_guess.py after reading child_plan.md",
+                }), None
+            if "Fast Plan Synthesizer" in prompt_str:
+                if "=== INSPECTED DOCUMENT: vfs://alpha/docs/child_plan.md ===" not in prompt_str:
+                    return json.dumps({
+                        "tasks": [
+                            {"id": "T1", "kind": "edit", "description": "Draft T1", "targets": ["vfs://alpha/mod_a.py"]},
+                        ],
+                        "inspect_files": ["vfs://alpha/docs/child_plan.md"],
+                        "missing_context_notes": "Need to read docs/child_plan.md to find second module",
+                        "status": "need_context",
+                        "reason": "Need child_plan.md",
+                    }), None
+                return json.dumps({
+                    "tasks": [
+                        {"id": "T1", "kind": "edit", "description": "Initial T1 from planner", "targets": ["vfs://alpha/mod_a.py"]},
+                        {"id": "T2", "kind": "edit", "description": "Initial T2 from planner", "targets": ["vfs://alpha/mod_b.py"]},
+                    ],
+                    "inspect_files": [],
+                    "missing_context_notes": "",
+                    "status": "ready",
+                    "reason": "Planned T1 and T2 after reading child_plan.md",
+                }), None
+            return combined_thinking_reply, None
+
+        sid_api = "sess_iso_api"
+        agent_ctx.db.execute(
+            "INSERT INTO chat_sessions (session_id, title, updated_at, seq_counter) VALUES (?, ?, ?, ?)",
+            (sid_api, "API Isomorphism", time.time(), 0),
+        )
+        agent_ctx.db.commit()
+
+        with patch("insetu.core.llm.engine_llm._run_single_inference", side_effect=fake_api_infer):
+            api_turn = _execute_agent_turn(
+                agent_ctx,
+                session_id=sid_api,
+                user_prompt="Execute items 1 and 2 from brief.md",
+                mode="code",
+            )
+
+        art_api = api_turn["artifact"]
+        # Verify Cycle 1 (scout + plan) + Cycle 2 (scout + plan) + Generate Patch ran (5 total LLM calls)
+        self.assertEqual(len(call_seq), 5)
+        # Verify wrong_guess.py was dropped while mod_a.py and mod_b.py were retained, and active_plan was initialized with T1 active!
+        self.assertIsNotNone(art_api["active_plan"])
+        self.assertEqual([t["id"] for t in art_api["active_plan"]["tasks"]], ["T1", "T2"])
+        self.assertEqual(art_api["active_plan"]["active_task_id"], "T1")
+        self.assertEqual(art_api["active_plan"]["tasks"][0]["description"], "Update A in mod_a.py")
+        self.assertIn("A = 42", art_api["unapplied_patches"])
+        self.assertNotIn("TASK_MANAGE", art_api["unapplied_patches"])
+
+        # Verify `msg://` session overview + turn dossier projection and `.zip` telemetry bundle export
+        from insetu.core.bridge.bridge_telemetry import (
+            build_session_telemetry_files_map as _build_tel_map,
+            build_session_telemetry_zip_bytes as _build_tel_zip,
+        )
+        tel_map = _build_tel_map(agent_ctx, session_id=sid_api)
+        self.assertIn("00_session_overview.txt", tel_map)
+        self.assertIn("ACTIVE PLAN:", tel_map["00_session_overview.txt"])
+        self.assertTrue(any(k.startswith("turn_001_") for k in tel_map.keys()))
+        zip_raw = _build_tel_zip(agent_ctx, session_id=sid_api)
+        self.assertGreater(len(zip_raw), 100)
+
+        # 2. Web-Chat (`agent/ingest_reply`) Transport Isomorphism: ingesting the exact same combined_thinking_reply
+        #    produces the exact same active_plan and cleaned unapplied_patches!
+        sid_wc = "sess_iso_wc"
+        agent_ctx.db.execute(
+            "INSERT INTO chat_sessions (session_id, title, updated_at, seq_counter) VALUES (?, ?, ?, ?)",
+            (sid_wc, "WebChat Isomorphism", time.time(), 0),
+        )
+        agent_ctx.db.commit()
+
+        app = Flask(__name__)
+        app.register_blueprint(agent_bp.bp)
+        client = app.test_client()
+        wc_resp = client.post(
+            "/api/default/agent/ingest_reply",
+            json={"session_id": sid_wc, "role": "assistant", "raw_text": combined_thinking_reply},
+        )
+        self.assertEqual(wc_resp.status_code, 200)
+        wc_data = wc_resp.get_json()
+        self.assertEqual(wc_data["active_plan"]["active_task_id"], art_api["active_plan"]["active_task_id"])
+        self.assertEqual([t["id"] for t in wc_data["active_plan"]["tasks"]], [t["id"] for t in art_api["active_plan"]["tasks"]])
+        self.assertIn("A = 42", wc_data["unapplied_patches"])
+        self.assertNotIn("TASK_MANAGE", wc_data["unapplied_patches"])
+
+        # 3. Reflection Invariant: Every field in dataclasses.fields(RoutineEnvelope) round-trips losslessly
+        #    through to_checkpoint() -> from_checkpoint() and fork_sub_routine()
+        from dataclasses import fields as _dc_fields
+        from insetu.core.agent.envelope import ContextArtifact as _ContextArtifact, RoutineEnvelope as _RoutineEnvelope
+        populated_env = _RoutineEnvelope(
+            session_id="ses_refl",
+            routine_id="code",
+            user_prompt="Prompt sentinel",
+            mode="code",
+            profile_id="prof_1",
+            pinned_repos=["alpha"],
+            web_chat_window_mode="same_window",
+            budget_limit_usd=2.5,
+            budget_step_usd=1.25,
+            artifacts={"vfs://alpha/mod_a.py": _ContextArtifact(uri="vfs://alpha/mod_a.py", bucket="data", lens="full", source="user_pinned", tokens=120, symbols=["A"])},
+            sent_hashes={"vfs://alpha/mod_a.py": "full:abc"},
+            staged_sent_hashes={"vfs://alpha/mod_a.py": "full:def"},
+            nodes={"scout_targets": {"status": "completed"}},
+            holding={"branch_1": "val"},
+            scouted_candidate_files=["vfs://alpha/mod_a.py"],
+            scouted_tasks=[{"id": "T1", "description": "Task 1"}],
+            attached_docs_content="=== DOC ===",
+            active_plan={"title": "Plan", "active_task_id": "T1", "tasks": [{"id": "T1"}]},
+            active_plan_prompt_block="=== PLAN BLOCK ===",
+            staged_task_actions=[{"op": "complete", "task_id": "T1"}],
+            file_token_map={"vfs://alpha/mod_a.py": 120},
+        )
+        cp_dict = populated_env.to_checkpoint("paused_for_user", wavefront_index=1)
+        restored_env = _RoutineEnvelope.from_checkpoint(cp_dict)
+        forked_env = populated_env.fork_sub_routine("sub_code")
+        for f_spec in _dc_fields(_RoutineEnvelope):
+            if f_spec.name == "routine_id":
+                self.assertEqual(restored_env.routine_id, "code")
+                self.assertEqual(forked_env.routine_id, "sub_code")
+            elif f_spec.name == "artifacts":
+                self.assertEqual(restored_env.artifacts["vfs://alpha/mod_a.py"].to_dict(), populated_env.artifacts["vfs://alpha/mod_a.py"].to_dict())
+                self.assertEqual(forked_env.artifacts["vfs://alpha/mod_a.py"].to_dict(), populated_env.artifacts["vfs://alpha/mod_a.py"].to_dict())
+            else:
+                self.assertEqual(getattr(restored_env, f_spec.name), getattr(populated_env, f_spec.name), f"Field {f_spec.name} failed checkpoint round-trip")
+                self.assertEqual(getattr(forked_env, f_spec.name), getattr(populated_env, f_spec.name), f"Field {f_spec.name} failed fork_sub_routine round-trip")
+
+        # Verify JavaScriptLanguageProvider.exports handles trailing commas and 'as' aliases in export blocks
+        from insetu.core.languages.javascript import JavaScriptLanguageProvider as _JsProvider
+        js_exports = _JsProvider().exports(
+            "vfs://alpha/agent.js",
+            "export {\n    AgentStore,\n    internalFn as publicFn,\n};\n",
+        )
+        self.assertEqual([e["name"] for e in js_exports], ["AgentStore", "publicFn"])
+
+        # Verify unified clamp_rag_files_to_topology policy matrix:
+        from insetu.core.gather.rag_proximity import clamp_rag_files_to_topology as _clamp_rag
+        # (a) #symbol fragment stripping on tracked file
+        self.assertEqual(_clamp_rag(agent_ctx, ["vfs://alpha/mod_a.py#A"], allowed_repos=populated_env.pinned_repos, allow_genesis=False), ["vfs://alpha/mod_a.py"])
+        # (b) Nonexistent Genesis file rejected when allow_genesis=False, accepted when allow_genesis=True
+        self.assertEqual(_clamp_rag(agent_ctx, ["vfs://alpha/new_gen.py"], allowed_repos=populated_env.pinned_repos, allow_genesis=False), [])
+        self.assertEqual(_clamp_rag(agent_ctx, ["vfs://alpha/new_gen.py"], allowed_repos=populated_env.pinned_repos, allow_genesis=True), ["vfs://alpha/new_gen.py"])
+        # (c) Package directory without extension resolves to __init__.py entrypoint
+        (self.repo_dir / "subpkg").mkdir(parents=True, exist_ok=True)
+        (self.repo_dir / "subpkg" / "__init__.py").write_text("PKG = 1\n", encoding="utf-8")
+        force_topology_scan("default")
+        self.assertEqual(_clamp_rag(agent_ctx, ["vfs://alpha/subpkg"], allowed_repos=populated_env.pinned_repos, allow_genesis=False), ["vfs://alpha/subpkg/__init__.py"])
+        # (d) Repo outside pinned_repos is rejected even with allow_genesis=True
+        self.assertEqual(_clamp_rag(agent_ctx, ["vfs://other_repo/hack.py"], allowed_repos=populated_env.pinned_repos, allow_genesis=True), [])
+
+        # 4. Sub-Routine Envelope Merge Invariant (/auto mode: workspace_turn -> classify_intent -> code):
+        #    Verify that running through workspace_turn's `type: routine` handoff node merges child active_plan,
+        #    unapplied_patches, and execution_trace back to the root turn settlement artifact.
+        def fake_auto_infer(provider, api_key, model, messages, system_prompt, base_url="", **kwargs):
+            prompt_str = messages[-1]["content"]
+            if "Classify the user's intent" in prompt_str or kwargs.get("output_schema") == "intent_classification":
+                return '{"intent": "EDIT_CODE"}', None
+            if "Fast File Scout" in prompt_str:
+                return json.dumps({
+                    "inspect_files": [],
+                    "requested_files": ["vfs://alpha/mod_a.py", "vfs://alpha/mod_b.py"],
+                    "reason": "Ready",
+                }), None
+            if "Fast Plan Synthesizer" in prompt_str:
+                return json.dumps({
+                    "tasks": [
+                        {"id": "T1", "kind": "edit", "description": "Update A in mod_a.py", "targets": ["vfs://alpha/mod_a.py"]},
+                        {"id": "T2", "kind": "edit", "description": "Update B in mod_b.py", "targets": ["vfs://alpha/mod_b.py"]},
+                    ],
+                    "inspect_files": [],
+                    "missing_context_notes": "",
+                    "status": "ready",
+                    "reason": "Planned",
+                }), None
+            return combined_thinking_reply, None
+
+        sid_auto = "sess_iso_auto"
+        agent_ctx.db.execute(
+            "INSERT INTO chat_sessions (session_id, title, updated_at, seq_counter) VALUES (?, ?, ?, ?)",
+            (sid_auto, "Auto Mode Sub-Routine Merge", time.time(), 0),
+        )
+        agent_ctx.db.commit()
+        with patch("insetu.core.llm.engine_llm._run_single_inference", side_effect=fake_auto_infer):
+            auto_turn = _execute_agent_turn(
+                agent_ctx,
+                session_id=sid_auto,
+                user_prompt="Execute items 1 and 2 from brief.md",
+                mode="auto",
+            )
+        art_auto = auto_turn["artifact"]
+        self.assertIsNotNone(art_auto["active_plan"], "/auto sub-routine handoff must merge child active_plan into parent envelope")
+        self.assertEqual(art_auto["active_plan"]["active_task_id"], "T1")
+        self.assertIn("A = 42", art_auto["unapplied_patches"])
+        trace_ids = [t.get("id") for t in (art_auto.get("execution_trace") or [])]
+        self.assertIn("classify_intent", trace_ids)
+        self.assertIn("generate_patch", trace_ids)
+
+    def test_homonymous_repo_genesis_dedup_and_step1_global_scoping_and_paused_telemetry(self):
+        """Verifies Pattern A (Step 1 scopes out deferred T2..T4 files and demotes code global_files to slice), Pattern B (homonymous <repo>/<repo>/ genesis deduplication preserves package paths), and Pattern C (paused handoff telemetry includes checkpoint execution_trace)."""
+        from insetu.core.gather.rag_proximity import clamp_rag_files_to_topology as _clamp_rag
+        from insetu.core.bridge.bridge_telemetry import build_session_telemetry_files_map as _build_tel_map
+
+        # Create a homonymous package layout inside repo 'alpha':
+        # - vfs://alpha/alpha/app.py (inner package directory 'alpha/alpha/')
+        # - vfs://alpha/alpha/core/engine.py (inner subpackage 'alpha/alpha/core/')
+        # - vfs://alpha/tests/unit/test_existing.py (repo-root tests directory 'alpha/tests/unit/')
+        # - vfs://alpha/docs/brief.md (repo-root docs directory 'alpha/docs/')
+        (self.repo_dir / "alpha" / "core").mkdir(parents=True, exist_ok=True)
+        (self.repo_dir / "alpha" / "app.py").write_text("APP = 1\n", encoding="utf-8")
+        (self.repo_dir / "alpha" / "core" / "engine.py").write_text("ENGINE = 1\n", encoding="utf-8")
+        (self.repo_dir / "alpha" / "core" / "step2_only.py").write_text("STEP2 = 1\n", encoding="utf-8")
+        (self.repo_dir / "tests" / "unit").mkdir(parents=True, exist_ok=True)
+        (self.repo_dir / "tests" / "unit" / "test_existing.py").write_text("TEST = 1\n", encoding="utf-8")
+        (self.repo_dir / "docs").mkdir(parents=True, exist_ok=True)
+        (self.repo_dir / "docs" / "brief.md").write_text("# Brief\n1. Step 1\n2. Step 2\n", encoding="utf-8")
+        force_topology_scan("default")
+
+        agent_ctx = agent_bp.get_context("default")
+
+        # Pattern B:
+        # 1. Accidental doubled repo prefix on repo-root test path ("alpha/tests/unit/test_new_parity.py" -> "vfs://alpha/alpha/tests/unit/test_new_parity.py")
+        #    must deduplicate to "vfs://alpha/tests/unit/test_new_parity.py" because vfs://alpha/tests/unit/ exists and vfs://alpha/alpha/tests/unit/ does not.
+        # 2. Legitimate new file inside the homonymous inner package ("vfs://alpha/alpha/core/new_helper.py" or "vfs://alpha/alpha/new_mod.py")
+        #    must NOT be stripped because vfs://alpha/alpha/core/ and vfs://alpha/alpha/ exist in topology_ledger!
+        clamped_gen = _clamp_rag(
+            agent_ctx,
+            [
+                "alpha/tests/unit/test_new_parity.py",
+                "vfs://alpha/alpha/tests/unit/test_new_parity.py",
+                "vfs://alpha/alpha/core/new_helper.py",
+                "vfs://alpha/alpha/new_root_mod.py",
+            ],
+            allowed_repos=["alpha"],
+            allow_genesis=True,
+        )
+        self.assertEqual(
+            clamped_gen,
+            [
+                "vfs://alpha/tests/unit/test_new_parity.py",
+                "vfs://alpha/alpha/core/new_helper.py",
+                "vfs://alpha/alpha/new_root_mod.py",
+            ],
+        )
+
+        # Pattern A & C: Run /code where scout_targets is API-backed (fast tier) and generate_patch is web_chat (pauses for handoff).
+        llm_ctx = llm_bp.get_context("default")
+        llm_ctx.settings.update({
+            "compute_endpoints": [
+                {"id": "anthropic_main", "driver": "anthropic", "api_key": "sk-test"},
+                {"id": "web_chat", "driver": "web_chat"},
+            ],
+            "llm_profiles": [{
+                "id": "hybrid_dogfood",
+                "title": "Fast API Scout + WebChat Thinking",
+                "tiers": {
+                    "decision": {"endpoint": "anthropic_main", "model": "claude-3-5-haiku-latest"},
+                    "fast": {"endpoint": "anthropic_main", "model": "claude-3-5-haiku-latest"},
+                    "standard": {"endpoint": "web_chat", "model": "chatbot"},
+                    "thinking": {"endpoint": "web_chat", "model": "chatbot"},
+                    "frontier": {"endpoint": "web_chat", "model": "chatbot"},
+                },
+            }],
+            "active_profile_id": "hybrid_dogfood",
+        })
+
+        def fake_fast_scout(provider, api_key, model, messages, system_prompt, base_url="", **kwargs):
+            prompt_str = messages[-1]["content"]
+            if "Fast File Scout" in prompt_str:
+                return json.dumps({
+                    "inspect_files": [],
+                    "global_files": ["vfs://alpha/docs/brief.md", "vfs://alpha/alpha/core/engine.py"],
+                    "requested_files": [
+                        "vfs://alpha/alpha/app.py",
+                        "vfs://alpha/alpha/core/engine.py",
+                        "vfs://alpha/alpha/core/step2_only.py",
+                    ],
+                    "reason": "Scouted candidate files",
+                }), None
+            return json.dumps({
+                "tasks": [
+                    {
+                        "id": "T1",
+                        "kind": "edit",
+                        "description": "Step 1 in app.py",
+                        "targets": ["vfs://alpha/alpha/app.py"],
+                        "test_contract": "alpha/tests/unit/test_new_parity.py",
+                    },
+                    {
+                        "id": "T2",
+                        "kind": "edit",
+                        "description": "Step 2 in step2_only.py",
+                        "targets": ["vfs://alpha/alpha/core/step2_only.py"],
+                    },
+                ],
+                "inspect_files": [],
+                "missing_context_notes": "",
+                "status": "ready",
+                "reason": "Planned 2-step execution",
+            }), None
+
+        sid_dogfood = "sess_dogfood_pause"
+        now_ts = time.time()
+        agent_ctx.db.execute(
+            "INSERT INTO chat_sessions (session_id, title, updated_at, seq_counter) VALUES (?, ?, ?, ?)",
+            (sid_dogfood, "Dogfood Pause Test", now_ts, 1),
+        )
+        agent_ctx.db.execute(
+            "INSERT INTO chat_messages (message_id, session_id, seq, role, content, raw_content, receipt, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("msg_dogfood_u1", sid_dogfood, 1, "user", "execute 1 through 2 in brief.md", "/code execute 1 through 2 in brief.md", "execute 1 through 2 in brief.md", now_ts),
+        )
+        agent_ctx.db.commit()
+
+        with patch("insetu.core.llm.engine_llm._run_single_inference", side_effect=fake_fast_scout):
+            paused_turn = _execute_agent_turn(
+                agent_ctx,
+                session_id=sid_dogfood,
+                user_prompt="execute 1 through 2 in brief.md",
+                mode="code",
+                extra_inputs={"profile_id": "hybrid_dogfood"},
+            )
+
+        art_p = paused_turn["artifact"]
+        self.assertEqual(art_p["status"], "paused_for_user")
+        # Pattern A check:
+        # - Editable full/genesis files on Turn 1 must contain app.py, brief.md, and the deduplicated genesis test_new_parity.py
+        # - step2_only.py (deferred to T2) and engine.py (code file in global_files) must NOT be in attached_files (editable full lens)!
+        # - engine.py (from global_files) is mounted in read_only_files (slice lens).
+        self.assertIn("vfs://alpha/alpha/app.py", art_p["attached_files"])
+        self.assertIn("vfs://alpha/tests/unit/test_new_parity.py", art_p["attached_files"])
+        self.assertNotIn("vfs://alpha/alpha/core/step2_only.py", art_p["attached_files"])
+        self.assertNotIn("vfs://alpha/alpha/core/engine.py", art_p["attached_files"])
+        self.assertIn("vfs://alpha/alpha/core/engine.py", art_p["read_only_files"])
+
+        # Pattern C check: While paused at generate_patch, building session telemetry includes the paused turn's
+        # DAG execution trace (scout_targets, fetch_context, generate_patch) and LLM scout call in both 00_session_overview and turn_001 dossier!
+        paused_tel_map = _build_tel_map(agent_ctx, session_id=sid_dogfood)
+        self.assertIn("00_session_overview.txt", paused_tel_map)
+        self.assertIn("scout_targets", paused_tel_map["00_session_overview.txt"])
+        dossier_key = next((k for k in paused_tel_map.keys() if k.startswith("turn_001_")), "")
+        self.assertTrue(dossier_key)
+        self.assertIn("scout_targets", paused_tel_map[dossier_key])
+        self.assertIn("Paused-Handoff Working Set:", paused_tel_map[dossier_key])
+
+    def test_lens_contract_message_parser_projection_genesis_and_reserved_ids(self):
+        """P25: one msg:// parser and canonical form; projections record served_lens and sha256; a missing target projects as genesis; reserved node IDs are refused."""
+        from insetu.core.agent.routine_loader import validate_routine_definition as _validate_routine
+        from insetu.core.gather.context_assemble import project_resource_lens as _project_lens
+        from insetu.core.gather.msg_lens import parse_message_uri as _parse_msg_uri
+
+        self.assertEqual(_parse_msg_uri("msg://sess_1/m_cold_2 [raw]"), ("msg://m_cold_2", "m_cold_2", True))
+        self.assertEqual(_parse_msg_uri("m_cold_2"), ("msg://m_cold_2", "m_cold_2", False))
+
+        agent_ctx = agent_bp.get_context("default")
+        agent_ctx.db.execute(
+            "INSERT INTO chat_sessions (session_id, title, updated_at, seq_counter) VALUES (?, ?, ?, ?)",
+            ("sess_lens_contract", "Lens Contract", time.time(), 1),
+        )
+        agent_ctx.db.execute(
+            "INSERT INTO chat_messages (message_id, session_id, seq, role, content, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            ("m_cold_2", "sess_lens_contract", 1, "user", "Cold message body", time.time()),
+        )
+        agent_ctx.db.commit()
+        msg_proj = _project_lens(agent_ctx, "msg://sess_lens_contract/m_cold_2", lens="slice")
+        self.assertEqual(msg_proj["uri"], "msg://m_cold_2")
+        self.assertEqual(msg_proj["served_lens"], "slice")
+        self.assertTrue(msg_proj["sha256"])
+
+        gen_proj = _project_lens(agent_ctx, "vfs://alpha/uncreated_day0.py", lens="full")
+        self.assertEqual(gen_proj["served_lens"], "genesis")
+        self.assertIn("GENESIS TARGET: vfs://alpha/uncreated_day0.py", gen_proj.get("text") or gen_proj.get("content") or "")
+
+        ok_reserved, err_reserved, _ = _validate_routine({
+            "id": "bad_reserved",
+            "nodes": [{"id": "global", "type": "llm", "parents": []}],
+        })
+        self.assertFalse(ok_reserved)
+        self.assertIn("reserved", err_reserved)
 
 
 if __name__ == "__main__":

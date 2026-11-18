@@ -35,19 +35,12 @@ While `inSetu` already verifies its static AST fitness rules with synthetic nega
 ## 3. Sprint 2: Anti-Tautology Fitness Rules & Explicit DAG Node Assertions
 
 - [ ] [S2.T1] Add a test-hygiene check to `tests/fitness/rules_python.py` (`is_test=True`) that flags `test_*` methods in `tests/unit/test_*.py` that contain zero `self.assert*` / `assert` / `mock.assert_*` calls ("Line Tourism" tests) or bare `except Exception: pass` blocks around assertions <!-- targets: vfs://insetu/tests/fitness/rules_python.py, test_contract: vfs://insetu/tests/unit/test_sdk_improvements.py -->
-- [ ] [S2.T2] Audit declarative routine unit tests in `tests/unit/test_agent_orchestrator_and_mcp.py` to assert explicit per-node `status == "completed"` (and `status != "skipped"`) on expected wavefront nodes in `execution_trace` / `chain_context` <!-- targets: vfs://insetu/tests/unit/test_agent_orchestrator_and_mcp.py, test_contract: vfs://insetu/tests/unit/test_agent_orchestrator_and_mcp.py -->
+- [ ] [S2.T2] Audit declarative routine unit tests in `tests/unit/test_agent_orchestrator_and_mcp.py` to assert explicit per-node `status == "completed"` (and `status != "skipped"`) on expected wavefront nodes in `envelope.execution_trace` / `envelope.nodes` <!-- targets: vfs://insetu/tests/unit/test_agent_orchestrator_and_mcp.py, test_contract: vfs://insetu/tests/unit/test_agent_orchestrator_and_mcp.py -->
 
 ## 4. Sprint 3: Mutation Testing on the Core Reducers (mutmut, through the kit)
 
 - [ ] [S3.T1] List the pure reducers (`insetu/core/bridge/bridge_fuzzy.py`, `insetu/core/bridge/bridge_ast.py`, `insetu/core/agent/expressions.py`) as mutation targets in `pyproject.toml`, list the files tests read from the repository (`tests/parity/`, `tests/unit/js_loader.mjs`) for mutmut to copy, and run it through the kit weekly or on demand. A surviving mutant becomes a tracker ticket, not a CI failure. <!-- targets: vfs://insetu/pyproject.toml, test_contract: vfs://insetu/tests/unit/test_bridge_anchor_invariants.py -->
 
-## 5. Sprint 4: Branch Coverage Floors
+## 5. Sprint 4: Branch Coverage Floors (Through `kiemma`)
 
-- [ ] [S4.T1] Branch coverage per module through the kit, with a checked-in floors file for the pure reducers (and akasa's `merge.py`, in akasa); a module below its floor fails, a run above it raises the floor. <!-- targets: vfs://insetu/pyproject.toml -->
-
-## 5. Sprint 4: Branch Coverage Floors & a Reusable Mutation Harness
-
-- [ ] [S4.T1] Measure branch coverage (`coverage.py`, a dev-only dependency) in `tests/run_unit_tests.py` behind a flag, reporting per module rather than one global percentage.
-- [ ] [S4.T2] Record a coverage floor per module for the pure reducers (`bridge_fuzzy.py`, `bridge_ast.py`, `expressions.py`, `merge.py` in akasa) in a checked-in baseline file; a fitness rule fails when a module drops below its floor, and a run that beats the floor updates the baseline (a ratchet, like `debt_ratchet`).
-- [ ] [S4.T3] Keep S3.T1's harness free of inSetu imports (target modules, mutation operators and the test command are arguments), so another repository can copy it unchanged; report surviving mutants as one line each with file, line and operator.
-- [ ] [S4.T4] Run mutation weekly or on demand, never per commit; a surviving mutant on a reducer becomes a tracker ticket, not a CI failure.
+- [ ] [S4.T1] Branch coverage per module through the shared test kit (`kiemma` / `coverage.py`), with a checked-in floors file for the pure reducers (`bridge_fuzzy.py`, `bridge_ast.py`, `expressions.py`, and akasa's `merge.py` in akasa); a module below its floor fails, and a run above it raises the floor. <!-- targets: vfs://insetu/pyproject.toml -->

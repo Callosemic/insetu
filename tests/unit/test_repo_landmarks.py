@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import insetu.core.topology.engine_topology as _engine_topology
 import insetu.core.utils_core as _utils_core
-from insetu.core.utils_core import InSetuURI, resolve_macro_includes
+from insetu.core.utils_core import InSetuURI, MemoryVFSTransaction, resolve_macro_includes
 from insetu.core.topology.engine_topology import (
     TOPOLOGY_SETTINGS_SCHEMA,
     discover_constitution_files,
@@ -18,27 +18,6 @@ from insetu.core.system.engine_system import system_bp
 from tests.fitness.rules_python import check_settings_access_ratchet
 
 
-class _FakeVFS:
-    def __init__(self, files=None):
-        self.files = dict(files or {})
-
-    def read(self, uri, is_absolute_artifact=False):
-        return self.files.get(str(uri))
-
-    def save(self, uri, content, data=None):
-        self.files[str(uri)] = content
-        return {"status": "success"}
-
-    def walk(self, root_uri, exts=None):
-        prefix = str(root_uri).rstrip("/") + "/"
-        out = []
-        for k in sorted(self.files.keys()):
-            if k.startswith(prefix):
-                if not exts or any(k.endswith(e) for e in exts):
-                    out.append(k)
-        return out
-
-
 class _FakeCtx:
     def __init__(self, workspace_id="test_ws", config=None, files=None):
         self.workspace_id = workspace_id
@@ -48,7 +27,7 @@ class _FakeCtx:
                 {"repo_dir": "akasa", "title": "Akasa Kernel"},
             ]
         }
-        self.vfs = _FakeVFS(files)
+        self.vfs = MemoryVFSTransaction(files, workspace_id=workspace_id)
 
 
 class TestRepoLandmarks(unittest.TestCase):

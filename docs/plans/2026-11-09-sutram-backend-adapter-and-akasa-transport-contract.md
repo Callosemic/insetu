@@ -92,7 +92,7 @@ Encapsulates the standard `akasa` kernel wire protocol so any `akasa` + `sutram`
   - In `ensureSutramAppShellCached`, read `adapter.getBuildId()` (or use `adapter.fetchRaw` when `serverBuildIdUrl` is configured) so it never makes an unauthenticated `fetch('/api/system/build_id')` call.
 
 ### Sprint 3: Migrate `inSetu` to `AkasaBackendAdapter` (`insetu`)
-- [ ] [S3.T1] Refactor `vfs://insetu/insetu/core/system/api.js` and `system.js` to consume `AkasaBackendAdapter`:
+- [x] [S3.T1] Refactor `vfs://insetu/insetu/core/system/api.js` and `system.js` to consume `AkasaBackendAdapter`:
   - Instantiate `AkasaBackendAdapter` in `api.js` with `inSetu`'s per-repository `offline_capable` predicate (`_shouldCacheGet`) and extension `offline_mode` policy.
   - Remove the redundant `/api/system/build_id` route and `serverBuildIdUrl: '/api/system/build_id'` option from `system.js`, relying on the `build_id` returned by `/auth/bootstrap` and the `X-InSetu-Build-ID` response header.
 

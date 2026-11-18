@@ -86,28 +86,28 @@ This plan sequences the remaining diff-audit remediations and the **Multi-Actor 
 
 ## Wave 2: Extension UI Hygiene & Declarative SQLite Hydration (Tier 2 & Tier 3)
 
-### 2.1 Guard `@sutram-modal-closed`, Replace Blocking `alert()` Calls & Pre-Check Hook Approvals in `ext_hooks.js`
-* **Problem:** `vfs://insetu/insetu/extensions/hooks/ext_hooks.js` still has an unguarded `@sutram-modal-closed` handler, raw `alert()` calls in `saveRule`/`toggleRule`/`deleteRule`, and allows clicking Execute on an unapproved rule (causing a raw `403 Forbidden` console error).
-* **Target Files:** `vfs://insetu/insetu/extensions/hooks/ext_hooks.js`
-* **Remediation:**
-  1. Guard `@sutram-modal-closed` with `if (e.target === e.currentTarget)`.
-  2. Replace blocking `alert(...)` calls with `this.setStatus(..., 3500, true)`.
-  3. If `rule.approved === false`, prompt the user to approve/save the rule first rather than firing an unapproved `POST hooks/execute`.
+### 2.1 Guard `@sutram-modal-closed`, Roll Out `this.ui.confirmModal` Across All Core & Extension Modules, and Pre-Check Hook Approvals
+* **Foundation Landed (2026-11-17):** `<insetu-confirm-modal>` and `window.inSetu.ui.confirmModal({ title, message, confirmLabel, cancelLabel, intent }) -> Promise<boolean>` are now mounted globally in `ui_primitives.js`, and `agent.js` (`session-delete`) and `system.js` (`vfsBound` dirty-buffer middleware & `simulatePanic`) have been upgraded to use it.
+* **Remaining Rollout Plan Across Core & Extensions:**
+  1. **Core Modules (`fs.js`, `config.js`, `prompts.js`, `ui_system_settings.js`, `offline_ui.js`):**
+     - Replace raw `confirm(...)` calls in bulk/single file delete, archive, repository removal, prompt override deletion, workspace deletion, and DLQ clearing with `await this.ui.confirmModal(...)`.
+     - Replace remaining raw `alert(...)` calls in `insetu_element.js` (`installExtensionDependencies`), `bridge.js` (clipboard fallback), and `ext_dev.js` (`_getDownloadLogsAction`) with `this.setStatus(..., 4000, true)`.
+  2. **Domain Extensions (`ext_hooks.js`, `ext_cronic.js`, `ext_citations.js`, `ext_research.js`, `ext_skills.js`, `ext_tracker.js`, `ext_git.js`, `ext_update.js`):**
+     - Guard `@sutram-modal-closed` with `if (e.target === e.currentTarget)` and pre-check `rule.approved` in `ext_hooks.js` before `POST hooks/execute`.
+     - Upgrade all destructive action handlers (`deleteRule`, `deleteJob`, `deleteCitation`, `deleteSkill`, `deleteTask`, `abortRebase`, `forceVersion`) to `await this.ui.confirmModal({ title, message, confirmLabel, intent: 'danger' })`.
+  3. **Permanent Static Fitness Gate (`NATIVE_CONFIRM_PROMPT_BAN` in `tests/fitness/rules_javascript.py`):**
+     - Once all extensions are migrated, add `NATIVE_CONFIRM_PROMPT_BAN` to `rules_javascript.py` forbidding raw `confirm(` and `prompt(` calls outside `ui_primitives.js` (fallback) and `index.html` (zero-JS crash shell).
 
-### 2.2 Declarative Extension SQLite Hydration (`@ext_bp.db_hydrator`) & `ctx.iter_domain_markdown_entities` (Unifies SDK Abstractions `S2.T1`–`S2.T2` — After 1.0)
+### 2.2 Declarative Extension SQLite Hydration (`@ext_bp.db_hydrator` for JSON/BibTeX Stores; Markdown Sidecars Unified via `ctx.mddb` — After 1.0)
 * **Problem:**
-  1. `citations`, `hooks`, `notes`, and `skills` each repeat manual `_ensure_<ext>_hydrated(ctx)` calls at the top of every route and hook handler to sync `.insetu/data/` files with `.insetu/cache/db/` SQLite tables.
-  2. `notes`, `skills`, and `research` each hand-roll directory + `ws://` shared-mount walking and frontmatter parsing (`2026-11-05-core-extension-sdk-abstractions.md` Abstraction 6).
+  1. `citations` and `hooks` repeat manual `_ensure_<ext>_hydrated(ctx)` calls at the top of every route and hook handler to sync `.insetu/data/` JSON/BibTeX files with `.insetu/cache/db/` SQLite tables.
+  2. *(Superseded by `ctx.mddb` in `2026-11-09-mddb-and-tracker-streamlining.md` Sprints 1–2):* `notes`, `skills`, `tracker`, and `research` Markdown sidecars move directly onto `ctx.mddb` (`mddb.db`), retiring `notes.db`, `skills.db`, `tracker.db`, and the need for a separate `ctx.iter_domain_markdown_entities` walker.
 * **Target Files:**
   * `vfs://insetu/insetu/core/sdk/__init__.py`
   * `vfs://insetu/insetu/extensions/citations/engine_citations.py`
   * `vfs://insetu/insetu/extensions/hooks/engine_hooks.py`
-  * `vfs://insetu/insetu/extensions/notes/engine_notes.py`
-  * `vfs://insetu/insetu/extensions/skills/engine_skills.py`
-  * `vfs://insetu/insetu/extensions/research/engine_research.py`
 * **Remediation:**
-  1. Declare the database hydrator explicitly on the `InSetuExtension` blueprint (`@ext_bp.db_hydrator` or `db_hydrator=...`) and have the SDK invoke it explicitly before route dispatch (with a per-workspace re-entrancy guard)—**never** lazily as a side-effect of accessing the `ctx.db` property. Hooks hydration must **never** record or migrate any command approvals (and must keep the regression test in `test_attestations.py` proving `hooks.list` leaves unapproved `rules.json` entries disabled and unattested).
-  2. Implement `ctx.iter_domain_markdown_entities(domain, exts=['.md'])` on `InSetuContext` in `sdk/__init__.py` (walking `ctx://<domain>`, `vfs://<repo>/.insetu-data/<domain>`, and `ws://` shared mounts). Note: any static context helper must target `@bp.on('gather_declare_topology')` rather than the banned `@bp.on('compile_contexts')` hook.
+  1. Declare the database hydrator explicitly on the `InSetuExtension` blueprint (`@ext_bp.db_hydrator` or `db_hydrator=...`) for non-`mddb` extensions (`citations`, `hooks`) and have the SDK invoke it explicitly before route dispatch (with a per-workspace re-entrancy guard)—**never** lazily as a side-effect of accessing the `ctx.db` property. Hooks hydration must **never** record or migrate any command approvals (and must keep the regression test in `test_attestations.py` proving `hooks.list` leaves unapproved `rules.json` entries disabled and unattested).
 
 ### 2.3 Declarative `<insetu-dependency-banner>` & `this.watchVfsMutations` (Fulfills SDK Abstractions `S1.T1`–`S1.T2`)
 * **Target Files:** `vfs://insetu/insetu/core/system/insetu_element.js`, `vfs://insetu/insetu/core/system/components/ui_primitives.js`, `ext_notes.js`, `ext_skills.js`, `ext_research.js`, `ext_ingest.js`, `ext_publish.js`, `prompts.js`, `ui_system_settings.js`
@@ -128,11 +128,11 @@ This plan sequences the remaining diff-audit remediations and the **Multi-Actor 
   1. Persist `pendingMutations` and `deletedMutations` directly on `sutram_outbox` records in `SutramDB.enqueueMutation` and read them in `syncOutboxMutationMarkers`.
   2. Consolidate all background and on-demand file warming into `SutramCacheWarmer` in `sutram/js/offline.js` (supporting `priority: 'high' | 'low'`), removing `AppStore.warmingQueue` from `store.js`.
 
-### 3.2 Unify `SSEPipeline` + `BroadcastChannel` Relay into One Typed `KernelEventBus` (Aligns with Multi-Tenant Scope & System Notices)
+### 3.2 Unify `SSEPipeline` + `BroadcastChannel` Relay into `AkasaBackendAdapter.connectStream` (Merged with `2026-11-09-sutram-backend-adapter` Sprints 2–3 & `2026-11-02-multitenant-scope-sutram` Phase 3)
 * **Problem:** Both `api.js` and `system.js` instantiate separate `BroadcastChannel('insetu_telemetry')` listeners and emit duplicate `sutram-*` / `insetu-*` window events.
-* **Target Files:** `vfs://insetu/insetu/core/system/api.js`, `vfs://insetu/insetu/core/system/system.js`
-* **Remediation:**
-  1. Consolidate SSE ingestion, `BroadcastChannel` cross-window relay, and `StoreRegistry.isTransitioning()` / `StoreRegistry.getActiveScope()` tenant filtering (`2026-11-02-multitenant-scope-sutram.md`) into a single `KernelEventBus` in `api.js` (including routing for the unified `notices` SSE event from `2026-11-04-system-notices.md`), removing the duplicate `BroadcastChannel` handler from `system.js`.
+* **Target Files:** `vfs://sutram/sutram/js/client.js`, `vfs://insetu/insetu/core/system/api.js`, `vfs://insetu/insetu/core/system/system.js`
+* **Remediation (Executed Once Alongside `AkasaBackendAdapter` & `Multi-Tenant Scope` Phase 3):**
+  1. Do not build a standalone `KernelEventBus` in `api.js` only to replace it in `AkasaBackendAdapter`. Consolidate SSE ingestion, `BroadcastChannel` cross-window presence/relay, `StoreRegistry.isTransitioning()` / `StoreRegistry.getActiveScope()` tenant filtering (`2026-11-02-multitenant-scope-sutram.md`), and unified `notices` event routing (`2026-11-04-system-notices.md`) directly into `AkasaBackendAdapter.connectStream` (`sutram/js/client.js`) consumed by `api.js` and `system.js`.
 
 ### 3.3 Decompose `fs.js` into Focused Modules (`fs_store.js`, `fs_editor_projection.js`, `fs.js` — Fulfills God-Objects Wave 3.1 & SDK Abstractions `S1.T3`–`S1.T4`)
 * **Problem:** `vfs://insetu/insetu/core/fs/fs.js` is ~2,700 lines combining state management, editor projections, diff projections, file explorer UI, and export helpers, and binds duplicate methods on both `window.inSetu.ui` and `window.inSetu.vfs`.

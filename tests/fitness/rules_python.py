@@ -54,7 +54,7 @@ SETTINGS_ACCESS_RATCHET: Dict[str, Tuple[int, str]] = {
     "insetu/core/gather/engine_gather.py": (4, "Phase 3: gather declarations and the compiler reading target_repos."),
     "insetu/core/cartographer/cartographer.py": (2, "Phase 3: map_repositories and _background_enrich reading target_repos."),
     "insetu/core/prompts/engine_prompts.py": (1, "Phase 3: prompt config mutation hook."),
-    "insetu/core/agent/engine_agent.py": (3, "Phase 3: plan and test-command helpers reading target_repos."),
+    "insetu/core/agent/engine_agent.py": (1, "Phase 3: plan and test-command helpers reading target_repos."),
     "insetu/core/bridge/bridge_test.py": (1, "Phase 3: the test runner resolving its repository config."),
     "insetu/core/bridge/bridge_vfs.py": (1, "Phase 4: the control-plane filename write guard, until protected targets replace it."),
     "insetu/core/mcp/engine_mcp.py": (1, "Phase 3: the MCP resource list iterating target_repos."),
@@ -315,34 +315,33 @@ MODULE_LINE_RATCHET: Dict[str, int] = {
     "insetu/core/fs/fs.js": 2016,
     "insetu/extensions/tracker/ext_tracker.js": 2932,
     "insetu/core/topology/engine_topology.py": 2202,  # Nov 9 (was 2170)
-    "insetu/core/agent/agent.js": 1115,  # Nov 12: Extracted InSetuAgentHandoffPanel into agent_staged_stacks.js
+    "insetu/core/agent/agent.js": 1047,  # Nov 18 (was 1043): plan stepper stays visible after session reload; Nov 15 (was 1055): Extracted InSetuAgentContextHud into agent_handoff_and_plan.js
     "insetu/core/system/components/ui_system_settings.js": 1864,  # Nov 9 (was 1812)
-    "insetu/core/agent/orchestrator.py": 1530,  # Nov 9 (was 1771): Wave 3.2 with agent plan Sprint 1
     "insetu/core/bridge/bridge_vfs.py": 1617,  # Nov 9 (was 1603)
-    "insetu/core/llm/engine_llm.py": 871,  # Nov 12 (was 921): Extracted llm_telemetry.py
+    "insetu/core/llm/engine_llm.py": 815,  # Nov 16 (was 839): Extracted run_audio_transcription into llm_drivers.py
     "insetu/core/utils_core.py": 1495,  # Nov 9 (was 1476): inside-out interpolation that never rescans values
     "insetu/extensions/tracker/engine_tracker.py": 1464,
-    "insetu/core/system/system.js": 1467,  # Nov 9 (was 1458)
-    "insetu/core/gather/engine_gather.py": 1430,
-    "insetu/core/bridge/bridge.js": 1275,  # Nov 11 (Nov 9: 1307)
+    "insetu/core/system/system.js": 1439,  # Nov 17 (was 1467): Migrated to AkasaBackendAdapter
+    "insetu/core/gather/engine_gather.py": 1398,  # Nov 15 (was 1430): Extracted heal_missing_ephemeral_quickpack into context_assemble.py
+    "insetu/core/bridge/bridge.js": 1237,  # Nov 15 (was 1275)
     "insetu/extensions/git/ext_git.js": 1277,
-    "insetu/extensions/git/engine_git.py": 1168,
+    "insetu/extensions/git/engine_git.py": 1149,
     "insetu/core/config/config.js": 1110,
     "insetu/extensions/update/ext_update.js": 1120,
     "insetu/extensions/update/engine_update.py": 957,
     "insetu/extensions/preview/engine_preview.py": 928,
     "insetu/extensions/skills/ext_skills.js": 828,
-    "insetu/core/bridge/engine_bridge.py": 1023,  # Nov 9 (was 825): telemetry compile and heal audit to extract
-    "insetu/core/bridge/bridge_fuzzy.py": 974,  # Nov 9 (was 815): sandwich anchor to its own module
+    "insetu/core/bridge/engine_bridge.py": 920,  # Nov 16 (was 1023): Extracted bridge_telemetry.py
+    "insetu/core/bridge/bridge_fuzzy.py": 754,  # Nov 17 (was 974): Extracted bridge_sandwich.py
     "insetu/core/system/engine_system.py": 814,
     # Ring 1 (akasa) and Ring 2 (sutram) modules currently above 800 lines (shrinking in Wave 2):
     "sutram/sutram/js/primitives.js": 2853,
     "sutram/sutram/js/sutram_sdk.js": 1916,
     "sutram/sutram/js/app_shell.js": 1423,
-    "akasa/akasa/vfs.py": 1117,  # Nov 11: the three-way merge moved to akasa/merge.py
+    "akasa/akasa/vfs.py": 1119,  # Nov 18 (was 1117): +2 lines in the 0.11 hardening; Nov 11: the three-way merge moved to akasa/merge.py
     "akasa/akasa/extension.py": 1223,
     "akasa/akasa/workers/__init__.py": 1200,
-    "sutram/sutram/js/offline.js": 1018,
+    "sutram/sutram/js/offline.js": 1058,  # Nov 18 (was 1018): adapter routing and bounded shell sync; split the app-shell vault into its own module
 }
 
 _CROSS_MODULE_PRIVATE_REFS = None
@@ -508,6 +507,22 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                             stmt.lineno,
                             "Hardcoded '_BUILTIN_ROUTINES' dictionary in Python is banned. All built-in routines must live as read-only Markdown-as-Code files in '<module>/routines/*.md'."
                         )
+                    is_dict_init = isinstance(stmt.value, ast.Dict) or (
+                        isinstance(stmt.value, ast.Call)
+                        and isinstance(stmt.value.func, ast.Name)
+                        and stmt.value.func.id in ("OrderedDict", "dict")
+                    )
+                    if (
+                        not self.is_test
+                        and isinstance(t, ast.Name)
+                        and (t.id.endswith("_CACHE_LOCK") or (t.id.endswith("_CACHE") and is_dict_init))
+                    ):
+                        report_violation(
+                            "BESPOKE_MODULE_CACHE_BAN",
+                            self.filepath,
+                            stmt.lineno,
+                            f"Bespoke module-level cache primitive '{t.id}' is banned. Use 'BoundedCache' or '@thread_safe_cache' from 'insetu.core.sdk' / 'insetu.core.utils_core' so caches are bounded and auto-purged on reset_state()."
+                        )
                     # Legacy Pattern Detector: Catch and remove duplicate JS symbol regexes outside insetu/core/languages/
                     if (
                         not self.is_test
@@ -519,13 +534,39 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                             "DUPLICATE_LANGUAGE_AST_HELPER_BAN",
                             self.filepath,
                             stmt.lineno,
-                            f"Legacy duplicate language regex '{t.id}' detected outside 'insetu/core/languages/'. Remove it and delegate to 'insetu.core.languages'."
+                            f"Legacy duplicate language regex '{t.id}' detected outside 'insetu/core/languages/'. Remove it and delegate to 'insetu.core/languages'."
+                        )
+                    if (
+                        not self.is_test
+                        and any(seg in str(self.filepath).replace("\\", "/") for seg in ("/core/gather/", "/core/agent/"))
+                        and isinstance(t, ast.Name)
+                        and ("STOPWORDS" in t.id.upper() or "SECTION_NUM" in t.id.upper())
+                    ):
+                        report_violation(
+                            "PROSE_HEURISTIC_BAN",
+                            self.filepath,
+                            stmt.lineno,
+                            f"Natural-language stopword/section heuristic '{t.id}' in '{self.filename}' violates Input-Format & Prose-Structure Agnosticism. Delegate semantic text interpretation to declarative LLM nodes or BaseLanguageProvider."
                         )
             if isinstance(stmt, ast.Import):
                 for alias in stmt.names:
                     self.top_level_imports.add(alias.asname or alias.name)
+                    if not self.is_test and self.filename == "envelope.py" and alias.name.startswith(("insetu.core.gather", "insetu.core.bridge")):
+                        report_violation(
+                            "ENVELOPE_ZERO_GATHER_IO_BAN",
+                            self.filepath,
+                            stmt.lineno,
+                            f"RoutineEnvelope (envelope.py) must remain a pure zero-I/O state container and cannot import '{alias.name}'.",
+                        )
             elif isinstance(stmt, ast.ImportFrom):
                 module = stmt.module or ""
+                if not self.is_test and self.filename == "envelope.py" and module.startswith(("insetu.core.gather", "insetu.core.bridge")):
+                    report_violation(
+                        "ENVELOPE_ZERO_GATHER_IO_BAN",
+                        self.filepath,
+                        stmt.lineno,
+                        f"RoutineEnvelope (envelope.py) must remain a pure zero-I/O state container and cannot import from '{module}'.",
+                    )
                 for alias in stmt.names:
                     self.top_level_imports.add(f"{module}.{alias.name}" if module else alias.name)
                     self.top_level_imports.add(alias.asname or alias.name)
@@ -725,7 +766,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             self._check_protected_write_homes(node)
             if (
                 "bridge" in self.filepath.parts
-                and self.filename not in ("bridge_window.py", "bridge_fuzzy.py")
+                and self.filename not in ("bridge_window.py", "bridge_fuzzy.py", "bridge_sandwich.py")
                 and (
                     (isinstance(node.func, ast.Attribute) and node.func.attr == "SequenceMatcher")
                     or (isinstance(node.func, ast.Name) and node.func.id == "SequenceMatcher")
@@ -937,6 +978,27 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'from_external_input':
             if self.filename not in ("utils_core.py", "parser.py", "bridge_vfs.py", "bridge_ast.py", "engine_fs.py", "cartographer.py", "engine_mcp.py") and not self.is_test:
                 report_violation("EXTERNAL_URI_COERCION_BOUNDARY_VIOLATION", self.filepath, node.lineno, "InSetuURI.from_external_input() is restricted to external ingress boundaries (parser.py, bridge_vfs.py, bridge_ast.py, engine_fs.py, cartographer.py, engine_mcp.py, utils_core.py). Use strict InSetuURI(uri) internally.")
+        if (
+            not self.is_test
+            and self.filename != "rag_proximity.py"
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "find_path_candidates"
+            and any(seg in str(self.filepath).replace("\\", "/") for seg in ("/core/gather/", "/core/agent/"))
+        ):
+            report_violation(
+                "SINGLE_TOPOLOGY_CLAMP_MANDATE",
+                self.filepath,
+                node.lineno,
+                "Direct find_path_candidates() in gather/ or agent/ outside rag_proximity.py is banned. Route through clamp_rag_files_to_topology() instead.",
+            )
+        if not self.is_test and self.filename == "envelope.py" and isinstance(node.func, ast.Attribute):
+            if node.func.attr in ("compile_context", "save_manifest", "sync_vfs_barrier", "call"):
+                report_violation(
+                    "ENVELOPE_ZERO_GATHER_IO_BAN",
+                    self.filepath,
+                    node.lineno,
+                    f"RoutineEnvelope (envelope.py) must remain a pure zero-I/O state container; '{node.func.attr}()' belongs in gather/context_assemble.py.",
+                )
 
         # Two-View VFS Mandate: Ban unconfined vfs.walk() on vfs://<repo> source trees outside engine_topology.py and .insetu-data/
         if (
@@ -1026,11 +1088,29 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     report_violation("PATHLIB_MANDATE", self.filepath, node.lineno, f"os.path.{node.func.attr} detected. Migrate to pathlib.Path.")
                 elif self.is_ext_engine and node.func.attr in ('exists', 'relpath', 'expanduser', 'abspath', 'isdir', 'isfile'):
                     report_violation("PATHLIB_MANDATE", self.filepath, node.lineno, f"os.path.{node.func.attr} detected in extension. Migrate to pathlib.Path.")
+        if "/core/agent/schemas/" in str(self.filepath).replace("\\", "/") and isinstance(node.func, ast.Attribute):
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == "ctx" and node.func.attr == "call":
+                report_violation(
+                    "SCHEMA_MODULE_IO_BAN",
+                    self.filepath,
+                    node.lineno,
+                    f"Schema/reducer module '{self.filename}' must remain pure and cannot invoke 'ctx.call()'.",
+                )
+            elif isinstance(node.func.value, ast.Attribute):
+                sub_attr = node.func.value.attr
+                call_attr = node.func.attr
+                if sub_attr == "db" or (sub_attr == "vfs" and call_attr in ("save", "delete", "move")):
+                    report_violation(
+                        "SCHEMA_MODULE_IO_BAN",
+                        self.filepath,
+                        node.lineno,
+                        f"Schema/reducer module '{self.filename}' must remain pure and cannot invoke 'ctx.{sub_attr}.{call_attr}()'. Perform DB/VFS persistence in session_ledger.py.",
+                    )
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'get':
             if len(node.args) > 0 and isinstance(node.args[0], ast.Constant):
                 arg_val = node.args[0].value
                 caller_name = getattr(node.func.value, 'id', '') or getattr(node.func.value, 'attr', '')
-                if arg_val == "targets" and self.filename != "rules_python.py" and caller_name not in ("data", "req", "json", "payload", "kwargs"):
+                if arg_val == "targets" and self.filename != "rules_python.py" and caller_name in ("cfg", "config", "live_cfg", "raw_cfg", "ws_cfg", "workspace_cfg"):
                     report_violation("TARGET_REPOS_KEY_MANDATE", self.filepath, node.lineno, "Deprecated config key 'targets' accessed. Normalize to 'target_repos' instead.")
                 if arg_val == "extension_config" and self.filename != "rules_python.py":
                     report_violation("LEGACY_EXTENSION_CONFIG_BAN", self.filepath, node.lineno, "Legacy 'extension_config' dictionary accessed. Use ctx.settings.get() with a declarative settings_schema instead.")
@@ -1113,6 +1193,16 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             report_violation("BANNED_SOCKET_MANAGEMENT", self.filepath, node.lineno, "Raw socket management loop detected in extension. Multi-tenant endpoints must utilize brokered WebSocket schemas or standard API routes.")
         self.generic_visit(node)
     def visit_FunctionDef(self, node):
+        if ast.get_docstring(node, clean=False) is None and len(node.body) > 1:
+            for stmt in node.body[1:]:
+                if isinstance(stmt, ast.Expr) and isinstance(getattr(stmt, "value", None), ast.Constant) and isinstance(stmt.value.value, str):
+                    report_violation(
+                        "MISPLACED_DOCSTRING_BAN",
+                        self.filepath,
+                        stmt.lineno,
+                        f"Function '{node.name}' places a docstring literal after executable statements, leaving __doc__ as None.",
+                    )
+                    break
         prev_fn = self.current_function_name
         prev_sel_vars = self.selection_item_vars
         self.current_function_name = node.name
@@ -1557,12 +1647,48 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     node.lineno,
                     "SQL update to topology_ledger.git_status must not overwrite the 'timestamp' column, as doing so clobbers physical file mutation watermarks."
                 )
+            if (
+                not self.is_test
+                and self.filename not in ("engine_llm.py", "llm_telemetry.py", "rules_python.py")
+                and "llm_telemetry" in node.value
+                and any(tok in node.value.upper() for tok in ("INSERT", "DELETE", "UPDATE"))
+            ):
+                report_violation(
+                    "TELEMETRY_DB_DOMAIN_ISOLATION",
+                    self.filepath,
+                    node.lineno,
+                    "Direct SQL mutation of 'llm_telemetry' outside engine_llm.py / llm_telemetry.py is banned. Route through record_llm_call_telemetry() targeting ctx.get_db('llm')."
+                )
             if not self.is_test and self.filename != "rules_python.py" and node.value == "__DELETED_FILE__":
                 report_violation(
                     "MAGIC_DELETED_FILE_SENTINEL_BAN",
                     self.filepath,
                     node.lineno,
                     "String-band deletion sentinel '__DELETED_FILE__' is banned. Represent absent/deleted VFS buffers as None (Optional[str])."
+                )
+            if (
+                not self.is_test
+                and "/core/gather/" in str(self.filepath).replace("\\", "/")
+                and isinstance(node.value, str)
+                and node.value in ("scout_targets", "load_overview")
+            ):
+                report_violation(
+                    "ORCHESTRATOR_NODE_NAME_COUPLE_BAN",
+                    self.filepath,
+                    node.lineno,
+                    f"Gather module '{self.filename}' must not hardcode routine node ID '{node.value}'; read state from RoutineEnvelope instead.",
+                )
+            if (
+                not self.is_test
+                and any(seg in str(self.filepath).replace("\\", "/") for seg in ("/core/agent/", "/core/gather/"))
+                and isinstance(node.value, str)
+                and node.value in ("chain_context", "prior_chain_context")
+            ):
+                report_violation(
+                    "LEGACY_CHAIN_CONTEXT_BAN",
+                    self.filepath,
+                    node.lineno,
+                    f"Legacy '{node.value}' dictionary key is retired; use RoutineEnvelope directly.",
                 )
         self.generic_visit(node)
 

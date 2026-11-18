@@ -96,9 +96,21 @@ Consequences, if adopted: the tree is the library of units and routines compose 
 - **g) Wrapper retirement.** The existing per-repository wrappers are deleted once their materialized views exist; any that differ from the template become overrides.
 - **h) Workspace scope.** Top-level custom folders and a top-level `agent.md` could be the workspace scope: prompts not tied to one repository, and the home of workspace directives.
 
+## Hanging Inline Python Prompts to Retire into the Tree
+
+Per the **No Stealth Directives** standard (`01_engineering_standards.md` §6), the following inline prompt strings still living in Python modules must be moved into the `agent.md` directive cascade or `ctx://prompts/.templates/` when the Prompts Tree lands:
+
+1. **`DEFAULT_AGENT_SYSTEM_PROMPT` (`insetu/core/agent/llm_contract.py`):** Fold into the base `ctx://settings/.templates/agent/agent.md` directive stack (`sys.directives`) so every LLM call inherits the stack without a hardcoded Python fallback string.
+2. **Post-Commit Test-Failure Healer Prompt (`execute_bridge_sync_and_test_gate`, in `insetu/core/agent/plan_ledger.py` today and moving to a `verify.stage` capability):** Replace the inline `[TEST GATE FAILURE FEEDBACK]` and `You are the inSetu Yomama Patch Healer...` strings with a declarative `type: loop` repair node in `/code` (`2026-11-10-agent-loop-and-sandbox.md` Sprint 3).
+3. **Cold History Compactor Prompt & `<session_summary>` Recall Note (`compact_session_history` in `insetu/core/agent/session_ledger.py`):** Move `"Condense these conversation turn receipts into a concise architectural summary..."` into a canonical LLM unit in `ctx://prompts/.templates/agent/`.
+4. **Output Schema Directives, Epistemic Mode Skeletons & Polyglot Domain Craft Lenses (`insetu/core/agent/schemas/__init__.py`, `schemas/plan.py`, `llm_contract.py`):**
+   - Keep built-in routine node prompts (`code.md` / `/do`, `plan.md`, `ask.md`, `close_session.md`) domain-neutral so they govern only the epistemic mode (`explore`, `plan`, `edit`, `verify`, `audit`, `explain`) and scope (`step`, `plan`, `turn`, `dirty`, `backlog`).
+   - Store domain-specific craft instructions (`code`, `mddb`, `prose`) as inspectable prompt lens fragments under `ctx://prompts/.templates/lenses/{code,mddb,prose}.md`, projected automatically by `compile_llm_node_request` based on the URI schemes and file extensions mounted in `Bucket 4: data` for the active step (`ActiveDomains(B_data)`).
+   - Unify `get_schema_directive(...)` (including `<<<<<<< TASK_MANAGE`, `<<<<<<< QUERY_CONTEXT`, and `<<<<<<< ASK_USER` protocol blocks) and `format_active_plan_meta_projection(...)` with `ctx://prompts/.templates/` fragments.
+
 ## Ordering
 
 - Language guidelines into directives: small, any time.
 - The tree itself needs N1 (drift and acceptance notices) and should follow P13 Phase 2 (field policy) so overrides use the same resolver.
 - Prompts that bring their own context follow six-bucket Sprint 3, which defines the declaration for routines.
-- Coordinate with `2026-11-03-routine-expression-compiler-and-parser-unification.md`, which also changes prompt templating (`{{ a | b }}` fallbacks, includes).
+- Coordinate with `2026-11-03-routine-expression-compiler-and-parser-unification.md` and `2026-11-14-greenfield-agent-compute-contract-and-envelope-unification.md`, which also change prompt templating (`{{ a | b }}` fallbacks, includes) and the LLM Ingress/Egress contract.

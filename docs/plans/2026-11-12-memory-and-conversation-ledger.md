@@ -29,7 +29,7 @@ Memory and chat history are not needed for the demo. The risk is structural: the
 1. **One pipeline, two scopes.** Conversation history and extracted memory share one storage, indexing, compaction and retrieval pipeline. They differ only by scope.
 2. **An append-only ledger, a disposable tree.** The leaves are a record of what happened: conversation turns and memory assertions. Everything above them (categories, summaries, tiers) is a derived view, rebuilt on demand.
 3. **Concept stacks.** Assertions that revise one another attach to one canonical concept in order. The default projection is the latest; the history stays addressable through `diff`.
-4. **A variable-depth ratchet.** A scope stays flat until a bucket passes a capacity `K` (default 64), then splits into sub-clusters, so the top level stays bounded from a hundred records to a million.
+4. **A variable-depth ratchet.** A scope stays flat until a bucket passes a capacity `K`, then splits into sub-clusters, so the top level stays bounded from a hundred records to a million.
 5. **Context-seeded rebucketing.** A split first moves pointers, reusing the existing sibling categories as anchors and minting new categories only for what does not fit. Summaries are rewritten second. Branches the split did not touch keep their summaries and hashes.
 6. **Two payloads per category.** Each category has a one-line `outline` for routing and a dense `slice` that keeps entities, dates, decisions and state changes. A parent is summarised from its children's slices, never from their outlines, so summaries do not drift over several levels.
 7. **Bounded progressive decompression.** A turn pins the top level of each active scope and spends a fixed jump budget opening only the branches it needs, down to `full` or `diff` on the leaves.
@@ -43,7 +43,7 @@ Most of the RFC already has a home. Building on these keeps it one mechanism.
 | --- | --- | --- |
 | Conversation leaves (`msg://`) | `chat_messages` with `seq`, `receipt`, `transaction_id`, `compacted_into_id`; the canonical procession | Lane A Sprint A1 item 4; orchestrator model §9 |
 | Cold compaction blocks | `chat_sessions.compacted_view_json`, watermarked, rebuilt when a message is deleted | Lane A Sprint A1 item 4 |
-| `msg://` lenses | `full` the message, `diff` the turn's patch, `slice` the receipt, `outline` the summary block; decay by turn age | Orchestrator model §8.1; lens contract providers table |
+| `msg://` lenses | `full` the complete turn dossier (message + `__envelope__` working set + DAG `execution_trace` + joined `llm_telemetry` & `bridge_heal_audit` records), `diff` the turn's patch (`bridge.turn_diff`), `slice` the turn receipt/trace (or `00_session_overview` for `msg://<session_id>`), `outline` the summary block; powers both `QUERY_CONTEXT` and `.zip`/Gather telemetry exports | Orchestrator model §8.1; lens contract providers table |
 | Memory leaves (`mem://`) | md-db records in an extension sidecar scope (for example `ext:memory`), indexed into `md_records` and `md_edges` | md-db model §6.1 |
 | Concept stacks (`ur:concept/<slug>`) | md-db Ur-Records (`tier: 0`, workspace-global `ur:` ids) with reverse attestation; supersession as an `md_edges` relation | md-db model §2, §6.5 |
 | `derived_from`, `attests_state_at` edges | Typed `md_edges` relations | md-db model §6.5 |
@@ -65,7 +65,10 @@ Each comes from an existing model or plan. Confirm, change or drop each one.
 2. **Addresses use the schemes that already exist:** `msg://<message_id>`, md-db record ids, `ur:` archetypes and `vfs://<repo>/<path>`. Do not add `repo://` or `ur://`.
    - Addresses are stable across revisions, never positions or line numbers (lens contract, Addresses).
    - **OPEN:** does memory get its own `mem://` scheme, or are memory leaves addressed as md-db records? Suggestion: md-db records, so memory gets indexing, FTS, proximity filters and the record editor for free.
-3. **Point-in-time references are stored as content at write time.** A memory or turn that refers to a file records its `sha256` and the repository's commit at that moment. This is the one fact that cannot be reconstructed later.
+3. **Point-in-time references and cognitive envelope snapshots are stored at write time.**
+   - Every turn that refers to a file records its `sha256` (and, once git moves into core, the repository's commit) in `chat_messages.context_hashes_json`.
+   - Every `user` message row also records the pre-turn cognitive envelope snapshot (`__envelope__`: `{mode, routine_id, scope, command_pill, prompt_clean, working_set, active_plan, sent_hashes}`), and every `assistant` message row records the post-turn settled snapshot (`{mode, routine_id, working_set, active_plan, sent_hashes, execution_trace}`), with `turn_msg_id` linking all `llm_telemetry` and `bridge_heal_audit` rows emitted during that turn.
+   - **Rewind Orthogonality (`POST agent/rewind`):** Rewinding to a `user` message node $k$ restores `chat_sessions` (`working_set_json`, `active_plan_json`, `web_chat_state_json`, `compacted_view_json`) and the composer (`/mode` trigger + prompt) to the exact pre-Turn-$k$ snapshot while leaving physical disk files untouched (file reversion remains exclusively owned by `bridge.revert` / `/undo` and Git).
    - A URI qualifier grammar (`@rev`, `@ts`) waits for the post-diff plan's revision ledger (Pillar 1, after 1.0).
    - A qualifier must not use a character that can appear in a path: `@` appears in paths such as `node_modules/@types/`.
 4. **Machine writers append; people delete.** The orchestrator model §9 already says that removing a message removes it from both the procession and the compacted view.
@@ -87,8 +90,8 @@ Each comes from an existing model or plan. Confirm, change or drop each one.
    - Conversation tiers follow time (session, episode, turn) and need no model.
    - Memory tiers need semantic clustering on the `fast` tier. That output is derived, so its nondeterminism is acceptable, but it must never lose or duplicate a leaf.
 9. **The top level is bounded.** The lens contract's `outline_root` currently returns "every addressable item in the scope". That cannot hold at a million records. It also does not hold for code today: the orchestrator model §4.1.2 keeps a full `CODE_INDEX.md` away from thinking models for the same reason.
-   - **OPEN** (lens contract, before Sprint 1 freezes it): `outline_root(scope, budget)` returns the top tier within a budget, and every node is either a leaf or expandable through `neighbours` on a containment basis.
-   - How a provider forms its tiers (directories for code, time for conversations, clustering for memory) stays the provider's business. That keeps the contract domain-neutral.
+   - Decided 2026-11-13 (lens contract, "The outline root"): `outline_root(scope, budget)` returns the finest whole outline level that fits a budget fixed for the run (5% of the smallest input token limit among the run's models); every line is a leaf or a group expandable through `neighbours` on the containment basis; it never substitutes a slice.
+   - How a provider forms its tiers (symbols, files and categories for code, time for conversations, clustering for memory) stays the provider's business. That keeps the contract domain-neutral.
 
 ## Sprints
 
@@ -98,7 +101,7 @@ Each comes from an existing model or plan. Confirm, change or drop each one.
   - Message ids are stable across compaction and deletion, so `msg://<message_id>` never changes meaning.
   - Each turn records the repository commit and the `sha256` of each file in its working set. `transaction_id` already links the files it patched through `bridge_ledger`.
 - [ ] **`compacted_view_json` is derived.** A test drops it and rebuilds it from `chat_messages`, and the result matches.
-- [ ] **Lens contract Sprint 1:** settle invariant 9's OPEN before the contract's first version.
+- [x] **Lens contract Sprint 1:** settle invariant 9's OPEN before the contract's first version (settled 2026-11-13).
 - [ ] **A fitness rule** that conversation and memory files are never tracked by git. It moves to kiemma with inSetu's adoption.
 - Done when: a session can be rebuilt from `chat_messages` alone, and every turn records the state of the repository it saw.
 
@@ -129,6 +132,7 @@ Each comes from an existing model or plan. Confirm, change or drop each one.
   - Context-seeded rebucketing (pointers first, summaries second).
   - Two payloads per category.
   - Dirty-path rollup from child slices only.
+  - All of it on the lens contract's categories mechanism ("Categories", 2026-11-13): same-level splits, changes that bubble up and stop early, the drift counter. Memory's grouping is clustering, and the contract's bounds play the role of the ratchet at `K`.
 - [ ] **Property tests:**
   - Rebuild equivalence.
   - No leaf lost or duplicated by a rebucket.
@@ -153,7 +157,7 @@ Each comes from an existing model or plan. Confirm, change or drop each one.
 
 - **OPEN:** its own `mem://` scheme, or md-db records? (Invariant 2.)
 - **OPEN:** does deleting a message purge the memory derived only from it? (Invariant 4.)
-- **OPEN:** bounded `outline_root` in the lens contract's first version? (Invariant 9.)
+- Decided 2026-11-13: `outline_root` is bounded in the lens contract's first version (invariant 9).
 - **OPEN:** should consolidation's writes wait for a person's approval until the routine has earned trust? This is the agent plan's open question on standing contracts, applied to memory.
 - **OPEN:** user-tier memory follows the person across workspaces, workspace memory stays put. Is that the split you want, and does any memory belong to a repository?
 - **OPEN:** a roadmap number, or leave it unplaced until the agent loop ships?

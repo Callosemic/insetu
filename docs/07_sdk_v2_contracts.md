@@ -38,7 +38,7 @@ ctx = my_ext_bp.get_context(workspace_id)
 
 ### 1.2 The `ExtensionContext` (`ctx`) Object
 
-Route handlers (`@my_ext_bp.route('path', methods=['POST'], risk='ui_only'|'read')`) and background workers (`@my_ext_bp.worker('task_name')`) receive a `ctx` object to safely interface with the OS. Declaring `risk='ui_only'` (or registering a `DELETE` route without an explicit `mcp_expose`) automatically sets `mcp_expose=False` and adds the capability to `get_dynamic_routine_banned_capabilities()`, while `risk='read'` adds the capability to `get_dynamic_read_only_capabilities()`.
+Route handlers (`@my_ext_bp.route('path', methods=['POST'], risk='ui_only'|'exec'|'read')`) and background workers (`@my_ext_bp.worker('task_name')`) receive a `ctx` object to safely interface with the OS. Declaring `risk='ui_only'` or `risk='exec'` (or registering a `DELETE` route without an explicit `mcp_expose`) automatically sets `mcp_expose=False` and adds the capability to `get_dynamic_routine_banned_capabilities()`, while `risk='read'` adds the capability to `get_dynamic_read_only_capabilities()`.
 * **`ctx.workspace_id`** *(String)*: The active multi-tenant tracking scope.
 * **`ctx.config`** *(Dict)*: Lazy configuration access to the active workspace configuration map.
 * **`ctx.paths`** *(Dict)*: Platform paths directory mappings (e.g., `ctx.paths['workspace_root']`).
@@ -55,6 +55,7 @@ Route handlers (`@my_ext_bp.route('path', methods=['POST'], risk='ui_only'|'read
 * **`ctx.iter_shared_mount_files(domain, exts=None)`** *(Method)*: Traverses virtual mount trees for a specified domain across authorized publisher workspaces, yielding `(target_ws, ws_uri)`.
 * **`ctx.get_manifest_files(target_key)`** *(Method)*: SSOT helper to extract polymorphic lists of files or chunks from the active manifest.
 * **`ctx.expand_selection(items)`** *(Method)*: SSOT helper to expand polymorphic selection payloads (files, folders, virtual URIs) into deduplicated physical/logical paths.
+* **`ctx.scrub_secrets(text)`** *(Method)*: Scrubs Fernet ciphertext tokens, boot tokens, URL query secret parameters, and decrypted workspace/daemon secret values from outbound or diagnostic strings (`S9`).
 * **`ctx.call(capability_name, **kwargs)`** *(Method)*: In-process capability dispatcher executing registered `@route` endpoints across blueprints and returning native dictionaries without HTTP transport overhead.
 * **`ctx.emit(event_name, **kwargs)`** *(Method)*: Emits a synchronous event, automatically injecting the tenant workspace ID.
 * **`ctx.emit_background(event_name, **kwargs)`** *(Method)*: Emits a background event, automatically injecting the tenant workspace ID.
@@ -72,7 +73,12 @@ Route handlers (`@my_ext_bp.route('path', methods=['POST'], risk='ui_only'|'read
 **Database & I/O Interfaces:**
 
 * **`ctx.db`** *(DatabaseWrapper)*: Automated SQLite connector keyed securely to the active tenant workspace schema. Exposes `.get_all(table)`, `.insert_or_replace(table, dict)`, `.update(table, data, where_col, where_val)`, `.get_by_id(table, id_val, id_col)`, and `.delete(table, col, val)`.
-* **`ctx.vfs`** *(VFSTransaction)*: Atomic Virtual File System context. Exposes `.save(filepath, content, data)`, `.delete(filepath, data)`, `.read(filepath)`, `.walk(directory)`, and `.bulk(operations)`. Directly utilizing `os.walk` or `open()` is strictly banned.
+* **`ctx.vfs`** *(VFSTransaction)*: Atomic Virtual File System context. Exposes `.save(filepath, content, data)`, `.delete(filepath, data)`, `.read(filepath)`, `.read_with_revision(filepath)` (returning `(revision_token, content)`), `.walk(directory)`, and `.bulk(operations)`. Directly utilizing `os.walk` or `open()` is strictly banned.
+* **`BoundedCache(name, max_entries=512, ttl=None, copy_mode="json")`** *(Class)*: Thread-safe bounded LRU cache re-exported from `insetu.core.sdk` / `insetu.core.utils_core` with causal `revision` matching, optional `ttl`, defensive cloning, and automatic `reset_kernel_state()` purging (`BESPOKE_MODULE_CACHE_BAN`).
+* **`MemoryVFSTransaction`** *(Class)*: Pure in-memory VFS overlay transaction helper re-exported from `akasa.vfs`.
+* **`get_current_baggage()`** *(Function)*: Returns the active `ExecutionFrame` baggage dictionary (carrying `session_id` and `turn_msg_id` across worker threads).
+* **`is_routine_banned_capability(action, extra_banned=(), ctx=None)`** *(Function)*: SSOT predicate returning `True` when a capability is restricted from declarative routine `exec` steps (via `risk='ui_only'|'exec'`, `DELETE`, `mcp_expose=False`, or `extra_banned`).
+* **`is_read_only_safe_capability(action, extra_allowed=())`** *(Function)*: SSOT predicate returning `True` when a capability is permitted in read-only (`/ask`) mode.
 * **`ctx.sync_vfs_barrier(timeout=5.0)`** *(Method)*: Enqueues an event barrier sentinel onto `_VFS_WRITE_QUEUE` and halts the current thread until all preceding VFS write transactions physically commit.
 * **`ctx.jobs`** *(JobManager)*: Off-thread background execution dispatcher. Exposes `.submit(task_name, coalesce=False, **kwargs)` for immediate tasks. For ledger-scheduled execution, use `submit_job()` for recurring metronome tasks (`interval_ms > 0`) or `submit_one_shot_job()` for self-destructing delayed tasks (`delay_ms`).
     * **Step Chaining:** You may pass a reserved `_chain` dictionary (matching `JobChainPayload`) as a kwarg to `.submit()` to automatically sequence multiple background workers or trigger an `on_complete_hook` event upon final settlement.
@@ -100,11 +106,11 @@ Extensions are strictly forbidden from relative-importing OS chassis functions. 
 * **`.setStatus(msg, timeout, isError)`**: Base helper to emit global status updates via `this.ui.setGlobalStatus`.
 * **`.compileSystem()`**: Base helper to trigger background system compilations via `this.sys.executeSystemCompile`.
 * **`this.vfs`**: `.viewSourceFile(path)`, `.viewFileGitDiff(path)`, `.isFileGitModified(path)`, `.fetchAndCopy(path)`, `.downloadFile(url)`, `.shareFiles(file, chunks)`, `.preWarmShareArtifact(baseFile, chunks, isFS)`, `.normalizeVfsURI(path)`, `.executeBulkMove(items)`, `.executeBulkArchive(items)`, `.executeBulkDelete(items)`
-* **`this.ui`**: `.openWorkspaceBrowser(options)`, `.openFolderBrowser(cb)`, `.setGlobalStatus(msg)`, `.viewTextBlob(title, content, suggestedFilename)`, `.popoutProjection(filepath)`
+* **`this.ui`**: `.openWorkspaceBrowser(options)`, `.openFolderBrowser(cb)`, `.setGlobalStatus(msg)`, `.confirmModal(options)`, `.viewTextBlob(title, content, suggestedFilename)`, `.popoutProjection(filepath)`
 * **`this.sys`**: `.executeWorkspaceMutation(path, payload)`, `.executeSystemCompile()`, `.switchTab(tabId)`, `.refreshManifest()`
 * **`AppStore.getState().getBrowsePath(subId)`** / **`setBrowsePath(pathArray, subId)`**: Retrieves or updates active browse paths scoped strictly to a designated sub-tab identifier, reflecting navigation into the URL hash without cross-tab interference.
 * **`this.editor`**: `.getEditorContent()`, `.setEditorContent(text)`, `.insertTextAtCursor(text)`
-* **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.truncateFilename(filename, maxLen, ellipsis)`, `.copyRawText(text)`, `.normalizeEntityData(data)`, `.extractManifestFiles(manifest, targetKey, domain)`, `.debounce(fn, ms)`, `.formatArtifactSize(meta)`, `.getScopedStorage(key, defaultVal, wsId)`, `.setScopedStorage(key, value, wsId)`, `.removeScopedStorage(key, wsId)`, `.nativeShareFiles(files)`, `BucketAddress.fromFilepath(path, meta)`
+* **`this.utils`**: Auto-projected SSOT of all `sutram` and `inSetu` utilities (`window.inSetu.utils`), including `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.truncateFilename(filename, maxLen, ellipsis)`, `.copyRawText(text)`, `.downloadBlob(blob, filename)`, `.getDropdownEntityActions(entityType, entityData, filterFn)`, `.normalizeEntityData(data)`, `.extractManifestFiles(manifest, targetKey, domain)`, `.debounce(fn, ms)`, `.formatArtifactSize(meta)`, `.getScopedStorage(key, defaultVal, wsId)`, `.setScopedStorage(key, value, wsId)`, `.removeScopedStorage(key, wsId)`, `.nativeShareFiles(files)`, `BucketAddress.fromFilepath(path, meta)`
 * **`.getOfflineMode(extName)`**: Retrieves the declarative offline mode capability (`"full"`, `"read_only"`, `"none"`) for a targeted extension.
 * **`.getMissingDependencies(extName)`**: Inspects whether the target extension has missing Python packages or system binaries.
 * **`.installExtensionDependencies(extName, onInstalled)`**: Dispatches an in-app background job installing declared whitelisted packages and executing post-install commands.

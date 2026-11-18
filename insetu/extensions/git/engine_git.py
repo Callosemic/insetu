@@ -2,26 +2,16 @@ from pathlib import Path
 import os
 import inspect
 import subprocess
-import threading
 import uuid
 import json
 from typing import TypedDict, Optional, List, Dict, Any, Union, Literal
 from insetu.core.sdk import (
-    BucketAddress,
-    InSetuExtension,
-    InSetuURI,
-    child_env,
-    execute_binary,
-    get_available_contexts,
-    get_repo_path,
-    get_safe_repo_id,
+    BoundedCache, BucketAddress, InSetuExtension, InSetuURI, child_env,
+    execute_binary, get_available_contexts, get_repo_path, get_safe_repo_id,
 )
 from insetu.core.languages import format_interleaved_file_diff
 from insetu.core.topology.engine_topology import (
-    is_file_tracked_by_sieve,
-    resolve_file_bucket,
-    resolve_topology_buffer,
-    topology_bp,
+    is_file_tracked_by_sieve, resolve_file_bucket, resolve_topology_buffer, topology_bp,
 )
 from insetu.core.cartographer.cartographer import map_repositories
 def get_headless_git_env():
@@ -149,8 +139,7 @@ def _register_git_compilation_step(workspace_id=None, **kwargs):
         "ext_name": "git",
         "worker_name": "compile_diffs_task"
     }]
-_DIFF_FILE_CACHE = {}
-_DIFF_FILE_CACHE_LOCK = threading.Lock()
+_DIFF_FILE_CACHE = BoundedCache("git_diff_files", max_entries=256, copy_mode="none")
 @git_bp.worker("compile_diffs_task")
 def _background_compile_diffs(
     ctx,
@@ -318,11 +307,9 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     except FileNotFoundError:
                         mtime, size = 0, 0
                     cache_key = (workspace_id, str(abs_filepath))
-                    with _DIFF_FILE_CACHE_LOCK:
-                        cached = _DIFF_FILE_CACHE.get(cache_key)
-
-                    if cached and cached['mtime'] == mtime and cached['size'] == size and cached['status'] == status:
-                        cached_blocks[orig_filepath] = cached['block']
+                    cached_block = _DIFF_FILE_CACHE.get(cache_key, revision=(mtime, size, status))
+                    if cached_block is not None:
+                        cached_blocks[orig_filepath] = cached_block
                     else:
                         stale_files.append((rel_path, status, orig_filepath, mtime, size))
 
@@ -377,22 +364,8 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     block_text = "\n".join(block_lines)
                     text_blocks.append(block_text)
 
-                    # Store in the shadow cache with thread-safe capacity eviction
                     cache_key = (workspace_id, str(abs_filepath))
-                    with _DIFF_FILE_CACHE_LOCK:
-                        if len(_DIFF_FILE_CACHE) > 250:
-                            try:
-                                oldest_key = next(iter(_DIFF_FILE_CACHE))
-                                _DIFF_FILE_CACHE.pop(oldest_key, None)
-                            except StopIteration:
-                                pass
-
-                        _DIFF_FILE_CACHE[cache_key] = {
-                            'mtime': mtime,
-                            'size': size,
-                            'status': status,
-                            'block': block_text
-                        }
+                    _DIFF_FILE_CACHE.put(cache_key, block_text, revision=(mtime, size, status))
                 if text_blocks:
                     new_content_full = header_str + "".join(text_blocks)
                     existing_content = ""

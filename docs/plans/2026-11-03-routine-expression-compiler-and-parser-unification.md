@@ -32,13 +32,14 @@ Currently, `orchestrator.py` evaluates `when:` and `until:` clauses by regex-sub
   1. **Grammar Scope:** What is the exact set of operators and built-ins we want in the routine DSL? (e.g., `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `not in`, `contains`, `and`, `or`, `not`, plus safe predicates like `empty(...)`, `len(...)`, `starts_with(...)`?)
   2. **Isomorphic Parity (`akasa` + `sutram`):** Should this expression lexer/evaluator live in Ring 0 (`akasa.utils` in Python and `sutram` in JS, alongside `compileDagWavefronts` and `extractTemplateVariables`) so Routine Studio in the browser can validate `when:` expressions live as the user types?
 
-### Vector B: Yomama Patch Parser Unification (`parser.py` vs. `bridge.js` vs. `fallback_bridge.py`)
-Currently, three separate line scanners parse Yomama `<<<<<<<` blocks:
-1. `insetu/core/bridge/parser.py` (Compiler-grade two-phase lexer + lookahead separator disambiguator).
-2. `insetu/core/bridge/bridge.js` (`BridgeStore.parseAndAppendCells`, a client-side line scanner that splits pasted text into staging cells).
-3. `insetu/fallback_bridge.py` (Zero-dependency lifeboat parser).
-* **Questions to Discuss:**
-  1. Should `bridge.js` delegate complex/ambiguous block splitting or shared marker regexes to a single shared specification, or keep a lightweight synchronous splitter on the client while relying on `parser.py` as the authoritative AST compiler?
+### Vector B: Yomama Patch Parser Unification & Declarative `YomamaDirectiveRegistry` (`parser.py` vs. `bridge_store.js` vs. `fallback_bridge.py`)
+Currently, three separate line scanners parse Yomama `<<<<<<<` blocks (`parser.py`, `bridge_store.js`, and `fallback_bridge.py`), and the nine+ directive variants (`SEARCH`, `SEARCH REGEX`, `TEXTEDIT`, `JSON_PATCH`, `RELOCATE`, `RENAME`, `MOVE_FILE`, `ARCHIVE_FILE`, `DELETE_FILE`, `TASK_MANAGE`, `QUERY_CONTEXT`) are dispatched via imperative `if/elif` chains across `parser.py`, `bridge_vfs.py`, and `bridge_store.js`.
+* **Target Greenfield Architecture — Declarative `YomamaDirectiveRegistry`:**
+  Mirroring `register_schema` in `insetu/core/agent/schemas/`, every Yomama directive should be registered as a declarative `DirectiveSpec` in one central registry (`insetu/core/bridge/directives_registry.py`):
+  1. **Lexical Grammar:** `open_markers` (e.g., `("TASK_MANAGE", "TASKMANAGE")`), `has_separator` (`True` for `SEARCH/REPLACE`, `False` for `EXECUTE` / single-body blocks), `close_markers` (`(">>>>>>> REPLACE", ">>>>>>> EXECUTE")`), and field parser (`key_value` vs `raw_body`).
+  2. **Pure State Transition Operator:** `apply_in_memory(working_tree, filepath, block) -> TransitionResult` operating over `FileTimeline` (`Optional[str] -> Optional[str]`) and automatically populating `LEDGER_CHUNK_TYPES`.
+  3. **UI Surface Routing (`surface`):** Declares how the frontend stages the directive—`"code_diff"` (staged in `BridgeStore` / `InSetuAgentStagedStacks` as a file patch cell), `"task_action"` (`TASK_MANAGE` / checkbox ticks staged as 1-click task buttons or auto-applied per `auto_complete_plan_tasks`), or `"epistemic_probe"` (`QUERY_CONTEXT` / `CALL_CAPABILITY` routed to working-set expansion).
+  4. **Prompt Protocol Generation:** Generates or validates the directive reference in `yomama_patch_protocol.md` and exports the marker table to `tests/parity/patch_block_splitting.json` so Python and JS splitters cannot drift.
 
 ### Vector C: Greenfield Routine & Prompt Compilation + `web_chat` as a First-Class Citizen
 Historically, Context Batches (`flow`), Prompt Templates (`prompts`), and DAG Routines (`agent`) evolved separately and were later merged. During live testing of External LLM Handoff (`web_chat` / `transport: manual`) and built-in `.templates` migration, we uncovered five structural failure modes caused by those seams:
@@ -65,8 +66,10 @@ Historically, Context Batches (`flow`), Prompt Templates (`prompts`), and DAG Ro
         - **Stage 2 (Unified Expression & Pipe-Chain Interpolation):** Evaluates `{{ inputs.x | sys.y | "literal" }}` in a single pass with full access to `chain_context` (`inputs`, `sys`, `nodes`, `global`), where unquoted dotted identifiers in pipe chains resolve against `chain_context` and quoted strings evaluate as literals.
         - **Stage 3 (Schema Contract Directive Injection):** Appends the formal response contract from `get_schema_directive(node.output_schema)` (`yomama_patch`, `conversational_with_patches`, `intent_classification`, `json`, etc.).
         - **Stage 4 (Secret Scrubbing & Context Binding):** Scrubs outbound secrets (`scrub_outbound_secrets`) and binds `context_uris` (`ctx://workflows/workflow_<id>_context.txt` or assembled working-set slice) as a separate field on `CompiledNodeRequest` so `prompt_text` never embeds raw `<workspace_context_...>` dumps.
-  3. **Pillar 3 — `web_chat` as a First-Class Transport Driver in `engine_llm.py`:**
-    - Elevate `web_chat` to a peer driver in `engine_llm.py` consuming `CompiledNodeRequest` and returning a structured `PausedForHandoff` envelope (`prompt_text`, `context_uris`, `output_schema`), eliminating duplicate prompt assembly in `orchestrator.py`.
+  3. **Pillar 3 — `web_chat` as a First-Class Transport Driver (`_build_handoff_branch`):**
+    - Treat `web_chat` strictly as a transport driver consuming the compiled node request and returning a structured `paused_for_user` handoff envelope (`prompt_text`, `full_context_uri`, `delta_context_uri`, `output_schema`), eliminating duplicate handoff branch assembly in `orchestrator.py`.
+  4. **Pillar 4 — Unified LLM Egress Pipeline (`process_turn_task_directives` & Node Egress):**
+    - Route all LLM replies (automated API nodes, resumed `web_chat` handoffs, and standalone `agent/ingest_reply` pastes) through one canonical egress sequence: (1) `QUERY_CONTEXT` probe resolution, (2) `extract_task_manage_directives` / `process_turn_task_directives` (`add`/`set_active` auto-applied, `complete` gated), (3) `validate_output_schema` / `parse_blocks` verification, and (4) `strip_yomama_blocks_keep_prose` transcript separation.
 
 * **Questions to Discuss:**
   1. **Pipe-Chain Grammar (`{{ a | b | 'default' }}`):** Should unquoted identifiers in a `|` chain always be looked up as variables first (falling back to literal only on the final segment if unquoted, or requiring quotes for literals in multi-hop chains)?

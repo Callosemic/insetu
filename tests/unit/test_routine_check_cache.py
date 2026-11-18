@@ -3,6 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import akasa.context as _akasa_context
 from insetu.core.agent import routine_check
 
 
@@ -60,9 +61,9 @@ class TestRoutineProblemsCache(unittest.TestCase):
         self.assertEqual(len(self.calls), 2)
 
     def test_an_old_result_is_checked_again(self):
-        with patch.object(routine_check.time, "monotonic", return_value=1000.0):
+        with patch.object(_akasa_context.time, "monotonic", return_value=1000.0):
             routine_check.attach_routine_problems(self.ctx, self._listing())
-        with patch.object(routine_check.time, "monotonic", return_value=1000.0 + routine_check.PROBLEMS_CACHE_SECONDS + 1):
+        with patch.object(_akasa_context.time, "monotonic", return_value=1000.0 + routine_check.PROBLEMS_CACHE_SECONDS + 1):
             routine_check.attach_routine_problems(self.ctx, self._listing())
         self.assertEqual(len(self.calls), 2)
 

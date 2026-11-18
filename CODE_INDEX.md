@@ -1575,6 +1575,8 @@ insetu/
         │   └── class TestDagFaultQuarantine(unittest.TestCase) # [stale?] Verifies that a fault in a non-foundational Core module or Tier 3 extension quarantines only its DAG dependents.
         ├── test_dev_exec_exposure.py # Tests that MCP neither lists nor calls dev.exec and that routines cannot use it.
         │   └── class TestDevExecExposure(unittest.TestCase) # MCP neither lists nor calls dev.exec, and routines cannot use it.
+        ├── test_dev_telemetry_and_scrubbing.py # Unit tests verifying S9 secret scrubbing in dev error logs, dev/client_error ingestion, dev/metrics payload truncation, and extension Bounde...
+        │   └── class TestDevTelemetryAndScrubbing(unittest.TestCase) # [stale?] Verifies S9 secret scrubbing on dev.db error tables, client_error ingestion, bounded get_dev_metrics previews, and extension BoundedCache pu...
         ├── test_directives.py      # New test suite verifying 4-tier directive assembly, acceptance logic, and protected target configuration.
         │   └── class TestDirectivesAndAcceptance(unittest.TestCase) # [stale?] Verifies 4-tier directive assembly, attestation acceptance, route guards, and S8 VFS protection.
         ├── test_editor_vendorize.py # S4 tests: bundled and local language descriptors resolve, local entries cannot shadow bundled ids, unknown packs are not downloaded, and invalid names are refused.

@@ -125,9 +125,8 @@ class TestConfigurationCascade(unittest.TestCase):
             self.assertEqual(mgr.get("api_token", mask_secrets=True), "")
 
             # 6. Legacy plaintext secret migration on .get() must not emit config_mutated on a read
+            mgr._sync_vfs_barrier()
             secrets_path.write_text(json.dumps({"test_ext": {"api_token": "legacy-plaintext-key"}}), encoding="utf-8")
-            akasa_utils._JSON_CACHE.clear()
-            akasa_utils._JSON_MTIME.clear()
             # patch.object: akasa/__init__.py binds the registry as `hooks`, shadowing the akasa.hooks
             # submodule, so the dotted string target only resolves on Python 3.11+.
             with patch.object(akasa_hooks, "emit") as mock_emit:

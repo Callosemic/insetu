@@ -123,6 +123,21 @@ process.exit(0);
         )
         self.assertEqual(res.returncode, 0, f"Node transitionToWorkspace test failed:\n{res.stderr}")
 
+    def test_frontend_build_manifest_discovers_all_submodules_and_memoizes_by_stat(self):
+        """resolve_frontend_build_manifest discovers split core/extension JS submodules (such as dev_sql_and_memory.js) from disk and computes an mtime-invariant content digest."""
+        from insetu.app import (
+            compute_build_id as _compute_build_id,
+            resolve_frontend_build_manifest as _resolve_frontend_build_manifest,
+        )
+
+        manifest = _resolve_frontend_build_manifest()
+        self.assertTrue(manifest.get("build_id") and len(manifest["build_id"]) == 12)
+        mod_assets = manifest.get("module_assets") or {}
+        self.assertIn("/static/extensions/dev/ext_dev.js", mod_assets.get("dev", []))
+        self.assertIn("/static/extensions/dev/dev_sql_and_memory.js", mod_assets.get("dev", []))
+        self.assertIn("/static/extensions/agent/agent_handoff_and_plan.js", mod_assets.get("agent", []))
+        self.assertEqual(_compute_build_id(), manifest["build_id"])
+
     def test_hard_reset_preserves_boot_token_and_guards_offline_caches(self):
         """The crash/reset actions in index.html must read insetu_boot_token from localStorage/sessionStorage."""
         index_html = (REPO_ROOT / "insetu" / "templates" / "index.html").read_text(encoding="utf-8")

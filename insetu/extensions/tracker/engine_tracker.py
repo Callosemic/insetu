@@ -36,8 +36,8 @@ TRACKER_SCHEMA = {
         "tier": "INTEGER DEFAULT 3",
         "parent_id": "TEXT",
         "depends_on": "TEXT DEFAULT '[]'",
-        "priority": "TEXT DEFAULT 'P2'",
-        "size": "TEXT DEFAULT 'M'"
+        "priority": "TEXT DEFAULT 'P2'", "size": "TEXT DEFAULT 'M'",
+        "__indexes__": ["idx_tracker_repo ON tracker_tickets(repo)", "idx_tracker_status ON tracker_tickets(status)", "idx_tracker_tier ON tracker_tickets(tier)", "idx_tracker_sub_bucket ON tracker_tickets(sub_bucket)"],
     }
 }
 # The database seed is now strictly empty. System defaults are dynamically injected on-the-fly.
@@ -253,10 +253,6 @@ def _background_archive_stale_tickets(ctx):
 def initialize_tracker_schemas(ctx, workspace_id=None, **kwargs):
     try:
         ctx.db.heal_uri_column("tracker_tickets", "filepath", "vfs://")
-        ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_repo ON tracker_tickets(repo)")
-        ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_status ON tracker_tickets(status)")
-        ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_tier ON tracker_tickets(tier)")
-        ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_sub_bucket ON tracker_tickets(sub_bucket)")
         ctx.db.commit()
     except Exception:
         pass

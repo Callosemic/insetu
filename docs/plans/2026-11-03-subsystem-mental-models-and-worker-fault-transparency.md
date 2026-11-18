@@ -22,6 +22,7 @@ Every model that exists or that a plan needs, so no plan names one that is not t
 | --- | --- | --- | --- |
 | `docs/models/yomama_bridge.md` | Exists. Confirm it is your dictation before the review-ready cut | REVIEWING.md's bridge stop; God-objects 3.4 (`bridge_vfs.py`) | Task 1.0 |
 | `docs/models/agent_orchestrator_and_rag.md` | Exists. Confirm it is your dictation | Six-bucket Sprint 2 (after 1.0) | Task 1.3 |
+| `docs/models/agent_harness_control_axes.md` | Exists (dictated 2026-11-17): The 6 Axes of Harness Control & v2 Extension Roadmap | Agent Loop & Polyglot Step-State Reduction | Task 1.3a |
 | `docs/models/proximity_filters_and_domain_jumps.md` | Exists (dictated 2026-11-08): Proximity Filters, Multiplex Topologies, Cross-Domain Jumps & Two-Speed RAG Lifecycle | Six-bucket Sprints 3 & 4 (after 1.0) | Task 1.3b |
 | `docs/models/mddb_and_tracker.md` | Exists (dictated 2026-11-08): Two-Axis Markdown Database (`md-db`), Sub-Record Spans, Unified Tracker Ontology & 2-Level Folder Law | `2026-11-09-mddb-and-tracker-streamlining.md` & God-Objects Wave 4.1 (after 1.0) | Task 1.3c |
 | `docs/models/vfs_occ_and_offline_outbox.md` | Not written | Post-diff 3.1, 4.3 and 4.4 (1.0) | Task 1.2 |

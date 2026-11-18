@@ -118,4 +118,5 @@ The `theme-tokens.css` file automatically intercepts and standardizes bare HTML 
 *   Standard `<button>` tags will automatically inherit the `--intent-primary` background.
 *   Applying `class="btn-sm"` provides standardized compact padding and font sizing.
 *   Standard `<textarea>`, `<input type="text">`, and `<pre>` blocks automatically bind to theme borders and backgrounds.
+*   Standard `<table>`, `<th>`, and `<td>` elements inside `sharedStyles` automatically inherit `width: 100%; border-collapse: collapse; font-family: var(--font-mono);` and themed `var(--border)` row dividers so tabular readouts (such as SQL consoles and heap profilers) require zero custom CSS or inline `style` attributes.
 *   Applying `class="spinner"` provides a lightweight, pure CSS animated loading ring.
