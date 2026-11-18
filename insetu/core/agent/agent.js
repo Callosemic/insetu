@@ -1,16 +1,17 @@
 import { html } from 'lit';
 import { InSetuElement } from '/static/extensions/system/insetu_element.js';
 import { sharedStyles } from '/static/extensions/system/insetu_sdk.js';
-import { AgentStore, ONE_SHOT_ROUTINES, classifyRoutineTargetUri, preWarmHandoffContext } from '/static/extensions/agent/agent_store.js';
+import { AgentStore, ONE_SHOT_ROUTINES, classifyRoutineTargetUri, getAllAgentCommandOptions, preWarmHandoffContext } from '/static/extensions/agent/agent_store.js';
 import { InSetuAgentRoutineProjection, InSetuCoreAgentRoutines } from '/static/extensions/agent/agent_routine_studio.js';
 import {
-    InSetuAgentExecutionTrace, InSetuAgentHandoffPanel, InSetuAgentStagedStacks,
-    InSetuCoreAgentSessions, hasYomamaPatchBlocks,
+    InSetuAgentContextHud, InSetuAgentExecutionTrace, InSetuAgentHandoffPanel, InSetuAgentPlanStepper,
+    InSetuAgentStagedStacks, InSetuCoreAgentSessions, buildAgentTelemetryMenuItems,
+    estimateWorkingSetTokensFromComponent, hasYomamaPatchBlocks,
 } from '/static/extensions/agent/agent_staged_stacks.js';
 
 export {
     AgentStore, classifyRoutineTargetUri, InSetuAgentRoutineProjection, InSetuCoreAgentRoutines,
-    InSetuCoreAgentSessions, InSetuAgentExecutionTrace, InSetuAgentHandoffPanel, InSetuAgentStagedStacks,
+    InSetuCoreAgentSessions, InSetuAgentContextHud, InSetuAgentExecutionTrace, InSetuAgentHandoffPanel, InSetuAgentPlanStepper, InSetuAgentStagedStacks,
 };
 
 export class InSetuCoreAgent extends InSetuElement {
@@ -20,11 +21,10 @@ export class InSetuCoreAgent extends InSetuElement {
         activeProfileId: { type: String }, activeSessionId: { type: String }, messages: { type: Array },
         loading: { type: Boolean }, constitutionFiles: { type: Array }, referenceFiles: { type: Array },
         pinnedFiles: { type: Array }, fileTokenMap: { type: Object }, executionTrace: { type: Array },
-        tokenLedger: { type: Object }, activePlanPath: { type: String }, pendingCheckpoint: { type: Object },
+        tokenLedger: { type: Object }, activePlanPath: { type: String }, activePlan: { type: Object }, stagedTaskActions: { type: Array }, pendingCheckpoint: { type: Object },
         agentRoutineId: { type: String }, agentMode: { type: String }, agentScope: { type: String },
         agentSettings: { type: Object }, promptInput: { type: String }, webChatWindowMode: { type: String },
-        activeJobMessage: { type: String }, pendingHandoff: { type: Object }, _lastQueryQuickpack: { type: Object, state: true },
-        _hudExpanded: { type: Boolean, state: true }
+        activeJobMessage: { type: String }, pendingHandoff: { type: Object }, _lastQueryQuickpack: { type: Object, state: true }
     };
     static styles = [sharedStyles];
     constructor() {
@@ -32,12 +32,12 @@ export class InSetuCoreAgent extends InSetuElement {
         Object.assign(this, {
             sessions: [], routines: [], llmProfiles: [], activeProfileId: 'default', activeSessionId: null,
             messages: [], loading: false, constitutionFiles: [], referenceFiles: [], pinnedFiles: [],
-            fileTokenMap: {}, executionTrace: [], activePlanPath: '', pendingCheckpoint: null,
+            fileTokenMap: {}, executionTrace: [], activePlanPath: '', activePlan: null, stagedTaskActions: [], pendingCheckpoint: null,
             tokenLedger: { prompt_tokens: 0, completion_tokens: 0, saved_by_slicing: 0, by_tier: {}, total_cost_usd: 0 },
             agentRoutineId: 'workspace_turn', agentMode: 'auto', agentScope: '', promptInput: '',
-            agentSettings: { rag_strategy: 'blast_radius', compaction_strategy: 'deterministic', run_tests_on_code: false, strict_test_enforcement: false },
+            agentSettings: { helper_mode: 'ai_assisted', run_tests_on_code: false, strict_test_enforcement: false, auto_complete_plan_tasks: false },
             webChatWindowMode: 'same_window', activeJobMessage: '', pendingHandoff: null, _handoffBranchIdx: 0,
-            _handoffBranchResponses: {}, _lastTurnCommittedFiles: [], _lastQueryQuickpack: null, _stagedBridgeCells: [], _hudExpanded: false
+            _handoffBranchResponses: {}, _lastTurnCommittedFiles: [], _lastQueryQuickpack: null, _stagedBridgeCells: []
         });
     }
 
@@ -50,10 +50,10 @@ export class InSetuCoreAgent extends InSetuElement {
             referenceFiles: state.referenceFiles || [], pinnedFiles: state.pinnedFiles || [],
             fileTokenMap: state.fileTokenMap || {}, executionTrace: state.executionTrace || [],
             tokenLedger: state.tokenLedger || { prompt_tokens: 0, completion_tokens: 0, saved_by_slicing: 0, by_tier: {}, total_cost_usd: 0 },
-            activePlanPath: state.activePlanPath || '', pendingCheckpoint: state.pendingCheckpoint || null,
+            activePlanPath: state.activePlanPath || '', activePlan: state.activePlan || null, stagedTaskActions: state.stagedTaskActions || [], pendingCheckpoint: state.pendingCheckpoint || null,
             agentRoutineId: state.agentRoutineId || 'workspace_turn', agentMode: state.agentMode || 'auto',
             agentScope: state.agentScope || '', promptInput: state.promptInput || '',
-            agentSettings: state.agentSettings || { rag_strategy: 'blast_radius', compaction_strategy: 'deterministic', run_tests_on_code: false, strict_test_enforcement: false },
+            agentSettings: state.agentSettings || { helper_mode: 'ai_assisted', run_tests_on_code: false, strict_test_enforcement: false, auto_complete_plan_tasks: false },
             webChatWindowMode: state.webChatWindowMode || 'same_window', pendingHandoff: state.pendingHandoff || null,
             _handoffBranchIdx: state.handoffBranchIdx || 0, _handoffBranchResponses: state.handoffBranchResponses || {},
             _lastTurnCommittedFiles: state.lastTurnCommittedFiles || []
@@ -111,46 +111,7 @@ export class InSetuCoreAgent extends InSetuElement {
     }
 
     _getAllCommandOptions() {
-        const baseCommands = [
-            { id: 'auto', slash: '/auto', mode: 'auto', routineId: 'workspace_turn', scope: '', label: 'Smart Router', icon: 'sparkles', intent: 'primary' },
-            { id: 'code', slash: '/code', mode: 'code', routineId: 'code', scope: '', label: 'Edit Code (Yomama Bridge)', icon: 'code', intent: 'highlight' },
-            { id: 'plan', slash: '/plan', mode: 'plan', routineId: 'plan', scope: '', label: 'Draft Architectural Plan', icon: 'file-text', intent: 'highlight' },
-            { id: 'ask', slash: '/ask', mode: 'ask', routineId: 'ask', scope: '', label: 'Read-Only Codebase Q&A', icon: 'help-circle', intent: 'neutral' },
-            { id: 'yomama', slash: '/yomama', mode: 'yomama', routineId: 'yomama', scope: '', label: 'Apply & Heal Patch Blocks', icon: 'zap', intent: 'warning' },
-            { id: 'undo', slash: '/undo', mode: 'undo', routineId: 'workspace_turn', scope: '', label: 'Revert Last Patch Transaction', icon: 'rotate-ccw', intent: 'danger' }
-        ];
-        const baseIds = new Set(['workspace_turn', 'code', 'plan', 'ask', 'yomama']);
-        const customCommands = [];
-        (this.routines || []).forEach(r => {
-            if (!r || !r.id || baseIds.has(r.id)) return;
-            customCommands.push({
-                id: `user:${r.id}`,
-                slash: `/${r.id}`,
-                altSlash: `/user:${r.id}`,
-                mode: 'user',
-                routineId: r.id,
-                scope: '',
-                label: r.title || r.name || r.id,
-                icon: 'workflow',
-                intent: 'warning',
-                ctxCount: Array.isArray(r.includes) ? r.includes.length : 0
-            });
-            (r.scopes || []).forEach(sc => {
-                customCommands.push({
-                    id: `user:${r.id}:${sc}`,
-                    slash: `/${r.id}:${sc}`,
-                    altSlash: `/user:${r.id}:${sc}`,
-                    mode: 'user',
-                    routineId: r.id,
-                    scope: sc,
-                    label: `${r.title || r.id} (${sc})`,
-                    icon: 'workflow',
-                    intent: 'warning',
-                    ctxCount: Array.isArray(r.includes) ? r.includes.length : 0
-                });
-            });
-        });
-        return [...baseCommands, ...customCommands];
+        return getAllAgentCommandOptions(this.routines);
     }
 
     _clearComposerDomValue(compEl, nextVal = '') {
@@ -199,7 +160,18 @@ export class InSetuCoreAgent extends InSetuElement {
         }
         return null;
     }
-    async _sendPrompt() {
+
+    async _handleCompletedTurnArtifact(art, sesId) {
+        await AgentStore.getState().fetchSessions();
+        await AgentStore.getState().selectSession(sesId);
+        const stagedCount = AgentStore.getState().applyTurnSettlement(art, { clearBridgeFirst: true });
+        if (stagedCount > 0) {
+            this.setStatus(`📦 Staged ${stagedCount} patch block(s) in Chat for review.`, 3000);
+        }
+    }
+
+    async _sendPrompt(options = {}) {
+        const forceResumeCheckpoint = Boolean(options?.resumeCheckpoint);
         const rawInput = (this.promptInput || '').trim();
 
         // If a routine handoff card is awaiting the external LLM response, route the bottom input box directly to resume it!
@@ -220,8 +192,7 @@ export class InSetuCoreAgent extends InSetuElement {
                 return;
             }
 
-            const priorCtx = this.pendingHandoff.chain_context || {};
-            const origPrompt = priorCtx?.global?.user_prompt || 'Resume Routine Handoff';
+            const origPrompt = this.pendingHandoff.user_prompt || 'Resume Routine Handoff';
             const targetRoutineId = this.pendingHandoff.routine_id || this.agentRoutineId;
             const sesId = await this._ensureActiveSession();
             if (!sesId) return;
@@ -238,11 +209,12 @@ export class InSetuCoreAgent extends InSetuElement {
                 {
                     session_id: sesId,
                     prompt: origPrompt,
-                    mode: this.agentMode,
+                    mode: targetRoutineId === 'code' ? 'code' : this.agentMode,
+                    profile_id: this.activeProfileId,
                     routine_id: targetRoutineId,
-                    transport: 'manual',
                     attached_files: this.pinnedFiles,
                     read_only_files: this.referenceFiles,
+                    pinned_repos: Array.from(this.ecosystem?.pinnedRepos || ['ALL']),
                     web_chat_window_mode: this.webChatWindowMode,
                     handoff_responses: nextMap
                 },
@@ -254,29 +226,19 @@ export class InSetuCoreAgent extends InSetuElement {
                         this.activeJobMessage = '';
                         const art = sData?.artifact || sData;
                         if (art?.status === 'paused_for_user' && art.pending_handoff) {
-                            const gCtx = art.chain_context?.global || {};
                             AgentStore.setState(s => ({
                                 pendingHandoff: art,
-                                pinnedFiles: Array.isArray(gCtx.attached_files) ? gCtx.attached_files : this.pinnedFiles,
-                                referenceFiles: Array.isArray(gCtx.read_only_files) ? gCtx.read_only_files : this.referenceFiles,
-                                fileTokenMap: { ...(s.fileTokenMap || {}), ...(art.file_token_map || gCtx.file_token_map || {}) },
-                                executionTrace: art.execution_trace || gCtx.execution_trace || s.executionTrace || [],
+                                activePlan: art.active_plan || s.activePlan,
+                                pinnedFiles: Array.isArray(art.attached_files) ? art.attached_files : this.pinnedFiles,
+                                referenceFiles: Array.isArray(art.read_only_files) ? art.read_only_files : this.referenceFiles,
+                                fileTokenMap: { ...(s.fileTokenMap || {}), ...(art.file_token_map || {}) },
+                                executionTrace: art.execution_trace || s.executionTrace || [],
                                 handoffBranchIdx: 0,
                                 handoffBranchResponses: {}
                             }));
                             preWarmHandoffContext(art);
                         } else {
-                            if (art?.unapplied_patches && window.inSetu?.stores?.Bridge?.getState()?.parseAndAppendCells) {
-                                window.inSetu.stores.Bridge.getState().clearPayload();
-                                window.inSetu.stores.Bridge.getState().parseAndAppendCells(art.unapplied_patches, { stayOnCurrentSurface: true });
-                            }
-                            AgentStore.setState(s => ({
-                                lastTurnCommittedFiles: art?.committed_files || [],
-                                fileTokenMap: { ...(s.fileTokenMap || {}), ...(art?.file_token_map || {}) },
-                                executionTrace: art?.execution_trace || s.executionTrace || []
-                            }));
-                            await AgentStore.getState().fetchSessions();
-                            await AgentStore.getState().selectSession(sesId);
+                            await this._handleCompletedTurnArtifact(art, sesId);
                         }
                     },
                     onError: (err) => {
@@ -318,22 +280,26 @@ export class InSetuCoreAgent extends InSetuElement {
             await this._undoLastTurn();
             return;
         }
+        // If a budget checkpoint is pending and user confirms resume:
+        let resumeCheckpoint = forceResumeCheckpoint;
+        if (!resumeCheckpoint && this.pendingCheckpoint && (rawInput.toLowerCase().includes('resume') || rawInput.toLowerCase().includes('continue'))) {
+            resumeCheckpoint = true;
+        }
+        if (resumeCheckpoint) {
+            AgentStore.setState({ pendingCheckpoint: null });
+        }
+
         const isCustomRoutine = effectiveRoutineId && effectiveRoutineId !== 'workspace_turn';
-        if (!cleanedInput && !isCustomRoutine) return;
+        if (!cleanedInput && !isCustomRoutine && !resumeCheckpoint) return;
         const activePill = (effectiveMode === 'user' && effectiveRoutineId && effectiveRoutineId !== 'workspace_turn')
             ? `/${effectiveRoutineId}${effectiveScope ? ':' + effectiveScope : ''}`
             : `/${effectiveMode || 'auto'}`;
         const displayUserBubble = cleanedInput
             ? (effectiveMode !== 'auto' ? `${activePill} ${cleanedInput}` : cleanedInput)
             : activePill;
-        const userText = cleanedInput || activePill;
-
-        // If a budget checkpoint is pending and user confirms resume:
-        let priorContext = null;
-        if (this.pendingCheckpoint && (rawInput.toLowerCase().includes('resume') || rawInput.toLowerCase().includes('continue'))) {
-            priorContext = this.pendingCheckpoint.chain_context || null;
-            AgentStore.setState({ pendingCheckpoint: null });
-        }
+        const userText = resumeCheckpoint
+            ? (this.pendingCheckpoint?.user_prompt || 'Resume from budget checkpoint')
+            : (cleanedInput || activePill);
 
         if (
             !userText.trim().startsWith('/yomama') &&
@@ -353,7 +319,17 @@ export class InSetuCoreAgent extends InSetuElement {
             agentMode: isOneShot ? 'auto' : effectiveMode,
             agentRoutineId: isOneShot ? 'workspace_turn' : effectiveRoutineId,
             agentScope: isOneShot ? '' : effectiveScope,
-            messages: [...(s.messages || []), { role: 'user', content: displayUserBubble, timestamp: Date.now() / 1000 }]
+            messages: resumeCheckpoint
+                ? (s.messages || [])
+                : [...(s.messages || []), {
+                    role: 'user',
+                    content: cleanedInput || activePill,
+                    mode: effectiveMode,
+                    routine_id: effectiveRoutineId,
+                    scope: effectiveScope,
+                    command_pill: activePill,
+                    timestamp: Date.now() / 1000
+                }]
         }));
         this.activeJobMessage = "Submitting prompt...";
         const runTurn = this.api.bindJobAction(
@@ -367,8 +343,9 @@ export class InSetuCoreAgent extends InSetuElement {
                 routine_id: effectiveRoutineId,
                 attached_files: this.pinnedFiles,
                 read_only_files: this.referenceFiles,
+                pinned_repos: Array.from(this.ecosystem?.pinnedRepos || ['ALL']),
                 web_chat_window_mode: this.webChatWindowMode,
-                prior_chain_context: priorContext
+                resume_checkpoint: resumeCheckpoint || undefined
             },
             {
                 onProgress: (msg) => {
@@ -378,17 +355,17 @@ export class InSetuCoreAgent extends InSetuElement {
                     this.activeJobMessage = '';
                     const art = statusData?.artifact || statusData;
                     if (art?.status === 'paused_for_user' && art.pending_handoff) {
-                        const globalCtx = art.chain_context?.global || {};
-                        const nextPinned = Array.isArray(globalCtx.attached_files) ? globalCtx.attached_files : this.pinnedFiles;
-                        const nextRef = Array.isArray(globalCtx.read_only_files) ? globalCtx.read_only_files : this.referenceFiles;
-                        const nextConst = Array.isArray(globalCtx.constitution_files) ? globalCtx.constitution_files : this.constitutionFiles;
+                        const nextPinned = Array.isArray(art.attached_files) ? art.attached_files : this.pinnedFiles;
+                        const nextRef = Array.isArray(art.read_only_files) ? art.read_only_files : this.referenceFiles;
+                        const nextConst = Array.isArray(art.constitution_files) ? art.constitution_files : this.constitutionFiles;
                         AgentStore.setState(s => ({
                             pendingHandoff: art,
+                            activePlan: art.active_plan || s.activePlan,
                             constitutionFiles: nextConst,
                             pinnedFiles: nextPinned,
                             referenceFiles: nextRef,
-                            fileTokenMap: { ...(s.fileTokenMap || {}), ...(art.file_token_map || globalCtx.file_token_map || {}) },
-                            executionTrace: art.execution_trace || globalCtx.execution_trace || [],
+                            fileTokenMap: { ...(s.fileTokenMap || {}), ...(art.file_token_map || {}) },
+                            executionTrace: art.execution_trace || [],
                             handoffBranchIdx: 0,
                             handoffBranchResponses: {}
                         }));
@@ -401,18 +378,7 @@ export class InSetuCoreAgent extends InSetuElement {
                         });
                         return;
                     }
-                    if (art?.unapplied_patches && window.inSetu?.stores?.Bridge?.getState()?.parseAndAppendCells) {
-                        window.inSetu.stores.Bridge.getState().clearPayload();
-                        window.inSetu.stores.Bridge.getState().parseAndAppendCells(art.unapplied_patches, { stayOnCurrentSurface: true });
-                    }
-                    AgentStore.setState(s => ({
-                        pendingHandoff: null,
-                        lastTurnCommittedFiles: art?.committed_files || [],
-                        fileTokenMap: { ...(s.fileTokenMap || {}), ...(art?.file_token_map || {}) },
-                        executionTrace: art?.execution_trace || s.executionTrace || []
-                    }));
-                    await AgentStore.getState().fetchSessions();
-                    await AgentStore.getState().selectSession(sesId);
+                    await this._handleCompletedTurnArtifact(art, sesId);
                 },
                 onError: (err) => {
                     this.activeJobMessage = '';
@@ -430,32 +396,16 @@ export class InSetuCoreAgent extends InSetuElement {
     async _ingestPastedPatchesAndProse(rawText) {
         AgentStore.setState({ promptInput: '' });
         this._clearComposerDomValue(null, '');
-        const bStore = window.inSetu?.stores?.Bridge?.getState();
-        const stagedCount = bStore?.parseAndAppendCells
-            ? bStore.parseAndAppendCells(rawText, { stayOnCurrentSurface: true })
-            : 0;
         const sesId = await this._ensureActiveSession();
         const res = await this.api.postJson('agent/ingest_reply', {
             session_id: sesId || '',
             role: 'assistant',
             raw_text: rawText
         }).catch(() => null);
+        const stagedCount = AgentStore.getState().applyTurnSettlement(res || { unapplied_patches: rawText }, { clearBridgeFirst: false });
         if (res?.quickpack?.base_filename) {
             this._lastQueryQuickpack = res.quickpack;
             this.requestUpdate();
-        }
-        if (res && res.status === 'success' && res.content) {
-            AgentStore.setState(s => ({
-                messages: [...(s.messages || []), {
-                    message_id: res.message_id,
-                    seq: res.seq,
-                    role: 'assistant',
-                    content: res.content,
-                    receipt: res.receipt,
-                    compaction_tier: 'hot',
-                    timestamp: res.timestamp || (Date.now() / 1000)
-                }]
-            }));
         }
         if (res?.quickpack?.base_filename && stagedCount > 0) {
             this.setStatus(`📦 Staged ${stagedCount} patch(es) & compiled Query Quickpack (${res.quickpack.file_count} file(s)).`, 3000);
@@ -468,12 +418,89 @@ export class InSetuCoreAgent extends InSetuElement {
 
     async _removeMessageBubble(msg, idx) {
         const msgId = msg?.message_id;
-        AgentStore.setState(s => ({
-            messages: (s.messages || []).filter((m, i) => (msgId ? m.message_id !== msgId : i !== idx))
-        }));
+        const isLast = idx >= (this.messages?.length || 1) - 1;
+        AgentStore.setState(s => {
+            const nextMsgs = (s.messages || []).filter((m, i) => (msgId ? m.message_id !== msgId : i !== idx));
+            const total = nextMsgs.length;
+            return {
+                messages: nextMsgs.map((m, i) => ({
+                    ...m,
+                    compaction_tier: i >= Math.max(0, total - 4) ? 'hot' : (i >= Math.max(0, total - 12) ? 'warm' : 'cold')
+                }))
+            };
+        });
         if (msgId) {
             await this.api.delete(`agent/messages/${encodeURIComponent(msgId)}`).catch(() => {});
+            if (isLast && this.activeSessionId) {
+                await AgentStore.getState().selectSession(this.activeSessionId);
+            }
+        } else if (isLast && this.activeSessionId) {
+            await this.api.postJson('agent/rewind', { session_id: this.activeSessionId }).catch(() => null);
+            await AgentStore.getState().selectSession(this.activeSessionId);
         }
+    }
+
+    async _rewindToMessageBubble(msg, idx) {
+        const msgId = msg?.message_id;
+        if (this.activeJobMessage) {
+            await this._cancelTurn().catch(() => {});
+        }
+        let restoredPrompt = String(msg?.content || '').trim();
+        let nextMode = msg?.mode || this.agentMode || 'auto';
+        let nextRoutineId = msg?.routine_id || this.agentRoutineId || 'workspace_turn';
+        let nextScope = msg?.scope || this.agentScope || '';
+
+        if (msgId || this.activeSessionId) {
+            const res = await this.api.postJson('agent/rewind', {
+                message_id: msgId || undefined,
+                session_id: this.activeSessionId || undefined
+            }).catch(() => null);
+            if (res?.prompt_text !== undefined) {
+                restoredPrompt = String(res.prompt_text).trim();
+            }
+            if (res?.mode) nextMode = res.mode;
+            if (res?.routine_id) nextRoutineId = res.routine_id;
+            if (res?.scope !== undefined) nextScope = res.scope || '';
+        } else {
+            AgentStore.setState(s => ({
+                messages: (s.messages || []).slice(0, idx),
+                pendingHandoff: null,
+                pendingCheckpoint: null,
+                handoffBranchIdx: 0,
+                handoffBranchResponses: {}
+            }));
+        }
+
+        window.inSetu?.stores?.Bridge?.getState()?.clearPayload?.();
+        const slashMatch = restoredPrompt.match(/^(\/(?:user:[a-zA-Z0-9_:-]+|[a-zA-Z0-9_:-]+))(?:\s+([\s\S]*))?$/);
+        if (slashMatch) {
+            const typedSlash = slashMatch[1].toLowerCase();
+            const matchedOpt = this._getAllCommandOptions().find(
+                o => (o.slash || '').toLowerCase() === typedSlash || (o.altSlash || '').toLowerCase() === typedSlash
+            );
+            if (matchedOpt) {
+                nextMode = matchedOpt.mode;
+                nextRoutineId = matchedOpt.routineId || 'workspace_turn';
+                nextScope = matchedOpt.scope || '';
+                restoredPrompt = (slashMatch[2] || '').trim();
+            }
+        }
+        if (this.activeSessionId) {
+            await AgentStore.getState().selectSession(this.activeSessionId);
+        }
+        AgentStore.setState({
+            agentMode: nextMode,
+            agentRoutineId: nextRoutineId,
+            agentScope: nextScope,
+            promptInput: restoredPrompt,
+            executionTrace: [],
+            pendingHandoff: null,
+            pendingCheckpoint: null,
+            handoffBranchIdx: 0,
+            handoffBranchResponses: {}
+        });
+        this._clearComposerDomValue(null, restoredPrompt);
+        this.setStatus("⏪ Rewound conversation to prompt.", 2500);
     }
 
     async _cancelTurn() {
@@ -495,193 +522,28 @@ export class InSetuCoreAgent extends InSetuElement {
         }
     }
 
-    _estimateFileTokens(filepath, tier = 'pinned') {
-        if (!filepath) return 0;
-        const mapVal = this.fileTokenMap?.[filepath];
-        if (Number(mapVal) > 0) return Number(mapVal);
-        const activeBuffers = window.inSetu?.stores?.Fs?.getState?.()?.activeBuffers || {};
-        const buf = activeBuffers[filepath];
-        if (buf && typeof buf.content === 'string' && buf.content !== 'Loading...') {
-            const fullTok = Math.max(1, Math.round(buf.content.length / 4));
-            return tier === 'reference' ? Math.max(40, Math.round(fullTok * 0.2)) : fullTok;
-        }
-        const wsRaw = AgentStore.getState()?.workingSetRaw || [];
-        const entry = wsRaw.find(x => x && x.filepath === filepath);
-        if (entry && Number(entry.tokens) > 0) {
-            return Number(entry.tokens);
-        }
-        if (tier === 'constitution') return 450;
-        if (tier === 'reference') return 200;
-        return 800;
-    }
-
-    _getScopedConstitutionFiles() {
-        const rawConst = Array.from(new Set(this.constitutionFiles || []));
-        const explicitFiles = [...(this.pinnedFiles || []), ...(this.referenceFiles || [])];
-        if (this.activePlanPath) explicitFiles.push(this.activePlanPath);
-        const activeRepos = new Set(
-            explicitFiles
-                .map(fp => new this.utils.InSetuURI(fp).repo)
-                .filter(Boolean)
-        );
-        const globalPins = this.ecosystem?.pinnedRepos;
-        if (globalPins && !globalPins.has('ALL')) {
-            globalPins.forEach(r => activeRepos.add(r));
-        }
-        if (activeRepos.size === 0) return rawConst;
-        const filtered = rawConst.filter(fp => activeRepos.has(new this.utils.InSetuURI(fp).repo));
-        return filtered.length > 0 ? filtered : rawConst;
-    }
-
-    _formatContextPillLabel(filepath, tier, tokCount) {
-        const uri = new this.utils.InSetuURI(filepath);
-        const repoPrefix = uri.repo ? `[${uri.repo}] ` : '';
-        const icon = tier === 'constitution' ? '📜' : (tier === 'reference' ? '🔒' : '✏️');
-        const badge = tier === 'constitution' ? '[Auto]' : (tier === 'reference' ? '[Slice]' : '[Full]');
-        return `${icon} ${repoPrefix}${uri.basename} · ${tokCount} tok ${badge}`;
-    }
-
-    _estimateWorkingSetTokens() {
-        const charPerTok = 4;
-        const scopedConstitution = this._getScopedConstitutionFiles();
-        const cTokens = scopedConstitution.reduce((acc, fp) => acc + this._estimateFileTokens(fp, 'constitution'), 0);
-        const rTokens = (this.referenceFiles || []).reduce((acc, fp) => acc + this._estimateFileTokens(fp, 'reference'), 0);
-        const pTokens = (this.pinnedFiles || []).reduce((acc, fp) => acc + this._estimateFileTokens(fp, 'pinned'), 0);
-        const promptTokens = Math.round((this.promptInput || '').length / charPerTok);
-        return {
-            scopedConstitution,
-            constitution: cTokens,
-            references: rTokens,
-            pinned: pTokens,
-            prompt: promptTokens,
-            total: cTokens + rTokens + pTokens + promptTokens
-        };
-    }
-
     render() {
-        const tokenEst = this._estimateWorkingSetTokens();
-        const scopedConstitution = tokenEst.scopedConstitution || [];
-        const softCeiling = 12000;
-        const ceilingRatio = tokenEst.total / softCeiling;
-        const tokenIntent = ceilingRatio > 1.0 ? 'danger' : (ceilingRatio > 0.75 ? 'warning' : 'success');
-
-        const totalContextFiles = scopedConstitution.length + (this.referenceFiles?.length || 0) + (this.pinnedFiles?.length || 0);
-        const compactTokStr = tokenEst.total >= 1000 ? `${(tokenEst.total / 1000).toFixed(1)}k` : `${tokenEst.total}`;
+        const tokenEst = estimateWorkingSetTokensFromComponent(this);
         const activeNodeName = this.pendingHandoff?.pending_handoff?.node_id
             || (this.executionTrace || []).find(s => s.status === 'running')?.id
             || 'next turn';
-        const byTier = this.tokenLedger?.by_tier || {};
-        const totalCostUsd = Number(this.tokenLedger?.total_cost_usd || 0);
+        const budgetLimitUsd = Number(this.tokenLedger?.budget_limit_usd || 1.0);
+        const budgetStepUsd = Number(this.tokenLedger?.budget_step_usd || 1.0);
 
         return html`
             <sutram-view>
-                <sutram-floating-hud
+                <insetu-agent-context-hud
                     slot="overlay"
-                    position="top-right"
-                    icon="database"
-                    .badgeText=${`~${compactTokStr}${totalContextFiles > 0 ? ` (${totalContextFiles})` : ''}`}
-                    .titleText=${`Context Budget: ~${tokenEst.total.toLocaleString()} / ${softCeiling.toLocaleString()} tok`}
-                    .intent=${tokenIntent}
-                    .open=${this._hudExpanded}
-                    @sutram-hud-toggled=${(e) => { this._hudExpanded = e.detail.open; }}>
-                    <sutram-tag slot="header" .text=${tokenIntent === 'danger' ? 'Over Soft Budget' : (tokenIntent === 'warning' ? 'Near Ceiling' : 'Optimal')} .intent=${tokenIntent}></sutram-tag>
-                    <sutram-stack direction="col" gap="sm">
-                        <sutram-surface variant="inset" padding="xs" gap="xs">
-                            <sutram-stack direction="row" justify="between" align="center" gap="xs">
-                                <strong>1. Working Context (→ ${activeNodeName})</strong>
-                                <sutram-tag .text=${`~${tokenEst.total.toLocaleString()} tok`} .intent=${tokenIntent}></sutram-tag>
-                            </sutram-stack>
-                            <sutram-label .text=${`Constitution ${tokenEst.constitution.toLocaleString()} · Slices ${tokenEst.references.toLocaleString()} · Pinned ${tokenEst.pinned.toLocaleString()} · Prompt ${tokenEst.prompt.toLocaleString()} tok`}></sutram-label>
-                            ${totalContextFiles > 0 ? html`
-                                <sutram-stack direction="row" gap="xs" ?wrap=${true}>
-                                    ${scopedConstitution.map(f => html`
-                                        <sutram-pill
-                                            labelText=${this._formatContextPillLabel(f, 'constitution', this._estimateFileTokens(f, 'constitution'))}
-                                            pillId=${f}
-                                            title=${`${f} — Tier 0 Constitution File (Auto-Pinned Architectural Standards)`}
-                                            ?active=${true}>
-                                        </sutram-pill>
-                                    `)}
-                                    ${(this.referenceFiles || []).filter(f => !scopedConstitution.includes(f)).map(f => html`
-                                        <sutram-pill
-                                            labelText=${this._formatContextPillLabel(f, 'reference', this._estimateFileTokens(f, 'reference'))}
-                                            pillId=${f}
-                                            title="${f} — Tier 1 Reference Interface (Click to promote to Full Source, Shift+Click to dismiss)"
-                                            ?active=${false}
-                                            @sutram-pill-toggled=${(e) => {
-                                                if (e.detail?.originalEvent?.shiftKey) {
-                                                    AgentStore.setState({
-                                                        referenceFiles: this.referenceFiles.filter(x => x !== f)
-                                                    });
-                                                } else {
-                                                    AgentStore.setState({
-                                                        referenceFiles: this.referenceFiles.filter(x => x !== f),
-                                                        pinnedFiles: [...this.pinnedFiles, f]
-                                                    });
-                                                }
-                                            }}>
-                                        </sutram-pill>
-                                    `)}
-                                    ${(this.pinnedFiles || []).filter(f => !scopedConstitution.includes(f)).map(f => html`
-                                        <sutram-pill
-                                            labelText=${this._formatContextPillLabel(f, 'pinned', this._estimateFileTokens(f, 'pinned'))}
-                                            pillId=${f}
-                                            title="${f} — Tier 2 Pinned Edit Target (Click to demote to AST Slice, Shift+Click to dismiss)"
-                                            ?active=${true}
-                                            @sutram-pill-toggled=${(e) => {
-                                                if (e.detail?.originalEvent?.shiftKey) {
-                                                    AgentStore.setState({
-                                                        pinnedFiles: this.pinnedFiles.filter(x => x !== f)
-                                                    });
-                                                } else {
-                                                    AgentStore.setState({
-                                                        pinnedFiles: this.pinnedFiles.filter(x => x !== f),
-                                                        referenceFiles: [...this.referenceFiles, f]
-                                                    });
-                                                }
-                                            }}>
-                                        </sutram-pill>
-                                    `)}
-                                </sutram-stack>
-                            ` : html`<sutram-label text="Working set empty. Use [+] below to attach files or run a turn to auto-populate."></sutram-label>`}
-                        </sutram-surface>
+                    .constitutionFiles=${this.constitutionFiles}
+                    .referenceFiles=${this.referenceFiles}
+                    .pinnedFiles=${this.pinnedFiles}
+                    .fileTokenMap=${this.fileTokenMap}
+                    .tokenLedger=${this.tokenLedger}
+                    .activeNodeName=${activeNodeName}
+                    .tokenEst=${tokenEst}>
+                </insetu-agent-context-hud>
 
-                        <sutram-surface variant="inset" padding="xs" gap="xs">
-                            <sutram-stack direction="row" justify="between" align="center" gap="xs">
-                                <strong>2. Session Token & Cost Ledger</strong>
-                                <sutram-tag .text=${`~$${totalCostUsd.toFixed(4)}`} intent="highlight"></sutram-tag>
-                            </sutram-stack>
-                            <sutram-label .text=${`Cumulative: ${(this.tokenLedger?.prompt_tokens || 0).toLocaleString()} in / ${(this.tokenLedger?.completion_tokens || 0).toLocaleString()} out · ~${(this.tokenLedger?.saved_by_slicing ?? this.tokenLedger?.saved_by_slicing_tokens ?? 0).toLocaleString()} tok saved by slicing`}></sutram-label>
-                            ${Object.entries(byTier).filter(([, info]) => info && info.calls > 0).map(([tierKey, info]) => html`
-                                <sutram-stack direction="row" justify="between" align="center" gap="xs">
-                                    <sutram-tag .text=${tierKey} intent="neutral"></sutram-tag>
-                                    <sutram-label ?monospace=${true} .text=${`${info.calls} call(s) · ${(info.prompt_tokens || 0).toLocaleString()} in / ${(info.completion_tokens || 0).toLocaleString()} out · ~$${Number(info.cost_usd || 0).toFixed(4)}`}></sutram-label>
-                                </sutram-stack>
-                            `)}
-                        </sutram-surface>
-                    </sutram-stack>
-                </sutram-floating-hud>
-
-                <sutram-stack direction="col" gap="md" ?flex=${true}>
-                    ${this.activePlanPath ? html`
-                        <sutram-surface variant="tinted" intent="highlight" padding="sm">
-                            <sutram-stack direction="row" justify="between" align="center" gap="sm">
-                                <sutram-stack direction="row" align="center" gap="xs">
-                                    <sutram-icon name="list-checks" size="sm" intent="highlight"></sutram-icon>
-                                    <strong>Active Plan: ${new this.utils.InSetuURI(this.activePlanPath).basename}</strong>
-                                </sutram-stack>
-                                <sutram-btn
-                                    ?compact=${true}
-                                    intent="highlight"
-                                    icon="external-link"
-                                    label="Open Plan"
-                                    @click=${() => {
-                                        if (this.vfs?.viewSourceFile) this.vfs.viewSourceFile(this.activePlanPath, true);
-                                    }}>
-                                </sutram-btn>
-                            </sutram-stack>
-                        </sutram-surface>
-                    ` : ''}
+                <sutram-stack direction="col" gap="sm" padding="sm" ?flex=${true} @insetu-start-next-plan-step=${() => this._sendPrompt()}>
                     ${this.messages.length === 0 && !this.activeJobMessage ? html`
                         <sutram-surface variant="tinted" intent="primary" padding="lg">
                             <sutram-stack direction="col" align="center" justify="center" gap="sm">
@@ -698,44 +560,75 @@ export class InSetuCoreAgent extends InSetuElement {
                                 <sutram-stack direction="row" align="center" gap="xs">
                                     <sutram-label .text=${m.role === 'user' ? 'You' : 'Yomama Agent'}></sutram-label>
                                     ${m.seq ? html`<sutram-tag .text=${`#${m.seq}`} intent="neutral" title=${m.message_id || ''}></sutram-tag>` : ''}
+                                    ${m.role === 'user' && (m.command_pill || (m.mode && m.mode !== 'auto')) ? html`
+                                        <sutram-tag
+                                            .text=${m.command_pill || `/${m.mode}`}
+                                            intent="warning"
+                                            title=${`Routine: ${m.routine_id || m.mode}`}>
+                                        </sutram-tag>
+                                    ` : ''}
                                     ${m.compaction_tier ? html`
                                         <sutram-tag
-                                            .text=${m.compaction_tier === 'hot' ? 'Hot • Full' : (m.compaction_tier === 'warm' ? 'Warm • Receipt' : 'Cold • Summary')}
+                                            .text=${m.compaction_tier === 'hot' ? 'Hot' : (m.compaction_tier === 'warm' ? 'Warm' : 'Cold')}
                                             intent=${m.compaction_tier === 'hot' ? 'success' : (m.compaction_tier === 'warm' ? 'highlight' : 'neutral')}
                                             title=${m.receipt ? `Receipt: ${m.receipt}` : ''}>
                                         </sutram-tag>
                                     ` : ''}
                                 </sutram-stack>
-                                <sutram-btn
-                                    ?compact=${true}
-                                    intent="neutral"
-                                    icon="x"
-                                    title="Remove message from transcript & compaction view"
-                                    @click=${() => this._removeMessageBubble(m, mIdx)}>
-                                </sutram-btn>
+                                <sutram-stack direction="row" align="center" gap="xs">
+                                    <sutram-btn
+                                        ?compact=${true}
+                                        intent="neutral"
+                                        icon="clipboard"
+                                        title="Copy message text"
+                                        @click=${() => {
+                                            const rawTxt = String(m.content || '').trim();
+                                            const pillPrefix = (m.role === 'user' && !rawTxt.startsWith('/'))
+                                                ? (m.command_pill || (m.mode && m.mode !== 'auto' ? `/${m.mode}` : ''))
+                                                : '';
+                                            const fullCopy = pillPrefix ? `${pillPrefix} ${rawTxt}`.trim() : rawTxt;
+                                            this.utils.copyRawText(fullCopy, "📋 Message copied!");
+                                        }}>
+                                    </sutram-btn>
+                                    ${m.role === 'user' ? html`
+                                        <sutram-btn
+                                            ?compact=${true}
+                                            intent="warning"
+                                            icon="rewind"
+                                            title="Rewind conversation to this prompt (restores pre-turn working set & mode)"
+                                            @click=${() => this._rewindToMessageBubble(m, mIdx)}>
+                                        </sutram-btn>
+                                    ` : ''}
+                                    <sutram-btn
+                                        ?compact=${true}
+                                        intent="neutral"
+                                        icon="x"
+                                        title="Remove message from transcript & compaction view"
+                                        @click=${() => this._removeMessageBubble(m, mIdx)}>
+                                    </sutram-btn>
+                                </sutram-stack>
                             </sutram-stack>
                             <sutram-label intent="neutral" ?multiline=${true} .text=${m.content}></sutram-label>
                         </sutram-surface>
                     `)}
-                    ${this.pendingCheckpoint && this.pendingCheckpoint.chain_context ? html`
+                    ${this.pendingCheckpoint && this.pendingCheckpoint.status ? html`
                         <sutram-surface variant="tinted" intent="warning" padding="md" gap="sm">
                             <sutram-stack direction="row" justify="between" align="center" gap="sm">
                                 <sutram-stack direction="row" align="center" gap="xs">
                                     <sutram-icon name="alert-circle" size="md" intent="warning"></sutram-icon>
-                                    <strong>P1 Execution Budget Checkpoint Reached</strong>
+                                    <strong>Session Budget Checkpoint Reached</strong>
                                 </sutram-stack>
                                 <sutram-tag text="Wavefront ${this.pendingCheckpoint.wavefront_index ?? 0}" intent="warning"></sutram-tag>
                             </sutram-stack>
-                            <sutram-label text="Turn paused at step budget limit to prevent unbounded execution. Resume to continue the next wavefront:"></sutram-label>
+                            <sutram-label .text=${this.pendingCheckpoint.reason || `Session spend reached $${budgetLimitUsd.toFixed(2)}. Resume to increase session budget by +$${budgetStepUsd.toFixed(2)} (to $${(budgetLimitUsd + budgetStepUsd).toFixed(2)}):`}></sutram-label>
                             <sutram-stack direction="row" align="center" gap="sm">
                                 <sutram-btn
                                     ?compact=${true}
                                     intent="warning"
                                     icon="play"
-                                    label="Resume Turn"
+                                    label="Resume Turn (+$${budgetStepUsd.toFixed(2)})"
                                     @click=${() => {
-                                        AgentStore.setState({ promptInput: 'Resume from budget checkpoint' });
-                                        this._sendPrompt();
+                                        this._sendPrompt({ resumeCheckpoint: true });
                                     }}>
                                 </sutram-btn>
                                 <sutram-btn
@@ -750,9 +643,30 @@ export class InSetuCoreAgent extends InSetuElement {
                     ` : ''}
                     <insetu-agent-execution-trace
                         .trace=${this.executionTrace}
+                        .activePlan=${this.activePlan}
+                        .activePlanPath=${this.activePlanPath}
+                        .sessionId=${this.activeSessionId}
                         .activeJobMessage=${this.activeJobMessage}
                         .loading=${this.loading}>
                     </insetu-agent-execution-trace>
+                    ${(() => {
+                        const traceVisible = Boolean((this.executionTrace && this.executionTrace.length > 0) || this.activeJobMessage);
+                        const activeTaskObj = (this.activePlan?.tasks || []).find(t => t.id === this.activePlan?.active_task_id);
+                        const needsStandaloneStepper = Boolean(
+                            this.activePlan?.pending_commit_tx
+                            || (this.stagedTaskActions && this.stagedTaskActions.length > 0)
+                            || (!traceVisible && (this.activePlanPath || this.activePlan?.recommend_file_upgrade || ['explore', 'verify'].includes(activeTaskObj?.kind)))
+                        );
+                        return needsStandaloneStepper ? html`
+                            <insetu-agent-plan-stepper
+                                .activePlan=${this.activePlan}
+                                .activePlanPath=${this.activePlanPath}
+                                .sessionId=${this.activeSessionId}
+                                .stagedTaskActions=${this.stagedTaskActions || []}
+                                @insetu-clear-task-actions=${() => AgentStore.setState({ stagedTaskActions: [] })}>
+                            </insetu-agent-plan-stepper>
+                        ` : '';
+                    })()}
                     <insetu-agent-staged-stacks
                         .cells=${this._stagedBridgeCells}
                         .activeProfileId=${this.activeProfileId}
@@ -812,8 +726,10 @@ export class InSetuCoreAgent extends InSetuElement {
                             }
                             : { id: 'auto', token: 'auto', pillLabel: '/auto ▾' }}
                         @sutram-input-changed=${e => {
-                            const val = e.detail?.value ?? '';
-                            const slashMatch = val.match(/^(\/(?:user:[a-zA-Z0-9_:-]+|[a-zA-Z0-9_:-]+))\s+([\s\S]*)$/);
+                            if (e.target !== e.currentTarget) return;
+                            const rawVal = e.detail?.value;
+                            if (typeof rawVal !== 'string') return;
+                            const slashMatch = rawVal.match(/^(\/(?:user:[a-zA-Z0-9_:-]+|[a-zA-Z0-9_:-]+))\s+([\s\S]*)$/);
                             if (slashMatch) {
                                 const typedSlash = slashMatch[1].toLowerCase();
                                 const restText = slashMatch[2] || '';
@@ -825,7 +741,7 @@ export class InSetuCoreAgent extends InSetuElement {
                                     return;
                                 }
                             }
-                            AgentStore.setState({ promptInput: val });
+                            AgentStore.setState({ promptInput: rawVal });
                         }}
                         @sutram-trigger-changed=${e => {
                             const trig = e.detail.trigger;
@@ -862,7 +778,7 @@ export class InSetuCoreAgent extends InSetuElement {
                                             ?flush=${true}
                                             .value=${this.activeProfileId || 'default'}
                                             .options=${((this.llmProfiles && this.llmProfiles.length > 0) ? this.llmProfiles : [{ id: 'default', title: 'Default Configuration' }]).map(p => ({ value: p.id, label: p.title || p.id }))}
-                                            @sutram-input-changed=${e => AgentStore.getState().selectProfile(e.detail.value)}>
+                                            @sutram-input-changed=${e => { e.stopPropagation(); AgentStore.getState().selectProfile(e.detail.value); }}>
                                         </sutram-select>
                                         <sutram-select
                                             label="Substrate Helper Mode (RAG, Compaction & Healer)"
@@ -872,48 +788,39 @@ export class InSetuCoreAgent extends InSetuElement {
                                                 { value: 'deterministic', label: 'Deterministic Only (0 tok AST & Sandwich Healer)' },
                                                 { value: 'ai_assisted', label: 'AI-Assisted (Fast-Tier Scout, Compactor & Healer)' }
                                             ]}
-                                            @sutram-input-changed=${e => AgentStore.getState().updateAgentSetting('helper_mode', e.detail.value)}>
+                                            @sutram-input-changed=${e => { e.stopPropagation(); AgentStore.getState().updateAgentSetting('helper_mode', e.detail.value); }}>
                                         </sutram-select>
                                         <sutram-toggle
                                             label="Run Test Gate After /code"
                                             ?flush=${true}
                                             .checked=${Boolean(this.agentSettings?.run_tests_on_code)}
-                                            @sutram-input-changed=${e => AgentStore.getState().updateAgentSetting('run_tests_on_code', e.detail.value)}>
+                                            @sutram-input-changed=${e => { e.stopPropagation(); AgentStore.getState().updateAgentSetting('run_tests_on_code', e.detail.value); }}>
                                         </sutram-toggle>
-                                        <sutram-stack direction="row" gap="xs" ?wrap=${true}>
-                                            <sutram-btn
+                                        <sutram-toggle
+                                            label="Auto-Complete Plan Step & Advance on Commit"
+                                            ?flush=${true}
+                                            .checked=${Boolean(this.agentSettings?.auto_complete_plan_tasks)}
+                                            @sutram-input-changed=${e => { e.stopPropagation(); AgentStore.getState().updateAgentSetting('auto_complete_plan_tasks', e.detail.value); }}>
+                                        </sutram-toggle>
+                                        <sutram-stack direction="row" justify="between" align="center" gap="xs" ?wrap=${true}>
+                                            <sutram-dropdown
+                                                align="left"
+                                                direction="up"
+                                                .items=${buildAgentTelemetryMenuItems(this)}>
+                                                <sutram-pill
+                                                    slot="trigger"
+                                                    ?compact=${true}
+                                                    ?active=${true}
+                                                    labelText="📊 Telemetry ▾"
+                                                    title="Copy, Share, or Download AI Telemetry">
+                                                </sutram-pill>
+                                            </sutram-dropdown>
+                                            <sutram-pill
                                                 ?compact=${true}
-                                                intent="highlight"
-                                                icon="activity"
-                                                label="Compile AI Telemetry"
-                                                ?grow=${true}
-                                                @click=${async () => {
-                                                    this.setStatus('⏳ Compiling AI Telemetry context...', null);
-                                                    try {
-                                                        const res = await this.api.postJson('bridge/compile_telemetry', { limit: 40 });
-                                                        if (window.inSetu?.sys?.refreshManifest) await window.inSetu.sys.refreshManifest();
-                                                        this.setStatus(`📊 Compiled AI Telemetry (${res.llm_calls || 0} LLM calls, ${res.heal_cases || 0} heal cases) to Gather!`, 3500);
-                                                    } catch (err) {
-                                                        this.setStatus(`⚠️ Telemetry compile failed: ${err.message}`, 4000, true);
-                                                    }
-                                                }}>
-                                            </sutram-btn>
-                                            <sutram-btn
-                                                ?compact=${true}
-                                                intent="neutral"
-                                                icon="cpu"
-                                                label="Compute Pool..."
-                                                ?grow=${true}
-                                                @click=${() => window.inSetu?.events?.emit('insetu:system:open-settings-view', { view: 'ext:llm' })}>
-                                            </sutram-btn>
-                                            <sutram-btn
-                                                ?compact=${true}
-                                                intent="neutral"
-                                                icon="sliders"
-                                                label="All Settings..."
-                                                ?grow=${true}
-                                                @click=${() => window.inSetu?.events?.emit('insetu:system:open-settings-view', { view: 'ext:agent' })}>
-                                            </sutram-btn>
+                                                labelText="⚙️ All Settings..."
+                                                title="Open Full Agent & Compute Pool Settings"
+                                                @sutram-pill-toggled=${() => window.inSetu?.events?.emit('insetu:system:open-settings-view', { view: 'ext:agent' })}>
+                                            </sutram-pill>
                                         </sutram-stack>
                                     </sutram-stack>
                                 </sutram-dropdown>
@@ -926,25 +833,16 @@ export class InSetuCoreAgent extends InSetuElement {
                                         const activeEditorFile = window.inSetu?.editor?.getActiveEditorPath ? window.inSetu.editor.getActiveEditorPath() : null;
                                         const activeEditorName = activeEditorFile ? new this.utils.InSetuURI(activeEditorFile).basename : 'None';
 
+                                        const pinFile = (fp) => {
+                                            if (fp && !this.pinnedFiles.includes(fp)) {
+                                                AgentStore.setState({ pinnedFiles: [...this.pinnedFiles, fp] });
+                                            }
+                                        };
                                         return [
                                             {
                                                 label: "📄 Choose Files... (Workspace Explorer)",
                                                 icon: "folder",
-                                                onClick: () => {
-                                                    if (window.inSetu.ui.openWorkspaceBrowser) {
-                                                        window.inSetu.ui.openWorkspaceBrowser({
-                                                            mode: 'file',
-                                                            title: 'Add Context File',
-                                                            callback: (filepath) => {
-                                                                if (!this.pinnedFiles.includes(filepath)) {
-                                                                    AgentStore.setState({
-                                                                        pinnedFiles: [...this.pinnedFiles, filepath]
-                                                                    });
-                                                                }
-                                                            }
-                                                        });
-                                                    }
-                                                }
+                                                onClick: () => window.inSetu.ui.openWorkspaceBrowser?.({ mode: 'file', title: 'Add Context File', callback: pinFile })
                                             },
                                             {
                                                 label: `🧺 Add from Selection Basket (${basketCount})`,
@@ -952,21 +850,14 @@ export class InSetuCoreAgent extends InSetuElement {
                                                 disabled: basketCount === 0,
                                                 onClick: () => {
                                                     const uris = basketItems.map(i => i.data?.filepath || i.filepath).filter(Boolean);
-                                                    const combined = Array.from(new Set([...this.pinnedFiles, ...uris]));
-                                                    AgentStore.setState({ pinnedFiles: combined });
+                                                    AgentStore.setState({ pinnedFiles: Array.from(new Set([...this.pinnedFiles, ...uris])) });
                                                 }
                                             },
                                             {
                                                 label: `✏️ Add Active Editor File (${activeEditorName})`,
                                                 icon: "edit-3",
                                                 disabled: !activeEditorFile,
-                                                onClick: () => {
-                                                    if (activeEditorFile && !this.pinnedFiles.includes(activeEditorFile)) {
-                                                        AgentStore.setState({
-                                                            pinnedFiles: [...this.pinnedFiles, activeEditorFile]
-                                                        });
-                                                    }
-                                                }
+                                                onClick: () => pinFile(activeEditorFile)
                                             }
                                         ];
                                     })()}>
@@ -1012,6 +903,61 @@ window.ExtensionRegistry.registerExtension('agent', {
     version: "2.0.0",
     offline_mode: "read_only",
     entityActions: [
+        {
+            targetEntity: 'agent_session',
+            id: 'session-rename',
+            label: 'Rename',
+            icon: 'edit-3',
+            intent: 'primary',
+            group: 'edit',
+            vfsBound: false,
+            order: 10,
+            emitEvent: (data) => ({ name: 'insetu:agent:start-rename-session', detail: { session: data } })
+        },
+        {
+            targetEntity: 'agent_session',
+            id: 'session-archive',
+            label: (data) => data?.archived ? 'Unarchive' : 'Archive',
+            icon: 'archive',
+            intent: 'warning',
+            group: 'edit',
+            vfsBound: false,
+            order: 20,
+            asyncAction: async (data) => {
+                if (!data?.session_id) return;
+                const nextArch = !Boolean(data.archived);
+                await AgentStore.getState().archiveSession(data.session_id, nextArch);
+                if (window.inSetu?.ui?.setGlobalStatus) {
+                    window.inSetu.ui.setGlobalStatus(nextArch ? '📦 Conversation archived.' : '📂 Conversation restored.', 2000);
+                }
+            }
+        },
+        {
+            targetEntity: 'agent_session',
+            id: 'session-delete',
+            label: 'Delete',
+            icon: 'trash-2',
+            intent: 'danger',
+            group: 'file',
+            vfsBound: false,
+            order: 30,
+            asyncAction: async (data) => {
+                if (!data?.session_id) return;
+                const ok = window.inSetu?.ui?.confirmModal
+                    ? await window.inSetu.ui.confirmModal({
+                        title: 'Delete Conversation',
+                        message: `Delete conversation "${data.title || data.session_id}" and all its messages?`,
+                        confirmLabel: 'Delete',
+                        intent: 'danger'
+                    })
+                    : confirm(`Delete conversation "${data.title || data.session_id}" and all its messages?`);
+                if (!ok) return;
+                await AgentStore.getState().deleteSession(data.session_id);
+                if (window.inSetu?.ui?.setGlobalStatus) {
+                    window.inSetu.ui.setGlobalStatus('🗑️ Conversation deleted.', 2000);
+                }
+            }
+        },
         {
             targetEntity: 'agent_routine',
             id: 'routine-run-chat',

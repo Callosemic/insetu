@@ -28,6 +28,7 @@ from insetu.core.languages import (
     get_language_provider,
 )
 from insetu.core.utils_core import (
+    BoundedCache,
     get_repo_path,
     execute_binary,
     InSetuURI,
@@ -78,7 +79,11 @@ TOPOLOGY_SCHEMA = {
         "bucket_id": "TEXT",
         "is_tracked": "INTEGER DEFAULT 1",
         "timestamp": "REAL",
-        "git_status": "TEXT DEFAULT ''"
+        "git_status": "TEXT DEFAULT ''",
+        "__indexes__": [
+            "idx_topology_repo ON topology_ledger(repo)",
+            "idx_topology_bucket ON topology_ledger(bucket_id)",
+        ],
     },
     "topology_event_buffer": {
         "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -264,8 +269,7 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
                 )
     if not target_repos:
         # A full scan matches the current configuration, so later config_mutated events diff against it.
-        with _SIEVE_FINGERPRINT_LOCK:
-            _SIEVE_CONFIG_FINGERPRINTS[workspace_id or "default"] = _sieve_config_fingerprints(ctx.config, workspace_id)
+        _SIEVE_CONFIG_FINGERPRINTS.put(workspace_id or "default", _sieve_config_fingerprints(ctx.config, workspace_id))
     # Re-invalidate after the transaction commits so no reader keeps the pre-scan ledger cached.
     hook_request_vfs_manifest.invalidate(workspace_id=workspace_id)
     return True
@@ -303,9 +307,7 @@ def hook_request_vfs_manifest(workspace_id=None, **kwargs):
         return {}
 def _ensure_sieve_reconciled(workspace_id: Optional[str] = None) -> None:
     wid = workspace_id or "default"
-    with _SIEVE_FINGERPRINT_LOCK:
-        is_cold = wid not in _SIEVE_CONFIG_FINGERPRINTS
-    if is_cold:
+    if _SIEVE_CONFIG_FINGERPRINTS.get(wid) is None:
         reconcile_topology_on_config_mutated(workspace_id=wid)
 
 
@@ -641,8 +643,7 @@ def _reconcile_repo_ledger_with_sieve(conn, workspace_id: Optional[str], repo_di
 
 # Per-workspace fingerprint of the configuration the sieve reads, so ordinary settings saves (which also
 # emit config_mutated) do not re-walk every repository.
-_SIEVE_CONFIG_FINGERPRINTS: Dict[str, Dict[str, str]] = {}
-_SIEVE_FINGERPRINT_LOCK = threading.Lock()
+_SIEVE_CONFIG_FINGERPRINTS = BoundedCache("topology_sieve_fingerprints", max_entries=64)
 
 
 def _sieve_config_fingerprints(cfg: Dict[str, Any], workspace_id: Optional[str] = None) -> Dict[str, str]:
@@ -678,9 +679,8 @@ def reconcile_topology_on_config_mutated(workspace_id=None, **kwargs):
     ctx = topology_bp.get_context(wid)
     live_cfg = ctx.config
     current = _sieve_config_fingerprints(live_cfg, wid)
-    with _SIEVE_FINGERPRINT_LOCK:
-        previous = _SIEVE_CONFIG_FINGERPRINTS.get(wid)
-        _SIEVE_CONFIG_FINGERPRINTS[wid] = current
+    previous = _SIEVE_CONFIG_FINGERPRINTS.get(wid)
+    _SIEVE_CONFIG_FINGERPRINTS.put(wid, current)
     # With no fingerprint from a full scan yet, every repository is reconciled once.
     changed_repos = [r_dir for r_dir, fp in current.items() if previous is None or previous.get(r_dir) != fp]
     if not changed_repos:
@@ -965,8 +965,6 @@ def init_topology_on_boot(workspace_id=None, **kwargs):
     # Force a mount evaluation during boot using the current config
     mount_topology_volumes_dynamically(ctx.config, workspace_id)
     try:
-        ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_topology_repo ON topology_ledger(repo)")
-        ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_topology_bucket ON topology_ledger(bucket_id)")
         ctx.db.execute("UPDATE topology_ledger SET filepath = 'vfs://' || filepath WHERE filepath NOT LIKE '%://%'")
         ctx.db.commit()
     except Exception:
@@ -1007,7 +1005,7 @@ def _background_resolve_topology(ctx, job_id: Optional[str] = None):
         return {"message": "No topology events to resolve."}
 
     return {"message": f"Topology settled. Resolved {total_resolved} events."}
-_GITIGNORE_REGEX_CACHE = {}
+_GITIGNORE_REGEX_CACHE = BoundedCache("topology_gitignore_regex", max_entries=2048, copy_mode="none")
 
 
 def _compile_gitignore_regex(pattern: str):
@@ -1067,9 +1065,7 @@ def _compile_gitignore_regex(pattern: str):
             full_pat = f"^(?:.+/)?{body}(?:/.*)?$"
 
     compiled = (re.compile(full_pat, re.IGNORECASE), is_dir_only)
-    if len(_GITIGNORE_REGEX_CACHE) < 2048:
-        _GITIGNORE_REGEX_CACHE[pattern] = compiled
-    return compiled
+    return _GITIGNORE_REGEX_CACHE.put(pattern, compiled)
 
 
 def matches_gitignore_patterns(rel_path: str, patterns: list) -> bool:
@@ -1371,16 +1367,26 @@ class VerifyPlanTargetsPayload(TypedDict, total=False):
     plan_file: Optional[str]
 
 
-@topology_bp.route('overview', methods=['GET'], docstring="[sync] Compiles a lightweight structural overview of tracked repositories, sub-buckets, and CODE_INDEX.md headers.")
+class TopologyOverviewResponse(TypedDict):
+    repos: List[Dict[str, Any]]
+    code_file_count: int
+    overview_text: str
+
+
+@topology_bp.route('overview', methods=['GET'], response_schema=TopologyOverviewResponse, docstring="[sync] Compiles a lightweight structural overview of tracked repositories, sub-buckets, and CODE_INDEX.md headers.")
 def api_topology_overview(ctx):
     """Compiles a lightweight structural overview of tracked repositories, sub-buckets, and CODE_INDEX.md headers."""
-    cfg = ctx.config
-    repos_summary = []
-    overview_lines = ["=== WORKSPACE TOPOLOGY OVERVIEW ==="]
+    cfg, req_repos = ctx.config, (ctx.payload or {}).get("repos")
+    allowed_set = {str(r) for r in req_repos if r and str(r) != "ALL"} if isinstance(req_repos, list) else None
+    repos_summary, overview_lines = [], ["=== WORKSPACE TOPOLOGY OVERVIEW ==="]
+    code_file_count = 0
     for r_cfg in _target_repo_configs(cfg):
         r_dir = r_cfg.get("repo_dir")
-        if not r_dir:
+        if not r_dir or (allowed_set and r_dir not in allowed_set):
             continue
+        for f_uri in get_topology_files_for_repo(ctx.workspace_id, r_dir):
+            if not f_uri.lower().endswith((".md", ".markdown", ".txt", ".rst", ".adoc")):
+                code_file_count += 1
         buckets = [b.get("id") for b in r_cfg.get("sub_buckets", []) if b.get("id") and not b.get("is_system")]
         idx_uri = resolve_repo_code_index_uri(ctx, r_dir, r_cfg)
         code_idx = (ctx.vfs.read(idx_uri) or "").strip()
@@ -1394,6 +1400,7 @@ def api_topology_overview(ctx):
 
     return {
         "repos": repos_summary,
+        "code_file_count": code_file_count,
         "overview_text": "\n".join(overview_lines),
     }
 @topology_bp.route('verify_plan_targets', methods=['POST'], request_schema=VerifyPlanTargetsPayload, docstring="[sync] Verifies that vfs:// file targets referenced in an architectural plan exist or are marked as new files.")
@@ -1428,8 +1435,7 @@ def api_topology_verify_plan_targets(ctx):
     }
 
 
-_REPO_TIER_SETTINGS_CACHE: Dict[Tuple[str, str, str], Tuple[Tuple[Optional[str], Optional[str]], Dict[str, Any]]] = {}
-_REPO_TIER_CACHE_LOCK = threading.Lock()
+_REPO_TIER_SETTINGS_CACHE = BoundedCache("topology_repo_tier_settings", max_entries=256)
 
 # Landmark kinds core knows about. Extensions add their own through the `register_repo_landmarks` hook.
 # shape: "files" (every matching file), "dir" (the first existing directory), "paths" (matching directories or files).
@@ -1581,19 +1587,11 @@ def read_repo_tier_settings(ctx, repo: str, ext_name: str = "topology") -> Dict[
 
     shared_uri = f"vfs://{clean_repo}/.insetu-data/settings/{ext_name}.md"
     local_uri = f"vfs://{clean_repo}/.insetu-data/settings.local/{ext_name}.md"
-
-    shared_raw = ctx.vfs.read(shared_uri)
-    local_raw = ctx.vfs.read(local_uri)
-
-    rev_token = (
-        str(hash(shared_raw)) if shared_raw is not None else None,
-        str(hash(local_raw)) if local_raw is not None else None,
-    )
-    cache_key = (wid, clean_repo, ext_name)
-    with _REPO_TIER_CACHE_LOCK:
-        cached = _REPO_TIER_SETTINGS_CACHE.get(cache_key)
-        if cached and cached[0] == rev_token:
-            return json.loads(json.dumps(cached[1]))
+    shared_rev, shared_raw = ctx.vfs.read_with_revision(shared_uri)
+    local_rev, local_raw = ctx.vfs.read_with_revision(local_uri)
+    rev_token, cache_key = (shared_rev, local_rev), (wid, clean_repo, ext_name)
+    cached = _REPO_TIER_SETTINGS_CACHE.get(cache_key, revision=rev_token)
+    if cached is not None: return cached
 
     allowed_fields = _get_repo_content_field_ids(wid, ext_name)
     merged_values: Dict[str, Any] = {}
@@ -1632,15 +1630,9 @@ def read_repo_tier_settings(ctx, repo: str, ext_name: str = "topology") -> Dict[
             else:
                 merged_values[k] = v
 
-    result = {
-        "values": merged_values,
-        "notices": notices,
-        "body_shared": body_shared,
-        "body_local": body_local,
-    }
-    with _REPO_TIER_CACHE_LOCK:
-        _REPO_TIER_SETTINGS_CACHE[cache_key] = (rev_token, result)
-    return json.loads(json.dumps(result))
+    return _REPO_TIER_SETTINGS_CACHE.put(
+        cache_key, {"values": merged_values, "notices": notices, "body_shared": body_shared, "body_local": body_local}, revision=rev_token
+    )
 
 
 def _match_tracked_files(rel_files: List[str], spec: str) -> List[str]:

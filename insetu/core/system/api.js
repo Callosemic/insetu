@@ -2,10 +2,10 @@
 // ADR 0016: Explicit API Client SDK & Network Gateway
 import {
     SutramDB,
-    OfflineHttpProvider,
+    AkasaBackendAdapter,
+    registerBackendAdapter,
     NetworkHysteresisManager,
     OutboxReconciler,
-    createJobPoller,
     InSetuURI
 } from '/static/extensions/system/insetu_sdk.js';
 import { AppStore } from '/static/extensions/system/store.js';
@@ -49,10 +49,29 @@ function _shouldCacheGet(cacheKeyUrl) {
     return true;
 }
 
-const offlineProvider = new OfflineHttpProvider({
+let _buildMismatchSyncInFlight = false;
+
+const backendAdapter = new AkasaBackendAdapter({
+    name: 'InSetuAkasaBackendAdapter',
+    namespace: 'insetu',
+    tokenHeader: 'X-InSetu-Token',
+    tokenAliasHeader: 'X-Akasa-Token',
+    scopeHeader: 'X-Workspace-ID',
+    buildIdHeader: 'X-InSetu-Build-ID',
+    bootstrapUrl: '/auth/bootstrap',
+    streamUrl: '/api/system/stream',
     probeUrl: '/auth/bootstrap',
     probeMethod: 'POST',
-    checkOfflineState: () => window.inSetu?.stores?.App?.getState()?.isOffline,
+    initialBuildId: (typeof window !== 'undefined' && window.INSETU_BUILD_ID) || null,
+    getActiveScope: () => (window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default'),
+    isExtensionEnabled: (extName) => {
+        const isCore = Boolean(window.inSetu?.isCore ? window.inSetu.isCore(extName) : window.inSetu?.CORE_MODULES?.has(extName));
+        if (isCore) return true;
+        if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extName)) return false;
+        return true;
+    },
+    isStreamConnected: () => Boolean(window.inSetu?.sse?.isConnected),
+    checkOfflineState: () => Boolean(window.inSetu?.stores?.App?.getState()?.isOffline),
     setOfflineState: (val) => {
         const prev = window.inSetu?.stores?.App?.getState()?.isOffline;
         window.inSetu.stores.App.setState({ isOffline: val });
@@ -69,6 +88,19 @@ const offlineProvider = new OfflineHttpProvider({
             return extManifest.offline_mode !== 'read_only' && extManifest.offline_mode !== 'none';
         }
         return Boolean(window.inSetu?.isCore && window.inSetu.isCore(extName));
+    },
+    onBuildMismatch: () => {
+        if (_buildMismatchSyncInFlight || typeof window.inSetu?.sys?.ensureAppShellCached !== 'function') return;
+        _buildMismatchSyncInFlight = true;
+        window.inSetu.sys.ensureAppShellCached({
+            buildId: window.INSETU_BUILD_ID || null,
+            buildIdHeader: 'X-InSetu-Build-ID',
+            staticPathPrefix: '/static/',
+            excludePathPrefix: '/api/',
+            onUpdateReady: (id) => window.inSetu?.ui?.setGlobalStatus?.(`Update ready (${id}), reload to apply.`, 10000)
+        }).catch(() => {}).finally(() => {
+            _buildMismatchSyncInFlight = false;
+        });
     },
     onEnqueue: (count, bodyString, headers, url, method, scopeId, options = {}) => {
         const pendingSet = new Set(window.inSetu.stores.App.getState().pendingMutations);
@@ -117,49 +149,38 @@ const offlineProvider = new OfflineHttpProvider({
         }
     }
 });
+
+const _origWriteToken = backendAdapter._writeStoredToken.bind(backendAdapter);
+backendAdapter._writeStoredToken = (token) => {
+    _origWriteToken(token);
+    if (token && window.inSetu?.stores?.App) {
+        window.inSetu.stores.App.setState({ authToken: token });
+    }
+};
+
+registerBackendAdapter(backendAdapter);
+
 window.inSetu.api = {
-    _abortControllers: new Map(),
+    adapter: backendAdapter,
     getWorkspaceSignal: function(workspaceId) {
-        if (!this._abortControllers.has(workspaceId)) {
-            this._abortControllers.set(workspaceId, new AbortController());
-        }
-        return this._abortControllers.get(workspaceId).signal;
+        return backendAdapter.getScopeSignal(workspaceId);
     },
     abortWorkspace: function(workspaceId) {
-        if (this._abortControllers.has(workspaceId)) {
-            this._abortControllers.get(workspaceId).abort();
-            this._abortControllers.delete(workspaceId);
-        }
+        return backendAdapter.abortScope(workspaceId);
     },
-    _getHeaders: function(isWorkspaceScoped = false) {
-        const headers = new Headers();
-        let bootToken = '';
-        try { bootToken = sessionStorage.getItem('insetu_boot_token') || localStorage.getItem('insetu_boot_token') || ''; } catch(e) {}
-        const appToken = window.inSetu?.stores?.App?.getState()?.authToken || bootToken;
-        if (appToken) headers.append('X-InSetu-Token', appToken);
+    _getHeaders: function() {
         const activeWs = window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default';
-        if (activeWs) {
-            headers.append('X-Workspace-ID', activeWs);
-        }
-        return headers;
+        return backendAdapter.buildHeaders(activeWs);
     },
-
     _attemptReAuthAndRetry: async function(fullUrl, options, isWorkspaceScoped) {
-        const authRes = await fetch('/auth/bootstrap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
-        if (authRes.ok) {
-            const authData = await authRes.json();
-            try {
-                sessionStorage.setItem('insetu_boot_token', authData.token);
-                localStorage.setItem('insetu_boot_token', authData.token);
-            } catch (_) {}
-            if (window.inSetu.stores?.App) window.inSetu.stores.App.setState({ authToken: authData.token });
-
-            const newHeaders = this._getHeaders(isWorkspaceScoped);
-            if (options.headers) {
-                new Headers(options.headers).forEach((value, key) => newHeaders.set(key, value));
-            }
+        const authRes = await backendAdapter.bootstrap();
+        if (authRes && authRes.authenticated) {
+            const scopeId = isWorkspaceScoped
+                ? (window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default')
+                : 'default';
+            const newHeaders = backendAdapter.buildHeaders(scopeId, options.headers);
             options.headers = newHeaders;
-            return await fetch(fullUrl, options);
+            return await backendAdapter.fetchRaw(fullUrl, { ...options, _skipAuthRetry: true }, scopeId);
         }
         return null;
     },
@@ -177,20 +198,8 @@ window.inSetu.api = {
             return await blob.text();
         }
 
-        const headers = options.headers instanceof Headers ? options.headers : new Headers(options.headers || {});
-        const baseHeaders = this._getHeaders(scopeId !== 'default');
-        baseHeaders.forEach((value, key) => {
-            if (!headers.has(key)) headers.set(key, value);
-        });
-
         try {
-            const fetchOpts = { cache: 'no-store', ...options, headers };
-            let res = await fetch(url, fetchOpts);
-
-            if (res.status === 401) {
-                const retryRes = await this._attemptReAuthAndRetry(url, fetchOpts, scopeId !== 'default');
-                if (retryRes) res = retryRes;
-            }
+            const res = await backendAdapter.fetchRaw(url, { cache: 'no-store', ...options }, scopeId);
 
             if ([502, 503, 504].includes(res.status)) {
                 throw new TypeError(`Gateway unreachable (HTTP ${res.status})`);
@@ -203,7 +212,7 @@ window.inSetu.api = {
 
             // Quietly update the offline cache with the fresh text if permitted by repo offline_capable policy
             if (_shouldCacheGet(cacheKeyUrl)) {
-                SutramDB.cacheVFSBlob(scopeId, cacheKeyUrl, new Blob([textContent], { type })).catch(()=>{});
+                SutramDB.cacheVFSBlob(scopeId, cacheKeyUrl, new Blob([textContent], { type })).catch(() => {});
             }
 
             return textContent;
@@ -215,54 +224,13 @@ window.inSetu.api = {
     },
     request: async function(url, options = {}, scopeId = 'default') {
         const method = options.method ? options.method.toUpperCase() : 'GET';
-
-        // Automated Context Cancellation Injection
-        if (!options.signal && this.getWorkspaceSignal) {
-            options.signal = this.getWorkspaceSignal(scopeId);
+        if (method !== 'GET' && Array.isArray(options.deletedMutations) && options.deletedMutations.length > 0 && !options.deletedCacheUrls) {
+            options.deletedCacheUrls = options.deletedMutations.map(fp => `/api/${scopeId}/fs/fetch?file=${encodeURIComponent(fp)}`);
         }
 
-        // 1. Auth Injection
-        const headers = options.headers instanceof Headers ? options.headers : new Headers(options.headers || {});
-        const baseHeaders = this._getHeaders(scopeId !== 'default');
-        baseHeaders.forEach((value, key) => {
-            if (!headers.has(key)) headers.set(key, value);
-        });
-        // Ensure Content-Type is set for JSON payloads
-        if (method !== 'GET' && options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) {
-            headers.set('Content-Type', 'application/json');
-        }
-        options.headers = headers;
-        let res;
-        if (method === 'GET') {
-            res = await offlineProvider.get(url, options, scopeId);
-        } else {
-            const rawPayload = options.body ? (typeof options.body === 'string' ? JSON.parse(options.body) : options.body) : {};
-            const isFormData = options.body instanceof FormData;
-            const bodyString = isFormData ? options.body : (options.body ? JSON.stringify(rawPayload) : null);
+        const res = await backendAdapter.request(url, options, scopeId);
 
-            const plainHeaders = {};
-            headers.forEach((val, key) => plainHeaders[key] = val);
-            options.plainHeaders = plainHeaders;
-            if (Array.isArray(options.deletedMutations) && options.deletedMutations.length > 0 && !options.deletedCacheUrls) {
-                options.deletedCacheUrls = options.deletedMutations.map(fp => `/api/${scopeId}/fs/fetch?file=${encodeURIComponent(fp)}`);
-            }
-
-            res = await offlineProvider.executeMutation(url, method, bodyString, options, scopeId);
-        }
-
-        // 2. Auth Retry Intercept & Build Version Mismatch Gate
-        if (res.status === 401) {
-            const retryRes = await this._attemptReAuthAndRetry(url, options, scopeId !== 'default');
-            if (retryRes) res = retryRes;
-        } else if (res.status === 426) {
-            if (window.inSetu?.ui?.setGlobalStatus) {
-                window.inSetu.ui.setGlobalStatus('Reload to update', 10000, true);
-            }
-            const toastStore = window.inSetu?.stores?.Toast || window.Sutram?.stores?.Toast;
-            toastStore?.getState?.()?.addToast?.('Reload to update', 'warning', 10000);
-        }
-
-        // 3. Soft Refresh Evaluation
+        // Soft Refresh Evaluation
         if (method !== 'GET') {
             try {
                 const clone = res.clone();
@@ -275,45 +243,26 @@ window.inSetu.api = {
 
         return res;
     },
-    _dispatchScoped: async function(path, options = {}) {
-        const activeWs = window.inSetu.utils.getActiveWorkspace();
-        const cleanPath = path.startsWith('/') ? path.substring(1) : path;
-        const extName = cleanPath.split('/')[0];
-        const isCore = Boolean(window.inSetu?.isCore ? window.inSetu.isCore(extName) : window.inSetu?.CORE_MODULES?.has(extName));
-        if (extName && !isCore && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extName)) {
-            return new Response(JSON.stringify({ error: `Extension '${extName}' is disabled in workspace '${activeWs}'.` }), { status: 403, statusText: "Forbidden" });
-        }
-
-        const fullUrl = `/api/${activeWs}/${cleanPath}`;
-        return this.request(fullUrl, options, activeWs);
+    _dispatchScoped: function(path, options = {}) {
+        return backendAdapter._dispatchScoped(path, options);
     },
-
     get: function(path, options = {}) {
-        return this._dispatchScoped(path, { ...options, method: 'GET' });
+        return backendAdapter.get(path, options);
     },
     post: function(path, payload, options = {}) {
-        const isFD = payload instanceof FormData;
-        const headers = isFD ? { ...(options.headers || {}) } : { 'Content-Type': 'application/json', ...(options.headers || {}) };
-        const body = isFD ? payload : JSON.stringify(payload);
-        return this._dispatchScoped(path, { ...options, method: 'POST', headers, body });
+        return backendAdapter.post(path, payload, options);
     },
     delete: function(path, options = {}) {
-        return this._dispatchScoped(path, { ...options, method: 'DELETE' });
+        return backendAdapter.delete(path, options);
     },
-    getJson: async function(path, options = {}) {
-        const res = await this.get(path, options);
-        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
-        return res.json();
+    getJson: function(path, options = {}) {
+        return backendAdapter.getJson(path, options);
     },
-    postJson: async function(path, payload, options = {}) {
-        const res = await this.post(path, payload, options);
-        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
-        return res.json();
+    postJson: function(path, payload, options = {}) {
+        return backendAdapter.postJson(path, payload, options);
     },
-    deleteJson: async function(path, options = {}) {
-        const res = await this.delete(path, options);
-        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
-        return res.json();
+    deleteJson: function(path, options = {}) {
+        return backendAdapter.deleteJson(path, options);
     },
     pollJob: function(jobId, options = {}) {
         return window.inSetu.utils.pollJob(jobId, options);
@@ -362,15 +311,13 @@ window.inSetu.api = {
     },
     keepalivePost: function(path, payload, workspaceId = null) {
         const ws = workspaceId || (window.inSetu?.utils?.getActiveWorkspace ? window.inSetu.utils.getActiveWorkspace() : 'default');
-        const cleanPath = path.startsWith('/') ? path.substring(1) : path;
-        const headers = this._getHeaders(true);
-        headers.set('Content-Type', 'application/json');
-        return fetch(`/api/${encodeURIComponent(ws)}/${cleanPath}`, {
+        const url = backendAdapter.resolveScopedUrl(path, ws);
+        return backendAdapter.fetchRaw(url, {
             method: 'POST',
-            headers,
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload || {}),
             keepalive: true
-        }).catch(() => {});
+        }, ws).catch(() => {});
     }
 };
 
@@ -378,6 +325,7 @@ window.inSetu.api = {
 class SSEPipeline {
     constructor() {
         this.source = null;
+        this._streamHandle = null;
         this.reconnectTimer = null;
         this.isConnected = false;
     }
@@ -390,12 +338,10 @@ class SSEPipeline {
     }
     connect() {
         if (this.source) return;
-        const token = window.inSetu.stores?.App?.getState()?.authToken || sessionStorage.getItem('insetu_boot_token');
-        this.source = new EventSource(`/api/system/stream?token=${token}`);
-        this.source.onopen = () => {
-            this.isConnected = true;
-            console.log("🟢 [SSE TELEMETRY] Connected to real-time system stream. Fallback polling relaxed.");
-        };
+        const appToken = window.inSetu.stores?.App?.getState()?.authToken;
+        if (appToken && !backendAdapter.getToken()) {
+            backendAdapter.setToken(appToken);
+        }
         const bc = _telemetryChannel;
         bc.onmessage = (ev) => {
             const { type, data } = ev.data || {};
@@ -424,114 +370,130 @@ class SSEPipeline {
                 }
             }
         };
-        this.source.addEventListener('vfs_mutated', (e) => {
-            const data = JSON.parse(e.data);
-            bc.postMessage({ type: 'vfs_mutated', data });
-            if (this._shouldDrop(data.workspace_id)) return;
-            window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: data.mutations });
-        });
-        this.source.addEventListener('manifest_settled', (e) => {
-            const data = JSON.parse(e.data);
-            bc.postMessage({ type: 'manifest_settled', data });
-            if (this._shouldDrop(data.workspace_id)) return;
-            if (window.inSetu?.sys?.refreshManifest) {
-                window.inSetu.sys.refreshManifest();
-            }
-            if (window.inSetu?.ui?.setSyncStatus) {
-                window.inSetu.ui.setSyncStatus('synced');
-            }
-        });
-        // S8: protected changes are daemon-wide (not per workspace), so every tab shows the same count.
-        this.source.addEventListener('protected_changes', (e) => {
-            const data = JSON.parse(e.data);
-            window.inSetu.stores.App.setState({ protectedChangesPending: Number(data.pending || 0) });
-        });
-        this.source.addEventListener('topology_resolved', (e) => {
-            const data = JSON.parse(e.data);
-            bc.postMessage({ type: 'topology_resolved', data });
-            if (this._shouldDrop(data.workspace_id)) return;
-            if ((data.dirty_repos && data.dirty_repos.length > 0) || (data.dirty_buckets && data.dirty_buckets.length > 0)) {
-                if (window.inSetu?.sys?.refreshManifest) {
-                    window.inSetu.sys.refreshManifest();
-                }
-            }
-        });
-        this.source.addEventListener('job_progress', (e) => {
-            const data = JSON.parse(e.data);
-            bc.postMessage({ type: 'job_progress', data });
-            if (this._shouldDrop(data.workspace_id)) return;
-            const isChainedPipelineJob = Boolean(
-                data.artifact?.root_job_id ||
-                data.artifact?.chain_history ||
-                data.artifact?.next_job_id ||
-                ['topology', 'cartographer', 'gather'].includes(data.ext_name)
-            );
 
-            // 1. ALWAYS emit step completion hooks regardless of job_category to keep manifest & dirty states fresh
-            if (data.status === 'completed' && data.artifact) {
-                window.inSetu.events.emitHook('insetu:compile-step-complete', {
-                    job_id: data.job_id,
-                    ext_name: data.ext_name,
-                    artifact: data.artifact
-                });
-            }
-            // Route events to the UI spinner strictly if they belong to the 'ui_blocking' category
-            if (data.job_category === 'ui_blocking') {
-                if (isChainedPipelineJob) {
-                    window.inSetu.events.emitHook('insetu:compile-progress', data);
+        this._streamHandle = backendAdapter.connectStream({
+            onOpen: () => {
+                this.isConnected = true;
+                console.log("🟢 [SSE TELEMETRY] Connected to real-time system stream. Fallback polling relaxed.");
+            },
+            onError: () => {
+                this.isConnected = false;
+                if (this._streamHandle) {
+                    this._streamHandle.disconnect();
+                    this._streamHandle = null;
                 }
+                this.source = null;
+                console.warn("🔴 [SSE TELEMETRY] Stream disconnected. Degrading to 3s fallback polling. Reconnecting in 5s...");
+                if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = setTimeout(() => this.connect(), 5000);
+            },
+            events: {
+                vfs_mutated: (e) => {
+                    const data = JSON.parse(e.data);
+                    bc.postMessage({ type: 'vfs_mutated', data });
+                    if (this._shouldDrop(data.workspace_id)) return;
+                    window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: data.mutations });
+                },
+                manifest_settled: (e) => {
+                    const data = JSON.parse(e.data);
+                    bc.postMessage({ type: 'manifest_settled', data });
+                    if (this._shouldDrop(data.workspace_id)) return;
+                    if (window.inSetu?.sys?.refreshManifest) {
+                        window.inSetu.sys.refreshManifest();
+                    }
+                    if (window.inSetu?.ui?.setSyncStatus) {
+                        window.inSetu.ui.setSyncStatus('synced');
+                    }
+                },
+                // S8: protected changes are daemon-wide (not per workspace), so every tab shows the same count.
+                protected_changes: (e) => {
+                    const data = JSON.parse(e.data);
+                    window.inSetu.stores.App.setState({ protectedChangesPending: Number(data.pending || 0) });
+                },
+                topology_resolved: (e) => {
+                    const data = JSON.parse(e.data);
+                    bc.postMessage({ type: 'topology_resolved', data });
+                    if (this._shouldDrop(data.workspace_id)) return;
+                    if ((data.dirty_repos && data.dirty_repos.length > 0) || (data.dirty_buckets && data.dirty_buckets.length > 0)) {
+                        if (window.inSetu?.sys?.refreshManifest) {
+                            window.inSetu.sys.refreshManifest();
+                        }
+                    }
+                },
+                job_progress: (e) => {
+                    const data = JSON.parse(e.data);
+                    bc.postMessage({ type: 'job_progress', data });
+                    if (this._shouldDrop(data.workspace_id)) return;
+                    const isChainedPipelineJob = Boolean(
+                        data.artifact?.root_job_id ||
+                        data.artifact?.chain_history ||
+                        data.artifact?.next_job_id ||
+                        ['topology', 'cartographer', 'gather'].includes(data.ext_name)
+                    );
 
-                if (data.status === 'processing' || data.status === 'pending' || (data.status === 'completed' && data.artifact && data.artifact.next_job_id)) {
-                    const msg = data.message || "Processing...";
-                    if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                        window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
-                    }
-                }
-                // 2. Only terminate UI spinners when the ENTIRE chain completes
-                const isStatusTrackedJob = isChainedPipelineJob || data.ext_name === 'bridge';
-                if (isStatusTrackedJob && (data.status === 'completed' || data.status === 'failed') && !(data.artifact && data.artifact.next_job_id)) {
-                    window.inSetu.events.emitHook('insetu:compile-progress', { status: 'terminated' });
-                    if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                        window.inSetu.ui.setGlobalStatus(data.status === 'completed' ? "✅ Sync Complete" : "❌ Sync Failed", 2000, data.status === 'failed');
-                    }
-                    if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) {
-                        window.inSetu.ui.setSyncStatus(data.status === 'completed' ? 'synced' : 'pending');
-                    }
-                }
-            }
-            // Apply definitive SSOT state directly from the kernel
-            if (data.active_modules !== undefined && data.pending_modules !== undefined) {
-                if (window.inSetu.stores?.App) {
-                    const state = window.inSetu.stores.App.getState();
-                    const sameActive = JSON.stringify(state.activeModules) === JSON.stringify(data.active_modules);
-                    const samePending = JSON.stringify(state.pendingModules) === JSON.stringify(data.pending_modules);
-                    if (!sameActive || !samePending) {
-                        window.inSetu.stores.App.setState({
-                            activeModules: data.active_modules,
-                            pendingModules: data.pending_modules
+                    // 1. ALWAYS emit step completion hooks regardless of job_category to keep manifest & dirty states fresh
+                    if (data.status === 'completed' && data.artifact) {
+                        window.inSetu.events.emitHook('insetu:compile-step-complete', {
+                            job_id: data.job_id,
+                            ext_name: data.ext_name,
+                            artifact: data.artifact
                         });
                     }
+                    // Route events to the UI spinner strictly if they belong to the 'ui_blocking' category
+                    if (data.job_category === 'ui_blocking') {
+                        if (isChainedPipelineJob) {
+                            window.inSetu.events.emitHook('insetu:compile-progress', data);
+                        }
+
+                        if (data.status === 'processing' || data.status === 'pending' || (data.status === 'completed' && data.artifact && data.artifact.next_job_id)) {
+                            const msg = data.message || "Processing...";
+                            if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
+                                window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
+                            }
+                        }
+                        // 2. Only terminate UI spinners when the ENTIRE chain completes
+                        const isStatusTrackedJob = isChainedPipelineJob || data.ext_name === 'bridge';
+                        if (isStatusTrackedJob && (data.status === 'completed' || data.status === 'failed') && !(data.artifact && data.artifact.next_job_id)) {
+                            window.inSetu.events.emitHook('insetu:compile-progress', { status: 'terminated' });
+                            if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
+                                window.inSetu.ui.setGlobalStatus(data.status === 'completed' ? "✅ Sync Complete" : "❌ Sync Failed", 2000, data.status === 'failed');
+                            }
+                            if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) {
+                                window.inSetu.ui.setSyncStatus(data.status === 'completed' ? 'synced' : 'pending');
+                            }
+                        }
+                    }
+                    // Apply definitive SSOT state directly from the kernel
+                    if (data.active_modules !== undefined && data.pending_modules !== undefined) {
+                        if (window.inSetu.stores?.App) {
+                            const state = window.inSetu.stores.App.getState();
+                            const sameActive = JSON.stringify(state.activeModules) === JSON.stringify(data.active_modules);
+                            const samePending = JSON.stringify(state.pendingModules) === JSON.stringify(data.pending_modules);
+                            if (!sameActive || !samePending) {
+                                window.inSetu.stores.App.setState({
+                                    activeModules: data.active_modules,
+                                    pendingModules: data.pending_modules
+                                });
+                            }
+                        }
+                    }
                 }
             }
         });
-        this.source.onerror = (err) => {
-            this.isConnected = false;
-            this.source.close();
-            this.source = null;
-            console.warn("🔴 [SSE TELEMETRY] Stream disconnected. Degrading to 3s fallback polling. Reconnecting in 5s...");
-            if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = setTimeout(() => this.connect(), 5000);
-        };
+        this.source = this._streamHandle?.source || this._streamHandle;
     }
     disconnect() {
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
         }
-        if (this.source) {
+        if (this._streamHandle) {
+            this._streamHandle.disconnect();
+            this._streamHandle = null;
+        } else if (this.source && typeof this.source.close === 'function') {
             this.source.close();
-            this.source = null;
         }
+        this.source = null;
         this.isConnected = false;
     }
 }
@@ -590,10 +552,9 @@ window.addEventListener('sutram-outbox-item-synced', async (e) => {
     }
     if (!targetFp) return;
     const normFp = window.inSetu?.vfs?.normalizeVfsURI ? window.inSetu.vfs.normalizeVfsURI(targetFp) : targetFp;
-    const cacheKeyUrl = `/api/${ws}/fs/fetch?file=${encodeURIComponent(normFp)}`;
+    const cacheKeyUrl = backendAdapter.resolveScopedUrl(`fs/fetch?file=${encodeURIComponent(normFp)}`, ws);
     try {
-        const headers = window.inSetu.api._getHeaders(ws !== 'default');
-        const liveRes = await fetch(cacheKeyUrl, { method: 'GET', headers, cache: 'no-store' });
+        const liveRes = await backendAdapter.fetchRaw(cacheKeyUrl, { method: 'GET', cache: 'no-store' }, ws);
         if (liveRes.ok) {
             const liveText = await liveRes.text();
             const liveBlob = new Blob([liveText], { type: liveRes.headers.get('content-type') || 'text/plain;charset=utf-8' });
@@ -612,7 +573,7 @@ window.addEventListener('sutram-outbox-item-synced', async (e) => {
     }
 });
 
-const networkManager = new NetworkHysteresisManager('/api/system/openapi.json?t={t}', 3);
+const networkManager = new NetworkHysteresisManager(null, 3, { adapter: backendAdapter });
 let lastCacheCheck = 0;
 const attemptReconciliation = async () => {
     const appState = window.inSetu?.stores?.App?.getState();
@@ -624,22 +585,9 @@ const attemptReconciliation = async () => {
             try {
                 const activeWs = window.inSetu.utils.getActiveWorkspace();
                 await OutboxReconciler.drain(activeWs, async (path, fetchOptions, scopeId) => {
-                    // Re-inject fresh authentication headers
-                    const headers = window.inSetu.api._getHeaders(scopeId !== 'default');
-                    if (fetchOptions.headers) {
-                        new Headers(fetchOptions.headers).forEach((v, k) => headers.set(k, v));
-                    }
-                    fetchOptions.headers = headers;
-
-                    // Use native fetch to bypass OfflineHttpProvider re-queuing.
-                    // This allows genuine network drops to throw, halting the reconciler queue chronologically.
-                    let res = await fetch(path, fetchOptions);
-
-                    // Handle 401 Session Expiration mid-reconciliation
-                    if (res.status === 401) {
-                        const retryRes = await window.inSetu.api._attemptReAuthAndRetry(path, fetchOptions, scopeId !== 'default');
-                        if (retryRes) res = retryRes;
-                    }
+                    // Route through adapter.fetchRaw to bypass OfflineHttpProvider re-queuing while
+                    // preserving auth headers, 401 single-flight re-authentication, and build-ID sniffing.
+                    const res = await backendAdapter.fetchRaw(path, fetchOptions, scopeId);
 
                     // Trigger soft refreshes if the backend demands it
                     if (res.ok && fetchOptions.method !== 'GET') {

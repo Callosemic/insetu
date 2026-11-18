@@ -33,7 +33,8 @@
     <link rel="apple-touch-icon" sizes="512x512" href="/static/icon-512.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap"></noscript>
     <script type="importmap">
         {{ import_map|safe }}
     </script>
@@ -44,6 +45,7 @@
         window.INSETU_BUILD_ID = {{ (build_id|default('dev'))|tojson|safe }};
         window.CORE_MODULES = {{ core_modules|tojson|safe }};
         window.ACTIVE_EXTENSIONS = {{ extensions|tojson|safe }};
+        window.INSETU_MODULE_ASSETS = {{ (module_assets|default({}))|tojson|safe }};
         window.SUTRAM_PUBLIC_PATH = '/static/vendor/sutram/js/';
     </script>
     <script src="/static/vendor/lucide/icons.js"></script>

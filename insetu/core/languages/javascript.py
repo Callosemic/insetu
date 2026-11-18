@@ -156,8 +156,12 @@ class JavaScriptLanguageProvider(BaseLanguageProvider):
             if name:
                 results.append({"name": name, "kind": kind, "line": line_no})
             elif m.group("decl"):
-                for sym in m.group("decl").strip("{} ").split(","):
-                    clean = sym.strip().split()[0]
+                clean_decl = re.sub(r'//[^\n]*|/\*[\s\S]*?\*/', '', m.group("decl")).strip("{} \t\r\n")
+                for sym in clean_decl.split(","):
+                    tokens = sym.strip().split()
+                    if not tokens:
+                        continue
+                    clean = tokens[-1] if (len(tokens) >= 3 and tokens[1] == "as") else tokens[0]
                     if clean:
                         results.append({"name": clean, "kind": "export", "line": line_no})
         return results

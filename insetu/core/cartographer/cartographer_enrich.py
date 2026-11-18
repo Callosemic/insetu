@@ -89,8 +89,7 @@ def execute_cartographer_enrich(
     repo_configs: List[Dict[str, Any]],
     extract_existing_comments_fn: Callable[..., Dict[str, str]],
     map_repositories_fn: Callable[..., Any],
-    sig_cache: Dict[Tuple[str, str], Any],
-    cache_lock: Any,
+    sig_cache: Any,
 ) -> Dict[str, Any]:
     """
     Describes '[comment required]' symbols and reviews '[stale?]' ones across batched fast-tier calls.
@@ -104,9 +103,7 @@ def execute_cartographer_enrich(
         r_dir = r_cfg.get("repo_dir")
         if not r_dir:
             continue
-        with cache_lock:
-            is_cold = (ctx.workspace_id or "default", r_dir) not in sig_cache
-        if is_cold:
+        if (ctx.workspace_id or "default", r_dir) not in sig_cache:
             map_repositories_fn(ctx.workspace_id, silent=True, target_repos=[r_dir])
             ctx.sync_vfs_barrier()
 
@@ -200,8 +197,7 @@ def execute_cartographer_enrich(
             ctx.db.commit()
 
         if generated or keep_keys:
-            with cache_lock:
-                sig_cache.pop((ctx.workspace_id or "default", r_dir), None)
+            sig_cache.pop((ctx.workspace_id or "default", r_dir), None)
             map_repositories_fn(ctx.workspace_id, target_repos=[r_dir], extra_comments={r_dir: generated})
 
     ctx.sync_vfs_barrier()

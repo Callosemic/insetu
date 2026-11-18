@@ -41,6 +41,40 @@ def get_provider_semaphore(provider: str, max_parallel: int = 4, endpoint_id: st
         return sem
 
 
+def _validate_http_url(url: str) -> bool:
+    """Returns True if `url` uses an explicit http:// or https:// scheme."""
+    return str(url or "").strip().lower().startswith(("http://", "https://"))
+
+
+def _iter_sse_json_events(
+    url: str,
+    headers: Dict[str, str],
+    payload_bytes: bytes,
+    timeout: int = 30,
+) -> Generator[Dict[str, Any], None, None]:
+    """
+    Single Source of Truth SSE HTTP streaming transport for LLM drivers:
+    Validates the URL scheme, opens the streaming request, and yields parsed JSON `data:` objects until `[DONE]` or EOF.
+    """
+    if not _validate_http_url(url):
+        raise ValueError(f"Invalid endpoint URL scheme: {url}")
+    req = urllib.request.Request(url, headers=headers, data=payload_bytes)
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        for raw_line in response:
+            decoded_line = raw_line.decode("utf-8", errors="replace").strip()
+            if not decoded_line or not decoded_line.startswith("data:"):
+                continue
+            data_str = decoded_line[5:].strip()
+            if data_str == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data_str)
+                if isinstance(chunk, dict):
+                    yield chunk
+            except json.JSONDecodeError:
+                continue
+
+
 def _normalize_direct_model_id(model: str, provider_prefix: str) -> str:
     """Strips catalog prefixes (e.g. 'google/', 'anthropic/', 'models/') for direct first-party REST APIs."""
     clean = str(model or "").strip()
@@ -78,30 +112,65 @@ def stream_anthropic(api_key: str, model: str, messages: list, system_prompt: st
             }
         ]
 
-    req = urllib.request.Request(url, headers=headers, data=json.dumps(payload).encode('utf-8'))
     try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            for line in response:
-                decoded_line = line.decode('utf-8').strip()
-                if decoded_line.startswith('data: '):
-                    data_str = decoded_line[6:]
-                    if data_str == '[DONE]':
-                        break
-                    try:
-                        chunk = json.loads(data_str)
-                        if chunk.get("type") == "content_block_delta":
-                            text = chunk.get("delta", {}).get("text", "")
-                            if text:
-                                yield f"data: {json.dumps({'text': text})}\n\n"
-                    except json.JSONDecodeError:
-                        continue
+        for chunk in _iter_sse_json_events(url, headers, json.dumps(payload).encode("utf-8"), timeout=30):
+            if chunk.get("type") == "content_block_delta":
+                text = chunk.get("delta", {}).get("text", "")
+                if text:
+                    yield f"data: {json.dumps({'text': text})}\n\n"
     except Exception as e:
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 
+def _gemini_headers(api_key: str) -> Dict[str, str]:
+    """Single source of truth for Google Gemini REST headers."""
+    return {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+
+
+def run_audio_transcription(
+    provider: str,
+    api_key: str,
+    model: str,
+    audio_base64: str,
+    mime_type: str = "audio/webm",
+    prompt_hint: str = "Transcribe the spoken developer instruction accurately.",
+) -> Tuple[Optional[str], Optional[str], int]:
+    """Executes multimodal audio transcription via the configured provider driver. Returns (transcript, error, status_code)."""
+    if provider != "gemini" or not api_key:
+        return None, f"Push-to-talk transcription requires a multimodal provider (e.g. 'gemini'); active provider is '{provider}'.", 400
+    clean_model = _normalize_direct_model_id(model, "google")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent"
+    payload = {
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {"text": prompt_hint},
+                {"inline_data": {"mime_type": mime_type, "data": audio_base64}},
+            ],
+        }]
+    }
+    try:
+        resp = fetch_url(
+            url,
+            method="POST",
+            headers=_gemini_headers(api_key),
+            data=json.dumps(payload).encode("utf-8"),
+            timeout=30.0,
+        )
+        resp_data = resp.json()
+        parts = resp_data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+        transcript = "".join(p.get("text", "") for p in parts).strip()
+        return transcript, None, 200
+    except Exception as e:
+        return None, f"Audio transcription failed: {str(e)}", 500
+
+
 def stream_gemini(api_key: str, model: str, messages: list, system_prompt: str) -> Generator[str, None, None]:
     clean_model = _normalize_direct_model_id(model, "google")
-    headers = {"Content-Type": "application/json"}
+    headers = _gemini_headers(api_key)
 
     # Gemini requires mapping standard roles to 'user' and 'model'
     gemini_messages = []
@@ -122,25 +191,16 @@ def stream_gemini(api_key: str, model: str, messages: list, system_prompt: str) 
 
     last_http_err = None
     for idx, cand_mod in enumerate(candidate_models):
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{cand_mod}:streamGenerateContent?alt=sse&key={api_key}"
-        req = urllib.request.Request(url, headers=headers, data=encoded_payload)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{cand_mod}:streamGenerateContent?alt=sse"
         try:
-            with urllib.request.urlopen(req, timeout=30) as response:
-                for line in response:
-                    decoded_line = line.decode('utf-8').strip()
-                    if decoded_line.startswith('data: '):
-                        data_str = decoded_line[6:]
-                        try:
-                            chunk = json.loads(data_str)
-                            if "candidates" in chunk and chunk["candidates"]:
-                                parts = chunk["candidates"][0].get("content", {}).get("parts", [])
-                                for part in parts:
-                                    text = part.get("text", "")
-                                    if text:
-                                        yield f"data: {json.dumps({'text': text})}\n\n"
-                        except json.JSONDecodeError:
-                            continue
-                return
+            for chunk in _iter_sse_json_events(url, headers, encoded_payload, timeout=30):
+                if "candidates" in chunk and chunk["candidates"]:
+                    parts = chunk["candidates"][0].get("content", {}).get("parts", [])
+                    for part in parts:
+                        text = part.get("text", "")
+                        if text:
+                            yield f"data: {json.dumps({'text': text})}\n\n"
+            return
         except urllib.error.HTTPError as he:
             last_http_err = (cand_mod, he)
             if he.code == 404 and idx + 1 < len(candidate_models):
@@ -166,6 +226,9 @@ def stream_gemini(api_key: str, model: str, messages: list, system_prompt: str) 
 def stream_openai_compatible(base_url: str, api_key: str, model: str, messages: list, system_prompt: str) -> Generator[str, None, None]:
     """Streams inference from any OpenAI-compatible /v1/chat/completions endpoint (Ollama, LM Studio, vLLM, llama.cpp, OpenAI)."""
     clean_base = (base_url or "http://127.0.0.1:11434/v1").strip().rstrip("/")
+    if not _validate_http_url(clean_base):
+        yield f"data: {json.dumps({'error': f'Invalid endpoint URL scheme: {clean_base}'})}\n\n"
+        return
     url = clean_base if clean_base.endswith("/chat/completions") else f"{clean_base}/chat/completions"
 
     headers = {
@@ -186,26 +249,14 @@ def stream_openai_compatible(base_url: str, api_key: str, model: str, messages: 
         "stream": True,
     }
 
-    req = urllib.request.Request(url, headers=headers, data=json.dumps(payload).encode("utf-8"))
     try:
-        with urllib.request.urlopen(req, timeout=120) as response:
-            for raw_line in response:
-                decoded_line = raw_line.decode("utf-8", errors="replace").strip()
-                if not decoded_line or not decoded_line.startswith("data:"):
-                    continue
-                data_str = decoded_line[5:].strip()
-                if data_str == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data_str)
-                    choices = chunk.get("choices") or []
-                    if choices:
-                        delta = choices[0].get("delta") or {}
-                        text = delta.get("content") or ""
-                        if text:
-                            yield f"data: {json.dumps({'text': text})}\n\n"
-                except json.JSONDecodeError:
-                    continue
+        for chunk in _iter_sse_json_events(url, headers, json.dumps(payload).encode("utf-8"), timeout=120):
+            choices = chunk.get("choices") or []
+            if choices:
+                delta = choices[0].get("delta") or {}
+                text = delta.get("content") or ""
+                if text:
+                    yield f"data: {json.dumps({'text': text})}\n\n"
     except Exception as e:
         yield f"data: {json.dumps({'error': f'OpenAI-compatible endpoint error ({url}): {str(e)}'})}\n\n"
 

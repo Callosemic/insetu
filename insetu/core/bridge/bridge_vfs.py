@@ -13,12 +13,11 @@ import uuid
 import difflib
 import traceback
 from pathlib import Path
-from collections import OrderedDict
 import copy
 import threading
 
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
-from insetu.core.utils_core import compute_vfs_sha256, get_workspace_physics, get_sister_repos, InSetuURI
+from insetu.core.utils_core import BoundedCache, compute_vfs_sha256, get_workspace_physics, get_sister_repos, InSetuURI
 from insetu.core.sdk import is_protected_vfs_target
 from insetu.core.protected_changes import REFERENCE_KEY as _PROTECTED_REFERENCE_KEY, SOURCE_KEY as _PROTECTED_SOURCE_KEY
 from insetu.core.languages import PythonLanguageProvider
@@ -42,18 +41,16 @@ from .bridge_ast import apply_ast_relocate_in_memory, apply_ast_rename_to_conten
 # ==============================================================================
 # TWO-TIER CONTENT-ADDRESSED SIGNATURE MEMOIZATION CACHE
 # ==============================================================================
-_EVAL_CACHE_LOCK = threading.Lock()
-_FILE_EVAL_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
-_PATCH_EVAL_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 MAX_FILE_EVAL_CACHE_SIZE = 256
 MAX_PATCH_EVAL_CACHE_SIZE = 1024
+_FILE_EVAL_CACHE = BoundedCache("bridge_file_eval", max_entries=MAX_FILE_EVAL_CACHE_SIZE, copy_mode="deepcopy")
+_PATCH_EVAL_CACHE = BoundedCache("bridge_patch_eval", max_entries=MAX_PATCH_EVAL_CACHE_SIZE)
 
 
 def clear_bridge_eval_cache() -> None:
     """Clears the in-memory content-addressed FileEvalSig and PatchEvalSig caches."""
-    with _EVAL_CACHE_LOCK:
-        _FILE_EVAL_CACHE.clear()
-        _PATCH_EVAL_CACHE.clear()
+    _FILE_EVAL_CACHE.clear()
+    _PATCH_EVAL_CACHE.clear()
 
 
 def compute_file_eval_signature(
@@ -107,21 +104,7 @@ def compute_patch_eval_signature(
     return hashlib.sha256(raw).hexdigest()
 
 
-def _cache_get(cache_obj: OrderedDict, key: str) -> Optional[Dict[str, Any]]:
-    with _EVAL_CACHE_LOCK:
-        val = cache_obj.get(key)
-        if val is not None:
-            cache_obj.move_to_end(key)
-            return copy.deepcopy(val)
-    return None
 
-
-def _cache_put(cache_obj: OrderedDict, key: str, value: Dict[str, Any], max_size: int) -> None:
-    with _EVAL_CACHE_LOCK:
-        cache_obj[key] = copy.deepcopy(value)
-        cache_obj.move_to_end(key)
-        while len(cache_obj) > max_size:
-            cache_obj.popitem(last=False)
 
 _BANNED_CONTROL_PLANE_FILENAMES = frozenset({
     "host.json",
@@ -689,7 +672,7 @@ def process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, ret
                 global_flags_tuple,
                 resolved_pointer=pointer_for_sig,
             )
-            cached_file_bundle = _cache_get(_FILE_EVAL_CACHE, file_eval_sig)
+            cached_file_bundle = _FILE_EVAL_CACHE.get(file_eval_sig)
             if cached_file_bundle is not None:
                 c_res_path = cached_file_bundle.get("resolved_path")
                 if c_res_path and tree.disk_hash(c_res_path) != cached_file_bundle.get("resolved_disk_hash"):
@@ -1295,7 +1278,7 @@ def process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, ret
             patch_eval_sig = compute_patch_eval_signature(
                 resolved_path, input_buf_hash, orig_file_hash, b, cell_res, repair_mode=raw_repair_mode
             )
-            cached_chunk = _cache_get(_PATCH_EVAL_CACHE, patch_eval_sig)
+            cached_chunk = _PATCH_EVAL_CACHE.get(patch_eval_sig)
             apply_stat = "success"
             if cached_chunk is not None and cached_chunk.get("ok"):
                 new_content = cached_chunk["new_content"]
@@ -1325,12 +1308,12 @@ def process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, ret
                 if ok:
                     if apply_stat == "sandwich_healed" and "sandwich_healed" not in patch_tel["flags"]:
                         patch_tel["flags"].append("sandwich_healed")
-                    _cache_put(_PATCH_EVAL_CACHE, patch_eval_sig, {
+                    _PATCH_EVAL_CACHE.put(patch_eval_sig, {
                         "ok": True,
                         "new_content": new_content,
                         "apply_stat": apply_stat,
                         "flags": list(patch_tel["flags"]),
-                    }, MAX_PATCH_EVAL_CACHE_SIZE)
+                    })
 
             if ok and apply_stat in ("idempotent", "no_op"):
                 patch_tel.update({
@@ -1438,14 +1421,14 @@ def process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root, ret
                 target_file,
             )
             tl_resolved = tree.timelines.get(resolved_fp_for_cache) if resolved_fp_for_cache else None
-            _cache_put(_FILE_EVAL_CACHE, file_eval_sig, {
+            _FILE_EVAL_CACHE.put(file_eval_sig, {
                 "resolved_path": resolved_fp_for_cache,
                 "resolved_disk_hash": tree.disk_hash(resolved_fp_for_cache) if resolved_fp_for_cache else None,
                 "patches": file_patches_slice,
                 "deferred_failures": file_def_slice,
                 "transitions": tl_resolved.transitions if tl_resolved else [],
                 "final_buffer": tl_resolved.current if tl_resolved else None,
-            }, MAX_FILE_EVAL_CACHE_SIZE)
+            })
 
     if batch_has_cross_file_ops and all_touched_files:
         _validate_and_isolate_syntax(all_touched_files)

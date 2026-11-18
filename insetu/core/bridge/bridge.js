@@ -1,29 +1,11 @@
 import { html } from 'lit';
 import { InSetuElement } from '/static/extensions/system/insetu_element.js';
 import { sharedStyles } from '/static/extensions/system/insetu_sdk.js';
-import {
-    BRIDGE_BASE_LAYOUT_SLOTS,
-    BRIDGE_FLAG_UI_MAP,
-    BRIDGE_GATE_UI_MAP,
-    BridgeStore,
-} from '/static/extensions/bridge/bridge_store.js';
-import {
-    InSetuBridgeDiffProjection,
-    InSetuBridgeEditProjection,
-    InSetuExtBridgeActions,
-} from '/static/extensions/bridge/bridge_projections.js';
+import { BRIDGE_BASE_LAYOUT_SLOTS, BRIDGE_FLAG_UI_MAP, BRIDGE_GATE_UI_MAP, BridgeStore } from '/static/extensions/bridge/bridge_store.js';
+import { InSetuBridgeDiffProjection, InSetuBridgeEditProjection, InSetuExtBridgeActions } from '/static/extensions/bridge/bridge_projections.js';
 import { InSetuExtBridgeHistory } from '/static/extensions/bridge/bridge_history.js';
 
-export {
-    BRIDGE_BASE_LAYOUT_SLOTS,
-    BRIDGE_FLAG_UI_MAP,
-    BRIDGE_GATE_UI_MAP,
-    BridgeStore,
-    InSetuBridgeDiffProjection,
-    InSetuBridgeEditProjection,
-    InSetuExtBridgeActions,
-    InSetuExtBridgeHistory,
-};
+export { BRIDGE_BASE_LAYOUT_SLOTS, BRIDGE_FLAG_UI_MAP, BRIDGE_GATE_UI_MAP, BridgeStore, InSetuBridgeDiffProjection, InSetuBridgeEditProjection, InSetuExtBridgeActions, InSetuExtBridgeHistory };
 
 export class InSetuExtBridge extends InSetuElement {
     static get extensionName() { return 'bridge'; }
@@ -93,11 +75,13 @@ export class InSetuExtBridge extends InSetuElement {
         BridgeStore.getState().clearPayload();
         BridgeStore.getState().fetchHistory();
         BridgeStore.getState().fetchFastTierStatus();
+        window.inSetu?.stores?.Agent?.getState()?.fetchSessions?.();
         this.requestUpdate();
     }
     onForceRefresh() {
         BridgeStore.getState().fetchHistory();
         BridgeStore.getState().fetchFastTierStatus();
+        window.inSetu?.stores?.Agent?.getState()?.fetchSessions?.();
     }
     connectedCallback() {
         super.connectedCallback();
@@ -219,13 +203,16 @@ export class InSetuExtBridge extends InSetuElement {
 
         window.inSetu.stores.Fs?.getState()?.verifyFiles(this.cells.map(c => c.file));
         BridgeStore.getState().fetchFastTierStatus();
+        if (!(window.inSetu?.stores?.Agent?.getState()?.sessions?.length > 0)) {
+            window.inSetu?.stores?.Agent?.getState()?.fetchSessions?.();
+        }
     }
     disconnectedCallback() {
         super.disconnectedCallback();
     }
 
     _hasBridgeDirective(text) {
-        return Boolean(text && typeof text === 'string' && /^[ \t]*(?:<[ \t]*){3,}(?:FILE:|SEARCH|TEXTEDIT|JSON_PATCH|RELOCATE|RENAME|MOVE_FILE|ARCHIVE_FILE|DELETE_FILE|QUERY_CONTEXT)\b/m.test(text));
+        return Boolean(text && typeof text === 'string' && /^[ \t]*(?:<[ \t]*){3,}(?:FILE:|SEARCH|TEXTEDIT|JSON_PATCH|RELOCATE|RENAME|MOVE_FILE|ARCHIVE_FILE|DELETE_FILE|TASK_?MANAGE|QUERY_CONTEXT)\b/m.test(text));
     }
 
     async _ingestBridgeText(text) {
@@ -250,56 +237,31 @@ export class InSetuExtBridge extends InSetuElement {
         BridgeStore.setState({ editCellId: cell.id, editCellOriginalFile: cell.file });
         const virtualUri = `yomama://${cell.id}`;
 
-        // Push the chunk into the agnostic multi-buffer store
+        const fullCellText = `<<<<<<< FILE: ${cell.file}\n${cell.content}`;
         window.inSetu.stores.Fs?.getState()?.openBuffer(virtualUri, {
-            filename: virtualUri,
-            content: `<<<<<<< FILE: ${cell.file}\n${cell.content}`,
-            originalContent: `<<<<<<< FILE: ${cell.file}\n${cell.content}`,
-            fullText: `<<<<<<< FILE: ${cell.file}\n${cell.content}`,
-            isFS: false, // Prevents actual disk writes
-            forceEdit: true,
-            isMemoryOnly: true,
-            isSupportedEditor: true,
-            ext: 'js',
-            codeMode: 'javascript'
+            filename: virtualUri, content: fullCellText, originalContent: fullCellText, fullText: fullCellText,
+            isFS: false, forceEdit: true, isMemoryOnly: true, isSupportedEditor: true, ext: 'js', codeMode: 'javascript'
         });
-
         if (window.Sutram?.stores?.Layout) {
             const layout = window.Sutram.stores.Layout.getState();
             layout.openWindow({
-                id: 'bridge:edit-cell',
-                component: 'insetu-bridge-edit-projection',
+                id: 'bridge:edit-cell', component: 'insetu-bridge-edit-projection',
                 label: `Edit Patch: ${new window.inSetu.utils.InSetuURI(cell.file).basename}`,
-                icon: 'git-commit',
-                intent: 'highlight',
-                extName: 'bridge',
-                windowOnly: true
+                icon: 'git-commit', intent: 'highlight', extName: 'bridge', windowOnly: true
             }, layout.focusedColumn || 'center', 1);
         }
     }
     _handleParentToggle(file) {
         const cells = BridgeStore.getState().cells || [];
-        const groupCells = cells.filter(c => c.file === file);
-        const selectedCount = groupCells.filter(c => c.active).length;
-        const targetState = selectedCount === 0;
-
-        const updatedCells = cells.map(c =>  
-            c.file === file ? { ...c, active: targetState } : c
-        );
-
-        BridgeStore.setState({ cells: updatedCells });
+        const targetState = cells.filter(c => c.file === file && c.active).length === 0;
+        BridgeStore.setState({ cells: cells.map(c => c.file === file ? { ...c, active: targetState } : c) });
         BridgeStore.getState().recomputeOptimisticTelemetry();
     }
     _deselectAllFilePatches(file, resolvedFile = null) {
         const cells = BridgeStore.getState().cells || [];
-        const updatedCells = cells.map(c => {
-            const matches = c.file === file || 
-                            (resolvedFile && c.file === resolvedFile) ||
-                            c.file.endsWith(file) || 
-                            file.endsWith(c.file);
-            return matches ? { ...c, active: false } : c;
+        BridgeStore.setState({
+            cells: cells.map(c => (c.file === file || (resolvedFile && c.file === resolvedFile) || c.file.endsWith(file) || file.endsWith(c.file)) ? { ...c, active: false } : c)
         });
-        BridgeStore.setState({ cells: updatedCells });
     }
     _getSyncAction(dryRunActive, bypassSandwich = false, overridePayload = {}) {
         return async (e) => {

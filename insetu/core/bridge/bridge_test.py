@@ -19,7 +19,25 @@ from insetu.core.agent.schemas.diagnostics import (
     parse_test_tail_output,
 )
 from insetu.core.system.security_io import child_env, is_test_command_approved
-from insetu.core.utils_core import get_repo_path
+from insetu.core.utils_core import get_repo_path, get_sister_repos
+
+
+def resolve_test_command_payload(ctx, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Inspects workspace repository configuration files to determine the appropriate test runner command."""
+    repos = list(get_sister_repos(ctx.workspace_id) or [])
+    repo = str(data.get("repo") or (repos[0] if repos else "")).strip()
+    target = str(data.get("target") or "").strip()
+    if not repo or repo not in repos:
+        return {"repo": repo, "command": f"pytest {target}".strip() or "pytest -q", "runner": "pytest"}
+    if ctx.vfs.read(f"vfs://{repo}/pyproject.toml") or ctx.resolve_path(f"vfs://{repo}/tests", must_exist=True, allow_heal=False):
+        return {"repo": repo, "command": f"pytest {target}".strip() if target else "pytest -q", "runner": "pytest"}
+    if ctx.vfs.read(f"vfs://{repo}/package.json"):
+        return {"repo": repo, "command": "npm test", "runner": "npm"}
+    if ctx.vfs.read(f"vfs://{repo}/Cargo.toml"):
+        return {"repo": repo, "command": "cargo test", "runner": "cargo"}
+    if ctx.vfs.read(f"vfs://{repo}/go.mod"):
+        return {"repo": repo, "command": "go test ./...", "runner": "go"}
+    return {"repo": repo, "command": f"pytest {target}".strip() or "pytest -q", "runner": "pytest"}
 
 
 def run_repo_test_diagnostics(

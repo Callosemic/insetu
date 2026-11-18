@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import TypedDict, List, Dict, Any, Optional, Union, Tuple
 from flask import Response, stream_with_context
 from insetu.core.sdk import InSetuExtension, SettingsManager, slugify
-from insetu.core.system.security_io import fetch_url
 from insetu.core.utils_core import (
     get_domain_cache_path,
     get_repeater_secret,
@@ -21,6 +20,7 @@ from .llm_catalog import (
 )
 from .llm_drivers import (
     get_provider_semaphore as _get_provider_semaphore,
+    run_audio_transcription as _run_audio_transcription,
     run_decisions_inference as _run_decisions_inference,
     run_single_inference as _run_single_inference,
     stream_anthropic as _stream_anthropic,
@@ -102,18 +102,7 @@ LLM_SETTINGS_SCHEMA = [
         "add_label": "Add Compute Endpoint",
         "description": "Register your pool of cloud API keys, OpenRouter, independent local Ollama instances, and CLI tools.",
         "pinned_items": [dict(BUILTIN_WEB_CHAT_ENDPOINT)],
-        "default": [
-            {
-                "id": "anthropic_main",
-                "label": "Anthropic Claude API",
-                "driver": "anthropic",
-                "base_url": "",
-                "api_key": "",
-                "custom_models": [],
-                "max_parallel": 4
-            },
-            dict(BUILTIN_WEB_CHAT_ENDPOINT),
-        ],
+        "default": [dict(ep) for ep in DEFAULT_COMPUTE_ENDPOINTS],
         "item_schema": [
             {"id": "label", "label": "Endpoint Label", "type": "text", "default": "New Compute Endpoint"},
             {
@@ -177,20 +166,7 @@ LLM_SETTINGS_SCHEMA = [
         "item_subtitle_key": "",
         "add_label": "Add Configuration Profile",
         "description": "Bind each semantic cognitive tier to an endpoint and model from your Compute Endpoint Pool.",
-        "default": [
-            {
-                "id": "default",
-                "title": "Default Configuration",
-                "description": "Balanced configuration across cognitive tiers.",
-                "tiers": {
-                    "decision": {"endpoint": "", "model": ""},
-                    "fast": {"endpoint": "anthropic_main", "model": "claude-3-5-haiku-latest"},
-                    "standard": {"endpoint": "anthropic_main", "model": "claude-3-5-sonnet-latest"},
-                    "thinking": {"endpoint": "anthropic_main", "model": "claude-3-5-sonnet-latest"},
-                    "frontier": {"endpoint": "anthropic_main", "model": "claude-3-5-sonnet-latest"}
-                }
-            }
-        ],
+        "default": [dict(p) for p in DEFAULT_LLM_PROFILES],
         "item_schema": [
             {"id": "title", "label": "Profile Title", "type": "text", "default": "New Profile"},
             {"id": "description", "label": "Description", "type": "text", "default": ""},
@@ -297,6 +273,7 @@ class ChatCompletionPayload(TypedDict, total=False):
     decision_questions: Optional[Dict[str, str]]
     max_retries: Optional[int]
     caller_tag: Optional[str]
+    session_id: Optional[str]
 
 class LlmDecidePayload(TypedDict, total=False):
     context: str
@@ -316,17 +293,7 @@ def get_compute_pool_and_profiles(ctx) -> Dict[str, Any]:
         else [dict(ep) for ep in DEFAULT_COMPUTE_ENDPOINTS]
     )
     if not any(ep.get("driver") == "web_chat" or ep.get("id") in ("web_chat", "chatbot") for ep in endpoints):
-        endpoints.append({
-            "id": "web_chat",
-            "label": "External Web Chatbot (Copy Context + Prompt Handoff)",
-            "driver": "web_chat",
-            "base_url": "",
-            "api_key": "",
-            "custom_models": ["chatbot"],
-            "models": ["chatbot"],
-            "max_parallel": 1,
-            "enabled": True,
-        })
+        endpoints.append(dict(BUILTIN_WEB_CHAT_ENDPOINT))
     for ep in endpoints:
         if ep.get("id"):
             ep["has_api_key"] = bool(
@@ -541,7 +508,7 @@ def api_llm_complete(ctx):
             ctx, t_start=t_start, caller_tag=caller_tag, tier=target["tier"], endpoint_id=endpoint_id,
             provider=provider, model=model, output_schema=output_schema, prompt_joined=prompt_joined,
             system_prompt=system_prompt, status_str=status_str, attempts_used=attempts_used,
-            resp_str=resp_str, err_str=err_str,
+            resp_str=resp_str, err_str=err_str, session_id=str(data.get("session_id") or "").strip(),
         )
 
     working_messages = list(messages)
@@ -638,37 +605,17 @@ def api_llm_transcribe(ctx):
         return {"error": "audio_base64 is required."}, 400
 
     target = _resolve_tier_execution_target(ctx, tier="fast", profile_id=data.get("profile_id"))
-    provider = target["provider"]
-    api_key = target["api_key"]
-    model = target["model"]
-    if provider == "gemini" and api_key:
-        clean_model = model.split("/", 1)[1] if "/" in model and model.lower().startswith(("google/", "models/")) else model
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={api_key}"
-        payload = {
-            "contents": [{
-                "role": "user",
-                "parts": [
-                    {"text": prompt_hint},
-                    {"inline_data": {"mime_type": mime_type, "data": audio_b64}},
-                ],
-            }]
-        }
-        try:
-            resp = fetch_url(
-                url,
-                method="POST",
-                headers={"Content-Type": "application/json"},
-                data=json.dumps(payload).encode("utf-8"),
-                timeout=30.0,
-            )
-            resp_data = resp.json()
-            parts = resp_data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-            transcript = "".join(p.get("text", "") for p in parts).strip()
-            return {"status": "success", "text": transcript, "provider": provider}
-        except Exception as e:
-            return {"error": f"Audio transcription failed: {str(e)}"}, 500
-
-    return {"error": f"Push-to-talk transcription requires a multimodal provider (e.g. 'gemini'); active provider is '{provider}'."}, 400
+    transcript, err, status_code = _run_audio_transcription(
+        provider=target["provider"],
+        api_key=target["api_key"],
+        model=target["model"],
+        audio_base64=audio_b64,
+        mime_type=mime_type,
+        prompt_hint=prompt_hint,
+    )
+    if err is not None:
+        return {"error": err}, status_code
+    return {"status": "success", "text": transcript, "provider": target["provider"]}
 @llm_bp.route('chat/completions', methods=['POST'], request_schema=ChatCompletionPayload, docstring="Streams LLM inference utilizing the active cognitive profile and compute pool.")
 def api_chat_completions(ctx):
     data = ctx.payload or {}
@@ -853,18 +800,14 @@ def api_llm_catalog(ctx):
 @llm_bp.bp.route('/api/system/llm_catalog.json', methods=['GET'])
 def api_public_llm_catalog():
     """
-    Free, unauthenticated, CORS-enabled public JSON API endpoint serving the normalized
-    multi-provider model & token pricing catalog (merging OpenRouter, Models.dev, LiteLLM, and local endpoints).
+    Read-only public JSON API endpoint serving the cached model & token pricing catalog
+    without triggering outbound network harvesting on unauthenticated GET requests.
     """
-    ctx = llm_bp.get_context("default")
     cache_dir = Path(get_domain_cache_path("default", "llm"))
     cache_file = cache_dir / "model_catalog.json"
-    if cache_file.exists():
-        data = load_json_config(cache_file.as_posix(), {})
-        if not data.get("models"):
-            data = harvest_external_model_catalog(ctx, endpoints=get_compute_pool_and_profiles(ctx).get("endpoints"))
-    else:
-        data = harvest_external_model_catalog(ctx, endpoints=get_compute_pool_and_profiles(ctx).get("endpoints"))
+    data = load_json_config(cache_file.as_posix(), {}) if cache_file.exists() else {}
+    if not isinstance(data, dict) or not data.get("models"):
+        data = {"models": {}, "driver_tier_defaults": DRIVER_TIER_DEFAULTS}
     resp = Response(json.dumps(data, indent=2), mimetype="application/json")
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Cache-Control"] = "public, max-age=3600"

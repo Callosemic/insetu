@@ -1,4 +1,4 @@
-import{html as e,css as o}from"lit";import{YenvuiBase as r}from"./yenvui-base.js";export class YenvuiCollapsible extends r{static properties={titleText:{type:String},open:{type:Boolean,reflect:!0},intent:{type:String},flush:{type:Boolean,reflect:!0}};static styles=o`
+import{html as e,css as o}from"lit";import{YenvuiBase as r}from"./yenvui-base.js";export class YenvuiCollapsible extends r{static properties={titleText:{type:String},open:{type:Boolean,reflect:!0},intent:{type:String},compact:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0}};static styles=o`
         :host {
             display: block;
             margin-bottom: 0;
@@ -65,6 +65,27 @@ import{html as e,css as o}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
             text-transform: uppercase;
             letter-spacing: 0.04em;
             color: var(--text);
+            min-width: 0;
+            flex: 1 1 0%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        :host([compact]) .header {
+            padding: 6px 10px;
+            border-radius: 6px;
+            border-bottom: 1px solid var(--border);
+        }
+        :host([compact][open]) .header {
+            margin-bottom: 6px;
+        }
+        :host([compact]) .title {
+            font-size: 0.76rem;
+            text-transform: none;
+            letter-spacing: 0.01em;
+        }
+        :host([compact][open]) .content {
+            padding: 0 0 6px 0;
         }
 
         /* Semantic Intent Accents */
@@ -114,7 +135,11 @@ import{html as e,css as o}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
             :host([open]) .header, :host([flush][open]) .header {
                 margin-bottom: 12px !important;
             }
+            :host([compact][open]) .header {
+                margin-bottom: 6px !important;
+            }
             :host([open]) .content { padding: 0 0 12px 0 !important; }
+            :host([compact][open]) .content { padding: 0 0 6px 0 !important; }
         }
         /* High Contrast Theme Hooks */
         :host([data-theme="e-ink"]) .header {
@@ -139,7 +164,7 @@ import{html as e,css as o}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
                 border-bottom: 2px dotted #000000 !important;
             }
         }
-    `;constructor(){super(),this.open=!0,this.intent="neutral",this.flush=!1}render(){return e`
+    `;constructor(){super(),this.open=!0,this.intent="neutral",this.compact=!1,this.flush=!1}render(){return e`
             <div class="header" @click=${t=>{t.stopPropagation(),this.open=!this.open,this.dispatchEvent(new CustomEvent("yenvui-collapsible-toggled",{detail:{open:this.open},bubbles:!1,composed:!1}))}}>
                 <span class="title intent-${this.intent}">${this.titleText}</span>
                 <div style="display: flex; align-items: center; gap: 15px;">

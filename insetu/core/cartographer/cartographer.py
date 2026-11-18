@@ -2,13 +2,13 @@ import os
 import re
 import ast
 import json
-import threading
 import hashlib
 import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, TypedDict
 from insetu.core.sdk import InSetuExtension
 from insetu.core.utils_core import (
+    BoundedCache,
     VFSTransaction,
     get_repo_path,
     load_config,
@@ -92,9 +92,8 @@ cartographer_bp = InSetuExtension(
 )
 __depends__ = ['topology']
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
-_CARTOGRAPHER_SIG_CACHE = {}
-_CARTOGRAPHER_CACHE_LOCK = threading.Lock()
-_CARTOGRAPHER_SYMBOL_CACHE: Dict[Tuple[str, str], Tuple[str, List[Dict[str, Any]]]] = {}
+_CARTOGRAPHER_SIG_CACHE = BoundedCache("cartographer_sig", max_entries=128, copy_mode="none")
+_CARTOGRAPHER_SYMBOL_CACHE = BoundedCache("cartographer_symbols", max_entries=2048)
 
 # file_descriptions sources. CODE_INDEX.md is the source of truth; these rows are its working memory.
 DESCRIPTION_SOURCE_GENESIS = "genesis_comment"   # first sentence of the patch COMMENT that created the file
@@ -374,9 +373,8 @@ def api_cartographer_verify_symbols(ctx):
             )
         updated += cur.rowcount
     ctx.db.commit()
-    with _CARTOGRAPHER_CACHE_LOCK:
-        _CARTOGRAPHER_SIG_CACHE.clear()
-        _CARTOGRAPHER_SYMBOL_CACHE.clear()
+    _CARTOGRAPHER_SIG_CACHE.clear()
+    _CARTOGRAPHER_SYMBOL_CACHE.clear()
     target_repos = [repo] if repo else None
     map_repositories(ctx.workspace_id, target_repos=target_repos)
     ctx.sync_vfs_barrier()
@@ -392,8 +390,7 @@ def api_cartographer_claim_index(ctx):
     repo = str((ctx.payload or {}).get("repo") or "").strip()
     if not repo:
         return {"error": "'repo' is required."}, 400
-    with _CARTOGRAPHER_CACHE_LOCK:
-        _CARTOGRAPHER_SIG_CACHE.pop((ctx.workspace_id or "default", repo), None)
+    _CARTOGRAPHER_SIG_CACHE.pop((ctx.workspace_id or "default", repo), None)
     map_repositories(ctx.workspace_id, target_repos=[repo], claim_index=True)
     ctx.sync_vfs_barrier()
     return {"status": "success", "repo": repo}
@@ -424,7 +421,6 @@ def _background_enrich(ctx, repo: Optional[str] = None, job_id: Optional[str] = 
         extract_existing_comments_fn=extract_existing_comments,
         map_repositories_fn=map_repositories,
         sig_cache=_CARTOGRAPHER_SIG_CACHE,
-        cache_lock=_CARTOGRAPHER_CACHE_LOCK,
     )
 
 
@@ -587,21 +583,18 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
                 if ext not in SUPPORTED_SYMBOL_EXTENSIONS:
                     continue
                 f_uri = f"vfs://{repo_dir}/{rel_f}"
-                f_text = ctx.vfs.read(f_uri)
+                f_rev, f_text = ctx.vfs.read_with_revision(f_uri)
                 if f_text is None:
                     continue
-                f_hash = str(hash(f_text))
                 sym_cache_key = (workspace_id or "default", f_uri)
-                cached_sym = _CARTOGRAPHER_SYMBOL_CACHE.get(sym_cache_key)
-                if cached_sym and cached_sym[0] == f_hash:
-                    extracted_syms = cached_sym[1]
-                else:
+                extracted_syms = _CARTOGRAPHER_SYMBOL_CACHE.get(sym_cache_key, revision=f_rev)
+                if extracted_syms is None:
                     extracted_syms = extract_file_symbols(rel_f, f_text)
                     if extracted_syms is None:
                         # Syntax error resilience: retain last known good symbols from cache
-                        extracted_syms = cached_sym[1] if cached_sym else []
+                        extracted_syms = _CARTOGRAPHER_SYMBOL_CACHE.get(sym_cache_key) or []
                     else:
-                        _CARTOGRAPHER_SYMBOL_CACHE[sym_cache_key] = (f_hash, extracted_syms)
+                        _CARTOGRAPHER_SYMBOL_CACHE.put(sym_cache_key, extracted_syms, revision=f_rev)
                 if extracted_syms:
                     symbol_map[rel_f] = [dict(s) for s in extracted_syms]
 
@@ -716,9 +709,8 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
         cache_key = (workspace_id or "default", repo_dir)
         comments_sig = tuple(sorted((k, v) for k, v in comments.items() if k in filtered_set or k.rstrip("/") in seen_dirs))
         pre_sig = (tuple(filtered_files), hash(live_vfs_index), tuple(managed_dirs), tuple(symbol_sig_parts), comments_sig, bool(extra_comments))
-        with _CARTOGRAPHER_CACHE_LOCK:
-            if live_vfs_index is not None and not extra_comments and _CARTOGRAPHER_SIG_CACHE.get(cache_key) == pre_sig:
-                return
+        if live_vfs_index is not None and not extra_comments and _CARTOGRAPHER_SIG_CACHE.get(cache_key) == pre_sig:
+            return
 
         # Other workspaces or insetu instances may mount this clone with different index rules; one of them writes (#22).
         rules = index_rules_fingerprint(config, cfg, include_symbols)
@@ -740,8 +732,7 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
         if rendered_index != live_vfs_index:
             ctx.vfs.save(logical_index_path, rendered_index, data={"ignore_ledger": True})
         post_sig = (tuple(filtered_files), hash(rendered_index), tuple(managed_dirs), tuple(symbol_sig_parts), comments_sig, False)
-        with _CARTOGRAPHER_CACHE_LOCK:
-            _CARTOGRAPHER_SIG_CACHE[cache_key] = post_sig
+        _CARTOGRAPHER_SIG_CACHE.put(cache_key, post_sig)
 
         missing = sum(1 for line in tree_lines if "[comment required]" in line)
         if not silent:

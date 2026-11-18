@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import re
 import sys
-import threading
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 import insetu.core.attestations as _attestations
@@ -16,12 +15,11 @@ from insetu.core.sdk import (
     resolve_external_dependency_spec,
 )
 from insetu.core.system.blueprint import system_bp
-from insetu.core.utils_core import get_workspace_physics
+from insetu.core.utils_core import BoundedCache, get_workspace_physics
 
 WORKSPACE_EXTENSION_NAME_PATTERN = re.compile(r"^[a-z0-9_]+$")
 WORKSPACE_EXTENSION_MAX_BYTES = 20 * 1024 * 1024
-_WORKSPACE_EXTENSION_SNAPSHOT_CACHE: Dict[str, Tuple[tuple, Dict[str, Any]]] = {}
-_WORKSPACE_EXTENSION_SNAPSHOT_LOCK = threading.Lock()
+_WORKSPACE_EXTENSION_SNAPSHOT_CACHE = BoundedCache("workspace_ext_snapshots", max_entries=64)
 
 
 def get_workspace_extension_reserved_names() -> frozenset:
@@ -102,13 +100,11 @@ def current_workspace_extension_fingerprint(ext_dir: Path) -> Optional[str]:
     except OSError:
         return None
     cache_id = ext_dir.as_posix()
-    with _WORKSPACE_EXTENSION_SNAPSHOT_LOCK:
-        cached = _WORKSPACE_EXTENSION_SNAPSHOT_CACHE.get(cache_id)
-        if cached and cached[0] == key:
-            return cached[1].get("fingerprint")
+    cached = _WORKSPACE_EXTENSION_SNAPSHOT_CACHE.get(cache_id, revision=key)
+    if cached is not None:
+        return cached.get("fingerprint")
     snap = snapshot_workspace_extension(ext_dir)
-    with _WORKSPACE_EXTENSION_SNAPSHOT_LOCK:
-        _WORKSPACE_EXTENSION_SNAPSHOT_CACHE[cache_id] = (key, snap)
+    _WORKSPACE_EXTENSION_SNAPSHOT_CACHE.put(cache_id, snap, revision=key)
     return snap.get("fingerprint")
 
 

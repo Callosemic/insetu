@@ -241,6 +241,15 @@ def api_fs_fetch(ctx):
     if not resolved_path:
         uri = InSetuURI.from_external_input(filename)
         resolved_path = uri.resolve_if_exists(workspace_id)
+        if not resolved_path and uri.scheme == "ctx":
+            hook_res = hooks.emit_first(
+                'vfs_resolve_file',
+                filename=str(uri),
+                workspace_id=workspace_id,
+                predicate=lambda r: bool(r and Path(r[0] if isinstance(r, tuple) else r).exists())
+            )
+            if hook_res:
+                resolved_path = hook_res[0] if isinstance(hook_res, tuple) else hook_res
 
     dl_param = str(ctx.payload.get('download') or '').lower()
     as_download = dl_param in ('1', 'true', 'yes')

@@ -584,6 +584,50 @@ def serialize_block_chunk(
     return "\n".join(lines)
 
 
+_YOMAMA_BLOCK_STRIP_RE = re.compile(
+    r'(?:```(?:text|python|javascript|js|json|yaml|markdown|md)?[ \t]*\n)?'
+    r'(?:[ \t]*(?:<[ \t]*){3,}FILE:[^\n]*\n)?'
+    r'(?:[ \t]*(?:<[ \t]*){3,}ID:[^\n]*\n)?'
+    r'(?:[ \t]*(?:<[ \t]*){3,}COMMENT\n[\s\S]*?\n)?'
+    r'^[ \t]*(?:<[ \t]*){3,}(?:SEARCH(?:\s+REGEX)?|TEXTEDIT|JSON_PATCH|RELOCATE|RENAME|MOVE_FILE|ARCHIVE_FILE|DELETE_FILE|TASK_?MANAGE|QUERY_CONTEXT|CALL_CAPABILITY)\b[\s\S]*?'
+    r'^[ \t]*(?:>[ \t]*){1,}(?:REPLACE|EXECUTE)[ \t]*(?:\n[ \t]*(?:>[ \t]*)+$)*'
+    r'(?:\n```)?',
+    re.MULTILINE,
+)
+
+
+def strip_yomama_blocks_keep_prose(raw_text: str) -> str:
+    """Strips raw Yomama patch/probe blocks and empty code fences while preserving surrounding conversational prose."""
+    if not raw_text or "<<<<<<<" not in raw_text:
+        return (raw_text or "").strip()
+    cleaned = _YOMAMA_BLOCK_STRIP_RE.sub("\n", raw_text)
+    cleaned = re.sub(r'^[ \t]*<<<<<<< FILE:[^\n]*$', '', cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r'```(?:text|python|javascript|js|json|yaml|markdown|md)?\s*```', '', cleaned)
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned.strip()
+
+
+def collect_live_files_for_patch_healing(ctx, parsed_blocks: Dict[str, Any], readonly_list: List[str]) -> str:
+    """Reads current disk contents of files targeted by a failed Yomama patch so the healing LLM has exact anchors."""
+    snippets: List[str] = []
+    for raw_file in parsed_blocks.keys():
+        if raw_file in readonly_list:
+            continue
+        try:
+            canon_uri = str(InSetuURI(raw_file))
+        except Exception:
+            continue
+        disk_text = ctx.vfs.read(canon_uri)
+        if disk_text is None:
+            candidates = ctx.find_path_candidates(canon_uri)
+            if candidates:
+                canon_uri = candidates[0]["filepath"]
+                disk_text = ctx.vfs.read(canon_uri)
+        if disk_text is not None:
+            snippets.append(f"=== CURRENT FILE ON DISK: {canon_uri} ===\n{disk_text}")
+    return "\n\n".join(snippets)
+
+
 def serialize_blocks_to_yomama(file_to_blocks: Dict[str, List[Dict[str, Any]]]) -> str:
     """Serializes a mapping of filepath -> block dicts into canonical Yomama patch text, preserving canonical 0..n order across interleaved files."""
     flat = flatten_parsed_blocks(file_to_blocks)

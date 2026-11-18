@@ -338,6 +338,8 @@ inSetu is local-first. The daemon binds to `127.0.0.1:5005` and is not reachable
 
 ### Security model
 
+How to report a problem, and what the model does and does not cover, is in [SECURITY.md](SECURITY.md). Gaps we already know about are in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+
 An authenticated session can read and write your files, run commands you approve, and push to your Git remotes. **Treat the session token like a shell login.** inSetu is built for a single user, and remote access is only as safe as the way you authenticate it.
 
 A browser gets the session token from `/auth/bootstrap` in one of three ways:

@@ -92,10 +92,6 @@ import{LitElement as i,html as a,css as r}from"lit";export class YenvuiModal ext
             filter: none;
         }
 
-        .close-btn:hover {
-            filter: brightness(1.2);
-        }
-
         :host([data-theme="e-ink"]) .close-btn {
             background: #ffffff;
             color: #000000;

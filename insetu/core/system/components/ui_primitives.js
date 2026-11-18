@@ -508,6 +508,104 @@ export class InSetuHostDirPicker extends InSetuElement {
 }
 if (!customElements.get('insetu-host-dir-picker')) customElements.define('insetu-host-dir-picker', InSetuHostDirPicker);
 
+export class InSetuConfirmModal extends InSetuElement {
+    static get extensionName() { return 'system'; }
+    static properties = {
+        _open: { type: Boolean, state: true },
+        _title: { type: String, state: true },
+        _message: { type: String, state: true },
+        _confirmLabel: { type: String, state: true },
+        _cancelLabel: { type: String, state: true },
+        _intent: { type: String, state: true }
+    };
+    static styles = [sharedStyles];
+
+    constructor() {
+        super();
+        this._open = false;
+        this._title = 'Confirm Action';
+        this._message = '';
+        this._confirmLabel = 'Confirm';
+        this._cancelLabel = 'Cancel';
+        this._intent = 'danger';
+        this._resolver = null;
+    }
+
+    prompt(options = {}) {
+        if (this._resolver) {
+            this._resolver(false);
+            this._resolver = null;
+        }
+        const opts = typeof options === 'string' ? { message: options } : (options || {});
+        this._title = opts.title || 'Confirm Action';
+        this._message = opts.message || '';
+        this._confirmLabel = opts.confirmLabel || 'Confirm';
+        this._cancelLabel = opts.cancelLabel || 'Cancel';
+        this._intent = opts.intent || 'danger';
+        this._open = true;
+        return new Promise((resolve) => {
+            this._resolver = resolve;
+        });
+    }
+
+    _settle(confirmed) {
+        this._open = false;
+        if (this._resolver) {
+            const resolve = this._resolver;
+            this._resolver = null;
+            resolve(Boolean(confirmed));
+        }
+    }
+
+    render() {
+        if (!this._open) return html``;
+        return html`
+            <sutram-modal
+                ?open=${this._open}
+                size="compact"
+                .titleText=${this._title}
+                @sutram-modal-closed=${(e) => {
+                    if (e.target === e.currentTarget) this._settle(false);
+                }}>
+                <sutram-stack direction="col" gap="sm">
+                    <sutram-label ?multiline=${true} .text=${this._message}></sutram-label>
+                </sutram-stack>
+                <sutram-btn
+                    slot="footer"
+                    intent="neutral"
+                    icon="x"
+                    .label=${this._cancelLabel}
+                    @click=${() => this._settle(false)}>
+                </sutram-btn>
+                <sutram-btn
+                    slot="footer"
+                    .intent=${this._intent}
+                    icon="check"
+                    .label=${this._confirmLabel}
+                    @click=${() => this._settle(true)}>
+                </sutram-btn>
+            </sutram-modal>
+        `;
+    }
+}
+if (!customElements.get('insetu-confirm-modal')) {
+    customElements.define('insetu-confirm-modal', InSetuConfirmModal);
+}
+
+window.inSetu.ui.confirmModal = async (options = {}) => {
+    let modalEl = document.getElementById('insetu-confirm-modal-root');
+    if (!modalEl && typeof document !== 'undefined' && document.body) {
+        modalEl = document.createElement('insetu-confirm-modal');
+        modalEl.id = 'insetu-confirm-modal-root';
+        document.body.appendChild(modalEl);
+    }
+    if (modalEl && typeof modalEl.prompt === 'function') {
+        return await modalEl.prompt(options);
+    }
+    const msg = typeof options === 'string' ? options : (options?.message || 'Are you sure?');
+    return typeof confirm === 'function' ? confirm(msg) : true;
+};
+
 if (!document.getElementById('insetu-toast-root')) {
     const toastRoot = document.createElement('sutram-toast-container');
     toastRoot.id = 'insetu-toast-root';
@@ -518,4 +616,10 @@ if (!document.getElementById('insetu-reboot-overlay-root')) {
     const rebootRoot = document.createElement('insetu-reboot-overlay');
     rebootRoot.id = 'insetu-reboot-overlay-root';
     document.body.appendChild(rebootRoot);
+}
+
+if (!document.getElementById('insetu-confirm-modal-root')) {
+    const confirmRoot = document.createElement('insetu-confirm-modal');
+    confirmRoot.id = 'insetu-confirm-modal-root';
+    document.body.appendChild(confirmRoot);
 }

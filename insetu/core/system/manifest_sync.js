@@ -27,6 +27,28 @@ export async function classifyBootModuleFailure(url, err, fetchImpl = fetch) {
     } catch (_) { return 'network'; }
 }
 
+export function collectOfflineBootModuleUrls(fallbackScripts = []) {
+    const activeExts = window.ACTIVE_EXTENSIONS || [];
+    const assetMap = (window.INSETU_MODULE_ASSETS && typeof window.INSETU_MODULE_ASSETS === 'object') ? window.INSETU_MODULE_ASSETS : null;
+    const urls = new Set(['/static/vendor/codemirror/languages.json', ...(fallbackScripts || [])]);
+    if (assetMap) {
+        Object.entries(assetMap).forEach(([mod, list]) => {
+            const isCoreMod = Boolean(window.inSetu?.CORE_MODULES?.has?.(mod) || (window.inSetu?.isCore && window.inSetu.isCore(mod)));
+            if ((isCoreMod || activeExts.includes(mod)) && Array.isArray(list)) {
+                list.forEach(u => urls.add(u));
+            }
+        });
+        activeExts.forEach(ext => {
+            if (ext && !assetMap[ext] && !(window.inSetu?.isCore && window.inSetu.isCore(ext))) {
+                urls.add(`/static/extensions/${ext}/ext_${ext}.js`);
+            }
+        });
+    } else {
+        activeExts.filter(ext => ext && !(window.inSetu?.isCore && window.inSetu.isCore(ext))).forEach(ext => urls.add(`/static/extensions/${ext}/ext_${ext}.js`));
+    }
+    return Array.from(urls);
+}
+
 // --- DECENTRALIZED MANIFEST SYNC & KERNEL HEARTBEAT ---
 export async function checkManifestVersion() {
     if (!window.BOOT_COMPLETE) return;

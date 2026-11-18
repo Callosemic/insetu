@@ -370,10 +370,13 @@ import{html as s,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
         }
         :host([compact]) .content-col {
             flex-direction: row;
+            justify-content: flex-start;
             align-items: center;
             padding: 6px 12px;
         }
         :host([compact]) .card-header {
+            flex: 1 1 0%;
+            min-width: 0;
             margin-bottom: 0;
         }
         :host([compact]) .card-title {
@@ -409,7 +412,8 @@ import{html as s,css as d}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
                 @mouseleave=${()=>{window.matchMedia("(hover: hover)").matches&&(!this._gestureController||!this._gestureController.active)&&(this._overlayActive=!1)}}
                 @pointerdown=${e=>{this._initGestureController(),this._gestureController.start(e)}}>
 
-                ${this.disableSelection?"":s`<div class="selection-hit-zone" title="Select Item" @click=${e=>{e.stopPropagation(),this._toggleSelection()}}></div><div class="selection-strip"></div>`}
+                ${this.disableSelection?"":s`<div class="selection-hit-zone" title="Select Item" @click=${e=>{e.stopPropagation(),this._toggleSelection()}}></div>`}
+                <div class="selection-strip" @click=${e=>{this.disableSelection||(e.stopPropagation(),this._toggleSelection())}}></div>
                 <div class="content-col" @click=${e=>{if(this._isPanning){e.stopPropagation(),e.preventDefault();return}this.dispatchEvent(new CustomEvent("yenvui-card-clicked",{detail:{filename:this.filename,isSource:!0},bubbles:!0,composed:!0}))}} style="cursor: pointer;">
                     <div class="card-header ${t?"single-row":""}">
                         <div class="card-title">

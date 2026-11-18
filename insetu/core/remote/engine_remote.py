@@ -15,10 +15,9 @@ import json
 import os
 import shutil
 import subprocess
-import threading
-import time
 from typing import Any, Dict, Optional, Tuple, TypedDict
 from insetu.core.sdk import (
+    BoundedCache,
     InSetuExtension,
     SettingsManager,
     execute_binary,
@@ -40,9 +39,9 @@ WHOIS_FAILURE_TTL_SECONDS = 5.0
 OWNER_TTL_SECONDS = 300.0
 LEGACY_SETTINGS_BLOCK = "tailscale"
 
-_CACHE_LOCK = threading.Lock()
-_WHOIS_CACHE: Dict[str, Tuple[float, Optional[Dict[str, Any]]]] = {}
-_OWNER_CACHE: Dict[str, Tuple[float, Optional[str]]] = {}
+_WHOIS_CACHE = BoundedCache("remote_tailscale_whois", max_entries=128)
+_OWNER_CACHE = BoundedCache("remote_tailscale_owner", max_entries=8)
+_UNRESOLVED_SENTINEL = "__UNRESOLVED__"
 _HEADER_MODE_WARNED = {"done": False}
 
 
@@ -158,11 +157,9 @@ def tailscale_whois(ip: str) -> Optional[Dict[str, Any]]:
     clean_ip = str(ip or "").strip()
     if not clean_ip:
         return None
-    now = time.monotonic()
-    with _CACHE_LOCK:
-        cached = _WHOIS_CACHE.get(clean_ip)
-        if cached and cached[0] > now:
-            return dict(cached[1]) if cached[1] else None
+    cached = _WHOIS_CACHE.get(clean_ip)
+    if cached is not None:
+        return None if cached == _UNRESOLVED_SENTINEL else cached
 
     payload = _run_tailscale_json(["whois", "--json", clean_ip])
     result: Optional[Dict[str, Any]] = None
@@ -178,18 +175,15 @@ def tailscale_whois(ip: str) -> Optional[Dict[str, Any]]:
             }
 
     ttl = WHOIS_TTL_SECONDS if result else WHOIS_FAILURE_TTL_SECONDS
-    with _CACHE_LOCK:
-        _WHOIS_CACHE[clean_ip] = (now + ttl, dict(result) if result else None)
+    _WHOIS_CACHE.put(clean_ip, result if result is not None else _UNRESOLVED_SENTINEL, ttl=ttl)
     return result
 
 
 def tailscale_owner_login() -> Optional[str]:
     """Returns the login that owns this machine's tailscaled (None for tagged machines or when unavailable). Cached 5 min."""
-    now = time.monotonic()
-    with _CACHE_LOCK:
-        cached = _OWNER_CACHE.get("self")
-        if cached and cached[0] > now:
-            return cached[1]
+    cached = _OWNER_CACHE.get("self")
+    if cached is not None:
+        return None if cached == _UNRESOLVED_SENTINEL else cached
 
     owner: Optional[str] = None
     status = _run_tailscale_json(["status", "--json"], timeout=5.0)
@@ -202,16 +196,14 @@ def tailscale_owner_login() -> Optional[str]:
             owner = str(profile.get("LoginName") or "").strip() or None
 
     ttl = OWNER_TTL_SECONDS if owner else WHOIS_FAILURE_TTL_SECONDS
-    with _CACHE_LOCK:
-        _OWNER_CACHE["self"] = (now + ttl, owner)
+    _OWNER_CACHE.put("self", owner if owner is not None else _UNRESOLVED_SENTINEL, ttl=ttl)
     return owner
 
 
 def reset_identity_caches() -> None:
     """Test harness contract: clears WHOIS and owner caches."""
-    with _CACHE_LOCK:
-        _WHOIS_CACHE.clear()
-        _OWNER_CACHE.clear()
+    _WHOIS_CACHE.clear()
+    _OWNER_CACHE.clear()
     _HEADER_MODE_WARNED["done"] = False
 
 

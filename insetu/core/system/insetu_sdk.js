@@ -1,32 +1,18 @@
 // insetu/insetu/static/js/core/sdk.js
 // Tier 1A: inSetu Local OS SDK Wrapper (Single-File Frontend Membrane)
 export * from 'sutram';
+import * as _sutramExports from 'sutram';
 import {
     SutramElement,
     createSutramStore,
     StoreRegistry,
     ExtensionRegistry as SutramRegistry,
-    fuzzyFilterObjects,
-    normalizeAccentText,
-    slugify,
     debounce,
-    coalescedAsync,
-    formatDate,
-    timeAgo,
-    nativeShareFiles,
-    shallowEqual,
-    copyRichHtml,
-    threeWayMergeText,
-    HostPath,
-    truncateFilename,
-    clone,
-    compileDagWavefronts,
+    downloadBlob,
     extractTemplateVariables as _sutramExtractTemplateVariables,
     interpolateTemplateVariables as _sutramInterpolateTemplateVariables,
     ensureSutramAppShellCached as ensureAppShellCached,
-    SutramCacheWarmer,
-    getEventPath,
-    getEventTarget
+    SutramCacheWarmer
 } from 'sutram';
 import * as jsYaml from '/static/vendor/js-yaml/js-yaml.min.js';
 import { BucketAddress, InSetuURI } from '/static/extensions/system/uri.js';
@@ -75,8 +61,8 @@ export function cleanCodeArtifacts(text) {
             + result.slice(firstDollar + 1, lastDollar).replace(/\\vert\{\}/g, '|')
             + result.slice(lastDollar);
     }
-    result = result.replace(/\{\{\s*ymm:(.)[x*](\d+)\s*\}\}/g, (_, char, count) => char.repeat(parseInt(count, 10)));
-    result = result.replace(/\{\{\s*(.)\s*\*\s*(\d+)\s*\}\}/g, (_, char, count) => char.repeat(parseInt(count, 10)));
+    result = result.replace(/\{\{\s*ymm:(.)[x*]([1-9])\s*\}\}/g, (_, char, count) => char.repeat(parseInt(count, 10)));
+    result = result.replace(/\{\{\s*(.)\s*\*\s*([1-9])\s*\}\}/g, (_, char, count) => char.repeat(parseInt(count, 10)));
     result = result.replace(/\{\{\s*triple(.)\s*\}\}/g, (_, char) => char.repeat(3));
     result = result.replace(/_(?:[^_\n]_){3,}/g, (match) => match.replace(/_/g, ''));
     result = result.replace(/\x5b\x73\x6f\x75\x72\x63\x65:\s*\d+\x5d/gi, '');
@@ -332,24 +318,16 @@ window.ExtensionRegistry.utils = {
     }
 };
 
-// Attach util wrappers mapping to the Sutram imports
-window.inSetu.utils.getEventPath = getEventPath;
-window.inSetu.utils.getEventTarget = getEventTarget;
-window.inSetu.utils.slugify = slugify;
-window.inSetu.utils.fuzzyFilterObjects = fuzzyFilterObjects;
-window.inSetu.utils.normalizeAccentText = normalizeAccentText;
-window.inSetu.utils.formatDate = formatDate;
-window.inSetu.utils.timeAgo = timeAgo;
-window.inSetu.utils.coalescedAsync = coalescedAsync;
-window.inSetu.utils.nativeShareFiles = nativeShareFiles;
+// Deterministically project Sutram utility functions and helpers onto window.inSetu.utils (SSOT)
+Object.entries(_sutramExports).forEach(([k, v]) => {
+    const isLowerUtil = /^[a-z]/.test(k) && typeof v === 'function';
+    if ((isLowerUtil || k === 'HostPath' || k === 'SutramWorker') && !(k in window.inSetu.utils)) {
+        window.inSetu.utils[k] = v;
+    }
+});
 window.inSetu.utils.cleanCodeArtifacts = cleanCodeArtifacts;
-window.inSetu.utils.shallowEqual = shallowEqual;
-window.inSetu.utils.threeWayMergeText = threeWayMergeText;
-window.inSetu.utils.compileDagWavefronts = compileDagWavefronts;
 window.inSetu.utils.extractTemplateVariables = extractTemplateVariables;
 window.inSetu.utils.interpolateTemplateVariables = interpolateTemplateVariables;
-window.inSetu.utils.HostPath = HostPath;
-window.inSetu.utils.truncateFilename = truncateFilename;
 window.inSetu.utils.formatArtifactSize = function(meta) {
     if (!meta) return "";
     if (meta.size_bytes !== undefined) {
@@ -362,13 +340,11 @@ window.inSetu.utils.formatArtifactSize = function(meta) {
     }
     return "";
 };
-window.inSetu.utils.clone = clone;
 window.inSetu.utils.getScopedStorage = (key, defaultVal = null, workspaceId = null) => StoreRegistry.getScopedStorage(key, defaultVal, workspaceId, 'insetu');
 window.inSetu.utils.setScopedStorage = (key, value, workspaceId = null) => StoreRegistry.setScopedStorage(key, value, workspaceId, 'insetu');
 window.inSetu.utils.removeScopedStorage = (key, workspaceId = null) => StoreRegistry.removeScopedStorage(key, workspaceId, 'insetu');
 // Preserve clipboard API bindings
-window.inSetu.utils.copyRichHtml = copyRichHtml;
-window.inSetu.utils.copyToClipboard = async function(text) {
+export async function copyToClipboard(text) {
     try {
         await navigator.clipboard.writeText(text);
         return true;
@@ -376,22 +352,24 @@ window.inSetu.utils.copyToClipboard = async function(text) {
         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("Clipboard access denied.", 3000, true);
         throw new Error("Clipboard access denied");
     }
-};
+}
 
-window.inSetu.utils.copyRawText = async function(text, successMsg = "✅ Copied!") {
+export async function copyRawText(text, successMsg = "✅ Copied!") {
     // An empty copy would silently clear the clipboard, so it is reported instead
     if (typeof text !== 'string' || !text.trim()) {
         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("Nothing to copy.", 3000, true);
         throw new Error("Nothing to copy");
     }
     try {
-        await window.inSetu.utils.copyToClipboard(text);
+        await copyToClipboard(text);
         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(successMsg, 2000);
     } catch (e) {
         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("❌ Error copying text", 3000, true);
         throw e;
     }
-};
+}
+window.inSetu.utils.copyToClipboard = copyToClipboard;
+window.inSetu.utils.copyRawText = copyRawText;
 window.inSetu.utils.parseURI = function(pathStr) {
     return new InSetuURI(pathStr);
 };
@@ -448,6 +426,25 @@ window.inSetu.utils.normalizeEntityData = function(data) {
         ...data,
         filepath: rawPath
     };
+};
+window.inSetu.utils.getDropdownEntityActions = function(entityType, entityData, filterFn = null) {
+    const rawActions = window.ExtensionRegistry?.getEntityActions
+        ? window.ExtensionRegistry.getEntityActions(entityType, entityData)
+        : [];
+    const filtered = typeof filterFn === 'function' ? rawActions.filter(filterFn) : rawActions;
+    return filtered.map(act => ({
+        id: act.id,
+        label: typeof act.label === 'function' ? act.label(entityData) : act.label,
+        icon: typeof act.icon === 'function' ? act.icon(entityData) : act.icon,
+        intent: (typeof act.intent === 'function' ? act.intent(entityData) : act.intent) || 'primary',
+        onClick: (e) => {
+            if (window.ExtensionRegistry?.executeEntityAction) {
+                return window.ExtensionRegistry.executeEntityAction(act, entityData, e);
+            }
+            if (act.onClick) return act.onClick(entityData, e);
+            if (act.asyncAction) return act.asyncAction(entityData, e);
+        }
+    }));
 };
 window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = null, domain = 'auto') {
     if (!manifestData) return [];
@@ -639,6 +636,7 @@ window.ExtensionRegistry.registerExtension('system', {
             id: 'blob-download',
             label: 'Download',
             icon: 'download',
+            intent: 'primary',
             group: 'file',
             vfsBound: false,
             order: 30,
@@ -646,13 +644,25 @@ window.ExtensionRegistry.registerExtension('system', {
                 if (data.textContent) {
                     const filename = data.suggestedFilename || `blob_${Date.now()}.txt`;
                     const blob = new Blob([data.textContent], { type: 'text/plain;charset=utf-8' });
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = filename;
-                    a.click();
-                    window.URL.revokeObjectURL(url);
+                    downloadBlob(blob, filename);
                     if (window.inSetu.ui) window.inSetu.ui.setGlobalStatus(`✅ Downloaded ${filename}`, 3000);
+                }
+            }
+        },
+        {
+            targetEntity: 'text_blob',
+            id: 'blob-share',
+            label: 'Share',
+            icon: 'share',
+            intent: 'primary',
+            group: 'share',
+            vfsBound: false,
+            order: 40,
+            match: () => Boolean(navigator.share && navigator.canShare),
+            onClick: (data) => {
+                if (data.textContent && window.inSetu?.utils?.nativeShareFiles) {
+                    const filename = data.suggestedFilename || `blob_${Date.now()}.txt`;
+                    window.inSetu.utils.nativeShareFiles([{ content: data.textContent, filename }]).catch(() => {});
                 }
             }
         }

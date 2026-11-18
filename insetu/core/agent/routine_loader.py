@@ -11,204 +11,15 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from insetu.core.agent.expressions import normalize_condition_expr as _default_normalize_cond_expr
 from insetu.core.languages import get_language_provider
 from insetu.core.sdk import CycleError, TemplateOverlayVFSDriver, extract_template_variables, resolve_dag_wavefronts, slugify
-from insetu.core.topology.engine_topology import clamp_uris_to_topology, get_topology_files_for_repo
 from insetu.core.utils_core import InSetuURI, get_sister_repos, load_yaml_string, parse_frontmatter, update_frontmatter
 
 _ROUTINES_DRIVER = TemplateOverlayVFSDriver(module_subdir="routines")
-MAX_RAG_FILES_PER_HOP = 15
 RESERVED_ROUTINE_NODE_IDS = frozenset({"sys", "global", "inputs", "nodes", "loop", "holding", "trace", "_ctx"})
-
-_PROSE_STOPWORDS = frozenset({
-    "the", "and", "for", "with", "from", "that", "this", "into", "through", "execute",
-    "implement", "update", "fix", "run", "task", "tasks", "item", "items", "section",
-    "part", "step", "phase", "sprint", "plan", "doc", "file", "in", "on", "to", "of",
-})
-
-def _collect_workspace_file_extensions(ctx) -> Tuple[Set[str], Set[str]]:
-    """Returns (known_extensions_lower, known_basenames_lower) from the workspace's live topology_ledger."""
-    exts: Set[str] = {".md", ".txt", ".json", ".yaml", ".yml", ".toml"}
-    basenames: Set[str] = set()
-    if ctx is None:
-        return exts, basenames
-    for repo in get_sister_repos(ctx.workspace_id):
-        for uri_str in get_topology_files_for_repo(ctx.workspace_id, repo):
-            bname = InSetuURI(uri_str).basename.lower()
-            if bname:
-                basenames.add(bname)
-                suf = Path(bname).suffix.lower()
-                if suf:
-                    exts.add(suf)
-    return exts, basenames
-
-def _prioritize_document_sections(user_prompt: str, docs_text: str) -> str:
-    """Orders sections of docs_text by relevance to user_prompt using MarkdownLanguageProvider.definitions."""
-    if not docs_text or not user_prompt:
-        return docs_text or ""
-    provider = get_language_provider("doc.md")
-    headings = provider.definitions("ctx://contexts/doc.md", docs_text) if provider else []
-    if not headings:
-        return docs_text
-    prompt_lower = user_prompt.lower()
-    prompt_nums = {
-        m.group(1) or m.group(2)
-        for m in re.finditer(r'\b(\d+)\.\d+\b|\b(?:section|part|step|phase|sprint)\s+([a-z0-9]+)\b', prompt_lower)
-        if (m.group(1) or m.group(2))
-    }
-    prompt_words = {w for w in re.findall(r'[a-z0-9_]{3,}', prompt_lower) if w not in _PROSE_STOPWORDS and not w.isdigit()}
-    if not prompt_nums and not prompt_words:
-        return docs_text
-    lines = docs_text.splitlines()
-    matched_slices: List[Tuple[int, str]] = []
-    for h in headings:
-        h_lower = str(h.get("name") or "").strip().lower()
-        score = sum(10 for num in prompt_nums if re.search(rf'(?:^|\b){re.escape(num)}(?:\b|\.)', h_lower))
-        score += sum(3 for w in prompt_words if w in h_lower)
-        if score > 0:
-            s_ln = max(1, int(h.get("line") or h.get("start_line") or 1))
-            e_ln = min(len(lines), int(h.get("end_line") or len(lines)))
-            matched_slices.append((score, "\n".join(lines[s_ln - 1 : e_ln])))
-    if not matched_slices:
-        return docs_text
-    matched_slices.sort(key=lambda item: item[0], reverse=True)
-    focused = "\n\n".join(chunk for _, chunk in matched_slices)
-    return focused if prompt_nums else f"{focused}\n\n{docs_text}"
-
-def extract_doc_referenced_files(ctx, user_prompt: str, docs_text: str) -> List[str]:
-    """Format- and repository-agnostic file reference extractor for attached plans, tickets, and notes."""
-    if not docs_text or ctx is None:
-        return []
-    try:
-        known_exts, known_basenames = _collect_workspace_file_extensions(ctx)
-        prioritized_text = _prioritize_document_sections(user_prompt, docs_text)
-        provider = get_language_provider("doc.md")
-        raw_candidates: List[str] = list(re.findall(r'(?:vfs|ctx)://[A-Za-z0-9_./-]+\.[A-Za-z0-9]{1,10}', prioritized_text))
-        if provider:
-            for imp in provider.imports("ctx://contexts/doc.md", prioritized_text):
-                link_target = str(imp.get("target") or imp.get("module") or "").strip().split("#", 1)[0].strip()
-                if link_target and not link_target.startswith(("http://", "https://", "mailto:")):
-                    raw_candidates.append(link_target)
-        for m in re.finditer(r'(?<![A-Za-z0-9_./:-])([A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z][A-Za-z0-9]{0,9})(?![A-Za-z0-9_./-])', prioritized_text):
-            tok = m.group(1).strip().lstrip("./")
-            if not tok or ".." in tok:
-                continue
-            suf, bname = Path(tok).suffix.lower(), Path(tok).name.lower()
-            if suf not in known_exts or ("/" not in tok and (tok.count(".") > 1 or bname not in known_basenames)):
-                continue
-            raw_candidates.append(tok)
-        deduped = list(dict.fromkeys(c.strip().strip("`'\"") for c in raw_candidates if c and c.strip()))
-        return clamp_rag_files_to_topology(ctx, deduped, max_files=12)
-    except Exception:
-        return []
-
-def collect_live_files_for_patch_healing(ctx, parsed_blocks: Dict[str, Any], readonly_list: List[str]) -> str:
-    """Reads current disk contents of files targeted by a failed Yomama patch so the healing LLM has exact anchors."""
-    snippets: List[str] = []
-    for raw_file in parsed_blocks.keys():
-        if raw_file in readonly_list:
-            continue
-        try:
-            canon_uri = str(InSetuURI(raw_file))
-        except Exception:
-            continue
-        disk_text = ctx.vfs.read(canon_uri)
-        if disk_text is None:
-            candidates = ctx.find_path_candidates(canon_uri)
-            if candidates:
-                canon_uri = candidates[0]["filepath"]
-                disk_text = ctx.vfs.read(canon_uri)
-        if disk_text is not None:
-            snippets.append(f"=== CURRENT FILE ON DISK: {canon_uri} ===\n{disk_text}")
-    return "\n\n".join(snippets)
-
-def clamp_rag_files_to_topology(
-    ctx,
-    candidate_files: List[str],
-    allowed_repos: Optional[List[str]] = None,
-    max_files: int = MAX_RAG_FILES_PER_HOP,
-    allow_genesis: bool = False,
-) -> List[str]:
-    """Clamps and resolves LLM-selected RAG file URIs against topology_ledger within allowed_repos."""
-    if not candidate_files or ctx is None:
-        return []
-    repos_list = list(allowed_repos or get_sister_repos(ctx.workspace_id))
-    repos = set(repos_list)
-    resolved_uris: List[str] = []
-
-    def _add_unique(uri_str: str) -> None:
-        if uri_str and uri_str not in resolved_uris:
-            resolved_uris.append(uri_str)
-
-    for raw_f in candidate_files:
-        if not raw_f or not isinstance(raw_f, str):
-            continue
-        clean_f = raw_f.strip().split("#", 1)[0].strip()
-        if not clean_f:
-            continue
-        try:
-            canon = InSetuURI.canonicalize(clean_f)
-        except Exception:
-            canon = ""
-        if canon and InSetuURI(canon).repo in repos:
-            exact = clamp_uris_to_topology(ctx.workspace_id, [canon], expand_dirs=False)
-            if exact:
-                for u in exact:
-                    _add_unique(u)
-                continue
-            if allow_genesis and InSetuURI(canon).scheme == "vfs" and InSetuURI(canon).path and "." in InSetuURI(canon).basename and ".." not in canon:
-                _add_unique(canon)
-            parent_dir = str(InSetuURI(canon).parent_uri).rstrip("/") + "/"
-            siblings = clamp_uris_to_topology(ctx.workspace_id, [parent_dir], expand_dirs=True)
-            if siblings:
-                for preferred_suffix in ("/__init__.py", "/base.py"):
-                    matched_sib = next((s for s in siblings if s.endswith(preferred_suffix)), None)
-                    if matched_sib:
-                        _add_unique(matched_sib)
-                if not any(s.endswith(("/__init__.py", "/base.py")) for s in siblings):
-                    _add_unique(siblings[0])
-                continue
-        cands = ctx.find_path_candidates(clean_f, allowed_repos=repos_list)
-        if cands and cands[0].get("score", 0) >= 0.75:
-            _add_unique(cands[0]["filepath"])
-    return resolved_uris[:max_files]
 
 ROUTINE_RESPONSE_DOCUMENT_EXTENSIONS = frozenset({
     ".md", ".markdown", ".txt", ".json", ".yaml", ".yml", ".csv",
 })
 
-_FILE_TOKEN_METRIC_CACHE: Dict[Tuple[str, str, bool, int, int], int] = {}
-
-def build_context_file_metrics(ctx, constitution_files: List[str], reference_files: List[str], pinned_files: List[str]) -> Dict[str, int]:
-    """Computes real estimated token counts per file URI in the active working set with tenant-scoped memoization."""
-    token_map: Dict[str, int] = {}
-    wid = getattr(ctx, "workspace_id", None) or "default"
-    all_uris = list(dict.fromkeys((constitution_files or []) + (reference_files or []) + (pinned_files or [])))
-    ref_set = set(reference_files or [])
-    for uri in all_uris:
-        if not uri:
-            continue
-        try:
-            content = ctx.vfs.read(uri)
-        except Exception:
-            content = None
-        if not isinstance(content, str):
-            continue
-        is_ref = (uri in ref_set and len(content) > 4000)
-        cache_key = (wid, uri, is_ref, len(content), hash(content))
-        if cache_key in _FILE_TOKEN_METRIC_CACHE:
-            token_map[uri] = _FILE_TOKEN_METRIC_CACHE[cache_key]
-            continue
-        if is_ref:
-            prov = get_language_provider(uri)
-            if prov:
-                try:
-                    content = prov.slice_interface(uri, content)
-                except Exception:
-                    pass
-        tok_est = max(1, len(content) // 4)
-        if len(_FILE_TOKEN_METRIC_CACHE) > 2048:
-            _FILE_TOKEN_METRIC_CACHE.clear()
-        _FILE_TOKEN_METRIC_CACHE[cache_key] = token_map[uri] = tok_est
-    return token_map
 
 def is_prose_document_uri(uri_or_path: str) -> bool:
     """Returns True when a URI or path represents prose documentation, plans, or notes rather than executable source code."""
@@ -445,6 +256,25 @@ def _parse_routine_text(raw_text: str, fallback_id: str, is_markdown: bool) -> D
                     node_copy["prompt"] = section_prompts["execute_prompt"]
                 elif defn.get("include_prompt"):
                     node_copy["prompt_uri"] = str(defn["include_prompt"])
+            if str(node_copy.get("type") or "").lower() == "loop":
+                raw_body = node_copy.get("body") or node_copy.get("nodes") or []
+                if isinstance(raw_body, list):
+                    hydrated_body = []
+                    for b_idx, bn in enumerate(raw_body):
+                        if not isinstance(bn, dict) or not bn.get("id"):
+                            continue
+                        bn_copy = dict(bn)
+                        bn_id = str(bn_copy["id"]).strip()
+                        bn_copy["id"] = bn_id
+                        b_parents = bn_copy.get("parents") or bn_copy.get("depends_on") or []
+                        if isinstance(b_parents, str):
+                            b_parents = [p.strip() for p in b_parents.split(",") if p.strip()]
+                        bn_copy["parents"] = [str(p).strip() for p in b_parents if str(p).strip()]
+                        bn_copy.setdefault("order", (b_idx + 1) * 10)
+                        if bn_id in section_prompts and section_prompts[bn_id]:
+                            bn_copy["prompt"] = section_prompts[bn_id]
+                        hydrated_body.append(bn_copy)
+                    node_copy["body"] = hydrated_body
             nodes.append(node_copy)
     elif defn.get("include_prompt") or section_prompts or defn.get("includes"):
         first_section_id = next(iter(section_prompts.keys()), "execute_prompt")
@@ -500,6 +330,17 @@ def serialize_routine_to_markdown(defn: Dict[str, Any]) -> str:
             continue
         n_copy = dict(n)
         prompt_body = str(n_copy.pop("prompt", "") or "").strip()
+        if str(n_copy.get("type") or "").lower() == "loop" and isinstance(n_copy.get("body"), list):
+            clean_body = []
+            for bn in n_copy["body"]:
+                if not isinstance(bn, dict) or not bn.get("id"):
+                    continue
+                bn_copy = dict(bn)
+                b_prompt = str(bn_copy.pop("prompt", "") or "").strip()
+                clean_body.append(bn_copy)
+                if b_prompt:
+                    body_sections.append(f"## {bn_copy['id']}\n{b_prompt}")
+            n_copy["body"] = clean_body
         clean_nodes.append(n_copy)
         if prompt_body:
             body_sections.append(f"## {n_copy['id']}\n{prompt_body}")
@@ -765,3 +606,92 @@ def load_routine_definition(ctx, routine_id: str = "workspace_turn") -> Dict[str
             return parsed
 
     raise FileNotFoundError(f"Agent routine '{clean_id}' not found.")
+
+
+def save_routine_definition_payload(ctx, raw_payload: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
+    """Validates and persists a workspace or user-template routine override (`POST agent/routines/save`)."""
+    data = dict(raw_payload or {})
+    if isinstance(data.get("routine"), dict):
+        nested = dict(data.pop("routine"))
+        nested.update(data)
+        data = nested
+    scope = str(data.pop("scope", "workspace") or "workspace").strip().lower()
+    raw_content = data.pop("raw_content", None) or data.pop("markdown_text", None)
+    original_id = str(data.pop("original_id", "") or "").strip()
+
+    try:
+        if raw_content and isinstance(raw_content, str) and raw_content.strip():
+            parsed = parse_routine_content(raw_content, fallback_id=data.get("id") or "routine", is_markdown=True)
+            rid = slugify(data.get("id") or parsed.get("id") or parsed.get("title") or "routine")
+            parsed["id"] = rid
+            is_valid, err_msg, wave_ids = validate_routine_definition(parsed)
+            if not is_valid:
+                return {"error": err_msg}, 422
+            parsed["wavefronts"] = wave_ids
+            md_content = raw_content if raw_content.lstrip().startswith("---") else serialize_routine_to_markdown(parsed)
+        else:
+            rid = slugify(data.get("id") or data.get("title") or data.get("name") or "routine")
+            if not rid:
+                return {"error": "Routine id or title is required."}, 400
+            data["id"] = rid
+            is_valid, err_msg, wave_ids = validate_routine_definition(data)
+            if not is_valid:
+                return {"error": err_msg}, 422
+            md_content = serialize_routine_to_markdown(data)
+            parsed = parse_routine_content(md_content, fallback_id=rid, is_markdown=True)
+            parsed["wavefronts"] = wave_ids
+    except Exception as val_err:
+        return {"error": str(val_err)}, 422
+
+    target_uri = (
+        f"ctx://routines/.templates/user/{rid}.md"
+        if scope in ("user", "global", "user_template")
+        else f"ctx://routines/{rid}.md"
+    )
+    if original_id and original_id != rid:
+        old_uri = (
+            f"ctx://routines/.templates/user/{original_id}.md"
+            if scope in ("user", "global", "user_template")
+            else f"ctx://routines/{original_id}.md"
+        )
+        if ctx.vfs.read(old_uri) is not None:
+            ctx.vfs.delete(old_uri)
+
+    ctx.vfs.save(target_uri, md_content)
+    return {
+        "status": "success",
+        "filepath": target_uri,
+        "routine": {**parsed, "filepath": target_uri, "source": "user_template" if "user/" in target_uri else "workspace"},
+        "routines": list_available_routines(ctx),
+        "job_id": None,
+    }, 200
+
+
+def delete_routine_override_payload(ctx, raw_payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Deletes a workspace or user-template routine override (`POST agent/routines/delete`)."""
+    data = raw_payload or {}
+    rid = str(data.get("id") or "").strip().lstrip("/")
+    fp = str(data.get("filepath") or "").strip()
+    scope = str(data.get("scope") or "workspace").strip().lower()
+
+    candidates = []
+    if fp and fp.startswith("ctx://routines/") and not InSetuURI(fp).is_readonly_template:
+        candidates.append(fp)
+    if rid:
+        if scope in ("user", "global", "user_template"):
+            candidates.extend([f"ctx://routines/.templates/user/{rid}.md", f"ctx://routines/.templates/user/{rid}.yaml"])
+        else:
+            candidates.extend([f"ctx://routines/{rid}.md", f"ctx://routines/{rid}.yaml"])
+
+    deleted = []
+    for cand in candidates:
+        if ctx.vfs.read(cand) is not None:
+            ctx.vfs.delete(cand)
+            deleted.append(cand)
+
+    return {
+        "status": "success",
+        "deleted": deleted,
+        "routines": list_available_routines(ctx),
+        "job_id": None,
+    }

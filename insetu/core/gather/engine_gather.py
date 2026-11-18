@@ -17,8 +17,7 @@ from insetu.core.sdk import (
     get_active_pipeline_modules,
 )
 from insetu.core.utils_core import (
-    get_workspace_physics,
-    generate_ascii_tree,
+    BoundedCache, get_workspace_physics, generate_ascii_tree,
     slugify,
     resolve_system_artifact_path,
     evaluate_circuit_breaker,
@@ -38,6 +37,7 @@ from .context_assemble import (
     ContextAssembleResponse,
     assemble_context_payload,
     compile_query_quickpack,
+    heal_missing_ephemeral_quickpack,
     resolve_query_context,
 )
 
@@ -695,14 +695,13 @@ def generate_context_file(workspace_id=None, target_repos=None):
             safe_k = InSetuURI(k).basename
             if re.search(r'_part\d+\.txt$', safe_k):
                 continue
-            base_path = Path(paths["contexts_dir"]).joinpath(safe_k).as_posix()
-            if base_path in active_ephemerals and os.path.exists(base_path):
+            chunks = v.get("chunks") or ctx.get_manifest_files(target_key=k) or [k]
+            chunk_paths = [Path(paths["contexts_dir"]).joinpath(InSetuURI(c).basename).as_posix() for c in chunks]
+            if any(cp in active_ephemerals or os.path.exists(cp) for cp in chunk_paths):
                 manifest[k] = v
-                chunks = v.get("chunks") or ctx.get_manifest_files(target_key=k) or [k]
-                for chunk in chunks:
-                    safe_chunk = InSetuURI(chunk).basename
-                    chunk_path = Path(paths["contexts_dir"]).joinpath(safe_chunk).as_posix()
-                    restored_ephemerals.add(chunk_path)
+                for cp in chunk_paths:
+                    restored_ephemerals.add(cp)
+                    expected_artifacts.add(Path(cp).name)
     for f_path in active_ephemerals:
         if f_path.startswith(paths["contexts_dir"]) and f_path not in restored_ephemerals:
             if not os.path.exists(f_path):
@@ -1080,18 +1079,18 @@ def _canonicalize_manifest_entry(filepath: str, entry: Any) -> tuple:
 def _heal_entry_domain(ctx, entry: Any) -> bool:
     """Ensures entry['meta']['domain'] is never blank, inheriting from the parent repository domain when empty."""
     return heal_manifest_entry_domain(entry, target_repos=ctx.config.get("target_repos"))
-_MIGRATED_MANIFEST_WORKSPACES = set()
+_MIGRATED_MANIFEST_WORKSPACES = BoundedCache("gather_manifest_migrated", max_entries=64, copy_mode="none")
 
 
 @gather_bp.on('workspace_shutdown')
 def _evict_migrated_manifest_workspace(workspace_id=None, **kwargs):
     if workspace_id:
-        _MIGRATED_MANIFEST_WORKSPACES.discard(workspace_id)
+        _MIGRATED_MANIFEST_WORKSPACES.pop(workspace_id, None)
 @gather_bp.on('workspace_boot', priority=12)
 def mount_gather_volumes(workspace_id=None, **kwargs):
     wid = workspace_id or "default"
     ctx = gather_bp.get_context(wid)
-    if wid in _MIGRATED_MANIFEST_WORKSPACES:
+    if _MIGRATED_MANIFEST_WORKSPACES.get(wid) is True:
         return
     try:
         conn = ctx.get_db("vfs_index")
@@ -1128,7 +1127,7 @@ def mount_gather_volumes(workspace_id=None, **kwargs):
             conn.executemany("INSERT OR REPLACE INTO manifest_ledger (filepath, entry_json, timestamp) VALUES (?, ?, ?)", updates)
         if deletes or updates:
             conn.commit()
-        _MIGRATED_MANIFEST_WORKSPACES.add(wid)
+        _MIGRATED_MANIFEST_WORKSPACES.put(wid, True)
     except Exception:
         pass
 
@@ -1265,21 +1264,8 @@ def _resolve_or_heal_compiled_ctx_artifact(filename=None, workspace_id=None, **k
         entry_meta = (parsed_entry.get("meta") or {}) if isinstance(parsed_entry, dict) else {}
         if parsed.basename == "ai_telemetry_context.txt" or entry_meta.get("type") == "telemetry":
             ctx.call("bridge.compile_telemetry", limit=40, wait=True)
-        elif parsed.basename.startswith(("quickpack_", "selection_")) or entry_meta.get("domain") in ("Quickpacks", "Exported Contexts"):
-            qp_files: List[str] = [
-                str(InSetuURI(f))
-                for f in ((parsed_entry.get("files") or []) if isinstance(parsed_entry, dict) else [])
-                if isinstance(f, str) and "://" in f
-            ]
-            if qp_files:
-                clean_tree = [f"{InSetuURI(f).volume}/{InSetuURI(f).path}".strip("/") if InSetuURI(f).volume else InSetuURI(f).path for f in qp_files]
-                hdr = "============================================================\nINSETU AD-HOC CONTEXT PAYLOAD (Selection)\n============================================================\n\n" + generate_ascii_tree(clean_tree) + "\n\n"
-                blks = [f"{'='*60}\n>>>NEW FILE :: {fp} | Selection\n{'='*60}\n\n{ctx.vfs.read(fp) or '[Error reading file: Not found]'}\n\n" for fp in qp_files]
-                m_entry = compile_context_payload(wid, None, base_uri, hdr, blks, qp_files, entry_meta or {"type": "gather", "title": "Quickpack", "domain": "Quickpacks", "desc": "Ad-hoc context export."}, is_ephemeral=True)
-                ctx.sync_vfs_barrier()
-                ctx.save_manifest({base_uri: m_entry}, is_full_compile=False)
-                for ch in m_entry.get("chunks", [base_uri]):
-                    ctx.jobs.register_ephemeral(ctx.resolve_path(ch) or resolve_system_artifact_path(ch, wid), ttl_seconds=86400, owner="quick_pack")
+        elif parsed.basename.startswith(("quickpack_", "selection_", "turn_")) or entry_meta.get("domain") in ("Quickpacks", "Exported Contexts"):
+            heal_missing_ephemeral_quickpack(ctx, base_uri, parsed_entry if isinstance(parsed_entry, dict) else {})
         else:
             generate_context_file(wid)
             ctx.sync_vfs_barrier()

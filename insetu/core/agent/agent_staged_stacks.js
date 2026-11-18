@@ -5,60 +5,180 @@ import { html } from 'lit';
 import { InSetuElement } from '/static/extensions/system/insetu_element.js';
 import { sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 import { AgentStore } from '/static/extensions/agent/agent_store.js';
+import {
+    InSetuAgentContextHud,
+    InSetuAgentHandoffPanel,
+    InSetuAgentPlanStepper,
+    buildAgentTelemetryMenuItems,
+    estimateWorkingSetTokensFromComponent,
+} from '/static/extensions/agent/agent_handoff_and_plan.js';
+
+export { InSetuAgentContextHud, InSetuAgentHandoffPanel, InSetuAgentPlanStepper, buildAgentTelemetryMenuItems, estimateWorkingSetTokensFromComponent };
 
 export function hasYomamaPatchBlocks(text) {
     if (!text || typeof text !== 'string') return false;
-    return /^[ \t]*(?:<[ \t]*){3,}(?:FILE:|SEARCH|TEXTEDIT|JSON_PATCH|RELOCATE|RENAME|MOVE_FILE|ARCHIVE_FILE|DELETE_FILE|QUERY_CONTEXT)\b/m.test(text);
+    return /^[ \t]*(?:<[ \t]*){3,}(?:FILE:|SEARCH|TEXTEDIT|JSON_PATCH|RELOCATE|RENAME|MOVE_FILE|ARCHIVE_FILE|DELETE_FILE|TASK_?MANAGE|QUERY_CONTEXT)\b/m.test(text);
 }
 
 export class InSetuCoreAgentSessions extends InSetuElement {
     static get extensionName() { return 'agent'; }
-    static properties = { sessions: { type: Array }, activeSessionId: { type: String } };
+    static properties = {
+        sessions: { type: Array },
+        activeSessionId: { type: String },
+        _showArchived: { type: Boolean, state: true },
+        _searchQuery: { type: String, state: true },
+        _renamingSessionId: { type: String, state: true },
+        _renameDraft: { type: String, state: true }
+    };
     static styles = [sharedStyles];
-    constructor() { super(); this.sessions = []; this.activeSessionId = null; }
+
+    constructor() {
+        super();
+        this.sessions = [];
+        this.activeSessionId = null;
+        this._showArchived = false;
+        this._searchQuery = '';
+        this._renamingSessionId = null;
+        this._renameDraft = '';
+    }
+
     connectedCallback() {
         super.connectedCallback();
-        this.bindStore(AgentStore, state => ({ sessions: state.sessions || [], activeSessionId: state.activeSessionId }), { autoFetch: 'fetchSessions' });
-    }
-    render() {
-        return html`
-            <sutram-stack direction="col" gap="sm" ?flex=${true}>
-                <sutram-async-btn label="New Chat" icon="plus" intent="primary" ?fullWidth=${true} .onClick=${async () => {
-                    const ts = this.utils.formatDate ? this.utils.formatDate(new Date()) : new Date().toLocaleString();
-                    const res = await this.api.post('agent/sessions', { title: `New Conversation (${ts})` });
-                    if (res.ok) {
-                        const data = await res.json();
-                        const newSes = { session_id: data.session_id, title: data.title, updated_at: Date.now() / 1000 };
-                        AgentStore.setState(s => ({
-                            sessions: [newSes, ...(s.sessions || []).filter(x => x.session_id !== data.session_id)],
-                            activeSessionId: data.session_id,
-                            messages: [],
-                            workingSetRaw: [],
-                            pinnedFiles: [],
-                            referenceFiles: [],
-                            activePlanPath: '',
-                            pendingHandoff: null,
-                            pendingCheckpoint: null,
-                            executionTrace: [],
-                            handoffBranchIdx: 0,
-                            handoffBranchResponses: {},
-                            lastTurnCommittedFiles: [],
-                            sessionSummary: ''
-                        }));
-                        this.dispatch('insetu:yomama:navigate', { surface: 'chat', sessionId: data.session_id });
+        this.bindStore(
+            AgentStore,
+            state => ({ sessions: state.sessions || [], activeSessionId: state.activeSessionId }),
+            { autoFetch: 'fetchSessions' }
+        );
+        if (window.inSetu?.stores?.Bridge) {
+            this.subscribe(
+                window.inSetu.stores.Bridge,
+                state => Boolean(state.drawerOpen || !state.drawerCollapsedDesktop),
+                (isOpen) => {
+                    if (isOpen && (!this.sessions || this.sessions.length === 0)) {
+                        AgentStore.getState().fetchSessions();
                     }
-                }}></sutram-async-btn>
-                <sutram-label text="CONVERSATIONS"></sutram-label>
+                }
+            );
+        }
+        this.registerGlobalListener('insetu:yomama:toggle-drawer', window, () => {
+            if (!this.sessions || this.sessions.length === 0) {
+                AgentStore.getState().fetchSessions();
+            }
+        });
+        this.registerGlobalListener('insetu:agent:start-rename-session', window, (e) => {
+            const ses = e.detail?.session;
+            if (ses?.session_id) {
+                this._renamingSessionId = ses.session_id;
+                this._renameDraft = ses.title || '';
+            }
+        });
+    }
+
+    async _commitRename() {
+        const sid = this._renamingSessionId;
+        const draft = (this._renameDraft || '').trim();
+        this._renamingSessionId = null;
+        this._renameDraft = '';
+        if (sid && draft) {
+            await AgentStore.getState().renameSession(sid, draft);
+            this.setStatus('✏️ Conversation renamed.', 2000);
+        }
+    }
+
+    render() {
+        const allSessions = Array.isArray(this.sessions) ? this.sessions : [];
+        const archivedCount = allSessions.filter(s => Boolean(s.archived)).length;
+        const scopedSessions = allSessions.filter(s => Boolean(s.archived) === Boolean(this._showArchived));
+        const visibleSessions = this._searchQuery.trim()
+            ? this.utils.fuzzyFilterObjects(scopedSessions, this._searchQuery, s => `${s.title || ''} ${s.session_id || ''}`)
+            : scopedSessions;
+
+        return html`
+            <sutram-stack direction="col" gap="xs" ?flex=${true}>
+                <sutram-stack direction="row" align="center" gap="xs">
+                    <sutram-async-btn
+                        label="New Chat"
+                        icon="plus"
+                        intent="primary"
+                        ?compact=${true}
+                        ?grow=${true}
+                        .onClick=${async () => {
+                            const ts = this.utils.formatDate ? this.utils.formatDate(new Date()) : new Date().toLocaleString();
+                            const res = await this.api.post('agent/sessions', { title: `New Conversation (${ts})` });
+                            if (res.ok) {
+                                const data = await res.json();
+                                const newSes = { session_id: data.session_id, title: data.title, updated_at: Date.now() / 1000, archived: 0 };
+                                this._showArchived = false;
+                                AgentStore.getState().resetSessionView(newSes);
+                                this.dispatch('insetu:yomama:navigate', { surface: 'chat', sessionId: data.session_id });
+                            }
+                        }}>
+                    </sutram-async-btn>
+                    ${archivedCount > 0 || this._showArchived ? html`
+                        <sutram-pill
+                            ?compact=${true}
+                            labelText=${this._showArchived ? `Archived (${archivedCount})` : `📦 ${archivedCount}`}
+                            title="Toggle Archived Conversations"
+                            ?active=${this._showArchived}
+                            @sutram-pill-toggled=${() => { this._showArchived = !this._showArchived; }}>
+                        </sutram-pill>
+                    ` : ''}
+                </sutram-stack>
+
+                ${allSessions.length > 4 ? html`
+                    <sutram-input
+                        ?flush=${true}
+                        placeholder="Filter conversations..."
+                        .value=${this._searchQuery}
+                        @sutram-input-changed=${e => { this._searchQuery = e.detail.value; }}>
+                    </sutram-input>
+                ` : ''}
+
+                ${this._renamingSessionId ? html`
+                    <sutram-surface variant="tinted" intent="primary" padding="xs" gap="xs">
+                        <sutram-label text="Rename Conversation:"></sutram-label>
+                        <sutram-input
+                            ?flush=${true}
+                            .value=${this._renameDraft}
+                            placeholder="Conversation title..."
+                            @sutram-input-changed=${e => { this._renameDraft = e.detail.value; }}>
+                        </sutram-input>
+                        <sutram-stack direction="row" justify="end" gap="xs">
+                            <sutram-btn ?compact=${true} intent="neutral" icon="x" label="Cancel" @click=${() => { this._renamingSessionId = null; }}></sutram-btn>
+                            <sutram-btn ?compact=${true} intent="success" icon="check" label="Save" @click=${() => this._commitRename()}></sutram-btn>
+                        </sutram-stack>
+                    </sutram-surface>
+                ` : ''}
+
+                <sutram-stack direction="row" justify="between" align="center" gap="xs">
+                    <sutram-label .text=${this._showArchived ? 'ARCHIVED CHATS' : 'CONVERSATIONS'}></sutram-label>
+                    <sutram-tag .text=${`${visibleSessions.length}`} intent="neutral"></sutram-tag>
+                </sutram-stack>
+
                 <sutram-stack direction="col" gap="xs" ?flex=${true} ?scrollable=${true}>
-                    ${this.sessions.length === 0 ? html`<sutram-empty-state text="No conversations yet."></sutram-empty-state>` : this.sessions.map(s => html`
-                        <sutram-surface variant=${this.activeSessionId === s.session_id ? 'tinted' : 'ghost'} intent="primary" padding="xs" ?interactive=${true}
-                            @click=${async () => { await AgentStore.getState().selectSession(s.session_id); this.dispatch('insetu:yomama:navigate', { surface: 'chat', sessionId: s.session_id }); }}>
-                            <sutram-stack direction="row" align="center" gap="sm">
-                                <sutram-icon name="message-square" size="sm" intent="primary"></sutram-icon>
-                                <sutram-label intent="neutral" ?truncate=${true} .text=${s.title}></sutram-label>
-                            </sutram-stack>
-                        </sutram-surface>
-                    `)}
+                    ${visibleSessions.length === 0 ? html`
+                        <sutram-empty-state .text=${this._showArchived ? "No archived conversations." : "No conversations yet."}></sutram-empty-state>
+                    ` : visibleSessions.map(s => {
+                        const isActive = this.activeSessionId === s.session_id;
+                        const relTime = (s.updated_at && this.utils.timeAgo) ? this.utils.timeAgo(s.updated_at * 1000) : '';
+                        return html`
+                            <sutram-card
+                                ?disableSelection=${true}
+                                selectionStoreKey="none"
+                                ?selected=${isActive}
+                                .titleText=${s.title || s.session_id}
+                                .detailText=${relTime}
+                                icon=${s.archived ? 'archive' : 'message-square'}
+                                intent=${isActive ? 'primary' : (s.archived ? 'neutral' : 'highlight')}
+                                entityType="agent_session"
+                                .entityData=${{ ...s, id: s.session_id, titleText: s.title }}
+                                @card-clicked=${async () => {
+                                    await AgentStore.getState().selectSession(s.session_id);
+                                    this.dispatch('insetu:yomama:navigate', { surface: 'chat', sessionId: s.session_id });
+                                }}>
+                            </sutram-card>
+                        `;
+                    })}
                 </sutram-stack>
             </sutram-stack>
         `;
@@ -72,6 +192,9 @@ export class InSetuAgentExecutionTrace extends InSetuElement {
     static get extensionName() { return 'agent'; }
     static properties = {
         trace: { type: Array },
+        activePlan: { type: Object },
+        activePlanPath: { type: String },
+        sessionId: { type: String },
         activeJobMessage: { type: String },
         loading: { type: Boolean }
     };
@@ -80,6 +203,9 @@ export class InSetuAgentExecutionTrace extends InSetuElement {
     constructor() {
         super();
         this.trace = [];
+        this.activePlan = null;
+        this.activePlanPath = '';
+        this.sessionId = '';
         this.activeJobMessage = '';
         this.loading = false;
     }
@@ -97,60 +223,68 @@ export class InSetuAgentExecutionTrace extends InSetuElement {
         const steps = Array.isArray(this.trace) ? this.trace : [];
         if (steps.length === 0 && !this.activeJobMessage) return html``;
 
-        const runningStep = steps.find(s => s.status === 'running' || s.status === 'paused');
+        const activeRunningStep = steps.find(s => s.status === 'running');
+        const pausedStep = steps.find(s => s.status === 'paused');
+        const focusStep = activeRunningStep || pausedStep;
         const completedCount = steps.filter(s => s.status === 'completed').length;
         const totalMs = steps.reduce((acc, s) => acc + Number(s.elapsed_ms || 0), 0);
         const timeStr = totalMs >= 1000 ? `${(totalMs / 1000).toFixed(1)}s` : `${totalMs}ms`;
         const headerTitle = this.activeJobMessage
             ? `Thinking • ${this.activeJobMessage}`
-            : (runningStep
-                ? `Thinking • Step [${runningStep.id}] (${runningStep.status})`
-                : `Execution Trace • ${completedCount}/${steps.length} step(s) (${timeStr})`);
+            : (focusStep
+                ? `Thinking • ${focusStep.id} (${focusStep.status}) • ${completedCount}/${steps.length} done`
+                : `Thinking Trace • ${completedCount}/${steps.length} step(s) (${timeStr})`);
 
         return html`
             <sutram-collapsible
+                ?compact=${true}
                 .titleText=${headerTitle}
-                intent=${runningStep?.status === 'paused' ? 'warning' : (this.activeJobMessage ? 'primary' : 'neutral')}
-                ?open=${Boolean(this.activeJobMessage || runningStep)}>
-                <sutram-stack direction="col" gap="xs">
+                intent=${pausedStep ? 'warning' : (this.activeJobMessage || activeRunningStep ? 'primary' : 'neutral')}
+                ?open=${Boolean(this.activeJobMessage || activeRunningStep)}>
+                <sutram-stack direction="col" gap="xs" padding="xs">
                     ${steps.map(step => {
                         const meta = this._statusMeta(step.status);
                         const roleBadge = step.type === 'exec'
-                            ? `exec: ${step.capability || step.id}`
-                            : `llm: ${step.tier || 'standard'}`;
-                        const stepTime = step.elapsed_ms ? `${step.elapsed_ms}ms` : '';
+                            ? (step.capability || step.id)
+                            : (step.tier || 'standard');
+                        const stepTime = step.elapsed_ms
+                            ? (Number(step.elapsed_ms) >= 1000 ? `${(Number(step.elapsed_ms) / 1000).toFixed(1)}s` : `${step.elapsed_ms}ms`)
+                            : '';
                         const children = Array.isArray(step.children) ? step.children : [];
                         return html`
-                            <sutram-surface variant="inset" padding="xs" gap="xs">
-                                <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
-                                    <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true}>
-                                        <sutram-icon name=${meta.icon} size="sm" intent=${meta.intent}></sutram-icon>
+                            <sutram-surface variant="inset" padding="xs" gap="none">
+                                <sutram-stack direction="row" justify="between" align="center" gap="xs">
+                                    <sutram-stack direction="row" align="center" gap="xs">
+                                        <sutram-icon name=${meta.icon} size="xs" intent=${meta.intent}></sutram-icon>
                                         <strong>${step.id}</strong>
                                         <sutram-tag .text=${roleBadge} intent=${step.type === 'exec' ? 'highlight' : 'primary'}></sutram-tag>
-                                        ${step.summary ? html`<sutram-label intent="neutral" .text=${step.summary}></sutram-label>` : ''}
                                     </sutram-stack>
                                     <sutram-stack direction="row" align="center" gap="xs">
                                         ${stepTime ? html`<sutram-label ?monospace=${true} .text=${stepTime}></sutram-label>` : ''}
                                         <sutram-tag .text=${meta.badge} intent=${meta.intent}></sutram-tag>
                                     </sutram-stack>
                                 </sutram-stack>
+                                ${step.summary ? html`
+                                    <sutram-label intent="neutral" ?truncate=${true} title=${step.summary} .text=${step.summary}></sutram-label>
+                                ` : ''}
                                 ${children.length > 0 ? html`
-                                    <sutram-stack direction="col" gap="xs" padding="xs">
-                                        ${children.map(ch => {
-                                            const chMeta = this._statusMeta(ch.status);
-                                            return html`
-                                                <sutram-stack direction="row" justify="between" align="center" gap="xs" ?wrap=${true}>
-                                                    <sutram-stack direction="row" align="center" gap="xs">
-                                                        <sutram-label ?monospace=${true} text="├─"></sutram-label>
-                                                        <sutram-icon name=${chMeta.icon} size="xs" intent=${chMeta.intent}></sutram-icon>
-                                                        <strong>${ch.id}</strong>
-                                                        ${ch.summary ? html`<sutram-label .text=${ch.summary}></sutram-label>` : ''}
+                                    <sutram-collapsible ?compact=${true} ?open=${false} intent="neutral" .titleText=${`${children.length} sub-step(s)`}>
+                                        <sutram-stack direction="col" gap="xs" padding="xs">
+                                            ${children.map(ch => {
+                                                const chMeta = this._statusMeta(ch.status);
+                                                return html`
+                                                    <sutram-stack direction="row" justify="between" align="center" gap="xs">
+                                                        <sutram-stack direction="row" align="center" gap="xs">
+                                                            <sutram-icon name=${chMeta.icon} size="xs" intent=${chMeta.intent}></sutram-icon>
+                                                            <strong>${ch.id}</strong>
+                                                            ${ch.summary ? html`<sutram-label ?truncate=${true} title=${ch.summary} .text=${ch.summary}></sutram-label>` : ''}
+                                                        </sutram-stack>
+                                                        ${ch.elapsed_ms ? html`<sutram-label ?monospace=${true} .text=${`${ch.elapsed_ms}ms`}></sutram-label>` : ''}
                                                     </sutram-stack>
-                                                    ${ch.elapsed_ms ? html`<sutram-label ?monospace=${true} .text=${`${ch.elapsed_ms}ms`}></sutram-label>` : ''}
-                                                </sutram-stack>
-                                            `;
-                                        })}
-                                    </sutram-stack>
+                                                `;
+                                            })}
+                                        </sutram-stack>
+                                    </sutram-collapsible>
                                 ` : ''}
                             </sutram-surface>
                         `;
@@ -159,6 +293,13 @@ export class InSetuAgentExecutionTrace extends InSetuElement {
                         <sutram-surface variant="ghost" padding="xs">
                             <sutram-spinner .text=${this.activeJobMessage}></sutram-spinner>
                         </sutram-surface>
+                    ` : ''}
+                    ${(this.activePlan || this.activePlanPath) ? html`
+                        <insetu-agent-plan-stepper
+                            .activePlan=${this.activePlan}
+                            .activePlanPath=${this.activePlanPath}
+                            .sessionId=${this.sessionId}>
+                        </insetu-agent-plan-stepper>
                     ` : ''}
                 </sutram-stack>
             </sutram-collapsible>
@@ -211,20 +352,22 @@ export class InSetuAgentStagedStacks extends InSetuElement {
         }, {});
         const activeCount = list.filter(c => c.active).length;
 
+        const fileEntries = Object.entries(grouped);
         return html`
             ${qpCard}
-            <sutram-surface variant="panel" intent="highlight" padding="md" gap="md">
-                <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
+            <sutram-surface variant="panel" intent="highlight" padding="sm" gap="sm">
+                <sutram-stack direction="row" justify="between" align="center" gap="xs" ?wrap=${true}>
                     <sutram-stack direction="row" align="center" gap="xs">
-                        <sutram-icon name="layers" size="md" intent="highlight"></sutram-icon>
-                        <strong>Staged Patch Stacks (${activeCount} of ${list.length} selected)</strong>
+                        <sutram-icon name="layers" size="sm" intent="highlight"></sutram-icon>
+                        <strong>Staged Patches (${activeCount}/${list.length})</strong>
                     </sutram-stack>
                     <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true}>
                         <sutram-btn
                             ?compact=${true}
                             intent="neutral"
                             icon="bridge"
-                            label="Open in Bridge"
+                            label="Bridge"
+                            title="Inspect in Yomama Bridge"
                             @click=${() => window.inSetu?.stores?.Bridge?.getState()?.setActiveSurface('bridge')}>
                         </sutram-btn>
                         <sutram-btn
@@ -236,15 +379,17 @@ export class InSetuAgentStagedStacks extends InSetuElement {
                         </sutram-btn>
                         <sutram-async-btn
                             ?compact=${true}
+                            ?grow=${true}
                             intent="success"
                             icon="zap"
-                            label="Confirm & Commit (${activeCount})"
+                            label="Commit (${activeCount})"
                             ?disabled=${activeCount === 0}
                             .onClick=${async () => {
                                 const bStore = window.inSetu?.stores?.Bridge?.getState();
                                 if (!bStore) return;
                                 const textVal = bStore.getCompiledPayload();
                                 const activeFiles = bStore.getActiveFiles();
+                                const isAiAssisted = (AgentStore.getState()?.agentSettings?.helper_mode || 'ai_assisted') === 'ai_assisted';
                                 const commitJob = this.api.bindJobAction('bridge/sync', {
                                     text: textVal,
                                     active_files: activeFiles,
@@ -256,10 +401,62 @@ export class InSetuAgentStagedStacks extends InSetuElement {
                                     onComplete: async (sData) => {
                                         const tel = sData?.artifact;
                                         if (tel?.can_commit && tel?.mode === 'live') {
+                                            const activeSesId = AgentStore.getState()?.activeSessionId;
+                                            let recData = null;
+                                            if (activeSesId && tel.transaction_id) {
+                                                recData = await this.api.postJson('agent/record_transaction', {
+                                                    session_id: activeSesId,
+                                                    transaction_id: tel.transaction_id,
+                                                    committed_files: activeFiles
+                                                }).catch(() => null);
+                                            }
                                             bStore.clearPayload();
                                             bStore.fetchHistory();
-                                            AgentStore.setState({ lastTurnCommittedFiles: activeFiles });
-                                            this.setStatus(`✅ Committed ${activeFiles.length} file(s)!`, 2500);
+                                            AgentStore.setState(s => ({
+                                                lastTurnCommittedFiles: activeFiles,
+                                                activePlan: recData?.active_plan !== undefined ? recData.active_plan : s.activePlan
+                                            }));
+                                            if (recData?.auto_advanced && recData?.next_task) {
+                                                const nt = recData.next_task;
+                                                this.setStatus(`✅ Committed & advancing to [${nt.id}]: ${nt.description}`, 3500);
+                                                AgentStore.setState(s => ({
+                                                    agentMode: 'code',
+                                                    agentRoutineId: 'code',
+                                                    pinnedFiles: Array.isArray(nt.targets) && nt.targets.length > 0 ? nt.targets : s.pinnedFiles,
+                                                    promptInput: `Execute [${nt.id}]: ${nt.description}`
+                                                }));
+                                                this.dispatchEvent(new CustomEvent('insetu-start-next-plan-step', { bubbles: true, composed: true }));
+                                            } else {
+                                                this.setStatus(`✅ Committed ${activeFiles.length} file(s)!`, 2500);
+                                            }
+                                        } else if (isAiAssisted && bStore.repairMode !== 'off') {
+                                            this.setStatus('✨ Running dry-run AI repair on failed patch(es) for review...', null);
+                                            const healJob = this.api.bindJobAction('bridge/sync', {
+                                                text: textVal,
+                                                active_files: activeFiles,
+                                                dry_run: true,
+                                                repair_mode: 'ai_assisted',
+                                                auto_heal: true,
+                                                profile_id: this.activeProfileId
+                                            }, {
+                                                onComplete: (hData) => {
+                                                    const hTel = hData?.artifact;
+                                                    if (hTel?.healed_cells && Object.keys(hTel.healed_cells).length > 0 && bStore.applyHealedCells) {
+                                                        bStore.applyHealedCells(hTel.healed_cells);
+                                                    } else if (hTel?.healed_payload && hTel?.can_commit) {
+                                                        bStore.clearPayload();
+                                                        bStore.parseAndAppendCells(hTel.healed_payload, { stayOnCurrentSurface: true });
+                                                    }
+                                                    if (hTel?.can_commit) {
+                                                        this.setStatus('✨ AI-repaired staged patch(es) in dry-run — review and click Commit to apply!', 4500);
+                                                    } else {
+                                                        bStore.setTelemetry(hTel || tel);
+                                                        bStore.setViewMode('console');
+                                                        bStore.setActiveSurface('bridge');
+                                                    }
+                                                }
+                                            });
+                                            await healJob();
                                         } else {
                                             bStore.setTelemetry(tel);
                                             bStore.setViewMode('console');
@@ -272,201 +469,57 @@ export class InSetuAgentStagedStacks extends InSetuElement {
                         </sutram-async-btn>
                     </sutram-stack>
                 </sutram-stack>
-                <sutram-stack direction="col" gap="sm">
-                    ${Object.entries(grouped).map(([file, groupCells]) => {
-                        const selInFile = groupCells.filter(c => c.active).length;
-                        return html`
-                            <sutram-card-group ?stacked=${true} ?accordion=${true}>
-                                <sutram-card
-                                    .titleText=${new this.utils.InSetuURI(file).basename}
-                                    .descriptionText=${`${selInFile} of ${groupCells.length} patch(es) selected`}
-                                    .detailText=${file}
-                                    icon="file-code-2"
-                                    intent=${selInFile > 0 ? 'highlight' : 'neutral'}
-                                    selectionStoreKey="none"
-                                    ?selected=${selInFile > 0}
-                                    @sutram-card-select-toggled=${(e) => {
-                                        e.stopPropagation();
-                                        window.inSetu?.stores?.Bridge?.getState()?.toggleGroupActive(file, selInFile === 0);
-                                    }}>
-                                </sutram-card>
-                                ${groupCells.map((c, idx) => {
-                                    const commentMatch = c.content.match(/<<<<<<< COMMENT\r?\n([\s\S]*?)\r?\n<<<<<<< /);
-                                    const commentStr = commentMatch && commentMatch[1] ? commentMatch[1].trim() : `Patch #${idx + 1}`;
-                                    return html`
-                                        <sutram-card
-                                            .titleText=${`Patch ${idx + 1} of ${groupCells.length}`}
-                                            .descriptionText=${commentStr}
-                                            icon="git-commit"
-                                            intent=${c.active ? 'success' : 'neutral'}
-                                            selectionStoreKey="none"
-                                            ?selected=${c.active}
-                                            @sutram-card-select-toggled=${(e) => {
-                                                e.stopPropagation();
-                                                window.inSetu?.stores?.Bridge?.getState()?.toggleCellActive(c.id);
-                                            }}
-                                            @card-clicked=${() => {
-                                                window.inSetu?.stores?.Bridge?.getState()?.setActiveSurface('bridge');
-                                            }}>
-                                        </sutram-card>
-                                    `;
-                                })}
-                            </sutram-card-group>
-                        `;
-                    })}
-                </sutram-stack>
-            </sutram-surface>
-        `;
-    }
-}
-
-export class InSetuAgentHandoffPanel extends InSetuElement {
-    static get extensionName() { return 'agent'; }
-    static properties = {
-        pendingHandoff: { type: Object },
-        routines: { type: Array },
-        agentRoutineId: { type: String },
-        webChatWindowMode: { type: String },
-        handoffBranchIdx: { type: Number },
-        handoffBranchResponses: { type: Object },
-        promptInput: { type: String },
-        totalTokensEst: { type: Number },
-        onSendPrompt: { attribute: false }
-    };
-    static styles = [sharedStyles];
-
-    constructor() {
-        super();
-        this.pendingHandoff = null;
-        this.routines = [];
-        this.agentRoutineId = 'workspace_turn';
-        this.webChatWindowMode = 'same_window';
-        this.handoffBranchIdx = 0;
-        this.handoffBranchResponses = {};
-        this.promptInput = '';
-        this.totalTokensEst = 0;
-        this.onSendPrompt = null;
-    }
-
-    render() {
-        const ph = this.pendingHandoff?.pending_handoff;
-        if (!ph) return html``;
-        const branches = Array.isArray(ph.branches) && ph.branches.length > 0 ? ph.branches : [ph];
-        const safeIdx = Math.min(this.handoffBranchIdx || 0, branches.length - 1);
-        const activeBranch = branches[safeIdx] || ph;
-        const routineObj = (this.routines || []).find(r => r.id === (this.pendingHandoff.routine_id || this.agentRoutineId));
-        const displayTitle = this.pendingHandoff.routine_title || activeBranch.routine_title || routineObj?.title || routineObj?.name || this.pendingHandoff.routine_id || 'Routine';
-        const deltaMeta = activeBranch.delta_meta || {};
-        const hasPriorWindowState = Number(deltaMeta.unchanged_count || 0) > 0;
-        const isSameWindow = this.webChatWindowMode === 'same_window';
-        const wfCtxUri = (isSameWindow && hasPriorWindowState && activeBranch.delta_context_uri)
-            ? activeBranch.delta_context_uri
-            : (activeBranch.full_context_uri || activeBranch.workflow_context_uri || '');
-        const ctxBtnLabel = (isSameWindow && hasPriorWindowState)
-            ? (Number(deltaMeta.changed_count || 0) === 0
-                ? 'Context (0 Δ — Unchanged)'
-                : `Delta Context (+${deltaMeta.changed_count} · ~${deltaMeta.delta_tokens || 0} tok)`)
-            : `Full Context (~${deltaMeta.full_tokens || this.totalTokensEst || 0} tok)`;
-        const promptToCopy = activeBranch.prompt_text || activeBranch.compiled_prompt || '';
-
-        return html`
-            <sutram-surface variant="tinted" intent="warning" border="top" padding="md" gap="sm">
-                <sutram-stack direction="row" justify="between" align="center" gap="sm" ?wrap=${true}>
-                    <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true}>
-                        <sutram-icon name="zap" size="sm" intent="warning"></sutram-icon>
-                        <strong>External LLM Handoff • ${displayTitle} (${activeBranch.node_id})</strong>
-                        ${activeBranch.tier ? html`<sutram-tag text=${activeBranch.tier} intent="warning"></sutram-tag>` : ''}
-                    </sutram-stack>
-                    <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true}>
-                        <sutram-pill
-                            ?compact=${true}
-                            labelText=${isSameWindow ? '🪟 Same Window (Delta)' : '🆕 New Window (Full)'}
-                            title="Click to toggle between Same Chat Window (packs only new/changed context) and New Chat Window (packs all context)"
-                            ?active=${isSameWindow}
-                            @sutram-pill-toggled=${() => {
-                                AgentStore.setState({ webChatWindowMode: isSameWindow ? 'new_window' : 'same_window' });
-                            }}>
-                        </sutram-pill>
-                        ${wfCtxUri ? (() => {
-                            const chunks = this.vfs?.getChunks ? this.vfs.getChunks(wfCtxUri) : [wfCtxUri];
-                            const ctxEntityData = {
-                                filepath: wfCtxUri, isFS: false, chunks,
-                                suppress: ['file-edit', 'file-browse', 'file-view', 'file-window']
-                            };
-                            const rawActions = window.ExtensionRegistry?.getEntityActions
-                                ? window.ExtensionRegistry.getEntityActions('file:context', ctxEntityData)
-                                : [];
-                            const shareActions = rawActions.filter(a => !a.bulkOnly && ['file-copy', 'file-download', 'file-share'].includes(a.id));
-                            const menuItems = shareActions.map(act => ({
-                                label: typeof act.label === 'function' ? act.label(ctxEntityData) : act.label,
-                                icon: act.icon,
-                                intent: act.intent,
-                                onClick: (e) => {
-                                    if (window.ExtensionRegistry?.executeEntityAction) return window.ExtensionRegistry.executeEntityAction(act, ctxEntityData, e);
-                                    if (act.onClick) return act.onClick(ctxEntityData, e);
-                                    if (act.asyncAction) return act.asyncAction(ctxEntityData, e);
-                                }
-                            }));
+                <sutram-collapsible
+                    ?compact=${true}
+                    intent="highlight"
+                    ?open=${fileEntries.length <= 3}
+                    .titleText=${`${fileEntries.length} file(s) staged • tap to inspect chunks`}>
+                    <sutram-stack direction="col" gap="xs">
+                        ${fileEntries.map(([file, groupCells]) => {
+                            const selInFile = groupCells.filter(c => c.active).length;
                             return html`
-                                <sutram-dropdown align="left" direction="up" .items=${menuItems}>
-                                    <sutram-btn
-                                        slot="trigger"
+                                <sutram-card-group ?stacked=${true} ?accordion=${true}>
+                                    <sutram-card
                                         ?compact=${true}
-                                        intent=${isSameWindow && hasPriorWindowState && Number(deltaMeta.changed_count || 0) === 0 ? 'success' : 'highlight'}
-                                        icon="package"
-                                        label=${ctxBtnLabel}>
-                                    </sutram-btn>
-                                </sutram-dropdown>
-                            `;
-                        })() : ''}
-                        <sutram-btn
-                            ?compact=${true}
-                            intent="primary"
-                            icon="clipboard"
-                            label="Copy Prompt + Directives"
-                            @click=${() => this.utils.copyRawText(promptToCopy, "📋 Prompt & directives copied!").catch(() => {})}>
-                        </sutram-btn>
-                    </sutram-stack>
-                </sutram-stack>
-                ${branches.length > 1 ? html`
-                    <sutram-stack direction="row" gap="xs" ?wrap=${true}>
-                        ${branches.map((b, bIdx) => {
-                            const isDone = Boolean((this.handoffBranchResponses?.[b.node_id] || '').trim());
-                            return html`
-                                <sutram-btn
-                                    ?compact=${true}
-                                    intent=${bIdx === safeIdx ? 'warning' : (isDone ? 'success' : 'neutral')}
-                                    ?active=${bIdx === safeIdx}
-                                    label="${isDone ? '●' : '○'} Step ${bIdx + 1}: ${b.node_id}"
-                                    @click=${() => { AgentStore.setState({ handoffBranchIdx: bIdx }); }}>
-                                </sutram-btn>
+                                        .titleText=${new this.utils.InSetuURI(file).basename}
+                                        .descriptionText=${`${selInFile}/${groupCells.length} patch(es)`}
+                                        .detailText=${file}
+                                        icon="file-code-2"
+                                        intent=${selInFile > 0 ? 'highlight' : 'neutral'}
+                                        selectionStoreKey="none"
+                                        ?selected=${selInFile > 0}
+                                        @sutram-card-select-toggled=${(e) => {
+                                            e.stopPropagation();
+                                            window.inSetu?.stores?.Bridge?.getState()?.toggleGroupActive(file, selInFile === 0);
+                                        }}>
+                                    </sutram-card>
+                                    ${groupCells.map((c, idx) => {
+                                        const commentMatch = c.content.match(/<<<<<<< COMMENT\r?\n([\s\S]*?)\r?\n<<<<<<< /);
+                                        const commentStr = commentMatch && commentMatch[1] ? commentMatch[1].trim() : `Patch #${idx + 1}`;
+                                        return html`
+                                            <sutram-card
+                                                ?compact=${true}
+                                                .titleText=${`Patch ${idx + 1}/${groupCells.length}`}
+                                                .descriptionText=${commentStr}
+                                                icon="git-commit"
+                                                intent=${c.active ? 'success' : 'neutral'}
+                                                selectionStoreKey="none"
+                                                ?selected=${c.active}
+                                                @sutram-card-select-toggled=${(e) => {
+                                                    e.stopPropagation();
+                                                    window.inSetu?.stores?.Bridge?.getState()?.toggleCellActive(c.id);
+                                                }}
+                                                @card-clicked=${() => {
+                                                    window.inSetu?.stores?.Bridge?.getState()?.setActiveSurface('bridge');
+                                                }}>
+                                            </sutram-card>
+                                        `;
+                                    })}
+                                </sutram-card-group>
                             `;
                         })}
                     </sutram-stack>
-                ` : ''}
-                <sutram-textarea
-                    placeholder=${`Paste the external LLM's response for "${activeBranch.node_id}" here (prose & Yomama patches will split automatically)...`}
-                    .value=${this.promptInput}
-                    ?flush=${true}
-                    @sutram-input-changed=${e => AgentStore.setState({ promptInput: e.detail.value })}>
-                </sutram-textarea>
-                <sutram-action-bar collapse="sm" align="between">
-                    <sutram-btn
-                        intent="neutral"
-                        icon="x"
-                        label="Cancel Handoff"
-                        @click=${() => {
-                            AgentStore.setState({ promptInput: '', pendingHandoff: null, handoffBranchIdx: 0, handoffBranchResponses: {} });
-                        }}>
-                    </sutram-btn>
-                    <sutram-async-btn
-                        label="Ingest Reply & Continue"
-                        icon="corner-down-left"
-                        intent="warning"
-                        ?grow=${true}
-                        .onClick=${() => this.onSendPrompt && this.onSendPrompt()}>
-                    </sutram-async-btn>
-                </sutram-action-bar>
+                </sutram-collapsible>
             </sutram-surface>
         `;
     }
@@ -477,7 +530,4 @@ if (!customElements.get('insetu-agent-execution-trace')) {
 }
 if (!customElements.get('insetu-agent-staged-stacks')) {
     customElements.define('insetu-agent-staged-stacks', InSetuAgentStagedStacks);
-}
-if (!customElements.get('insetu-agent-handoff-panel')) {
-    customElements.define('insetu-agent-handoff-panel', InSetuAgentHandoffPanel);
 }

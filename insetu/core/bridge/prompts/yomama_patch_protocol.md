@@ -72,7 +72,20 @@ SCOPE: vfs://repo_name/path/to/scope/**/*.py
 >>>>>>> EXECUTE
 ```
 
-### 5. File Lifecycle Directives (`MOVE_FILE`, `ARCHIVE_FILE`, `DELETE_FILE`)
+### 5. Plan & Task Management Directives (`TASK_MANAGE`)
+When completing a step, refining a step's targets/description (`UPDATE`), splitting a complex step into sub-steps (`ADD: T1a`), or dropping an obsolete step in an active plan, emit a `<<<<<<< TASK_MANAGE` block (which renders as 1-click task completion/amendment buttons in the UI) rather than a raw `SEARCH/REPLACE` diff:
+```text
+<<<<<<< FILE: ctx://plan/active_plan.md
+<<<<<<< COMMENT
+Mark T1 complete, refine T2 targets, and add follow-up verification task
+<<<<<<< TASK_MANAGE
+COMPLETE: T1
+UPDATE: T2 | kind: edit | targets: vfs://repo/mod.py | Refined description for T2
+ADD: T2a | kind: verify | targets: vfs://repo/tests/test_mod.py | Verify edge case coverage
+>>>>>>> EXECUTE
+```
+
+### 6. File Lifecycle Directives (`MOVE_FILE`, `ARCHIVE_FILE`, `DELETE_FILE`)
 ```text
 <<<<<<< FILE: vfs://repo_name/path/to/old_file.py
 <<<<<<< COMMENT
@@ -89,3 +102,19 @@ Remove deprecated module (snapshot is automatically saved in bridge_ledger for /
 FILE: vfs://repo_name/path/to/obsolete.py
 >>>>>>> EXECUTE
 ```
+
+### 7. Epistemic Context Probes (`QUERY_CONTEXT` — 1 Request Allowed Before Patching)
+If a target file, symbol definition, or earlier conversation message required to complete the request is missing from the attached Context payload (or only present as an `[OUTLINE]` / `[SLICE]` summary), **do NOT guess its contents**. Pause and request the missing context by responding ONLY with a fenced `text` block:
+```text
+<<<<<<< QUERY_CONTEXT
+vfs://repo_name/path/to/missing_file.py
+vfs://repo_name/path/to/module.py#target_function_or_class
+- vfs://repo_name/path/to/irrelevant_file_to_drop.py
+msg://msg_a1b2c3d4e5f6
+>>>>>>> EXECUTE
+```
+* **Add / Promote File (`vfs://...`):** Mounts the full file into the working set for the follow-up pass.
+* **Slice Specific Symbol (`vfs://...#symbol`):** Extracts the exact source definition of `symbol`.
+* **Drop Unneeded File (`- vfs://...`):** Evicts an irrelevant non-pinned file from the working set.
+* **Recall Session Turn (`msg://<message_id>`):** Recalls the full verbatim text (or turn dossier) of a Warm or Cold compacted turn receipt.
+* **Active-Step Scoping:** When an `ACTIVE MULTI-STEP EXECUTION PLAN` is present, only request `QUERY_CONTEXT` for files or symbols needed to complete the **currently active step**—never pause to pre-fetch files that belong only to deferred future steps (`T2+`).

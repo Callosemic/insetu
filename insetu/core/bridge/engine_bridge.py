@@ -1,96 +1,42 @@
-import re
-import uuid
-import json
-import time
-import hashlib
-import zlib
-import traceback
-from typing import TypedDict, Literal, List, Dict, Optional, Any, Union, Tuple
+import base64, hashlib, json, re, time, traceback, uuid, zlib
+from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union
 from insetu.core.sdk import InSetuExtension
 from insetu.core.system.security_io import approve_command
-from insetu.core.utils_core import compute_vfs_sha256, InSetuURI, get_sister_repos, get_workspace_physics
-# Import the extracted math & validation logic
+from insetu.core.utils_core import InSetuURI, compute_vfs_sha256, get_sister_repos, get_workspace_physics
 from insetu.core.languages import format_interleaved_file_diff
-from .parser import (
-    LEDGER_CHUNK_TYPES,
-    parse_blocks,
-    serialize_block_chunk,
-    serialize_blocks_to_yomama as _serialize_blocks_to_yomama,
-)
-from .bridge_fuzzy import (
-    apply_block_in_memory,
-    apply_textedit_in_memory,
-    apply_json_patch_in_memory,
-)
+from .parser import LEDGER_CHUNK_TYPES, parse_blocks, serialize_block_chunk, serialize_blocks_to_yomama as _serialize_blocks_to_yomama
+from .bridge_fuzzy import apply_block_in_memory, apply_json_patch_in_memory, apply_textedit_in_memory
 from .bridge_window import extract_windowed_buffer_context as _extract_windowed_buffer_context
-from .bridge_vfs import (
-    execute_bridge_sync,
-    process_sync_transaction,
-    validate_buffer_syntax as _validate_buffer_syntax,
-)
+from .bridge_vfs import execute_bridge_sync, process_sync_transaction, validate_buffer_syntax as _validate_buffer_syntax
 from .bridge_ast import generate_commit_message_from_ledger
+from insetu.core.prompts.engine_prompts import resolve_prompt_text
+from .bridge_telemetry import build_session_telemetry_zip_bytes, compile_ai_telemetry_context, log_bridge_heal_audit
 from .bridge_test import run_repo_test_diagnostics
-# 1. Initialize the Single Source of Truth Blueprint
+
+BRIDGE_HEALER_SYSTEM_PROMPT = "You are the inSetu Fast-Tier Yomama Patch Healer. Preceding patches (0 .. n-1) have already been applied to the file buffer provided. Output ONLY the repaired Yomama patch block ('<<<<<<< FILE:' / '<<<<<<< SEARCH' / '=======' / '>>>>>>> REPLACE') that applies cleanly on top of the provided n-1 buffer."
+
 BRIDGE_SCHEMA = {
     "bridge_ledger": {
-        "patch_id": "TEXT PRIMARY KEY",
-        "transaction_id": "TEXT",
-        "repo": "TEXT",
-        "filepath": "TEXT",
-        "search_block": "TEXT",
-        "replace_block": "TEXT",
-        "post_patch_hash": "TEXT",
-        "is_snapshot": "INTEGER DEFAULT 0",
-        "compressed_state": "BLOB",
-        "timestamp": "REAL",
-        "ttl_expires_at": "REAL",
-        "patch_count": "INTEGER DEFAULT 1",
-        "chunks_json": "TEXT"
+        "patch_id": "TEXT PRIMARY KEY", "transaction_id": "TEXT", "repo": "TEXT", "filepath": "TEXT",
+        "search_block": "TEXT", "replace_block": "TEXT", "post_patch_hash": "TEXT",
+        "is_snapshot": "INTEGER DEFAULT 0", "compressed_state": "BLOB", "timestamp": "REAL",
+        "ttl_expires_at": "REAL", "patch_count": "INTEGER DEFAULT 1", "chunks_json": "TEXT",
     },
     "bridge_heal_audit": {
-        "heal_id": "TEXT PRIMARY KEY",
-        "timestamp": "REAL",
-        "transaction_id": "TEXT",
-        "filepath": "TEXT",
-        "cell_id": "TEXT",
-        "pass_number": "INTEGER DEFAULT 1",
-        "failure_type": "TEXT",
-        "original_error": "TEXT",
-        "original_block": "TEXT",
-        "windowed_context_sent": "TEXT",
-        "instructions_sent": "TEXT",
-        "healer_raw_output": "TEXT",
-        "healed_block": "TEXT",
-        "verification_status": "TEXT",
-        "verification_error": "TEXT",
-        "model": "TEXT",
-        "latency_ms": "INTEGER DEFAULT 0"
-    }
+        "heal_id": "TEXT PRIMARY KEY", "timestamp": "REAL", "transaction_id": "TEXT", "filepath": "TEXT",
+        "cell_id": "TEXT", "pass_number": "INTEGER DEFAULT 1", "failure_type": "TEXT",
+        "original_error": "TEXT", "original_block": "TEXT", "windowed_context_sent": "TEXT",
+        "instructions_sent": "TEXT", "healer_raw_output": "TEXT", "healed_block": "TEXT",
+        "verification_status": "TEXT", "verification_error": "TEXT", "model": "TEXT", "latency_ms": "INTEGER DEFAULT 0",
+    },
 }
 
-bridge_bp = InSetuExtension(
-    'bridge', 
-    __name__,
-    title="Sync Bridge",
-    description="Yomama Patch Protocol and AST Validation Engine.",
-    schema=BRIDGE_SCHEMA,
-    core=True
-)
-__depends__ = ['topology', 'cartographer']
+bridge_bp = InSetuExtension("bridge", __name__, title="Sync Bridge", description="Yomama Patch Protocol and AST Validation Engine.", schema=BRIDGE_SCHEMA, core=True)
+__depends__ = ["topology", "cartographer"]
 
 class BridgeLedgerRecord(TypedDict):
-    patch_id: str
-    transaction_id: str
-    repo: str
-    filepath: str
-    search_block: str
-    replace_block: str
-    post_patch_hash: str
-    is_snapshot: int
-    timestamp: float
-    ttl_expires_at: float
-    patch_count: int
-    chunks_json: str
+    patch_id: str; transaction_id: str; repo: str; filepath: str; search_block: str; replace_block: str
+    post_patch_hash: str; is_snapshot: int; timestamp: float; ttl_expires_at: float; patch_count: int; chunks_json: str
 
 class BridgeHistoryResponse(TypedDict):
     history: List[BridgeLedgerRecord]
@@ -244,21 +190,10 @@ class PatchResolution(TypedDict, total=False):
     approved_gate: str
     allow_deep_search: bool
 class BridgeSyncPayload(TypedDict, total=False):
-    text: str
-    active_files: List[str]
-    dry_run: bool
-    pinned_repos: List[str]
-    allow_deep_search: bool
-    ignore_syntax: bool
-    confirmed_candidates: Dict[str, str]
-    resolutions: Dict[str, PatchResolution]
-    unattended: bool
-    force: bool
-    repair_mode: Literal['off', 'algorithmic', 'ai_assisted']
-    auto_heal: bool
-    max_heal_passes: int
-    target_cell_id: str
-    profile_id: str
+    text: str; active_files: List[str]; dry_run: bool; pinned_repos: List[str]; allow_deep_search: bool
+    ignore_syntax: bool; confirmed_candidates: Dict[str, str]; resolutions: Dict[str, PatchResolution]
+    unattended: bool; force: bool; repair_mode: Literal['off', 'algorithmic', 'ai_assisted']
+    auto_heal: bool; max_heal_passes: int; target_cell_id: str; profile_id: str
 @bridge_bp.route('sync', methods=['POST'], request_schema=BridgeSyncPayload, docstring=(
     "Applies modifications to the VFS using the 'Yomama' Patch Protocol.\n\n"
     "The 'text' parameter MUST strictly follow this exact format:\n"
@@ -491,125 +426,34 @@ def bridge_turn_diff(ctx):
 
 class BridgeCompileTelemetryPayload(TypedDict, total=False):
     limit: Optional[int]
+    session_id: Optional[str]
+    turn_msg_id: Optional[str]
+    latest_turn_only: Optional[bool]
 
 
-def compile_ai_telemetry_context(ctx, limit: int = 40) -> Dict[str, Any]:
-    """
-    Compiles a Gather-chunked diagnostic context payload (ctx://contexts/ai_telemetry_context.txt)
-    containing tagged LLM telemetry and full before/context/after Bridge AI Auto-Heal case studies.
-    All text is scrubbed through S5 outbound secret scrubbing before writing to ctx://contexts/.
-    """
-    from insetu.core.gather.context_assemble import (
-        collect_workspace_secrets as _collect_secrets,
-        scrub_outbound_secrets as _scrub_secrets,
+@bridge_bp.route('compile_telemetry', methods=['GET', 'POST'], risk='read', request_schema=BridgeCompileTelemetryPayload, docstring="[sync] Compiles session overview, per-turn routine/LLM dossiers, and Yomama Patch Auto-Heal case studies into ctx://contexts/ai_telemetry_context.txt.")
+def api_bridge_compile_telemetry(ctx):
+    data = ctx.payload or {}
+    return compile_ai_telemetry_context(
+        ctx,
+        limit=int(data.get("limit") or 40),
+        session_id=data.get("session_id"),
+        turn_msg_id=data.get("turn_msg_id"),
+        latest_turn_only=bool(data.get("latest_turn_only", False)),
     )
-    safe_limit = max(1, min(int(limit or 40), 200))
-    secrets_set = _collect_secrets(ctx)
-    heal_rows = ctx.db.execute(
-        "SELECT * FROM bridge_heal_audit ORDER BY timestamp DESC LIMIT ?",
-        (safe_limit,),
-    ).fetchall()
-    llm_rows = []
-    try:
-        llm_conn = ctx.get_db("llm")
-        llm_rows = llm_conn.execute(
-            "SELECT * FROM llm_telemetry ORDER BY timestamp DESC LIMIT ?",
-            (safe_limit,),
-        ).fetchall()
-    except Exception:
-        pass
 
-    header_lines = [
-        "============================================================",
-        "INSETU AI TELEMETRY & YOMAMA PATCH HEALER AUDIT PAYLOAD",
-        "============================================================",
-        "Purpose: Audit the exact windowed file slices, error diagnostics, and instructions provided",
-        "to inSetu's Fast/Decision/Thinking LLM calls and Yomama Patch Auto-Healer.",
-        "",
-    ]
 
-    text_blocks: List[str] = []
-    if llm_rows:
-        summary_lines = [
-            "=== SECTION 1: RECENT TAGGED LLM CALLS (llm_telemetry) ===",
-            "caller_tag | tier | model | status | attempts | latency_ms | prompt_chars -> resp_chars | error",
-            "-" * 96,
-        ]
-        for r in llm_rows:
-            rk = dict(r)
-            err_short = (rk.get("error_message") or "").replace("\n", " ")[:120]
-            summary_lines.append(
-                f"{rk.get('caller_tag')} | {rk.get('tier')} | {rk.get('model')} | {rk.get('status')} | "
-                f"try={rk.get('attempts')} | {rk.get('latency_ms')}ms | "
-                f"{rk.get('prompt_chars')}->{rk.get('response_chars')} chars"
-                + (f" | ERR: {err_short}" if err_short else "")
-            )
-            if rk.get("status") != "ok" or int(rk.get("attempts") or 1) > 1:
-                summary_lines.append(
-                    f"  [Non-Nominal Call Detail ({rk.get('call_id')})]\n"
-                    f"  Prompt Excerpt:\n{rk.get('prompt_excerpt', '')[:1200]}\n"
-                    f"  Response Excerpt:\n{rk.get('response_excerpt', '')[:1200]}\n"
-                )
-        text_blocks.append(_scrub_secrets("\n".join(summary_lines) + "\n\n", secrets_set))
-
-    if heal_rows:
-        text_blocks.append("=== SECTION 2: YOMAMA PATCH AUTO-HEAL CASE STUDIES (bridge_heal_audit) ===\n\n")
-        for idx, hr in enumerate(heal_rows, 1):
-            hd = dict(hr)
-            case_block = (
-                f"============================================================\n"
-                f"CASE STUDY #{idx}: [{hd.get('verification_status', '').upper()}] {hd.get('filepath')}\n"
-                f"Transaction: {hd.get('transaction_id') or 'uncommitted'} | Pass: {hd.get('pass_number')} | "
-                f"Failure Type: {hd.get('failure_type')} | Model: {hd.get('model')} ({hd.get('latency_ms')}ms)\n"
-                f"============================================================\n\n"
-                f"--- 1. INITIAL FAILURE DIAGNOSTIC ---\n"
-                f"{hd.get('original_error')}\n\n"
-                f"--- 2. ORIGINAL BROKEN PATCH BLOCK (FROM PRIMARY MODEL) ---\n"
-                f"{hd.get('original_block')}\n\n"
-                f"--- 3. EXACT INSTRUCTIONS SENT TO HEALER LLM ---\n"
-                f"{hd.get('instructions_sent')}\n\n"
-                f"--- 4. EXACT WINDOWED BUFFER CONTEXT SENT TO HEALER LLM ---\n"
-                f"{hd.get('windowed_context_sent')}\n\n"
-                f"--- 5. HEALER LLM RAW OUTPUT ---\n"
-                f"{hd.get('healer_raw_output')}\n\n"
-                f"--- 6. VERIFICATION OUTCOME AGAINST B_(k-1) ---\n"
-                f"Status: {hd.get('verification_status')}\n"
-                + (f"Verification Error: {hd.get('verification_error')}\n" if hd.get("verification_error") else "")
-                + "\n"
-            )
-            text_blocks.append(_scrub_secrets(case_block, secrets_set))
-    else:
-        text_blocks.append("=== SECTION 2: YOMAMA PATCH AUTO-HEAL CASE STUDIES ===\nNo AI patch heal events recorded yet.\n")
-
-    base_uri = "ctx://contexts/ai_telemetry_context.txt"
-    compiled_entry = ctx.compile_context(
-        base_uri=base_uri,
-        header_block="\n".join(header_lines),
-        text_blocks=text_blocks,
-        files=[base_uri],
-        meta={
-            "type": "telemetry",
-            "domain": "Diagnostics",
-            "category": "Diagnostics",
-            "title": "AI Telemetry & Patch Healer Audit",
-            "desc": f"{len(heal_rows)} heal case(s), {len(llm_rows)} LLM call(s) — chunked for LLM meta-audit.",
-            "timestamp": time.time(),
-        },
-    )
-    ctx.save_manifest({base_uri: compiled_entry}, is_full_compile=False)
+@bridge_bp.route('telemetry_zip', methods=['GET', 'POST'], mcp_expose=False, request_schema=BridgeCompileTelemetryPayload, docstring="[sync] Builds a .zip archive containing 00_session_overview.txt and individual turn_<NNN>_dossier.txt files for a session.")
+def api_bridge_telemetry_zip(ctx):
+    data = ctx.payload or {}
+    sid = str(data.get("session_id") or "latest").strip()
+    zip_bytes = build_session_telemetry_zip_bytes(ctx, session_id=data.get("session_id"), limit=int(data.get("limit") or 40))
     return {
         "status": "success",
-        "context_uri": base_uri,
-        "heal_cases": len(heal_rows),
-        "llm_calls": len(llm_rows),
-        "chunks": compiled_entry.get("chunks", [base_uri]),
+        "filename": f"session_{sid}_telemetry.zip",
+        "size_bytes": len(zip_bytes),
+        "zip_base64": base64.b64encode(zip_bytes).decode("ascii"),
     }
-
-
-@bridge_bp.route('compile_telemetry', methods=['GET', 'POST'], request_schema=BridgeCompileTelemetryPayload, docstring="[sync] Compiles recent LLM call telemetry and Yomama Patch Auto-Heal case studies (including windowed context sent to the healer) into ctx://contexts/ai_telemetry_context.txt, chunked by Gather max_kb.")
-def api_bridge_compile_telemetry(ctx):
-    limit = int((ctx.payload or {}).get("limit") or 40)
-    return compile_ai_telemetry_context(ctx, limit=limit)
 
 
 # 3. Background Workers
@@ -647,17 +491,10 @@ def _background_bridge_sync(
     effective_auto_heal = bool(auto_heal or effective_repair_mode == "ai_assisted")
     current_text = text
     sync_payload = {
-        "text": current_text,
-        "active_files": active_files or [],
-        "dry_run": dry_run,
-        "pinned_repos": pinned_repos or ["ALL"],
-        "confirmed_candidates": confirmed_candidates or {},
-        "resolutions": resolutions or {},
-        "unattended": unattended,
-        "allow_deep_search": allow_deep_search,
-        "force": force,
-        "ignore_syntax": ignore_syntax,
-        "ignore_syntax_errors": ignore_syntax_errors,
+        "text": current_text, "active_files": active_files or [], "dry_run": dry_run,
+        "pinned_repos": pinned_repos or ["ALL"], "confirmed_candidates": confirmed_candidates or {},
+        "resolutions": resolutions or {}, "unattended": unattended, "allow_deep_search": allow_deep_search,
+        "force": force, "ignore_syntax": ignore_syntax, "ignore_syntax_errors": ignore_syntax_errors,
         "repair_mode": effective_repair_mode,
     }
     sister_repos = get_sister_repos(ctx.workspace_id)
@@ -717,42 +554,76 @@ def _background_bridge_sync(
                 err_msg = df_entry["patch_tel"].get("error_message") or df_entry["patch_tel"].get("status") or "Anchor mismatch"
                 p_status = df_entry["patch_tel"].get("status") or ""
                 focus_lines: List[int] = list(df_entry["patch_tel"].get("ambiguous_lines") or [])
-                for m_ln in re.findall(r'\b[Ll]ine\s+(\d+)\b', str(err_msg)):
-                    focus_lines.append(int(m_ln))
+                for m_ln in re.findall(
+                    r'(?:\b[Ll]ine\s+(\d+)\b|\[stdin\]:(\d+)|\.(?:py|js|mjs|cjs|ts|tsx|jsx|rs|json|yaml|yml|md):(\d+)\b)',
+                    str(err_msg),
+                ):
+                    for grp in m_ln:
+                        if grp and grp.isdigit() and int(grp) > 0:
+                            focus_lines.append(int(grp))
 
-                windowed_snippet = _extract_windowed_buffer_context(
-                    fp_key, n_minus_1_text, [f_blk], extra_focus_lines=focus_lines
-                )
-                if p_status == "syntax_error" and isinstance(df_entry.get("post_buffer"), str):
-                    post_lines = df_entry["post_buffer"].splitlines()
-                    err_ln = focus_lines[0] if focus_lines else 1
-                    p_start = max(0, err_ln - 20)
-                    p_end = min(len(post_lines), err_ln + 20)
-                    post_excerpt = "\n".join(
-                        f"{idx_l + 1}: {post_lines[idx_l]}" for idx_l in range(p_start, p_end)
-                    )
-                    windowed_snippet += (
-                        f"\n\n=== BROKEN POST-PATCH EXCERPT AROUND SYNTAX ERROR ({err_msg}) ===\n"
-                        f"{post_excerpt}"
-                    )
-                elif f_blk.get("type") == "relocate" and f_blk.get("target_uri"):
-                    dst_uri = str(InSetuURI(f_blk["target_uri"]))
-                    dst_text = (post_valid_buffers or {}).get(dst_uri) or ctx.vfs.read(dst_uri) or ""
-                    if dst_text:
-                        windowed_snippet += (
-                            f"\n\n=== DESTINATION FILE BUFFER ({dst_uri}) ===\n"
-                            f"{dst_text[:8000]}"
+                post_buf_for_syn = df_entry.get("post_buffer") if p_status == "syntax_error" else None
+                if p_status == "syntax_error" and isinstance(post_buf_for_syn, str):
+                    post_lines = post_buf_for_syn.splitlines()
+                    err_ln = focus_lines[0] if focus_lines else max(1, len(post_lines) // 2)
+                    rep_str = (f_blk.get("replace") or "").strip()
+                    rep_lines = [l.strip() for l in rep_str.splitlines() if l.strip()]
+                    join_idx = None
+                    if len(rep_lines) >= 2:
+                        tail_pair = (rep_lines[-2], rep_lines[-1])
+                        for i_p in range(len(post_lines) - 1):
+                            if post_lines[i_p].strip() == tail_pair[0] and post_lines[i_p + 1].strip() == tail_pair[1]:
+                                join_idx = i_p + 1
+                                break
+                    windows_to_show = [(max(0, err_ln - 35), min(len(post_lines), err_ln + 35))]
+                    if join_idx is not None:
+                        j_win = (max(0, join_idx - 20), min(len(post_lines), max(join_idx + 140, err_ln + 25)))
+                        windows_to_show.append(j_win)
+                    windows_to_show.sort(key=lambda w: w[0])
+                    merged_wins: List[Tuple[int, int]] = []
+                    for w_s, w_e in windows_to_show:
+                        if merged_wins and w_s <= merged_wins[-1][1] + 5:
+                            merged_wins[-1] = (merged_wins[-1][0], max(merged_wins[-1][1], w_e))
+                        else:
+                            merged_wins.append((w_s, w_e))
+                    excerpt_parts = []
+                    for w_s, w_e in merged_wins:
+                        excerpt_parts.append(
+                            f"--- Lines {w_s + 1}..{w_e} of {fp_key} (POST-PATCH BUFFER) ---\n"
+                            + "\n".join(file_ln for file_ln in post_lines[w_s:w_e])
                         )
+                    windowed_snippet = (
+                        f"=== BROKEN POST-PATCH BUFFER EXCERPTS AROUND SYNTAX ERROR (Line {err_ln}: {err_msg}) ===\n\n"
+                        + "\n\n".join(excerpt_parts)
+                    )
+                else:
+                    windowed_snippet = _extract_windowed_buffer_context(
+                        fp_key, n_minus_1_text, [f_blk], extra_focus_lines=focus_lines
+                    )
 
                 failed_yomama = _serialize_blocks_to_yomama({fp_key: [f_blk]})
+                if len(failed_yomama) > 4000 and p_status == "syntax_error":
+                    f_s_lines = (f_blk.get("search") or "").splitlines()
+                    f_r_lines = (f_blk.get("replace") or "").splitlines()
+                    failed_yomama = (
+                        f"<<<<<<< FILE: {fp_key}\n"
+                        f"<<<<<<< SEARCH (first 15 / last 15 of {len(f_s_lines)} lines)\n"
+                        + "\n".join(f_s_lines[:15] + ["..."] + f_s_lines[-15:])
+                        + f"\n======= (first 15 / last 20 of {len(f_r_lines)} lines)\n"
+                        + "\n".join(f_r_lines[:15] + ["..."] + f_r_lines[-20:])
+                        + "\n>>>>>>> REPLACE"
+                    )
                 extra_instructions = (
                     "Rewrite ONLY the failed Yomama patch block above so its SEARCH block matches the exact lines in the "
                     "'FILE STATE AFTER APPLYING VALID PATCHES' (n-1) buffer while preserving its intended changes."
                 )
                 if p_status == "syntax_error":
                     extra_instructions = (
-                        f"This patch anchored, but introduced an AST syntax error ({err_msg}). "
-                        "Inspect the 'BROKEN POST-PATCH EXCERPT' above and rewrite the Yomama patch block so the resulting file is syntactically valid."
+                        f"CRITICAL: The patch above ALREADY applied to produce the 'POST-PATCH BUFFER' shown above, "
+                        f"which currently has a syntax error at Line {focus_lines[0] if focus_lines else '?'}: {err_msg}\n"
+                        "(Typically caused by an unconsumed tail of the old function/class left immediately after the replacement end boundary, or an extra/missing closing `}`).\n"
+                        "DO NOT rewrite the entire giant patch! Instead, emit a small, surgical `<<<<<<< FILE:` / `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE` patch block "
+                        "whose `<<<<<<< SEARCH` matches the broken/duplicate lines in the `POST-PATCH BUFFER` excerpts above and removes or fixes them so the `POST-PATCH BUFFER` becomes syntactically valid."
                     )
                 elif df_entry["patch_tel"].get("resolution_type") == "ambiguous_anchor":
                     extra_instructions = (
@@ -764,14 +635,10 @@ def _background_bridge_sync(
                         f"The AST RELOCATE directive failed ({err_msg}) — for example, because the symbol is a const/variable assignment rather than a function/class, or was already moved. "
                         "Rewrite it as standard '<<<<<<< FILE:' + '<<<<<<< SEARCH' / '=======' / '>>>>>>> REPLACE' block(s) against the source (and destination, if needed) buffers above."
                     )
-                file_heal_prompt = (
-                    "All preceding patches (0 .. n-1) for this file have been applied in memory.\n"
-                    "The following Yomama patch block (patch n) failed against the n-1 buffer state:\n"
-                    f"- {fp_key}: {err_msg}"
-                    + f"\n\n--- FAILED PATCH BLOCK TO REPAIR ---\n{failed_yomama}\n\n"
-                    + windowed_snippet
-                    + f"\n\n{extra_instructions}"
-                )
+                file_heal_prompt = resolve_prompt_text(
+                    ctx, target_uri="ctx://prompts/.templates/bridge/patch_healer.md",
+                    extra_context={"filepath": fp_key, "error_message": str(err_msg), "failed_yomama": failed_yomama, "windowed_snippet": windowed_snippet, "extra_instructions": extra_instructions},
+                ) or f"All preceding patches (0 .. n-1) for this file have been applied in memory.\n- {fp_key}: {err_msg}\n\n--- FAILED PATCH BLOCK TO REPAIR ---\n{failed_yomama}\n\n{windowed_snippet}\n\n{extra_instructions}"
                 t_heal_start = time.time()
                 failure_kind = (
                     "syntax_error"
@@ -782,40 +649,20 @@ def _background_bridge_sync(
                 h_model = ""
 
                 def _log_heal_audit(ver_status: str, ver_err: str = "", healed_yomama_str: str = "") -> None:
-                    try:
-                        elapsed_ms = int(round((time.time() - t_heal_start) * 1000))
-                        ctx.db.insert_or_replace("bridge_heal_audit", {
-                            "heal_id": f"heal_{uuid.uuid4().hex[:12]}",
-                            "timestamp": time.time(),
-                            "transaction_id": sync_data.get("transaction_id") or "",
-                            "filepath": fp_key,
-                            "cell_id": str(f_blk.get("id") or ""),
-                            "pass_number": heal_attempt,
-                            "failure_type": str(failure_kind),
-                            "original_error": str(err_msg),
-                            "original_block": failed_yomama,
-                            "windowed_context_sent": windowed_snippet,
-                            "instructions_sent": extra_instructions,
-                            "healer_raw_output": h_text,
-                            "healed_block": healed_yomama_str,
-                            "verification_status": ver_status,
-                            "verification_error": ver_err,
-                            "model": h_model,
-                            "latency_ms": elapsed_ms,
-                        })
-                        ctx.db.commit()
-                    except Exception:
-                        pass
+                    log_bridge_heal_audit(
+                        ctx, t_heal_start=t_heal_start, transaction_id=sync_data.get("transaction_id") or "",
+                        filepath=fp_key, cell_id=str(f_blk.get("id") or ""), pass_number=heal_attempt,
+                        failure_type=str(failure_kind), original_error=str(err_msg), original_block=failed_yomama,
+                        windowed_context_sent=windowed_snippet, instructions_sent=extra_instructions,
+                        healer_raw_output=h_text, healed_block=healed_yomama_str,
+                        verification_status=ver_status, verification_error=ver_err, model=h_model,
+                    )
 
                 try:
                     h_res = ctx.call(
                         "llm.complete",
                         messages=[{"role": "user", "content": file_heal_prompt}],
-                        system=(
-                            "You are the inSetu Fast-Tier Yomama Patch Healer. "
-                            "Preceding patches (0 .. n-1) have already been applied to the file buffer provided. "
-                            "Output ONLY the repaired Yomama patch block ('<<<<<<< FILE:' / '<<<<<<< SEARCH' / '=======' / '>>>>>>> REPLACE') that applies cleanly on top of the provided n-1 buffer."
-                        ),
+                        system=BRIDGE_HEALER_SYSTEM_PROMPT,
                         tier="fast",
                         profile_id=profile_id,
                         output_schema="yomama_patch",
@@ -848,8 +695,7 @@ def _background_bridge_sync(
                         if buf_for_target is None:
                             buf_for_target = (post_valid_buffers or {}).get(target_r_fp) or ctx.vfs.read(target_r_fp) or ""
 
-                        # Immediate In-Memory Verification Gate against B_{k-1}:
-                        # Reject any LLM repair that still fails to anchor, is a no-op, or introduces a syntax error!
+                        # Immediate In-Memory Verification Gate against B_{k-1} (or against post_buffer for surgical syntax_error repairs):
                         rep_type = rep_b.get("type", "exact")
                         if rep_type in ("exact", "regex", "textedit", "json_patch"):
                             if rep_type == "json_patch":
@@ -858,18 +704,59 @@ def _background_bridge_sync(
                                 ok_cand, cand_buf, cand_stat = apply_textedit_in_memory(buf_for_target, dict(rep_b), silent=True)
                             else:
                                 ok_cand, cand_buf, cand_stat = apply_block_in_memory(buf_for_target, dict(rep_b), silent=True)
+
+                            # If this is a syntax_error repair and the healer emitted a surgical delta against post_buffer,
+                            # apply it to post_buffer and fold the resulting span back into a single clean block against n_minus_1_text!
+                            if p_status == "syntax_error" and target_r_fp == fp_key and isinstance(post_buf_for_syn, str):
+                                ok_post, post_healed_buf, post_stat = apply_block_in_memory(post_buf_for_syn, dict(rep_b), silent=True)
+                                if (
+                                    ok_post
+                                    and post_stat not in ("no_op", "idempotent")
+                                    and post_healed_buf.strip() != n_minus_1_text.strip()
+                                    and (not ok_cand or len(cand_buf) < len(post_healed_buf) - 500)
+                                ):
+                                    n1_lines, ph_lines = n_minus_1_text.splitlines(), post_healed_buf.splitlines()
+                                    top_k, bot_k = 0, 0
+                                    while top_k < min(len(n1_lines), len(ph_lines)) and n1_lines[top_k] == ph_lines[top_k]:
+                                        top_k += 1
+                                    while bot_k < min(len(n1_lines) - top_k, len(ph_lines) - top_k) and n1_lines[len(n1_lines) - 1 - bot_k] == ph_lines[len(ph_lines) - 1 - bot_k]:
+                                        bot_k += 1
+                                    s_start, b_trim = max(0, top_k - 2), max(0, bot_k - 2)
+                                    n1_end = max(s_start, len(n1_lines) - b_trim)
+                                    ph_end = max(s_start, len(ph_lines) - b_trim)
+                                    folded_search = "\n".join(n1_lines[s_start:n1_end])
+                                    folded_replace = "\n".join(ph_lines[s_start:ph_end])
+                                    if folded_search.strip() and folded_search != folded_replace:
+                                        rep_b.update({"type": "exact", "search": folded_search, "replace": folded_replace})
+                                        ok_cand, cand_buf, cand_stat = apply_block_in_memory(buf_for_target, dict(rep_b), silent=True)
+
                             if not ok_cand or cand_stat == "no_op":
                                 fail_reason = f"Healer candidate failed verification on {target_r_fp} ({cand_stat})."
                                 _log_heal_audit(f"failed_{cand_stat}", fail_reason, h_text)
                                 return fp_key, None, fail_reason
-                            if p_status == "syntax_error":
-                                has_syn, syn_msg = _validate_buffer_syntax(ctx, target_r_fp, cand_buf)
-                                if has_syn:
-                                    fail_reason = f"Healer candidate still has syntax error ({syn_msg})."
-                                    _log_heal_audit("failed_syntax", fail_reason, h_text)
-                                    return fp_key, None, fail_reason
                             running_buffers[target_r_fp] = cand_buf
                         verified_pairs.append((target_r_fp, rep_b))
+
+                    if p_status == "syntax_error":
+                        check_buf = running_buffers.get(fp_key, n_minus_1_text)
+                        orig_idx_for_syn = df_entry.get("block_index")
+                        file_all_blks = all_blocks_by_file.get(fp_key) or []
+                        if isinstance(orig_idx_for_syn, int) and orig_idx_for_syn + 1 < len(file_all_blks):
+                            for tail_b in file_all_blks[orig_idx_for_syn + 1:]:
+                                t_type = tail_b.get("type", "exact")
+                                if t_type == "textedit":
+                                    ok_t, next_b, _ = apply_textedit_in_memory(check_buf, dict(tail_b), silent=True)
+                                elif t_type == "json_patch":
+                                    ok_t, next_b, _ = apply_json_patch_in_memory(fp_key, check_buf, dict(tail_b), silent=True)
+                                else:
+                                    ok_t, next_b, _ = apply_block_in_memory(check_buf, dict(tail_b), silent=True)
+                                if ok_t:
+                                    check_buf = next_b
+                        has_syn, syn_msg = _validate_buffer_syntax(ctx, fp_key, check_buf)
+                        if has_syn:
+                            fail_reason = f"Healer candidate still has syntax error ({syn_msg})."
+                            _log_heal_audit("failed_syntax", fail_reason, h_text)
+                            return fp_key, None, fail_reason
 
                     _log_heal_audit("verified", "", h_text)
                     return fp_key, verified_pairs, None

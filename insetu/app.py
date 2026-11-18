@@ -754,28 +754,96 @@ def recovery_ui():
     </html>
     """
     return html
-def compute_build_id() -> str:
-    """Short deterministic content/mtime digest of the frontend boot shell, core modules, and extension entrypoints."""
+
+
+_BUILD_MANIFEST_STATE = {"stat_sig": None, "build_id": "dev", "module_assets": {}}
+_BUILD_MANIFEST_LOCK = threading.Lock()
+
+
+def resolve_frontend_build_manifest() -> dict:
+    """
+    Single Source of Truth for frontend build identity and offline module discovery:
+    1. Scans physical files under templates/, static/, core/, extensions/, and active workspace extensions.
+    2. Memoizes the content-addressed 12-char SHA-256 build_id and per-module JS URL map by (rel_path, size, mtime_ns)
+       so steady-state GET / requests avoid re-reading megabytes of vendored assets from disk.
+    """
     root = Path(app.root_path)
-    digest = hashlib.sha256()
-    tracked_files = [
-        root / "templates" / "index.html",
-        root / "static" / "sw.js",
-        root / "static" / "vendor.json",
-        root / "static" / "js" / "app.js",
-    ]
+    candidates: dict[str, Path] = {}
+    module_assets: dict[str, list[str]] = {}
+
+    for asset_dir_name in ("templates", "static"):
+        base_dir = root / asset_dir_name
+        if base_dir.is_dir():
+            for fp in base_dir.rglob("*"):
+                if fp.is_file() and "__pycache__" not in fp.parts and fp.name != ".DS_Store":
+                    candidates[fp.relative_to(root).as_posix()] = fp
+
     for sub in ("core", "extensions"):
         sub_dir = root / sub
         if sub_dir.is_dir():
-            tracked_files.extend(sorted(sub_dir.rglob("*.js")))
-    for fp in tracked_files:
+            for pattern in ("*.js", "*.css", "*.json"):
+                for fp in sub_dir.rglob(pattern):
+                    if fp.is_file() and "__pycache__" not in fp.parts:
+                        rel_to_root = fp.relative_to(root).as_posix()
+                        candidates[rel_to_root] = fp
+                        rel_parts = fp.relative_to(sub_dir).parts
+                        if fp.suffix == ".js" and len(rel_parts) >= 2 and "vendor" not in rel_parts:
+                            mod_name = rel_parts[0]
+                            mod_rel = "/".join(rel_parts[1:])
+                            module_assets.setdefault(mod_name, []).append(f"/static/extensions/{mod_name}/{mod_rel}")
+
+    for ws_ext in list(getattr(app, "_loaded_workspace_extensions", {}).keys()):
+        ws_dir = _resolve_workspace_ext_dir(ws_ext)
+        if ws_dir and ws_dir.is_dir():
+            for pattern in ("*.js", "*.css", "*.json"):
+                for fp in ws_dir.rglob(pattern):
+                    if fp.is_file() and "__pycache__" not in fp.parts:
+                        rel_ws = fp.relative_to(ws_dir).as_posix()
+                        candidates[f"ws_extensions/{ws_ext}/{rel_ws}"] = fp
+                        if fp.suffix == ".js" and "vendor" not in fp.relative_to(ws_dir).parts:
+                            module_assets.setdefault(ws_ext, []).append(f"/static/extensions/{ws_ext}/{rel_ws}")
+
+    for mod_name, urls in module_assets.items():
+        module_assets[mod_name] = sorted(set(urls))
+
+    sorted_items = sorted(candidates.items(), key=lambda kv: kv[0])
+    stat_entries = []
+    for rel_key, fp in sorted_items:
         try:
             st = fp.stat()
-            digest.update(f"{fp.relative_to(root).as_posix()}:{st.st_size}:{st.st_mtime_ns}\n".encode("utf-8"))
+            stat_entries.append((rel_key, st.st_size, st.st_mtime_ns))
         except OSError:
             continue
-    return digest.hexdigest()[:12]
+    stat_sig = tuple(stat_entries)
 
+    with _BUILD_MANIFEST_LOCK:
+        if _BUILD_MANIFEST_STATE["stat_sig"] == stat_sig and _BUILD_MANIFEST_STATE["build_id"]:
+            return {
+                "build_id": _BUILD_MANIFEST_STATE["build_id"],
+                "module_assets": {k: list(v) for k, v in _BUILD_MANIFEST_STATE["module_assets"].items()},
+            }
+
+    digest = hashlib.sha256()
+    for rel_key, fp in sorted_items:
+        try:
+            content = fp.read_bytes()
+        except OSError:
+            continue
+        digest.update(f"{rel_key}:{len(content)}:".encode("utf-8"))
+        digest.update(content)
+        digest.update(b"\n")
+
+    build_id = digest.hexdigest()[:12]
+    with _BUILD_MANIFEST_LOCK:
+        _BUILD_MANIFEST_STATE["stat_sig"] = stat_sig
+        _BUILD_MANIFEST_STATE["build_id"] = build_id
+        _BUILD_MANIFEST_STATE["module_assets"] = {k: list(v) for k, v in module_assets.items()}
+    return {"build_id": build_id, "module_assets": module_assets}
+
+
+def compute_build_id() -> str:
+    """Short deterministic content digest of all templates, static/vendored assets, and frontend module files."""
+    return resolve_frontend_build_manifest()["build_id"]
 
 
 @app.route('/')
@@ -788,7 +856,8 @@ def index():
     mounted_extensions = [ext for ext in extensions if ext == "config" or ext in app.blueprints]
 
     import_map = resolve_js_vendors(mounted_extensions)
-    build_id = compute_build_id()
+    build_manifest = resolve_frontend_build_manifest()
+    build_id = build_manifest["build_id"]
     html = render_template(
         'index.html',
         title=instance_title,
@@ -797,6 +866,7 @@ def index():
         import_map=json.dumps({"imports": import_map}),
         core_modules=list(CORE_MODULES_TUPLE),
         build_id=build_id,
+        module_assets=build_manifest["module_assets"],
     )
     resp = Response(html, mimetype='text/html')
     resp.headers['X-InSetu-Build-ID'] = build_id

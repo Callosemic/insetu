@@ -8,7 +8,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from insetu.core.sdk import (
-    CORE_MODULES_TUPLE, AkasaURI, CycleError, DefaultVFSDriver, SettingsManager, VFSTransaction,
+    CORE_MODULES_TUPLE, AkasaURI, BoundedCache, CycleError, DefaultVFSDriver, MemoryVFSTransaction, SettingsManager, VFSTransaction,
+    get_registered_cache_stats,
     allocate_ephemeral_port, atomic_write_bytes, atomic_write_text, build_tree_dict, can_bind_port,
     compute_vfs_sha256, decrypt_secret, encrypt_secret, ensure_master_key_on_disk, evict_vfs_cache,
     execute_binary, execute_vfs_bulk, execute_vfs_delete, execute_vfs_move, execute_vfs_save,
@@ -1256,27 +1257,30 @@ def find_path_candidates(query_path=None, workspace_id=None, allowed_repos=None,
     query_tail_without_repo = "/".join(query_parts[1:]) if (len(query_parts) > 1 and q_uri.repo in sister_repos) else query_lower
     query_dir_tokens = set(query_parts[:-1]) - repo_names_lower
 
-    omniscient = _get_omniscient_workspace_files(workspace_id, effective_repos)
-    candidates, unscoped_basename_cands = [], []
-    for cand_basename, cand_fp in omniscient:
-        c_uri = InSetuURI(cand_fp)
-        cand_canonical = str(c_uri)
-        cand_rel = (f"{c_uri.repo}/{c_uri.path}".strip('/') if c_uri.repo else c_uri.path).lower()
-        cand_dir_tokens = set(p for p in cand_rel.split('/')[:-1] if p) - repo_names_lower
-        dir_bonus = min(0.09, len(query_dir_tokens & cand_dir_tokens) * 0.03)
-        if cand_rel == query_lower:
-            candidates.append({"filepath": cand_canonical, "score": 1.0, "match_type": "exact_match"})
-        elif cand_basename.lower() == query_basename:
-            if query_lower in cand_rel or (query_tail_without_repo and cand_rel.endswith(query_tail_without_repo)):
-                candidates.append({"filepath": cand_canonical, "score": round(0.92 + dir_bonus, 4), "match_type": "basename_match"})
-            elif dir_bonus > 0:
-                candidates.append({"filepath": cand_canonical, "score": round(0.84 + dir_bonus, 4), "match_type": "basename_match"})
-            else:
-                unscoped_basename_cands.append({"filepath": cand_canonical, "score": 0.8, "match_type": "basename_match"})
-        elif query_lower in cand_rel or cand_rel.endswith(query_lower) or (len(query_tail_without_repo) > 4 and cand_rel.endswith(query_tail_without_repo)):
-            candidates.append({"filepath": cand_canonical, "score": round(0.75 + dir_bonus, 4), "match_type": "subpath_match"})
-    if not candidates and (not has_explicit_subdir or len(unscoped_basename_cands) == 1):
-        candidates.extend(unscoped_basename_cands)
+    for repos_pool in ([effective_repos] if effective_repos == allowed_repos else [effective_repos, allowed_repos]):
+        omniscient = _get_omniscient_workspace_files(workspace_id, repos_pool)
+        candidates, unscoped_basename_cands = [], []
+        for cand_basename, cand_fp in omniscient:
+            c_uri = InSetuURI(cand_fp)
+            cand_canonical = str(c_uri)
+            cand_rel = (f"{c_uri.repo}/{c_uri.path}".strip('/') if c_uri.repo else c_uri.path).lower()
+            cand_dir_tokens = set(p for p in cand_rel.split('/')[:-1] if p) - repo_names_lower
+            dir_bonus = min(0.09, len(query_dir_tokens & cand_dir_tokens) * 0.03)
+            if cand_rel == query_lower:
+                candidates.append({"filepath": cand_canonical, "score": 1.0, "match_type": "exact_match"})
+            elif cand_basename.lower() == query_basename:
+                if query_lower in cand_rel or (query_tail_without_repo and cand_rel.endswith(query_tail_without_repo)):
+                    candidates.append({"filepath": cand_canonical, "score": round(0.92 + dir_bonus, 4), "match_type": "basename_match"})
+                elif dir_bonus > 0:
+                    candidates.append({"filepath": cand_canonical, "score": round(0.84 + dir_bonus, 4), "match_type": "basename_match"})
+                else:
+                    unscoped_basename_cands.append({"filepath": cand_canonical, "score": 0.8, "match_type": "basename_match"})
+            elif query_lower in cand_rel or cand_rel.endswith(query_lower) or (len(query_tail_without_repo) > 4 and cand_rel.endswith(query_tail_without_repo)):
+                candidates.append({"filepath": cand_canonical, "score": round(0.75 + dir_bonus, 4), "match_type": "subpath_match"})
+        if not candidates and (not has_explicit_subdir or len(unscoped_basename_cands) == 1):
+            candidates.extend(unscoped_basename_cands)
+        if candidates:
+            break
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
     return candidates

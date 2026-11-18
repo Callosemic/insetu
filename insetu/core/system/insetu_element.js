@@ -149,38 +149,7 @@ export class InSetuElement extends SutramElement {
         }
         return Promise.resolve();
     }
-    get utils() {
-        return {
-            fuzzyFilterObjects: window.inSetu.utils.fuzzyFilterObjects,
-            normalizeAccentText: window.inSetu.utils.normalizeAccentText,
-            truncateFilename: window.inSetu.utils.truncateFilename,
-            pollJob: window.inSetu.utils.pollJob,
-            slugify: window.inSetu.utils.slugify,
-            copyToClipboard: window.inSetu.utils.copyToClipboard,
-            copyRichHtml: window.inSetu.utils.copyRichHtml,
-            copyRawText: window.inSetu.utils.copyRawText,
-            formatDate: window.inSetu.utils.formatDate,
-            timeAgo: window.inSetu.utils.timeAgo,
-            clone: window.inSetu.utils.clone,
-            debounce: window.ExtensionRegistry.utils.debounce,
-            coalescedAsync: window.inSetu.utils.coalescedAsync,
-            nativeShareFiles: window.inSetu.utils.nativeShareFiles,
-            HostPath: window.inSetu.utils.HostPath,
-            InSetuURI: window.inSetu.utils.InSetuURI,
-            parseURI: window.inSetu.utils.parseURI,
-            formatArtifactSize: window.inSetu.utils.formatArtifactSize,
-            extractManifestFiles: window.inSetu.utils.extractManifestFiles,
-            parseFrontmatter: window.inSetu.utils.parseFrontmatter,
-            serializeFrontmatter: window.inSetu.utils.serializeFrontmatter,
-            cleanCodeArtifacts: window.inSetu.utils.cleanCodeArtifacts,
-            shallowEqual: window.inSetu.utils.shallowEqual,
-            threeWayMergeText: window.inSetu.utils.threeWayMergeText,
-            compileDagWavefronts: window.inSetu.utils.compileDagWavefronts,
-            extractTemplateVariables: window.inSetu.utils.extractTemplateVariables,
-            interpolateTemplateVariables: window.inSetu.utils.interpolateTemplateVariables,
-            getActiveWorkspace: window.inSetu.utils.getActiveWorkspace
-        };
-    }
+    get utils() { return window.inSetu.utils; }
     get api() {
         const resolveScopedPath = (path) => {
             const cleanPath = String(path || '').replace(/^\/+/, '');

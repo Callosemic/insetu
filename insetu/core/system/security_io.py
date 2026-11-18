@@ -4,16 +4,17 @@ import http.client
 import ipaddress
 import json
 import os
+from pathlib import Path
 import re
 import socket
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
 
 import insetu.core.attestations as _attestations
-from insetu.core.sdk import SettingsManager
+from insetu.core.sdk import SettingsManager, decrypt_secret, get_current_origin, get_tenant_control_dir, load_json_config
 
 # Child process environments (S3). Every process insetu starts gets its environment from child_env().
 CHILD_ENV_PURPOSES = ("shell", "tool", "repo_code")
@@ -24,6 +25,61 @@ _SECRET_ENV_NAME_RE = re.compile(
     r"(?:^|_)(?:API_?KEY|ACCESS_?KEY|SECRET|SECRET_?KEY|TOKEN|PASSWORD|PASSWD|PRIVATE_?KEY|CREDENTIALS?|AUTH)(?:$|_)",
     re.IGNORECASE,
 )
+
+_FERNET_CIPHERTEXT_RE = re.compile(r'\bv1:[A-Za-z0-9_-]{32,}\b')
+_URL_QUERY_SECRET_RE = re.compile(r'(?i)([?&](?:token|key|api_key|access_token|secret)=)[^&\s"\'\)\]]+')
+
+
+def collect_workspace_secrets(ctx) -> List[str]:
+    """
+    Collects secret values for outbound and telemetry scrubbing (S9) from this workspace's secrets.json and the
+    daemon's (default workspace), where daemon-scope secrets such as LLM keys are kept.
+    Stored values are Fernet ciphertext ("v1:..."); each is decrypted, since the plaintext is what can leak into a prompt.
+    """
+    if ctx is None:
+        return []
+    secrets_list: List[str] = []
+    wid = getattr(ctx, "workspace_id", None) or "default"
+    for vault_wid in dict.fromkeys([wid, "default"]):
+        try:
+            sec_path = Path(get_tenant_control_dir(vault_wid)) / "secrets.json"
+            if not sec_path.exists():
+                continue
+            data = load_json_config(sec_path.as_posix(), {})
+            for ext_vals in (data or {}).values():
+                if not isinstance(ext_vals, dict):
+                    continue
+                for v in ext_vals.values():
+                    if not isinstance(v, str) or not v.strip():
+                        continue
+                    stored = v.strip()
+                    try:
+                        plain = (decrypt_secret(stored) or "").strip()
+                    except Exception:
+                        plain = ""
+                    for cand in (plain, stored):
+                        if len(cand) >= 8 and cand not in secrets_list:
+                            secrets_list.append(cand)
+        except Exception:
+            continue
+    return secrets_list
+
+
+def scrub_outbound_secrets(text: str, secret_values: Optional[List[str]] = None) -> str:
+    """Scrubs Fernet ciphertext tokens, boot tokens, URL query tokens, and workspace secrets from strings (S5, S9)."""
+    if not text:
+        return ""
+    scrubbed = _FERNET_CIPHERTEXT_RE.sub("[REDACTED_FERNET_CIPHERTEXT]", str(text))
+    scrubbed = _URL_QUERY_SECRET_RE.sub(r"\1[REDACTED]", scrubbed)
+    for env_key in ("AKASA_BOOT_TOKEN", "INSETU_BOOT_TOKEN"):
+        env_tok = os.environ.get(env_key, "").strip()
+        if env_tok and len(env_tok) >= 8 and env_tok in scrubbed:
+            scrubbed = scrubbed.replace(env_tok, "[REDACTED_BOOT_TOKEN]")
+    for sec in (secret_values or []):
+        if sec and sec in scrubbed:
+            scrubbed = scrubbed.replace(sec, "[REDACTED_WORKSPACE_SECRET]")
+    return scrubbed
+
 
 # Outbound HTTP (S4). Every fetch insetu makes goes through fetch_url().
 FETCH_DEFAULT_TIMEOUT = 15
@@ -283,6 +339,8 @@ def fetch_url(
     configured in settings (a local model server) may be private.
     Raises FetchRefused, FetchHTTPError (4xx/5xx, body capped) or URLError/TimeoutError for network failures.
     """
+    if get_current_origin() == "public":
+        raise FetchRefused("Outbound HTTP requests are refused from unauthenticated public routes.")
     _check_fetch_target(url, allow_private, allowed_private_hosts)
     req_headers = {"User-Agent": "inSetu/1.0", "Accept-Encoding": "gzip, deflate"}
     req_headers.update(headers or {})

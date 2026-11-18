@@ -9,17 +9,6 @@ SCRATCH_VAULT_THRESHOLD_BYTES = 256 * 1024
 
 _MUSTACHE_COND_RE = re.compile(r'\{\{\s*([a-zA-Z0-9_.\[\]-]+)(?:\s*\|\s*([^{}]*?))?\s*\}\}')
 
-_YOMAMA_BLOCK_STRIP_RE = re.compile(
-    r'(?:```(?:text|python|javascript|js|json|yaml|markdown|md)?[ \t]*\n)?'
-    r'(?:[ \t]*(?:<[ \t]*){3,}FILE:[^\n]*\n)?'
-    r'(?:[ \t]*(?:<[ \t]*){3,}ID:[^\n]*\n)?'
-    r'(?:[ \t]*(?:<[ \t]*){3,}COMMENT\n[\s\S]*?\n)?'
-    r'^[ \t]*(?:<[ \t]*){3,}(?:SEARCH(?:\s+REGEX)?|TEXTEDIT|JSON_PATCH|RELOCATE|RENAME|MOVE_FILE|ARCHIVE_FILE|DELETE_FILE|QUERY_CONTEXT|CALL_CAPABILITY)\b[\s\S]*?'
-    r'^[ \t]*(?:>[ \t]*){1,}(?:REPLACE|EXECUTE)[ \t]*(?:\n[ \t]*(?:>[ \t]*)+$)*'
-    r'(?:\n```)?',
-    re.MULTILINE,
-)
-
 
 def normalize_condition_expr(
     raw_expr: str,
@@ -158,14 +147,3 @@ def vault_if_oversized(ctx, node_id: str, output_dict: Dict[str, Any]) -> Dict[s
     vaulted["_uri"] = scratch_file
     vaulted["_vaulted_bytes"] = byte_len
     return vaulted
-
-
-def strip_yomama_blocks_keep_prose(raw_text: str) -> str:
-    """Strips raw Yomama patch/probe blocks and empty code fences while preserving surrounding conversational prose."""
-    if not raw_text or "<<<<<<<" not in raw_text:
-        return (raw_text or "").strip()
-    cleaned = _YOMAMA_BLOCK_STRIP_RE.sub("\n", raw_text)
-    cleaned = re.sub(r'^[ \t]*<<<<<<< FILE:[^\n]*$', '', cleaned, flags=re.MULTILINE)
-    cleaned = re.sub(r'```(?:text|python|javascript|js|json|yaml|markdown|md)?\s*```', '', cleaned)
-    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-    return cleaned.strip()

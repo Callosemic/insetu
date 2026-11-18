@@ -1,29 +1,8 @@
 import { AppStore, StatusStore } from '/static/extensions/system/store.js';
-import { CORE_UI_SCRIPTS, SutramDB, bootSutramServiceWorker, purgeSutramCaches, initShortcutRouter, createJobPoller } from '/static/extensions/system/insetu_sdk.js';
-import { checkManifestVersion, refreshManifest, importModuleWithRetry, classifyBootModuleFailure } from '/static/extensions/system/manifest_sync.js';
-export { importModuleWithRetry, classifyBootModuleFailure };
-
-const CORE_COMPONENT_SCRIPTS = [
-    '/static/extensions/system/system.js', '/static/extensions/system/api.js', '/static/extensions/system/store.js',
-    '/static/extensions/system/insetu_sdk.js', '/static/extensions/system/insetu_element.js', '/static/extensions/system/uri.js',
-    '/static/extensions/system/manifest_sync.js', '/static/extensions/system/components/ui_file_tree.js',
-    '/static/extensions/system/components/ui_system_settings.js', '/static/extensions/system/components/ui_filter_pills.js',
-    '/static/extensions/system/components/ui_primitives.js', '/static/extensions/system/components/ui_protected_changes.js',
-    '/static/extensions/system/components/ui_schema_repeater.js', '/static/extensions/system/components/ui_editor.js',
-    '/static/extensions/fs/fs_store.js', '/static/extensions/fs/fs_editor_projection.js', '/static/extensions/fs/fs_modals.js',
-    '/static/extensions/agent/agent_store.js', '/static/extensions/agent/agent_routine_studio.js',
-    '/static/extensions/agent/agent_staged_stacks.js',
-    '/static/extensions/bridge/bridge_store.js', '/static/extensions/bridge/bridge_projections.js',
-    '/static/extensions/bridge/bridge_history.js', '/static/vendor/codemirror/languages.json'
-];
-
-function _collectOfflineBootModuleUrls() {
-    const activeExts = window.ACTIVE_EXTENSIONS || [];
-    const extUrls = activeExts
-        .filter(ext => ext && !(window.inSetu?.isCore && window.inSetu.isCore(ext)))
-        .map(ext => `/static/extensions/${ext}/ext_${ext}.js`);
-    return [...CORE_COMPONENT_SCRIPTS, ...CORE_UI_SCRIPTS, ...extUrls];
-}
+import { CORE_UI_SCRIPTS, SutramDB, bootSutramServiceWorker, purgeSutramCaches, initShortcutRouter, createJobPoller, getBackendAdapter } from '/static/extensions/system/insetu_sdk.js';
+import { checkManifestVersion, refreshManifest, importModuleWithRetry, classifyBootModuleFailure, collectOfflineBootModuleUrls } from '/static/extensions/system/manifest_sync.js';
+const _collectOfflineBootModuleUrls = () => collectOfflineBootModuleUrls(CORE_UI_SCRIPTS);
+export { importModuleWithRetry, classifyBootModuleFailure, _collectOfflineBootModuleUrls };
 
 export function bootServiceWorker() {
     bootSutramServiceWorker({
@@ -33,7 +12,8 @@ export function bootServiceWorker() {
         subscribeReconciling: (cb) => window.inSetu?.stores?.App?.subscribe(s => s.isReconciling, cb),
         onStatus: (msg, timeout) => window.inSetu?.ui?.setGlobalStatus?.(msg, timeout),
         onLog: (msg, type) => window.inSetu?.offlineLog?.(msg, type),
-        onError: (msg) => alert(msg)
+        onError: (msg) => alert(msg),
+        shellSyncDelayMs: 15000
     });
 }
 // Single reactive bridge: keep Sutram's EnvironmentStore.isOffline in lockstep with AppStore.isOffline
@@ -272,10 +252,12 @@ window.inSetu.utils.pollJob = (jobId, options = {}) => {
     window.addEventListener('insetu:compile-progress', sseHandler);
 
     // Instantiate a dynamically bound poller to strictly lock network requests to the originating tenant
+    const adapter = getBackendAdapter();
     const scopedPoller = createJobPoller({
         get: async (path) => {
             if (settled) return new Response(JSON.stringify({ status: 'completed', _aborted_by_sse: true }), { status: 200 });
-            return window.inSetu.api.request(`/api/${initWs}/system/${path}`, { method: 'GET' }, initWs);
+            const targetUrl = adapter ? adapter.resolveScopedUrl(`system/${path}`, initWs) : `/api/${initWs}/system/${path}`;
+            return window.inSetu.api.request(targetUrl, { method: 'GET' }, initWs);
         }
     });
 
@@ -285,9 +267,11 @@ window.inSetu.utils.pollJob = (jobId, options = {}) => {
 let bootCurrentStep = 0;
 let bootTotalSteps = 8;
 let bootHighestPercent = 0;
-function updateBootProgress(statusMsg) {
+// Every module that registers counts as a step and the total is an estimate, so the bar stops at 95%
+// until the boot is really done: 100% means ready.
+function updateBootProgress(statusMsg, { final = false } = {}) {
     bootCurrentStep++;
-    let percent = Math.min(100, Math.round((bootCurrentStep / bootTotalSteps) * 100));
+    let percent = final ? 100 : Math.min(95, Math.round((bootCurrentStep / bootTotalSteps) * 100));
     bootHighestPercent = Math.max(bootHighestPercent, percent);
     percent = bootHighestPercent;
 
@@ -309,13 +293,8 @@ window.addEventListener('sutram:extension-registered', (e) => {
     updateBootProgress(`Loaded Extension: ${extName}`);
 });
 async function executeSecurityHandshake() {
-    const getOfflineFallbackToken = () => {
-        try {
-            return localStorage.getItem('insetu_boot_token') || sessionStorage.getItem('insetu_boot_token') || '';
-        } catch (_) {
-            return '';
-        }
-    };
+    const adapter = getBackendAdapter() || window.inSetu?.api?.adapter;
+    const cachedToken = adapter?.getToken?.() || '';
 
     let forceOffline = false;
     try {
@@ -323,63 +302,48 @@ async function executeSecurityHandshake() {
         if (forceOffline) sessionStorage.removeItem('insetu_force_offline_boot');
     } catch (_) {}
     if (!navigator.onLine || forceOffline) {
-        const cachedToken = getOfflineFallbackToken();
         if (cachedToken) { AppStore.setState({ authToken: cachedToken, isOffline: true }); return true; }
         if (!navigator.onLine) return false;
     }
 
     try {
-        // Attempt a seamless, zero-config Tailscale or Localhost handshake first.
-        // If we have a cached token, fail fast (2 attempts x 1.5s) into offline mode when the daemon is unreachable
-        // (including 502/503/504 from Tailscale Serve when the local daemon is stopped).
-        const hasCachedToken = Boolean(getOfflineFallbackToken());
-        const maxAttempts = hasCachedToken ? 2 : 6;
-        const timeoutMs = hasCachedToken ? 1500 : 2500;
-        let res = null;
+        // Attempt a seamless, zero-config Tailscale or Localhost handshake via AkasaBackendAdapter.
+        // If we have a cached token, fail fast (2 attempts) into offline mode when the daemon is unreachable.
+        const maxAttempts = cachedToken ? 2 : 6;
+        let bootRes = null;
         let lastErr = null;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
             try {
-                res = await fetch('/auth/bootstrap?t=' + Date.now(), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({}),
-                    cache: 'no-store',
-                    signal: AbortSignal.timeout(timeoutMs)
-                });
-                if (res.status < 500) {
+                bootRes = await adapter.bootstrap();
+                if (!bootRes.status || bootRes.status < 500) {
                     break;
                 }
-                lastErr = new Error(`Bootstrap HTTP ${res.status}`);
-                res = null;
+                lastErr = new Error(`Bootstrap HTTP ${bootRes.status}`);
+                bootRes = null;
             } catch (fetchErr) {
                 lastErr = fetchErr;
-                res = null;
+                bootRes = null;
             }
             if (!navigator.onLine) break;
             if (attempt < maxAttempts - 1) {
                 await new Promise(r => setTimeout(r, 400));
             }
         }
-        if (!res) {
+        if (!bootRes) {
             throw lastErr || new Error("Bootstrap endpoint unreachable");
         }
 
-        if (res.ok) {
-            const data = await res.json();
-            if (data && data.status === 'recovery') {
-                window.location.href = '/recovery';
-                return new Promise(() => {});
-            }
-            if (data && data.token) {
-                sessionStorage.setItem('insetu_boot_token', data.token);
-                localStorage.setItem('insetu_boot_token', data.token);
-                AppStore.setState({ authToken: data.token, isOffline: false });
-                return true;
-            }
+        if (bootRes.recovery) {
+            window.location.href = '/recovery';
+            return new Promise(() => {});
+        }
+        if (bootRes.authenticated && bootRes.token) {
+            AppStore.setState({ authToken: bootRes.token, isOffline: false });
+            return true;
         }
         // Fallback: Challenge issued, render HTML auth gate
-        if (res.status === 401) {
-            return new Promise((resolve) => {
+        if (bootRes.status === 401) {
+            return new Promise(() => {
                 document.body.innerHTML = `
                     <div style="font-family:var(--font-mono, monospace); background:var(--bg-deep, #0f172a); color:var(--text, #f8fafc); padding:20px; text-align:center; height:100dvh; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; align-items:center;">
                         <h2 style="color:var(--intent-success, #10b981); margin-top:0; display:flex; align-items:center; gap:8px;"><sutram-icon name="key" size="lg" intent="success"></sutram-icon><span>inSetu Security Gate</span></h2>
@@ -396,16 +360,9 @@ async function executeSecurityHandshake() {
                     if (!userToken) return;
                     btn.innerText = 'Verifying...';
                     try {
-                        let retryRes = await fetch('/auth/bootstrap', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ token: userToken.trim() })
-                        });
-                        if (retryRes.ok) {
-                            const data = await retryRes.json();
-                            sessionStorage.setItem('insetu_boot_token', data.token);
-                            localStorage.setItem('insetu_boot_token', data.token);
-                            AppStore.setState({ authToken: data.token, isOffline: false });
+                        const retryBoot = await adapter.bootstrap(userToken.trim());
+                        if (retryBoot.authenticated && retryBoot.token) {
+                            AppStore.setState({ authToken: retryBoot.token, isOffline: false });
                             window.location.reload(); // Reload to cleanly restore the boot screen
                         } else {
                             btn.innerText = 'Invalid Token';
@@ -423,7 +380,6 @@ async function executeSecurityHandshake() {
         }
     } catch (err) {
         // Offline Fallback: If network fetch fails, inspect cached credentials
-        const cachedToken = getOfflineFallbackToken();
         if (cachedToken) {
             window.inSetu?.offlineLog?.("Network handshake failed. Hydrating offline OS shell.", "warning", err.message);
             AppStore.setState({ authToken: cachedToken, isOffline: true });
@@ -486,7 +442,9 @@ export async function executeBootSequence(options = {}) {
 
                 if (isDirty) {
                     const label = typeof action.label === 'function' ? action.label(data) : (action.label || action.id);
-                    if (confirm(`You have unsaved changes. To execute '${label}', these changes must be saved to the filesystem.\n\nClick OK to Save and continue, or Cancel to abort.`)) {
+                    const msg = `You have unsaved changes. To execute '${label}', these changes must be saved to the filesystem.\n\nSave and continue?`;
+                    const confirmed = window.inSetu?.ui?.confirmModal ? await window.inSetu.ui.confirmModal({ title: 'Unsaved Changes', message: msg, confirmLabel: 'Save & Continue', intent: 'warning' }) : confirm(msg);
+                    if (confirmed) {
                         if (window.inSetu?.ui?.saveBufferFile) {
                             // Auto-save all explicitly detected dirty files
                             for (const fp of dirtyFiles) {
@@ -832,8 +790,9 @@ export async function executeBootSequence(options = {}) {
         const shell = document.querySelector('sutram-app-shell');
         if (shell) shell.setAttribute('variant', 'popout');
     }
-    updateBootProgress("System Ready!");
+    updateBootProgress("System Ready!", { final: true });
     window.BOOT_COMPLETE = true;
+    window.dispatchEvent(new CustomEvent('insetu:boot-complete'));
     if (window.inSetu?.ui?.setGlobalStatus) {
         window.inSetu.ui.setGlobalStatus("System Ready", 2000);
     }
@@ -1005,22 +964,25 @@ async function _hydrateWorkspaceEnvironment(targetWs, previousExts = []) {
         }
         _reconcileExtensionsAndSettings(previousExts, window.ACTIVE_EXTENSIONS);
         if (typeof window.inSetu?.sys?.ensureAppShellCached === 'function') {
-            window.inSetu.sys.ensureAppShellCached({
-                buildId: window.INSETU_BUILD_ID || null,
+            const syncShell = () => window.inSetu.sys.ensureAppShellCached({
+                buildId: window.INSETU_BUILD_ID || getBackendAdapter()?.getBuildId?.() || null,
                 buildIdHeader: 'X-InSetu-Build-ID',
-
                 staticPathPrefix: '/static/',
                 excludePathPrefix: '/api/',
                 additionalAssets: _collectOfflineBootModuleUrls,
                 onUpdateReady: (id) => window.inSetu?.ui?.setGlobalStatus?.(`Update ready (${id}), reload to apply.`, 10000)
             }).catch(() => {});
+            if (window.BOOT_COMPLETE) syncShell();
+            else window.addEventListener('insetu:boot-complete', syncShell, { once: true });
         }
     }
 
     // 3. Hydrate Offline Outbox Markers from IndexedDB
+    updateBootProgress("Restoring offline outbox...");
     await window.inSetu.utils?.syncOutboxMutationMarkers?.(targetWs);
 
     // 4. Hydrate Manifest
+    updateBootProgress("Loading manifest...");
     AppStore.setState({ manifest: { vfs: {}, ctx: {} } });
     try {
         const mRes = await window.inSetu.api.get('system/manifest?t=' + Date.now());
@@ -1039,6 +1001,7 @@ async function _hydrateWorkspaceEnvironment(targetWs, previousExts = []) {
             });
         }
         if (isEmptyCtxManifest && hasActiveRepos && !appState.isOffline && window.inSetu.stores.Gather) {
+            updateBootProgress("Compiling context (first run)...");
             await window.inSetu.stores.Gather.getState().executeCompile();
         }
     } catch (_) {}
@@ -1367,7 +1330,9 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
     }
 }
 async function simulatePanic() {
-    if (!confirm("This will intentionally crash the server to test the Immutable Recovery Bootloader. The page will reload automatically. Continue?")) return;
+    const panicMsg = "This will intentionally crash the server to test the Immutable Recovery Bootloader. The page will reload automatically. Continue?";
+    const confirmed = window.inSetu?.ui?.confirmModal ? await window.inSetu.ui.confirmModal({ title: 'Simulate Kernel Panic', message: panicMsg, confirmLabel: 'Trigger Panic', intent: 'danger' }) : confirm(panicMsg);
+    if (!confirmed) return;
     // Keep the saved token: the session token is durable, and the lifeboat (same origin) accepts it.
     const savedToken = sessionStorage.getItem('insetu_boot_token') || localStorage.getItem('insetu_boot_token');
     sessionStorage.clear();
@@ -1429,8 +1394,13 @@ async function fullRefresh() {
         }
         // 3. Force browser HTTP cache reload on all core and active extension JS modules
         const allModuleUrls = _collectOfflineBootModuleUrls();
+        const adapter = getBackendAdapter();
         await Promise.allSettled(
-            allModuleUrls.map(u => fetch(u, { cache: 'reload', credentials: 'same-origin' }))
+            allModuleUrls.map(u => (
+                adapter
+                    ? adapter.fetchRaw(u, { cache: 'reload', credentials: 'same-origin' })
+                    : fetch(u, { cache: 'reload', credentials: 'same-origin' })
+            ))
         );
         // 4. Hard reload browser with cache-busting query param
         const url = new URL(window.location.href);

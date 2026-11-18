@@ -73,7 +73,7 @@ def infer_model_cognitive_tier(model_id: str, input_cost_per_1m: float = 0.0, ca
     if category == "decision":
         return "decision"
     mid = str(model_id or "").lower()
-    if any(tok in mid for tok in ("jev", "drex", "liquid/d1", "Guard", "moderation")):
+    if any(tok in mid for tok in ("jev", "drex", "liquid/d1", "guard", "moderation")):
         return "decision"
     if any(tok in mid for tok in ("haiku", "flash-lite", "mini", "nano", "8b", "7b", "3b", "1b", "small", "instant")):
         return "fast"

@@ -1,12 +1,12 @@
-"""Unified 6-Bucket RoutineEnvelope, ContextArtifact value object, and Web-Chat delta state machine."""
-from dataclasses import dataclass, field
+"""Pure Zero-I/O 6-Bucket RoutineEnvelope, ContextArtifact value object, and Web-Chat delta algebra."""
+import copy
+from dataclasses import dataclass, field, fields
 import hashlib
-import re
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 
 from insetu.core.utils_core import InSetuURI
-from insetu.core.agent.routine_loader import is_prose_document_uri, resolve_routine_mode
-from insetu.core.gather.context_assemble import resolve_query_context
+from insetu.core.agent.routine_loader import RESERVED_ROUTINE_NODE_IDS, is_prose_document_uri
+from insetu.core.agent.schemas.plan import format_active_plan_meta_projection
 
 BucketName = Literal["governance", "hierarchy", "meta", "data", "telemetry", "prompt"]
 LensName = Literal["full", "diff", "slice", "outline", "genesis"]
@@ -20,7 +20,7 @@ BUCKET_VOLATILITY_ORDER: Tuple[BucketName, ...] = (
     "prompt",
 )
 
-RESERVED_ENVELOPE_KEYS: Set[str] = {"sys", "global", "inputs", "nodes", "loop", "holding", "trace", "_ctx"}
+RESERVED_ENVELOPE_KEYS: Set[str] = set(RESERVED_ROUTINE_NODE_IDS)
 
 
 def _hash_projection(lens: str, content: str) -> str:
@@ -35,89 +35,194 @@ class ContextArtifact:
     uri: str
     bucket: BucketName = "data"
     lens: LensName = "full"
+    served_lens: LensName = "full"
     source: str = "auto"
     idle_turns: int = 0
     tokens: int = 0
+    sha256: str = ""
+    symbols: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "uri": self.uri,
             "bucket": self.bucket,
             "lens": self.lens,
+            "served_lens": self.served_lens,
             "source": self.source,
             "idle_turns": self.idle_turns,
             "tokens": self.tokens,
+            "sha256": self.sha256,
+            "symbols": list(self.symbols),
         }
 
 
 @dataclass
 class RoutineEnvelope:
     """
-    Single state and working-set container for a declarative Routine or Agent turn.
-    Maintains the 6 volatility-ordered buckets, node outputs, execution trace, and
-    the content-addressed Web-Chat sent-hash ledger for Same-Window delta packing.
+    Pure, zero-I/O state and working-set container for a declarative Routine or Agent turn.
+    Maintains the 6 volatility-ordered buckets, node outputs, execution trace, active plan,
+    and content-addressed Web-Chat sent-hash ledger for Same-Window delta packing.
     """
+    # 1. Turn Identity & Routing
     session_id: str = "default"
     routine_id: str = "workspace_turn"
     user_prompt: str = ""
-    web_chat_window_mode: Literal["same_window", "new_window"] = "new_window"
+    mode: str = "auto"
+    effective_intent: str = "EDIT_CODE"
+    profile_id: str = "default"
+    pinned_repos: List[str] = field(default_factory=list)
+    context_nonce: str = ""
+    has_raw_patches: bool = False
+    has_code_targets: bool = False
+
+    # 2. 6-Bucket Working Set & Scout Buffers
     artifacts: Dict[str, ContextArtifact] = field(default_factory=dict)
+    file_token_map: Dict[str, int] = field(default_factory=dict)
+    attached_docs_content: str = ""
+    recalled_messages_text: str = ""
+    scouted_global_files: List[str] = field(default_factory=list)
+    scouted_candidate_files: List[str] = field(default_factory=list)
+    scouted_tasks: List[Dict[str, Any]] = field(default_factory=list)
+
+    # 3. Active Plan & Task Directives (Bucket 3: meta)
+    active_plan: Optional[Dict[str, Any]] = None
+    active_plan_prompt_block: str = ""
+    staged_task_actions: List[Dict[str, Any]] = field(default_factory=list)
+
+    # 4. Transport Delta State & Two-Level Budget Watermarks
+    web_chat_window_mode: Literal["same_window", "new_window"] = "new_window"
     sent_hashes: Dict[str, str] = field(default_factory=dict)
     staged_sent_hashes: Dict[str, str] = field(default_factory=dict)
-    nodes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    holding: Dict[str, Any] = field(default_factory=dict)
+    web_chat_delta_meta: Dict[str, Any] = field(default_factory=dict)
+    budget_limit_usd: float = 1.0
+    budget_step_usd: float = 1.0
+    session_cost_usd: float = 0.0
+    model_context_length: int = 200000
+    context_soft_ceiling: int = 150000
+    outline_budget: int = 10000
 
-    def sync_lists(
-        self,
-        editable_list: List[str],
-        readonly_list: List[str],
-        all_context_files: List[str],
-        scoped_const: Optional[List[str]] = None,
-    ) -> None:
-        """Synchronizes legacy orchestrator working-set lists with the authoritative RoutineEnvelope artifacts map."""
-        const_set = set(scoped_const or self.constitution_uris())
-        for u in list(self.artifacts.keys()):
-            if u not in all_context_files and u not in editable_list and u not in readonly_list and u not in const_set:
-                if self.artifacts[u].source != "user_pinned":
-                    del self.artifacts[u]
-        for cf in const_set:
-            if cf:
-                self.artifacts[cf] = ContextArtifact(uri=cf, bucket="governance", lens="full", source="constitution")
-        for rf in readonly_list:
-            if rf and rf not in const_set:
-                cur = self.artifacts.get(rf)
-                self.artifacts[rf] = ContextArtifact(
-                    uri=rf,
-                    bucket="data",
-                    lens="slice",
-                    source=cur.source if cur else "reference",
-                    idle_turns=cur.idle_turns if cur else 0,
-                )
-        for ef in editable_list:
-            if ef and ef not in const_set:
-                cur = self.artifacts.get(ef)
-                self.artifacts[ef] = ContextArtifact(
-                    uri=ef,
-                    bucket="meta" if is_prose_document_uri(ef) else "data",
-                    lens="full",
-                    source=cur.source if cur else "user_pinned",
-                    idle_turns=0,
-                )
-        editable_list[:] = [u for u in editable_list if u in self.artifacts and self.artifacts[u].lens in ("full", "diff", "genesis") and u not in const_set]
-        for u, art in self.artifacts.items():
-            if art.bucket in ("data", "meta") and art.lens in ("full", "diff", "genesis") and u not in editable_list and u not in const_set:
-                editable_list.append(u)
-        readonly_list[:] = [u for u in readonly_list if u in self.artifacts and self.artifacts[u].lens == "slice" and u not in const_set]
-        for u, art in self.artifacts.items():
-            if art.bucket == "data" and art.lens == "slice" and u not in readonly_list and u not in const_set:
-                readonly_list.append(u)
-        all_context_files[:] = list(dict.fromkeys(list(const_set) + readonly_list + editable_list))
+    # 5. DAG Execution Registers
+    sys: Dict[str, Any] = field(default_factory=dict)
+    inputs: Dict[str, Any] = field(default_factory=dict)
+    global_vars: Dict[str, Any] = field(default_factory=dict)
+    nodes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    loop: Dict[str, Any] = field(default_factory=dict)
+    holding: Dict[str, Any] = field(default_factory=dict)
+    execution_trace: List[Dict[str, Any]] = field(default_factory=list)
+
+    def render_active_plan_block(self) -> str:
+        """Returns `active_plan_prompt_block` if explicitly set, or derives it from `self.active_plan`."""
+        if self.active_plan_prompt_block:
+            return str(self.active_plan_prompt_block)
+        if isinstance(self.active_plan, dict) and self.active_plan.get("tasks"):
+            return format_active_plan_meta_projection(self.active_plan)
+        return ""
+
+    def is_repo_allowed(self, uri: str) -> bool:
+        """Returns True if `uri` belongs to an allowed/pinned repository (or is a workspace `ctx://` URI)."""
+        if not uri or not self.pinned_repos or "ALL" in self.pinned_repos:
+            return True
+        parsed = InSetuURI(uri)
+        if parsed.scheme != "vfs" or not parsed.repo:
+            return True
+        return parsed.repo in self.pinned_repos
+
+    def refresh_constitution(self, all_constitution_uris: List[str], primary_repo_name: str = "") -> List[str]:
+        """Scopes Tier 0 governance constitution files to the repositories active in the working set (clamped to pinned_repos)."""
+        allowed_const = [cf for cf in (all_constitution_uris or []) if self.is_repo_allowed(cf)]
+        non_const_uris = [
+            u for u, art in self.artifacts.items()
+            if art.bucket in ("data", "meta") and InSetuURI(u).scheme == "vfs" and InSetuURI(u).repo
+        ]
+        code_repos = {
+            InSetuURI(u).repo for u in non_const_uris if not is_prose_document_uri(u)
+        }
+        touched_repos = code_repos or {InSetuURI(u).repo for u in non_const_uris}
+        if not touched_repos and primary_repo_name and primary_repo_name != "workspace":
+            if not self.pinned_repos or "ALL" in self.pinned_repos or primary_repo_name in self.pinned_repos:
+                touched_repos = {primary_repo_name}
+        scoped = [cf for cf in allowed_const if InSetuURI(cf).repo in touched_repos] if touched_repos else allowed_const[:2]
+        for u in [k for k, a in self.artifacts.items() if a.bucket == "governance" and k not in scoped]:
+            del self.artifacts[u]
+        for cf in scoped:
+            self.artifacts[cf] = ContextArtifact(uri=cf, bucket="governance", lens="full", served_lens="full", source="constitution")
+        return scoped
+
+    def set_node(self, node_id: str, val: Dict[str, Any]) -> Dict[str, Any]:
+        """Stores `val` for `node_id` in `self.nodes` and returns `val`."""
+        self.nodes[node_id] = val
+        return val
+
+    def get_node(self, node_id: str, default: Any = None) -> Any:
+        """Returns the state dict for `node_id` from `self.nodes`."""
+        return self.nodes.get(node_id, default)
+
+    def global_view(self) -> Dict[str, Any]:
+        """Computes the authoritative `global.*` scope projection directly from `RoutineEnvelope` fields."""
+        cur_all = self.all_context_files
+        cur_edit = self.editable_files
+        cur_ro = self.readonly_files
+        out: Dict[str, Any] = {
+            **self.inputs,
+            **self.global_vars,
+            "session_id": self.session_id,
+            "user_prompt": self.user_prompt,
+            "user_message": self.user_prompt,
+            "mode": self.mode,
+            "effective_intent": self.effective_intent,
+            "has_raw_patches": self.has_raw_patches,
+            "has_attached_files": bool(cur_all),
+            "has_code_targets": self.has_code_targets or any(not is_prose_document_uri(f) for f in cur_edit),
+            "attached_docs_content": self.attached_docs_content,
+            "attached_files": cur_edit,
+            "selected_files": cur_edit,
+            "read_only_files": cur_ro,
+            "constitution_files": self.constitution_files,
+            "all_context_files": cur_all,
+            "context_nonce": self.context_nonce,
+            "_context_nonce": self.context_nonce,
+            "web_chat_sent_hashes": dict(self.sent_hashes),
+            "web_chat_staged_hashes": dict(self.staged_sent_hashes),
+            "web_chat_window_mode": self.web_chat_window_mode,
+            "web_chat_delta_meta": dict(self.web_chat_delta_meta),
+            "budget_limit_usd": self.budget_limit_usd,
+            "budget_step_usd": self.budget_step_usd,
+            "session_cost_usd": round(self.session_cost_usd, 6),
+            "model_context_length": self.model_context_length,
+            "context_soft_ceiling": self.context_soft_ceiling,
+            "execution_trace": list(self.execution_trace),
+            "file_token_map": dict(self.file_token_map),
+            "active_plan": self.active_plan,
+            "active_plan_prompt_block": self.render_active_plan_block(),
+            "staged_task_actions": list(self.staged_task_actions),
+            "scouted_global_files": list(self.scouted_global_files),
+        }
+        return out
+
+    def to_scope_dict(self, ctx=None) -> Dict[str, Any]:
+        """Returns the read-only Mustache and condition evaluation scope projected from `RoutineEnvelope`."""
+        scope: Dict[str, Any] = {
+            **self.nodes,
+            "nodes": self.nodes,
+            "sys": self.sys,
+            "global": self.global_view(),
+            "inputs": {
+                **self.inputs,
+                "user_prompt": self.user_prompt,
+                "user_message": self.user_prompt,
+            },
+            "loop": self.loop,
+        }
+        if ctx is not None:
+            scope["_ctx"] = ctx
+        return scope
 
     def apply_working_set_delta(
         self,
         *,
         add: Optional[List[str]] = None,
         slice_uris: Optional[List[str]] = None,
+        slice_symbols_map: Optional[Dict[str, List[str]]] = None,
         outline_uris: Optional[List[str]] = None,
         drop: Optional[List[str]] = None,
         source: str = "auto",
@@ -142,22 +247,29 @@ class RoutineEnvelope:
 
         def _upsert(uris: Optional[List[str]], target_lens: LensName, target_bucket: BucketName) -> None:
             for u in (uris or []):
-                if not u:
+                if not u or not self.is_repo_allowed(u):
                     continue
+                effective_bucket: BucketName = (
+                    "meta" if (target_bucket == "data" and target_lens == "full" and is_prose_document_uri(u)) else target_bucket
+                )
+                req_syms = list((slice_symbols_map or {}).get(u) or [])
                 cur = self.artifacts.get(u)
                 if cur is None:
                     self.artifacts[u] = ContextArtifact(
                         uri=u,
-                        bucket=target_bucket,
+                        bucket=effective_bucket,
                         lens=target_lens,
                         source=source,
+                        symbols=req_syms,
                     )
                     added_out.append(u)
                 else:
-                    # Promote lens if requested lens is higher resolution
-                    lens_rank = {"outline": 1, "slice": 2, "diff": 3, "full": 4}
+                    lens_rank = {"outline": 1, "slice": 2, "diff": 3, "genesis": 3, "full": 4}
                     if lens_rank.get(target_lens, 1) >= lens_rank.get(cur.lens, 1) or source in ("user_pinned", "probe"):
                         cur.lens = target_lens
+                        cur.bucket = effective_bucket
+                    if req_syms:
+                        cur.symbols = list(dict.fromkeys(cur.symbols + req_syms))
                     if source == "user_pinned":
                         cur.source = "user_pinned"
 
@@ -180,53 +292,53 @@ class RoutineEnvelope:
                 evicted.append(uri)
         return evicted
 
-    def to_checkpoint(self, status: str, wavefront_index: int = 0, pending_handoff: Any = None, wavefronts: Any = None, chain_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Serializes the RoutineEnvelope and chain_context into a server-authoritative checkpoint dictionary."""
-        return {
+    def to_checkpoint(self, status: str, wavefront_index: int = 0, pending_handoff: Any = None, wavefronts: Any = None, reason: str = "") -> Dict[str, Any]:
+        """Serializes every dataclass field on RoutineEnvelope plus checkpoint metadata into a server-authoritative dictionary."""
+        out: Dict[str, Any] = {
             "status": status,
-            "session_id": self.session_id,
-            "routine_id": self.routine_id,
-            "user_prompt": self.user_prompt,
-            "web_chat_window_mode": self.web_chat_window_mode,
             "wavefront_index": wavefront_index,
             "wavefronts": wavefronts or [],
             "pending_handoff": pending_handoff,
-            "artifacts": {u: a.to_dict() for u, a in self.artifacts.items()},
-            "sent_hashes": dict(self.sent_hashes),
-            "staged_sent_hashes": dict(self.staged_sent_hashes),
-            "holding": dict(self.holding),
-            "chain_context": chain_context or {},
+            "reason": reason,
         }
+        for f in fields(self):
+            val = getattr(self, f.name)
+            if f.name == "artifacts":
+                out["artifacts"] = {u: a.to_dict() for u, a in (val or {}).items()}
+            else:
+                out[f.name] = copy.deepcopy(val)
+        return out
 
     @classmethod
     def from_checkpoint(cls, data: Dict[str, Any]) -> "RoutineEnvelope":
-        """Reconstructs a RoutineEnvelope from a persisted server checkpoint dictionary."""
+        """Reconstructs a RoutineEnvelope by reflecting over `dataclasses.fields(cls)`."""
         if not isinstance(data, dict):
             return cls()
-        g_ctx = (data.get("chain_context") or {}).get("global") or {}
-        raw_arts = data.get("artifacts") or {}
-        arts: Dict[str, ContextArtifact] = {}
-        if isinstance(raw_arts, dict):
-            for u, spec in raw_arts.items():
-                if isinstance(spec, dict) and spec.get("uri"):
-                    arts[u] = ContextArtifact(
-                        uri=spec["uri"],
-                        bucket=spec.get("bucket", "data"),
-                        lens=spec.get("lens", "full"),
-                        source=spec.get("source", "auto"),
-                        idle_turns=int(spec.get("idle_turns") or 0),
-                        tokens=int(spec.get("tokens") or 0),
-                    )
-        return cls(
-            session_id=str(data.get("session_id") or g_ctx.get("session_id") or "default"),
-            routine_id=str(data.get("routine_id") or "workspace_turn"),
-            user_prompt=str(data.get("user_prompt") or g_ctx.get("user_prompt") or ""),
-            web_chat_window_mode=data.get("web_chat_window_mode") or g_ctx.get("web_chat_window_mode") or "same_window",
-            artifacts=arts,
-            sent_hashes=dict(data.get("sent_hashes") or g_ctx.get("web_chat_sent_hashes") or {}),
-            staged_sent_hashes=dict(data.get("staged_sent_hashes") or g_ctx.get("web_chat_staged_hashes") or {}),
-            holding=dict(data.get("holding") or {}),
-        )
+        kwargs: Dict[str, Any] = {}
+        for f in fields(cls):
+            if f.name == "artifacts":
+                raw_arts = data.get("artifacts") or {}
+                arts: Dict[str, ContextArtifact] = {}
+                if isinstance(raw_arts, dict):
+                    for u, spec in raw_arts.items():
+                        if isinstance(spec, dict) and spec.get("uri"):
+                            arts[u] = ContextArtifact(
+                                uri=spec["uri"],
+                                bucket=spec.get("bucket", "data"),
+                                lens=spec.get("lens", "full"),
+                                served_lens=spec.get("served_lens", spec.get("lens", "full")),
+                                source=spec.get("source", "auto"),
+                                idle_turns=int(spec.get("idle_turns") or 0),
+                                tokens=int(spec.get("tokens") or 0),
+                                sha256=str(spec.get("sha256") or ""),
+                                symbols=list(spec.get("symbols") or []),
+                            )
+                kwargs["artifacts"] = arts
+                continue
+            raw_val = data.get(f.name)
+            if raw_val is not None:
+                kwargs[f.name] = copy.deepcopy(raw_val)
+        return cls(**kwargs)
 
     @property
     def editable_files(self) -> List[str]:
@@ -239,23 +351,54 @@ class RoutineEnvelope:
         return self.reference_uris()
 
     @property
+    def constitution_files(self) -> List[str]:
+        """Read-only computed list of Tier 0 governance constitution URIs."""
+        return self.constitution_uris()
+
+    @property
     def all_context_files(self) -> List[str]:
         """Read-only computed list of all mounted vfs:// and ctx:// URIs in bucket volatility order."""
         return self.all_file_uris()
 
     def fork_sub_routine(self, target_routine_id: str) -> "RoutineEnvelope":
-        """Creates a child RoutineEnvelope for sub-routine delegation preserving working-set artifacts and Web-Chat hashes."""
-        return RoutineEnvelope(
-            session_id=self.session_id,
-            routine_id=target_routine_id,
-            user_prompt=self.user_prompt,
-            web_chat_window_mode=self.web_chat_window_mode,
-            artifacts={k: ContextArtifact(**v.to_dict()) for k, v in self.artifacts.items()},
-            sent_hashes=dict(self.sent_hashes),
-            staged_sent_hashes=dict(self.staged_sent_hashes),
-            nodes=dict(self.nodes),
-            holding=dict(self.holding),
-        )
+        """Creates a child RoutineEnvelope for sub-routine delegation by cloning all dataclass fields via `to_checkpoint`/`from_checkpoint`."""
+        cloned = self.to_checkpoint("running")
+        cloned["routine_id"] = target_routine_id
+        return RoutineEnvelope.from_checkpoint(cloned)
+
+    def merge_sub_routine_result(
+        self,
+        child_env: "RoutineEnvelope",
+    ) -> None:
+        """Merges working-set artifacts, active_plan, staged_task_actions, file_token_map, hashes, and execution_trace from a completed child RoutineEnvelope into this parent envelope."""
+        self.artifacts = {k: ContextArtifact(**v.to_dict()) for k, v in child_env.artifacts.items()}
+        if child_env.effective_intent and child_env.effective_intent != "EDIT_CODE":
+            self.effective_intent = child_env.effective_intent
+        if child_env.global_vars:
+            self.global_vars.update(child_env.global_vars)
+        self.sent_hashes.update(child_env.sent_hashes)
+        self.staged_sent_hashes.update(child_env.staged_sent_hashes)
+        if child_env.web_chat_delta_meta:
+            self.web_chat_delta_meta = dict(child_env.web_chat_delta_meta)
+        self.session_cost_usd = max(self.session_cost_usd, child_env.session_cost_usd)
+        self.budget_limit_usd = max(self.budget_limit_usd, child_env.budget_limit_usd)
+        if isinstance(child_env.active_plan, dict) and child_env.active_plan.get("tasks"):
+            self.active_plan = copy.deepcopy(child_env.active_plan)
+            self.active_plan_prompt_block = child_env.active_plan_prompt_block
+        if child_env.scouted_global_files:
+            self.scouted_global_files = list(dict.fromkeys(self.scouted_global_files + child_env.scouted_global_files))
+        if child_env.staged_task_actions:
+            self.staged_task_actions = list(child_env.staged_task_actions)
+        if child_env.file_token_map:
+            self.file_token_map.update(child_env.file_token_map)
+        if child_env.attached_docs_content:
+            self.attached_docs_content = child_env.attached_docs_content
+        if "fetch_context" in child_env.nodes:
+            self.nodes["fetch_context"] = copy.deepcopy(child_env.nodes["fetch_context"])
+        existing_ids = {t.get("id") for t in self.execution_trace if isinstance(t, dict)}
+        for tr_item in child_env.execution_trace:
+            if isinstance(tr_item, dict) and tr_item.get("id") not in existing_ids:
+                self.execution_trace.append(copy.deepcopy(tr_item))
 
     def editable_uris(self) -> List[str]:
         """Returns all full/diff/genesis-lens data/meta target URIs (excluding constitution files)."""
@@ -353,200 +496,20 @@ class RoutineEnvelope:
         }
         return full_text, delta_text, next_hashes, delta_meta
 
-    def resolve_query_directives(
-        self,
-        ctx,
-        directives: List[str],
-        clamp_fn,
-    ) -> Tuple[List[str], Set[str]]:
-        """
-        Parses `<<<<<<< QUERY_CONTEXT` lines (`+ vfs://...`, `- vfs://...`, `msg://<id>`)
-        into `(clamped_add_uris, clamped_drop_uris)`, materializing any recalled `msg://`
-        session messages into `ctx://contexts/recalled_session_messages.txt`.
-        """
-        raw_add_uris: List[str] = []
-        raw_drop_uris: List[str] = []
-        recalled_msgs: List[str] = []
-        for q_item in (directives or [])[:12]:
-            for raw_ln in str(q_item).splitlines():
-                s_ln = raw_ln.strip().strip("`'")
-                if not s_ln:
-                    continue
-                is_drop = s_ln.startswith("-") or s_ln.lower().startswith("drop:")
-                clean_ln = re.sub(r'^(?:[-+*]|drop:|add:)\s*', '', s_ln, flags=re.IGNORECASE).strip()
-                if clean_ln.startswith(("msg://", "msg_")):
-                    recalled = resolve_query_context(ctx, clean_ln)
-                    if isinstance(recalled, dict) and recalled.get("content"):
-                        recalled_msgs.append(
-                            f"=== RECALLED MESSAGE {recalled.get('message_id')} (Turn #{recalled.get('seq')} · {recalled.get('role')}) ===\n"
-                            f"{recalled.get('content')}"
-                        )
-                    continue
-                found_uris = re.findall(r'(?:vfs|ctx)://[A-Za-z0-9_./-]+', clean_ln)
-                target_list = raw_drop_uris if is_drop else raw_add_uris
-                if found_uris:
-                    target_list.extend(found_uris)
-                elif clean_ln:
-                    target_list.append(clean_ln)
 
-        if recalled_msgs:
-            self.holding["recalled_messages_text"] = "\n\n".join(recalled_msgs)
-
-        clamped_add = clamp_fn(ctx, raw_add_uris)
-        clamped_drop = set(clamp_fn(ctx, raw_drop_uris)) if raw_drop_uris else set()
-        self.apply_working_set_delta(add=clamped_add, drop=list(clamped_drop), source="probe")
-        return clamped_add, clamped_drop
-
-
-def reconcile_working_set_ttl(
-    existing_ws: List[Dict[str, Any]],
-    *,
-    pinned_this_turn: Optional[List[str]] = None,
-    referenced_this_turn: Optional[List[str]] = None,
-    committed_this_turn: Optional[List[str]] = None,
-    advance_turn_age: bool = True,
-) -> List[Dict[str, Any]]:
-    """
-    Single Source of Truth for Session Working-Set Lifecycle (5-Turn TTL Decay & Eviction):
-    - When `advance_turn_age=False` (e.g., mid-turn `paused_for_user`), records active pinned/reference files without aging.
-    - When `advance_turn_age=True` (end of turn), increments `idle_turns` on non-user-pinned items,
-      demotes `pinned` -> `reference` (`full` -> `slice`) at `idle_turns >= 6`, and evicts at `idle_turns >= 9`.
-    """
-    ws_map: Dict[str, Dict[str, Any]] = {}
-    for ws_entry in (existing_ws or []):
-        if not isinstance(ws_entry, dict):
-            continue
-        raw_fp = ws_entry.get("filepath") or ws_entry.get("uri") or ""
-        if not raw_fp:
-            continue
-        try:
-            norm_fp = str(InSetuURI(raw_fp))
-        except Exception:
-            continue
-        ws_map[norm_fp] = {
-            "filepath": norm_fp,
-            "tier": ws_entry.get("tier") or "pinned",
-            "idle_turns": int(ws_entry.get("idle_turns") or 0),
-            "user_pinned": bool(ws_entry.get("user_pinned", False)),
-        }
-
-    if advance_turn_age:
-        for ws_entry in ws_map.values():
-            if not ws_entry.get("user_pinned"):
-                ws_entry["idle_turns"] = ws_entry.get("idle_turns", 0) + 1
-                if ws_entry["idle_turns"] >= 6 and ws_entry.get("tier") == "pinned":
-                    ws_entry["tier"] = "reference"
-
-    for rf in (referenced_this_turn or []):
-        if not rf:
-            continue
-        try:
-            norm_rf = str(InSetuURI(rf))
-        except Exception:
-            continue
-        if norm_rf not in ws_map:
-            ws_map[norm_rf] = {
-                "filepath": norm_rf,
-                "tier": "reference",
-                "idle_turns": 0,
-                "user_pinned": False,
-            }
-
-    for af in (pinned_this_turn or []):
-        if not af:
-            continue
-        try:
-            norm_af = str(InSetuURI(af))
-        except Exception:
-            continue
-        was_pinned = bool(ws_map.get(norm_af, {}).get("user_pinned", True))
-        ws_map[norm_af] = {
-            "filepath": norm_af,
-            "tier": "pinned",
-            "idle_turns": 0,
-            "user_pinned": was_pinned,
-        }
-
-    for cf in (committed_this_turn or []):
-        if not cf:
-            continue
-        try:
-            norm_cf = str(InSetuURI(cf))
-        except Exception:
-            continue
-        was_user_pinned = bool(ws_map.get(norm_cf, {}).get("user_pinned", False))
-        ws_map[norm_cf] = {
-            "filepath": norm_cf,
-            "tier": "pinned",
-            "idle_turns": 0,
-            "user_pinned": was_user_pinned,
-        }
-
-    return [
-        ws_entry for ws_entry in ws_map.values()
-        if ws_entry.get("user_pinned") or ws_entry.get("idle_turns", 0) < 9
-    ]
-
-
-def parse_colon_command_tokens(raw_prompt: str) -> Dict[str, str]:
-    """Parses universal colon-scoped slash commands (/code, /upkeep:docs, /upkeep:docs:apply, /user:upkeep:docs)."""
-    text = (raw_prompt or "").strip()
-    if not text.startswith("/"):
-        return {"namespace": "", "target": "", "scope": "", "stage": "", "rest": text}
-    first_token, _, rest = text.partition(" ")
-    parts = [p.strip().lower() for p in first_token[1:].split(":") if p.strip()]
-    if not parts:
-        return {"namespace": "", "target": "", "scope": "", "stage": "", "rest": rest.strip()}
-    namespace = "user" if parts[0] == "user" else ""
-    if namespace:
-        parts = parts[1:]
-    target = parts[0] if parts else ""
-    stage, scope = "", ""
-    for seg in parts[1:]:
-        if seg in ("apply", "execute", "commit"):
-            stage = "apply"
-        elif seg in ("audit", "plan", "propose"):
-            stage = "audit"
-        elif not scope:
-            scope = seg
-    return {"namespace": namespace, "target": target, "scope": scope, "stage": stage, "rest": rest.strip()}
-
-
-def parse_slash_command(raw_prompt: str, explicit_mode: Optional[str] = None, routine: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
-    """Parses leading colon-scoped slash commands (/code, /plan, /ask, /yomama, /upkeep:docs, /user:<id>:<scope>, /undo)."""
-    text = (raw_prompt or "").strip()
-    fallback_mode = (explicit_mode or "auto").strip().lower().lstrip("/")
-    if text.startswith("/"):
-        parsed_tok = parse_colon_command_tokens(text)
-        target, rest = parsed_tok["target"], parsed_tok["rest"]
-        if target == "undo":
-            return "undo", rest
-        if parsed_tok["namespace"] == "user":
-            return (target or "auto"), (rest or target or text)
-        if routine and (
-            target in (routine.get("modes") or {})
-            or target == str(routine.get("id") or "").lower()
-            or f"/{target}" == str(routine.get("slash_command") or "").lower()
-        ):
-            return target, (rest or target or text)
-        if target in ("code", "plan", "ask", "yomama", "auto"):
-            return target, (rest or text)
-    if routine:
-        canon_mode, _, _ = resolve_routine_mode(routine, fallback_mode)
-        return canon_mode, text
-    return (fallback_mode if fallback_mode in ("code", "plan", "ask", "yomama", "auto") else "auto"), text
 
 
 def record_trace_step(
-    chain_context: Dict[str, Any], context_lock, node_id: str, *, node_type: str = "llm", tier: str = "",
+    target_state: Any, context_lock, node_id: str, *, node_type: str = "llm", tier: str = "",
     capability: str = "", wavefront_index: int = 0, status: str = "running", elapsed_ms: int = 0,
     summary: str = "", added_files: Optional[List[str]] = None, dropped_files: Optional[List[str]] = None,
     children: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
-    """Appends or updates a structured node execution trace record in chain_context['global']['execution_trace']."""
+    """Appends or updates a structured node execution trace record on `RoutineEnvelope.execution_trace`."""
     with context_lock:
-        g = chain_context.setdefault("global", {})
-        trace_list: List[Dict[str, Any]] = list(g.get("execution_trace") or [])
+        is_env = isinstance(target_state, RoutineEnvelope)
+        g = target_state.global_vars if is_env else target_state.setdefault("global", {})
+        trace_list: List[Dict[str, Any]] = list(target_state.execution_trace if is_env else (g.get("execution_trace") or []))
         existing = next((item for item in trace_list if item.get("id") == node_id), None)
         entry = {
             "id": node_id, "type": node_type, "tier": tier, "capability": capability,
@@ -559,5 +522,8 @@ def record_trace_step(
             trace_list[trace_list.index(existing)] = entry
         else:
             trace_list.append(entry)
-        g["execution_trace"] = trace_list
+        if is_env:
+            target_state.execution_trace = trace_list
+        else:
+            g["execution_trace"] = trace_list
         g["active_node_id"] = node_id if status in ("running", "paused") else g.get("active_node_id", "")

@@ -43,12 +43,12 @@ def get_language_provider(filepath: str) -> Optional[BaseLanguageProvider]:
 
 
 def extract_file_symbols(filepath: str, content: str) -> Optional[List[Dict[str, Any]]]:
-    if Path(filepath).suffix.lower() not in SUPPORTED_SYMBOL_EXTENSIONS:
-        return None
     """
     Extracts public top-level symbols for supported languages (.py, .js/.ts/.mjs/.tsx, .rs).
     Returns None if a syntax error prevented parsing so callers can preserve cached symbols.
     """
+    if Path(filepath).suffix.lower() not in SUPPORTED_SYMBOL_EXTENSIONS:
+        return None
     if not content:
         return []
     provider = get_language_provider(filepath)

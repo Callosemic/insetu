@@ -191,7 +191,7 @@ def extract_query_context_directives(raw_text: str) -> List[str]:
     if not raw_text or "QUERY_CONTEXT" not in raw_text:
         return []
     norm = re.sub(
-        r'\{\{\s*ymm:(.)[x*](\d+)\s*\}\}',
+        r'\{\{\s*ymm:(.)[x*]([1-9])\s*\}\}',
         lambda m: m.group(1) * int(m.group(2)),
         raw_text.replace('\r\n', '\n').replace('\xa0', ' '),
     )

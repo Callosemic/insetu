@@ -12,10 +12,12 @@ insetu/
 ├── .gitkeep                        # Git folder retention.
 ├── CHANGELOG.md                    # Auto-generated semantic release changelog.
 ├── CODE_INDEX.md                   # Topological map of the inSetu repository (this file).
+├── KNOWN_ISSUES.md                 # R3: known gaps named plainly, so a reviewer finds them here before finding them in the code.
 ├── LICENSE                         # Apache-2.0 open-source software license.
 ├── NOTICE                          # Copyright notice and third-party software attributions.
 ├── README.md                       # Primary project overview, architecture, and installation guide.
 ├── REVIEWING.md                    # Reviewing inSetu
+├── SECURITY.md                     # R3: the security policy a reviewer looks for first: what inSetu protects, what it does not, how to report a problem, and where the guards an...
 ├── docs/                           # Internal Documentation and Architecture.
 │   ├── 00_index.md                 # Master Index for inSetu.
 │   ├── 01_engineering_standards.md # Engineering standards and audit guardrails.
@@ -63,6 +65,7 @@ insetu/
 │   │   ├── 0103-optional-str-buffer-algebra-and-wave-1-system-decomposition.md # 0103: Optional[str] Buffer Algebra, Bridge Working Tree, and Wave 1 System Decomposition
 │   │   ├── 0104-wave-3-decompositions-three-tier-bridge-repair-markdown-ast-and-build-versioned-offline-boot.md # 0104: Wave 3 Decompositions, Three-Tier Bridge Repair & Sandwich Anchor Healer, Markdown AST Provider, S8 Human-Origin Allowlist, and Build-...
 │   │   ├── 0105-six-bucket-routine-envelope-lens-projector-dual-track-session-ledger-and-index-claims.md # ADR 0105: Six-Bucket RoutineEnvelope, Multi-Scheme Lens Projector, Dual-Track Session Ledger, Shared-Clone Index Claims, and Python Floor Ga...
+│   │   ├── 0106-pure-routine-envelope-two-sided-llm-contract-msg-lens-and-akasa-adapter.md # ADR 0106: Pure Zero-I/O RoutineEnvelope, Two-Sided LLM Compute Contract, msg:// Turn Dossiers, Conversation Rewind, AkasaBackendAdapter Transport Unifi...│   │   ├── archived/               # Superseded and historical ADR documents.
 │   │   ├── archived/               # Superseded and historical ADR documents.
 │   │   │   ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │   │   │   ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -137,6 +140,7 @@ insetu/
 │   ├── brainstorm/                 # Exploratory architecture notes and design scratchpad.
 │   │   └── 2026-11-09-sota-agentic-frontiers-on-unified-primitives.md # High-leverage designs for dynamic stack-trace proximity filters, deterministic Best-of-N patch tournaments, sub-turn streaming probe interce...
 │   ├── models/                     # Human-authored subsystem mental models and state-machine invariant specifications.
+│   │   ├── agent_harness_control_axes.md # Move agent-model-appendix.md from docs/plans/ into docs/models/agent_harness_control_axes.md so it lives alongside agent_orchestrator_and_ra...
 │   │   ├── agent_orchestrator_and_rag.md # Black-box DAG execution contracts, the 6 volatility-ordered context buckets, fork-join holding confinement, and self-contained healing loops...
 │   │   ├── mddb_and_tracker.md     # Recursive Markdown-as-a-Database records, heading-scoped sub-record spans, Containment vs. Ur-Record intersection graphs, and zero-hack structural lenses.
 │   │   ├── proximity_filters_and_domain_jumps.md # Composable RAG retrieval algebra unifying AST call graphs, Hebbian affinity, string fuzziness, vector embeddings, custom multiplex schemas,...
@@ -166,6 +170,8 @@ insetu/
 │       ├── 2026-11-12-lens-contract.md # New plan for the lens contract shared by every context provider (roadmap P25).
 │       ├── 2026-11-12-memory-and-conversation-ledger.md # New speculative plan: conversation history and long-term memory on one ledger, mapped onto the session ledger, md-db and the lens contract,...
 │       ├── 2026-11-12-shared-test-kit.md # New plan for the shared test kit, one pytest plugin package for every Callosemic repository (roadmap P25).
+│       ├── 2026-11-14-greenfield-agent-compute-contract-and-envelope-unification.md # Create the canonical greenfield plan for unifying RoutineEnvelope (retiring chain_context), formalizing the Two-Sided LLM Compute Contract (...
+│       ├── 2026-11-15-sutram-css-vacuum-and-data-primitives.md # Create a plan for standardizing tabular readouts and micro-sparkbars in `sutram` / `yenvui` under the Zero-CSS & Zero-Inline-Style Lego Bloc...
 │       ├── agent-briefs/           # Cross-model review briefs and implementation handoff notes.
 │       │   ├── .gitkeep            # Git folder retention.
 │       │   ├── gemini_agent_harness_and_rag_lane.md # Parallel Lane Brief: Agent Harness, 6-Bucket RAG Funnel & Dogfooding Observability
@@ -192,8 +198,9 @@ insetu/
 │   │   ├── def favicon()           # Serves the application favicon asset.
 │   │   ├── def api_system_panic()  # Hard reboot of the OS process, setting the simulated panic flag.
 │   │   ├── def recovery_ui()       # Zero-JS escape hatch in case the frontend bundle is completely bricked.
-│   │   ├── def compute_build_id()  # Short deterministic content/mtime digest of the frontend boot shell, core modules, and extension entrypoints.
-│   │   ├── def index()             # Renders the main SPA entry point with the active importmap, extensions, and X-InSetu-Build-ID header.
+│   │   ├── def resolve_frontend_build_manifest() # Single Source of Truth for frontend build identity and offline module discovery: 1.
+│   │   ├── def compute_build_id()  # [stale?] Short deterministic content/mtime digest of the frontend boot shell, core modules, and extension entrypoints.
+│   │   ├── def index()             # [stale?] Renders the main SPA entry point with the active importmap, extensions, and X-InSetu-Build-ID header.
 │   │   ├── def inject_bypassed_extensions(cfg, workspace_id, **kwargs) # Injects quarantined and bypassed extension diagnostic metadata into the workspace config payload.
 │   │   └── def run_app()           # Starts the Flask/Werkzeug server with kernel initialization and background worker ignition.
 │   ├── cli.py                      # [Daemon & Process Management]
@@ -205,99 +212,123 @@ insetu/
 │   │   ├── agent/                  # Autonomous ReAct agent harness and streaming chat interface.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── agent.js            # Agent chat streaming UI, turn history, and session management.
-│   │   │   │   └── class InSetuCoreAgent # Primary multi-turn chat view with Two-Part Context Budget HUD, Execution Trace, Staged Patch Stacks, and Web-Chat handoff.
+│   │   │   │   └── class InSetuCoreAgent # [stale?] Primary multi-turn chat view with Two-Part Context Budget HUD, Execution Trace, Staged Patch Stacks, and Web-Chat handoff.
+│   │   │   ├── agent_handoff_and_plan.js # Context Budget Floating HUD, External Web-Chat Handoff Panel, and Multi-Step Plan Stepper components for Agent Chat.
+│   │   │   │   ├── function estimateFileTokensFromState(filepath, tier, fileTokenMap) # Estimates token count for a file URI using fileTokenMap, open FsStore buffers, or tier heuristics.
+│   │   │   │   ├── function estimateWorkingSetTokensFromComponent(comp) # Computes total estimated working-set tokens across scoped constitution, reference slices, pinned files, and prompt input.
+│   │   │   │   ├── class InSetuAgentContextHud # Floating Context Budget and Session Spend HUD component for Agent Chat.
+│   │   │   │   ├── function ensureAgentSessionTelemetryCompiled(comp, { latestTurnOnly = false }...) # Compiles session or latest-turn AI telemetry context and pre-warms the VFS share cache.
+│   │   │   │   ├── function buildAgentTelemetryMenuItems(comp) # Builds dropdown menu items for copying, sharing, or downloading latest-turn, full-session, or .zip telemetry dossiers.
+│   │   │   │   ├── class InSetuAgentHandoffPanel # External Web-Chat handoff composer with Same-Window Delta vs. New-Window Full context selector.
+│   │   │   │   └── class InSetuAgentPlanStepper # Multi-step execution plan progress bar and TASK_MANAGE confirmation stepper for Agent Chat.
 │   │   │   ├── agent_routine_studio.js # Declarative Routine Studio and Routine Catalog UI components extracted from agent.js (God-Objects Wave 3.3).
 │   │   │   │   ├── function formatWavefrontBadge(wavefronts) # Formats a compact topological wavefront progression badge string for routine cards.
 │   │   │   │   ├── class InSetuAgentRoutineProjection # Visual DAG step builder and raw Markdown-as-Code routine editor projection.
 │   │   │   │   └── class InSetuCoreAgentRoutines # Categorized catalog surface for browsing, filtering, and launching declarative routines.
 │   │   │   ├── agent_staged_stacks.js # Collapsible DAG Execution Trace ("Thinking") and Staged Patch Stacks components for the Agent Chat view.
-│   │   │   │   ├── function hasYomamaPatchBlocks(text) # Returns true when a string contains any Yomama v4 patch or lifecycle directive marker.
-│   │   │   │   ├── class InSetuCoreAgentSessions # Sidebar widget listing chat sessions and creating timestamped conversations.
-│   │   │   │   ├── class InSetuAgentExecutionTrace # Collapsible per-node and fan-out execution trace component for Agent Chat turns.
-│   │   │   │   ├── class InSetuAgentStagedStacks # Staged Yomama patch stack and Query Quickpack review card group component with 1-click Confirm & Commit.
-│   │   │   │   └── class InSetuAgentHandoffPanel # External Web-Chat handoff composer with Same-Window Delta vs. New-Window Full context selector.
+│   │   │   │   ├── function hasYomamaPatchBlocks(text) # [stale?] Returns true when a string contains any Yomama v4 patch or lifecycle directive marker.
+│   │   │   │   ├── class InSetuCoreAgentSessions # [stale?] Sidebar widget listing chat sessions and creating timestamped conversations.
+│   │   │   │   ├── class InSetuAgentExecutionTrace # [stale?] Collapsible per-node and fan-out execution trace component for Agent Chat turns.
+│   │   │   │   └── class InSetuAgentStagedStacks # [stale?] Staged Yomama patch stack and Query Quickpack review card group component with 1-click Confirm & Commit.
 │   │   │   ├── agent_store.js      # Agent Harness state store (AgentStore) and routine target URI classifier extracted from agent.js (God-Objects Wave 3.3).
+│   │   │   │   ├── function getAllAgentCommandOptions(routines = []) # [comment required]
 │   │   │   │   ├── function preWarmHandoffContext(handoffWrapper) # Pre-warms full or delta handoff context artifacts into the VFS share cache on pause.
 │   │   │   │   └── function classifyRoutineTargetUri(rawInc) # Validates a routine include URI against loaded contexts, diffs, prompts, and repositories.
+│   │   │   ├── commands.py         # Colon-scoped slash command tokenizer and mode resolver extracted from envelope.py (Sprint A2.0).
+│   │   │   │   ├── def parse_colon_command_tokens(raw_prompt) # Parses universal colon-scoped slash commands (/code, /upkeep:docs, /upkeep:docs:apply, /user:upkeep:docs).
+│   │   │   │   └── def parse_slash_command(raw_prompt, explicit_mode, routine) # Parses leading colon-scoped slash commands (/code, /plan, /ask, /yomama, /upkeep:docs, /user:<id>:<scope>, /undo).
 │   │   │   ├── engine_agent.py     # ReAct agent execution loop, prompt packing, and self-healing patch retry logic.
-│   │   │   │   ├── def get_routines(ctx) # Lists all available declarative Markdown-as-Code and YAML routines with step timings, problems, and context options.
-│   │   │   │   ├── def api_save_routine(ctx) # Validates and saves a declarative routine in ctx://routines/.
-│   │   │   │   ├── def api_delete_routine(ctx) # Deletes a workspace or user-template routine override.
-│   │   │   │   ├── def api_ensure_plan_file(ctx) # Resolves or creates a canonical Markdown plan file URI for /plan.
-│   │   │   │   ├── def api_resolve_test_command(ctx) # Inspects repository files to determine the appropriate test runner command.
+│   │   │   │   ├── def api_record_session_transaction(ctx) # Records a committed Yomama Bridge transaction and its modified files on the active chat session.
+│   │   │   │   ├── def api_agent_plan_task(ctx) # Marks an active plan task complete, applies TASK_MANAGE directives, or promotes an ephemeral plan to docs/plans/*.md.
+│   │   │   │   ├── def get_routines(ctx) # [stale?] Lists all available declarative Markdown-as-Code and YAML routines with step timings, problems, and context options.
+│   │   │   │   ├── def api_save_routine(ctx) # [stale?] Validates and saves a declarative routine in ctx://routines/.
+│   │   │   │   ├── def api_delete_routine(ctx) # [stale?] Deletes a workspace or user-template routine override.
+│   │   │   │   ├── def api_ensure_plan_file(ctx) # [stale?] Resolves or creates a canonical Markdown plan file URI for /plan.
+│   │   │   │   ├── def api_resolve_test_command(ctx) # [stale?] Inspects repository files to determine the appropriate test runner command.
 │   │   │   │   ├── def api_agent_run_test(ctx) # Executes an approved repository test command with shell=False.
-│   │   │   │   ├── def get_sessions(ctx) # Retrieves all chat sessions for the active workspace.
-│   │   │   │   ├── def create_session(ctx) # Creates a new chat session record in SQLite.
+│   │   │   │   ├── def get_sessions(ctx) # [stale?] Retrieves all chat sessions for the active workspace.
+│   │   │   │   ├── def create_session(ctx) # [stale?] Creates a new chat session record in SQLite.
+│   │   │   │   ├── def api_rename_session(ctx) # Renames an existing chat session.
+│   │   │   │   ├── def api_archive_session(ctx) # Archives or unarchives a chat session.
+│   │   │   │   ├── def api_delete_session(ctx, session_id) # Permanently deletes a chat session and its associated transcript messages.
 │   │   │   │   ├── def api_ingest_reply(ctx) # Unified reply ingestion pipeline: compiles a standalone Quickpack for QUERY_CONTEXT blocks, strips patch/probe blocks, and inserts prose into chat_messages.
 │   │   │   │   ├── def delete_chat_message(ctx, message_id) # Removes a specific message bubble from chat_messages and invalidates cold compaction blocks from that point forward.
-│   │   │   │   ├── def get_messages(ctx, session_id) # Retrieves canonical message history (annotated with compaction tier), compacted view, working-set metrics, and per-tier cost ledger.
-│   │   │   │   ├── def cancel_agent_turn(ctx) # Signals an active agent turn to abort before the next LLM or VFS step.
-│   │   │   │   ├── def undo_last_agent_turn(ctx) # Reverts the most recent Yomama Bridge transaction for the session.
-│   │   │   │   └── def submit_prompt(ctx) # Dispatches a user prompt, handoff resume, or colon-scoped slash routine into the agent worker.
+│   │   │   │   ├── def api_rewind_session(ctx) # Rewinds a chat session's conversation state to immediately before a target message without reverting files on disk.
+│   │   │   │   ├── def get_messages(ctx, session_id) # [stale?] Retrieves canonical message history (annotated with compaction tier), compacted view, working-set metrics, and per-tier cost ledger.
+│   │   │   │   ├── def cancel_agent_turn(ctx) # [stale?] Signals an active agent turn to abort before the next LLM or VFS step.
+│   │   │   │   ├── def undo_last_agent_turn(ctx) # [stale?] Reverts the most recent Yomama Bridge transaction for the session.
+│   │   │   │   └── def submit_prompt(ctx) # [stale?] Dispatches a user prompt, handoff resume, or colon-scoped slash routine into the agent worker.
 │   │   │   ├── envelope.py         # Unified 6-Bucket RoutineEnvelope, ContextArtifact value object, and Web-Chat delta state machine.
-│   │   │   │   ├── class ContextArtifact # Represents a single URI-addressed artifact mounted in one of the 6 canonical context buckets.
-│   │   │   │   ├── class RoutineEnvelope # Single state and working-set container for a declarative Routine or Agent turn with Same-Window delta hashing.
-│   │   │   │   ├── def reconcile_working_set_ttl(existing_ws) # Single Source of Truth for Session Working-Set Lifecycle (5-turn TTL decay and eviction).
-│   │   │   │   ├── def parse_colon_command_tokens(raw_prompt) # Parses universal colon-scoped slash commands (/code, /upkeep:docs, /upkeep:docs:apply, /user:upkeep:docs).
-│   │   │   │   ├── def parse_slash_command(raw_prompt, explicit_mode, routine) # Parses leading colon-scoped slash commands (/code, /plan, /ask, /yomama, /upkeep:docs, /user:<id>:<scope>, /undo).
-│   │   │   │   └── def record_trace_step(chain_context, context_lock, node_id) # Appends or updates a structured node execution trace record in chain_context['global']['execution_trace'].
+│   │   │   │   ├── class ContextArtifact # [stale?] Represents a single URI-addressed artifact mounted in one of the 6 canonical context buckets.
+│   │   │   │   ├── class RoutineEnvelope # [stale?] Single state and working-set container for a declarative Routine or Agent turn with Same-Window delta hashing.
+│   │   │   │   └── def record_trace_step(target_state, context_lock, node_id) # Appends or updates a structured node execution trace record on `RoutineEnvelope.execution_trace` (or a legacy `chain_context` dict).
 │   │   │   ├── expressions.py      # Declarative routine condition evaluator, 256KB scratch vaulter, and Yomama block prose stripper.
 │   │   │   │   ├── def normalize_condition_expr(raw_expr, chain_context) # Token-safe normalizer binding {{ var | fallback }} placeholders and 'contains' operators for AST evaluation.
 │   │   │   │   ├── def evaluate_when_condition(when_expr, chain_context) # AST-restricted, zero-eval conditional evaluator for 'when' / 'condition' / 'until' expressions.
-│   │   │   │   ├── def vault_if_oversized(ctx, node_id, output_dict) # Spills node outputs >= 256 KB to ephemeral scratch storage via ctx.jobs.write_scratch.
-│   │   │   │   └── def strip_yomama_blocks_keep_prose(raw_text) # Strips raw Yomama patch blocks and empty code fences while preserving surrounding conversational prose.
+│   │   │   │   └── def vault_if_oversized(ctx, node_id, output_dict) # Spills node outputs >= 256 KB to ephemeral scratch storage via ctx.jobs.write_scratch.
+│   │   │   ├── llm_contract.py     # Formal Two-Sided LLM Compute Boundary Contract (Ingress prompt/handoff compilation and Egress probe, TASK_MANAGE, and working-set delta pipeline).
+│   │   │   │   ├── def resolve_raw_node_prompt(ctx, node, routine) # Resolves the raw un-interpolated prompt template for a routine node.
+│   │   │   │   ├── def prepare_llm_prompt_and_system(ctx, node, routine, envelope) # [stale?] Compiles `(tier_val, system_prompt, user_prompt)` for an LLM node directly from `RoutineEnvelope`.
+│   │   │   │   ├── def build_web_chat_handoff_branch(ctx, n_node, routine, routine_id, ...) # [stale?] Compiles a canonical `web_chat` handoff branch dictionary from the node's Ingress contract.
+│   │   │   │   ├── def build_paused_for_user_response(branches_list, routine, routine_id, w_idx, ...) # [stale?] Constructs the canonical `paused_for_user` checkpoint response for 1 or more Web-Chat handoff branches.
+│   │   │   │   ├── def collect_wavefront_handoff_branches(ctx, active_wave_nodes, handoff_responses, routine, ...) # [stale?] Evaluates active `type: llm` nodes in a wavefront before execution: - Compiles `pending_handoff_branches` for any `web_chat` node lacking a...
+│   │   │   │   └── def execute_llm_dag_node(ctx, node, routine, routine_id, ...) # [stale?] Executes a `type: llm` node under the Unified Ingress/Egress Compute Contract.
 │   │   │   ├── orchestrator.py     # Declarative YAML routine DAG interpreter, conditional evaluator, and 256KB scratch vaulter.
 │   │   │   │   └── def execute_declarative_routine(ctx, **kwargs) # Runs a declarative routine with origin 'routine' (S8): every tool call, file write and job it starts is marked as machine work, so protected...
+│   │   │   ├── plan_ledger.py      # SQLite and VFS persistence for multi-step execution plans, TASK_MANAGE directives, and commit-driven step progression.
+│   │   │   │   ├── def apply_task_manage_actions(ctx, session_id, actions, reconcile_ws_fn) # [stale?] Applies a list of `TASK_MANAGE` operations (`complete`, `reopen`, `add`, `drop`, `set_active`) to `active_plan_json` and any backing plan `....
+│   │   │   │   ├── def process_turn_task_directives(ctx, session_id, raw_text) # [stale?] Canonical LLM Egress Processor for `<<<<<<< TASK_MANAGE` directives: 1.
+│   │   │   │   ├── def complete_and_advance_plan_task(ctx, session_id, task_id, transaction_id) # [stale?] Marks the specified (or currently active) PlanTask complete, ticks any backing plan.md file on disk, and advances active_task_id.
+│   │   │   │   ├── def resolve_canonical_plan_uri(ctx, title, repo, tasks, ...) # Single Source of Truth resolver for canonical `vfs://<repo>/docs/plans/<date>-<slug>.md` URIs.
+│   │   │   │   ├── def ensure_plan_file_payload(ctx, data) # Resolves or creates a canonical Markdown plan file URI for the `/plan` routine.
+│   │   │   │   ├── def promote_ephemeral_plan_to_file(ctx, session_id, repo) # [stale?] Materializes an ephemeral session active_plan into a canonical vfs://<repo>/docs/plans/<date>-<slug>.md file.
+│   │   │   │   ├── def record_committed_bridge_transaction(ctx, session_id, transaction_id, committed_files) # [stale?] Updates chat_sessions.last_transaction_id, working_set_json TTL, and Hebbian affinity edges when a staged stack commits.
+│   │   │   │   ├── def persist_paused_turn_state(ctx, session_id, routine_id, routine_result, ...) # [stale?] Persists working-set TTL state, web-chat hashes, and resumable checkpoint when a routine pauses for user handoff.
+│   │   │   │   ├── def finalize_completed_turn_state(ctx) # [stale?] Persists assistant message, working-set TTL, Hebbian affinity edges, and session token ledger upon turn completion.
+│   │   │   │   └── def execute_bridge_sync_and_test_gate(ctx, node, routine, routine_id, ...) # [stale?] Executes the `bridge.sync` verification/commit step with bounded `n-1` test-failure self-healing and transactional rollback under `strict_te...
 │   │   │   ├── prompts/            # Management of global prompt templates and macro inclusions.
 │   │   │   │   ├── routine_authoring_guide.md # Authoring guide for declarative Markdown-as-Code (ctx://routines/*.md) wavefront routines.
 │   │   │   │   ├── start_session_protocol.md # Initializes an engineering or editorial session with repository landmarks, architectural directives, and the Yomama Patch Protocol.
 │   │   │   │   └── test_triage_rubric.md # Diagnostic rubric for triaging test suite failures against implementation code.
 │   │   │   ├── routine_check.py    # Routine check: reports every routine whose prompts do not resolve, so a routine pointing at a moved or deleted prompt shows up in Routine St...
-│   │   │   │   ├── def check_routine(ctx, routine) # Problems with one loaded routine.
-│   │   │   │   ├── def forget_routine_problems(workspace_id, saved_path) # Drops remembered check results: for one workspace when a prompt or routine file may have changed, or all of them.
-│   │   │   │   └── def attach_routine_problems(ctx, routines) # Attaches cached prompt-resolution problems to each routine summary for Routine Studio.
+│   │   │   │   ├── def check_routine(ctx, routine) # [stale?] Problems with one loaded routine.
+│   │   │   │   ├── def forget_routine_problems(workspace_id, saved_path) # [stale?] Drops remembered check results: for one workspace when a prompt or routine file may have changed, or all of them.
+│   │   │   │   └── def attach_routine_problems(ctx, routines) # [stale?] Attaches cached prompt-resolution problems to each routine summary for Routine Studio.
 │   │   │   ├── routine_loader.py   # Declarative Markdown-as-Code (.md) and YAML (.yaml) routine loader, serializer, and validator (God-Objects Wave 3.2).
-│   │   │   │   ├── def extract_doc_referenced_files(ctx, user_prompt, docs_text) # Format- and repository-agnostic file reference extractor for attached plans, tickets, and notes.
-│   │   │   │   ├── def collect_live_files_for_patch_healing(ctx, parsed_blocks, readonly_list) # Reads current disk contents of files targeted by a failed Yomama patch so the healing LLM has exact anchors.
-│   │   │   │   ├── def clamp_rag_files_to_topology(ctx, candidate_files, allowed_repos, max_files, ...) # Clamps and resolves LLM-selected RAG file URIs against topology_ledger within allowed_repos.
-│   │   │   │   ├── def build_context_file_metrics(ctx, constitution_files, reference_files, pinned_files) # Computes memoized estimated token counts per file URI in the active working set.
 │   │   │   │   ├── def is_prose_document_uri(uri_or_path) # Returns True when a URI or path represents prose documentation, plans, or notes rather than executable source code.
 │   │   │   │   ├── def compile_node_wavefronts(nodes) # Compiles routine nodes into level-order topological wavefronts via Ring 0 resolve_dag_wavefronts.
 │   │   │   │   ├── def response_path_error(response_path) # Returns an error message when a routine's response_path does not target a document file, else None.
 │   │   │   │   ├── def persist_routine_response(ctx, routine, response_text) # Saves a routine's declared report (response_path) directly through the VFS and returns its URI.
 │   │   │   │   ├── def validate_routine_definition(routine_dict, normalize_cond_fn) # Validates routine id, response_path, reserved node IDs, DAG wavefronts, and condition expressions.
 │   │   │   │   ├── def parse_routine_content(raw_text, fallback_id, is_markdown) # Parses and LRU-caches Markdown-as-Code (.md) or YAML (.yaml/.yml) routines into deep-copied definitions.
-│   │   │   │   ├── def serialize_routine_to_markdown(defn) # Serializes a routine definition dict into Markdown-as-Code (YAML frontmatter + ## <node_id> sections).
+│   │   │   │   ├── def serialize_routine_to_markdown(defn) # [stale?] Serializes a routine definition dict into Markdown-as-Code (YAML frontmatter + ## <node_id> sections).
 │   │   │   │   ├── def list_available_routines(ctx) # Discovers all declarative routines (.md and .yaml) across Built-in Module .templates, Global User Templates, Workspace Overrides, and Share...
 │   │   │   │   ├── def resolve_routine_mode(routine, requested_mode) # Resolves a requested slash mode against the routine's declarative `modes:` block.
-│   │   │   │   └── def load_routine_definition(ctx, routine_id) # Loads a declarative routine (.md or .yaml) across the 3-Tier Same-Name Override Cascade: 1.
+│   │   │   │   ├── def load_routine_definition(ctx, routine_id) # Loads a declarative routine (.md or .yaml) across the 3-Tier Same-Name Override Cascade: 1.
+│   │   │   │   ├── def save_routine_definition_payload(ctx, raw_payload) # Validates and persists a workspace or user-template routine override (`POST agent/routines/save`).
+│   │   │   │   └── def delete_routine_override_payload(ctx, raw_payload) # Deletes a workspace or user-template routine override (`POST agent/routines/delete`).
 │   │   │   ├── routines/           # Co-located Git declarative DAG routines (/audit and /closeout).
 │   │   │   │   ├── ask.md          # Answers architectural and codebase questions using a 2-stage context expansion funnel without mutating files.
-│   │   │   │   ├── ask.yaml        # Declarative YAML routine for conversational Q&A and architecture inquiries without workspace mutations.
 │   │   │   │   ├── bugfix.md       # Performs root-cause analysis on a bug report or stack trace and applies a minimal, non-regressive Yomama fix.
 │   │   │   │   ├── code.md         # Scouts relevant workspace files, generates surgical Yomama patches, and applies them atomically.
-│   │   │   │   ├── code.yaml       # Declarative YAML routine for code scouting, surgical Yomama patch generation, and atomic application.
 │   │   │   │   ├── debt_ratchet.md # Audits newly committed turn diffs for duplicate helpers, dead code, or boundary leaks and applies a surgical cleanup patch if needed.
 │   │   │   │   ├── implement.md    # Executes an architectural plan or ticket into concrete Yomama code patches and runs the Debt Ratchet audit.
-│   │   │   │   ├── map_reduce_audit.yaml # Declarative YAML routine for parallel map-reduce auditing across repository buckets.
+│   │   │   │   ├── map_reduce_audit.md # Declarative Markdown-as-Code routine for parallel map-reduce auditing across attached context files (migrated from map_reduce_audit.yaml per...
 │   │   │   │   ├── plan.md         # Drafts or refines a persistent Markdown architectural plan using Yomama patches and verifies all referenced file targets via Cartographer.
-│   │   │   │   ├── plan.yaml       # Declarative YAML routine for drafting and refining persistent Markdown architectural plans with Cartographer verification.
 │   │   │   │   ├── refactor.md     # Executes behavior-preserving structural refactorings using Yomama RELOCATE, RENAME, and SEARCH/REPLACE blocks.
 │   │   │   │   ├── scout_context.md # Scores candidate workspace files in parallel using the fast model tier to prune irrelevant context before synthesis.
-│   │   │   │   ├── symbol_refactor.yaml # Declarative YAML routine for AST symbol relocation and token-aware renaming across files.
+│   │   │   │   ├── symbol_refactor.md # Declarative Markdown-as-Code routine for surgical AST symbol relocation and token-aware renaming across files (migrated from symbol_refactor...
 │   │   │   │   ├── test.md         # Resolves and runs the repository test suite in a bounded loop, triaging and patching failures automatically.
 │   │   │   │   ├── upkeep.md       # Two-stage maintenance routine for documentation/symbol drift, zero-logic God-object modularization, and test suite relevance.
 │   │   │   │   ├── workspace_turn.md # Classifies turn intent, synthesizes response and Yomama patches, and applies code/plan mutations atomically.
-│   │   │   │   ├── workspace_turn.yaml # Declarative YAML routine for multi-stage workspace turn intent classification and patch synthesis.
-│   │   │   │   ├── yomama.md       # Validates and commits Yomama patch blocks, automatically healing failed hunks against live VFS file contents in a bounded loop.
-│   │   │   │   └── yomama.yaml     # Declarative YAML routine for validating, committing, and auto-healing Yomama patch blocks.
+│   │   │   │   └── yomama.md       # Validates and commits Yomama patch blocks, automatically healing failed hunks against live VFS file contents in a bounded loop.
 │   │   │   ├── schemas/            # Zero-dependency formal response schema registry and prompt directives.
 │   │   │   │   ├── __init__.py     # Central formal response schema registry and prompt directive dispatcher.
 │   │   │   │   │   ├── def register_schema(name, directive_fn, validator_fn) # Registers a formal response schema contract.
 │   │   │   │   │   ├── def list_registered_schemas() # Returns a sorted list of registered schema contract identifiers.
 │   │   │   │   │   ├── def get_schema_directive(schema_name) # Returns the prompt instruction directive for the requested schema.
 │   │   │   │   │   ├── def validate_schema_response(schema_spec, raw_text) # Validates LLM output against a named registered contract or a JSON Schema dictionary.
-│   │   │   │   │   └── def extract_query_context_directives(raw_text) # Extracts bounded <<<<<<< QUERY_CONTEXT read directives from an LLM response, tolerating chevron meltdown.
+│   │   │   │   │   └── def extract_query_context_directives(raw_text) # [stale?] Extracts bounded <<<<<<< QUERY_CONTEXT read directives from an LLM response, tolerating chevron meltdown.
 │   │   │   │   ├── diagnostics.py  # Test diagnostic contracts and JUnit XML parser for post-syntax test verification.
 │   │   │   │   │   ├── class TestFailureItem # Structured record of a single failing test assertion or error.
 │   │   │   │   │   ├── class TestDiagnosticSchema # Unified test run diagnostic emitted by bridge.test and ingested by test.md.
@@ -306,13 +337,20 @@ insetu/
 │   │   │   │   │   ├── def get_test_diagnostic_directive() # Returns the prompt directive for test diagnostic responses.
 │   │   │   │   │   └── def validate_test_diagnostic_response(raw_text) # Validates an LLM output against the TestDiagnosticSchema contract.
 │   │   │   │   ├── plan.py         # Hierarchical plan schema and markdown parser for the insetu_plan protocol.
-│   │   │   │   │   ├── class PlanTask # Atomic executable task with mandatory targets and test verification contract.
+│   │   │   │   │   ├── class PlanTask # [stale?] Atomic executable task with mandatory targets and test verification contract.
 │   │   │   │   │   ├── class PlanSprint # Sequential grouping of atomic tasks within an epic.
 │   │   │   │   │   ├── class PlanDocument # Top-level structured representation of an active plan artifact.
 │   │   │   │   │   ├── def parse_plan_markdown(raw_text) # Parses plan.md YAML frontmatter and markdown task checklists into a PlanDocument.
 │   │   │   │   │   ├── def serialize_plan_markdown(plan) # Serializes a PlanDocument back to canonical markdown with frontmatter.
 │   │   │   │   │   ├── def get_plan_schema_directive() # Returns the prompt instruction directive for hierarchical plan generation.
-│   │   │   │   │   └── def validate_plan_response(raw_text) # Validates an LLM output against the hierarchical plan contract.
+│   │   │   │   │   ├── def validate_plan_response(raw_text) # Validates an LLM output against the hierarchical plan contract.
+│   │   │   │   │   ├── def should_recommend_file_upgrade(tasks, is_ephemeral) # Returns True when an ephemeral plan is complex enough (>= 4 tasks or >= 6 target files or multi-repo) to suggest promoting to a file.
+│   │   │   │   │   ├── def normalize_active_plan_dict(raw_tasks) # Normalizes raw LLM or markdown task dicts into a canonical active_plan ledger, preserving completed tasks from existing_plan.
+│   │   │   │   │   ├── def format_active_plan_meta_projection(active_plan) # Projects `active_plan` for Bucket 3 (`meta`) and node prompts using Foveated Lens Decay: - The active task (`active_task_id`) is projected a...
+│   │   │   │   │   ├── def extract_task_manage_directives(raw_text) # [stale?] Extracts explicit `<<<<<<< TASK_MANAGE` / `<<<<<<< TASKMANAGE` blocks AND auto-detects `SEARCH/REPLACE` blocks on `.md` files whose sole cha...
+│   │   │   │   │   ├── def build_promoted_plan_markdown(plan_obj, session_id) # Serializes an ephemeral `active_plan` dictionary into canonical `PlanDocument` Markdown.
+│   │   │   │   │   ├── def tick_task_in_plan_markdown(raw_markdown, task_id, transaction_id) # [stale?] Marks `- [ ] [task_id]` as `- [x] [task_id] (tx_...)` in-place inside a Markdown plan document.
+│   │   │   │   │   └── def reduce_plan_actions(plan_obj, actions) # [stale?] Pure in-memory reducer over `active_plan` dictionary state.
 │   │   │   │   └── rag.py          # RAG response contracts for MacroScout and ContextSlice retrieval.
 │   │   │   │       ├── class MacroScoutSchema # Output contract for Stage 1 macro file discovery.
 │   │   │   │       ├── class ContextSliceReference # A reference-only file slice specifying symbol signatures to retain.
@@ -323,12 +361,15 @@ insetu/
 │   │   │   │       ├── def get_context_slice_directive() # Returns the prompt instruction directive for fine-grained context slicing.
 │   │   │   │       └── def validate_context_slice_response(raw_text) # Validates an LLM output against the ContextSliceSchema contract.
 │   │   │   └── session_ledger.py   # Extract dual-track session transcript compaction, monotonic sequence numbering, and turn session persistence into session_ledger.py (alignin...
+│   │   │       ├── def reconcile_working_set_ttl(existing_ws) # [stale?] Single Source of Truth for Session Working-Set Lifecycle (5-turn TTL decay and eviction).
 │   │   │       ├── def build_message_receipt(role, content, transaction_id, committed_files) # Synthesizes a deterministic 1-line micro-receipt for a canonical chat_messages row.
 │   │   │       ├── def next_session_seq(ctx, session_id) # Returns the next monotonic message sequence number (1..N) for a chat session without reusing deleted numbers.
+│   │   │       ├── def append_session_message(ctx, session_id, role, content) # [stale?] Single Source of Truth append-only writer for `chat_messages`.
+│   │   │       ├── def delete_session_message_and_invalidate(ctx, message_id) # [stale?] Deletes a message from `chat_messages` and invalidates any cold compaction blocks at or after that message.
+│   │   │       ├── def rewind_session_to_message(ctx, message_id, session_id) # Rewinds a chat session's conversation state back to the exact point immediately before `message_id` was sent (or the latest user message in...
+│   │   │       ├── def load_session_messages_state(ctx, session_id) # [stale?] Hydrates canonical messages, compaction tiers, working set, token metrics, and budget ledger for a session.
 │   │   │       ├── def capture_turn_context_hashes(ctx, uris, limit) # Records the content hash of each file a turn worked with, as it stood when the turn ended.
-│   │   │       ├── def compact_session_history(ctx, session_id, rows, existing_summary, ...) # Watermarked Dual-Track History Compaction preserving canonical message_id and monotonic seq coordinates.
-│   │   │       ├── def persist_paused_turn_state(ctx, session_id, routine_id, routine_result, ...) # Persists working-set TTL state, web-chat hashes, and resumable checkpoint when a routine pauses for user handoff.
-│   │   │       └── def finalize_completed_turn_state(ctx) # Persists assistant message, working-set TTL, Hebbian affinity edges, and session token ledger upon turn completion.
+│   │   │       └── def compact_session_history(ctx, session_id, rows, existing_summary, ...) # [stale?] Watermarked Dual-Track History Compaction preserving canonical message_id and monotonic seq coordinates.
 │   │   ├── attestations.py         # The attestation store (S8): one place for every grant a person makes that stays in force.
 │   │   │   ├── class AttestationRefused(PermissionError) # Raised when code running for a model, an MCP client or a routine tries to record an approval.
 │   │   │   ├── def control_dir_path() # The daemon's control directory, which holds host.json, this store, pending protected changes and the audit log.
@@ -344,25 +385,24 @@ insetu/
 │   │   ├── bridge/                 # Yomama Sync Bridge and AST validation engine.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── bridge.js           # [Sync Bridge Payload UI]
-│   │   │   │   └── class InSetuExtBridge # Multi-surface Yomama Sync Bridge staging, dry-run triage, and live commit component.
+│   │   │   │   └── class InSetuExtBridge # [stale?] Multi-surface Yomama Sync Bridge staging, dry-run triage, and live commit component.
 │   │   │   ├── bridge_ast.py       # Yomama v4 AST symbol relocation, token-aware renaming, and commit message synthesis.
 │   │   │   │   ├── def apply_ast_relocate_in_memory(source_content, target_content, source_uri, target_uri, ...) # Byte-exact AST symbol cut-and-paste (supporting single or comma-separated symbols) from source_content into target_content.
 │   │   │   │   ├── def apply_ast_rename_to_content(filepath, content, target_symbol, new_symbol) # Token-aware symbol renamer for a single file buffer.
 │   │   │   │   ├── def resolve_scope_files(workspace_id, scope_prefix, allowed_repos) # Resolves a URI prefix or glob pattern (e.g.
 │   │   │   │   └── def generate_commit_message_from_ledger(ctx, repo, transaction_id, limit) # Synthesizes a Conventional Commit message and Transaction-ID trailers directly from recent bridge_ledger intent comments (<<<<<<< COMMENT).
 │   │   │   ├── bridge_fuzzy.py     # Fuzzy matching and fallback regex algorithms.
-│   │   │   │   ├── def heal_chevron_meltdown(text) # Trims conversational garbage or broken markdown fences trailing the final REPLACE block.
+│   │   │   │   ├── def heal_chevron_meltdown(text) # [stale?] Trims conversational garbage or broken markdown fences trailing the final REPLACE block.
 │   │   │   │   ├── def heal_latex_vert(text) # Replaces Gemini LaTeX math-mode pipe escapes (\vert{}) back into '|' strictly when bounded by $ ...
-│   │   │   │   ├── def heal_citation_artifacts(text) # Strips leaked LLM citation markers (,, [cite_start], [cite_end]).
+│   │   │   │   ├── def heal_citation_artifacts(text) # [stale?] Strips leaked LLM citation markers (,, [cite_start], [cite_end]).
 │   │   │   │   ├── def heal_llm_block_artifacts(text, reference_content) # Unified chatbot artifact healing pipeline for SEARCH and REPLACE blocks.
-│   │   │   │   ├── def expand_macros(text, reference_content) # Expands Yomama transport escape macros.
+│   │   │   │   ├── def expand_macros(text, reference_content) # [stale?] Expands Yomama transport escape macros.
 │   │   │   │   ├── def is_effectively_identical(lines_a, lines_b) # Externalized comparison logic.
 │   │   │   │   ├── def find_all_block_anchors(file_lines, block_lines, allow_boundary_partial) # Two-Tier Contiguous Block Anchor Scanner: - Tier 0 (Strict Full-Line Scan): Requires every non-empty line in block_lines to match file_lines...
-│   │   │   │   ├── def find_sandwich_fuzzy_anchor(file_lines, block_lines) # Tier 2 Deterministic Sandwich-Weighted Anchor Healer: Locates candidate windows in `file_lines` where the top k_top and bottom k_bot lines o...
 │   │   │   │   ├── def find_block_anchor(file_lines, block_lines, allow_boundary_partial) # Abstracted 100% contiguous block search engine.
 │   │   │   │   ├── def normalize_patch_payload(text, reference_content) # Single Source of Truth normalizer for Yomama SEARCH, REPLACE, TEXTEDIT, and JSON_PATCH payloads.
-│   │   │   │   ├── def apply_block_in_memory(content, block, silent, allow_algorithmic_heal) # Applies a SEARCH/REPLACE block in memory using strict, artifact-healed, boundary-partial, and sandwich-fuzzy anchor matching.
-│   │   │   │   ├── def rebase_overlapping_block_in_memory(original_content, current_content, block, silent) # Tier 2 Deterministic Overlap Rebaser: When a patch block fails to anchor in `current_content` (A) because an earlier patch in the same batch...
+│   │   │   │   ├── def apply_block_in_memory(content, block, silent, allow_algorithmic_heal) # [stale?] Applies a SEARCH/REPLACE block in memory using strict, artifact-healed, boundary-partial, and sandwich-fuzzy anchor matching.
+│   │   │   │   ├── def rebase_overlapping_block_in_memory(original_content, current_content, block, silent) # [stale?] Tier 2 Deterministic Overlap Rebaser: When a patch block fails to anchor in `current_content` (A) because an earlier patch in the same batch...
 │   │   │   │   ├── def apply_textedit_in_memory(content, block, silent) # Applies a <<<<<<< TEXTEDIT inline prose diff block ({-delete}} / {{+insert}}) using exact or soft-wrap-normalized character span matching.
 │   │   │   │   └── def apply_json_patch_in_memory(filepath, content, block, silent) # Applies a <<<<<<< JSON_PATCH block (either a dotted/selector key-path dict or RFC 6902 array) to .json, .yaml/.yml, or .md (YAML frontmatter...
 │   │   │   ├── bridge_history.js   # Yomama Sync Bridge ledger receipt history projection (InSetuExtBridgeHistory).
@@ -371,17 +411,26 @@ insetu/
 │   │   │   │   ├── class InSetuBridgeDiffProjection # Side-by-side anchor and syntax diff inspection projection.
 │   │   │   │   ├── class InSetuBridgeEditProjection # Interactive single-chunk patch editor projection.
 │   │   │   │   └── class InSetuExtBridgeActions # Yomama surface header action toolbar and repository filter control.
+│   │   │   ├── bridge_sandwich.py  # Extract Tier 2 deterministic sandwich-weighted anchor healer and 3-way overlap rebaser into bridge_sandwich.py per gemini_offline_bridge_fol...
+│   │   │   │   ├── def find_sandwich_fuzzy_anchor(file_lines, block_lines) # [stale?] Tier 2 Deterministic Sandwich-Weighted Anchor Healer: Locates candidate windows in `file_lines` where the top k_top and bottom k_bot lines o...
+│   │   │   │   └── def rebase_overlapping_block(original_content, current_content, block) # Tier 2 Deterministic Overlap Rebaser: 1.
 │   │   │   ├── bridge_store.js     # Yomama Sync Bridge state store (BridgeStore) and declarative gate/flag UI metadata maps.
+│   │   │   ├── bridge_telemetry.py # Turn-partitioned session & routine telemetry compiler (`00_session_overview.txt` + `turn_<NNN>_dossier.txt`), `.zip` diagnostic bundle build...
+│   │   │   │   ├── def log_bridge_heal_audit(ctx) # [stale?] Records a structured Yomama Patch Auto-Heal attempt in `bridge_heal_audit`.
+│   │   │   │   ├── def build_session_telemetry_files_map(ctx, session_id, limit, since_ts) # [stale?] Projects a session's telemetry through the `msg://` Lens Contract into a map of `{"00_session_overview.txt": ..., "turn_001_<msg_id>_dossier...
+│   │   │   │   ├── def build_session_telemetry_zip_bytes(ctx, session_id, limit) # Packages `00_session_overview.txt` and all `turn_<NNN>_dossier.txt` files into an in-memory `.zip` archive.
+│   │   │   │   └── def compile_ai_telemetry_context(ctx, limit, session_id, turn_msg_id, ...) # [stale?] Compiles `ctx://contexts/ai_telemetry_context.txt` (or `ctx://contexts/ai_latest_turn_telemetry.txt` when `latest_turn_only=True`) using the...
 │   │   │   ├── bridge_test.py      # JUnit XML test runner adapter and exit-code fallback diagnostic extractor.
+│   │   │   │   ├── def resolve_test_command_payload(ctx, data) # Inspects workspace repository configuration files to determine the appropriate test runner command.
 │   │   │   │   └── def run_repo_test_diagnostics(ctx, repo, command_override, target_files, ...) # Executes the configured test runner for repo and extracts compact diagnostics.
 │   │   │   ├── bridge_vfs.py       # Async VFS commit pipelines and concurrency locks.
-│   │   │   │   ├── def clear_bridge_eval_cache() # Clears the in-memory content-addressed FileEvalSig and PatchEvalSig caches.
+│   │   │   │   ├── def clear_bridge_eval_cache() # [stale?] Clears the in-memory content-addressed FileEvalSig and PatchEvalSig caches.
 │   │   │   │   ├── def compute_file_eval_signature(workspace_id, target_file, disk_hash, blocks, ...) # Tier 1 Per-File Bundle Signature (FileEvalSig): Pure function of the target file's on-disk SHA-256 hash, the ordered list of active patch bl...
 │   │   │   │   ├── def compute_patch_eval_signature(resolved_path, input_buffer_hash, orig_disk_hash, block, ...) # Tier 2 Intra-File Sequential Chunk Signature (PatchEvalSig): Models a single chunk evaluation as a pure state transition from `input_buffer_...
 │   │   │   │   ├── class FileTimeline # Single Source of Truth for one file's state progression B_0 -> B_1 -> ...
 │   │   │   │   ├── class BridgeWorkingTree # Speculative VFS overlay for a single Bridge transaction.
 │   │   │   │   ├── def validate_buffer_syntax(ctx, resolved_path, new_content) # Validates full-buffer syntax for .json, .py, and .js/.ts/.mjs files using Tree-sitter (with ast.parse / node --input-type=module -c verifica...
-│   │   │   │   ├── def process_sync_transaction(vfs, workspace_id, data, sister_repos, ...) # Evaluates multi-file patch blocks in memory, enforces syntax/gate checks, and stages transitions.
+│   │   │   │   ├── def process_sync_transaction(vfs, workspace_id, data, sister_repos, ...) # [stale?] Evaluates multi-file patch blocks in memory, enforces syntax/gate checks, and stages transitions.
 │   │   │   │   └── def execute_bridge_sync(workspace_id, data, ctx) # Executes a full Yomama Bridge dry-run or live commit transaction with optional n-1 auto-healing.
 │   │   │   ├── bridge_window.py    # Stripped-line SequenceMatcher and declaration/symbol window locator for failed Yomama Bridge anchors.
 │   │   │   │   ├── def has_distinctive_anchor_line(content, search_str) # Fast pre-check before running multi-tier apply_block_in_memory on fuzzy candidate files: Returns True if `search_str` is empty (genesis) or...
@@ -394,7 +443,7 @@ insetu/
 │   │   │   │   ├── class BridgeRevertPayload(TypedDict) # Request schema naming the transaction_id and target_state for rollback.
 │   │   │   │   ├── def bridge_revert(ctx) # Phase 5: Forward-replay reversion.
 │   │   │   │   ├── class PatchResolution(TypedDict) # Per-cell or per-file user resolution override schema (selected_uri, approved_gate).
-│   │   │   │   ├── class BridgeSyncPayload(TypedDict) # Request schema for dry-run or live bridge.sync patch transactions.
+│   │   │   │   ├── class BridgeSyncPayload(TypedDict) # [stale?] Request schema for dry-run or live bridge.sync patch transactions.
 │   │   │   │   ├── def bridge_sync(ctx) # Receives Yomama payloads from the UI and dispatches the sync.
 │   │   │   │   ├── class BridgeAstRelocatePayload(TypedDict) # Request schema for AST symbol relocation between source and target files.
 │   │   │   │   ├── def bridge_ast_relocate(ctx) # Dispatches an in-memory or live AST symbol relocation transaction.
@@ -408,17 +457,20 @@ insetu/
 │   │   │   │   ├── def bridge_commit_message(ctx) # Synthesizes a Conventional Commit message from recent bridge_ledger intent comments.
 │   │   │   │   ├── class BridgeTurnDiffPayload(TypedDict) # Request schema for collecting unified/interleaved diffs across one or more transaction IDs.
 │   │   │   │   ├── def bridge_turn_diff(ctx) # Renders interleaved AST diffs and new/deleted file blocks for specified bridge transactions.
-│   │   │   │   ├── class BridgeCompileTelemetryPayload(TypedDict) # Request schema for compiling recent LLM call telemetry and Bridge auto-heal case studies.
-│   │   │   │   ├── def compile_ai_telemetry_context(ctx, limit) # Compiles a Gather-chunked diagnostic context payload (ctx://contexts/ai_telemetry_context.txt) containing tagged LLM telemetry and full befo...
-│   │   │   │   └── def api_bridge_compile_telemetry(ctx) # Route handler compiling recent LLM telemetry and Yomama Patch Auto-Heal case studies into ctx://contexts/ai_telemetry_context.txt.
+│   │   │   │   ├── class BridgeCompileTelemetryPayload(TypedDict) # [stale?] Request schema for compiling recent LLM call telemetry and Bridge auto-heal case studies.
+│   │   │   │   ├── def api_bridge_compile_telemetry(ctx) # Route handler compiling recent LLM telemetry and Yomama Patch Auto-Heal case studies into ctx://contexts/ai_telemetry_context.txt.
+│   │   │   │   └── def api_bridge_telemetry_zip(ctx) # Builds a .zip archive containing 00_session_overview.txt and individual turn dossiers for a session.
 │   │   │   ├── parser.py           # Create dedicated Yomama Bridge lexer and lookahead parser module (extracted from utils_core.py) with deterministic block content hashing for...
 │   │   │   │   ├── def get_base_step_and_diffs(lines) # Analyzes a block of code to find its true structural base indentation unit (LCD > 1).
 │   │   │   │   ├── def compute_block_signature(block, resolution) # Computes a deterministic SHA-256 content signature for a parsed Yomama block and its user resolution.
 │   │   │   │   ├── def parse_blocks(text) # Compiler-grade two-phase Lexer + Lookahead Parser for Yomama Bridge payloads: - Heals web-chat chevron meltdown (`> > > REPLACE`, `< < < SEA...
 │   │   │   │   ├── def flatten_parsed_blocks(parsed_structure) # Returns a flat list of (raw_target_file, block_index_in_file, block_dict) sorted strictly by the canonical 0..n creation order ('order') in...
 │   │   │   │   ├── def serialize_block_chunk(block, filepath, include_file_header, include_id) # Single Source of Truth serializer for a single Yomama block dict.
+│   │   │   │   ├── def strip_yomama_blocks_keep_prose(raw_text) # Strips raw Yomama patch blocks and empty code fences while preserving surrounding conversational prose.
+│   │   │   │   ├── def collect_live_files_for_patch_healing(ctx, parsed_blocks, readonly_list) # Reads current disk contents of files targeted by a failed Yomama patch so the healing LLM has exact anchors.
 │   │   │   │   └── def serialize_blocks_to_yomama(file_to_blocks) # Serializes a mapping of filepath -> block dicts into canonical Yomama patch text.
 │   │   │   └── prompts/            # Management of global prompt templates and macro inclusions.
+│   │   │       ├── patch_healer.md # Built-in module prompt template for the Fast-Tier Yomama Bridge n-1 Patch & Syntax Auto-Healer (projected at ctx://prompts/.templates/bridge...
 │   │   │       └── yomama_patch_protocol.md # Built-in prompt template defining the Yomama Bridge SEARCH/REPLACE patch syntax.
 │   │   ├── cartographer/           # Autonomous topology mapping and CODE_INDEX generation.
 │   │   │   ├── __init__.py         # Module initialization.
@@ -428,16 +480,16 @@ insetu/
 │   │   │   │   ├── class CartographerExtractPayload(TypedDict) # Request schema for AST symbol source slice extraction.
 │   │   │   │   ├── def api_cartographer_extract(ctx) # Slices and returns the exact AST source block for a target class, method, or function.
 │   │   │   │   ├── class CartographerVerifySymbolsPayload(TypedDict) # Request schema for marking symbol body hashes as verified.
-│   │   │   │   ├── def api_cartographer_verify_symbols(ctx) # Marks specified symbols as verified at their current AST body_hash, clearing [stale?] flags.
+│   │   │   │   ├── def api_cartographer_verify_symbols(ctx) # [stale?] Marks specified symbols as verified at their current AST body_hash, clearing [stale?] flags.
 │   │   │   │   ├── class CartographerClaimIndexPayload(TypedDict) # Request schema naming the repository whose CODE_INDEX.md claim should transfer to this workspace.
-│   │   │   │   ├── def api_cartographer_claim_index(ctx) # Human-only route transferring a shared clone's CODE_INDEX.md write claim to the active workspace.
+│   │   │   │   ├── def api_cartographer_claim_index(ctx) # [stale?] Human-only route transferring a shared clone's CODE_INDEX.md write claim to the active workspace.
 │   │   │   │   ├── class CartographerEnrichPayload(TypedDict) # Request schema for fast-tier LLM symbol comment enrichment.
 │   │   │   │   ├── def api_cartographer_enrich(ctx) # Batches undocumented or stale symbol snippets into a fast-tier LLM call and updates CODE_INDEX.md.
-│   │   │   │   └── def map_repositories(workspace_id, silent, target_repos, extra_comments, ...) # Maps tracked repository file trees and AST symbols into CODE_INDEX.md, honoring shared-clone index claims.
+│   │   │   │   └── def map_repositories(workspace_id, silent, target_repos, extra_comments, ...) # [stale?] Maps tracked repository file trees and AST symbols into CODE_INDEX.md, honoring shared-clone index claims.
 │   │   │   ├── cartographer_enrich.py # Fast-tier LLM symbol enrichment and [stale?] description review for Cartographer.
 │   │   │   │   ├── def build_enrich_symbol_context(rel_p, f_content, sym, file_desc) # Builds a high-signal source excerpt for Cartographer symbol enrichment and [stale?] review: - Prepends the enclosing file's 1-sentence descr...
 │   │   │   │   ├── def parse_enrich_reply_map(llm_res) # Extracts and parses the JSON key->description map from an llm.complete response.
-│   │   │   │   └── def execute_cartographer_enrich(ctx, repo_configs, extract_existing_comments_fn, map_repositories_fn, ...) # Describes '[comment required]' symbols and reviews '[stale?]' ones across batched fast-tier calls.
+│   │   │   │   └── def execute_cartographer_enrich(ctx, repo_configs, extract_existing_comments_fn, map_repositories_fn, ...) # [stale?] Describes '[comment required]' symbols and reviews '[stale?]' ones across batched fast-tier calls.
 │   │   │   └── index_claim.py      # Decides which workspace writes a clone's CODE_INDEX.md when several workspaces or insetu instances mount that clone with different index rul...
 │   │   │       ├── def index_rules_fingerprint(repo_cfg, workspace_cfg, include_symbols) # Hashes the configuration that shapes a CODE_INDEX.md render, so two workspaces can tell whether their renders agree.
 │   │   │       ├── def may_write_index(repo_path, workspace_id, rules, take_over) # Returns (allowed, holder): whether this workspace may write the clone's CODE_INDEX.md, and which workspace holds the claim.
@@ -464,7 +516,7 @@ insetu/
 │   │   │   │   ├── class FileDownloadZipPayload(TypedDict) # Request schema for exporting selected files and folders as a ZIP archive.
 │   │   │   │   ├── def api_fs_download_zip(ctx) # Expands selected files and folders through the Topology Sieve and streams a deflated .zip archive, capped by file count and total size.
 │   │   │   │   ├── def api_fs_exists(ctx) # Silent validation route that verifies file existence for the UI.
-│   │   │   │   ├── def api_fs_fetch(ctx) # Unified authenticated URI read, binary streaming, and attachment download gateway.
+│   │   │   │   ├── def api_fs_fetch(ctx) # [stale?] Unified authenticated URI read, binary streaming, and attachment download gateway.
 │   │   │   │   ├── class FileGitDiffResponse(TypedDict) # Response schema containing HEAD baseline and current working tree text for a file.
 │   │   │   │   ├── class FileProtectionResponse(TypedDict) # Whether a file is protected, with the message the editor shows.
 │   │   │   │   ├── def api_fs_protected(ctx) # Reports whether a file is a protected recovery file, so the editor shows its banner and skips autosave (S8).
@@ -567,15 +619,14 @@ insetu/
 │   │   ├── gather/                 # RAG Context compiler and manifest synchronizer.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── context_assemble.py # Unified RAG funnel (context.assemble) and Hebbian affinity graph.
-│   │   │   │   ├── def scrub_outbound_secrets(text, secret_values) # Scrubs Fernet ciphertext tokens, boot tokens, and workspace secrets from outbound context strings.
-│   │   │   │   ├── def collect_workspace_secrets(ctx) # Collects decrypted/raw secret values from the tenant secrets.json vault for outbound scrubbing.
-│   │   │   │   ├── def assemble_blast_radius(ctx, edit_targets, user_message, history_summary) # 4-Layer Deterministic Blast Radius: 1.
-│   │   │   │   ├── def parse_message_uri(raw_uri) # Canonicalizes any session message reference (`msg://<id>`, `msg://<session_id>/<id>`, or bare `msg_<id>`, with optional `[raw]` / `[full]` q...
-│   │   │   │   ├── def project_resource_lens(ctx, uri, lens, **params) # Universal Representational Lens Projector projecting vfs://, ctx://, msg://, and mddb:// URIs across full, diff, slice, outline, and genesis.
-│   │   │   │   ├── def detect_external_edits(ctx, filepaths) # SHA-256 External Edit Detection (Section 3.1): Compares live disk SHA-256 of working_set files against the latest bridge_ledger post_patch_h...
-│   │   │   │   ├── def assemble_context_payload(ctx, edit_targets, user_message, strategy, ...) # Assembles volatility-ordered 3-tier context + neighborhood CODE_INDEX outline, registers turn_*_context.txt in manifest_ledger, and scrubs secrets.
-│   │   │   │   ├── def resolve_query_context(ctx, query_text) # Resolves single-hop topology-confined symbolic/file read directives and msg:// session message recalls.
-│   │   │   │   └── def compile_query_quickpack(ctx, raw_text) # Compiles a standalone Quickpack (ctx://contexts/quickpack_*_context.txt) from topology-tracked QUERY_CONTEXT blocks in raw_text.
+│   │   │   │   ├── def project_resource_lens(ctx, uri, lens, **params) # [stale?] Universal Representational Lens Projector projecting vfs://, ctx://, msg://, and mddb:// URIs across full, diff, slice, outline, and genesis.
+│   │   │   │   ├── def detect_external_edits(ctx, filepaths) # [stale?] SHA-256 External Edit Detection (Section 3.1): Compares live disk SHA-256 of working_set files against the latest bridge_ledger post_patch_h...
+│   │   │   │   ├── def assemble_context_payload(ctx, edit_targets, user_message, strategy, ...) # [stale?] Assembles volatility-ordered 3-tier context + neighborhood CODE_INDEX outline, registers turn_*_context.txt in manifest_ledger, and scrubs secrets.
+│   │   │   │   ├── def pack_envelope_working_set(ctx, envelope, ordered_nodes, history_messages, ...) # [stale?] Single-Seam Working-Set Context Packer: Projects all working-set artifacts on `envelope` in bucket volatility order, records `served_lens`,...
+│   │   │   │   ├── def resolve_envelope_query_directives(ctx, envelope, directives, clamp_fn) # [stale?] Parses `<<<<<<< QUERY_CONTEXT` lines (`+ vfs://...`, `- vfs://...`, `msg://<id>`) into `(clamped_add_uris, clamped_drop_uris)`, materializin...
+│   │   │   │   ├── def resolve_query_context(ctx, query_text) # [stale?] Resolves single-hop topology-confined symbolic/file read directives and msg:// session message recalls.
+│   │   │   │   ├── def heal_missing_ephemeral_quickpack(ctx, base_uri, parsed_entry) # [stale?] Re-materializes a missing `quickpack_*` / `turn_*` context artifact from active session checkpoints or manifest file lists.
+│   │   │   │   └── def compile_query_quickpack(ctx, raw_text) # [stale?] Compiles a standalone Quickpack (ctx://contexts/quickpack_*_context.txt) from topology-tracked QUERY_CONTEXT blocks in raw_text.
 │   │   │   ├── engine_gather.py    # [Context Compiler and Workflow Batch routing]
 │   │   │   │   ├── def compile_context_payload(workspace_id, output_dir, base_uri, header_block, ...) # Universal compiler for all system contexts (Gather, Git, Flow).
 │   │   │   │   ├── def handle_topology_resolved(workspace_id, dirty_repos, dirty_buckets, events, **kwargs) # Stage 2 Slew Limiter: Catches resolved topology and schedules a delayed RAG compilation.
@@ -585,7 +636,7 @@ insetu/
 │   │   │   │   ├── def hook_vfs_search(workspace_id, query, **kwargs) # Searches tracked workspace files for matching lines on vfs_search hook emissions.
 │   │   │   │   ├── def provide_base_workspaces(target_repos, ledger_events, workspace_id, **kwargs) # Base Workspace Provider: Yields schemas for standard repo contexts and media vaults.
 │   │   │   │   ├── def get_compiler_lock(wid) # Returns the per-workspace reentrant compilation lock.
-│   │   │   │   ├── def generate_context_file(workspace_id, target_repos) # The Master Orchestrator Loop: Executes full sweeps based on declared topology and garbage collects.
+│   │   │   │   ├── def generate_context_file(workspace_id, target_repos) # [stale?] The Master Orchestrator Loop: Executes full sweeps based on declared topology and garbage collects.
 │   │   │   │   ├── def vacuum_unaccounted_cache_on_complete(workspace_id, **kwargs) # Terminal Mark-and-Sweep Garbage Collector: Runs strictly AFTER all compilation DAG steps have updated manifest_ledger.
 │   │   │   │   ├── class QueryContextPayload(TypedDict) # Request schema for single-hop QUERY_CONTEXT reads or standalone Quickpack compilation.
 │   │   │   │   ├── def api_gather_context_assemble(ctx) # Assembles volatility-ordered 3-tier turn context payloads via assemble_context_payload.
@@ -596,7 +647,7 @@ insetu/
 │   │   │   │   ├── def api_gather_pack_selection(ctx) # Queues an asynchronous background job to compile selected items into a Quickpack.
 │   │   │   │   ├── class RepoTemplateResponse(TypedDict) # Response schema returning the default repository configuration template.
 │   │   │   │   ├── def api_repo_template(ctx) # Returns the default configuration dictionary template required when appending a new target repository.
-│   │   │   │   ├── def mount_gather_volumes(workspace_id, **kwargs) # Ensures legacy context cache directories are migrated into the declarative contexts volume.
+│   │   │   │   ├── def mount_gather_volumes(workspace_id, **kwargs) # [stale?] Ensures legacy context cache directories are migrated into the declarative contexts volume.
 │   │   │   │   ├── def hook_request_manifest(workspace_id, **kwargs) # Returns the memoized ctx domain manifest dictionary from manifest_ledger.
 │   │   │   │   ├── def hook_request_manifest_chunks(target_key, workspace_id, **kwargs) # Resolves the ordered chunk URIs for a manifest entry.
 │   │   │   │   ├── def hook_resolve_payload_chunks(uri, workspace_id, manifest, **kwargs) # Resolves constituent chunk URIs for a logical ctx:// context or diff URI.
@@ -611,15 +662,30 @@ insetu/
 │   │   │   │   ├── function getFlattenedBuckets(repoDirOrConfigs = null, include...) # Flattens configured repositories and sub-buckets into an ordered list of bucket descriptors.
 │   │   │   │   ├── function packSelectionPayload(items) # Compiles selected files and folders into a Quickpack and pre-warms its share cache.
 │   │   │   │   └── class InSetuExtGather # Categorized Gather context deck UI component with fuzzy search and Quickpack management.
-│   │   │   └── rag_proximity.py    # Extract Hebbian affinity graph helpers and blast-radius CODE_INDEX subtree slicer into rag_proximity.py per proximity_filters_and_domain_jum...
-│   │   │       ├── def record_affinity_interaction(ctx, file_list, interaction_type, weight) # Updates co-occurrence weights in the persistent SQLite affinity_edges table.
-│   │   │       ├── def get_affinity_neighbors(ctx, seed_files, top_k) # Calculates time-decayed Hebbian affinity scores clamped to topology_ledger to return top correlated peer files.
-│   │   │       ├── def prune_stale_affinity_edges(ctx, grace_period_seconds) # Garbage-collects affinity_edges rows older than grace_period_seconds whose endpoints are no longer tracked in topology_ledger.
-│   │   │       └── def slice_code_index_for_blast_radius(ctx, seed_files, max_chars) # Slices a repository's CODE_INDEX.md to retain top-level landmarks and the directory subtrees matching seed_files.
+│   │   │   ├── msg_lens.py         # Dedicated `msg://` Lens Provider module (`msg://<session_id>` and `msg://<message_id>[#telemetry]`) extracted from `context_assemble.py` so...
+│   │   │   │   ├── def parse_message_uri(raw_uri) # [stale?] Canonicalizes any session message reference (`msg://<id>`, `msg://<session_id>/<id>`, or bare `msg_<id>`, with optional `[raw]` / `[full]` q...
+│   │   │   │   ├── def format_trace_tree_lines(trace_list, indent) # Formats a hierarchical `RoutineEnvelope.execution_trace` list into indented text lines.
+│   │   │   │   ├── def project_session_msg_lens(ctx, session_id, s_row, clean_lens) # [stale?] Projects a whole session (`msg://<session_id>`) at `outline`, `slice` (`00_session_overview.txt`), or `full`.
+│   │   │   │   └── def project_turn_dossier(ctx, rk) # [stale?] Renders the complete forensic turn dossier (`turn_<NNN>_dossier.txt`) for `msg://<message_id>`.
+│   │   │   ├── rag_proximity.py    # Hebbian co-occurrence affinity graph (affinity_edges), deterministic blast-radius assembler, and CODE_INDEX.md subtree outline slicer.
+│   │   │   │   ├── def clamp_rag_files_to_topology(ctx, candidate_files, allowed_repos, max_files, ...) # Clamps and resolves LLM-selected RAG file URIs against topology_ledger within allowed_repos.
+│   │   │   │   ├── def describe_unresolved_rag_path(ctx, raw_path, allowed_repos, prefix_label) # Formats a diagnostic message with closest tracked `topology_ledger` candidates when a scout/probe path fails to resolve.
+│   │   │   │   ├── def ingest_scout_inspect_files(ctx, envelope, parsed_output) # [stale?] Pure deterministic helper invoked when a routine node with an `until:` loop returns `inspect_files` (or unread prose docs in `requested_file...
+│   │   │   │   ├── def expand_scouted_working_set_targets(ctx, envelope) # [stale?] Consolidates scouted candidate files on `RoutineEnvelope`, extracts deterministic file references from attached/inspected documents, scopes...
+│   │   │   │   ├── def record_affinity_interaction(ctx, file_list, interaction_type, weight) # Updates co-occurrence weights in the persistent SQLite affinity_edges table.
+│   │   │   │   ├── def assemble_blast_radius(ctx, edit_targets, user_message, history_summary, ...) # 4-Layer Deterministic Blast Radius: 1.
+│   │   │   │   ├── def get_affinity_neighbors(ctx, seed_files, top_k) # Calculates time-decayed Hebbian affinity scores clamped to topology_ledger to return top correlated peer files.
+│   │   │   │   ├── def prune_stale_affinity_edges(ctx, grace_period_seconds) # Garbage-collects affinity_edges rows older than grace_period_seconds whose endpoints are no longer tracked in topology_ledger.
+│   │   │   │   └── def slice_code_index_for_blast_radius(ctx, seed_files, max_chars) # Slices a repository's CODE_INDEX.md to retain top-level landmarks and the directory subtrees matching seed_files.
+│   │   │   └── rag_scout.py        # Format-agnostic document budget guard, deterministic fallback URI extractor, and working-set token metric estimator.
+│   │   │       ├── def collect_workspace_file_extensions(ctx, allowed_repos) # Returns (known_extensions_lower, known_basenames_lower) from the workspace's live topology_ledger.
+│   │   │       ├── def prioritize_document_sections(user_prompt, docs_text, full_threshold_chars) # Format-agnostic document budget guard: returns `docs_text` untouched when <= `full_threshold_chars`, and delegates strictly to `BaseLanguageProvider.slice_interface` when a document exceeds the threshold.
+│   │   │       ├── def build_context_file_metrics(ctx, constitution_files, reference_files, pinned_files) # Computes memoized estimated token counts per file URI in the active working set.
+│   │   │       └── def extract_doc_referenced_files(ctx, user_prompt, docs_text, allowed_repos, ...) # Format- and repository-agnostic file reference extractor for attached plans, tickets, and notes.
 │   │   ├── languages/              # Pluggable Tree-sitter and AST language provider contracts.
 │   │   │   ├── __init__.py         # Create central Tier 2 language analysis package unifying AST symbol indexing, source slice extraction, and interface slicing.
 │   │   │   │   ├── def get_language_provider(filepath) # Resolves the appropriate language provider for a file path based on its extension.
-│   │   │   │   ├── def extract_file_symbols(filepath, content) # Stage 2 Shallow Static AST Extractor: Extracts public top-level symbols for .py, .rs, and .js/.ts/.mjs/.tsx files.
+│   │   │   │   ├── def extract_file_symbols(filepath, content) # [stale?] Stage 2 Shallow Static AST Extractor: Extracts public top-level symbols for .py, .rs, and .js/.ts/.mjs/.tsx files.
 │   │   │   │   ├── def extract_symbol_source_slice(filepath, content, symbol_query) # Locates a top-level class, method (Class.method or method), or function in `content` and returns its exact source slice (including leading d...
 │   │   │   │   ├── def describe_source_file(rel_path, content) # Derives a one-sentence file description for CODE_INDEX.md from docstrings, frontmatter, headers, or metadata.
 │   │   │   │   ├── def describe_directory(rel_dir, child_files, read_fn) # Derives a one-sentence directory description from its README.md, __init__.py, package.json, or child script headers.
@@ -631,7 +697,7 @@ insetu/
 │   │   │   │   └── class BaseLanguageProvider(ABC) # Abstract interface contract for language-specific AST inspection and interface slicing.
 │   │   │   ├── javascript.py       # Consolidate JS/TS symbol extraction, JSDoc parsing, file description, and interface slicing in JavaScriptLanguageProvider without importing...
 │   │   │   │   ├── def extract_preceding_jsdoc(lines, target_line_idx) # Returns (first_sentence_jsdoc, earliest_start_line_1based) preceding target_line_idx (0-based).
-│   │   │   │   └── class JavaScriptLanguageProvider(BaseLanguageProvider) # Resilient JS/TS language provider with Tree-Sitter and regex-based AST extraction and brace balancing.
+│   │   │   │   └── class JavaScriptLanguageProvider(BaseLanguageProvider) # [stale?] Resilient JS/TS language provider with Tree-Sitter and regex-based AST extraction and brace balancing.
 │   │   │   ├── markdown.py         # Pure general-purpose Markdown language provider for heading AST spans, links, citations, and interface slicing.
 │   │   │   │   └── class MarkdownLanguageProvider(BaseLanguageProvider) # General-purpose language provider for Markdown (.md, .markdown) files: - Extracts hierarchical heading trees (# ..
 │   │   │   ├── python.py           # Consolidate Python AST symbol extraction, normalized body hashing, file description, and interface slicing in PythonLanguageProvider.
@@ -644,37 +710,45 @@ insetu/
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── engine_llm.py       # Multi-model inference orchestrator (Anthropic, Gemini, Claude CLI).
 │   │   │   │   ├── class ChatMessage(TypedDict) # Schema representing a single role/content chat turn message.
-│   │   │   │   ├── class ChatCompletionPayload(TypedDict) # Request schema for semantic-tier LLM completion or streaming inference.
+│   │   │   │   ├── class ChatCompletionPayload(TypedDict) # [stale?] Request schema for semantic-tier LLM completion or streaming inference.
 │   │   │   │   ├── class LlmDecidePayload(TypedDict) # Request schema for fast decision-tier classification calls.
-│   │   │   │   ├── def get_compute_pool_and_profiles(ctx) # Returns the normalized compute endpoint pool, configuration profiles, and active_profile_id.
+│   │   │   │   ├── def get_compute_pool_and_profiles(ctx) # [stale?] Returns the normalized compute endpoint pool, configuration profiles, and active_profile_id.
 │   │   │   │   ├── class LlmResolveTargetPayload(TypedDict) # Query schema naming the cognitive tier and profile to resolve.
 │   │   │   │   ├── def api_llm_resolve_target(ctx) # Resolves execution target metadata for a cognitive tier without exposing plaintext API keys.
 │   │   │   │   ├── def validate_output_schema(raw_text, output_schema) # Universal Output Schema Bouncer: Validates LLM text against named built-in contracts ('yomama_patch', 'intent_classification', 'json') or a...
-│   │   │   │   ├── def api_llm_complete(ctx) # Executes an LLM inference turn with tier routing, output_schema retries, and telemetry recording.
+│   │   │   │   ├── def api_llm_complete(ctx) # [stale?] Executes an LLM inference turn with tier routing, output_schema retries, and telemetry recording.
 │   │   │   │   ├── class AudioTranscribePayload(TypedDict) # Request schema for push-to-talk audio transcription payloads.
-│   │   │   │   ├── def api_llm_transcribe(ctx) # Transcribes uploaded audio snippets through the configured speech endpoint.
+│   │   │   │   ├── def api_llm_transcribe(ctx) # [stale?] Transcribes uploaded audio snippets through the configured speech endpoint.
 │   │   │   │   ├── def api_chat_completions(ctx) # Streams Server-Sent Events (SSE) inference chunks for interactive chat completions.
 │   │   │   │   ├── class LlmProfilesSavePayload(TypedDict) # Request schema for updating compute endpoints, profiles, or active_profile_id.
 │   │   │   │   ├── def api_llm_profiles(ctx) # Lists or updates the Compute Endpoint Pool, Cognitive Configuration Profiles, and active_profile_id.
 │   │   │   │   ├── def api_llm_decide(ctx) # Executes a fast binary or multi-class decision evaluation using the 'decision' tier with fallback to 'fast'.
 │   │   │   │   ├── def api_llm_catalog(ctx) # Returns or refreshes the cached multi-provider model and token pricing catalog.
-│   │   │   │   └── def api_public_llm_catalog() # Free, unauthenticated, CORS-enabled public JSON API endpoint serving the normalized multi-provider model & token pricing catalog (merging Op...
+│   │   │   │   └── def api_public_llm_catalog() # [stale?] Free, unauthenticated, CORS-enabled public JSON API endpoint serving the normalized multi-provider model & token pricing catalog (merging Op...
 │   │   │   ├── llm_catalog.py      # Multi-source model and token pricing catalog harvester and cognitive tier classifier extracted from engine_llm.py (God-Objects Wave 3.5).
-│   │   │   │   ├── def infer_model_cognitive_tier(model_id, input_cost_per_1m, category) # Heuristically classifies a catalog model ID into a semantic cognitive tier (decision, fast, standard, thinking, frontier).
+│   │   │   │   ├── def infer_model_cognitive_tier(model_id, input_cost_per_1m, category) # [stale?] Heuristically classifies a catalog model ID into a semantic cognitive tier (decision, fast, standard, thinking, frontier).
 │   │   │   │   ├── def harvest_external_model_catalog(ctx, endpoints) # Harvests and normalizes model availability, context limits, and per-1M token pricing from: 1.
 │   │   │   │   └── def export_public_llm_catalog_file(out_path, workspace_id) # Headless static exporter for CI / GitHub Actions / Cloudflare Pages: Harvests the live multi-provider model & token pricing catalog and writ...
 │   │   │   ├── llm_drivers.py      # Physical admission control semaphores and streaming/decision protocol drivers extracted from engine_llm.py (God-Objects Wave 3.5).
 │   │   │   │   ├── def get_provider_semaphore(provider, max_parallel, endpoint_id) # Physical Admission Control Semaphore per Compute Endpoint (or fallback provider): - claude_cli: hard-clamped to 1 (local pseudo-TTY binary).
-│   │   │   │   ├── def stream_anthropic(api_key, model, messages, system_prompt) # Streams SSE inference chunks from the Anthropic Messages API with ephemeral prompt caching.
-│   │   │   │   ├── def stream_gemini(api_key, model, messages, system_prompt) # Streams SSE inference chunks from the Google Gemini API with preview model fallback and Python 3.10-safe error formatting.
-│   │   │   │   ├── def stream_openai_compatible(base_url, api_key, model, messages, ...) # Streams inference from any OpenAI-compatible /v1/chat/completions endpoint (Ollama, LM Studio, vLLM, llama.cpp, OpenAI).
+│   │   │   │   ├── def stream_anthropic(api_key, model, messages, system_prompt) # [stale?] Streams SSE inference chunks from the Anthropic Messages API with ephemeral prompt caching.
+│   │   │   │   ├── def run_audio_transcription(provider, api_key, model, audio_base64, ...) # Executes multimodal audio transcription via the configured provider driver.
+│   │   │   │   ├── def stream_gemini(api_key, model, messages, system_prompt) # [stale?] Streams SSE inference chunks from the Google Gemini API with preview model fallback and Python 3.10-safe error formatting.
+│   │   │   │   ├── def stream_openai_compatible(base_url, api_key, model, messages, ...) # [stale?] Streams inference from any OpenAI-compatible /v1/chat/completions endpoint (Ollama, LM Studio, vLLM, llama.cpp, OpenAI).
 │   │   │   │   ├── def stream_claude_cli(model, messages, system_prompt) # Hardened subprocess adapter for the Claude CLI binary: - Pipes prompt payload over stdin to avoid OS ARG_MAX limits on large Gather context...
 │   │   │   │   ├── def run_decisions_inference(base_url, api_key, model, messages, ...) # Executes a TypeSafe Jev / System-One decision call against POST /api/alpha/decisions (supported natively by OpenRouter and TypeSafe endpoint...
 │   │   │   │   └── def run_single_inference(provider, api_key, model, messages, ...) # Acquires the endpoint admission semaphore and aggregates a complete inference response from the active driver.
 │   │   │   └── llm_telemetry.py    # Extract LLM call telemetry schema, recording, and per-tier cost aggregation into llm_telemetry.py per Follow-up Brief §2.6 and Sprint A2.1.
-│   │   │       ├── def get_cached_catalog_rates(workspace_id) # Reads and caches (input_cost_per_1m, output_cost_per_1m) rates by model ID from model_catalog.json.
-│   │   │       ├── def record_llm_call_telemetry(ctx) # Scrubs outbound secrets and inserts a bounded row into llm_telemetry.
-│   │   │       └── def compute_session_tier_telemetry(ctx, since_ts) # Aggregates per-tier token usage and estimated USD cost from llm_telemetry joined with model_catalog.json.
+│   │   │       ├── def telemetry_session_scope(session_id, workspace_id, turn_msg_id) # [stale?] Binds session_id (and turn_msg_id, auto-resolved from the latest user prompt in session_id when omitted) for automatic LLM telemetry attribu...
+│   │   │       ├── def get_active_telemetry_session_id(workspace_id) # [stale?] Returns the session_id bound in the current telemetry_session_scope (falling back to workspace scope for child threads).
+│   │   │       ├── def get_active_telemetry_turn_msg_id(workspace_id) # [stale?] Returns the turn_msg_id bound in the current telemetry_session_scope.
+│   │   │       ├── def get_cached_catalog_rates(workspace_id) # [stale?] Reads and caches (input_cost_per_1m, output_cost_per_1m) rates by model ID from model_catalog.json.
+│   │   │       ├── def get_model_context_length(workspace_id, model_id) # [stale?] Returns the context_length in tokens for model_id from model_catalog.json, defaulting to 200,000.
+│   │   │       ├── def estimate_call_cost_usd(workspace_id, tier, model_id, prompt_tokens, ...) # Computes the USD cost (or imputed thinking-tier cost for web_chat) for a single inference call.
+│   │   │       ├── def record_llm_call_telemetry(ctx) # [stale?] Scrubs outbound secrets and inserts a bounded row into llm_telemetry.
+│   │   │       ├── def compute_session_tier_telemetry(ctx, since_ts, session_id) # [stale?] Aggregates per-tier token usage and estimated USD cost from llm_telemetry joined with model_catalog.json.
+│   │   │       ├── def resolve_session_budget_state(ctx, session_id, token_ledger) # [stale?] Single Source of Truth for Two-Level Session Budget State: - Level 1: Resolves `model_context_length` and `context_soft_ceiling` (75% of mod...
+│   │   │       └── def build_web_chat_budget_warning(workspace_id, tier, packed_est_tok, prompt_chars, ...) # Formats the inline buttonless warning for Web-Chat handoff cards when Level 1 (75% window) or Level 2 ($X spend) is reached.
 │   │   ├── mcp/                    # Model Context Protocol (MCP 2025-03-26) server substrate.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   └── engine_mcp.py       # JSON-RPC 2.0 MCP gateway exposing capabilities as tools, contexts as resources, and prompt templates.
@@ -726,9 +800,9 @@ insetu/
 │   │   ├── remote/                 # Remote access: Tailscale identity verification, Serve binding, and trusted hostnames.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   └── engine_remote.py    # Verifies remote devices with tailscale whois, binds Tailscale Serve, and registers trusted hosts.
-│   │   │       ├── def tailscale_whois(ip) # Resolves a tailnet address to {'login', 'tags', 'node'} via `tailscale whois --json`.
-│   │   │       ├── def tailscale_owner_login() # Returns the login that owns this machine's tailscaled (None for tagged machines or when unavailable).
-│   │   │       ├── def reset_identity_caches() # Test harness contract: clears WHOIS and owner caches.
+│   │   │       ├── def tailscale_whois(ip) # [stale?] Resolves a tailnet address to {'login', 'tags', 'node'} via `tailscale whois --json`.
+│   │   │       ├── def tailscale_owner_login() # [stale?] Returns the login that owns this machine's tailscaled (None for tagged machines or when unavailable).
+│   │   │       ├── def reset_identity_caches() # [stale?] Test harness contract: clears WHOIS and owner caches.
 │   │   │       ├── def tailscale_identity_handshake(request, peer, client_ip, config, **kwargs) # Route B provider: authenticates a remote device by its verified Tailscale login.
 │   │   │       ├── def migrate_legacy_tailscale_settings() # Copies daemon settings saved by the retired 'tailscale' extension into the 'remote' block once.
 │   │   │       ├── def register_configured_hosts() # Registers operator-configured hostnames (comma-separated 'allowed_hosts' setting) with the Host gate.
@@ -742,12 +816,14 @@ insetu/
 │   │   │       ├── def reset_kernel_state(**kwargs) # Resets Akasa kernel state, closes cached SQLite pools, and resets extension volume mount tracking so subsequent get_context() mounts cleanly.
 │   │   │       ├── def mount_declared_volume(workspace_id, scheme, volume) # Mounts volume via its owning InSetuExtension if declared, preserving TemplateOverlayVFSDriver.
 │   │   │       ├── class TemplateOverlayVFSDriver(DefaultVFSDriver) # Unified Tier 2 Template Overlay VFS Driver for ctx://prompts and ctx://routines: - Routes ctx://<vol>/.templates/user/...
-│   │   │       ├── class InSetuContext(_BaseExtensionContext) # Tier 2 Developer OS Extension Context with dual-root Manifest, RAG compilation, and Frontmatter helpers.
+│   │   │       ├── class InSetuContext(_BaseExtensionContext) # [stale?] Tier 2 Developer OS Extension Context with dual-root Manifest, RAG compilation, and Frontmatter helpers.
 │   │   │       ├── def get_mountable_data_domains() # Returns options for all registered extensions that own a 'data'-tier VFS volume, plus the '*' wildcard.
 │   │   │       ├── def resolve_external_dependency_spec(dep_str) # Normalizes an external dependency declaration into (import_specifier, pypi_package_name).
-│   │   │       ├── class InSetuExtension(AkasaExtension) # Tier 2 Developer OS Blueprint wrapper supporting declarative VFS volume mounts, dependency contracts, route risk tiers, and InSetuContext injection.
+│   │   │       ├── class InSetuExtension(AkasaExtension) # [stale?] Tier 2 Developer OS Blueprint wrapper supporting declarative VFS volume mounts, dependency contracts, route risk tiers, and InSetuContext injection.
 │   │   │       ├── def get_dynamic_routine_banned_capabilities() # Returns capability IDs dynamically banned from routine invocation via risk='ui_only' or 'exec'.
-│   │   │       └── def get_dynamic_read_only_capabilities() # Returns capability IDs dynamically marked safe for read-only (/ask) mode via risk='read'.
+│   │   │       ├── def is_routine_banned_capability(action, extra_banned, ctx) # SSOT predicate evaluating whether `action` is banned from declarative routine `exec` steps.
+│   │   │       ├── def get_dynamic_read_only_capabilities() # Returns capability IDs dynamically marked safe for read-only (/ask) mode via risk='read'.
+│   │   │       └── def is_read_only_safe_capability(action, extra_allowed) # SSOT predicate evaluating whether `action` is permitted in read-only ('ask') mode.
 │   │   ├── step_timer.py           # A small timer that records how long each named step of a request took, so a slow response can report which part was slow.
 │   │   │   └── class StepTimer     # Records how long each step took, in milliseconds, measured from the previous mark (or from creation).
 │   │   ├── system/                 # System lifecycle, settings, and recovery controllers.
@@ -795,7 +871,8 @@ insetu/
 │   │   │   │   │   ├── class InSetConfigBanner # [comment required]
 │   │   │   │   │   ├── class InSetuQuarantinedSlotPlaceholder # [comment required]
 │   │   │   │   │   ├── class InSetuProjectionWindowControls # [comment required]
-│   │   │   │   │   └── class InSetuHostDirPicker # [comment required]
+│   │   │   │   │   ├── class InSetuHostDirPicker # [comment required]
+│   │   │   │   │   └── class InSetuConfirmModal # Declarative compact confirmation dialog modal backing window.inSetu.ui.confirmModal.
 │   │   │   │   ├── ui_protected_changes.js # S8: the review window for pending changes to protected files (the CLI, the lifeboat, the credential store), one change at a time as a diff a...
 │   │   │   │   │   ├── function hashReviewedContent(change) # S8: the review window for changes to protected files (the CLI, the lifeboat, the credential store).
 │   │   │   │   │   ├── class InSetuProtectedChangesProjection # Shows pending protected changes one at a time as diffs, with Previous and Next, Confirm and Discard.
@@ -856,7 +933,7 @@ insetu/
 │   │   │   │   ├── def get_workspace_extension_reserved_names() # Names a workspace extension cannot take: every bundled extension and core module, plus config, sdk, languages.
 │   │   │   │   ├── def get_workspace_extensions_root() # The one folder workspace extensions load from: .insetu/extensions/ under the default workspace root.
 │   │   │   │   ├── def snapshot_workspace_extension(ext_dir, with_contents) # Hashes every file of one workspace extension.
-│   │   │   │   ├── def current_workspace_extension_fingerprint(ext_dir) # The extension's fingerprint now, rehashed only when a file's size or mtime changed (for per-request checks).
+│   │   │   │   ├── def current_workspace_extension_fingerprint(ext_dir) # [stale?] The extension's fingerprint now, rehashed only when a file's size or mtime changed (for per-request checks).
 │   │   │   │   ├── def get_workspace_extension_approvals() # Approved workspace extensions from the attestation store: {name: {"fingerprint", "files", "approved_at"}}.
 │   │   │   │   ├── def approve_workspace_extension(name, snapshot) # Records a person's approval of one extension's exact files in the attestation store; refused to machine origins.
 │   │   │   │   ├── def revoke_workspace_extension(name) # Removes a person's approval for one extension; it stops loading at the next restart.
@@ -870,13 +947,15 @@ insetu/
 │   │   │   │   ├── def api_workspace_extension_approve(ctx) # [stale?] Approves the files a person reviewed: the fingerprint they saw must still match the folder, or nothing is approved.
 │   │   │   │   └── def api_workspace_extension_revoke(ctx) # [stale?] Human-only: removes a workspace extension's approval; it stops loading at the next restart.
 │   │   │   ├── insetu_element.js   # Base Web Component class providing tenant workspace hydration, scoped API client access, and ecosystem filtering.
-│   │   │   │   └── class InSetuElement # Base Web Component class for inSetu core views and extensions with tenant-scoped API, store, and ecosystem bindings.
+│   │   │   │   └── class InSetuElement # [stale?] Base Web Component class for inSetu core views and extensions with tenant-scoped API, store, and ecosystem bindings.
 │   │   │   ├── insetu_sdk.js       # The InSetuElement base class and Zustand store factory.
 │   │   │   │   ├── function extractTemplateVariables(text, options = {}) # [comment required]
 │   │   │   │   ├── function interpolateTemplateVariables(text, values = {}, options = {}) # [comment required]
 │   │   │   │   ├── function cleanCodeArtifacts(text) # [comment required]
 │   │   │   │   ├── function createExtensionStore(name, initialState, persistenceS...) # [comment required]
-│   │   │   │   └── function createIsolatedSlice(store, sliceKey) # [comment required]
+│   │   │   │   ├── function createIsolatedSlice(store, sliceKey) # [comment required]
+│   │   │   │   ├── function copyToClipboard(text) # Preserve clipboard API bindings
+│   │   │   │   └── function copyRawText(text, successMsg = "✅ Copied!") # [comment required]
 │   │   │   ├── legacy.py           # Self-healing database recovery and legacy sandbox migration.
 │   │   │   │   ├── def move_tree_contents(src_dir, dst_dir) # Recursively merges files from src_dir into dst_dir and removes empty source directories.
 │   │   │   │   ├── def split_system_json(**kwargs) # Delegates legacy system.json splitting (into host.json and workspaces.json) to the Akasa kernel.
@@ -884,12 +963,15 @@ insetu/
 │   │   │   ├── manifest_sync.js    # Decentralized VFS/CTX manifest delta synchronization and background IndexedDB cache warming queue.
 │   │   │   │   ├── function importModuleWithRetry(url, importer = (u) => import(u)...) # Imports a frontend ES module with bounded backoff retries on transient network fetch errors.
 │   │   │   │   ├── function classifyBootModuleFailure(url, err, fetchImpl = fetch) # Distinguishes transient network/offline drops from SyntaxError or 404 faults via a HEAD probe.
+│   │   │   │   ├── function collectOfflineBootModuleUrls(fallbackScripts = []) # [comment required]
 │   │   │   │   └── function checkManifestVersion() # --- DECENTRALIZED MANIFEST SYNC & KERNEL HEARTBEAT ---
 │   │   │   ├── memory_profiler.py  # Process memory telemetry, garbage collection object profiling, and tracemalloc snapshot helpers.
 │   │   │   │   └── def collect_process_memory_telemetry(action) # Inspects backend RAM usage, internal caches, top Python object types, and optionally triggers GC/malloc_trim or tracemalloc.
 │   │   │   ├── openapi.py          # OpenAPI 3.0 specification builder for mounted Akasa and inSetu extension routes.
 │   │   │   │   └── def build_system_openapi_spec(app) # Generates a real-time OpenAPI 3.0 specification dictionary from mounted SDK routes on `app`.
 │   │   │   ├── security_io.py      # Child process environment sanitization, outbound HTTP SSRF/byte-cap guard, command attestations, and repeater secret vaulting.
+│   │   │   │   ├── def collect_workspace_secrets(ctx) # [stale?] Collects decrypted/raw secret values from the tenant secrets.json vault for outbound scrubbing.
+│   │   │   │   ├── def scrub_outbound_secrets(text, secret_values) # Scrubs Fernet ciphertext tokens, boot tokens, and workspace secrets from outbound context strings.
 │   │   │   │   ├── def get_approved_commands(workspace_id) # [stale?] Returns the approved command signatures for workspace_id from host.json (P5).
 │   │   │   │   ├── def approve_command(workspace_id, kind, repo, command) # [stale?] Records a person's approval of one exact command of a kind ('test', 'preview') for a repository.
 │   │   │   │   ├── def is_command_approved(workspace_id, kind, repo, command) # True only when the attestation store holds a person's approval of this exact command of this kind for this repository.
@@ -900,13 +982,13 @@ insetu/
 │   │   │   │   ├── class FetchRefused(Exception) # A URL was refused before or during the fetch: wrong scheme, a non-public address, or a body over the cap.
 │   │   │   │   ├── class FetchHTTPError(Exception) # The server answered with an HTTP error status.
 │   │   │   │   ├── class FetchResult # A completed fetch: final URL after redirects, status, headers and the decoded (decompressed) body.
-│   │   │   │   └── def fetch_url(url) # The one way insetu makes an outbound HTTP request (S4).
+│   │   │   │   └── def fetch_url(url) # [stale?] The one way insetu makes an outbound HTTP request (S4).
 │   │   │   ├── store.js            # [Zustand Unified Data Flow (UDF) Store]
 │   │   │   ├── system.js           # System settings UI, SSE pipeline listeners, and recovery triggers.
 │   │   │   │   ├── function bootServiceWorker() # [comment required]
 │   │   │   │   ├── function autoWireSettingsSchemas() # [comment required]
 │   │   │   │   ├── function bootExtensions() # [comment required]
-│   │   │   │   ├── function updateBootProgress(statusMsg) # [comment required]
+│   │   │   │   ├── function updateBootProgress(statusMsg, { final = false } = {}) # Every module that registers counts as a step and the total is an estimate, so the bar stops at 95% until the boot is really done: 100% means...
 │   │   │   │   ├── function executeSecurityHandshake() # [comment required]
 │   │   │   │   ├── function executeBootSequence(options = {}) # [comment required]
 │   │   │   │   ├── function executeWorkspaceSwap(key, title = null, targetHash =...) # [comment required]
@@ -931,27 +1013,28 @@ insetu/
 │   │   │       ├── def is_conflict_artifact_path(path_or_uri) # True when a path or URI is an OCC fallback file (`*.conflict_<timestamp>.*`).
 │   │   │       ├── def hook_topology_manifest_signatures(workspace_id, since_ts, **kwargs) # Yields lightweight repository signatures for the vfs domain, incorporating git_status counts.
 │   │   │       ├── def api_topology_vfs_repo(ctx) # Surgically fetches the VFS bucket structure and git modification state for a specific repository.
-│   │   │       ├── def force_topology_scan(workspace_id, target_repos, **kwargs) # Synchronously forces a full physical disk walk to rebuild the Topology Ledger.
+│   │   │       ├── def force_topology_scan(workspace_id, target_repos, **kwargs) # [stale?] Synchronously forces a full physical disk walk to rebuild the Topology Ledger.
 │   │   │       ├── def hook_request_vfs_manifest(workspace_id, **kwargs) # Returns the vfs manifest derived directly from the topology ledger via raw tuple queries.
 │   │   │       ├── def get_omniscient_workspace_files(workspace_id, allowed_repos) # Fast SQL replacement for the old os.walk bridge optimization.
 │   │   │       ├── def get_topology_files_for_repo(workspace_id, repo_dir) # SSOT accessor returning canonical vfs://<repo>/<path> URIs from topology_ledger.
-│   │   │       ├── def clamp_uris_to_topology(workspace_id, candidate_uris, expand_dirs, gather_only) # Clamps and optionally expands candidate URIs against topology_ledger.
+│   │   │       ├── def clamp_uris_to_topology(workspace_id, candidate_uris, expand_dirs, gather_only) # [stale?] Clamps and optionally expands candidate URIs against topology_ledger.
 │   │   │       ├── def broadcast_cross_workspace_mutations(mutations, workspace_id, **kwargs) # Phase 4 Event Bus Synchronization: Propagates mutations on shared domains to subscriber workspaces as virtual 'ws://' mutations for reactive...
 │   │   │       ├── def buffer_topology_events(mutations, workspace_id, **kwargs) # Stage 1 Slew Limiter: Catches high-velocity disk/watchdog mutations and buffers them in RAM to absorb the I/O storm before hitting SQLite.
-│   │   │       ├── def reconcile_topology_on_config_mutated(workspace_id, **kwargs) # Reconciles topology_ledger for repositories whose sieve configuration changed (exts, ignores, mounts).
+│   │   │       ├── def reconcile_topology_on_config_mutated(workspace_id, **kwargs) # [stale?] Reconciles topology_ledger for repositories whose sieve configuration changed (exts, ignores, mounts).
 │   │   │       ├── def resolve_topology_buffer(workspace_id) # Processes any pending events in topology_event_buffer, updates topology_ledger, and emits topology_resolved.
 │   │   │       ├── def mount_topology_volumes_dynamically(cfg, workspace_id, **kwargs) # Dynamically remounts VFS volumes whenever the configuration changes.
-│   │   │       ├── def init_topology_on_boot(workspace_id, **kwargs) # Topology owns the boot sequence.
+│   │   │       ├── def init_topology_on_boot(workspace_id, **kwargs) # [stale?] Topology owns the boot sequence.
 │   │   │       ├── def matches_gitignore_patterns(rel_path, patterns) # Evaluates a relative POSIX path against a list of .gitignore-style patterns.
 │   │   │       ├── def is_file_tracked_by_sieve(rel_path, config, live_cfg, repo_dir) # Single Source of Truth (SSOT) Hierarchical VFS Sieve.
 │   │   │       ├── def get_valid_workspace_files(repo_path, config, workspace_id) # Walks a physical repository directory and returns all files passing the Hierarchical VFS Sieve.
 │   │   │       ├── def resolve_file_bucket(filepath, sub_buckets, repo_dir) # Maps a repo-relative filepath to its matching sub-bucket, _dropped sentinel, or Bucket 0 (main).
 │   │   │       ├── def resolve_owning_workspaces(event_name, **kwargs) # Domain-aware spatial router for OS lifecycle events.
 │   │   │       ├── class VerifyPlanTargetsPayload(TypedDict) # Request schema for verifying plan file targets against the workspace VFS.
-│   │   │       ├── def api_topology_overview(ctx) # Compiles a lightweight structural overview of tracked repositories, sub-buckets, and CODE_INDEX.md headers.
+│   │   │       ├── class TopologyOverviewResponse(TypedDict) # [comment required]
+│   │   │       ├── def api_topology_overview(ctx) # [stale?] Compiles a lightweight structural overview of tracked repositories, sub-buckets, and CODE_INDEX.md headers.
 │   │   │       ├── def api_topology_verify_plan_targets(ctx) # Verifies that vfs:// file targets referenced in an architectural plan exist or are marked as new files.
 │   │   │       ├── def get_landmark_kinds(workspace_id) # Returns (kinds, notices): core landmark kinds followed by valid kinds that enabled extensions register.
-│   │   │       ├── def read_repo_tier_settings(ctx, repo, ext_name) # Reads one extension's repository-tier settings, keeping only fields declared `authority: repo_content`.
+│   │   │       ├── def read_repo_tier_settings(ctx, repo, ext_name) # [stale?] Reads one extension's repository-tier settings, keeping only fields declared `authority: repo_content`.
 │   │   │       ├── def resolve_repo_landmarks(ctx, repo) # Resolves where a repository keeps each landmark kind (standards, contracts, ADRs, tests, fitness suites, and kinds registered by extensions).
 │   │   │       ├── def resolve_repo_code_index_uri(ctx, repo_dir, repo_cfg) # Resolves the canonical VFS URI for a repository's CODE_INDEX.md.
 │   │   │       ├── def infer_target_repo(ctx, explicit_repo, candidate_uris) # Infers the target repository directory from an explicit repo name or a list of candidate URIs (such as `ctx://prompts/<repo>/...`, `vfs://<r...
@@ -960,7 +1043,7 @@ insetu/
 │   │   │       ├── class TopologyLandmarksPayload(TypedDict) # Request schema for topology.landmarks: an optional repository name.
 │   │   │       ├── def api_topology_landmarks(ctx) # Resolves repository landmarks for one repository (the first mounted one when none is named).
 │   │   │       ├── class AuditUpkeepPayload(TypedDict) # Request schema for running a deterministic codebase upkeep audit.
-│   │   │       ├── def api_topology_audit_upkeep(ctx) # Read-only audit of documentation/symbol drift, God-object candidates, test relevance and leftover *.conflict_* files.
+│   │   │       ├── def api_topology_audit_upkeep(ctx) # [stale?] Read-only audit of documentation/symbol drift, God-object candidates, test relevance and leftover *.conflict_* files.
 │   │   │       ├── class CleanConflictsPayload(TypedDict) # Request schema for topology.clean_conflicts: the conflict files a person reviewed.
 │   │   │       └── def api_topology_clean_conflicts(ctx) # Human-only: deletes the listed *.conflict_* files and refuses any other path.
 │   │   └── utils_core.py           # [Workspace Physics & Universal Utils]
@@ -1049,6 +1132,9 @@ insetu/
 │   │   │   └── vendor.json         # Map of core third-party UI dependencies (Lit, CodeMirror).
 │   │   ├── dev/                    # Developer Dashboard for bridge telemetry and thrashing.
 │   │   │   ├── __init__.py         # Module initialization.
+│   │   │   ├── dev_sql_and_memory.js # Extract `InSetuExtDevSql` and `InSetuExtDevMemory` into `dev_sql_and_memory.js` so `ext_dev.js` and `dev_sql_and_memory.js` both stay well u...
+│   │   │   │   ├── class InSetuExtDevSql # [comment required]
+│   │   │   │   └── class InSetuExtDevMemory # [comment required]
 │   │   │   ├── engine_dev.py       # Bridges and VFS performance logging.
 │   │   │   │   ├── def log_vfs_telemetry(ctx, mutations, workspace_id, **kwargs) # [comment required]
 │   │   │   │   ├── def log_bridge_error(ctx, filepath, error_type, details, ...) # [comment required]
@@ -1056,21 +1142,21 @@ insetu/
 │   │   │   │   ├── class CmdExecPayload(TypedDict) # [comment required]
 │   │   │   │   ├── class CmdExecResponse(TypedDict) # [comment required]
 │   │   │   │   ├── def api_dev_exec(ctx) # Executes an arbitrary shell command within the workspace sandbox for testing and verification.
-│   │   │   │   ├── def get_dev_metrics(ctx) # Retrieves system telemetry metrics, including file thrashing limits and bridge errors.
+│   │   │   │   ├── def get_dev_metrics(ctx) # [stale?] Retrieves system telemetry metrics, including file thrashing limits and bridge errors.
 │   │   │   │   ├── def list_sql_databases(ctx) # Lists all available SQLite databases within the tenant cache/db directory.
 │   │   │   │   ├── class SqlQueryPayload(TypedDict) # [comment required]
 │   │   │   │   ├── def execute_sql_query(ctx) # Executes a constrained SQL query against a target workspace database.
 │   │   │   │   ├── def get_backend_logs(ctx) # Retrieves the systemd journal logs for the background backend daemon.
 │   │   │   │   ├── def download_boot_logs_worker(ctx) # [comment required]
+│   │   │   │   ├── class ClientErrorPayload(TypedDict) # [comment required]
+│   │   │   │   ├── def api_dev_client_error(ctx) # Records a client-side JavaScript error into the system_errors ledger for mobile debugging.
 │   │   │   │   ├── class DownloadLogsPayload(TypedDict) # [comment required]
 │   │   │   │   ├── def api_download_logs(ctx) # Exports the current backend daemon invocation logs to a downloadable text file.
 │   │   │   │   ├── def sweep_telemetry_worker(ctx) # [comment required]
 │   │   │   │   └── def init_dev_workers(ctx, workspace_id, **kwargs) # [comment required]
 │   │   │   └── ext_dev.js          # Dashboard UI for metrics display.
 │   │   │       ├── class InSetuExtDevDash # [comment required]
-│   │   │       ├── class InSetuExtDevLogs # [comment required]
-│   │   │       ├── class InSetuExtDevSql # [comment required]
-│   │   │       └── class InSetuExtDevMemory # [comment required]
+│   │   │       └── class InSetuExtDevLogs # [comment required]
 │   │   ├── favorites/              # Pinned file and folder quick-access tray.
 │   │   │   ├── engine_favorites.py # SQLite store for quick-access items.
 │   │   │   │   ├── def list_favorites(ctx) # Lists all favorited files, folders, and resources.
@@ -1568,11 +1654,11 @@ insetu/
         │   ├── class TestAppRouteAuthInventory(_InventoryCase) # The main app: one token gate in front of every route, with a short reviewed public list.
         │   └── class TestLifeboatRouteAuthInventory(_InventoryCase) # The lifeboat: the same rules, because it listens on the port Tailscale exposes.
         ├── test_routine_check.py   # The routine check reports prompts that do not resolve, and a run stops on a missing prompt instead of sending an empty one.
-        │   ├── class TestRoutineCheck(unittest.TestCase) # check_routine mirrors how a run resolves each LLM step's prompt.
+        │   ├── class TestRoutineCheck(unittest.TestCase) # [stale?] check_routine mirrors how a run resolves each LLM step's prompt.
         │   ├── class TestCascadeReportsWhereItFoundAPrompt(unittest.TestCase) # read_prompt_with_cascade tells the check whether a prompt was found directly or only by file name.
         │   └── class TestAMissingPromptStopsTheRun(unittest.TestCase) # require_prompt_text turns a prompt that did not resolve into an error naming the routine and URI.
         ├── test_routine_check_cache.py # Checks that the routine check's results are reused between listings, are safe from callers' edits, and are checked again after a prompt or r...
-        │   └── class TestRoutineProblemsCache(unittest.TestCase) # attach_routine_problems checks a routine once, then reuses the result until something it depends on changes.
+        │   └── class TestRoutineProblemsCache(unittest.TestCase) # [stale?] attach_routine_problems checks a routine once, then reuses the result until something it depends on changes.
         ├── test_routine_parse_cache.py # Checks that a routine's text is parsed once, that callers cannot change what the next caller gets, that edited text or a different fallback...
         │   └── class TestRoutineParseCache(unittest.TestCase) # parse_routine_content parses each distinct routine text once and never shares a parsed object between callers.
         ├── test_routine_response_path.py # Tests that routine response_path writes only document files and refuses code targets.

@@ -56,6 +56,8 @@ from akasa.auth.peer import (
 )
 from akasa.uri import AkasaURI
 from akasa.utils import (
+    BoundedCache,
+    get_registered_cache_stats,
     slugify,
     thread_safe_cache,
     register_core_module,
@@ -77,6 +79,7 @@ from akasa.utils import (
     set_tenant_resolver,
     resolve_active_tenant,
     execution_frame,
+    get_current_baggage,
     get_current_origin,
     sniff_tenant_id,
     is_subpath,
@@ -101,6 +104,7 @@ from akasa.utils import (
     interpolate_template_variables,
 )
 from akasa.vfs import (
+    MemoryVFSTransaction,
     VFSTransaction,
     DefaultVFSDriver,
     InterWorkspaceVFSDriver,
@@ -236,6 +240,8 @@ _SECURITY_IO_REEXPORTS = frozenset({
     "get_approved_commands",
     "is_secret_env_name",
     "get_child_env_passthrough",
+    "collect_workspace_secrets",
+    "scrub_outbound_secrets",
 })
 
 
@@ -523,6 +529,13 @@ class InSetuContext(_BaseExtensionContext):
 
     def update_frontmatter(self, content: str, new_data: Dict[str, Any]) -> str:
         return _utils_core.update_frontmatter(content, new_data)
+
+    def scrub_secrets(self, text: Optional[str]) -> str:
+        """Scrubs Fernet tokens, boot tokens, URL query secrets, and workspace secrets from `text` (S9)."""
+        if not text:
+            return ""
+        import insetu.core.system.security_io as _sec_io
+        return _sec_io.scrub_outbound_secrets(str(text), _sec_io.collect_workspace_secrets(self))
 # Export ExtensionContext alias pointing to InSetuContext for backward compatibility
 ExtensionContext = InSetuContext
 
@@ -703,7 +716,12 @@ class InSetuExtension(AkasaExtension):
         cap_sub = ".".join(clean_parts)
         raw_sub = rule.strip("/").replace("/", ".")
         cap_ids = {f"{self.name}.{s}" if s else self.name for s in (cap_sub, raw_sub)}
-        if risk == "ui_only" or ("DELETE" in methods and "mcp_expose" not in options):
+        if risk not in ROUTE_RISK_LABELS:
+            raise ValueError(
+                f"SDK Exception in '{self.name}': unknown route risk {risk!r} on '{rule}'; "
+                f"use one of {sorted(r for r in ROUTE_RISK_LABELS if r)}."
+            )
+        if risk in ("ui_only", "exec") or ("DELETE" in methods and "mcp_expose" not in options) or options.get("mcp_expose") is False:
             options["mcp_expose"] = False
             _DYNAMIC_ROUTINE_BANNED_CAPABILITIES.update(cap_ids)
         elif risk == "read":
@@ -711,15 +729,56 @@ class InSetuExtension(AkasaExtension):
         return super().route(rule, **options)
 
 
-_DYNAMIC_ROUTINE_BANNED_CAPABILITIES: set = set()
-_DYNAMIC_READ_ONLY_SAFE_CAPABILITIES: set = set()
+# "" = no label. "ui_only", "exec", or mcp_expose=False hide a route from MCP and ban it in routines; "read" marks it safe for /ask.
+ROUTE_RISK_LABELS = frozenset({"", "ui_only", "exec", "read"})
+_DYNAMIC_ROUTINE_BANNED_CAPABILITIES: set = {
+    "dev.exec", "fs.download_zip", "topology.clean_conflicts",
+    "bridge.test.approve", "preview.approve_command",
+    "system.directives.accept", "system.directives.revoke", "system.directives.save",
+    "preview.open_lan", "dev.sql.query", "system.reboot", "system.panic", "system.workspaces.delete",
+    "system.extensions.install_deps", "system.extensions.workspace.approve", "system.extensions.workspace.revoke",
+    "system.protected.confirm", "system.protected.discard", "system.UpdateConfig", "system.CreateWorkspace",
+    "system.DeleteWorkspace", "system.SwitchWorkspace", "system.RebootServer", "system.UpdateHostTopology",
+    "hooks.save", "hooks.toggle", "hooks.approve", "hooks.execute", "cronic.schedule", "cronic.run_now",
+    "agent.messages.append", "agent.ingest_reply", "agent.record_transaction", "agent.plan_task", "agent.rewind", "cartographer.claim_index",
+}
+_DYNAMIC_READ_ONLY_SAFE_CAPABILITIES: set = {
+    "topology.overview", "topology.landmarks", "topology.verify_plan_targets", "topology.audit_upkeep",
+    "context.assemble", "gather.context.assemble", "gather.context.query", "gather.pack_selection",
+    "cartographer.extract", "cartographer.verify_plan_targets",
+    "agent.resolve_test_command", "fs.fetch", "fs.exists", "fs.git_diff", "fs.search",
+    "git.compile_diffs", "git.list_dirty_diff_buckets", "prompts.resolve", "bridge.turn_diff",
+    "bridge.commit_message", "bridge.compile_telemetry",
+}
 
 
 def get_dynamic_routine_banned_capabilities() -> frozenset:
-    """Returns capability IDs dynamically banned from routine invocation via risk='ui_only' or 'exec'."""
+    """Returns all capability IDs banned from routine invocation (baseline + risk='ui_only'|'exec', DELETE, or mcp_expose=False)."""
     return frozenset(_DYNAMIC_ROUTINE_BANNED_CAPABILITIES)
 
 
+def is_routine_banned_capability(action: str, extra_banned: Any = (), ctx: Any = None) -> bool:
+    """SSOT predicate evaluating whether `action` is banned from declarative routine `exec` steps."""
+    clean = str(action or "").strip()
+    if not clean:
+        return False
+    if clean in _DYNAMIC_ROUTINE_BANNED_CAPABILITIES or (extra_banned and clean in extra_banned):
+        return True
+    reg_caps = (
+        ctx.get_registered_capabilities()
+        if ctx is not None and hasattr(ctx, "get_registered_capabilities")
+        else get_registered_capabilities()
+    )
+    cap_info = reg_caps.get(clean) if isinstance(reg_caps, dict) else None
+    return bool(isinstance(cap_info, dict) and cap_info.get("mcp_expose") is False)
+
+
 def get_dynamic_read_only_capabilities() -> frozenset:
-    """Returns capability IDs dynamically marked safe for read-only (/ask) mode via risk='read'."""
+    """Returns all capability IDs marked safe for read-only (/ask) mode (baseline + risk='read')."""
     return frozenset(_DYNAMIC_READ_ONLY_SAFE_CAPABILITIES)
+
+
+def is_read_only_safe_capability(action: str, extra_allowed: Any = ()) -> bool:
+    """SSOT predicate evaluating whether `action` is permitted in read-only ('ask') mode."""
+    clean = str(action or "").strip()
+    return bool(clean and (clean in _DYNAMIC_READ_ONLY_SAFE_CAPABILITIES or (extra_allowed and clean in extra_allowed)))

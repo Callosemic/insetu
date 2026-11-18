@@ -186,8 +186,8 @@ def _confine(raw_path):
 # (Isolated from engine_bridge.py to ensure zero dependencies during Kernel Panic)
 
 def expand_macros(text):
-    text = re.sub(r'\{\{\s*ymm:(.)[x*](\d+)\s*\}\}', lambda m: m.group(1) * int(m.group(2)), text)
-    text = re.sub(r'\{\{\s*(.)\s*\*\s*(\d+)\s*\}\}', lambda m: m.group(1) * int(m.group(2)), text)
+    text = re.sub(r'\{\{\s*ymm:(.)[x*]([1-9])\s*\}\}', lambda m: m.group(1) * int(m.group(2)), text)
+    text = re.sub(r'\{\{\s*(.)\s*\*\s*([1-9])\s*\}\}', lambda m: m.group(1) * int(m.group(2)), text)
     text = re.sub(r'\{\{\s*triple(.)\s*\}\}', lambda m: m.group(1) * 3, text)
     return text
 
