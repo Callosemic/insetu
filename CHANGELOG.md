@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v0.39.0 (2026-11-18)
+
+### Build System
+
+- **deps**: Require akasa 0.11.1 and vendor sutram 2.9.0
+  ([`1ede5d3`](https://github.com/Callosemic/insetu/commit/1ede5d309ad18870c1e02ef7953896271f7c3204))
+
+### Features
+
+- **agent**: Unify RoutineEnvelope and LLM compute contract, add msg:// turn dossiers, conversation
+  rewind, and AkasaBackendAdapter transport
+  ([`12e1fc2`](https://github.com/Callosemic/insetu/commit/12e1fc2f954d663399119b22238ae05da0c1a853))
+
+- **dev,extensions**: Dev console capture and scrubbed error tables, extension BoundedCache, fitness
+  rules
+  ([`bc4783f`](https://github.com/Callosemic/insetu/commit/bc4783fd71c141e8cb2081358d01f3821b86bf2f))
+
+
 ## v0.38.0 (2026-11-13)
 
 ### Bug Fixes
