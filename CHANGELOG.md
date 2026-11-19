@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.40.0 (2026-11-19)
+
+### Bug Fixes
+
+- **security**: Seal attestation grants to the install so a cloned store grants nothing
+  ([#28](https://github.com/Callosemic/insetu/pull/28),
+  [`a40696f`](https://github.com/Callosemic/insetu/commit/a40696fab9a13bc6755f2d208af349ff17827e8f))
+
+### Features
+
+- **dev**: Dev mode switches on only with a restart
+  ([`43ba023`](https://github.com/Callosemic/insetu/commit/43ba0238a4c9d0f530082339a53abf3e9522f17d))
+
+
 ## v0.39.0 (2026-11-18)
 
 ### Build System
