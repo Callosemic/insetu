@@ -12,9 +12,19 @@ One-shot confirmations, such as a confirmed protected change, are events and bel
 The store lives in <control dir>/attestations.json beside host.json. It is a protected VFS target, so it is written
 only through the kernel's confirmed-write path, and only from code that runs for a person (attest refuses machine
 origins). The digest ties a grant to exactly what the person saw, so a grant lapses when that thing changes.
+
+Every grant is sealed to this install (#28). The control directory sits inside the workspace, so a repository can carry
+an attestations.json (or a host.json with legacy approvals) into a clone. A record counts only if its seal was made with
+this install's key, which lives in the home control directory beside akasa's master key (~/.insetu/), outside every
+workspace, and never enters the VFS. A
+store copied from another machine, or written by hand, holds no valid seal and grants nothing. Records from before
+seals existed count as absent too, so people approve those things once more after upgrading.
 """
 import hashlib
+import hmac
 import json
+import os
+import secrets
 import threading
 import time
 import uuid
@@ -39,6 +49,9 @@ NON_HUMAN_ORIGINS = frozenset({"mcp", "routine", "agent"})
 DAEMON_RUN_ID = uuid.uuid4().hex
 
 _STORE_LOCK = threading.RLock()
+INSTALL_KEY_FILENAME = "install.key"
+# Overrides where the install key lives (tests, containers with a read-only home).
+INSTALL_KEY_DIR_ENV = "INSETU_INSTALL_KEY_DIR"
 
 
 class AttestationRefused(PermissionError):
@@ -58,6 +71,69 @@ def control_dir_path() -> Path:
 def attestations_path() -> Path:
     """<control dir>/attestations.json, beside host.json."""
     return control_dir_path() / ATTESTATIONS_FILENAME
+
+
+def install_key_dir() -> Path:
+    """
+    Where the install key lives: the home control directory (~/.insetu/), beside akasa's master_key.txt, so the
+    install's secrets sit in one place. Decided 2026-11-19; where machine secrets live in general is left to the
+    data-placement model.
+    """
+    override = os.environ.get(INSTALL_KEY_DIR_ENV)
+    if override:
+        return Path(override).expanduser().resolve()
+    return (Path.home() / control_dir_path().name).resolve()
+
+
+def _install_key(create: bool) -> Optional[bytes]:
+    """
+    This install's sealing key, made on first use (owner-only file). None when it doesn't exist and create is False.
+
+    Read from disk on every check, not cached: the file is 64 bytes, and deleting it withdraws every grant at once.
+    """
+    key_path = install_key_dir() / INSTALL_KEY_FILENAME
+    with _STORE_LOCK:
+        try:
+            key = bytes.fromhex(key_path.read_text(encoding="ascii").strip())
+        except FileNotFoundError:
+            if not create:
+                return None
+            key_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            key = secrets.token_bytes(32)
+            try:
+                fd = os.open(key_path.as_posix(), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                key = bytes.fromhex(key_path.read_text(encoding="ascii").strip())
+            else:
+                with os.fdopen(fd, "w", encoding="ascii") as handle:
+                    handle.write(key.hex())
+        except (OSError, ValueError):
+            return None
+        return key if len(key) >= 32 else None
+
+
+def _seal_of(record: Dict[str, Any], key: bytes) -> str:
+    """HMAC over every field of the record except the seal itself."""
+    body = {k: v for k, v in record.items() if k != "seal"}
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
+    return hmac.new(key, canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _seal(record: Dict[str, Any]) -> Dict[str, Any]:
+    key = _install_key(create=True)
+    if key is None:
+        raise OSError(f"Could not create the install key in {install_key_dir()}; set {INSTALL_KEY_DIR_ENV} to a writable directory.")
+    record["seal"] = _seal_of(record, key)
+    return record
+
+
+def _is_sealed_here(record: Dict[str, Any]) -> bool:
+    """True only when this install sealed the record. Copied, hand-written and pre-seal records are not."""
+    seal = record.get("seal")
+    if not isinstance(seal, str):
+        return False
+    key = _install_key(create=False)
+    return key is not None and hmac.compare_digest(seal, _seal_of(record, key))
 
 
 def digest_of(*parts: Any) -> str:
@@ -85,6 +161,8 @@ def _write_store(data: Dict[str, Any]) -> None:
 
 
 def _is_active(record: Dict[str, Any], now: Optional[float] = None) -> bool:
+    if not _is_sealed_here(record):
+        return False
     expires_at = record.get("expires_at")
     if expires_at is not None and float(expires_at) <= (now if now is not None else time.time()):
         return False
@@ -107,7 +185,12 @@ def describe_actor() -> Dict[str, Any]:
 
 
 def _migrate_legacy_host_approvals(data: Dict[str, Any]) -> bool:
-    """Moves command, hook and workspace-extension approvals out of host.json (insetu 0.32 and earlier). Idempotent."""
+    """
+    Moves command, hook and workspace-extension approvals out of host.json (insetu 0.32 and earlier). Idempotent.
+
+    The moved records are left unsealed: host.json sits in the workspace too, so nothing in it proves this install made
+    those approvals. They show as absent until a person approves again.
+    """
     host_path = _host_config_path()
     host_data = load_json_config(host_path, {})
     legacy_commands = host_data.get("approved_test_commands")
@@ -187,14 +270,14 @@ def attest(
     with _STORE_LOCK:
         data = _load()
         data["records"] = [r for r in data["records"] if not (r.get("kind") == kind and r.get("subject") == subject)]
-        record = _new_record(kind, subject, digest, detail, expires_at, DAEMON_RUN_ID if until_restart else None, describe_actor())
+        record = _seal(_new_record(kind, subject, digest, detail, expires_at, DAEMON_RUN_ID if until_restart else None, describe_actor()))
         data["records"].append(record)
         _write_store(data)
     return dict(record)
 
 
 def get_attestation(kind: str, subject: str) -> Optional[Dict[str, Any]]:
-    """The active grant for subject, or None (expired grants and grants from an earlier run count as absent)."""
+    """The active grant for subject, or None (unsealed, expired and earlier-run grants count as absent)."""
     with _STORE_LOCK:
         for record in _load()["records"]:
             if record.get("kind") == kind and record.get("subject") == subject and _is_active(record):
@@ -227,7 +310,7 @@ def revoke(kind: str, subject: str) -> bool:
 
 
 def prune() -> int:
-    """Drops expired grants and grants from earlier runs. Returns how many were removed."""
+    """Drops unsealed and expired grants and grants from earlier runs. Returns how many were removed."""
     with _STORE_LOCK:
         data = _load()
         now = time.time()

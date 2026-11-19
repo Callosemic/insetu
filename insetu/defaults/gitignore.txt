@@ -1,18 +1,5 @@
-# inSetu Volatile Cache & Credentials
-cache/
-ext/
-contexts/
-diffs/
-workflows/
-*.db
-*.db-wal
-*.db-shm
-*.db-journal
-*.db.corrupt_*
-secrets.json
-master_key.txt
-*.env
-
-# OS Files
-.DS_Store
-__pycache__/
+# inSetu control directory. Everything in .insetu/ is per-machine state: the session token,
+# standing approvals, caches, workspace settings and workspace data. None of it is committed;
+# a committed attestations.json would carry approvals to anyone who clones the repository.
+# Settings and data that travel with a repository live in <repo>/.insetu-data/ instead.
+*

@@ -47,6 +47,26 @@ def scaffold_profiles(cwd):
             if not copied and fallback_payload is not None:
                 Path(target_p).write_text(json.dumps(fallback_payload, indent=2), encoding="utf-8")
 
+    # Heal an existing .insetu/.gitignore. scaffold copies the default only when the file is
+    # absent, so installs created before the default became '*' would otherwise keep committing
+    # parts of .insetu/. Append the '*' line idempotently; nothing in .insetu/ is ever committed.
+    gitignore_p = Path(base_dir).joinpath(".gitignore").as_posix()
+    required_ignores = ("*",)
+    if os.path.exists(gitignore_p):
+        try:
+            current = Path(gitignore_p).read_text(encoding="utf-8")
+            present = {line.strip() for line in current.splitlines()}
+            missing = [line for line in required_ignores if line not in present]
+            if missing:
+                sep = "" if (not current or current.endswith("\n")) else "\n"
+                Path(gitignore_p).write_text(
+                    current + sep + "\n# inSetu: everything in .insetu/ is per-machine state; never commit it\n"
+                    + "\n".join(missing) + "\n",
+                    encoding="utf-8",
+                )
+        except OSError:
+            pass
+
     os.makedirs(Path(base_dir).joinpath("data").as_posix(), exist_ok=True)
     os.makedirs(Path(base_dir).joinpath("cache", "db").as_posix(), exist_ok=True)
 

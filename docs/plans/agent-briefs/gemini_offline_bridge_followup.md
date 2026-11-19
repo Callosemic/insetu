@@ -49,6 +49,7 @@ The Yomama (Bridge) page's repair mode is a separate setting and stays separate:
 
 - The migration keeps today's tracker entries readable: make it reversible, or keep reading the old layout for one release.
 - Add the per-save event count to `tests/performance/` before Sprint 2 (see below), not after.
+- **Notes and Tracker follow the global repo pin (decided 2026-11-19).** The pin is global (`AppStore.pinnedRepos`), and Lane A's Sprint U3 moves its only filter into the gear. Notes drops `NotesStore.pinnedRepos` and its `insetu-repo-filter` row, and reads the global pin. Tracker filters by the global pin only: retire `repo_strategy` (`schema`, `explicit`) and `_localPinnedRepos`, and drop its repo filter row. Its tag and bucket filters stay. The tracker is due for a full redesign, so do the least that achieves this rather than reworking the view now.
 
 - `apply_declarative_schema`'s `__constraints__` only apply when a table is created; an existing table never gets them. Either say so in the schema docstring and plan, or add a migration path that rebuilds a table when its constraints change.
 - `ctx://` and `ws://` mutations now enter `topology_resolved` as `ctx_events`. Keep compiled `ctx://contexts/` and `ctx://diffs/` out, and bound them with the per-save count (events per save, log lines per save).

@@ -142,6 +142,7 @@ insetu/
 │   ├── models/                     # Human-authored subsystem mental models and state-machine invariant specifications.
 │   │   ├── agent_harness_control_axes.md # Move agent-model-appendix.md from docs/plans/ into docs/models/agent_harness_control_axes.md so it lives alongside agent_orchestrator_and_ra...
 │   │   ├── agent_orchestrator_and_rag.md # Black-box DAG execution contracts, the 6 volatility-ordered context buckets, fork-join holding confinement, and self-contained healing loops...
+│   │   ├── card_and_action_model.md # Mental model for cards and actions: four card zones, width tiers from the card's own width, fit-then-overflow action rows, and the registry...
 │   │   ├── mddb_and_tracker.md     # Recursive Markdown-as-a-Database records, heading-scoped sub-record spans, Containment vs. Ur-Record intersection graphs, and zero-hack structural lenses.
 │   │   ├── proximity_filters_and_domain_jumps.md # Composable RAG retrieval algebra unifying AST call graphs, Hebbian affinity, string fuzziness, vector embeddings, custom multiplex schemas,...
 │   │   └── yomama_bridge.md        # Three-phase state machine, canonical ordering, n-1 healing, and content-addressed signature invariants for the Yomama Sync Bridge.
@@ -175,6 +176,7 @@ insetu/
 │       ├── agent-briefs/           # Cross-model review briefs and implementation handoff notes.
 │       │   ├── .gitkeep            # Git folder retention.
 │       │   ├── gemini_agent_harness_and_rag_lane.md # Parallel Lane Brief: Agent Harness, 6-Bucket RAG Funnel & Dogfooding Observability
+│       │   ├── gemini_card_actions_and_r1_handoff.md # Lane A brief: card action rows (fit, then the three-dot menu), card width tiers, variant sets with last-used defaults, the Send set, bulk Co...
 │       │   └── gemini_offline_bridge_followup.md # Follow-up for Gemini: after the Nov 9 round
 │       └── archived/               # Superseded and historical ADR documents.
 │           ├── 2026-11-03-s8-confirmed-protected-changes.md # Plan: S8 Confirmed Protected Changes, One Attestation Store, Smoke Test, Last-Good Lifeboat
@@ -204,7 +206,7 @@ insetu/
 │   │   ├── def inject_bypassed_extensions(cfg, workspace_id, **kwargs) # Injects quarantined and bypassed extension diagnostic metadata into the workspace config payload.
 │   │   └── def run_app()           # [stale?] Starts the Flask/Werkzeug server with kernel initialization and background worker ignition.
 │   ├── cli.py                      # [Daemon & Process Management]
-│   │   ├── def scaffold_profiles(cwd) # Minimal zero-dependency profile bootstrapper for the Immutable Recovery Bootloader.
+│   │   ├── def scaffold_profiles(cwd) # [stale?] Minimal zero-dependency profile bootstrapper for the Immutable Recovery Bootloader.
 │   │   ├── def load_recovery_app(cwd) # The lifeboat's run_recovery_app, or the last-good copy's when the current lifeboat will not import (S8).
 │   │   └── def main()              # CLI entrypoint dispatching serve, init, service, auth, gui, and mcp-stdio subcommands.
 │   ├── core/                       # Core frontend SDK and UI components.
@@ -374,9 +376,10 @@ insetu/
 │   │   │   ├── class AttestationRefused(PermissionError) # Raised when code running for a model, an MCP client or a routine tries to record an approval.
 │   │   │   ├── def control_dir_path() # The daemon's control directory, which holds host.json, this store, pending protected changes and the audit log.
 │   │   │   ├── def attestations_path() # <control dir>/attestations.json, beside host.json.
+│   │   │   ├── def install_key_dir() # [stale?] The user's insetu config directory, outside every workspace: where the install key lives.
 │   │   │   ├── def digest_of()     # Stable digest of the exact thing a person approved (a command, a launch configuration).
 │   │   │   ├── def describe_actor() # Who is acting, as far as insetu can tell: the call's origin and, for HTTP, the client.
-│   │   │   ├── def attest(kind, subject, digest, detail, ...) # Records a person's approval of subject as it is now (digest), replacing any earlier grant; refused unless origin is in HUMAN_ORIGINS.
+│   │   │   ├── def attest(kind, subject, digest, detail, ...) # [stale?] Records a person's approval of subject as it is now (digest), replacing any earlier grant; refused unless origin is in HUMAN_ORIGINS.
 │   │   │   ├── def get_attestation(kind, subject) # The active grant for subject, or None (expired grants and grants from an earlier run count as absent).
 │   │   │   ├── def is_attested(kind, subject, digest) # True when an active grant exists for subject and, if a digest is given, it covers exactly that digest.
 │   │   │   ├── def list_attestations(kind) # Active grants, optionally of one kind.
@@ -1551,7 +1554,8 @@ insetu/
         │   ├── class TestAttestationStore(_StoreCase) # [stale?] Grant, replace, revoke, expiry, run scope, machine origins refused, and the store refused to the VFS and the bridge.
         │   ├── class TestDispatchersMarkMachineOrigins(_StoreCase) # MCP tool calls run with origin 'mcp' and routines with 'routine', so neither can approve anything.
         │   ├── class TestHookRulesNeedAPersonsApproval(_StoreCase) # [stale?] Saving or enabling a hook approves its exact command; a rule whose command changed, or that a machine saved, never runs.
-        │   └── class TestLegacyHostApprovalMigration(_StoreCase) # host.json approvals move into the store once and leave host.json.
+        │   ├── class TestLegacyHostApprovalMigration(_StoreCase) # [stale?] host.json approvals move into the store once and leave host.json.
+        │   └── class TestGrantsAreBoundToTheInstall(_StoreCase) # #28: a store that came with a clone, was copied from another machine or was written by hand grants nothing.
         ├── test_bridge_anchor_invariants.py # Regression and fitness tests for patch anchor matching, blank-line fidelity, no-op detection, chunk blame isolation, and the single patch engine.
         │   └── class TestBridgeAnchorInvariants(unittest.TestCase) # [stale?] Regression and fitness tests for patch anchor matching, no-op detection, chunk blame isolation, and the single patch engine.
         ├── test_canonical_uris.py  # Unit tests for canonical URI enforcement, InSetuURI normalization, and legacy ledger migrations.

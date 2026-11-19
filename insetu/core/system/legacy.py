@@ -53,7 +53,7 @@ def split_system_json(**kwargs):
 
 @hooks.on('system_boot', priority=5)
 def migrate_physical_sandboxes(**kwargs):
-    """Domain-agnostic kernel migration: consolidates SQLite databases into .insetu/cache/db/ and heals .gitignore."""
+    """Domain-agnostic kernel migration: consolidates SQLite databases into .insetu/cache/db/."""
     for ws_id in get_all_workspace_ids():
         base_dir = Path(get_tenant_control_dir(ws_id))
         cache_db_dir = base_dir.joinpath("cache", "db")
@@ -66,18 +66,8 @@ def migrate_physical_sandboxes(**kwargs):
         if wm_data.get("version", 0) >= LEGACY_MIGRATION_VERSION and not base_dir.joinpath("ext").exists():
             continue
 
-        # 1. Heal .insetu/.gitignore so data/ is never blocked from version control
-        gitignore_p = base_dir.joinpath(".gitignore")
-        if gitignore_p.exists():
-            try:
-                gi_text = gitignore_p.read_text(encoding="utf-8")
-                if "\ndata/\n" in f"\n{gi_text}\n":
-                    lines = [l for l in gi_text.splitlines() if l.strip() != "data/"]
-                    if "cache/" not in lines:
-                        lines.insert(1 if lines else 0, "cache/")
-                    gitignore_p.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            except Exception:
-                pass
+        # 1. (Retired) The .insetu/.gitignore heal that kept data/ committable. Repository data now lives in
+        #    <repo>/.insetu-data/, and .insetu/ is ignored as a whole (scaffold_profiles keeps the '*' line).
 
         # 2. Sweep legacy .insetu/ext/*/db/ and .insetu/data/*.db into .insetu/cache/db/
         ext_base = base_dir.joinpath("ext")
