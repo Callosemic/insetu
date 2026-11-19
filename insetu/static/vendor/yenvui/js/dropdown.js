@@ -1,4 +1,4 @@
-import{html as n,css as r}from"lit";import{YenvuiBase as a}from"./yenvui-base.js";import{syncTopLayerPopover as s,anchorTopLayerPopover as d}from"./physics.js";import"./search-bar.js";export class YenvuiDropdown extends a{static properties={items:{type:Array},open:{type:Boolean,reflect:!0},align:{type:String},direction:{type:String},searchable:{type:Boolean},searchPlaceholder:{type:String},filterFn:{attribute:!1},_searchQuery:{type:String,state:!0},_hasSlottedContent:{type:Boolean,state:!0},_loadingItemId:{type:String,state:!0}};static styles=r`
+import{html as s,css as d}from"lit";import{YenvuiBase as l}from"./yenvui-base.js";import{syncTopLayerPopover as a,anchorTopLayerPopover as c}from"./physics.js";import"./search-bar.js";export class YenvuiDropdown extends l{static properties={items:{type:Array},open:{type:Boolean,reflect:!0},align:{type:String},direction:{type:String},searchable:{type:Boolean},searchPlaceholder:{type:String},confirmHoldMs:{type:Number},filterFn:{attribute:!1},_searchQuery:{type:String,state:!0},_hasSlottedContent:{type:Boolean,state:!0},_loadingItemId:{type:String,state:!0},_confirmedItemId:{type:String,state:!0},_confirmedLabel:{type:String,state:!0}};static styles=d`
         :host { display: inline-flex; align-items: stretch; height: 100%; }
         .dropdown-menu {
             position: fixed;
@@ -42,6 +42,22 @@ import{html as n,css as r}from"lit";import{YenvuiBase as a}from"./yenvui-base.js
             z-index: 2;
         }
         .divider { height: 1px; background: var(--border, #444); margin: 4px 0; }
+        .section-heading {
+            font-size: 0.7rem;
+            font-weight: 800;
+            font-family: var(--font-mono, monospace);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--intent-primary, #8b5cf6);
+            padding: 6px 10px 3px 10px;
+            margin-top: 2px;
+            border-bottom: 1px solid color-mix(in srgb, var(--intent-primary, #8b5cf6) 28%, transparent);
+            user-select: none;
+        }
+        .menu-item.confirmed {
+            color: var(--intent-success, #10b981);
+            background: color-mix(in srgb, var(--intent-success, #10b981) 14%, transparent);
+        }
         .menu-item {
             background: transparent; color: var(--text, #e0e0e0); text-align: left; 
             padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; 
@@ -81,14 +97,14 @@ import{html as n,css as r}from"lit";import{YenvuiBase as a}from"./yenvui-base.js
             animation: spin 1s linear infinite;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    `;constructor(){super(),this.items=[],this.open=!1,this.align="auto",this.direction="auto",this.searchable=!1,this.searchPlaceholder="Filter actions...",this.filterFn=null,this._searchQuery="",this._hasSlottedContent=!1,this._loadingItemId=null}connectedCallback(){super.connectedCallback(),this.registerOutsideClick&&this.registerOutsideClick(()=>{this.open&&(this.open=!1)}),this._boundReposition=()=>{if(this.open){const e=this.shadowRoot?.querySelector(".dropdown-menu");e&&d(this,e,{mode:"menu",align:this.align||"auto",direction:this.direction||"auto",offset:0})}},window.addEventListener("resize",this._boundReposition),window.addEventListener("scroll",this._boundReposition,!0)}disconnectedCallback(){super.disconnectedCallback(),this._boundReposition&&(window.removeEventListener("resize",this._boundReposition),window.removeEventListener("scroll",this._boundReposition,!0));const e=this.shadowRoot?.querySelector(".dropdown-menu");e&&s(this,e,!1)}updated(e){if(super.updated(e),e.has("open")&&!this.open&&this._searchQuery&&(this._searchQuery=""),e.has("open")||e.has("items")||e.has("align")||e.has("direction")||e.has("_hasSlottedContent")){const t=this.shadowRoot?.querySelector(".dropdown-menu");if(t){const i=!!(this.open&&(this.items&&this.items.length>0||this._hasSlottedContent||this.searchable));s(this,t,i,{mode:"menu",align:this.align||"auto",direction:this.direction||"auto",offset:0})}}}_toggle(e){this._loadingItemId||(this.open=!this.open)}_getFilteredItems(){const e=this.items||[],t=(this._searchQuery||"").trim();if(!t)return e;if(typeof this.filterFn=="function")return this.filterFn(e.filter(o=>!o.divider),t);const i=t.toLowerCase();return e.filter(o=>!o||o.divider?!1:`${o.label||""} ${o.id||""} ${o.token||""} ${o.badge||""} ${o.description||""}`.toLowerCase().includes(i))}_notifyError(e){console.error(e),this.dispatchEvent(new CustomEvent("yenvui-action-error",{detail:{msg:`Action Failed: ${e.message}`,error:e},bubbles:!0,composed:!0}))}async _executeItem(e,t){if(!this._loadingItemId){if(e.asyncAction){this._loadingItemId=e.id||e.label;try{await e.asyncAction(t)}catch(i){this._notifyError(i)}finally{this._loadingItemId=null,this.open=!1}}else if(this.open=!1,e.onClick)try{const i=e.onClick(t);i&&typeof i.catch=="function"&&i.catch(o=>this._notifyError(o))}catch(i){this._notifyError(i)}}}render(){const e=this._getFilteredItems();return n`
+    `;constructor(){super(),this.items=[],this.open=!1,this.align="auto",this.direction="auto",this.searchable=!1,this.searchPlaceholder="Filter actions...",this.filterFn=null,this._searchQuery="",this._hasSlottedContent=!1,this._loadingItemId=null,this._confirmedItemId=null,this._confirmedLabel="",this.confirmHoldMs=900}connectedCallback(){super.connectedCallback(),this.registerOutsideClick&&this.registerOutsideClick(()=>{this.open&&(this.open=!1)}),this._boundReposition=()=>{if(this.open){const e=this.shadowRoot?.querySelector(".dropdown-menu");e&&c(this,e,{mode:"menu",align:this.align||"auto",direction:this.direction||"auto",offset:0})}},window.addEventListener("resize",this._boundReposition),window.addEventListener("scroll",this._boundReposition,!0)}disconnectedCallback(){super.disconnectedCallback(),this._boundReposition&&(window.removeEventListener("resize",this._boundReposition),window.removeEventListener("scroll",this._boundReposition,!0));const e=this.shadowRoot?.querySelector(".dropdown-menu");e&&a(this,e,!1)}updated(e){if(super.updated(e),e.has("open")&&!this.open&&this._searchQuery&&(this._searchQuery=""),e.has("open")||e.has("items")||e.has("align")||e.has("direction")||e.has("_hasSlottedContent")){const t=this.shadowRoot?.querySelector(".dropdown-menu");if(t){const o=!!(this.open&&(this.items&&this.items.length>0||this._hasSlottedContent||this.searchable));a(this,t,o,{mode:"menu",align:this.align||"auto",direction:this.direction||"auto",offset:0})}}}_toggle(e){this._loadingItemId||(this.open=!this.open)}_getFilteredItems(){const e=this.items||[],t=(this._searchQuery||"").trim();if(!t)return e;const o=e.filter(i=>i&&!i.divider&&!i.sectionHeading);if(typeof this.filterFn=="function")return this.filterFn(o,t);const r=t.toLowerCase();return o.filter(i=>`${i.label||""} ${i.id||""} ${i.token||""} ${i.badge||""} ${i.description||""} ${i.section||""}`.toLowerCase().includes(r))}_notifyError(e){console.error(e),this.dispatchEvent(new CustomEvent("yenvui-action-error",{detail:{msg:`Action Failed: ${e.message}`,error:e},bubbles:!0,composed:!0}))}async _executeItem(e,t){if(this._loadingItemId||this._confirmedItemId)return;const o=e.id||e.label,r=Number(e.confirmHoldMs??this.confirmHoldMs)>=0?Number(e.confirmHoldMs??this.confirmHoldMs):900,i=async()=>{e.successLabel&&r>0&&(this._confirmedItemId=o,this._confirmedLabel=e.successLabel,this.dispatchEvent(new CustomEvent("yenvui-action-confirmed",{bubbles:!0,composed:!0,detail:{item:e,status:"success",phase:"start",label:e.successLabel,holdMs:r,keepDrawerOpen:!!e.keepDrawerOpen}})),await new Promise(n=>this.registerTimeout(n,r)),this._confirmedItemId=null,this._confirmedLabel=""),e.keepDrawerOpen||(this.open=!1),this.dispatchEvent(new CustomEvent("yenvui-action-confirmed",{bubbles:!0,composed:!0,detail:{item:e,status:"success",phase:"settled",label:e.successLabel||"Done",holdMs:r,keepDrawerOpen:!!e.keepDrawerOpen}}))};if(e.asyncAction){this._loadingItemId=o;try{await e.asyncAction(t),this._loadingItemId=null,await i()}catch(n){this._loadingItemId=null,this._notifyError(n),this.open=!1}}else if(e.onClick)try{const n=e.onClick(t);n&&typeof n.then=="function"&&(this._loadingItemId=o,await n,this._loadingItemId=null),await i()}catch(n){this._loadingItemId=null,this._notifyError(n),this.open=!1}else this.open=!1}render(){const e=this._getFilteredItems();return s`
             <div style="position: relative; display: flex; align-items: stretch; width: 100%; height: 100%;">
                 <div @click=${this._toggle} style="display: flex; align-items: stretch; width: 100%; height: 100%;">
                     <slot name="trigger"></slot>
                 </div>
                 <div class="dropdown-menu" popover="manual" @click=${t=>t.stopPropagation()}>
                     <slot name="header"></slot>
-                    ${this.searchable?n`
+                    ${this.searchable?s`
                         <div class="dropdown-search-header">
                             <yenvui-search-bar
                                 .placeholder=${this.searchPlaceholder||"Filter..."}
@@ -97,22 +113,22 @@ import{html as n,css as r}from"lit";import{YenvuiBase as a}from"./yenvui-base.js
                             </yenvui-search-bar>
                         </div>
                     `:""}
-                    ${e.map(t=>{if(t.divider)return n`<div class="divider"></div>`;const i=this._loadingItemId===(t.id||t.label);return n`
-                            <button class="menu-item" ?disabled=${!!this._loadingItemId} @click=${o=>this._executeItem(t,o)}>
+                    ${e.map(t=>{if(!t)return"";if(t.divider)return s`<div class="divider"></div>`;if(t.sectionHeading)return s`<div class="section-heading">${t.sectionHeading}</div>`;const o=t.id||t.label,r=this._loadingItemId===o,i=this._confirmedItemId===o,n=i?"check":t.icon,h=i?this._confirmedLabel||t.successLabel||"Done":r?"Processing...":t.label||t.id||"Unknown Action";return s`
+                            <button class="menu-item ${i?"confirmed":""}" ?disabled=${!!(this._loadingItemId||this._confirmedItemId)} @click=${u=>this._executeItem(t,u)}>
                                 <span class="menu-item-main">
-                                    <span class="icon">${i?n`<div class="menu-spinner"></div>`:t.icon?/^[a-zA-Z0-9-]+$/.test(t.icon)?n`<yenvui-icon name="${t.icon}" size="sm"></yenvui-icon>`:t.icon:""}</span>
+                                    <span class="icon">${r?s`<div class="menu-spinner"></div>`:n?/^[a-zA-Z0-9-]+$/.test(n)?s`<yenvui-icon name="${n}" size="sm"></yenvui-icon>`:n:""}</span>
                                     <span class="menu-item-text">
-                                        <span>${i?"Processing...":t.label||t.id||"Unknown Action"}</span>
-                                        ${t.description?n`<span class="menu-item-desc">${t.description}</span>`:""}
+                                        <span>${h}</span>
+                                        ${t.description?s`<span class="menu-item-desc">${t.description}</span>`:""}
                                     </span>
                                 </span>
-                                ${t.badge?n`<span class="menu-item-badge">${t.badge}</span>`:""}
+                                ${t.badge?s`<span class="menu-item-badge">${t.badge}</span>`:""}
                             </button>
                         `})}
                     <slot name="content" @slotchange=${t=>{this._hasSlottedContent=t.target.assignedNodes({flatten:!0}).length>0}}></slot>
                 </div>
             </div>
-        `}}customElements.define("yenvui-dropdown",YenvuiDropdown);export class YenvuiFilterDropdown extends a{static properties={filterText:{type:String},open:{type:Boolean,reflect:!0},hasFilters:{type:Boolean}};static styles=r`
+        `}}customElements.define("yenvui-dropdown",YenvuiDropdown);export class YenvuiFilterDropdown extends l{static properties={filterText:{type:String},open:{type:Boolean,reflect:!0},hasFilters:{type:Boolean}};static styles=d`
         :host { display: flex; position: static; height: 100%; align-items: stretch; }
         .container { display: flex; align-items: stretch; height: 100%; }
         .panel {
@@ -158,7 +174,7 @@ import{html as n,css as r}from"lit";import{YenvuiBase as a}from"./yenvui-base.js
             background: transparent; border: 1px solid transparent; color: var(--text, #e0e0e0);
         }
         :host([open]) .btn { background: var(--input-bg, #2d2d2d); border-color: var(--border, #444); }
-    `;constructor(){super(),this.open=!1,this.filterText="Filters",this.hasFilters=!1}connectedCallback(){super.connectedCallback(),this.registerOutsideClick(()=>{this.open&&(this.open=!1)}),this._boundSyncBounds=()=>{if(this.open){const e=this.shadowRoot?.querySelector(".panel");e&&d(this,e,{mode:"column-drawer"})}},window.addEventListener("resize",this._boundSyncBounds),window.addEventListener("scroll",this._boundSyncBounds,!0)}disconnectedCallback(){super.disconnectedCallback(),this._boundSyncBounds&&(window.removeEventListener("resize",this._boundSyncBounds),window.removeEventListener("scroll",this._boundSyncBounds,!0));const e=this.shadowRoot?.querySelector(".panel");e&&s(this,e,!1)}updated(e){if(super.updated(e),e.has("open")){const t=this.shadowRoot?.querySelector(".panel");t&&s(this,t,this.open,{mode:"column-drawer"})}}_toggleOpen(e){e.stopPropagation(),this.open=!this.open}render(){return n`
+    `;constructor(){super(),this.open=!1,this.filterText="Filters",this.hasFilters=!1}connectedCallback(){super.connectedCallback(),this.registerOutsideClick(()=>{this.open&&(this.open=!1)}),this._boundSyncBounds=()=>{if(this.open){const e=this.shadowRoot?.querySelector(".panel");e&&c(this,e,{mode:"column-drawer"})}},window.addEventListener("resize",this._boundSyncBounds),window.addEventListener("scroll",this._boundSyncBounds,!0)}disconnectedCallback(){super.disconnectedCallback(),this._boundSyncBounds&&(window.removeEventListener("resize",this._boundSyncBounds),window.removeEventListener("scroll",this._boundSyncBounds,!0));const e=this.shadowRoot?.querySelector(".panel");e&&a(this,e,!1)}updated(e){if(super.updated(e),e.has("open")){const t=this.shadowRoot?.querySelector(".panel");t&&a(this,t,this.open,{mode:"column-drawer"})}}_toggleOpen(e){e.stopPropagation(),this.open=!this.open}render(){return s`
             <div class="container">
                 <button class="system-action-btn" title=${this.filterText} @click=${this._toggleOpen} style="opacity: ${this.hasFilters?"1":"0.5"};">
                     <yenvui-icon name="filter" size="sm"></yenvui-icon>
