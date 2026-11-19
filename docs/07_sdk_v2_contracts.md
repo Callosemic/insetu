@@ -105,12 +105,12 @@ Extensions are strictly forbidden from relative-importing OS chassis functions. 
 * **`this.manifest`**: Accessor reading the live partitioned system manifest dictionary (`{"vfs": {...}, "ctx": {...}}`) from `AppStore`.
 * **`.setStatus(msg, timeout, isError)`**: Base helper to emit global status updates via `this.ui.setGlobalStatus`.
 * **`.compileSystem()`**: Base helper to trigger background system compilations via `this.sys.executeSystemCompile`.
-* **`this.vfs`**: `.viewSourceFile(path)`, `.viewFileGitDiff(path)`, `.isFileGitModified(path)`, `.fetchAndCopy(path)`, `.downloadFile(url)`, `.shareFiles(file, chunks)`, `.preWarmShareArtifact(baseFile, chunks, isFS)`, `.normalizeVfsURI(path)`, `.executeBulkMove(items)`, `.executeBulkArchive(items)`, `.executeBulkDelete(items)`
+* **`this.vfs`**: `.viewSourceFile(path)`, `.viewFileGitDiff(path)`, `.isFileGitModified(path)`, `.fetchArtifactText(path, options)`, `.fetchAndCopy(path)`, `.downloadFile(url)`, `.shareFiles(file, chunks)`, `.preWarmShareArtifact(baseFile, chunks, isFS)`, `.getChunks(filepathOrData, explicitChunks)`, `.isMultiPartArtifact(filepathOrData, explicitChunks)`, `.normalizeVfsURI(path)`, `.executeBulkMove(items)`, `.executeBulkArchive(items)`, `.executeBulkDelete(items)`
 * **`this.ui`**: `.openWorkspaceBrowser(options)`, `.openFolderBrowser(cb)`, `.setGlobalStatus(msg)`, `.confirmModal(options)`, `.viewTextBlob(title, content, suggestedFilename)`, `.popoutProjection(filepath)`
 * **`this.sys`**: `.executeWorkspaceMutation(path, payload)`, `.executeSystemCompile()`, `.switchTab(tabId)`, `.refreshManifest()`
 * **`AppStore.getState().getBrowsePath(subId)`** / **`setBrowsePath(pathArray, subId)`**: Retrieves or updates active browse paths scoped strictly to a designated sub-tab identifier, reflecting navigation into the URL hash without cross-tab interference.
 * **`this.editor`**: `.getEditorContent()`, `.setEditorContent(text)`, `.insertTextAtCursor(text)`
-* **`this.utils`**: Auto-projected SSOT of all `sutram` and `inSetu` utilities (`window.inSetu.utils`), including `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.truncateFilename(filename, maxLen, ellipsis)`, `.copyRawText(text)`, `.downloadBlob(blob, filename)`, `.getDropdownEntityActions(entityType, entityData, filterFn)`, `.normalizeEntityData(data)`, `.extractManifestFiles(manifest, targetKey, domain)`, `.debounce(fn, ms)`, `.formatArtifactSize(meta)`, `.getScopedStorage(key, defaultVal, wsId)`, `.setScopedStorage(key, value, wsId)`, `.removeScopedStorage(key, wsId)`, `.nativeShareFiles(files)`, `BucketAddress.fromFilepath(path, meta)`
+* **`this.utils`**: Auto-projected SSOT of all `sutram` and `inSetu` utilities (`window.inSetu.utils`), including `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.truncateFilename(filename, maxLen, ellipsis)`, `.copyRawText(text)`, `.downloadBlob(blob, filename)`, `.getDropdownEntityActions(entityType, entityData, filterFn)`, `.normalizeEntityData(data)`, `.extractManifestFiles(manifest, targetKey, domain, { fallbackToKey })`, `.debounce(fn, ms)`, `.formatArtifactSize(meta)`, `.getScopedStorage(key, defaultVal, wsId)`, `.setScopedStorage(key, value, wsId)`, `.removeScopedStorage(key, wsId)`, `.nativeShareFiles(files)`, `BucketAddress.fromFilepath(path, meta)`
 * **`.getOfflineMode(extName)`**: Retrieves the declarative offline mode capability (`"full"`, `"read_only"`, `"none"`) for a targeted extension.
 * **`.getMissingDependencies(extName)`**: Inspects whether the target extension has missing Python packages or system binaries.
 * **`.installExtensionDependencies(extName, onInstalled)`**: Dispatches an in-app background job installing declared whitelisted packages and executing post-install commands.
@@ -151,6 +151,21 @@ window.ExtensionRegistry.registerExtension('my_ext', {
     name: "My Extension",
     version: "2.0.0",
     offline_mode: "full", // Options: "full", "read_only", "none"
+    // Optional canonical prompt URIs pinned under "Core prompts" in the Prompts Library
+    corePrompts: ['ctx://prompts/.templates/my_ext/protocol.md'],
+    // Optional named split-button variant sets (one level only; cannot nest inside another set/group)
+    variantSets: [{
+        id: 'send',
+        label: 'Send',
+        icon: 'send',
+        intent: 'primary',
+        group: 'share',
+        surfaced: 1,
+        order: 12,
+        sections: ['Raw', 'Expanded'],
+        families: { files: ['file', 'file:note'] },
+        defaults: { files: ['file-copy', 'file-share', 'file-download'] }
+    }],
     // Injects contextual and bulk buttons onto file/task cards and selection trays
     entityActions: [{
         targetEntity: 'file', // Target entity type or '*'
@@ -159,9 +174,16 @@ window.ExtensionRegistry.registerExtension('my_ext', {
         bulkGroupKey: 'my-group', // Key to aggregate bulk actions across heterogenous items
         label: 'Action',
         bulkLabel: 'Bulk Action', // Optional label override in bulk selection mode
+        successLabel: 'Done', // Optional button confirmation text shown for ~900ms after resolve
+        set: 'send', // Optional variantSet id to join
+        section: 'Raw', // Optional dropdown section heading inside a variantSet or overflow menu
+        group: 'share', // Canonical action group ('file' | 'edit' | 'share' | 'vcs' | 'tools')
+        surfaced: 1, // Lower rank surfaces first in fit-then-overflow rows; omit for overflow-only
         icon: 'zap',
         intent: 'primary', // success, danger, warning, neutral
         order: 50,
+        vfsBound: false, // Auto-flushes dirty buffers before firing when true
+        keepDrawerOpen: false, // Keeps narrow card drawer open after action resolves when true
         bulkable: true, // Enables action in multi-select tray
         bulkOnly: false, // Set true to hide from individual card action bars
         match: (data) => data.filepath?.endsWith('.md'),

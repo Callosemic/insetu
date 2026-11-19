@@ -110,55 +110,28 @@ export const FsStore = createExtensionStore('Fs', {
         FsStore.setState(s => {
             const existing = s.activeBuffers[key] || {};
             const merged = {
-                docRevision: 0,
-                savedRevision: 0,
-                frontmatterMode: false,
-                previewMode: false,
-                previewContent: null,
-                previewLoading: false,
-                yamlMeta: {},
-                bodyContent: '',
-                hasFrontmatter: false,
-                ...existing,
-                ...data,
-                filename: key
+                docRevision: 0, savedRevision: 0, frontmatterMode: false, previewMode: false,
+                previewContent: null, previewLoading: false, yamlMeta: {}, bodyContent: '', hasFrontmatter: false,
+                ...existing, ...data, filename: key
             };
             if (data.content !== undefined && data.content !== 'Loading...') {
                 Object.assign(merged, _deriveFrontmatterProjection(merged.content, merged.isMarkdown, merged.frontmatterMode));
             }
-            return {
-                activeBuffers: {
-                    ...s.activeBuffers,
-                    [key]: merged
-                }
-            };
+            return { activeBuffers: { ...s.activeBuffers, [key]: merged } };
         });
     },
     updateBuffer: (filepath, data, options = {}) => {
         const key = normalizeVfsURI(filepath) || filepath;
         FsStore.setState(s => {
             const existing = s.activeBuffers[key] || { filename: key, docRevision: 0, savedRevision: 0 };
-            // Store-level invariant: reject user edits to content while buffer is in a read-only state (previewMode, isTruncated, or !isFS)
-            if (options.userEdit && isBufferReadOnly(existing) && data.content !== undefined) {
-                return s;
-            }
+            if (options.userEdit && isBufferReadOnly(existing) && data.content !== undefined) return s;
             const nextDocRev = options.userEdit ? (existing.docRevision || 0) + 1 : (data.docRevision ?? existing.docRevision ?? 0);
             const nextSavedRev = options.markSaved ? nextDocRev : (data.savedRevision ?? existing.savedRevision ?? 0);
-            const nextBuf = {
-                ...existing,
-                ...data,
-                docRevision: nextDocRev,
-                savedRevision: nextSavedRev
-            };
+            const nextBuf = { ...existing, ...data, docRevision: nextDocRev, savedRevision: nextSavedRev };
             if (data.content !== undefined && data.content !== 'Loading...' && !options.skipFrontmatterParse) {
                 Object.assign(nextBuf, _deriveFrontmatterProjection(nextBuf.content, nextBuf.isMarkdown, nextBuf.frontmatterMode));
             }
-            return {
-                activeBuffers: {
-                    ...s.activeBuffers,
-                    [key]: nextBuf
-                }
-            };
+            return { activeBuffers: { ...s.activeBuffers, [key]: nextBuf } };
         });
     },
     enableFrontmatterMode: (filepath, enabled = true) => {
@@ -585,20 +558,10 @@ export async function hydrateVfsBuffer(filepath, { isFS = null, forceReload = fa
 
     if (forceReload || !existing) {
         fsState.openBuffer(normPath, {
-            filename: normPath,
-            content: 'Loading...',
-            originalContent: 'Loading...',
-            fullText: 'Loading...',
-            isTruncated: false,
-            isFS: effectiveIsFS,
-            forceEdit: false,
-            isMemoryOnly: false,
-            previewMode: Boolean(previewMode),
-            previewContent: null,
-            previewLoading: Boolean(previewMode),
-            isMarkdown,
-            ext,
-            codeMode
+            filename: normPath, content: 'Loading...', originalContent: 'Loading...', fullText: 'Loading...',
+            isTruncated: false, isFS: effectiveIsFS, forceEdit: false, isMemoryOnly: false,
+            previewMode: Boolean(previewMode), previewContent: null, previewLoading: Boolean(previewMode),
+            isMarkdown, ext, codeMode
         });
     }
 
@@ -625,12 +588,9 @@ export async function hydrateVfsBuffer(filepath, { isFS = null, forceReload = fa
             } catch(e) {}
             const protection = await protectionCheck;
             FsStore.getState().updateBuffer(normPath, {
-                baseHash: initialHash,
-                ancestorHashes: initialHash ? [initialHash] : [],
-                saveStatus: 'idle',
-                docHandle: null,
-                isProtected: Boolean(protection?.protected),
-                protectedMessage: protection?.message || ''
+                baseHash: initialHash, ancestorHashes: initialHash ? [initialHash] : [],
+                saveStatus: 'idle', docHandle: null,
+                isProtected: Boolean(protection?.protected), protectedMessage: protection?.message || ''
             });
             injectTextToBuffer(normPath, text, isMarkdown, effectiveIsFS);
         } catch (e) {
@@ -663,11 +623,36 @@ export function resolveFileFetchUrl(filepath, isFS = false) {
 }
 
 
-export function getChunks(filepath) {
-    if (!filepath) return [];
+/**
+ * Single Source of Truth resolver for an artifact's constituent chunk URIs.
+ * Accepts either a canonical URI string or an EntityData object ({ filepath, filename, chunks }).
+ */
+export function getChunks(filepathOrData, explicitChunks = null) {
+    if (!filepathOrData) return Array.isArray(explicitChunks) ? explicitChunks : [];
+    const isObj = typeof filepathOrData === 'object' && filepathOrData !== null;
+    const rawPath = isObj ? String(filepathOrData.filepath || filepathOrData.filename || '') : String(filepathOrData || '');
+    const inlineChunks = isObj
+        ? (Array.isArray(filepathOrData.chunks) ? filepathOrData.chunks : explicitChunks)
+        : explicitChunks;
+    if (!rawPath) return Array.isArray(inlineChunks) ? inlineChunks : [];
+    const normPath = normalizeVfsURI(rawPath) || rawPath;
     const manifest = AppStore.getState().manifest || {};
-    const isContext = filepath.startsWith('ctx://') || filepath.endsWith('_context.txt') || filepath.endsWith('_diffs.txt');
-    return extractManifestFiles(manifest, filepath, isContext ? 'ctx' : 'vfs');
+    const isContext = normPath.startsWith('ctx://') || normPath.endsWith('_context.txt') || normPath.endsWith('_diffs.txt');
+    const manifestChunks = extractManifestFiles(manifest, normPath, isContext ? 'ctx' : 'vfs', { fallbackToKey: false });
+    if (Array.isArray(manifestChunks) && manifestChunks.length > 0) {
+        return manifestChunks;
+    }
+    if (Array.isArray(inlineChunks) && inlineChunks.length > 0) {
+        return inlineChunks;
+    }
+    return [normPath];
+}
+
+/**
+ * Returns true when an artifact or EntityData payload resolves to more than one part.
+ */
+export function isMultiPartArtifact(filepathOrData, explicitChunks = null) {
+    return getChunks(filepathOrData, explicitChunks).length > 1;
 }
 
 const MAX_SHARE_CACHE_ITEMS = 24;
@@ -725,10 +710,7 @@ export async function preWarmShareArtifact(baseFile, chunks = null, isFS = false
     if (!baseFile) return [];
     try {
         const activeWs = window.inSetu.utils.getActiveWorkspace();
-        const manifestChunks = getChunks(baseFile);
-        const targetFiles = (manifestChunks && manifestChunks.length > 0)
-            ? manifestChunks
-            : ((Array.isArray(chunks) && chunks.length > 0) ? chunks : [baseFile]);
+        const targetFiles = getChunks(baseFile, chunks);
         const warmed = [];
         for (const fp of targetFiles) {
             const existing = getCachedShareText(fp);

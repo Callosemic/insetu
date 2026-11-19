@@ -474,13 +474,10 @@ export class InSetuAgentHandoffPanel extends InSetuElement {
                 </sutram-stack>
                 <sutram-stack direction="row" align="center" gap="xs" ?wrap=${true}>
                     ${wfCtxUri ? (() => {
-                        const manifestChunks = this.vfs?.getChunks ? this.vfs.getChunks(wfCtxUri) : [];
                         const fallbackChunks = (isSameWindow && hasPriorWindowState && activeBranch.delta_context_chunks)
                             ? activeBranch.delta_context_chunks
                             : (activeBranch.full_context_chunks || [wfCtxUri]);
-                        const chunks = (manifestChunks && manifestChunks.length > 0 && !(manifestChunks.length === 1 && manifestChunks[0] === wfCtxUri && fallbackChunks.length > 1))
-                            ? manifestChunks
-                            : fallbackChunks;
+                        const chunks = this.vfs?.getChunks ? this.vfs.getChunks(wfCtxUri, fallbackChunks) : fallbackChunks;
                         const ctxEntityData = {
                             filepath: wfCtxUri, isFS: false, chunks,
                             suppress: ['file-edit', 'file-browse', 'file-view', 'file-window']

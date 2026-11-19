@@ -99,9 +99,12 @@ export class InSetuURI {
         this.isDir = hadTrailingSlash;
 
         this.isCompiledArtifact = scheme === 'ctx' && ['contexts', 'diffs'].includes(volume);
-        this.isUserTemplate = withScheme.includes('/.templates/user/');
-        this.isReadOnlyTemplate = !this.isUserTemplate && withScheme.includes('/.templates/');
+        this.isUserTemplateRoot = withScheme.endsWith('/.templates/user');
+        this.isUserTemplate = this.isUserTemplateRoot || withScheme.includes('/.templates/user/');
+        this.isReadOnlyTemplate = !this.isUserTemplate && (withScheme.endsWith('/.templates') || withScheme.includes('/.templates/'));
         this.isTemplate = this.isUserTemplate || this.isReadOnlyTemplate;
+        this.isRepoPromptRoot = scheme === 'vfs' && relativePath === '.insetu-data/prompts';
+        this.isRepoPrompt = scheme === 'vfs' && (this.isRepoPromptRoot || relativePath.startsWith('.insetu-data/prompts/'));
         this.isSharedMount = scheme === 'ws';
         this.isReadOnly = this.isSharedMount || this.isCompiledArtifact || this.isReadOnlyTemplate;
         this.isEditable = !this.isReadOnly && (scheme === 'vfs' || scheme === 'ctx' || scheme === 'virtual' || scheme === 'yomama');

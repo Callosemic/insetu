@@ -114,10 +114,41 @@ def check_tier0_domain_purity():
             except Exception:
                 pass
 
+def _collect_exported_vfs_symbols() -> set:
+    """Extracts all exported VFS function and property names from fs.js, fs_store.js, and ui_file_tree.js."""
+    symbols = {"shareTextCache", "buildUriFileTree"}
+    fs_files = [
+        BACKEND_DIR / "core" / "fs" / "fs.js",
+        BACKEND_DIR / "core" / "fs" / "fs_store.js",
+    ]
+    export_fn_re = re.compile(r'\bexport\s+(?:async\s+)?function\s+([A-Za-z0-9_]+)\b')
+    export_const_re = re.compile(r'\bexport\s+const\s+([A-Za-z0-9_]+)\b')
+    export_list_re = re.compile(r'\bexport\s*\{([^}]+)\}', re.MULTILINE)
+    non_callable_exports = {"VFS_PUBLIC_API", "FsStore"}
+    for fp in fs_files:
+        if not fp.is_file():
+            continue
+        text = fp.read_text(encoding="utf-8")
+        symbols.update(export_fn_re.findall(text))
+        symbols.update(export_const_re.findall(text))
+        for block in export_list_re.findall(text):
+            for part in block.split(","):
+                clean = part.strip().split(" as ")[-1].strip()
+                if clean:
+                    symbols.add(clean)
+    return symbols - non_callable_exports
+
+
 def check_javascript_files():
     check_vendor_manifest_paths()
     check_tier0_domain_purity()
     print("🔍 Sweeping JavaScript Frontend (Hybrid AST + Regex Analysis)...")
+    exported_vfs_symbols = _collect_exported_vfs_symbols()
+    vfs_member_call_pattern = re.compile(r'\b(?:this\.vfs|window\.inSetu\.vfs)(?:\?\.)?\.([A-Za-z0-9_]+)\s*\(')
+    private_registry_access_pattern = re.compile(r'\bExtensionRegistry(?:\?\.)?\._[A-Za-z0-9_]+\b')
+    ad_hoc_chunk_fallback_pattern = re.compile(
+        r'\b(?:const|let|var)\s+([A-Za-z0-9_]+)\s*=[^;\n]*?\bgetChunks\s*\([^)]*\)[\s\S]{0,180}?\?\s*\1\s*:\s*[\w.?]*[Cc]hunks\b'
+    )
     shared_styles_pattern = re.compile(r'from\s+[\'"][^\'"]*shared_styles\.js[\'"]')
     dom_read_pattern = re.compile(r'document\.(?:getElementById|querySelector)\([^\)]+\)(?:\.(value|checked|classList)|\[[\'"](value|checked|classList)[\'"]\]|\.getAttribute\([\'"](value|checked|class)[\'"]\))')
     interval_pattern = re.compile(r'\bsetInterval\s*\(')
@@ -255,7 +286,7 @@ def check_javascript_files():
         r'\b(?:chain_context|prior_chain_context)\b'
     )
     entity_action_obj_pattern = re.compile(r'\{\s*targetEntit(?:y|ies)\s*:[\s\S]*?\n\s*\}', re.MULTILINE)
-    quickpack_share_allowed_files = {"gather.js", "fs.js", "agent.js", "prompts.js"}
+    quickpack_share_allowed_files = {"gather.js", "gather_quickpack.js", "fs.js", "fs_actions.js", "agent.js", "prompts.js"}
     fs_domain_coupling_pattern = re.compile(
         r'\b(?:GatherStore|FlowStore|GitStore|executeCompile|flow_workflows|git_diffs|gather_base)\b|stores\.(?:Gather|Flow|Git)\b'
     )
@@ -390,6 +421,35 @@ def check_javascript_files():
                             )
 
         # --- 2. GLOBAL & STRING PATTERNS ---
+        if not is_tier0 and exported_vfs_symbols:
+            for m in vfs_member_call_pattern.finditer(full_content):
+                vfs_fn = m.group(1)
+                if vfs_fn not in exported_vfs_symbols:
+                    line_num = full_content[:m.start()].count('\n') + 1
+                    report_violation(
+                        "VFS_ACCESSOR_PARITY_MANDATE",
+                        filepath,
+                        line_num,
+                        f"Call to 'vfs.{vfs_fn}()' which is not exported by 'core/fs/fs.js' or 'core/fs/fs_store.js'. Export it in VFS_PUBLIC_API."
+                    )
+        if not is_tier0 and file != "fs_store.js":
+            for m in ad_hoc_chunk_fallback_pattern.finditer(full_content):
+                line_num = full_content[:m.start()].count('\n') + 1
+                report_violation(
+                    "AD_HOC_CHUNK_FALLBACK_TERNARY_BAN",
+                    filepath,
+                    line_num,
+                    f"Manual getChunks() vs inline chunks ternary in '{file}'. Pass the EntityData object or fallbackChunks directly to getChunks(dataOrUri, fallbackChunks) or isMultiPartArtifact(dataOrUri)."
+                )
+        if not is_tier0 and file not in ("insetu_sdk.js", "insetu_element.js"):
+            for m in private_registry_access_pattern.finditer(full_content):
+                line_num = full_content[:m.start()].count('\n') + 1
+                report_violation(
+                    "PRIVATE_REGISTRY_ACCESS_BAN",
+                    filepath,
+                    line_num,
+                    f"Direct access to private ExtensionRegistry property '{m.group(0)}' in '{file}'. Use public ExtensionRegistry methods (e.g. collectManifestField, getLayoutSlots, getEntityActions)."
+                )
         for folder_match in folder_entity_card_pattern.finditer(full_content):
             entity_data_body = folder_match.group(1)
             if "filepath:" not in entity_data_body or "titleText:" not in entity_data_body:
@@ -808,7 +868,7 @@ def check_javascript_files():
 
             if zustand_reference_mutation_pattern.search(line):
                 report_violation("ZUSTAND_REFERENCE_MUTATION", filepath, line_num, "Symmetric state assignment detected (e.g. {manifest: manifest}). Ensure complex objects are explicitly cloned using the spread operator before passing to setState.")
-            if (is_extension or 'core' in filepath.parts) and file not in ["fs.js", "ui_editor.js", "insetu_sdk.js"] and banned_ui_zones_pattern.search(line):
+            if (is_extension or 'core' in filepath.parts) and file not in ["fs.js", "fs_actions.js", "ui_editor.js", "insetu_sdk.js"] and banned_ui_zones_pattern.search(line):
                 report_violation("BANNED_UI_ZONES", filepath, line_num, "The 'uiHooks' object and 'zone:*' string hooks are permanently deprecated (ADR 0041). Use declarative customEditors, expanded layoutSlots, native InSetuElement lifecycles, or the Typed Event Bus.")
             if dirty_alert_triangle_pattern.search(line):
                 report_violation("DIRTY_CARD_CONSTRUCTION_ICON_MANDATE", filepath, line_num, "Dirty cards must use the 'construction' icon instead of 'alert-triangle' (e.g., isDirty ? 'construction' : 'package').")

@@ -92,8 +92,8 @@ export class InSetuFileTree extends InSetuElement {
         hidePath: { type: Boolean },
         enableSearch: { type: Boolean },
         searchPlaceholder: { type: String },
+        searchQuery: { type: String },
         entityType: { type: String },
-        _searchQuery: { type: String },
         _searchResults: { type: Array, state: true },
         _pendingMutations: { type: Object },
         _deletedMutations: { type: Object },
@@ -110,7 +110,7 @@ constructor() {
         this.hidePath = false;
         this.enableSearch = false;
         this.searchPlaceholder = 'Search...';
-        this._searchQuery = '';
+        this.searchQuery = '';
         this._searchResults = [];
         this._searchReqId = 0;
         this._cachedTree = null;
@@ -146,14 +146,14 @@ constructor() {
         if (filesChanged) {
             this._cachedTree = null;
         }
-        if (filesChanged || changedProperties.has('_searchQuery')) {
-            if (this.enableSearch && this._searchQuery) {
+        if (filesChanged || changedProperties.has('searchQuery')) {
+            if (this.enableSearch && this.searchQuery) {
                 const { mergedFiles } = this._getMergedUris();
                 if (mergedFiles.length < 500) {
-                    this._searchResults = window.inSetu.utils.fuzzyFilterObjects(mergedFiles, this._searchQuery);
+                    this._searchResults = window.inSetu.utils.fuzzyFilterObjects(mergedFiles, this.searchQuery);
                 } else {
                     const reqId = ++this._searchReqId;
-                    SutramWorker.dispatch('FUZZY_SEARCH', { items: mergedFiles, query: this._searchQuery }).then(({ results }) => {
+                    SutramWorker.dispatch('FUZZY_SEARCH', { items: mergedFiles, query: this.searchQuery }).then(({ results }) => {
                         if (reqId === this._searchReqId) {
                             this._searchResults = results || [];
                         }
@@ -171,10 +171,11 @@ constructor() {
             .map(f => f.includes('://') ? f : `vfs://${f.replace(/^\/+/, '')}`);
         const isPromptsRoot = rootScope.replace(/\/+$/, '') === 'ctx://prompts';
         const pendingFiles = Array.from(this._pendingMutations || [])
-            .filter(f => f && typeof f === 'string' && (
-                f.startsWith(rootScope) ||
-                (isPromptsRoot && /^vfs:\/\/[^/]+\/\.insetu-data\/prompts\//.test(f))
-            ));
+            .filter(f => {
+                if (!f || typeof f !== 'string') return false;
+                if (f.startsWith(rootScope)) return true;
+                return isPromptsRoot && new this.utils.InSetuURI(f).isRepoPrompt;
+            });
         let mergedFiles = Array.from(new Set([...baseFiles, ...pendingFiles]));
         if (this._deletedMutations && this._deletedMutations.size > 0) {
             const deletedSet = this._deletedMutations;
@@ -208,9 +209,14 @@ constructor() {
     }
     render() {
         if (this.files.length === 0) {
-            return html`<sutram-empty-state text="No files found."></sutram-empty-state>`;
+            return html`
+                <sutram-view ?flush=${true} ?noScroll=${true}>
+                    <slot name="pinned-top" slot="header"></slot>
+                    <sutram-empty-state text="No files found."></sutram-empty-state>
+                </sutram-view>
+            `;
         }
-        const isSearching = this.enableSearch && this._searchQuery;
+        const isSearching = this.enableSearch && this.searchQuery;
 
         let directoryEntries = [];
         let flatResults = [];
@@ -236,8 +242,15 @@ constructor() {
                     <sutram-toolbar
                         slot="toolbar"
                         searchPlaceholder=${this.searchPlaceholder}
-                        .searchQuery=${this._searchQuery || ''}
-                        @search-changed=${(e) => this._searchQuery = e.detail.value}
+                        .searchQuery=${this.searchQuery || ''}
+                        @search-changed=${(e) => {
+                            this.searchQuery = e.detail.value;
+                            this.dispatchEvent(new CustomEvent('search-changed', {
+                                detail: { value: e.detail.value },
+                                bubbles: true,
+                                composed: true
+                            }));
+                        }}
                         ?flush=${(!isSearching && activePath.length > 0 && !this.hidePath)}>
                         ${(!isSearching && activePath.length > 0 && !this.hidePath) ? html`
                             <sutram-surface slot="bottom-row" variant="panel" border="top" padding="xs">
@@ -260,13 +273,14 @@ constructor() {
                         </sutram-stack>
                     </sutram-surface>
                 ` : '')}
+                <slot name="pinned-top" slot="header"></slot>
                 ${isSearching ? html`
                     <sutram-virtual-list
                         .items=${flatResults}
                         .renderItem=${fullFilepath => {
                             if (!fullFilepath || typeof fullFilepath !== 'string') return html``;
                             const parsed = new this.utils.InSetuURI(fullFilepath);
-                            const isRepoPromptFile = /^vfs:\/\/[^/]+\/\.insetu-data\/prompts\//.test(fullFilepath);
+                            const isRepoPromptFile = parsed.isRepoPrompt;
                             const isGitMod = this._gitModifiedFiles.has(fullFilepath);
                             const cardSuffix = parsed.isSharedMount
                                 ? `🌐 ${parsed.volume}`
@@ -307,10 +321,10 @@ constructor() {
                             const fullTarget = node.canonicalUri || node.fullPath || '';
                             const parsed = new this.utils.InSetuURI(fullTarget);
                             const displayName = node.name || parsed.basename || fullTarget;
-                            const isUserTemplateRoot = fullTarget.endsWith('/.templates/user');
-                            const isReadOnlyTemplateNode = !parsed.isUserTemplate && !isUserTemplateRoot && fullTarget.includes('/.templates');
-                            const isRepoPromptRoot = isDirNode && /^vfs:\/\/[^/]+\/\.insetu-data\/prompts\/?$/.test(fullTarget);
-                            const isRepoPromptNode = /^vfs:\/\/[^/]+\/\.insetu-data\/prompts(?:\/|$)/.test(fullTarget);
+                            const isUserTemplateRoot = parsed.isUserTemplateRoot;
+                            const isReadOnlyTemplateNode = parsed.isReadOnlyTemplate;
+                            const isRepoPromptRoot = isDirNode && parsed.isRepoPromptRoot;
+                            const isRepoPromptNode = parsed.isRepoPrompt;
 
                             const nextPath = isDirNode
                                 ? (Array.isArray(node.treePath) ? node.treePath : node.fullPath.split('/').filter(Boolean))

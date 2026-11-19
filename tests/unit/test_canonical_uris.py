@@ -384,9 +384,9 @@ assert.equal(repoRoot.isRootVolume, true);
         apply_declarative_schema("vfs_index", VFS_INDEX_SCHEMA, "default")
         g_ctx = gather_bp.get_context("default")
 
-        # Create two large files (~260 KB each) so the repo context exceeds the 400 KB chunk limit and splits into 2 parts
-        part_a = "A" * 260000
-        part_b = "B" * 260000
+        # Create two large files (~160 KB each) so the repo context exceeds the 250 KB chunk limit and splits into 2 parts
+        part_a = "A" * 160000
+        part_b = "B" * 160000
         (self.repo_dir / "part_a.py").write_text(part_a, encoding="utf-8")
         (self.repo_dir / "part_b.py").write_text(part_b, encoding="utf-8")
         force_topology_scan(workspace_id="default")

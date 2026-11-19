@@ -203,6 +203,114 @@ assert.equal(getCachedShareText('vfs://alpha/service.py'), null);
 assert.equal(getCachedShareText('ctx://contexts/alpha_context.txt'), null, 'Topological context must invalidate when a vfs:// file mutates');
 assert.equal(getCachedShareText('ctx://contexts/quickpack_123_context.txt'), 'quickpack snapshot', 'Point-in-time Quickpack snapshot must survive');
 
+// 8. Sprint U2: Send variant set, family defaults, multi-part pack fallback, Publish section, bulk Send, and Core prompts
+await import('/static/extensions/gather/gather.js');
+const { getRegisteredCorePrompts } = await import('/static/extensions/prompts/prompts.js');
+await import('/static/extensions/publish/ext_publish.js');
+
+// 8a. Core prompts includes the Yomama patch protocol declared by bridge.js
+const corePrompts = getRegisteredCorePrompts();
+assert.ok(corePrompts.includes('ctx://prompts/.templates/bridge/yomama_patch_protocol.md'));
+
+// 8b. Single markdown file gets Send variant set with Raw, Expanded (when hasMacros), and Publish sections; default is Copy Raw
+const mdFileActions = window.ExtensionRegistry.getEntityActions('file', {
+    filepath: 'vfs://alpha/README.md',
+    isFS: true,
+    hasMacros: true
+});
+const sendSetMd = mdFileActions.find(a => a.kind === 'variant-set' && a.setId === 'send');
+assert.ok(sendSetMd, 'Expected collapsed send variant set on file entity');
+assert.equal(sendSetMd.surfaced, 1);
+assert.equal(sendSetMd.defaultVariant.id, 'file-copy');
+assert.equal(sendSetMd.defaultVariant.label, 'Copy Raw');
+assert.equal(sendSetMd.defaultVariant.successLabel, 'Copied');
+assert.deepEqual(sendSetMd.sections, ['Raw', 'Expanded', 'Publish']);
+
+// 8c. Single-part vs Multi-part pack (file:context): single-part defaults to Copy Raw; multi-part hides Copy Raw and falls back to Download Raw
+const singlePartPackActions = window.ExtensionRegistry.getEntityActions('file:context', {
+    filepath: 'ctx://contexts/single_context.txt',
+    isFS: false,
+    chunks: ['ctx://contexts/single_context.txt']
+});
+const sendSetSinglePack = singlePartPackActions.find(a => a.kind === 'variant-set' && a.setId === 'send');
+assert.equal(sendSetSinglePack.defaultVariant.id, 'file-copy');
+
+const multiPartPackActions = window.ExtensionRegistry.getEntityActions('file:context', {
+    filepath: 'ctx://contexts/multi_context.txt',
+    isFS: false,
+    chunks: ['ctx://contexts/multi_context_part1.txt', 'ctx://contexts/multi_context_part2.txt']
+});
+const sendSetMultiPack = multiPartPackActions.find(a => a.kind === 'variant-set' && a.setId === 'send');
+assert.ok(!sendSetMultiPack.variants.some(v => v.id === 'file-copy'), 'Copy Raw must be hidden for multi-part context packs');
+assert.equal(sendSetMultiPack.defaultVariant.id, 'file-download');
+assert.equal(sendSetMultiPack.defaultVariant.label, 'Download Raw');
+
+// 8d. Folder entity resolves Send default to Download Raw (ZIP)
+const folderActions = window.ExtensionRegistry.getEntityActions('folder', {
+    filepath: 'vfs://alpha/src/',
+    folderpath: 'vfs://alpha/src',
+    isDir: true
+});
+const sendSetFolder = folderActions.find(a => a.kind === 'variant-set' && a.setId === 'send');
+assert.ok(sendSetFolder, 'Expected send variant set on folder entity');
+assert.equal(sendSetFolder.defaultVariant.id, 'vfs-download-zip');
+assert.equal(sendSetFolder.defaultVariant.label, 'Download Raw');
+
+// 8e. Bulk selection tray aggregates gather-pack-copy and gather-pack-download into bulk Send variant set
+const bulkTrayActions = window.ExtensionRegistry.getAggregatableActions([
+    { entityType: 'file:prompt', data: { filepath: 'ctx://prompts/.templates/bridge/yomama_patch_protocol.md' } },
+    { entityType: 'file:context', data: { filepath: 'ctx://contexts/single_context.txt', chunks: ['ctx://contexts/single_context.txt'] } }
+], { group: 'share' });
+const bulkSendSet = bulkTrayActions.find(a => a.kind === 'variant-set' && a.setId === 'send');
+assert.ok(bulkSendSet, 'Expected bulk send variant set in selection tray');
+assert.equal(bulkSendSet.defaultVariant.variantId, 'gather-pack-copy');
+assert.equal(bulkSendSet.defaultVariant.label, 'Copy Raw');
+
+// 8f. Files sub-tab menu (group: 'file') preserves bulk Download ZIP across regular files and folders
+const bulkFileMenuActions = window.ExtensionRegistry.getAggregatableActions([
+    { entityType: 'file', data: { filepath: 'vfs://alpha/src/main.py', isFS: true } },
+    { entityType: 'file', data: { filepath: 'vfs://alpha/src/utils.py', isFS: true } }
+], { group: 'file' });
+assert.ok(bulkFileMenuActions.some(a => a.variantId === 'vfs-bulk-download-zip'), 'Files sub-tab menu must offer Download ZIP for multi-file selections');
+
+// 8g. VFS_PUBLIC_API projects all fs_store.js helpers (getCachedShareText, cacheShareText, fetchArtifactText, isMultiPartArtifact) onto window.inSetu.vfs
+assert.equal(typeof window.inSetu.vfs.getCachedShareText, 'function');
+assert.equal(typeof window.inSetu.vfs.cacheShareText, 'function');
+assert.equal(typeof window.inSetu.vfs.fetchArtifactText, 'function');
+assert.equal(typeof window.inSetu.vfs.isMultiPartArtifact, 'function');
+
+// 8h. Polymorphic getChunks & isMultiPartArtifact 3-way resolution contract (manifest vs ephemeral inline vs manifest override)
+const { getChunks, isMultiPartArtifact, resolveEntityExportTarget } = window.inSetu.vfs;
+// Case 1: Ephemeral/un-manifested multi-part pack (not in AppStore.manifest.ctx, but data.chunks has 2 parts)
+const ephemeralMulti = {
+    filepath: 'ctx://contexts/ephemeral_query_context.txt',
+    chunks: ['ctx://contexts/ephemeral_query_context_part1.txt', 'ctx://contexts/ephemeral_query_context_part2.txt']
+};
+assert.equal(isMultiPartArtifact(ephemeralMulti), true);
+assert.deepEqual(getChunks(ephemeralMulti), ephemeralMulti.chunks);
+assert.deepEqual(resolveEntityExportTarget(ephemeralMulti).chunks, ephemeralMulti.chunks);
+
+// Case 2: Manifest-backed multi-part pack where card .entityData only passes { filepath }
+AppStore.setState({
+    manifest: {
+        vfs: AppStore.getState().manifest?.vfs || {},
+        ctx: {
+            'ctx://contexts/manifest_multi_context.txt': {
+                chunks: ['ctx://contexts/manifest_multi_context_part1.txt', 'ctx://contexts/manifest_multi_context_part2.txt'],
+                meta: { timestamp: 200 }
+            }
+        }
+    }
+});
+assert.equal(isMultiPartArtifact({ filepath: 'ctx://contexts/manifest_multi_context.txt' }), true);
+// Case 3: Live manifest (2 parts) overrides stale 1-part inline data.chunks snapshot
+const staleInline = {
+    filepath: 'ctx://contexts/manifest_multi_context.txt',
+    chunks: ['ctx://contexts/manifest_multi_context.txt']
+};
+assert.equal(isMultiPartArtifact(staleInline), true);
+assert.equal(getChunks(staleInline).length, 2);
+
 console.log('JS_BEHAVIORAL_UNITS_OK');
 """
         res = execute_binary(

@@ -278,23 +278,77 @@ window.ExtensionRegistry.getLayoutSlots = function() {
         return [];
     }
 };
-const _baseGetEntityActions = window.ExtensionRegistry.getEntityActions.bind(window.ExtensionRegistry);
-window.ExtensionRegistry.getEntityActions = function(compoundType, data) {
-    const actions = _baseGetEntityActions(compoundType, data);
+const MUTATIVE_ACTION_IDS = ['file-edit', 'vfs-move', 'vfs-rename', 'vfs-archive', 'vfs-delete'];
+
+if (typeof window.ExtensionRegistry.setActionFilterPredicate !== 'function') {
+    window.ExtensionRegistry.setActionFilterPredicate = function(predicateFn) {
+        this._actionFilterPredicate = typeof predicateFn === 'function' ? predicateFn : null;
+    };
+    const _baseCollapseVariantSets = window.ExtensionRegistry._collapseVariantSets.bind(window.ExtensionRegistry);
+    window.ExtensionRegistry._collapseVariantSets = function(flatActions, entityType, data = null, isBulk = false) {
+        const pred = this._actionFilterPredicate;
+        const preFiltered = typeof pred === 'function'
+            ? (flatActions || []).filter(act => {
+                if (isBulk && Array.isArray(data)) {
+                    return data.every(item => pred(act, item?.data || item, entityType));
+                }
+                return pred(act, data, entityType);
+            })
+            : flatActions;
+        return _baseCollapseVariantSets(preFiltered, entityType, data, isBulk);
+    };
+}
+
+if (typeof window.ExtensionRegistry.collectManifestField !== 'function') {
+    window.ExtensionRegistry.collectManifestField = function(fieldName) {
+        if (!fieldName || !this._manifests) return [];
+        const collected = [];
+        this._manifests.forEach((manifest, extName) => {
+            if (this._filterPredicate && !this._filterPredicate(extName)) return;
+            const val = manifest?.[fieldName];
+            if (Array.isArray(val)) {
+                collected.push(...val);
+            } else if (val !== undefined && val !== null) {
+                collected.push(val);
+            }
+        });
+        return collected;
+    };
+}
+
+if (typeof window.ExtensionRegistry.collectManifestEntries !== 'function') {
+    window.ExtensionRegistry.collectManifestEntries = function(fieldName, { respectFilter = false } = {}) {
+        if (!fieldName || !this._manifests) return [];
+        const entries = [];
+        this._manifests.forEach((manifest, extName) => {
+            if (respectFilter && this._filterPredicate && !this._filterPredicate(extName)) return;
+            const value = manifest?.[fieldName];
+            if (value !== undefined && value !== null) {
+                entries.push({ extName, value });
+            }
+        });
+        return entries;
+    };
+}
+
+if (typeof window.ExtensionRegistry.getRegisteredExtensionNames !== 'function') {
+    window.ExtensionRegistry.getRegisteredExtensionNames = function() {
+        if (!this._manifests) return [];
+        return Array.from(this._manifests.keys());
+    };
+}
+
+window.ExtensionRegistry.setActionFilterPredicate((act, data) => {
+    if (act.extName && !window.inSetu.isCore(act.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(act.extName)) {
+        return false;
+    }
     const rawFp = data?.filepath || data?.folderpath || data?.id || '';
     const isSharedAsset = Boolean(rawFp && String(rawFp).startsWith('ws://'));
-    const MUTATIVE_ACTION_IDS = ['file-edit', 'vfs-move', 'vfs-rename', 'vfs-archive', 'vfs-delete'];
-
-    return actions.filter(act => {
-        if (act.extName && !window.inSetu.isCore(act.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(act.extName)) {
-            return false;
-        }
-        if (isSharedAsset && MUTATIVE_ACTION_IDS.includes(act.id)) {
-            return false;
-        }
-        return true;
-    });
-};
+    if (isSharedAsset && MUTATIVE_ACTION_IDS.includes(act.id)) {
+        return false;
+    }
+    return true;
+});
 window.ExtensionRegistry.utils = {
     debounce,
     _verifyTokens: {},
@@ -446,7 +500,7 @@ window.inSetu.utils.getDropdownEntityActions = function(entityType, entityData, 
         }
     }));
 };
-window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = null, domain = 'auto') {
+window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = null, domain = 'auto', { fallbackToKey = true } = {}) {
     if (!manifestData) return [];
     const ctxManifest = manifestData.ctx || {};
     const vfsManifest = manifestData.vfs || {};
@@ -465,7 +519,7 @@ window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = nu
             const name = targetKey.split('/').pop();
             entry = (domain === 'ctx') ? ctxManifest[name] : (domain === 'vfs' ? vfsManifest[name] : (ctxManifest[name] || vfsManifest[name] || manifestData[name]));
         }
-        if (!entry) return [targetKey];
+        if (!entry) return fallbackToKey ? [targetKey] : [];
         return extract(entry);
     }
 

@@ -36,6 +36,27 @@ const syncPromptsState = window.inSetu.utils.coalescedAsync(async (forceRewarm =
         console.warn("Headless prompt sync failed:", e);
     }
 });
+
+/**
+ * Collects deduplicated canonical corePrompts URIs declared across active extension manifests.
+ */
+export function getRegisteredCorePrompts() {
+    const rawList = window.ExtensionRegistry?.collectManifestField
+        ? window.ExtensionRegistry.collectManifestField('corePrompts')
+        : [];
+    const seen = new Set();
+    const coreUris = [];
+    rawList.forEach(rawUri => {
+        if (!rawUri || typeof rawUri !== 'string') return;
+        const clean = rawUri.trim();
+        if (clean && !seen.has(clean)) {
+            seen.add(clean);
+            coreUris.push(clean);
+        }
+    });
+    return coreUris;
+}
+
 export const PromptsStore = createExtensionStore('Prompts', {
     prompts: [],
     warmedPromptUrls: new Set(),
@@ -131,13 +152,16 @@ export class InSetuExtPrompts extends InSetuElement {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
             const touchedPrompt = payload.mutations.some(m => isPromptPath(m.filepath));
-            if (touchedPrompt) setTimeout(() => syncPromptsState(true), 300);
+            if (touchedPrompt) syncPromptsState(true);
         });
         this.registerGlobalListener('insetu:soft-refresh', window, () => {
             syncPromptsState();
         });
         this.registerGlobalListener('sutram-sync-complete', window, () => {
             syncPromptsState();
+        });
+        this.registerGlobalListener('sutram:extension-registered', window, () => {
+            this.requestUpdate();
         });
 
         PromptsStore.getState().fetchPrompts();
@@ -172,7 +196,19 @@ export class InSetuExtPrompts extends InSetuElement {
             });
         }
     }
+    _openPromptFile(fn) {
+        if (!fn || !window.inSetu?.vfs?.viewSourceFile) return;
+        const parsed = new this.utils.InSetuURI(fn);
+        const isEditable = parsed.isEditable;
+        window.inSetu.vfs.viewSourceFile(fn, isEditable, false, { previewMode: !isEditable });
+    }
     render() {
+        const corePromptUris = getRegisteredCorePrompts();
+        const filteredCorePrompts = this.searchQuery
+            ? this.utils.fuzzyFilterObjects(corePromptUris, this.searchQuery)
+            : corePromptUris;
+        const showCorePrompts = ((!this.browsePath || this.browsePath.length === 0) || Boolean(this.searchQuery)) && filteredCorePrompts.length > 0;
+
         return html`
             <sutram-view ?flush=${true} ?noScroll=${true}>
                 ${this.loading ? html`
@@ -186,16 +222,49 @@ export class InSetuExtPrompts extends InSetuElement {
                     basePath="ctx://prompts/"
                     .enableSearch=${true}
                     searchPlaceholder="Fuzzy search prompts & .templates..."
+                    .searchQuery=${this.searchQuery}
                     .currentPath=${this.browsePath}
                     entityType="file:prompt"
+                    @search-changed=${(e) => PromptsStore.setState({ searchQuery: e.detail?.value || '' })}
                     @card-clicked=${(e) => {
-                        if (e.detail.isSource && window.inSetu.vfs.viewSourceFile) {
-                            const fn = e.detail.filename || '';
-                            const isEditable = (!fn.includes('/.templates/') || fn.includes('/.templates/user/')) && !fn.startsWith('ws://');
-                            window.inSetu.vfs.viewSourceFile(fn, isEditable, false, { previewMode: !isEditable });
+                        if (e.detail.isSource) {
+                            this._openPromptFile(e.detail.filename || '');
                         }
                     }}
                     @path-changed=${(e) => AppStore.getState().setBrowsePath(e.detail.path || [], this._getSubKey())}>
+                    ${showCorePrompts ? html`
+                        <sutram-collapsible slot="pinned-top" titleText="Core prompts" intent="highlight" ?open=${true}>
+                            <sutram-stack direction="col" gap="none">
+                                ${filteredCorePrompts.map(uri => {
+                                    const parsed = new this.utils.InSetuURI(uri);
+                                    const displayName = parsed.filename || parsed.basename || uri;
+                                    return html`
+                                        <sutram-card
+                                            .filename=${uri}
+                                            .titleText=${displayName}
+                                            .detailText=${uri}
+                                            .detailSuffix=${parsed.isReadOnlyTemplate ? 'Template' : ''}
+                                            descriptionText=""
+                                            icon="book-open"
+                                            intent="highlight"
+                                            entityType="file:prompt"
+                                            .entityData=${{
+                                                filepath: uri,
+                                                titleText: displayName,
+                                                isSource: parsed.isSource,
+                                                isFS: parsed.isEditable,
+                                                isTemplate: parsed.isTemplate
+                                            }}
+                                            @card-clicked=${(e) => {
+                                                e.stopPropagation();
+                                                this._openPromptFile(uri);
+                                            }}>
+                                        </sutram-card>
+                                    `;
+                                })}
+                            </sutram-stack>
+                        </sutram-collapsible>
+                    ` : ''}
                 </insetu-file-tree>
             </sutram-view>
         `;
@@ -244,15 +313,15 @@ function _buildPromptsMenuActions(slotCfg = {}) {
 function isPromptPath(filepath) {
     if (!filepath) return false;
     const raw = typeof filepath === 'object' ? (filepath.src || filepath.filepath || filepath.oldPath || '') : filepath;
-    const str = String(raw).replace(/\\/g, '/');
-    if (str.startsWith('ctx://diffs/') || str.startsWith('ctx://contexts/') || str.endsWith('_diffs.txt') || str.endsWith('_context.txt')) {
+    const parsed = new window.inSetu.utils.InSetuURI(raw);
+    if (parsed.isCompiledArtifact || parsed.basename.endsWith('_diffs.txt') || parsed.basename.endsWith('_context.txt')) {
         return false;
     }
     return (
-        str.startsWith('ctx://prompts/') ||
-        str.includes('/.insetu-data/prompts/') ||
-        str.includes('/.templates/') ||
-        (str.startsWith('ws://') && str.includes('/prompts/'))
+        (parsed.scheme === 'ctx' && parsed.volume === 'prompts') ||
+        parsed.isRepoPrompt ||
+        parsed.isTemplate ||
+        (parsed.isSharedMount && parsed.canonical.includes('/prompts/'))
     );
 }
 

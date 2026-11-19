@@ -5,11 +5,12 @@ import {
 } from '/static/extensions/system/insetu_sdk.js';
 import { resolveEditorMode, insertLinkToEditor, openEditorLinkTarget, isMarkdownLinksEnabled } from '/static/extensions/system/components/ui_editor.js';
 import { AppStore, SelectionStore } from '/static/extensions/system/store.js';
+import * as _fsStoreExports from '/static/extensions/fs/fs_store.js';
 import {
     FsStore, normalizeVfsURI, isBufferReadOnly, hasMacroSyntax, canPreviewFileMacros,
     resolveLiveBufferPreview, injectTextToBuffer, prepareBufferSavePayload, rebaseConcurrentText,
     saveBufferFile, reconcileBufferWithDisk, flushAllDirtyBuffers, renameFileTracking,
-    hydrateVfsBuffer, extractManifestFiles, resolveFileFetchUrl, getChunks, cacheShareText,
+    hydrateVfsBuffer, extractManifestFiles, resolveFileFetchUrl, getChunks, isMultiPartArtifact, cacheShareText,
     getCachedShareText, invalidateShareCache, preWarmShareArtifact, syncVirtualBuffer, preCacheFiles,
 } from '/static/extensions/fs/fs_store.js';
 import { InSetuEditorProjection, InSetuFrontmatterEditor, InSetuFileDiffProjection } from '/static/extensions/fs/fs_editor_projection.js';
@@ -17,12 +18,13 @@ import {
     InSetuBrowserProjection, InSetuLinkInsertProjection, InSetuMoveFileProjection,
     InSetuNewFileProjection, InSetuNewFolderProjection,
 } from '/static/extensions/fs/fs_modals.js';
+import { registerFsExtension } from '/static/extensions/fs/fs_actions.js';
 
 export {
     FsStore, normalizeVfsURI, isBufferReadOnly, hasMacroSyntax, canPreviewFileMacros,
     resolveLiveBufferPreview, injectTextToBuffer, prepareBufferSavePayload, rebaseConcurrentText,
     saveBufferFile, reconcileBufferWithDisk, flushAllDirtyBuffers, renameFileTracking,
-    hydrateVfsBuffer, extractManifestFiles, resolveFileFetchUrl, getChunks, cacheShareText,
+    hydrateVfsBuffer, extractManifestFiles, resolveFileFetchUrl, getChunks, isMultiPartArtifact, cacheShareText,
     getCachedShareText, invalidateShareCache, preWarmShareArtifact, syncVirtualBuffer, preCacheFiles,
     InSetuEditorProjection, InSetuFrontmatterEditor, InSetuFileDiffProjection,
     InSetuBrowserProjection, InSetuLinkInsertProjection, InSetuMoveFileProjection,
@@ -210,24 +212,32 @@ export async function ensureFreshContext(filePath) {
         }
     }
 }
+/**
+ * Fetches and caches raw text for a file or single-part compiled context artifact.
+ */
+export async function fetchArtifactText(filePath, { isFS = false, explicitUrl = null, requireSinglePart = false } = {}) {
+    await ensureFreshContext(filePath);
+    const resolvedChunks = getChunks(filePath);
+    if (requireSinglePart && Array.isArray(resolvedChunks) && resolvedChunks.length > 1) {
+        throw new Error("Artifact has multiple parts; use Share Raw or Download Raw.");
+    }
+    const targetFile = (resolvedChunks && resolvedChunks.length > 0) ? resolvedChunks[0] : filePath;
+    const cachedText = !explicitUrl ? getCachedShareText(targetFile) : null;
+    if (cachedText !== null) {
+        return cachedText;
+    }
+    const activeWs = window.inSetu.utils.getActiveWorkspace();
+    const fetchUrl = (targetFile === filePath && explicitUrl) ? explicitUrl : resolveFileFetchUrl(targetFile, isFS);
+    const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
+    if (!res.ok) throw new Error("File not found on disk.");
+    const text = await res.text();
+    cacheShareText(targetFile, text);
+    return text;
+}
+
 export async function fetchAndCopy(filePath, explicitUrl = null) {
     try {
-        await ensureFreshContext(filePath);
-        const activeWs = window.inSetu.utils.getActiveWorkspace();
-        const resolvedChunks = getChunks(filePath);
-        const targetFile = (resolvedChunks && resolvedChunks.length > 0) ? resolvedChunks[0] : filePath;
-        const cachedText = !explicitUrl ? getCachedShareText(targetFile) : null;
-        if (cachedText !== null) {
-            await navigator.clipboard.writeText(cachedText);
-            window.inSetu.ui.setGlobalStatus("✅ Copied!", 2000);
-            return;
-        }
-        const fetchUrl = (targetFile === filePath && explicitUrl) ? explicitUrl : resolveFileFetchUrl(targetFile, false);
-        const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
-
-        if (!res.ok) throw new Error("File not found on disk.");
-        const text = await res.text();
-        cacheShareText(targetFile, text);
+        const text = await fetchArtifactText(filePath, { isFS: false, explicitUrl });
         await navigator.clipboard.writeText(text);
         window.inSetu.ui.setGlobalStatus("✅ Copied!", 2000);
     } catch (e) {
@@ -249,10 +259,7 @@ export async function fetchAndDownloadState(filePath, explicitUrl = null) {
 }
 export function shareFiles(baseFile, chunks = null, isFS = false) {
     const activeWs = window.inSetu.utils.getActiveWorkspace();
-    const manifestChunks = getChunks(baseFile);
-    const filesToFetch = (manifestChunks && manifestChunks.length > 0)
-        ? manifestChunks
-        : ((chunks && chunks.length > 0) ? chunks : [baseFile]);
+    const filesToFetch = getChunks(baseFile, chunks);
 
     // Synchronous Fast-Path (0ms user-gesture-safe execution when pre-warmed or previously fetched)
     if (filesToFetch.length > 0 && filesToFetch.every(fp => getCachedShareText(fp) !== null)) {
@@ -280,8 +287,7 @@ export function shareFiles(baseFile, chunks = null, isFS = false) {
                 window.inSetu.ui.setGlobalStatus("⏳ Preparing files for Share...", null);
             }
             await ensureFreshContext(baseFile);
-            const refreshedChunks = getChunks(baseFile);
-            const effectiveFiles = (refreshedChunks && refreshedChunks.length > 0) ? refreshedChunks : filesToFetch;
+            const effectiveFiles = getChunks(baseFile, chunks);
             const fileObjects = [];
 
             for (const filepath of effectiveFiles) {
@@ -445,11 +451,7 @@ export function resolveEntityExportTarget(data = {}) {
     const rawPath = data.filepath || '';
     const normPath = normalizeVfsURI(rawPath);
     const parsed = new window.inSetu.utils.InSetuURI(normPath);
-
-    const manifestChunks = getChunks(normPath);
-    const chunks = (manifestChunks && manifestChunks.length > 0)
-        ? manifestChunks
-        : ((data.chunks && data.chunks.length > 0) ? data.chunks : []);
+    const chunks = getChunks(data);
 
     if (parsed.isCompiledArtifact || (chunks && chunks.length > 1)) {
         return {
@@ -1007,542 +1009,29 @@ export async function executeBulkDelete(items) {
         }
     });
 }
-function _buildVfsExplorerMenuActions(slotCfg = {}) {
-    const subKey = slotCfg?.id || 'fs:files';
-    const browsePath = AppStore.getState().getBrowsePath ? AppStore.getState().getBrowsePath(subKey) : [];
-    const currentPath = browsePath.join('/');
-    const items = [];
-    if (!currentPath) {
-        items.push({ label: 'New Repository', icon: 'package', onClick: () => openNewFolderModal() });
-    } else {
-        const prefix = `vfs://${currentPath}/`;
-        items.push({ label: 'New Folder', icon: 'folder-plus', onClick: () => openNewFolderModal(prefix) });
-        items.push({ label: 'New File', icon: 'file-plus', onClick: () => openNewFileModal(prefix) });
-        items.push({ label: 'Upload File', icon: 'upload', onClick: () => uploadFileToWorkspace(`vfs://${currentPath}`) });
-
-        const manifestFiles = getGlobalManifest();
-        const hasFiles = manifestFiles.some(f => f.startsWith(prefix) && !f.endsWith('.gitkeep'));
-        if (!hasFiles) {
-            items.push({ divider: true });
-            items.push({ label: 'Delete Folder', icon: 'trash-2', onClick: () => deleteEmptyFolder(`vfs://${currentPath}`) });
-        }
-    }
-    window.inSetu.events.emitHook('insetu:fs-dropdown-menu', { currentPath, menuItems: items });
-    return items;
-}
-window.ExtensionRegistry.registerExtension('fs', {
-    name: "Virtual File System",
-    version: "2.0.0",
-    offline_mode: "full",
-    uiHooks: {
-        'sutram:is-projection-dirty': (subId) => {
-            if (!subId) return false;
-            const normId = normalizeVfsURI(subId);
-            const activeBuffers = FsStore.getState().activeBuffers || {};
-            const buf = activeBuffers[subId] || activeBuffers[normId];
-            return Boolean(buf && buf.content !== buf.originalContent);
-        },
-        'sutram:rekey-projection-id': ({ id, mapSegment }) => {
-            if (!id || typeof id !== 'string' || typeof mapSegment !== 'function') return null;
-            if (id.startsWith('vfs:diff:')) {
-                const target = id.slice('vfs:diff:'.length);
-                const mapped = mapSegment(target);
-                return mapped !== target ? `vfs:diff:${mapped}` : id;
-            }
-            if (id.startsWith('vfs:pairdiff:')) {
-                const pairStr = id.slice('vfs:pairdiff:'.length);
-                const [leftFp, rightFp] = pairStr.split('::');
-                const nextLeft = mapSegment(leftFp || '');
-                const nextRight = mapSegment(rightFp || '');
-                if (nextLeft !== (leftFp || '') || nextRight !== (rightFp || '')) {
-                    return `vfs:pairdiff:${nextLeft}::${nextRight}`;
-                }
-            }
-            return null;
-        }
-    },
-    shortcuts: [
-        {
-            id: 'new-file-modal-save',
-            context: 'global',
-            key: 'ctrl+s',
-            label: 'Save New File',
-            action: () => {
-                const isNewFileOpen = window.Sutram?.stores?.Layout?.getState()?.windows?.some(w => w.id === 'vfs:new-file');
-                if (isNewFileOpen && window.inSetu.ui.saveNewFile) {
-                    window.inSetu.ui.saveNewFile();
-                }
-            }
-        }
-    ],
-    entityActions: [
-        {
-            targetEntity: 'file',
-            targetEntities: ['file', 'folder'],
-            id: 'vfs-move',
-            bulkGroupKey: 'move',
-            label: 'Move',
-            icon: 'truck',
-            group: 'file',
-            vfsBound: true,
-            intent: 'neutral',
-            order: 64,
-            bulkable: true,
-            match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
-            onClick: (data, e) => {
-                if (data.isDir) {
-                    const srcUri = new window.inSetu.utils.InSetuURI(data.folderpath || data.filepath);
-                    openFolderBrowser(async (destParent) => {
-                        if (destParent === undefined || destParent === null) return;
-                        const destBaseUri = new window.inSetu.utils.InSetuURI(destParent);
-                        const normDest = destBaseUri.join(srcUri.basename);
-                        if (normDest === srcUri.toString() || normDest.startsWith(srcUri.toString() + '/')) {
-                            alert("Cannot move a folder into itself or a subfolder.");
-                            return;
-                        }
-                        await _relocateVfsNode(srcUri.toString(), normDest, true, { loadingText: 'Moving folder...' });
-                    });
-                } else {
-                    const srcUri = new window.inSetu.utils.InSetuURI(data.filepath);
-                    const parts = srcUri.pathSegments;
-                    parts.pop();
-                    window.inSetu.stores.Fs.getState().setModal('move', { open: false, currentFile: srcUri.toString(), destPath: srcUri.toString(), initialParts: parts });
-                    if (window.Sutram?.stores?.Layout) {
-                        const layout = window.Sutram.stores.Layout.getState();
-                        layout.openWindow({
-                            id: 'vfs:move-file',
-                            component: 'insetu-move-file-projection',
-                            label: `Move: ${srcUri.basename}`,
-                            icon: 'truck',
-                            intent: 'warning',
-                            extName: 'fs',
-                            windowOnly: true
-                        }, layout.focusedColumn || 'center', 1);
-                    }
-                }
-            },
-            bulkAction: (items, e) => executeBulkMove(items)
-        },
-        {
-            targetEntity: 'file',
-            targetEntities: ['file', 'folder'],
-            id: 'vfs-rename',
-            label: 'Rename',
-            icon: 'edit-3',
-            group: 'file',
-            vfsBound: true,
-            intent: 'neutral',
-            order: 65,
-            bulkable: false,
-            match: (data) => {
-                if (data.isSkeleton || !(data.isFS || data.isDir)) return false;
-                const uri = new window.inSetu.utils.InSetuURI(data.isDir ? (data.folderpath || data.filepath) : data.filepath);
-                if (data.isDir && uri.isRootVolume) return false;
-                return Boolean(uri.basename);
-            },
-            asyncAction: async (data, e) => {
-                const srcUri = new window.inSetu.utils.InSetuURI(data.isDir ? (data.folderpath || data.filepath) : data.filepath);
-                const currentName = srcUri.basename;
-                const rawNewName = prompt(`Enter new ${data.isDir ? 'folder' : 'file'} name:`, currentName);
-                if (!rawNewName) return;
-                const newName = rawNewName.trim().replace(/^\/+|\/+$/g, '');
-                if (!newName || newName === currentName) return;
-                const destPath = srcUri.withName(newName);
-                await _relocateVfsNode(srcUri.toString(), destPath, !!data.isDir, { loadingText: 'Renaming...' });
-            }
-        },
-        {
-            targetEntity: 'file',
-            targetEntities: ['file', 'folder'],
-            id: 'vfs-archive',
-            bulkGroupKey: 'archive',
-            label: 'Archive',
-            icon: 'archive',
-            group: 'file',
-            vfsBound: true,
-            intent: 'warning',
-            order: 66,
-            bulkable: true,
-            match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
-            asyncAction: async (data, e) => {
-                const targetUri = new window.inSetu.utils.InSetuURI(data.isDir ? (data.folderpath || data.filepath) : data.filepath);
-                const label = data.isDir ? `folder "${targetUri.basename}"` : `this file`;
-                if (!confirm(`Archive ${label} to an 'archived/' directory?`)) return;
-                await _archiveVfsNode(targetUri.toString(), !!data.isDir, { loadingText: 'Archiving...' });
-            },
-            bulkAction: (items, e) => executeBulkArchive(items)
-        },
-        {
-            targetEntity: 'file',
-            targetEntities: ['file', 'folder'],
-            id: 'vfs-delete',
-            bulkGroupKey: 'delete',
-            label: 'Delete',
-            icon: 'trash-2',
-            group: 'file',
-            vfsBound: true,
-            intent: 'danger',
-            order: 67,
-            bulkable: true,
-            match: (data) => (data.isFS || data.isDir) && !data.isSkeleton,
-            asyncAction: async (data, e) => {
-                const targetUri = new window.inSetu.utils.InSetuURI(data.isDir ? (data.folderpath || data.filepath) : data.filepath);
-                const label = data.isDir ? `folder "${targetUri.basename}" and all its contents` : `this file`;
-                if (!confirm(`Permanently delete ${label}? This cannot be undone!`)) return;
-                await _deleteVfsNode(targetUri.toString(), !!data.isDir, { loadingText: 'Deleting...' });
-            },
-            bulkAction: (items, e) => executeBulkDelete(items)
-        },
-        {
-            targetEntity: 'file',
-            id: 'file-edit',
-            label: 'Edit',
-            icon: 'edit-3',
-            group: 'edit',
-            vfsBound: false,
-            intent: 'neutral',
-            order: 10,
-            match: (data) => !data.isSkeleton,
-            onClick: (data, e) => {
-                if (window.inSetu.vfs.viewSourceFile) {
-                    window.inSetu.vfs.viewSourceFile(data.filepath, data.isFS || false, false, { previewMode: false });
-                }
-            }
-        },
-        {
-            targetEntity: 'file',
-            id: 'file-preview',
-            label: 'Preview',
-            icon: 'eye',
-            group: 'edit',
-            vfsBound: false,
-            intent: 'highlight',
-            order: 10.5,
-            match: (data) => {
-                if (data.isSkeleton || data.isDir) return false;
-                return Boolean(data.hasMacros || canPreviewFileMacros(data.filepath));
-            },
-            onClick: (data, e) => {
-                if (window.inSetu.vfs.viewSourceFile) {
-                    window.inSetu.vfs.viewSourceFile(data.filepath, data.isFS || false, false, { previewMode: true });
-                }
-            }
-        },
-        {
-            targetEntity: 'file',
-            id: 'file-git-diff',
-            label: 'Diff',
-            icon: 'git-compare',
-            group: 'edit',
-            vfsBound: false,
-            intent: 'warning',
-            order: 11,
-            match: (data) => {
-                if (data.isSkeleton || !data.isFS) return false;
-                return !!(data.git_modified || data.isDirty || isFileGitModified(data.filepath));
-            },
-            onClick: (data, e) => {
-                viewFileGitDiff(data.filepath);
-            }
-        },
-        {
-            targetEntity: 'file',
-            id: 'file-conflict-diff',
-            label: 'Diff Original',
-            icon: 'git-compare',
-            group: 'edit',
-            vfsBound: false,
-            intent: 'highlight',
-            order: 11.5,
-            match: (data) => {
-                if (data.isSkeleton || data.isDir) return false;
-                return Boolean(resolveConflictOriginalPath(data.filepath));
-            },
-            onClick: (data, e) => {
-                const origPath = resolveConflictOriginalPath(data.filepath);
-                if (origPath) {
-                    viewTwoFileDiff(origPath, data.filepath);
-                }
-            }
-        },
-        {
-            targetEntity: 'file',
-            targetEntities: ['file'],
-            id: 'vfs-compare-selected',
-            bulkGroupKey: 'compare',
-            label: 'Compare Selected (2)',
-            icon: 'git-compare',
-            group: 'file',
-            vfsBound: false,
-            intent: 'highlight',
-            order: 63,
-            bulkable: true,
-            match: (data) => {
-                if (data.isSkeleton || data.isDir) return false;
-                const selMap = SelectionStore.getState()?.selectedItems;
-                if (!selMap || selMap.size !== 2) return false;
-                const items = Array.from(selMap.values());
-                return items.every(i => !(i.data?.isDir || i.isDir));
-            },
-            onClick: () => {
-                const selMap = SelectionStore.getState()?.selectedItems;
-                if (!selMap || selMap.size !== 2) return;
-                const paths = Array.from(selMap.values()).map(i => i.data?.filepath || i.filepath).filter(Boolean);
-                if (paths.length === 2) {
-                    const [a, b] = paths;
-                    // Always place the base file on the Left and the .conflict_ file on the Right
-                    if (resolveConflictOriginalPath(a)) {
-                        viewTwoFileDiff(b, a);
-                    } else {
-                        viewTwoFileDiff(a, b);
-                    }
-                    SelectionStore.getState().clearSelection();
-                }
-            },
-            bulkAction: (items) => {
-                const fileItems = (items || []).filter(i => !(i.data?.isDir || i.isDir));
-                if (fileItems.length !== 2) {
-                    alert("Please select exactly 2 files to compare side-by-side.");
-                    return;
-                }
-                const a = fileItems[0].data?.filepath || fileItems[0].filepath;
-                const b = fileItems[1].data?.filepath || fileItems[1].filepath;
-                if (resolveConflictOriginalPath(a)) {
-                    viewTwoFileDiff(b, a);
-                } else {
-                    viewTwoFileDiff(a, b);
-                }
-                SelectionStore.getState().clearSelection();
-            }
-        },
-        {
-            targetEntity: 'file',
-            id: 'file-copy',
-            label: 'Copy',
-            icon: 'clipboard',
-            group: 'edit',
-            vfsBound: false,
-            intent: 'success',
-            order: 12,
-            match: (data) => !data.isSkeleton,
-            asyncAction: async (data, e) => {
-                const preTarget = resolveEntityExportTarget(data);
-                if (preTarget.mode === 'memory') {
-                    await navigator.clipboard.writeText(preTarget.text).then(() => {
-                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("✅ Copied!", 2000);
-                    }).catch(err => alert("Clipboard API failed. Please manually select the text and copy it directly."));
-                    return;
-                }
-                await ensureFreshContext(data.filepath);
-                const target = resolveEntityExportTarget(data);
-                const primaryFile = target.chunks[0] || data.filepath;
-                const fetchUrl = resolveFileFetchUrl(primaryFile, target.isFS);
-                await fetchAndCopy(primaryFile, fetchUrl);
-            }
-        },
-        {
-            targetEntity: 'file',
-            id: 'file-copy-expanded',
-            label: 'Copy Expanded',
-            icon: 'sparkles',
-            group: 'edit',
-            vfsBound: false,
-            intent: 'highlight',
-            order: 12.5,
-            match: (data) => {
-                if (data.isSkeleton || data.isDir) return false;
-                return Boolean(data.supportsMacroPreview || data.hasMacros || canPreviewFileMacros(data.filepath, data.transientContent || ''));
-            },
-            asyncAction: async (data, e) => {
-                const { text } = await resolveExpandedExportText(data);
-                await navigator.clipboard.writeText(text).then(() => {
-                    if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("✅ Copied Expanded!", 2000);
-                }).catch(err => alert("Clipboard API failed. Please manually select the text and copy it directly."));
-            }
-        },
-        {
-            targetEntity: 'file',
-            id: 'file-browse',
-            label: 'Browse',
-            icon: 'folder',
-            group: 'tools',
-            vfsBound: false,
-            intent: 'neutral',
-            order: 14,
-            match: (data) => {
-                if (data.isSkeleton) return false;
-                return data.filepath && (data.filepath.startsWith('ctx://') || data.filepath.endsWith('_context.txt') || data.filepath.endsWith('_diffs.txt'));
-            },
-            onClick: (data, e) => {
-                if (window.inSetu.ui.openBrowseModal) window.inSetu.ui.openBrowseModal(data.filepath);
-            }
-        },
-        {
-            targetEntity: 'file',
-            id: 'file-share',
-            label: 'Share',
-            icon: 'share',
-            group: 'share',
-            vfsBound: false,
-            keepDrawerOpen: true,
-            intent: 'primary',
-            order: 15,
-            match: (data) => {
-                if (data.isSkeleton) return false;
-                return !!navigator.share && !!navigator.canShare;
-            },
-            onClick: (data, e) => {
-                if (e) e.stopPropagation();
-                const target = resolveEntityExportTarget(data);
-                if (target.mode === 'memory') {
-                    window.inSetu.utils.nativeShareFiles([{ content: target.text || '', filename: target.filename }]).catch(()=>{});
-                    return;
-                }
-                shareFiles(data.filepath, target.chunks, target.isFS);
-            }
-        },
-        {
-            targetEntity: 'file',
-            id: 'file-share-expanded',
-            label: 'Share Expanded',
-            icon: 'sparkles',
-            group: 'share',
-            vfsBound: false,
-            keepDrawerOpen: true,
-            intent: 'highlight',
-            order: 15.5,
-            match: (data) => {
-                if (data.isSkeleton || data.isDir) return false;
-                if (!navigator.share || !navigator.canShare) return false;
-                return Boolean(data.supportsMacroPreview || data.hasMacros || canPreviewFileMacros(data.filepath, data.transientContent || ''));
-            },
-            onClick: (data, e) => {
-                if (e) e.stopPropagation();
-                resolveExpandedExportText(data).then(({ text, filename }) => {
-                    window.inSetu.utils.nativeShareFiles([{ content: text || '', filename }]).catch(()=>{});
-                });
-            }
-        },
-        {
-            targetEntity: 'file',
-            id: 'file-view-parts',
-            label: 'View Parts',
-            icon: 'puzzle',
-            group: 'tools',
-            vfsBound: false,
-            intent: 'neutral',
-            order: 105,
-            match: (data) => {
-                if (data.isSkeleton || !data.filepath) return false;
-                const chunks = getChunks(data.filepath);
-                return Boolean(chunks && chunks.length > 1);
-            },
-            onClick: (data, e) => {
-                window.dispatchEvent(new CustomEvent('insetu:vfs:view-parts', { detail: { filepath: data.filepath } }));
-            }
-        },
-        {
-            targetEntity: 'file',
-            id: 'file-download',
-            label: 'Download',
-            icon: 'download',
-            group: 'file',
-            vfsBound: false,
-            intent: 'primary',
-            order: 18,
-            match: (data) => !data.isSkeleton && !data.isDir,
-            asyncAction: async (data, e) => {
-                const preTarget = resolveEntityExportTarget(data);
-                if (preTarget.mode === 'memory') {
-                    try {
-                        const blob = new Blob([preTarget.text], { type: 'text/plain' });
-                        downloadBlob(blob, preTarget.filename);
-                        return;
-                    } catch (err) {
-                        alert("Error downloading file: " + err.message);
-                        return;
-                    }
-                }
-                await ensureFreshContext(data.filepath);
-                const target = resolveEntityExportTarget(data);
-                const chunks = target.chunks;
-                if (chunks && chunks.length > 1) {
-                    if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⬇️ Downloading multi-part context...", 2000);
-                    for (const f of chunks) {
-                        const fetchUrl = `${resolveFileFetchUrl(f, false)}&download=1`;
-                        await window.inSetu.vfs.fetchAndDownloadState(f, fetchUrl);
-                        await new Promise(r => setTimeout(r, 300));
-                    }
-                } else {
-                    const baseFetchUrl = resolveFileFetchUrl(data.filepath, true);
-                    const fetchUrl = baseFetchUrl.includes('/fs/fetch?') ? `${baseFetchUrl}&download=1` : baseFetchUrl;
-                    await window.inSetu.vfs.fetchAndDownloadState(data.filepath, fetchUrl);
-                }
-            }
-        },
-        {
-            targetEntity: 'folder',
-            targetEntities: ['file', 'folder'],
-            id: 'vfs-download-zip',
-            bulkGroupKey: 'download-zip',
-            label: 'Download ZIP',
-            bulkLabel: 'Download ZIP',
-            icon: 'archive',
-            group: 'file',
-            vfsBound: false,
-            intent: 'primary',
-            order: 18.2,
-            bulkable: true,
-            match: (data) => !data.isSkeleton && Boolean(data.isDir || data.filepath || data.folderpath),
-            asyncAction: async (data) => {
-                await executeDownloadZip([data]);
-            },
-            bulkAction: async (items) => {
-                await executeDownloadZip(items);
-            }
-        },
-        {
-            targetEntity: 'file',
-            id: 'file-download-expanded',
-            label: 'Download Expanded',
-            icon: 'sparkles',
-            group: 'file',
-            vfsBound: false,
-            intent: 'highlight',
-            order: 18.5,
-            match: (data) => {
-                if (data.isSkeleton || data.isDir) return false;
-                return Boolean(data.supportsMacroPreview || data.hasMacros || canPreviewFileMacros(data.filepath, data.transientContent || ''));
-            },
-            asyncAction: async (data, e) => {
-                try {
-                    const { text, filename } = await resolveExpandedExportText(data);
-                    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-                    downloadBlob(blob, filename);
-                    if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("✅ Downloaded Expanded!", 2000);
-                } catch (err) {
-                    alert("Error downloading expanded file: " + err.message);
-                }
-            }
-        }
-    ],
-    layoutSlots: [
-        {
-            slot: "slots:sub-navigation",
-            targetParent: "edit",
-            id: "files",
-            label: "Files",
-            icon: "folder-tree",
-            intent: "neutral",
-            order: 2,
-            allow_popout: true,
-            bulkActionGroup: "file",
-            bulkEntityTypes: ["file", "folder"],
-            menuStores: ["App"],
-            menuActions: _buildVfsExplorerMenuActions,
-            component: "insetu-vfs-explorer"
-        }
-    ]
+registerFsExtension({
+    openNewFolderModal,
+    openNewFileModal,
+    uploadFileToWorkspace,
+    getGlobalManifest,
+    deleteEmptyFolder,
+    openFolderBrowser,
+    relocateVfsNode: _relocateVfsNode,
+    archiveVfsNode: _archiveVfsNode,
+    deleteVfsNode: _deleteVfsNode,
+    executeBulkMove,
+    executeBulkArchive,
+    executeBulkDelete,
+    executeDownloadZip,
+    isFileGitModified,
+    viewFileGitDiff,
+    resolveConflictOriginalPath,
+    viewTwoFileDiff,
+    resolveEntityExportTarget,
+    resolveExpandedExportText,
+    ensureFreshContext,
+    fetchAndCopy,
+    shareFiles
 });
 export function getFileExtensionWarning(filename, basePath = '') {
     if (!filename) return '';
@@ -1819,7 +1308,6 @@ export function openVirtualFile(filename, content) {
     closeBrowseModal();
     injectTextToBuffer(virtualUri, content, true, false, true);
 }
-window.inSetu.vfs.normalizeVfsURI = normalizeVfsURI;
 window.inSetu.utils = window.inSetu.utils || {};
 
 // Window Bindings
@@ -1838,37 +1326,60 @@ export function openPartsModal(filepath) {
         });
     }
 }
-window.inSetu.vfs.hasMacroSyntax = hasMacroSyntax;
-window.inSetu.vfs.resolveEntityExportTarget = resolveEntityExportTarget;
-window.inSetu.vfs.resolveFileFetchUrl = resolveFileFetchUrl;
-window.inSetu.vfs.renameFileTracking = renameFileTracking;
-window.inSetu.vfs.getChunks = getChunks;
-window.inSetu.vfs.ensureFreshContext = ensureFreshContext;
-window.inSetu.vfs.openPartsModal = openPartsModal;
-
-window.inSetu.vfs.openVirtualFile = openVirtualFile;
-window.inSetu.vfs.openNewFileModal = openNewFileModal;
-window.inSetu.vfs.syncVirtualBuffer = syncVirtualBuffer;
-window.inSetu.vfs.preWarmShareArtifact = preWarmShareArtifact;
-window.inSetu.vfs.preCacheFiles = preCacheFiles;
-window.inSetu.vfs.fetchAndCopy = fetchAndCopy;
-window.inSetu.vfs.fetchAndDownloadState = fetchAndDownloadState;
-window.inSetu.vfs.downloadFile = downloadFile;
-window.inSetu.vfs.executeDownloadZip = executeDownloadZip;
-window.inSetu.vfs.shareFiles = shareFiles;
-window.inSetu.vfs.uploadFileToWorkspace = uploadFileToWorkspace;
-window.inSetu.vfs.viewSourceFile = viewSourceFile;
-window.inSetu.vfs.viewFileGitDiff = viewFileGitDiff;
-window.inSetu.vfs.viewTwoFileDiff = viewTwoFileDiff;
-window.inSetu.vfs.reconcileBufferWithDisk = reconcileBufferWithDisk;
-window.inSetu.vfs.flushAllDirtyBuffers = flushAllDirtyBuffers;
-window.inSetu.vfs.isFileGitModified = isFileGitModified;
-window.inSetu.vfs.viewAndCopy = viewAndCopy;
-window.inSetu.vfs.viewInWindow = viewInWindow;
-window.inSetu.vfs.deleteEmptyFolder = deleteEmptyFolder;
-window.inSetu.vfs.buildFileTree = buildFileTree;
-window.inSetu.vfs.resolveDirectoryState = resolveDirectoryState;
-window.inSetu.vfs.getGlobalManifest = getGlobalManifest;
+export const VFS_PUBLIC_API = Object.freeze({
+    ..._fsStoreExports,
+    bindDownloadDrag,
+    isFileGitModified,
+    resolveConflictOriginalPath,
+    viewTwoFileDiff,
+    viewFileGitDiff,
+    routeToSpatialGrid,
+    ensureFreshContext,
+    fetchArtifactText,
+    fetchAndCopy,
+    fetchAndDownloadState,
+    shareFiles,
+    downloadFile,
+    viewInWindow,
+    viewAndCopy,
+    updateManifestState,
+    resolveEntityExportTarget,
+    resolveExpandedExportText,
+    executeMove,
+    deleteEmptyFolder,
+    getGlobalManifest,
+    pruneSubsumedTargets,
+    executeBulkMove,
+    executeBulkArchive,
+    executeDownloadZip,
+    executeBulkDelete,
+    getFileExtensionWarning,
+    checkFileExtension,
+    openNewFileModal,
+    saveNewFile,
+    openNewFolderModal,
+    saveNewFolder,
+    viewSourceFile,
+    closeBrowseModal,
+    openWorkspaceBrowser,
+    openFolderBrowser,
+    confirmFolderSelection,
+    openBrowseModal,
+    openVirtualFile,
+    openPartsModal,
+    uploadFileToWorkspace,
+    openLinkModal,
+    switchLinkTab,
+    onLinkSearchInput,
+    executeDeepLinkSearch,
+    buildFileTree,
+    resolveDirectoryState,
+});
+Object.entries(VFS_PUBLIC_API).forEach(([k, v]) => {
+    if (typeof v === 'function') {
+        window.inSetu.vfs[k] = v;
+    }
+});
 window.inSetu.ui.openNewFileModal = openNewFileModal;
 window.inSetu.ui.openNewFolderModal = openNewFolderModal;
 window.inSetu.ui.saveBufferFile = saveBufferFile;

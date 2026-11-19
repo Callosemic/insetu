@@ -78,11 +78,11 @@ initShortcutRouter(window.ExtensionRegistry, () => {
 // Default OS Shortcut Registrations
 const _isCoreExt = (extName) => window.inSetu?.isCore ? window.inSetu.isCore(extName) : false;
 export function autoWireSettingsSchemas() {
-    if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
+    if (window.ExtensionRegistry?.collectManifestEntries) {
         window.inSetu.settingsSchemas = window.inSetu.settingsSchemas || {};
-        window.ExtensionRegistry._manifests.forEach((manifest, extName) => {
-            if (manifest.settingsSchema && !window.inSetu.settingsSchemas[extName]) {
-                window.inSetu.settingsSchemas[extName] = manifest.settingsSchema;
+        window.ExtensionRegistry.collectManifestEntries('settingsSchema').forEach(({ extName, value }) => {
+            if (value && !window.inSetu.settingsSchemas[extName]) {
+                window.inSetu.settingsSchemas[extName] = value;
             }
         });
     }
@@ -880,9 +880,12 @@ function _setAppShellLock(locked) {
 function _reconcileExtensionsAndSettings(previousExts = [], nextExts = []) {
     if (!window.ExtensionRegistry) return;
 
+    const registeredExts = window.ExtensionRegistry.getRegisteredExtensionNames
+        ? window.ExtensionRegistry.getRegisteredExtensionNames()
+        : [];
     const candidateExts = new Set([
         ...(previousExts || []),
-        ...Array.from(window.ExtensionRegistry._manifests?.keys() || [])
+        ...registeredExts
     ]);
     candidateExts.forEach(extName => {
         if (!extName || _isCoreExt(extName)) return;

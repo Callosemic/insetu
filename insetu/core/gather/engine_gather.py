@@ -66,7 +66,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
 GATHER_SETTINGS_SCHEMA = [
     {
         "id": "max_context_size_kb", "label": "Max Context Size (KB)", "type": "number", "scope": "workspace", "default": 0,
-        "description": "Set to 0 to use the default 400 KB chunk limit. Context files exceeding this limit will be cleanly split into numbered parts."
+        "description": "Set to 0 to use the default 250 KB chunk limit. Context files exceeding this limit will be cleanly split into numbered parts."
     },
     {
         "id": "domain_colors", "label": "Domain Intent Colors", "type": "intent_map", "scope": "workspace",
@@ -168,7 +168,7 @@ def compile_context_payload(workspace_id, output_dir, base_uri, header_block, te
                         existing_meta[k] = v
                 return existing_entry  # Skip chunk disk I/O while keeping metadata (domain, title, desc) fresh.
     vfs = ctx.vfs
-    effective_max_kb = max_kb if (max_kb and max_kb > 0) else 400
+    effective_max_kb = max_kb if (max_kb and max_kb > 0) else 250
     max_bytes = effective_max_kb * 1024
     chunks = []
 

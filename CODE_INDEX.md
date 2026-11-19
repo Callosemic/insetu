@@ -173,6 +173,7 @@ insetu/
 │       ├── 2026-11-12-shared-test-kit.md # New plan for the shared test kit, one pytest plugin package for every Callosemic repository (roadmap P25).
 │       ├── 2026-11-14-greenfield-agent-compute-contract-and-envelope-unification.md # Create the canonical greenfield plan for unifying RoutineEnvelope (retiring chain_context), formalizing the Two-Sided LLM Compute Contract (...
 │       ├── 2026-11-15-sutram-css-vacuum-and-data-primitives.md # Create a plan for standardizing tabular readouts and micro-sparkbars in `sutram` / `yenvui` under the Zero-CSS & Zero-Inline-Style Lego Bloc...
+│       ├── 2026-11-19-entity-descriptor-and-action-coeffects.md # Create architectural plan for the live InSetuEntityDescriptor resolver, polymorphic chunk SSOT, declarative action coeffects, and full card/...
 │       ├── agent-briefs/           # Cross-model review briefs and implementation handoff notes.
 │       │   ├── .gitkeep            # Git folder retention.
 │       │   ├── gemini_agent_harness_and_rag_lane.md # Parallel Lane Brief: Agent Harness, 6-Bucket RAG Funnel & Dogfooding Observability
@@ -221,7 +222,7 @@ insetu/
 │   │   │   │   ├── class InSetuAgentContextHud # Floating Context Budget and Session Spend HUD component for Agent Chat.
 │   │   │   │   ├── function ensureAgentSessionTelemetryCompiled(comp, { latestTurnOnly = false }...) # Compiles session or latest-turn AI telemetry context and pre-warms the VFS share cache.
 │   │   │   │   ├── function buildAgentTelemetryMenuItems(comp) # Builds dropdown menu items for copying, sharing, or downloading latest-turn, full-session, or .zip telemetry dossiers.
-│   │   │   │   ├── class InSetuAgentHandoffPanel # External Web-Chat handoff composer with Same-Window Delta vs. New-Window Full context selector.
+│   │   │   │   ├── class InSetuAgentHandoffPanel # [stale?] External Web-Chat handoff composer with Same-Window Delta vs. New-Window Full context selector.
 │   │   │   │   └── class InSetuAgentPlanStepper # Multi-step execution plan progress bar and TASK_MANAGE confirmation stepper for Agent Chat.
 │   │   │   ├── agent_routine_studio.js # Declarative Routine Studio and Routine Catalog UI components extracted from agent.js (God-Objects Wave 3.3).
 │   │   │   │   ├── function formatWavefrontBadge(wavefronts) # Formats a compact topological wavefront progression badge string for routine cards.
@@ -547,15 +548,16 @@ insetu/
 │   │   │   │   ├── function viewFileGitDiff(filepath) # Opens a spatial diff projection comparing a file against its Git HEAD revision.
 │   │   │   │   ├── function routeToSpatialGrid(filepath, label = null, preferre...) # Opens or focuses a document editor projection inside the spatial multi-column layout.
 │   │   │   │   ├── function ensureFreshContext(filePath) # Emits insetu:ensure-fresh-artifact before copying or sharing a context artifact.
+│   │   │   │   ├── function fetchArtifactText(filePath, { isFS = false, explic...) # Fetches and caches raw text for a file or single-part compiled context artifact.
 │   │   │   │   ├── function fetchAndCopy(filePath, explicitUrl = null) # Copies file or context text to the clipboard using the LRU share cache when warm.
 │   │   │   │   ├── function fetchAndDownloadState(filePath, explicitUrl = null) # Downloads a file or compiled context artifact as a local attachment.
-│   │   │   │   ├── function shareFiles(baseFile, chunks = null, isFS =...) # Shares file or multi-part context chunks via navigator.share with a 0 ms synchronous cache fast-path.
+│   │   │   │   ├── function shareFiles(baseFile, chunks = null, isFS =...) # [stale?] Shares file or multi-part context chunks via navigator.share with a 0 ms synchronous cache fast-path.
 │   │   │   │   ├── function downloadFile(fetchUrl, fallbackFilename, fetc...) # Streams an authenticated file download to the browser.
 │   │   │   │   ├── function viewInWindow(filename) # Opens a read-only context or file viewer projection in the spatial grid.
 │   │   │   │   ├── function viewAndCopy(filename) # Opens a context artifact in a viewer window and copies its content to the clipboard.
 │   │   │   │   ├── function refreshActiveFileViews(oldPath, newPath = null) # Synchronizes open buffer projections when a file is moved or renamed.
 │   │   │   │   ├── function updateManifestState(mutations) # Applies surgical VFS mutation deltas to AppStore.manifest and invalidates stale share cache entries.
-│   │   │   │   ├── function resolveEntityExportTarget(data = {}) # Resolves the canonical URI and chunk list for entity export actions.
+│   │   │   │   ├── function resolveEntityExportTarget(data = {}) # [stale?] Resolves the canonical URI and chunk list for entity export actions.
 │   │   │   │   ├── function resolveExpandedExportText(data = {}) # Resolves macro-expanded prompt text for copy, share, or download actions.
 │   │   │   │   ├── function executeMove() # Submits a single file or folder move/rename request to fs/move.
 │   │   │   │   ├── function deleteEmptyFolder(dirPath) # Deletes an empty directory through the VFS delete endpoint.
@@ -586,6 +588,8 @@ insetu/
 │   │   │   │   ├── function onLinkSearchInput(val) # Updates the link insertion modal search query and triggers debounced search.
 │   │   │   │   ├── function executeDeepLinkSearch(overrideQuery = null) # Queries fs/search for deep full-text Markdown link matches.
 │   │   │   │   └── function executeLinkSearch(query) # Filters workspace manifest URIs by fuzzy filename match for link insertion.
+│   │   │   ├── fs_actions.js       # Extract the declarative 'fs' ExtensionRegistry manifest (variantSets, uiHooks, shortcuts, entityActions, layoutSlots) from fs.js into fs_act...
+│   │   │   │   └── function registerFsExtension({ openNewFolderModal, openNewFil...) # Registers the declarative 'fs' ExtensionRegistry manifest, 'send' variant set, file/folder actions, and Files sub-navigation slot.
 │   │   │   ├── fs_editor_projection.js # Core VFS Editor, Frontmatter Editor, and File Diff Spatial Projections extracted from fs.js (God-Objects Wave 3.1).
 │   │   │   │   ├── class InSetuEditorProjection # Multi-projection VFS document editor supporting CodeMirror 6, frontmatter drawers, macro previews, and Zen mode.
 │   │   │   │   ├── class InSetuFrontmatterEditor # Specialized editor projection with YAML frontmatter mode permanently enabled.
@@ -612,7 +616,8 @@ insetu/
 │   │   │       ├── function hydrateVfsBuffer(filepath, { isFS = null, forceRe...) # Fetches file content and S8 protection status into FsStore.activeBuffers with deduplicated promises.
 │   │   │       ├── function extractManifestFiles(...args) # Delegates manifest file list extraction to window.inSetu.utils.extractManifestFiles.
 │   │   │       ├── function resolveFileFetchUrl(filepath, isFS = false) # Builds the authenticated /api/<ws>/fs/fetch URL for a canonical file URI.
-│   │   │       ├── function getChunks(filepath) # Returns the ordered chunk URIs for a compiled context or VFS file from AppStore.manifest.
+│   │   │       ├── function getChunks(filepathOrData, explicitChunks =...) # Single Source of Truth resolver for an artifact's constituent chunk URIs.
+│   │   │       ├── function isMultiPartArtifact(filepathOrData, explicitChunks =...) # Returns true when an artifact or EntityData payload resolves to more than one part.
 │   │   │       ├── function cacheShareText(filepath, text) # [comment required]
 │   │   │       ├── function getCachedShareText(filepath) # [comment required]
 │   │   │       ├── function invalidateShareCache(filepath = null) # [comment required]
@@ -631,7 +636,7 @@ insetu/
 │   │   │   │   ├── def heal_missing_ephemeral_quickpack(ctx, base_uri, parsed_entry) # [stale?] Re-materializes a missing `quickpack_*` / `turn_*` context artifact from active session checkpoints or manifest file lists.
 │   │   │   │   └── def compile_query_quickpack(ctx, raw_text) # [stale?] Compiles a standalone Quickpack (ctx://contexts/quickpack_*_context.txt) from topology-tracked QUERY_CONTEXT blocks in raw_text.
 │   │   │   ├── engine_gather.py    # [Context Compiler and Workflow Batch routing]
-│   │   │   │   ├── def compile_context_payload(workspace_id, output_dir, base_uri, header_block, ...) # Universal compiler for all system contexts (Gather, Git, Flow).
+│   │   │   │   ├── def compile_context_payload(workspace_id, output_dir, base_uri, header_block, ...) # [stale?] Universal compiler for all system contexts (Gather, Git, Flow).
 │   │   │   │   ├── def handle_topology_resolved(workspace_id, dirty_repos, dirty_buckets, events, **kwargs) # Stage 2 Slew Limiter: Catches resolved topology and schedules a delayed RAG compilation.
 │   │   │   │   ├── def get_ordered_compilation_steps(ctx) # Delegates compilation sequence resolution to Akasa's generic DAG orchestrator.
 │   │   │   │   ├── def init_gather_workers(workspace_id, **kwargs) # Schedules initial context compilation workers after workspace topology boot completes.
@@ -663,8 +668,11 @@ insetu/
 │   │   │   ├── gather.js           # [Context Batch & Workflow UI]
 │   │   │   │   ├── function executeCompile(onProgress = null, forceFull = f...) # Triggers full or incremental workspace context compilation and polls progress.
 │   │   │   │   ├── function getFlattenedBuckets(repoDirOrConfigs = null, include...) # Flattens configured repositories and sub-buckets into an ordered list of bucket descriptors.
-│   │   │   │   ├── function packSelectionPayload(items) # Compiles selected files and folders into a Quickpack and pre-warms its share cache.
-│   │   │   │   └── class InSetuExtGather # Categorized Gather context deck UI component with fuzzy search and Quickpack management.
+│   │   │   │   └── class InSetuExtGather # [stale?] Categorized Gather context deck UI component with fuzzy search and Quickpack management.
+│   │   │   ├── gather_quickpack.js # Extract Quickpack selection payload compiler, multi-part detection, and bulk entity action definitions from gather.js so both modules remain...
+│   │   │   │   ├── function clearQuickpackSelectionCache() # Resets the cached Quickpack selection artifact and items hash on VFS mutation or refresh.
+│   │   │   │   ├── function computePackSelectionPayload(items) # Normalizes selected items and computes a manifest-timestamp-aware cache key for Quickpack packing.
+│   │   │   │   └── function packSelectionPayload(items) # Compiles selected files and folders into a Quickpack and pre-warms its share cache.
 │   │   │   ├── msg_lens.py         # Dedicated `msg://` Lens Provider module (`msg://<session_id>` and `msg://<message_id>[#telemetry]`) extracted from `context_assemble.py` so...
 │   │   │   │   ├── def parse_message_uri(raw_uri) # [stale?] Canonicalizes any session message reference (`msg://<id>`, `msg://<session_id>/<id>`, or bare `msg_<id>`, with optional `[raw]` / `[full]` q...
 │   │   │   │   ├── def format_trace_tree_lines(trace_list, indent) # Formats a hierarchical `RoutineEnvelope.execution_trace` list into indented text lines.
@@ -783,8 +791,9 @@ insetu/
 │   │   │   │   ├── def api_prompts_list(ctx) # Provides a list of available prompts (including virtual .templates) for the UI.
 │   │   │   │   └── def api_prompts_resolve(ctx) # Fetches a canonical prompt URI or live POST buffer and recursively resolves {{include_prompt: ...}} and optional {{include_prompt?: ...}} macros.
 │   │   │   └── prompts.js          # Core Prompt Library UI, virtual module .templates browser, and macro embedding.
-│   │   │       ├── class InSetuExtPrompts # Prompt Library browser and template fork/preview UI component.
-│   │   │       └── function isPromptPath(filepath) # Returns true when a URI belongs to ctx://prompts/ or .insetu-data/prompts/.
+│   │   │       ├── function getRegisteredCorePrompts() # Collects deduplicated canonical corePrompts URIs declared across active extension manifests.
+│   │   │       ├── class InSetuExtPrompts # [stale?] Prompt Library browser and template fork/preview UI component.
+│   │   │       └── function isPromptPath(filepath) # [stale?] Returns true when a URI belongs to ctx://prompts/ or .insetu-data/prompts/.
 │   │   ├── protected_changes.py    # Pending protected changes (S8): a change to a protected file waits here until a person confirms or discards it.
 │   │   │   ├── def install()       # Makes this module the kernel's policy for protected writes.
 │   │   │   ├── def pending_dir()   # <control dir>/pending_changes/, one JSON record per pending change.
@@ -1558,6 +1567,8 @@ insetu/
         │   └── class TestGrantsAreBoundToTheInstall(_StoreCase) # #28: a store that came with a clone, was copied from another machine or was written by hand grants nothing.
         ├── test_bridge_anchor_invariants.py # Regression and fitness tests for patch anchor matching, blank-line fidelity, no-op detection, chunk blame isolation, and the single patch engine.
         │   └── class TestBridgeAnchorInvariants(unittest.TestCase) # [stale?] Regression and fitness tests for patch anchor matching, no-op detection, chunk blame isolation, and the single patch engine.
+        ├── test_bridge_chat_wrappers.py # Unit tests verifying that parse_blocks parses two-file patches wrapped in nine web-chat copy/paste variations identically to clean fenced pa...
+        │   └── class TestBridgeChatWrappers(unittest.TestCase) # Verifies that parse_blocks handles all nine web-chat wrapper forms identically to a clean fenced patch.
         ├── test_canonical_uris.py  # Unit tests for canonical URI enforcement, InSetuURI normalization, and legacy ledger migrations.
         │   └── class TestCanonicalURIs(unittest.TestCase) # [comment required]
         ├── test_cartographer_and_bridge_ast.py # Unit tests for Cartographer AST symbol extraction, 3-tier waterfall indexing, and Yomama RELOCATE/RENAME.

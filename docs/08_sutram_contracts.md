@@ -17,8 +17,10 @@ All UI components extending the platform must inherit from `SutramElement`. This
 Extensions must register their UI topology via `window.ExtensionRegistry.registerExtension(name: String, config: Object)`. The `config` object accepts the following declarative arrays:
 *   **`layoutSlots`**: Projects components into the `<sutram-app-shell>`.
     *   Schema: `{ slot: "slots:sub-navigation", targetParent: "tab_id", id: "sub_id", label: "Label", icon: "icon-name", intent: "primary", order: 1, component: "custom-tag" }`
+*   **`variantSets`**: Registers named variant-set split buttons (one level of navigation; cannot be nested inside another set or group).
+    *   Schema: `{ id: "send", label: "Send", icon: "send", intent: "primary", group: "share", surfaced: 1, order: 10, sections: ["Raw", "Expanded"], families: { files: ["file", "file:note", "file:prompt"] }, defaults: { files: ["file-copy", "file-share", "file-download"] } }`
 *   **`entityActions`**: Defines contextual and bulk buttons for the `<sutram-entity-actions>` and selection tray brokers.
-    *   Schema: `{ targetEntity: "type", targetEntities: ["type1", "type2"], id: "str", bulkGroupKey: "str", label: "str" | (data) => "str", bulkLabel: "str", icon: "str" | (data) => "str", intent: "primary", order: 1, bulkable: bool, bulkOnly: bool, match: (data) => bool, emitEvent: (data) => ({name, detail}), asyncAction: async (data, e) => {...}, onClick: (data, e) => {...}, bulkAction: async (items, e) => {...}, bulkOnClick: (items, e) => {...} }`
+    *   Schema: `{ targetEntity: "type", targetEntities: ["type1", "type2"], id: "str", bulkGroupKey: "str", label: "str" | (data) => "str", bulkLabel: "str" | (items) => "str", successLabel: "Copied", set: "send", section: "Raw", group: "file|edit|share|vcs|tools", surfaced: 1, order: 10, icon: "str" | (data) => "str", intent: "primary", variant: "tinted", emphasis: bool, bulkable: bool, bulkOnly: bool, vfsBound: bool, keepDrawerOpen: bool, isActive: bool | (data) => bool, match: (data) => bool, emitEvent: (data) => ({name, detail}), asyncAction: async (data, e) => {...}, onClick: (data, e) => {...}, bulkAction: async (items, e) => {...}, bulkOnClick: (items, e) => {...} }`
 *   **`settingsActions`**: Injects buttons into the host's settings UI.
     *   Schema: `{ id: "str", label: "str", icon: "str", onClick: async () => {...} }`
 *   **`shortcuts`**: Registers global keybindings.
@@ -29,6 +31,9 @@ Extensions must register their UI topology via `window.ExtensionRegistry.registe
     *   Schema: `{ id: "str", order: 1, component: ({repo/bucket, updateCallback}) => html\`...\` }`
 
 ### Registry Lifecycle & Event Methods
+*   **`ExtensionRegistry.registerVariantSet(setDef: Object)`**: Registers or merges a variant set definition (`id`, `label`, `icon`, `group`, `surfaced`, `sections`, `families`, `defaults`). Refuses nested sets/groups.
+*   **`ExtensionRegistry.registerEntityFamilies(familyMapping: Object)` / `resolveEntityFamily(entityType: String)`**: Maps entity types to family keys for first-use variant preference resolution.
+*   **`ExtensionRegistry.getLastUsedVariant(entityType: String, setId: String)` / `setLastUsedVariant(entityType: String, setId: String, variantId: String)`**: Reads or persists the device-local last-used variant in `VariantDefaultStore`.
 *   **`ExtensionRegistry.registerTick(extName: String, intervalMs: Number, callback: Function)`**: Hooks a callback into the unified frontend metronome loop, executing every `intervalMs` (milliseconds).
 *   **`ExtensionRegistry.registerUnloadHook(extName: String, callback: Function)`**: Registers teardown logic executed when the extension is dynamically unmounted.
 *   **`ExtensionRegistry.registerUIHook(zone: String, callback: Function)`**: Registers a callback to a synchronous UI event bus zone.
@@ -48,11 +53,16 @@ Extensions must register their UI topology via `window.ExtensionRegistry.registe
 ## IV. Inversion of Control (IoC) Brokers
 
 ### `<sutram-entity-actions>`
-The core dynamic action broker. It queries the `ExtensionRegistry` to resolve and render buttons for a specific entity.
+The core dynamic action broker implementing the **fit-then-overflow** action row rule (`computeFitActionCount`). It queries `ExtensionRegistry.getEntityActions` (or accepts a pre-resolved `.actionsList`), renders as many surfaced buttons and `<sutram-variant-btn>` split buttons as fit in the measured container width, and places remaining and destructive (`intent="danger"`) actions under section headings inside a trailing 3-dot `<sutram-dropdown>`.
 *   **Properties:** 
     *   `entityType="string"`: The compound type to query against the registry (e.g., `'file'`, `'virtual_keyboard'`).
     *   `.entityData=${Object}`: The payload passed to the action callbacks. **Must contain an identity property (like `filepath` or `id`)**. Transient boolean states should be tunneled into this object.
-    *   `?scrollable=${Boolean}`: Enables horizontal scrolling for overflow actions.
+    *   `.actionsList=${Array}`: Optional pre-resolved action array (used by `<sutram-selection-tray>` for bulk actions).
+    *   `variant="row|footer|menu-bar"`: Display mode (`'row'` default fit-then-overflow, `'footer'` full-width bar, `'menu-bar'` grouped top dropdowns).
+
+### `<sutram-variant-btn>`
+Split button primitive for collapsed `kind: 'variant-set'` entries. The main button runs the active default variant (device-local last-used via `VariantDefaultStore`, falling back to the entity family's ordered preference list) and reserves `--variant-min-width` for the longest available variant label; the arrow trigger opens a sectioned `<sutram-dropdown>` with a 900ms on-item confirmation hold (`ACTION_CONFIRM_HOLD_MS`).
+*   **Properties:** `.setEntry` (Object), `.entityType` (String), `.entityData` (Object), `?compact` (Boolean), `.executeAction` (Async Function).
 
 ### `<sutram-generic-settings>`
 Dynamically generates form controls from backend JSON schemas.

@@ -1,6 +1,14 @@
 import { html } from 'lit';
-import { AppStore, SelectionStore } from '/static/extensions/system/store.js';
+import { AppStore } from '/static/extensions/system/store.js';
 import { createExtensionStore, InSetuElement, sharedStyles } from '/static/extensions/system/insetu_sdk.js';
+import {
+    clearQuickpackSelectionCache,
+    computePackSelectionPayload,
+    packSelectionPayload,
+    GATHER_EXTENSION_MANIFEST
+} from '/static/extensions/gather/gather_quickpack.js';
+
+export { clearQuickpackSelectionCache, computePackSelectionPayload, packSelectionPayload };
 let compilePromise = null;
 let compilePromiseWs = null;
 
@@ -235,91 +243,6 @@ if (typeof window !== 'undefined') {
     window.inSetu.utils.getFlattenedBuckets = getFlattenedBuckets;
     window.inSetu.sys.getFlattenedBuckets = getFlattenedBuckets;
 }
-let _lastPackSelection = null;
-let _lastPackItemsHash = '';
-
-window.addEventListener('insetu:vfs-mutated', () => {
-    _lastPackSelection = null;
-    _lastPackItemsHash = '';
-});
-window.addEventListener('insetu:soft-refresh', () => {
-    _lastPackSelection = null;
-    _lastPackItemsHash = '';
-});
-const _computePackSelectionPayload = (items) => {
-    const payloadItems = items.map(i => {
-        const d = i.data || i;
-        if (typeof d === 'string' && d.trim()) {
-            const isDirStr = d.trim().endsWith('/');
-            return { filepath: d.trim(), isDir: isDirStr };
-        }
-        const rawTarget = String(d?.filepath || d?.folderpath || d?.id || '').trim();
-        if (!rawTarget) return null;
-        const isDir = Boolean(d?.isDir || d?.folderpath || rawTarget.endsWith('/'));
-        if (isDir) {
-            const cleanDir = rawTarget.replace(/\/+$/, '');
-            return { filepath: `${cleanDir}/`, folderpath: cleanDir, isDir: true };
-        }
-        return { filepath: rawTarget, isDir: false };
-    }).filter(i => i !== null);
-
-    const manifest = window.inSetu?.stores?.App?.getState()?.manifest || { vfs: {}, ctx: {} };
-    const statefulItems = payloadItems.map(p => {
-        const fp = p.filepath || p.folderpath;
-        let ts = 0;
-        if (manifest.ctx && manifest.ctx[fp]) ts = manifest.ctx[fp].meta?.timestamp || 0;
-        return `${fp}@${ts}`;
-    });
-
-    return { payloadItems, itemsHash: JSON.stringify(statefulItems) };
-};
-
-const packSelectionPayload = async (items) => {
-    const { payloadItems, itemsHash } = _computePackSelectionPayload(items);
-    if (payloadItems.length === 0) throw new Error("No valid items to pack.");
-
-    if (_lastPackItemsHash === itemsHash && _lastPackSelection) {
-        return _lastPackSelection;
-    }
-    const res = await window.inSetu.api.post('gather/pack_selection', { items: payloadItems });
-    if (!res.ok) throw new Error("Failed to queue compilation.");
-    const data = await res.json();
-    if (data.job_id === 'offline_queue') {
-        throw new Error("Quickpack compilation requires an active network connection.");
-    }
-    return new Promise((resolve, reject) => {
-        window.inSetu.utils.pollJob(data.job_id, {
-            onProgress: (msg) => { if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null); },
-            onComplete: async (statusData) => {
-                const artifact = statusData.artifact || {};
-                if (artifact.base_filename && artifact.manifest_entry) {
-                    const curManifest = AppStore.getState().manifest || { vfs: {}, ctx: {} };
-                    AppStore.setState({
-                        manifest: {
-                            vfs: curManifest.vfs || {},
-                            ctx: { ...(curManifest.ctx || {}), [artifact.base_filename]: artifact.manifest_entry }
-                        }
-                    });
-                } else if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
-                    await window.inSetu.sys.refreshManifest();
-                }
-                const packedFiles = artifact.manifest_entry?.files || [];
-                if (packedFiles.length > 0 && packedFiles.every(f => typeof f === 'string')) {
-                    _lastPackItemsHash = itemsHash;
-                    _lastPackSelection = artifact;
-                } else {
-                    _lastPackItemsHash = '';
-                    _lastPackSelection = null;
-                }
-                if (artifact.base_filename && window.inSetu?.vfs?.preWarmShareArtifact) {
-                    window.inSetu.vfs.preWarmShareArtifact(artifact.base_filename, artifact.chunks, false);
-                }
-                resolve(artifact);
-            },
-            onError: (err) => reject(err)
-        });
-    });
-};
 export class InSetuExtGather extends InSetuElement {
     static get extensionName() { return 'gather'; }
     static properties = {
@@ -531,8 +454,7 @@ export class InSetuExtGather extends InSetuElement {
                                 ${cat === 'Quickpacks' ? html`
                                     <sutram-async-btn slot="actions" label="Clear" intent="danger" ?compact=${true} .onClick=${async () => {
                                         try {
-                                            _lastPackSelection = null;
-                                            _lastPackItemsHash = '';
+                                            clearQuickpackSelectionCache();
                                             const res = await this.api.post('gather/clear_quickpacks', {});
                                             if (res.ok) {
                                                 const data = await res.json();
@@ -615,173 +537,4 @@ export class InSetuExtGather extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-gather', InSetuExtGather);
-window.ExtensionRegistry.registerExtension('gather', {
-    name: "Context Gatherer",
-    version: "2.0.0",
-    icon: "hexagon",
-    offline_mode: "read_only",
-    repoConfigOptions: [
-        {
-            id: 'gather-repo-exclude',
-            order: 10,
-            component: ({ repo, updateCallback }) => html`
-                <sutram-toggle 
-                    label="Exclude from Context Compilation" 
-                    .checked=${!!repo.exclude_from_context} 
-                    ?flush=${true}
-                    @sutram-input-changed=${(e) => { 
-                        repo.exclude_from_context = e.detail.value; 
-                        updateCallback(); 
-                    }}>
-                </sutram-toggle>
-            `
-        }
-    ],
-    bucketConfigOptions: [
-        {
-            id: 'gather-exclude',
-            order: 10,
-            component: ({ bucket, updateCallback }) => html`
-                <sutram-toggle 
-                    label="Exclude from Context Compilation" 
-                    .checked=${!!bucket.exclude_from_context} 
-                    ?flush=${true}
-                    @sutram-input-changed=${(e) => { 
-                        bucket.exclude_from_context = e.detail.value; 
-                        updateCallback(); 
-                    }}>
-                </sutram-toggle>
-            `
-        }
-    ],
-    layoutSlots: [
-        {
-            slot: "slots:sub-navigation",
-            targetParent: "context",
-            id: "gather",
-            label: "Gather",
-            icon: "hexagon",
-            intent: "primary",
-            order: 1,
-            component: "insetu-ext-gather"
-        }
-    ],
-    entityActions: [
-        {
-            targetEntity: '*',
-            targetEntities: ['*'],
-            id: 'gather-pack-download',
-            bulkGroupKey: 'pack-download',
-            label: 'Download',
-            bulkLabel: 'Download',
-            icon: 'download',
-            intent: 'primary',
-            group: 'share',
-            vfsBound: true,
-            order: 20,
-            bulkable: true,
-            bulkOnly: true,
-            match: (data) => !!(data?.filepath || data?.folderpath),
-            bulkAction: async (items) => {
-                try {
-                    const artifact = await packSelectionPayload(items);
-                    SelectionStore.getState().clearSelection();
-                    if (artifact.chunks && artifact.chunks.length > 1) {
-                        if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading Parts...", 2000);
-                        for (const f of artifact.chunks) {
-                            const fetchUrl = `${window.inSetu.vfs.resolveFileFetchUrl(f, false)}&download=1`;
-                            if (window.inSetu.vfs.fetchAndDownloadState) {
-                                await window.inSetu.vfs.fetchAndDownloadState(f, fetchUrl);
-                                await new Promise(r => setTimeout(r, 300));
-                            }
-                        }
-                    } else {
-                        if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading...", 2000);
-                        if (window.inSetu.vfs.fetchAndDownloadState) {
-                            const fetchUrl = `${window.inSetu.vfs.resolveFileFetchUrl(artifact.base_filename, false)}&download=1`;
-                            await window.inSetu.vfs.fetchAndDownloadState(artifact.base_filename, fetchUrl);
-                        }
-                    }
-                } catch (err) {
-                    alert("Packing failed: " + err.message);
-                }
-            }
-        },
-        {
-            targetEntity: '*',
-            targetEntities: ['*'],
-            id: 'gather-pack-share',
-            bulkGroupKey: 'pack-share',
-            label: 'Share',
-            bulkLabel: 'Share',
-            icon: 'share',
-            intent: 'primary',
-            group: 'share',
-            vfsBound: true,
-            order: 25,
-            bulkable: true,
-            bulkOnly: true,
-            match: (data) => !!(data?.filepath || data?.folderpath) && !!navigator.share && !!navigator.canShare,
-            bulkOnClick: (items, e) => {
-                if (e) e.stopPropagation();
-
-                const { itemsHash } = _computePackSelectionPayload(items);
-                // Synchronous Fast-Path if Quickpack is already compiled (preserves WebKit user gesture)
-                if (_lastPackItemsHash === itemsHash && _lastPackSelection) {
-                    SelectionStore.getState().clearSelection();
-                    window.inSetu.vfs.shareFiles(_lastPackSelection.base_filename, _lastPackSelection.chunks);
-                    return;
-                }
-
-                if (window.inSetu.ui?.setGlobalStatus) {
-                    window.inSetu.ui.setGlobalStatus("⏳ Compiling Quickpack for Share...", null);
-                }
-                packSelectionPayload(items).then(artifact => {
-                    SelectionStore.getState().clearSelection();
-                    window.inSetu.vfs.shareFiles(artifact.base_filename, artifact.chunks);
-                }).catch(err => {
-                    alert("Packing failed: " + err.message);
-                });
-            }
-        },
-        {
-            targetEntity: '*',
-            targetEntities: ['*'],
-            id: 'gather-pack-compile',
-            bulkGroupKey: 'pack-compile',
-            label: 'Compile Only',
-            bulkLabel: 'Compile Only',
-            icon: 'zap',
-            intent: 'warning',
-            emphasis: true,
-            group: 'share',
-            vfsBound: true,
-            order: 30,
-            bulkable: true,
-            bulkOnly: true,
-            match: (data) => !!(data?.filepath || data?.folderpath),
-            bulkAction: async (items) => {
-                try {
-                    const { itemsHash } = _computePackSelectionPayload(items);
-                    if (_lastPackItemsHash === itemsHash && _lastPackSelection) {
-                        SelectionStore.getState().clearSelection();
-                        if (window.inSetu.ui?.setGlobalStatus) {
-                            window.inSetu.ui.setGlobalStatus("⚡ Quickpack already in Gather!", 2000);
-                        }
-                        return;
-                    }
-                    if (window.inSetu.ui?.setGlobalStatus) {
-                        window.inSetu.ui.setGlobalStatus("⏳ Compiling Quickpack...", null);
-                    }
-                    await packSelectionPayload(items);
-                    SelectionStore.getState().clearSelection();
-                    if (window.inSetu.ui?.setGlobalStatus) {
-                        window.inSetu.ui.setGlobalStatus("⚡ Quickpack compiled to Gather!", 3000);
-                    }
-                } catch (err) {
-                    alert("Packing failed: " + err.message);
-                }
-            }
-        }
-    ]
-});
+window.ExtensionRegistry.registerExtension('gather', GATHER_EXTENSION_MANIFEST);

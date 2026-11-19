@@ -267,7 +267,11 @@ assert.throws(
         2. Speculative onReveal pre-warming is removed from fs.js and Sutram primitives.js, while file-share sets keepDrawerOpen: true.
         3. InSetuURI in insetu_sdk.js remains strictly lexical and never couples to AppStore or derivedVfsFiles.
         """
-        fs_js = (BACKEND_DIR / "core" / "fs" / "fs.js").read_text(encoding="utf-8")
+        fs_js = "\n".join(
+            (BACKEND_DIR / "core" / "fs" / fname).read_text(encoding="utf-8")
+            for fname in ("fs.js", "fs_actions.js")
+            if (BACKEND_DIR / "core" / "fs" / fname).exists()
+        )
         self.assertIn("insetu:ensure-fresh-artifact", fs_js, "fs.js must emit insetu:ensure-fresh-artifact")
         self.assertIn("keepDrawerOpen: true", fs_js, "fs.js share actions must set keepDrawerOpen: true")
         self.assertNotIn("onReveal", fs_js, "fs.js must not use speculative onReveal pre-warming")
@@ -353,7 +357,7 @@ assert.throws(
         """
         fs_js = "\n".join(
             (BACKEND_DIR / "core" / "fs" / fname).read_text(encoding="utf-8")
-            for fname in ("fs.js", "fs_store.js", "fs_editor_projection.js")
+            for fname in ("fs.js", "fs_actions.js", "fs_store.js", "fs_editor_projection.js")
             if (BACKEND_DIR / "core" / "fs" / fname).exists()
         )
         ui_editor_js = (BACKEND_DIR / "core" / "system" / "components" / "ui_editor.js").read_text(encoding="utf-8")
@@ -370,6 +374,20 @@ assert.throws(
         self.assertIn("id: 'editor-toggle-macro-preview'", ui_editor_js, "ui_editor.js must register editor-toggle-macro-preview")
         self.assertIn("{ previewMode: !isEditable }", prompts_js, "prompts.js must pass { previewMode: !isEditable }")
         self.assertNotIn("insetu:file-fetch-url", prompts_js, "prompts.js must not register insetu:file-fetch-url")
+
+    def test_sprint_u2_fitness_guards_are_enforced(self):
+        """Verifies that AD_HOC_CHUNK_FALLBACK_TERNARY_BAN, VFS_ACCESSOR_PARITY_MANDATE, and PRIVATE_REGISTRY_ACCESS_BAN exist and match anti-patterns."""
+        rules_js = (PROJECT_ROOT / "tests" / "fitness" / "rules_javascript.py").read_text(encoding="utf-8")
+        for rule_id in ("VFS_ACCESSOR_PARITY_MANDATE", "AD_HOC_CHUNK_FALLBACK_TERNARY_BAN", "PRIVATE_REGISTRY_ACCESS_BAN"):
+            self.assertIn(rule_id, rules_js, f"rules_javascript.py must enforce {rule_id}")
+        pattern_match = re.search(r'ad_hoc_chunk_fallback_pattern\s*=\s*re\.compile\(\s*r[\'"](.+?)[\'"]\s*\)', rules_js, re.DOTALL)
+        self.assertIsNotNone(pattern_match, "ad_hoc_chunk_fallback_pattern must be compiled in rules_javascript.py")
+        chunk_re = re.compile(pattern_match.group(1))
+        self.assertIsNotNone(chunk_re.search("const resolved = getChunks(fp);\nconst out = resolved ? resolved : data.chunks;"))
+        self.assertIsNone(chunk_re.search("const out = getChunks(data, fallbackChunks);"))
+        self.assertIsNotNone(chunk_re.search("const manifestChunks = this.vfs?.getChunks ? this.vfs.getChunks(uri) : [];\nconst chunks = manifestChunks.length ? manifestChunks : fallbackChunks;"))
+        self.assertIsNone(chunk_re.search("const chunks = getChunks(fp);\nconst target = chunks.length > 1 ? chunks[0] : fp;"))
+        self.assertIsNone(chunk_re.search("const chunks = getChunks(data);\nreturn { chunks: chunks.length ? chunks : [normPath] };"))
 
 
 if __name__ == "__main__":

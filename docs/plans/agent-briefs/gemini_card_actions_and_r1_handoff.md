@@ -45,14 +45,14 @@ Read this section first. The sprints build only part of it, but nothing built he
 
 | Repository | Files this brief owns |
 | --- | --- |
-| sutram | `yenvui/js/card.js`, `yenvui/js/async-btn.js`, `yenvui/js/dropdown.js` (only if the split button needs it), `sutram/js/primitives.js` (`SutramEntityActions`, `SutramCard`, the selection tray), `sutram/js/sutram_sdk.js` (`getEntityActions`, `getAggregatableActions`, the new set registry), `sutram/js/app_shell.js` (only to share the column-unit constant), sutram's tests and CHANGELOG |
+| sutram | `yenvui/js/card.js`, `yenvui/js/async-btn.js`, `yenvui/js/dropdown.js` (only if the split button needs it), `sutram/js/primitives.js` (`SutramEntityActions`, `SutramCard`, the selection tray), `sutram/js/sutram_sdk.js` (`getEntityActions`, `getAggregatableActions`, the new set registry), `sutram/js/app_shell.js` (only to share the column-unit constant), sutram's tests |
 | insetu | `insetu/core/fs/fs.js` (the file action registry), `insetu/core/gather/gather.js`, `insetu/core/gather/engine_gather.py` (part-size fallback only), `insetu/core/prompts/prompts.js`, `insetu/core/bridge/bridge.js` (its `registerExtension` manifest only), `insetu/extensions/publish/ext_publish.js`, the vendored `insetu/static/vendor/sutram/`, a new `tests/unit/test_bridge_chat_wrappers.py` |
 
 **Hands-off.** Everything Lane B owns, per `gemini_offline_bridge_followup.md`, and in particular `engine_bridge.py` and `bridge_fuzzy.py`: the new test exercises the parser without editing it. Also everything in Lane C (Claude), and your own Lane A agent files, which this brief doesn't touch.
 
 **Order.** Do Sprint U1 (sutram) first, release it, and vendor it into insetu before Sprint U2, because insetu consumes the new registry shapes. Sprint U3 (added 2026-11-19) comes after U2: its sutram part is released as 2.11.0 and vendored before its insetu part.
 
-**U3 also owns:** in sutram, all of `sutram/js/app_shell.js` and the `LayoutStore` in `sutram/js/sutram_sdk.js`. In insetu: `insetu/templates/index.html`, the gear (`insetu-system-settings` in `insetu/core/system/components/ui_system_settings.js`), `insetu/core/system/components/ui_filter_pills.js`, the default layout in `insetu/core/system/system.js`, and only the repo filter rows in `gather.js`, `extensions/git/ext_git.js`, `core/bridge/bridge_projections.js`, `core/bridge/bridge_history.js` and `extensions/citations/ext_citations.js`. Notes and Tracker stay with Lane B.
+**U3 also owns:** in sutram, all of `sutram/js/app_shell.js`, the `LayoutStore` and the `ExtensionRegistry` in `sutram/js/sutram_sdk.js`, and `SutramEntityActions`, `SutramSelectionTray` and `SutramSubtabMenu` in `sutram/js/primitives.js`. In insetu: `insetu/core/system/insetu_sdk.js` (the registry helpers only), `insetu/core/fs/fs.js` and `insetu/core/fs/fs_actions.js` (Copy only), `insetu/core/gather/gather_quickpack.js` (bulk Copy only), the `PRIVATE_REGISTRY_ACCESS_BAN` exemption in `tests/fitness/rules_javascript.py`, `insetu/templates/index.html`, the gear (`insetu-system-settings` in `insetu/core/system/components/ui_system_settings.js`), `insetu/core/system/components/ui_filter_pills.js`, the default layout in `insetu/core/system/system.js`, and only the repo filter rows in `gather.js`, `extensions/git/ext_git.js`, `core/bridge/bridge_projections.js`, `core/bridge/bridge_history.js` and `extensions/citations/ext_citations.js`. Notes and Tracker stay with Lane B.
 
 ---
 
@@ -106,7 +106,7 @@ Read this section first. The sprints build only part of it, but nothing built he
   - the nesting refusal;
   - success-state timing.
 - **Consumer linter:** extend it so insetu's `test_sutram_compliance.py` knows the new properties (`surfaced`, `successLabel`, `set`, `section`).
-- **Release:** CHANGELOG, then release 2.10.0.
+- **Release:** commit with a `feat` message and leave the version and CHANGELOG alone: semantic-release writes both when the owner releases 2.10.0.
 
 ---
 
@@ -222,9 +222,28 @@ Read this section first. The sprints build only part of it, but nothing built he
 - A phone opens on column 2.
 - Pin through `LayoutStore.pinToColumn` with the registered slots, and never replace a saved layout.
 
-**Not in U3:** the views' own header buttons (the `header-actions` slot inside views, such as Research's New Job and Dev's buttons) and the choices for the gear's pinned slot. Both come later.
+**Carried into U3 (decided 2026-11-19).** Three groups. The sutram ones ship in 2.11.0 with the shell work; the insetu ones come after 2.11.0 is vendored.
 
-**Release:** sutram 2.11.0 with its CHANGELOG, vendored into insetu, then the insetu changes.
+*Sutram: the registry helpers insetu patches on today.* U2 added four methods to sutram's registry from `insetu_sdk.js` (`collectManifestField`, `collectManifestEntries`, `getRegisteredExtensionNames`, `setActionFilterPredicate`) and wraps the private `_collapseVariantSets`. They belong in sutram, written domain-neutral, with these changes rather than copied as they are:
+- **One manifest reader, not two.** Add `getManifestEntries(field, { activeOnly = true })`, returning `[{ extName, value }]` in registration order; `activeOnly` applies the extension filter sutram already has (`setFilterPredicate`). `collectManifestField(field, options)` is a thin helper over it that flattens array values. Today the two versions disagree on whether inactive extensions count; pass `activeOnly: false` explicitly where that's wanted (the settings-schema wiring in `system.js`).
+- **`getExtensionNames({ activeOnly = false })`** replaces `getRegisteredExtensionNames`.
+- **`setActionFilter(fn)`, a real hook, not a wrap.** sutram calls `fn(action, item, entityType)` inside `getEntityActions` and `getAggregatableActions`, before variant sets are collapsed, so a set never shows a variant the host hid. For bulk, an action survives only if every item passes. One filter per registry; setting it again replaces it.
+- **insetu's filter keeps only its own rule.** Its first check (drop actions from inactive extensions) repeats what sutram's extension filter already does in both paths, so delete it. What stays is the shared-asset rule: no mutative action (`MUTATIVE_ACTION_IDS`) on a `ws://` item. The parked entity-descriptor plan (its Sprint 2, `requires: { editable }`) is where that rule moves later; don't start it here.
+- **Node tests in sutram** for each method, including the filter running before collapse and the bulk every-item rule.
+
+*Sutram: U1's follow-ups.*
+- **Last-used key for a selection:** when every selected item has the same entity type, remember the variant under that type, in the tray and in the sub-tab bulk menu. Use `bulk` only for mixed selections.
+- **The eight-variant warning:** development builds only, and once per set and entity type rather than on every render.
+- **Clipped buttons:** after a row renders, if it overflows its container, move one more entry into the three-dot menu. That corrects the 7.5 px a character estimate instead of letting the row clip a button.
+
+*insetu, after 2.11.0 is vendored.*
+- **Remove the helpers from `insetu_sdk.js`:** the four `typeof … !== 'function'` blocks and the `_collapseVariantSets` wrap. Call the sutram methods directly (`getManifestEntries` or `collectManifestField` in `prompts.js` and `system.js`, `getExtensionNames` in `system.js`, `setActionFilter` in `insetu_sdk.js`), and drop `insetu_sdk.js` from `PRIVATE_REGISTRY_ACCESS_BAN`'s exemptions. `insetu_element.js` keeps its exemption only if it still needs it; say so in your summary.
+- **Single-card Copy Raw on Safari:** `file-copy` fetches the text and then calls `navigator.clipboard.writeText`, which Safari can refuse once the click is no longer current. Add one helper in `fs.js` that writes text from a promise through `ClipboardItem` (falling back to `writeText` when `ClipboardItem` is missing), and use it for single-card Copy (both Raw and Expanded) and for the tray's bulk Copy in `gather_quickpack.js`.
+- **"Copied" in the tray:** bulk Copy clears the selection as soon as it finishes, so the tray disappears before the confirmation shows. Clear it once the button's confirmation has settled (`yenvui-action-confirmed` with `phase: 'settled'`), not before.
+
+**Not in U3:** the views' own header buttons (the `header-actions` slot inside views, such as Research's New Job and Dev's buttons), the choices for the gear's pinned slot, and the terminal's helper-key row (it gets its own look with the terminal work). All come later.
+
+**Release:** sutram 2.11.0 (semantic-release writes the version and CHANGELOG; don't edit them), vendored into insetu, then the insetu changes.
 
 ---
 
@@ -245,6 +264,8 @@ Read this section first. The sprints build only part of it, but nothing built he
   - The position bar shows only when columns are off screen, and tapping or swiping it pans.
   - The repo filter appears in the gear and nowhere in Gather, Git, Bridge or Citations.
   - A new workspace opens on Prompts and Files, Gather, Yomama; an existing workspace's layout is unchanged.
+  - `insetu_sdk.js` adds nothing to sutram's registry, and no insetu file reads a private registry property.
+  - On an iPhone, single-card Copy Raw and the tray's Copy Raw both reach the clipboard, and the tray shows "Copied" before it closes.
 
 ## 7. Out of scope (decided, scheduled later; do not build)
 

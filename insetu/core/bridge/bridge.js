@@ -321,8 +321,7 @@ export class InSetuExtBridge extends InSetuElement {
                                 layout.closeWindow('bridge:syntax-diff');
                             }
 
-                            // The backend Event Bus natively handles RAG compilation and diffs via the Topology Slew Limiter.
-                            // We only need to refresh the ledger UI history locally.
+                            // Backend Event Bus handles RAG/diff compilation; refresh local ledger history.
                             BridgeStore.getState().fetchHistory();
                         }
                     } else {
@@ -1074,6 +1073,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
     name: "Yomama Sync Bridge",
     version: "2.0.0",
     offline_mode: "read_only",
+    corePrompts: ['ctx://prompts/.templates/bridge/yomama_patch_protocol.md'],
     entityActions: [
         {
             targetEntity: 'yomama-turn',

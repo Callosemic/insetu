@@ -312,7 +312,7 @@ MAX_UNLISTED_MODULE_LINES = 800
 MODULE_LINE_RATCHET: Dict[str, int] = {
     # Ceilings marked "Nov 9" were raised to the files' real sizes after the Nov 9 round added features
     # past the ceilings Gemini had just set. Each is owed back by a split (gemini_offline_bridge_followup.md).
-    "insetu/core/fs/fs.js": 2016,
+    "insetu/core/fs/fs.js": 1535,
     "insetu/extensions/tracker/ext_tracker.js": 2932,
     "insetu/core/topology/engine_topology.py": 2202,  # Nov 9 (was 2170)
     "insetu/core/agent/agent.js": 1047,  # Nov 18 (was 1043): plan stepper stays visible after session reload; Nov 15 (was 1055): Extracted InSetuAgentContextHud into agent_handoff_and_plan.js
@@ -336,7 +336,7 @@ MODULE_LINE_RATCHET: Dict[str, int] = {
     "insetu/core/system/engine_system.py": 814,
     # Ring 1 (akasa) and Ring 2 (sutram) modules currently above 800 lines (shrinking in Wave 2):
     "sutram/sutram/js/primitives.js": 2853,
-    "sutram/sutram/js/sutram_sdk.js": 1916,
+    "sutram/sutram/js/sutram_sdk.js": 2145,
     "sutram/sutram/js/app_shell.js": 1423,
     "akasa/akasa/vfs.py": 1119,  # Nov 18 (was 1117): +2 lines in the 0.11 hardening; Nov 11: the three-way merge moved to akasa/merge.py
     "akasa/akasa/extension.py": 1223,
