@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.41.0 (2026-11-19)
+
+### Features
+
+- **cards**: Implement Send variant set, corePrompts, and polymorphic chunk SSOT
+  ([`3b2fd22`](https://github.com/Callosemic/insetu/commit/3b2fd22bac2e5e5697be933eb338836d513284b6))
+
+
 ## v0.40.0 (2026-11-19)
 
 ### Bug Fixes
