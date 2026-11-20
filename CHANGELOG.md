@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.43.0 (2026-11-20)
+
+### Features
+
+- **bridge**: Say Apply instead of Commit, and adopt sutram 2.12.0 column bands
+  ([`f07dfc8`](https://github.com/Callosemic/insetu/commit/f07dfc808cbbeafd3233211d1e5e1f2f998f4d85))
+
+
 ## v0.42.0 (2026-11-19)
 
 ### Features
