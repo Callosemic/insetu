@@ -32,7 +32,7 @@ import{html as n,css as i}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
         .window-btn:hover { background: var(--bg-hover); color: var(--text); }
         .window-btn.active-span { background: color-mix(in srgb, var(--intent-color, var(--intent-primary)) 20%, transparent); color: var(--intent-color, var(--intent-primary)); border: 1px solid var(--intent-color, var(--intent-primary)); }
         .window-btn.close-btn:hover { color: var(--intent-danger); background: color-mix(in srgb, var(--intent-danger) 15%, transparent); }
-        .body { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; background: var(--bg); container-type: inline-size; }
+        .body { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; background: var(--bg); container: yv-band / inline-size; }
         .body > ::slotted(*) { flex: 1 1 0%; min-height: 0; min-width: 0; height: 100%; width: 100%; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; }
 
         :host-context([data-theme="e-ink"]) dialog {
@@ -56,6 +56,6 @@ import{html as n,css as i}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
                         <yenvui-icon name="x" size="md"></yenvui-icon>
                     </button>
                 </div>
-                <div class="body"><slot></slot></div>
+                <div class="body" data-spatial-boundary><slot></slot></div>
             </dialog>
         `}}customElements.define("yenvui-window",YenvuiWindow);

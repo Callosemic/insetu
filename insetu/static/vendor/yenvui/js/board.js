@@ -1,4 +1,4 @@
-import{html as t,css as e}from"lit";import{YenvuiBase as n}from"./yenvui-base.js";export class YenvuiBoard extends n{static styles=e`
+import{html as t,css as n}from"lit";import{YenvuiBase as r}from"./yenvui-base.js";import{BAND_QUERY as e}from"./physics.js";export class YenvuiBoard extends r{static styles=n`
         :host { 
             display: grid; 
             grid-template-columns: repeat(3, 1fr);
@@ -6,18 +6,18 @@ import{html as t,css as e}from"lit";import{YenvuiBase as n}from"./yenvui-base.js
             gap: 15px; 
             width: 100%; 
         }
-        @container (max-width: 1100px) {
+        @container ${e.belowWide} {
             :host { 
                 grid-template-columns: repeat(2, 1fr); 
             }
         }
-        @container (max-width: 700px) {
+        @container ${e.narrow} {
             :host { 
                 grid-template-columns: 1fr; 
                 gap: 25px; 
             }
         }
-    `;render(){return t`<slot></slot>`}}customElements.define("yenvui-board",YenvuiBoard);export class YenvuiColumn extends n{static properties={titleText:{type:String},intent:{type:String,reflect:!0}};static styles=e`
+    `;render(){return t`<slot></slot>`}}customElements.define("yenvui-board",YenvuiBoard);export class YenvuiColumn extends r{static properties={titleText:{type:String},intent:{type:String,reflect:!0}};static styles=n`
         :host { 
             min-width: 0; 
             background: var(--input-bg, #2d2d2d); 
@@ -41,7 +41,7 @@ import{html as t,css as e}from"lit";import{YenvuiBase as n}from"./yenvui-base.js
             margin-bottom: 10px; 
             color: var(--col-accent); 
         }
-        @container (max-width: 700px) {
+        @container ${e.narrow} {
             :host { 
                 background: transparent; 
                 padding: 0; 

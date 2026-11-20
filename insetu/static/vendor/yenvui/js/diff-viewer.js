@@ -1,4 +1,4 @@
-import{html as c,css as v}from"lit";import{YenvuiBase as u}from"./yenvui-base.js";import{parseDiffPayload as x}from"./diff-utils.js";export class YenvuiDiffViewer extends u{static properties={diffText:{type:String},searchStr:{type:String},replaceStr:{type:String},searchLines:{type:Array},replaceLines:{type:Array},leftTitle:{type:String},rightTitle:{type:String},mode:{type:String,reflect:!0},activeLineIndex:{type:Number},_parsedData:{type:Object,state:!0}};static styles=v`
+import{html as c,css as v}from"lit";import{YenvuiBase as x}from"./yenvui-base.js";import{BAND_QUERY as u,observeColumnBand as g}from"./physics.js";import{parseDiffPayload as b}from"./diff-utils.js";export class YenvuiDiffViewer extends x{static properties={diffText:{type:String},searchStr:{type:String},replaceStr:{type:String},searchLines:{type:Array},replaceLines:{type:Array},leftTitle:{type:String},rightTitle:{type:String},mode:{type:String,reflect:!0},wrap:{type:String},_columnBand:{type:Object,state:!0},activeLineIndex:{type:Number},_parsedData:{type:Object,state:!0}};static styles=v`
         :host {
             display: flex;
             flex-direction: column;
@@ -35,6 +35,11 @@ import{html as c,css as v}from"lit";import{YenvuiBase as u}from"./yenvui-base.js
             min-width: 0;
         }
 
+        .toolbar-controls {
+            display: inline-flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
         .mode-toggle-group {
             display: inline-flex;
             border: 1px solid var(--border);
@@ -61,7 +66,7 @@ import{html as c,css as v}from"lit";import{YenvuiBase as u}from"./yenvui-base.js
             display: inline;
         }
 
-        @container (max-width: 520px) {
+        @container ${u.compact} {
             .mode-text {
                 display: none;
             }
@@ -70,6 +75,10 @@ import{html as c,css as v}from"lit";import{YenvuiBase as u}from"./yenvui-base.js
             }
         }
 
+        .mode-btn:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
         .mode-btn:last-child {
             border-right: none;
         }
@@ -106,7 +115,7 @@ import{html as c,css as v}from"lit";import{YenvuiBase as u}from"./yenvui-base.js
             background: var(--bg);
         }
 
-        @container (min-width: 768px) {
+        @container ${u.mediumUp} {
             :host([mode="auto"]) .diff-split-container {
                 flex-direction: row !important;
             }
@@ -166,6 +175,10 @@ import{html as c,css as v}from"lit";import{YenvuiBase as u}from"./yenvui-base.js
             min-width: max(100%, calc(var(--diff-min-char-width, 0ch) + 64px));
             width: max-content;
         }
+        :host([wrapped]) .diff-box { white-space: pre-wrap; overflow-x: hidden; }
+        :host([wrapped]) .diff-track { min-width: 0; width: 100%; }
+        :host([wrapped]) .diff-line { height: auto; min-height: 1.45rem; align-items: flex-start; }
+        :host([wrapped]) .line-text { min-width: 0; overflow-wrap: anywhere; }
 
         .diff-line {
             display: flex;
@@ -332,11 +345,12 @@ import{html as c,css as v}from"lit";import{YenvuiBase as u}from"./yenvui-base.js
             0% { opacity: 0.5; }
             100% { opacity: 1; }
         }
-    `;constructor(){super(),this.diffText="",this.searchStr="",this.replaceStr="",this.searchLines=null,this.replaceLines=null,this.leftTitle="SEARCH (Expected / Original)",this.rightTitle="REPLACE (Actual / Modified)",this.mode="auto",this.activeLineIndex=null,this._parsedData={split:{searchLines:[],replaceLines:[]},interleaved:[],maxChars:0},this._activeScrollSource=null,this._scrollReleaseTimer=null,this._hoveredLineIndex=null,this._activeCharCol=null,this._isDragging=!1,this._dragStartX=0,this._dragStartY=0,this._dragStartScrollLeft=0,this._dragStartScrollTop=0,this._dragSourceBox=null,this._historySamples=[],this._momentumRafId=null}disconnectedCallback(){super.disconnectedCallback(),this._scrollReleaseTimer&&clearTimeout(this._scrollReleaseTimer),this._momentumRafId&&cancelAnimationFrame(this._momentumRafId)}_handlePointerDownPan(t,r){if(t.pointerType!=="mouse"||t.button!==0||t.target.classList.contains("line-text")&&window.getSelection().toString().length>0)return;const n=this.shadowRoot.getElementById(r);if(!n)return;this._momentumRafId&&(cancelAnimationFrame(this._momentumRafId),this._momentumRafId=null),this._isDragging=!1,this._dragSourceBox=n,this._dragStartX=t.clientX,this._dragStartY=t.clientY,this._dragStartScrollLeft=n.scrollLeft,this._dragStartScrollTop=n.scrollTop,this._historySamples=[{x:t.clientX,y:t.clientY,t:performance.now()}];const o=i=>{const l=i.clientX-this._dragStartX,s=i.clientY-this._dragStartY;if(!this._isDragging&&(Math.abs(l)>4||Math.abs(s)>4)&&(this._isDragging=!0,n.classList.add("is-panning")),this._isDragging){i.preventDefault(),this._claimScrollSource(r);const d=r==="box-a"?"box-b":"box-a",h=this.shadowRoot.getElementById(d),p=this._dragStartScrollLeft-l,m=this._dragStartScrollTop-s;n.scrollLeft=p,n.scrollTop=m,h&&(h.scrollLeft=p,h.scrollTop=m);const f=performance.now();this._historySamples.push({x:i.clientX,y:i.clientY,t:f}),this._historySamples.length>5&&this._historySamples.shift()}},e=i=>{if(window.removeEventListener("pointermove",o),window.removeEventListener("pointerup",e),window.removeEventListener("pointercancel",e),n.classList.remove("is-panning"),this._isDragging&&this._historySamples.length>=2){const l=performance.now(),s=this._historySamples.filter(d=>l-d.t<100);if(s.length>=2){const d=s[0],h=s[s.length-1],p=Math.max(10,h.t-d.t);let m=(h.x-d.x)/p,f=(h.y-d.y)/p;(Math.abs(m)>.15||Math.abs(f)>.15)&&this._executeThrow(r,m*16,f*16)}}};window.addEventListener("pointermove",o,{passive:!1}),window.addEventListener("pointerup",e),window.addEventListener("pointercancel",e)}_executeThrow(t,r,a){let n=r,o=a;const e=.94,i=t==="box-a"?"box-b":"box-a",l=()=>{if(n*=e,o*=e,Math.abs(n)<.2&&Math.abs(o)<.2){this._momentumRafId=null;return}const s=this.shadowRoot.getElementById(t),d=this.shadowRoot.getElementById(i);s&&(this._claimScrollSource(t),s.scrollLeft-=n,s.scrollTop-=o,d&&(d.scrollLeft=s.scrollLeft,d.scrollTop=s.scrollTop)),this._momentumRafId=requestAnimationFrame(l)};this._momentumRafId=requestAnimationFrame(l)}_handleLineHover(t,r){this._hoveredLineIndex=t;const a=r.currentTarget,n=a?a.querySelector(".line-text"):null;if(a&&n){const o=n.getBoundingClientRect(),e=Math.max(0,r.clientX-o.left);this._activeCharCol=Math.floor(e/8)}this.requestUpdate()}_clearLineHover(){this._hoveredLineIndex=null,this._activeCharCol=null,this.requestUpdate()}willUpdate(t){if(t.has("diffText")||t.has("searchStr")||t.has("replaceStr")||t.has("searchLines")||t.has("replaceLines"))if(Array.isArray(this.searchLines)&&Array.isArray(this.replaceLines)){let r=0;const a=(i,l)=>i.map((s,d)=>typeof s=="string"?{lineNumber:d+1,text:s,type:l,isDummy:!1,tokens:null}:s),n=a(this.searchLines,"removed"),o=a(this.replaceLines,"added"),e=[];n.forEach(i=>{(i.text||"").length>r&&(r=(i.text||"").length),i.isDummy||e.push({oldLineNumber:i.lineNumber,newLineNumber:null,text:i.text,type:i.type||"context",tokens:i.tokens})}),o.forEach(i=>{(i.text||"").length>r&&(r=(i.text||"").length),!i.isDummy&&i.type==="added"&&e.push({oldLineNumber:null,newLineNumber:i.lineNumber,text:i.text,type:"added",tokens:i.tokens})}),this._parsedData={split:{searchLines:n,replaceLines:o},interleaved:e,maxChars:r}}else this._parsedData=x({diffText:this.diffText,searchStr:this.searchStr,replaceStr:this.replaceStr})}_claimScrollSource(t){this._activeScrollSource=t,this._scrollReleaseTimer&&clearTimeout(this._scrollReleaseTimer),this._scrollReleaseTimer=setTimeout(()=>{this._activeScrollSource=null},160)}_handleScroll(t,r){if(this._activeScrollSource&&this._activeScrollSource!==t)return;this._claimScrollSource(t);const a=this.shadowRoot.getElementById(t),n=this.shadowRoot.getElementById(r);if(!a||!n)return;const o=a.scrollTop,e=a.scrollLeft;n.scrollTop!==o&&(n.scrollTop=o),n.scrollLeft!==e&&(n.scrollLeft=e)}_setActiveLine(t){this.activeLineIndex=this.activeLineIndex===t?null:t,this.dispatchEvent(new CustomEvent("yenvui-diff-line-selected",{detail:{index:this.activeLineIndex},bubbles:!0,composed:!0}))}_setMode(t){this.mode=t,this.dispatchEvent(new CustomEvent("yenvui-diff-mode-changed",{detail:{mode:t},bubbles:!0,composed:!0}))}_renderLineContent(t,r="context"){if(!t||t.isDummy)return" ";if(Array.isArray(t.tokens)&&t.tokens.length>0){const n=r==="removed"||t.type==="removed"?"intraline-del":"intraline-ins";return t.tokens.map(o=>o.changed?c`<span class="${n}">${o.text}</span>`:o.text)}return t.text||" "}render(){const{split:t,interleaved:r,maxChars:a}=this._parsedData,n=this.mode==="interleaved",o=`--diff-min-char-width: ${a||0}ch;`;return c`
+    `;constructor(){super(),this.diffText="",this.searchStr="",this.replaceStr="",this.searchLines=null,this.replaceLines=null,this.leftTitle="SEARCH (Expected / Original)",this.rightTitle="REPLACE (Actual / Modified)",this.mode="auto",this.wrap="auto",this._columnBand=null,this._scrolledToChangeKey=null,this.activeLineIndex=null,this._parsedData={split:{searchLines:[],replaceLines:[]},interleaved:[],maxChars:0},this._activeScrollSource=null,this._scrollReleaseTimer=null,this._hoveredLineIndex=null,this._activeCharCol=null,this._isDragging=!1,this._dragStartX=0,this._dragStartY=0,this._dragStartScrollLeft=0,this._dragStartScrollTop=0,this._dragSourceBox=null,this._historySamples=[],this._momentumRafId=null}connectedCallback(){super.connectedCallback(),this._stopBandObserver=g(this,e=>{this._columnBand=e})}disconnectedCallback(){super.disconnectedCallback(),this._stopBandObserver&&(this._stopBandObserver(),this._stopBandObserver=null),this._scrollReleaseTimer&&clearTimeout(this._scrollReleaseTimer),this._momentumRafId&&cancelAnimationFrame(this._momentumRafId)}_handlePointerDownPan(e,r){if(e.pointerType!=="mouse"||e.button!==0||e.target.classList.contains("line-text")&&window.getSelection().toString().length>0)return;const n=this.shadowRoot.getElementById(r);if(!n)return;this._momentumRafId&&(cancelAnimationFrame(this._momentumRafId),this._momentumRafId=null),this._isDragging=!1,this._dragSourceBox=n,this._dragStartX=e.clientX,this._dragStartY=e.clientY,this._dragStartScrollLeft=n.scrollLeft,this._dragStartScrollTop=n.scrollTop,this._historySamples=[{x:e.clientX,y:e.clientY,t:performance.now()}];const s=i=>{const l=i.clientX-this._dragStartX,a=i.clientY-this._dragStartY;if(!this._isDragging&&(Math.abs(l)>4||Math.abs(a)>4)&&(this._isDragging=!0,n.classList.add("is-panning")),this._isDragging){i.preventDefault(),this._claimScrollSource(r);const d=r==="box-a"?"box-b":"box-a",h=this.shadowRoot.getElementById(d),p=this._dragStartScrollLeft-l,m=this._dragStartScrollTop-a;n.scrollLeft=p,n.scrollTop=m,h&&(h.scrollLeft=p,h.scrollTop=m);const f=performance.now();this._historySamples.push({x:i.clientX,y:i.clientY,t:f}),this._historySamples.length>5&&this._historySamples.shift()}},t=i=>{if(window.removeEventListener("pointermove",s),window.removeEventListener("pointerup",t),window.removeEventListener("pointercancel",t),n.classList.remove("is-panning"),this._isDragging&&this._historySamples.length>=2){const l=performance.now(),a=this._historySamples.filter(d=>l-d.t<100);if(a.length>=2){const d=a[0],h=a[a.length-1],p=Math.max(10,h.t-d.t);let m=(h.x-d.x)/p,f=(h.y-d.y)/p;(Math.abs(m)>.15||Math.abs(f)>.15)&&this._executeThrow(r,m*16,f*16)}}};window.addEventListener("pointermove",s,{passive:!1}),window.addEventListener("pointerup",t),window.addEventListener("pointercancel",t)}_executeThrow(e,r,o){let n=r,s=o;const t=.94,i=e==="box-a"?"box-b":"box-a",l=()=>{if(n*=t,s*=t,Math.abs(n)<.2&&Math.abs(s)<.2){this._momentumRafId=null;return}const a=this.shadowRoot.getElementById(e),d=this.shadowRoot.getElementById(i);a&&(this._claimScrollSource(e),a.scrollLeft-=n,a.scrollTop-=s,d&&(d.scrollLeft=a.scrollLeft,d.scrollTop=a.scrollTop)),this._momentumRafId=requestAnimationFrame(l)};this._momentumRafId=requestAnimationFrame(l)}_handleLineHover(e,r){this._hoveredLineIndex=e;const o=r.currentTarget,n=o?o.querySelector(".line-text"):null;if(o&&n){const s=n.getBoundingClientRect(),t=Math.max(0,r.clientX-s.left);this._activeCharCol=Math.floor(t/8)}this.requestUpdate()}_clearLineHover(){this._hoveredLineIndex=null,this._activeCharCol=null,this.requestUpdate()}willUpdate(e){if(e.has("diffText")||e.has("searchStr")||e.has("replaceStr")||e.has("searchLines")||e.has("replaceLines"))if(Array.isArray(this.searchLines)&&Array.isArray(this.replaceLines)){let r=0;const o=(i,l)=>i.map((a,d)=>typeof a=="string"?{lineNumber:d+1,text:a,type:l,isDummy:!1,tokens:null}:a),n=o(this.searchLines,"removed"),s=o(this.replaceLines,"added"),t=[];n.forEach(i=>{(i.text||"").length>r&&(r=(i.text||"").length),i.isDummy||t.push({oldLineNumber:i.lineNumber,newLineNumber:null,text:i.text,type:i.type||"context",tokens:i.tokens})}),s.forEach(i=>{(i.text||"").length>r&&(r=(i.text||"").length),!i.isDummy&&i.type==="added"&&t.push({oldLineNumber:null,newLineNumber:i.lineNumber,text:i.text,type:"added",tokens:i.tokens})}),this._parsedData={split:{searchLines:n,replaceLines:s},interleaved:t,maxChars:r}}else this._parsedData=b({diffText:this.diffText,searchStr:this.searchStr,replaceStr:this.replaceStr})}_claimScrollSource(e){this._activeScrollSource=e,this._scrollReleaseTimer&&clearTimeout(this._scrollReleaseTimer),this._scrollReleaseTimer=setTimeout(()=>{this._activeScrollSource=null},160)}_handleScroll(e,r){if(this._activeScrollSource&&this._activeScrollSource!==e)return;this._claimScrollSource(e);const o=this.shadowRoot.getElementById(e),n=this.shadowRoot.getElementById(r);if(!o||!n)return;const s=o.scrollTop,t=o.scrollLeft;n.scrollTop!==s&&(n.scrollTop=s),n.scrollLeft!==t&&(n.scrollLeft=t)}_setActiveLine(e){this.activeLineIndex=this.activeLineIndex===e?null:e,this.dispatchEvent(new CustomEvent("yenvui-diff-line-selected",{detail:{index:this.activeLineIndex},bubbles:!0,composed:!0}))}_isSideBySide(){return this.mode==="split-side"||this.mode==="auto"&&(this._columnBand?.capability||1)>=2}_isWrapped(){return this._isSideBySide()?!1:this.wrap==="on"?!0:this.wrap==="off"?!1:(this._columnBand?.band||"narrow")==="narrow"}_toggleWrap(){this.wrap=this._isWrapped()?"off":"on",this.dispatchEvent(new CustomEvent("yenvui-diff-wrap-changed",{detail:{wrap:this.wrap},bubbles:!0,composed:!0}))}updated(e){super.updated?.(e),this.toggleAttribute("wrapped",this._isWrapped()),this._scrollUnifiedToFirstChange()}_scrollUnifiedToFirstChange(){if(this.mode!=="interleaved")return;const r=`${(this._parsedData?.interleaved||[]).length}:${this.diffText?.length||0}:${this.searchStr?.length||0}:${this.replaceStr?.length||0}`;if(this._scrolledToChangeKey===r)return;const o=this.shadowRoot?.getElementById("box-interleaved"),n=o?.querySelector(".diff-line.added, .diff-line.removed");!o||!n||(this._scrolledToChangeKey=r,o.scrollTop=Math.max(0,n.offsetTop-Math.round(o.clientHeight/3)))}_setMode(e){this.mode=e,this.dispatchEvent(new CustomEvent("yenvui-diff-mode-changed",{detail:{mode:e},bubbles:!0,composed:!0}))}_renderLineContent(e,r="context"){if(!e||e.isDummy)return" ";if(Array.isArray(e.tokens)&&e.tokens.length>0){const n=r==="removed"||e.type==="removed"?"intraline-del":"intraline-ins";return e.tokens.map(s=>s.changed?c`<span class="${n}">${s.text}</span>`:s.text)}return e.text||" "}render(){const{split:e,interleaved:r,maxChars:o}=this._parsedData,n=this.mode==="interleaved",s=`--diff-min-char-width: ${o||0}ch;`;return c`
             <div class="diff-toolbar">
                 <span class="toolbar-label">
                     ${n?`${this.leftTitle} /${this.rightTitle} (Interleaved)`:`${this.leftTitle} \u27F7${this.rightTitle}`}
                 </span>
+                <div class="toolbar-controls">
                 <div class="mode-toggle-group">
                     <button class="mode-btn ${this.mode==="auto"?"active":""}" @click=${()=>this._setMode("auto")} title="Responsive Container Split">
                         <yenvui-icon name="sparkles" size="xs"></yenvui-icon><span class="mode-text">Auto</span>
@@ -351,6 +365,12 @@ import{html as c,css as v}from"lit";import{YenvuiBase as u}from"./yenvui-base.js
                         <yenvui-icon name="align-justify" size="xs"></yenvui-icon><span class="mode-text">Unified</span>
                     </button>
                 </div>
+                <div class="mode-toggle-group">
+                    <button class="mode-btn ${this._isWrapped()?"active":""}" ?disabled=${this._isSideBySide()} @click=${()=>this._toggleWrap()} title="Wrap long lines (not side by side)">
+                        <yenvui-icon name="wrap-text" size="xs"></yenvui-icon><span class="mode-text">Wrap</span>
+                    </button>
+                </div>
+                </div>
             </div>
 
             <div class="diff-viewport">
@@ -361,15 +381,15 @@ import{html as c,css as v}from"lit";import{YenvuiBase as u}from"./yenvui-base.js
                             <span>${r.length} lines</span>
                         </div>
                         <div class="diff-box" id="box-interleaved"
-                            @pointerdown=${e=>this._handlePointerDownPan(e,"box-interleaved")}>
-                            <div class="diff-track" style="${o}">
-                                ${r.map((e,i)=>c`
-                                    <div class="diff-line ${e.type||""} ${this.activeLineIndex===i?"active":""}"
+                            @pointerdown=${t=>this._handlePointerDownPan(t,"box-interleaved")}>
+                            <div class="diff-track" style="${s}">
+                                ${r.map((t,i)=>c`
+                                    <div class="diff-line ${t.type||""} ${this.activeLineIndex===i?"active":""}"
                                         @pointerdown=${()=>this._setActiveLine(i)}>
-                                        <span class="line-num">${e.oldLineNumber??""}</span>
-                                        <span class="line-num">${e.newLineNumber??""}</span>
-                                        <span class="line-marker">${e.type==="added"?"+":e.type==="removed"?"-":" "}</span>
-                                        <span class="line-text">${this._renderLineContent(e,e.type)}</span>
+                                        <span class="line-num">${t.oldLineNumber??""}</span>
+                                        <span class="line-num">${t.newLineNumber??""}</span>
+                                        <span class="line-marker">${t.type==="added"?"+":t.type==="removed"?"-":" "}</span>
+                                        <span class="line-text">${this._renderLineContent(t,t.type)}</span>
                                     </div>
                                 `)}
                             </div>
@@ -380,22 +400,22 @@ import{html as c,css as v}from"lit";import{YenvuiBase as u}from"./yenvui-base.js
                         <div class="diff-pane">
                             <div class="diff-pane-header">
                                 <span>${this.leftTitle}</span>
-                                <span>${t.searchLines.filter(e=>!e.isDummy).length} lines</span>
+                                <span>${e.searchLines.filter(t=>!t.isDummy).length} lines</span>
                             </div>
                             <div class="diff-box" id="box-a"
-                                @pointerdown=${e=>this._handlePointerDownPan(e,"box-a")}
+                                @pointerdown=${t=>this._handlePointerDownPan(t,"box-a")}
                                 @wheel=${()=>this._claimScrollSource("box-a")}
                                 @scroll=${()=>this._handleScroll("box-a","box-b")}>
-                                <div class="diff-track" style="${o}">
-                                    ${t.searchLines.map((e,i)=>c`
-                                        <div class="diff-line ${e.isDummy?"dummy":e.type||""} ${this.activeLineIndex===i?"active":""} ${this._hoveredLineIndex===i?"hover-sync":""}"
+                                <div class="diff-track" style="${s}">
+                                    ${e.searchLines.map((t,i)=>c`
+                                        <div class="diff-line ${t.isDummy?"dummy":t.type||""} ${this.activeLineIndex===i?"active":""} ${this._hoveredLineIndex===i?"hover-sync":""}"
                                             @pointerdown=${()=>this._setActiveLine(i)}
                                             @pointerenter=${l=>this._handleLineHover(i,l)}
                                             @pointerleave=${()=>this._clearLineHover()}
                                             style="position: relative;">
-                                            <span class="line-num">${e.lineNumber??""}</span>
-                                            <span class="line-marker">${e.isDummy?"":e.type==="removed"?"-":" "}</span>
-                                            <span class="line-text">${this._renderLineContent(e,"removed")}</span>${this._hoveredLineIndex===i&&this._activeCharCol!==null?c`
+                                            <span class="line-num">${t.lineNumber??""}</span>
+                                            <span class="line-marker">${t.isDummy?"":t.type==="removed"?"-":" "}</span>
+                                            <span class="line-text">${this._renderLineContent(t,"removed")}</span>${this._hoveredLineIndex===i&&this._activeCharCol!==null?c`
                                                 <div class="ghost-caret-marker" style="left: ${72+this._activeCharCol*8}px;"></div>
                                             `:""}
                                         </div>
@@ -407,22 +427,22 @@ import{html as c,css as v}from"lit";import{YenvuiBase as u}from"./yenvui-base.js
                         <div class="diff-pane">
                             <div class="diff-pane-header">
                                 <span>${this.rightTitle}</span>
-                                <span>${t.replaceLines.filter(e=>!e.isDummy).length} lines</span>
+                                <span>${e.replaceLines.filter(t=>!t.isDummy).length} lines</span>
                             </div>
                             <div class="diff-box" id="box-b"
-                                @pointerdown=${e=>this._handlePointerDownPan(e,"box-b")}
+                                @pointerdown=${t=>this._handlePointerDownPan(t,"box-b")}
                                 @wheel=${()=>this._claimScrollSource("box-b")}
                                 @scroll=${()=>this._handleScroll("box-b","box-a")}>
-                                <div class="diff-track" style="${o}">
-                                    ${t.replaceLines.map((e,i)=>c`
-                                        <div class="diff-line ${e.isDummy?"dummy":e.type||""} ${this.activeLineIndex===i?"active":""} ${this._hoveredLineIndex===i?"hover-sync":""}"
+                                <div class="diff-track" style="${s}">
+                                    ${e.replaceLines.map((t,i)=>c`
+                                        <div class="diff-line ${t.isDummy?"dummy":t.type||""} ${this.activeLineIndex===i?"active":""} ${this._hoveredLineIndex===i?"hover-sync":""}"
                                             @pointerdown=${()=>this._setActiveLine(i)}
                                             @pointerenter=${l=>this._handleLineHover(i,l)}
                                             @pointerleave=${()=>this._clearLineHover()}
                                             style="position: relative;">
-                                            <span class="line-num">${e.lineNumber??""}</span>
-                                            <span class="line-marker">${e.isDummy?"":e.type==="added"?"+":" "}</span>
-                                            <span class="line-text">${this._renderLineContent(e,"added")}</span>${this._hoveredLineIndex===i&&this._activeCharCol!==null?c`
+                                            <span class="line-num">${t.lineNumber??""}</span>
+                                            <span class="line-marker">${t.isDummy?"":t.type==="added"?"+":" "}</span>
+                                            <span class="line-text">${this._renderLineContent(t,"added")}</span>${this._hoveredLineIndex===i&&this._activeCharCol!==null?c`
                                                 <div class="ghost-caret-marker" style="left: ${72+this._activeCharCol*8}px;"></div>
                                             `:""}
                                         </div>

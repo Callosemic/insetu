@@ -1,4 +1,4 @@
-import{html as t,css as o}from"lit";import{YenvuiBase as s}from"./yenvui-base.js";export class YenvuiView extends s{static properties={titleText:{type:String},descriptionText:{type:String},flush:{type:Boolean,reflect:!0},compact:{type:Boolean,reflect:!0},noScroll:{type:Boolean,reflect:!0},zen:{type:Boolean,reflect:!0},size:{type:String,reflect:!0},_hasFooterSlot:{type:Boolean,state:!0}};static styles=o`
+import{html as t,css as o}from"lit";import{YenvuiBase as s}from"./yenvui-base.js";import{BAND_QUERY as d}from"./physics.js";export class YenvuiView extends s{static properties={titleText:{type:String},descriptionText:{type:String},flush:{type:Boolean,reflect:!0},compact:{type:Boolean,reflect:!0},noScroll:{type:Boolean,reflect:!0},zen:{type:Boolean,reflect:!0},size:{type:String,reflect:!0},_hasFooterSlot:{type:Boolean,state:!0}};static styles=o`
         :host {
             display: flex;
             flex-direction: column;
@@ -166,7 +166,7 @@ import{html as t,css as o}from"lit";import{YenvuiBase as s}from"./yenvui-base.js
             height: 100% !important;
             width: 100% !important;
         }
-        @container (max-width: 480px) {
+        @container ${d.compact} {
             :host(:not([flush])) .view-body {
                 padding: 0;
             }
@@ -470,6 +470,7 @@ import{html as t,css as o}from"lit";import{YenvuiBase as s}from"./yenvui-base.js
             display: none;
         }
         .sidebar-rail {
+            container: yv-band / inline-size; /* a pane dividing a column is a band container: its cards follow its width */
             width: var(--yv-sidebar-width, 300px);
             border-right: 1px solid var(--border);
             background: var(--input-bg);
@@ -486,7 +487,7 @@ import{html as t,css as o}from"lit";import{YenvuiBase as s}from"./yenvui-base.js
         :host([collapsed]) .sidebar-rail {
             display: none;
         }
-        @container (max-width: 45rem) {
+        @container ${d.narrow} {
             .sidebar-rail,
             :host([collapsed]) .sidebar-rail {
                 display: flex;
@@ -617,7 +618,7 @@ import{html as t,css as o}from"lit";import{YenvuiBase as s}from"./yenvui-base.js
         }
     `;constructor(){super(),this.intent="highlight",this.drawerOpen=!1,this.collapsed=!1,this.navTitle="",this.navItems=[],this.activeNavId="",this._hasSidebarSlot=!1}render(){const i=Array.isArray(this.navItems)?this.navItems:[];return t`
             <div class="sidebar-backdrop" @click=${()=>{this.dispatchEvent(new CustomEvent("yenvui-drawer-closed",{bubbles:!0,composed:!0}))}}></div>
-            <aside class="sidebar-rail">
+            <aside class="sidebar-rail" data-band-container>
                 <div class="sidebar-slot-wrap">
                     <slot name="sidebar" @slotchange=${e=>{this._hasSidebarSlot=e.target.assignedNodes({flatten:!0}).length>0}}></slot>
                 </div>

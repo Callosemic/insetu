@@ -1,4 +1,4 @@
-import{LitElement as b,html as y,css as f}from"lit";import{YenvuiGestureController as x,getDeepElementFromPoint as g,getEventPath as v}from"./physics.js";export class YenvuiCardGroup extends b{static properties={enableEdgeSelection:{type:Boolean},stacked:{type:Boolean,reflect:!0},accordion:{type:Boolean,reflect:!0},expanded:{type:Boolean,reflect:!0},_childCount:{type:Number,state:!0},_exceedsViewport:{type:Boolean,state:!0}};static styles=f`
+import{LitElement as b,html as y,css as f}from"lit";import{YenvuiGestureController as x,getDeepElementFromPoint as g,getEventPath as v,BAND_QUERY as k}from"./physics.js";export class YenvuiCardGroup extends b{static properties={enableEdgeSelection:{type:Boolean},stacked:{type:Boolean,reflect:!0},accordion:{type:Boolean,reflect:!0},expanded:{type:Boolean,reflect:!0},_childCount:{type:Number,state:!0},_exceedsViewport:{type:Boolean,state:!0}};static styles=f`
         :host {
             display: flex;
             flex-direction: column;
@@ -58,7 +58,7 @@ import{LitElement as b,html as y,css as f}from"lit";import{YenvuiGestureControll
             background: color-mix(in srgb, var(--intent-primary) 15%, var(--input-bg));
             color: var(--intent-primary);
         }
-        @container (max-width: 480px) {
+        @container ${k.compact} {
             .more-handle,
             .collapse-handle {
                 width: 100% !important;

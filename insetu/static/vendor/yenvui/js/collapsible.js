@@ -1,4 +1,4 @@
-import{html as e,css as o}from"lit";import{YenvuiBase as r}from"./yenvui-base.js";export class YenvuiCollapsible extends r{static properties={titleText:{type:String},open:{type:Boolean,reflect:!0},intent:{type:String},compact:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0}};static styles=o`
+import{html as o,css as r}from"lit";import{YenvuiBase as n}from"./yenvui-base.js";import{BAND_QUERY as e}from"./physics.js";export class YenvuiCollapsible extends n{static properties={titleText:{type:String},open:{type:Boolean,reflect:!0},intent:{type:String},compact:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0}};static styles=r`
         :host {
             display: block;
             margin-bottom: 0;
@@ -122,7 +122,7 @@ import{html as e,css as o}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
         :host([flush]) .content {
             padding: 0;
         }
-        @container (max-width: 480px) {
+        @container ${e.compact} {
             :host { margin-bottom: 0 !important; }
             .header, :host(:first-child) .header, :host(:last-child:not([open])) .header, :host([open]) .header {
                 margin: 0 !important;
@@ -153,7 +153,7 @@ import{html as e,css as o}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
         :host([data-theme="e-ink"][open]) .header {
             border-bottom: 2px solid #000000;
         }
-        @container (max-width: 480px) {
+        @container ${e.compact} {
             :host([data-theme="e-ink"]) .header,
             :host([data-theme="e-ink"]:first-child) .header,
             :host([data-theme="e-ink"]:last-child:not([open])) .header,
@@ -164,7 +164,7 @@ import{html as e,css as o}from"lit";import{YenvuiBase as r}from"./yenvui-base.js
                 border-bottom: 2px dotted #000000 !important;
             }
         }
-    `;constructor(){super(),this.open=!0,this.intent="neutral",this.compact=!1,this.flush=!1}render(){return e`
+    `;constructor(){super(),this.open=!0,this.intent="neutral",this.compact=!1,this.flush=!1}render(){return o`
             <div class="header" @click=${t=>{t.stopPropagation(),this.open=!this.open,this.dispatchEvent(new CustomEvent("yenvui-collapsible-toggled",{detail:{open:this.open},bubbles:!1,composed:!1}))}}>
                 <span class="title intent-${this.intent}">${this.titleText}</span>
                 <div style="display: flex; align-items: center; gap: 15px;">

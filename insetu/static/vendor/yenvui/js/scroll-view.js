@@ -1,4 +1,4 @@
-import{html as d,css as o}from"lit";import{YenvuiBase as n}from"./yenvui-base.js";export class YenvuiScrollView extends n{static properties={padding:{type:String,reflect:!0}};static styles=o`
+import{html as o,css as d}from"lit";import{YenvuiBase as n}from"./yenvui-base.js";import{BAND_QUERY as t}from"./physics.js";export class YenvuiScrollView extends n{static properties={padding:{type:String,reflect:!0}};static styles=d`
         :host {
             display: flex;
             flex-direction: column;
@@ -21,7 +21,7 @@ import{html as d,css as o}from"lit";import{YenvuiBase as n}from"./yenvui-base.js
         :host([padding="md"]) { --scroll-padding: 12px 16px; }
         :host([padding="wide"]),
         :host([padding="lg"]) { --scroll-padding: 16px 20px; }
-        @container (max-width: 480px) {
+        @container ${t.compact} {
             :host {
                 --content-padding-x: 0px;
             }
@@ -30,4 +30,4 @@ import{html as d,css as o}from"lit";import{YenvuiBase as n}from"./yenvui-base.js
                 --mobile-edge-padding: 20px;
             }
         }
-    `;constructor(){super(),this.padding="compact"}render(){return d`<slot></slot>`}}customElements.define("yenvui-scroll-view",YenvuiScrollView);
+    `;constructor(){super(),this.padding="compact"}render(){return o`<slot></slot>`}}customElements.define("yenvui-scroll-view",YenvuiScrollView);
