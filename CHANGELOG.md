@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.42.0 (2026-11-19)
+
+### Features
+
+- **shell**: Integrate single-row col-header, unified gear menu, global repo pin SSOT, and
+  gesture-safe clipboard
+  ([`bfccab8`](https://github.com/Callosemic/insetu/commit/bfccab8d24726d8a3d7ee6e8535936726d67606d))
+
+
 ## v0.41.0 (2026-11-19)
 
 ### Features
