@@ -56,9 +56,10 @@ export class InSetuElement extends SutramElement {
 
     get extName() {
         const myTag = this.tagName.toLowerCase();
-        if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
-            for (const [extName, config] of window.ExtensionRegistry._manifests.entries()) {
-                if (config.layoutSlots && config.layoutSlots.some(s => s.component === myTag)) {
+        if (window.ExtensionRegistry?.getManifestEntries) {
+            const slotEntries = window.ExtensionRegistry.getManifestEntries('layoutSlots', { activeOnly: false });
+            for (const { extName, value } of slotEntries) {
+                if (Array.isArray(value) && value.some(s => s && s.component === myTag)) {
                     return extName;
                 }
             }
@@ -254,7 +255,7 @@ export class InSetuElement extends SutramElement {
     connectedCallback() {
         super.connectedCallback();
         // Wire up the unified onForceRefresh lifecycle method
-        this.registerGlobalListener('insetu:force-refresh', window, (e) => {
+        const handleForceRefreshEvent = (e) => {
             const { parentId, subId } = e.detail || {};
             const mySubId = this.dataset.subId || this.extName;
 
@@ -271,7 +272,9 @@ export class InSetuElement extends SutramElement {
             if (matchesSub || (!subId && matchesParent) || (parentId && !subId && matchesParent)) {
                 this._runForceRefresh();
             }
-        });
+        };
+        this.registerGlobalListener('insetu:force-refresh', window, handleForceRefreshEvent);
+        this.registerGlobalListener('sutram:force-refresh', window, handleForceRefreshEvent);
         // Wire up workspace soft-refresh lifecycle method
         this.registerGlobalListener('insetu:soft-refresh', window, (e) => {
             const ws = e.detail || window.inSetu?.utils?.getActiveWorkspace() || 'default';

@@ -93,10 +93,57 @@ export function createIsolatedSlice(store, sliceKey) {
     };
 }
 
+/**
+ * Seeds the default 3-column workspace layout (Col 1: Prompts [active] + Files, Col 2: Gather, Col 3: Yomama,
+ * mobileViewport: 1, focusedColumn: 'center') for a new workspace with no saved layout and no explicit hash target.
+ */
+/** Pure SSOT state transition for 'ALL' vs. specific repository pin sets. */
+export function toggleRepoInPinSet(currentSetOrArray, repoId, explicitActive = undefined) {
+    const next = new Set(Array.from(currentSetOrArray || ['ALL']));
+    if (repoId === 'ALL') {
+        next.clear();
+        next.add('ALL');
+        return next;
+    }
+    next.delete('ALL');
+    const shouldAdd = explicitActive !== undefined ? Boolean(explicitActive) : !next.has(repoId);
+    if (shouldAdd) next.add(repoId);
+    else next.delete(repoId);
+    if (next.size === 0) next.add('ALL');
+    return next;
+}
+
+export function ensureDefaultWorkspaceLayout({ hasExplicitHashTarget = false } = {}) {
+    if (hasExplicitHashTarget) return false;
+    const layout = window.Sutram?.stores?.Layout?.getState?.();
+    if (!layout) return false;
+    const cols = layout.columns || {};
+    const hasSaved = ['left', 'center', 'right'].some(c => (cols[c]?.pinned || []).length > 0) || (layout.windows || []).length > 0;
+    if (hasSaved) return false;
+    const slots = window.ExtensionRegistry?.getLayoutSlots?.() || [];
+    const findSlot = (id) => slots.find(s => s.slot === 'slots:sub-navigation' && (s.rawId === id || s.id === id || String(s.id || '').endsWith(`:${id}`)));
+    const pin = (colId, slot) => {
+        if (!slot || typeof layout.pinToColumn !== 'function') return null;
+        layout.pinToColumn(colId, { id: slot.id, rawId: slot.rawId || slot.id, component: slot.component, label: slot.label, extName: slot.extName, targetParent: slot.targetParent || colId, icon: slot.icon, intent: slot.intent });
+        return slot.id;
+    };
+    const promptsId = pin('left', findSlot('prompts'));
+    pin('left', findSlot('files'));
+    if (promptsId) layout.setActiveProjection?.('left', promptsId);
+    const gatherId = pin('center', findSlot('gather'));
+    if (gatherId) layout.setActiveProjection?.('center', gatherId);
+    const bridgeId = pin('right', findSlot('bridge'));
+    if (bridgeId) layout.setActiveProjection?.('right', bridgeId);
+    layout.setFocusedColumn?.('center');
+    layout.setMobileViewport?.(1);
+    return Boolean(promptsId || gatherId || bridgeId);
+}
+
 window.inSetu = window.inSetu || {};
 window.inSetu.utils = window.inSetu.utils || {};
 window.inSetu.utils.BucketAddress = BucketAddress;
 window.inSetu.utils.InSetuURI = InSetuURI;
+window.inSetu.utils.toggleRepoInPinSet = toggleRepoInPinSet;
 window.inSetu.utils.canonicalizeURI = (raw, defaultScheme = 'vfs') => InSetuURI.canonicalize(raw, defaultScheme);
 window.inSetu.utils.openFilePicker = function({ multiple = true, accept = '', onSelect = null } = {}) {
     if (typeof document === 'undefined') return;
@@ -220,20 +267,7 @@ window.ExtensionRegistry.setFilterPredicate((extName) => {
     return window.ACTIVE_EXTENSIONS.includes(extName);
 });
 // Apply opinionated inSetu OS extensions to the generic Sutram Registry
-const _baseGetLayoutSlots = typeof window.ExtensionRegistry.getLayoutSlots === 'function' 
-    ? window.ExtensionRegistry.getLayoutSlots.bind(window.ExtensionRegistry) 
-    : function() {
-        const slots = [];
-        this._manifests.forEach((manifest, extName) => {
-            if (manifest.layoutSlots && Array.isArray(manifest.layoutSlots)) {
-                slots.push(...manifest.layoutSlots.map(s => {
-                    const slotType = (s.slot || '').startsWith('slots:') ? s.slot : 'slots:' + s.slot;
-                    return { ...s, slot: slotType, extName };
-                }));
-            }
-        });
-        return slots;
-    }.bind(window.ExtensionRegistry);
+const _baseGetLayoutSlots = window.ExtensionRegistry.getLayoutSlots.bind(window.ExtensionRegistry);
 window.ExtensionRegistry.getLayoutSlots = function() {
     try {
         const slots = _baseGetLayoutSlots() || [];
@@ -280,68 +314,7 @@ window.ExtensionRegistry.getLayoutSlots = function() {
 };
 const MUTATIVE_ACTION_IDS = ['file-edit', 'vfs-move', 'vfs-rename', 'vfs-archive', 'vfs-delete'];
 
-if (typeof window.ExtensionRegistry.setActionFilterPredicate !== 'function') {
-    window.ExtensionRegistry.setActionFilterPredicate = function(predicateFn) {
-        this._actionFilterPredicate = typeof predicateFn === 'function' ? predicateFn : null;
-    };
-    const _baseCollapseVariantSets = window.ExtensionRegistry._collapseVariantSets.bind(window.ExtensionRegistry);
-    window.ExtensionRegistry._collapseVariantSets = function(flatActions, entityType, data = null, isBulk = false) {
-        const pred = this._actionFilterPredicate;
-        const preFiltered = typeof pred === 'function'
-            ? (flatActions || []).filter(act => {
-                if (isBulk && Array.isArray(data)) {
-                    return data.every(item => pred(act, item?.data || item, entityType));
-                }
-                return pred(act, data, entityType);
-            })
-            : flatActions;
-        return _baseCollapseVariantSets(preFiltered, entityType, data, isBulk);
-    };
-}
-
-if (typeof window.ExtensionRegistry.collectManifestField !== 'function') {
-    window.ExtensionRegistry.collectManifestField = function(fieldName) {
-        if (!fieldName || !this._manifests) return [];
-        const collected = [];
-        this._manifests.forEach((manifest, extName) => {
-            if (this._filterPredicate && !this._filterPredicate(extName)) return;
-            const val = manifest?.[fieldName];
-            if (Array.isArray(val)) {
-                collected.push(...val);
-            } else if (val !== undefined && val !== null) {
-                collected.push(val);
-            }
-        });
-        return collected;
-    };
-}
-
-if (typeof window.ExtensionRegistry.collectManifestEntries !== 'function') {
-    window.ExtensionRegistry.collectManifestEntries = function(fieldName, { respectFilter = false } = {}) {
-        if (!fieldName || !this._manifests) return [];
-        const entries = [];
-        this._manifests.forEach((manifest, extName) => {
-            if (respectFilter && this._filterPredicate && !this._filterPredicate(extName)) return;
-            const value = manifest?.[fieldName];
-            if (value !== undefined && value !== null) {
-                entries.push({ extName, value });
-            }
-        });
-        return entries;
-    };
-}
-
-if (typeof window.ExtensionRegistry.getRegisteredExtensionNames !== 'function') {
-    window.ExtensionRegistry.getRegisteredExtensionNames = function() {
-        if (!this._manifests) return [];
-        return Array.from(this._manifests.keys());
-    };
-}
-
-window.ExtensionRegistry.setActionFilterPredicate((act, data) => {
-    if (act.extName && !window.inSetu.isCore(act.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(act.extName)) {
-        return false;
-    }
+window.ExtensionRegistry.setActionFilter((act, data) => {
     const rawFp = data?.filepath || data?.folderpath || data?.id || '';
     const isSharedAsset = Boolean(rawFp && String(rawFp).startsWith('ws://'));
     if (isSharedAsset && MUTATIVE_ACTION_IDS.includes(act.id)) {

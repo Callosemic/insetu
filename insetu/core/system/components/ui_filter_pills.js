@@ -1,6 +1,7 @@
 import { LitElement, html } from 'lit';
-import { sharedStyles } from '/static/extensions/system/insetu_sdk.js';
+import { sharedStyles, toggleRepoInPinSet } from '/static/extensions/system/insetu_sdk.js';
 
+/** Reusable repository filter pill strip emitting repo-filter-changed events. */
 export class InSetuRepoFilter extends LitElement {
     static properties = {
         label: { type: String },
@@ -18,21 +19,9 @@ export class InSetuRepoFilter extends LitElement {
     }
 
     _handleRepoToggle(e) {
-            e.stopPropagation();
-            const { id, active } = e.detail;
-            let newSet = new Set(this.activeRepos);
-            if (id === 'ALL') {
-                newSet.clear();
-                newSet.add('ALL');
-                if (this.activeRepos.includes('ALL')) {
-                    this.collapsed = !this.collapsed;
-                }
-            } else {
-            newSet.delete('ALL');
-            if (active) newSet.add(id);
-            else newSet.delete(id);
-            if (newSet.size === 0) newSet.add('ALL');
-        }
+        e.stopPropagation();
+        const { id, active } = e.detail;
+        const newSet = toggleRepoInPinSet(this.activeRepos, id, active);
 
         this.dispatchEvent(new CustomEvent('repo-filter-changed', {
             detail: { activeRepos: Array.from(newSet) },

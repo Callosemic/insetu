@@ -2,10 +2,10 @@ import { html } from 'lit';
 import { InSetuElement } from '/static/extensions/system/insetu_element.js';
 import { sharedStyles } from '/static/extensions/system/insetu_sdk.js';
 import { BRIDGE_BASE_LAYOUT_SLOTS, BRIDGE_FLAG_UI_MAP, BRIDGE_GATE_UI_MAP, BridgeStore } from '/static/extensions/bridge/bridge_store.js';
-import { InSetuBridgeDiffProjection, InSetuBridgeEditProjection, InSetuExtBridgeActions } from '/static/extensions/bridge/bridge_projections.js';
+import { InSetuBridgeDiffProjection, InSetuBridgeEditProjection } from '/static/extensions/bridge/bridge_projections.js';
 import { InSetuExtBridgeHistory } from '/static/extensions/bridge/bridge_history.js';
 
-export { BRIDGE_BASE_LAYOUT_SLOTS, BRIDGE_FLAG_UI_MAP, BRIDGE_GATE_UI_MAP, BridgeStore, InSetuBridgeDiffProjection, InSetuBridgeEditProjection, InSetuExtBridgeActions, InSetuExtBridgeHistory };
+export { BRIDGE_BASE_LAYOUT_SLOTS, BRIDGE_FLAG_UI_MAP, BRIDGE_GATE_UI_MAP, BridgeStore, InSetuBridgeDiffProjection, InSetuBridgeEditProjection, InSetuExtBridgeHistory };
 
 export class InSetuExtBridge extends InSetuElement {
     static get extensionName() { return 'bridge'; }

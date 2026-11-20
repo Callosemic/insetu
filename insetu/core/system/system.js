@@ -1,8 +1,8 @@
 import { AppStore, StatusStore } from '/static/extensions/system/store.js';
-import { CORE_UI_SCRIPTS, SutramDB, bootSutramServiceWorker, purgeSutramCaches, initShortcutRouter, createJobPoller, getBackendAdapter } from '/static/extensions/system/insetu_sdk.js';
+import { CORE_UI_SCRIPTS, SutramDB, bootSutramServiceWorker, purgeSutramCaches, initShortcutRouter, createJobPoller, getBackendAdapter, ensureDefaultWorkspaceLayout } from '/static/extensions/system/insetu_sdk.js';
 import { checkManifestVersion, refreshManifest, importModuleWithRetry, classifyBootModuleFailure, collectOfflineBootModuleUrls } from '/static/extensions/system/manifest_sync.js';
 const _collectOfflineBootModuleUrls = () => collectOfflineBootModuleUrls(CORE_UI_SCRIPTS);
-export { importModuleWithRetry, classifyBootModuleFailure, _collectOfflineBootModuleUrls };
+export { importModuleWithRetry, classifyBootModuleFailure, _collectOfflineBootModuleUrls, ensureDefaultWorkspaceLayout };
 
 export function bootServiceWorker() {
     bootSutramServiceWorker({
@@ -78,9 +78,9 @@ initShortcutRouter(window.ExtensionRegistry, () => {
 // Default OS Shortcut Registrations
 const _isCoreExt = (extName) => window.inSetu?.isCore ? window.inSetu.isCore(extName) : false;
 export function autoWireSettingsSchemas() {
-    if (window.ExtensionRegistry?.collectManifestEntries) {
+    if (window.ExtensionRegistry?.getManifestEntries) {
         window.inSetu.settingsSchemas = window.inSetu.settingsSchemas || {};
-        window.ExtensionRegistry.collectManifestEntries('settingsSchema').forEach(({ extName, value }) => {
+        window.ExtensionRegistry.getManifestEntries('settingsSchema', { activeOnly: false }).forEach(({ extName, value }) => {
             if (value && !window.inSetu.settingsSchemas[extName]) {
                 window.inSetu.settingsSchemas[extName] = value;
             }
@@ -189,15 +189,9 @@ async function bootExtensions() {
     // Automatically map schemas to the System Settings menu
     autoWireSettingsSchemas();
 }
-// Keep tick running at 3s so degraded mode reacts immediately when SSE drops (Bypassed in Pop-outs)
-if (!new URLSearchParams(window.location.search).get('popout')) {
-    window.ExtensionRegistry.registerTick('manifest_sync', 3000, checkManifestVersion);
-    window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
-    window.ExtensionRegistry.startMetronome(
-        () => window.ACTIVE_EXTENSIONS || [],
-        [...Array.from(window.inSetu?.CORE_MODULES || []), 'core_refresh', 'manifest_sync']
-    );
-}
+// Register core ticks passively; metronome starts in executeBootSequence for non-popout shells
+window.ExtensionRegistry.registerTick('manifest_sync', 3000, checkManifestVersion);
+window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
 import './api.js'; // Mount explicit API client and network interceptors
 // ADR 0017: Wrap the global poller to statelessly swallow callbacks and pin requests to the originating workspace
 window.inSetu.utils.pollJob = (jobId, options = {}) => {
@@ -529,8 +523,12 @@ export async function executeBootSequence(options = {}) {
                 window.inSetu.sse.connect();
             }
         }, 1500);
-    } else if (window.inSetu.sse) {
-        window.inSetu.sse.connect();
+    } else {
+        if (window.inSetu.sse) window.inSetu.sse.connect();
+        window.ExtensionRegistry?.startMetronome?.(
+            () => window.ACTIVE_EXTENSIONS || [],
+            [...Array.from(window.inSetu?.CORE_MODULES || []), 'core_refresh', 'manifest_sync']
+        );
     }
     if (AppStore.getState().isOffline) {
         updateBootProgress("Offline Mode — Hydrating Cached Shell...");
@@ -775,7 +773,13 @@ export async function executeBootSequence(options = {}) {
     window.addEventListener('hashchange', handleHashChange);
     // Bootstrap initial route from URL or set default from restored LayoutStore state
     const currentWs = window.inSetu.utils.getActiveWorkspace();
-    if (!window.location.hash || window.location.hash === '#/' || window.location.hash === '#') {
+    const rawHashOnBoot = window.location.hash.replace(/^#\/?/, '');
+    const bootParts = rawHashOnBoot ? rawHashOnBoot.split('/').filter(Boolean).map(decodeURIComponent) : [];
+    const hasExplicitBootTarget = bootParts.length >= 3 && Boolean(bootParts[2]);
+    if (!isPopout) {
+        ensureDefaultWorkspaceLayout({ hasExplicitHashTarget: hasExplicitBootTarget });
+    }
+    if (!window.location.hash || window.location.hash === '#/' || window.location.hash === '#' || !hasExplicitBootTarget) {
         const restoredLayout = window.Sutram?.stores?.Layout?.getState();
         const restoredCol = restoredLayout?.focusedColumn || 'center';
         const restoredActive = restoredLayout?.columns?.[restoredCol]?.active || '';
@@ -880,8 +884,8 @@ function _setAppShellLock(locked) {
 function _reconcileExtensionsAndSettings(previousExts = [], nextExts = []) {
     if (!window.ExtensionRegistry) return;
 
-    const registeredExts = window.ExtensionRegistry.getRegisteredExtensionNames
-        ? window.ExtensionRegistry.getRegisteredExtensionNames()
+    const registeredExts = window.ExtensionRegistry.getExtensionNames
+        ? window.ExtensionRegistry.getExtensionNames({ activeOnly: false })
         : [];
     const candidateExts = new Set([
         ...(previousExts || []),
@@ -1097,10 +1101,15 @@ export const SessionOrchestrator = {
             } else if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
                 window.ExtensionRegistry.compileLayout();
             }
+            const swapHashParts = targetHash ? targetHash.replace(/^#\/?/, '').split('/').filter(Boolean) : [];
+            const hasExplicitSwapTarget = swapHashParts.length >= 3 && Boolean(swapHashParts[2]);
+            if (!isPopout) {
+                ensureDefaultWorkspaceLayout({ hasExplicitHashTarget: hasExplicitSwapTarget });
+            }
             const restoredLayout = window.Sutram?.stores?.Layout?.getState();
             const restoredCol = restoredLayout?.focusedColumn || 'center';
             const restoredActive = restoredLayout?.columns?.[restoredCol]?.active || '';
-            const desiredHash = (targetHash && targetHash.startsWith(`#/${encodeURIComponent(targetWs)}/`))
+            const desiredHash = (targetHash && hasExplicitSwapTarget && targetHash.startsWith(`#/${encodeURIComponent(targetWs)}/`))
                 ? targetHash
                 : `#/${encodeURIComponent(targetWs)}/${restoredCol}/${encodeURIComponent(restoredActive)}`;
             if (window.location.hash !== desiredHash) {
@@ -1414,21 +1423,10 @@ async function fullRefresh() {
         window.location.reload();
     }
 }
-/* ==========================================================================
-            ES6 MODULE PREPARATION (WINDOW BRIDGE)
-            Explicitly binding UI-triggered functions to the global scope so they 
-            survive the transition to <script type="module">
-            ========================================================================== */
+// Bind global window.inSetu.sys and window.inSetu.ui methods
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
-window.inSetu.sys = window.inSetu.sys || {};
-window.inSetu.ui = window.inSetu.ui || {};
-window.inSetu.sys.fullRefresh = fullRefresh;
-window.inSetu.sys.performSoftRefresh = performSoftRefresh;
-window.inSetu.sys.refreshManifest = refreshManifest;
-window.inSetu.sys.simulatePanic = simulatePanic;
-window.inSetu.sys.executeWorkspaceMutation = executeWorkspaceMutation;
-window.inSetu.sys.loadWorkspaces = loadWorkspaces;
-window.inSetu.sys.executeWorkspaceSwap = executeWorkspaceSwap;
-window.inSetu.sys.SessionOrchestrator = SessionOrchestrator;
-window.inSetu.ui.setGlobalStatus = setGlobalStatus;
-window.inSetu.ui.setSyncStatus = setSyncStatus;
+window.inSetu.sys = Object.assign(window.inSetu.sys || {}, {
+    fullRefresh, performSoftRefresh, refreshManifest, simulatePanic,
+    executeWorkspaceMutation, loadWorkspaces, executeWorkspaceSwap, SessionOrchestrator
+});
+window.inSetu.ui = Object.assign(window.inSetu.ui || {}, { setGlobalStatus, setSyncStatus });

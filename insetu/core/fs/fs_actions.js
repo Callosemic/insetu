@@ -25,7 +25,8 @@ export function registerFsExtension({
     resolveEntityExportTarget,
     resolveExpandedExportText,
     ensureFreshContext,
-    fetchAndCopy,
+    copyTextFromPromise,
+    fetchArtifactText,
     shareFiles
 }) {
     function _buildVfsExplorerMenuActions(slotCfg = {}) {
@@ -133,6 +134,7 @@ export function registerFsExtension({
                 targetEntities: ['file', 'folder'],
                 id: 'vfs-move',
                 bulkGroupKey: 'move',
+                keepSelection: true, // hands off to a dialog; clears on its success
                 label: 'Move',
                 icon: 'truck',
                 group: 'file',
@@ -208,6 +210,7 @@ export function registerFsExtension({
                 targetEntities: ['file', 'folder'],
                 id: 'vfs-archive',
                 bulkGroupKey: 'archive',
+                keepSelection: true, // hands off to a dialog; clears on its success
                 label: 'Archive',
                 icon: 'archive',
                 group: 'file',
@@ -229,6 +232,7 @@ export function registerFsExtension({
                 targetEntities: ['file', 'folder'],
                 id: 'vfs-delete',
                 bulkGroupKey: 'delete',
+                keepSelection: true, // hands off to a dialog; clears on its success
                 label: 'Delete',
                 icon: 'trash-2',
                 group: 'file',
@@ -347,7 +351,6 @@ export function registerFsExtension({
                         } else {
                             viewTwoFileDiff(a, b);
                         }
-                        SelectionStore.getState().clearSelection();
                     }
                 },
                 bulkAction: (items) => {
@@ -363,7 +366,6 @@ export function registerFsExtension({
                     } else {
                         viewTwoFileDiff(a, b);
                     }
-                    SelectionStore.getState().clearSelection();
                 }
             },
             {
@@ -386,16 +388,14 @@ export function registerFsExtension({
                 asyncAction: async (data) => {
                     const preTarget = resolveEntityExportTarget(data);
                     if (preTarget.mode === 'memory') {
-                        await navigator.clipboard.writeText(preTarget.text).then(() => {
+                        await copyTextFromPromise(() => preTarget.text).then(() => {
                             if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("✅ Copied!", 2000);
                         }).catch(() => alert("Clipboard API failed. Please manually select the text and copy it directly."));
                         return;
                     }
-                    await ensureFreshContext(data.filepath);
-                    const target = resolveEntityExportTarget(data);
-                    const primaryFile = target.chunks[0] || data.filepath;
-                    const fetchUrl = resolveFileFetchUrl(primaryFile, target.isFS);
-                    await fetchAndCopy(primaryFile, fetchUrl);
+                    // fetchArtifactText compiles a stale artifact first (ensureFreshContext) and reads through the share cache.
+                    await copyTextFromPromise(() => fetchArtifactText(data.filepath, { isFS: preTarget.isFS }));
+                    if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("✅ Copied!", 2000);
                 }
             },
             {
@@ -416,8 +416,10 @@ export function registerFsExtension({
                     return Boolean(data.supportsMacroPreview || data.hasMacros || canPreviewFileMacros(data.filepath, data.transientContent || ''));
                 },
                 asyncAction: async (data) => {
-                    const { text } = await resolveExpandedExportText(data);
-                    await navigator.clipboard.writeText(text).then(() => {
+                    await copyTextFromPromise(async () => {
+                        const { text } = await resolveExpandedExportText(data);
+                        return text;
+                    }).then(() => {
                         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("✅ Copied Expanded!", 2000);
                     }).catch(() => alert("Clipboard API failed. Please manually select the text and copy it directly."));
                 }

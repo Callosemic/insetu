@@ -277,7 +277,7 @@ With the deprecation of UI zones (ADR 0041), horizontal communication across the
 | \`insetu:vfs-mutated\` | \`routes_fs.py\`, \`app.js\`, \`fs.js\`, \`bridge.js\` | \`git\`, \`tracker\`, \`flow\`, \`notes\` | \`{ mutations: [{ filepath, operation, ignore_ledger }] }\` |
 | \`sutram-sync-complete\` | \`app.js\` (Offline Reconciler) | \`fs.js\`, \`ext_tracker.js\`, \`ext_git.js\`, \`ext_flow.js\` | None |
 | \`sutram-route-changed\` | \`app.js\` (\`AppStore.subscribe\`) | \`<sutram-app-shell>\`, Extensions | \`{ tab, subTabs }\` |
-| \`insetu:force-refresh\` | \`<sutram-app-shell>\` (Tab re-click) | \`InSetuElement.onForceRefresh\` | \`{ parentId, subId }\` |
+| \`insetu:force-refresh\` / \`sutram:force-refresh\` | \`<sutram-app-shell>\` / \`<sutram-subtab-menu>\` | \`InSetuElement.onForceRefresh\` | \`{ parentId, subId }\` |
 | \`insetu:git:generate-diffs\` | \`ext_git.js\` (Push/Sweep actions) | \`ext_git.js\` (\`generateDiffs()\`) | \`{ force: boolean }\` |
 | \`git-diffs-refreshed\` | \`ext_git.js\` (\`generateDiffs()\`) | \`ext_git.js\` (\`_fetchSweepStatusSilent\`) | None |
 | \`insetu:tracker:open-edit-task\` | \`tracker\` (Custom Editors) | \`InSetuExtTrackerModals\` | \`{ filepath }\` |

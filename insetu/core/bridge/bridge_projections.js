@@ -1,5 +1,5 @@
 /**
- * Yomama Sync Bridge auxiliary projections: Diff Viewer, Chunk Editor, and Header Repo Filter.
+ * Yomama Sync Bridge auxiliary projections: Diff Viewer and Chunk Editor.
  */
 import { html } from 'lit';
 import { InSetuElement } from '/static/extensions/system/insetu_element.js';
@@ -193,46 +193,4 @@ export class InSetuBridgeEditProjection extends InSetuElement {
 }
 if (!customElements.get('insetu-bridge-edit-projection')) {
     customElements.define('insetu-bridge-edit-projection', InSetuBridgeEditProjection);
-}
-
-export class InSetuExtBridgeActions extends InSetuElement {
-    static get extensionName() { return 'bridge'; }
-    static properties = {
-        _pinnedRepos: { type: Object }
-    };
-    static styles = [sharedStyles];
-    connectedCallback() {
-        super.connectedCallback();
-        this._pinnedRepos = window.inSetu.stores.App.getState().pinnedRepos;
-        this.subscribe(
-            window.inSetu.stores.App,
-            state => state.pinnedRepos,
-            (pinnedRepos) => {
-                this._pinnedRepos = pinnedRepos;
-            }
-        );
-    }
-
-    render() {
-        const currentPins = this._pinnedRepos || this.ecosystem.pinnedRepos;
-        const active = Array.from(currentPins).filter(r => r !== 'ALL');
-        let btnText = 'Filters';
-        let hasF = false;
-        if (active.length > 0) {
-            btnText = `Filters: ${active.slice(0, 2).join(', ')}${active.length > 2 ? '...' : ''}`;
-            hasF = true;
-        }
-        return html`
-            <sutram-filter-dropdown .filterText=${btnText} .hasFilters=${hasF}>
-                <insetu-repo-filter
-                    .repos=${this.ecosystem.allRepos}
-                    .activeRepos=${Array.from(currentPins)}
-                    @repo-filter-changed=${(e) => window.inSetu.stores.App.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                </insetu-repo-filter>
-            </sutram-filter-dropdown>
-        `;
-    }
-}
-if (!customElements.get('insetu-ext-bridge-actions')) {
-    customElements.define('insetu-ext-bridge-actions', InSetuExtBridgeActions);
 }

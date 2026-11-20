@@ -68,8 +68,9 @@ During Sprint U2 (`gemini_card_actions_and_r1_handoff.md`), testing multi-part c
 - [ ] **[S2.T2] `InSetuEntityDescriptor` in `insetu` (`vfs://insetu/insetu/core/system/uri.js`, `insetu_sdk.js`):**
   - Implement `InSetuEntityDescriptor` wrapping `InSetuURI` (lexical properties) + live store getters (`manifestEntry`, `chunks`, `partCount`, `isMultiPart`, `activeBuffer`, `isDirty`, `isGitModified`, `hasMacros`, `isProtected`) while maintaining backward-compatible property access for any seed fields passed in `.entityData`.
   - Retire `MUTATIVE_ACTION_IDS` in `insetu_sdk.js` in favor of `requires: { editable: true }` on mutative VFS actions.
-- [ ] **[S2.T3] Reactive `SelectionStore` Re-Evaluation Without Manual Map Cloning (`sutram/js/primitives.js`, `gather_quickpack.js`):**
+- [ ] **[S2.T3] Reactive `SelectionStore` Re-Evaluation & Declarative `SutramCard` Action Slotting (`sutram/js/primitives.js`, `gather_quickpack.js`):**
   - Have `<sutram-selection-tray>` re-evaluate `getAggregatableActions` when `AppStore.manifest` or `SelectionStore` updates, retiring `_notifySelectionTrayMultiPart()` in `gather_quickpack.js`.
+  - Replace `SutramCard._injectEntityActions()`'s imperative `document.createElement('sutram-entity-actions')` injection with declarative Lit slot rendering.
 
 ### Sprint 3: Full Codebase Card & Action Coverage Sweep (`insetu/core` & `insetu/extensions`)
 
@@ -79,6 +80,10 @@ During Sprint U2 (`gemini_card_actions_and_r1_handoff.md`), testing multi-part c
 - [ ] **[S3.T2] Sweep Tier 3 Extensions (`ext_git.js`, `ext_notes.js`, `ext_tracker.js`, `ext_citations.js`, `ext_research.js`, `ext_ingest.js`, `ext_skills.js`, `ext_favorites.js`, `ext_hooks.js`, `ext_cronic.js`, `ext_preview.js`, `ext_format.js`, `ext_freshdesk.js`, `ext_update.js`, `ext_dev.js`):**
   - Remove manual `chunks:` and redundant `.entityData` properties across extensions (allowing `MANUAL_ENTITY_CHUNKS_PROP_BAN` in `rules_javascript.py` to enforce across both `core/` and `extensions/`).
   - Verify every card type and width tier (`< 720px` drawer vs. `>= 720px` inline row) against `card_and_action_model.md`.
+- [ ] **[S3.T3] Retire Legacy View-Header Action Components (`Seam C` — `sutram/js/app_shell.js`, `sutram/js/primitives.js`, `insetu/extensions/*`, `rules_javascript.py`, `sutram_consumer_linter.py`):**
+  - Fold all remaining extension `headerActionComponent` and view `slot="header-actions"` controls (such as `ext_ingest.js`, `ext_research.js`, and `ext_dev.js`) into declarative `menuActions` / `menuStores` on their `slots:sub-navigation` definitions (per `card_and_action_model.md` §9).
+  - Delete `extraContentNodes` from `SutramSubtabMenu` and delete `headerActionComponent` and `slots:sub-navigation-actions` handling from `SutramAppShell` and `ExtensionRegistry.getLayoutSlots`.
+  - Add `HEADER_ACTION_COMPONENT_BAN` in `insetu/tests/fitness/rules_javascript.py` and `sutram/tests/sutram_consumer_linter.py` alongside `BANNED_SUB_NAV_ACTIONS_SLOT_BAN`.
 
 ---
 

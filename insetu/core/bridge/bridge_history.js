@@ -101,15 +101,7 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                     slot="toolbar"
                     searchPlaceholder="Fuzzy search receipts..."
                     .searchQuery=${this.searchQuery}
-                    @search-changed=${(e) => this.searchQuery = e.detail.value}
-                    .enableFilterDropdown=${true}
-                    .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
-                    <insetu-repo-filter
-                        slot="filters"
-                        .repos=${this.ecosystem.allRepos}
-                        .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
-                        @repo-filter-changed=${(e) => window.inSetu.stores.App.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                    </insetu-repo-filter>
+                    @search-changed=${(e) => this.searchQuery = e.detail.value}>
                 </sutram-toolbar>
                 <sutram-stack direction="col" gap="md">
                     ${this.historyRecords.length === 0 ? html`<sutram-empty-state text="No ledger receipts available."></sutram-empty-state>` : ''}

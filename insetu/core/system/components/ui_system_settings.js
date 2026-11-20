@@ -1,13 +1,13 @@
 import { html } from 'lit';
 import { InSetuElement } from '/static/extensions/system/insetu_element.js';
-import { sharedStyles } from '/static/extensions/system/insetu_sdk.js';
+import { sharedStyles, toggleRepoInPinSet } from '/static/extensions/system/insetu_sdk.js';
 import { AppStore } from '/static/extensions/system/store.js';
 import { cascadeRepeaterIdRename } from '/static/extensions/system/components/ui_schema_repeater.js';
 
+/** Global header gear menu and unified 3-tier OS Settings Hub component. */
 export class InSetuSystemSettings extends InSetuElement {
     static get extensionName() { return 'system'; }
     static properties = {
-        menuOpen: { type: Boolean },
         modalOpen: { type: Boolean },
         docsModalOpen: { type: Boolean },
         _activeView: { type: String },
@@ -37,7 +37,6 @@ export class InSetuSystemSettings extends InSetuElement {
     static styles = [sharedStyles];
     constructor() {
         super();
-        this.menuOpen = false;
         this.modalOpen = false;
         this.docsModalOpen = false;
         this._activeView = null;
@@ -51,7 +50,6 @@ export class InSetuSystemSettings extends InSetuElement {
         this.layoutCapacity = 3;
         this._sysConfigForm = {};
         this._sysConfigMeta = {};
-        this._handleOutsideClick = this._handleOutsideClick.bind(this);
         this._mountsLoading = false;
         this._sharedMounts = [];
         this._exportSharedDomains = {};
@@ -562,7 +560,7 @@ export class InSetuSystemSettings extends InSetuElement {
         const extList = [];
         const allExtKeys = new Set([
             ...Object.keys(allSchemas),
-            ...Array.from(window.ExtensionRegistry?._manifests?.keys() || [])
+            ...(window.ExtensionRegistry?.getExtensionNames?.({ activeOnly: false }) || [])
         ]);
         const coreDefaultIcons = {
             system: 'settings',
@@ -577,7 +575,7 @@ export class InSetuSystemSettings extends InSetuElement {
             if (ext === 'core_system' || ext === 'config') return;
             const rawSchema = allSchemas[ext] || [];
             const visibleSchema = Array.isArray(rawSchema) ? rawSchema.filter(s => s && s.type !== 'hidden') : [];
-            const manifest = window.ExtensionRegistry?._manifests?.get(ext);
+            const manifest = window.ExtensionRegistry?.getExtension ? window.ExtensionRegistry.getExtension(ext) : null;
             const customActions = (manifest?.settingsActions || []).filter(a => !a.id.endsWith('_generic_settings'));
 
             if (visibleSchema.length === 0 && customActions.length === 0) return;
@@ -646,7 +644,6 @@ export class InSetuSystemSettings extends InSetuElement {
                 this.requestUpdate();
             }
         );
-        this.registerGlobalListener('click', document, this._handleOutsideClick);
         this.registerGlobalListener('insetu:system:close-settings', window, () => {
             this.modalOpen = false;
             this._activeView = null;
@@ -691,17 +688,10 @@ export class InSetuSystemSettings extends InSetuElement {
     disconnectedCallback() {
         super.disconnectedCallback();
     }
-    _handleOutsideClick(e) {
-        if (!this.menuOpen) return;
-        if (!this.getEventPath(e).includes(this)) {
-            this.menuOpen = false;
-        }
-    }
     _setTheme(theme) {
         this.currentTheme = theme;
         document.body.setAttribute('data-theme', theme);
         localStorage.setItem('insetu_theme', theme);
-        this.menuOpen = false;
         this.dispatch('sutram-theme-changed', { theme });
         this.dispatch('insetu:theme-changed', { theme });
     }
@@ -714,10 +704,40 @@ export class InSetuSystemSettings extends InSetuElement {
                 layout.setCapacity(cap);
             }
         }
-        this.menuOpen = false;
+    }
+    _toggleGearRepoPin(repoId) {
+        const nextPins = toggleRepoInPinSet(this.ecosystem?.pinnedRepos || ['ALL'], repoId);
+        AppStore.getState().setPinnedRepos(nextPins);
+    }
+    _buildGearMenuItems(activeWs, allRepos) {
+        const items = [
+            { sectionHeading: 'System', sectionSlug: 'System', sectionIcon: 'wrench', sectionIntent: 'highlight', dividerAfter: true },
+            { id: 'sys:hub', label: 'Settings', icon: 'settings-2', intent: 'highlight', onClick: () => this._openSettings() },
+            { id: 'sys:docs', label: 'Docs', icon: 'book', intent: 'highlight', onClick: () => this._openDocsModal() },
+            { id: 'sys:refresh', label: 'UI Refresh', icon: 'refresh-cw', intent: 'danger', onClick: () => window.inSetu.sys.fullRefresh?.() }
+        ];
+        const pinnedSet = new Set(Array.from(this.ecosystem?.pinnedRepos || ['ALL']));
+        if (allRepos.length > 0) {
+            items.push({ sectionHeading: 'Repositories in scope', sectionSlug: 'Repos:', sectionIcon: 'git-branch', sectionIntent: 'primary', dividerAfter: true });
+            items.push({ id: 'repo:ALL', label: 'All', icon: 'pin', intent: 'primary', checked: pinnedSet.has('ALL'), keepDrawerOpen: true, onClick: () => this._toggleGearRepoPin('ALL') });
+            allRepos.forEach(r => items.push({ id: `repo:${r}`, label: r, intent: 'primary', checked: pinnedSet.has(r), keepDrawerOpen: true, onClick: () => this._toggleGearRepoPin(r) }));
+        }
+        items.push({ sectionHeading: 'Workspace', sectionSlug: 'Workspace', sectionIcon: 'layers', sectionIntent: 'success', dividerAfter: true });
+        items.push({ id: `ws:${activeWs}`, label: this.workspaces?.[activeWs]?.title || activeWs, icon: 'package', intent: 'success', checked: true, onClick: () => {} });
+        Object.entries(this.workspaces || {}).filter(([k]) => k !== activeWs).forEach(([k, ws]) => {
+            items.push({ id: `ws:${k}`, label: ws?.title || k, icon: 'layout-grid', intent: 'success', checked: false, onClick: () => window.inSetu.sys.executeWorkspaceSwap?.(k, ws?.title) });
+        });
+        items.push({ sectionHeading: 'Display Theme', sectionSlug: 'Theme', sectionIcon: 'sun', sectionIntent: 'warning' });
+        [['dark', 'Dark', 'moon'], ['light', 'Light', 'sun'], ['e-ink', 'E-Ink', 'book-open']].forEach(([id, label, icon]) => {
+            items.push({ id: `theme:${id}`, label, icon, intent: 'warning', checked: this.currentTheme === id, onClick: () => this._setTheme(id) });
+        });
+        items.push({ sectionHeading: 'Viewport Grid', sectionSlug: 'Grid', sectionIcon: 'layout-grid', sectionIntent: 'primary' });
+        [[1, '1-Col', 'smartphone'], [2, '2-Col', 'tablet'], [3, '3-Col', 'monitor']].forEach(([cap, label, icon]) => {
+            items.push({ id: `grid:${cap}`, label, icon, intent: 'primary', checked: this.layoutCapacity === cap, onClick: () => this._setLayoutCapacity(cap) });
+        });
+        return items;
     }
     async _openSettings(initialView = null) {
-        this.menuOpen = false;
         this._activeView = initialView;
         this._topologyEditingRepo = false;
         this._topologyRepoTitle = '';
@@ -749,7 +769,6 @@ export class InSetuSystemSettings extends InSetuElement {
         } catch(e) {}
     }
     async _openDocsModal() {
-        this.menuOpen = false;
         this.docsModalOpen = true;
         this._docsStatus = null;
         this.requestUpdate();
@@ -1333,52 +1352,14 @@ export class InSetuSystemSettings extends InSetuElement {
         }
 
         return html`
-            <sutram-dropdown align="right" direction="down" .open=${this.menuOpen}>
+            <sutram-dropdown
+                align="right"
+                direction="down"
+                ?chipRows=${true}
+                .items=${this._buildGearMenuItems(activeWs, allRepos)}>
                 <button slot="trigger" class="system-action-btn" title="System Menu">
                     <sutram-icon name="settings" size="md"></sutram-icon>
                 </button>
-                <sutram-stack slot="content" direction="col" gap="compact" padding="xs">
-                    <sutram-stack direction="col" gap="xs">
-                        <sutram-label text="SYSTEM"></sutram-label>
-                        <sutram-btn intent="highlight" variant="tinted" icon="settings-2" label="Settings Hub" ?fullWidth=${true} @click=${() => this._openSettings()}></sutram-btn>
-                        <sutram-btn intent="highlight" variant="tinted" icon="book" label="Documentation" ?fullWidth=${true} @click=${() => this._openDocsModal()}></sutram-btn>
-                        <sutram-btn intent="danger" variant="tinted" icon="refresh-cw" label="Force UI Refresh" ?fullWidth=${true} @click=${() => { this.menuOpen = false; if(window.inSetu.sys.fullRefresh) window.inSetu.sys.fullRefresh(); }}></sutram-btn>
-                    </sutram-stack>
-
-                    <sutram-stack direction="col" gap="xs">
-                        <sutram-label text="WORKSPACE"></sutram-label>
-                        <sutram-btn intent="success" variant="tinted" ?active=${true} icon="package" label="${this.workspaces[activeWs]?.title || activeWs} ✓" ?fullWidth=${true}></sutram-btn>
-                        ${Object.entries(this.workspaces).filter(([key, _]) => key !== activeWs).map(([key, ws]) => html`
-                            <sutram-btn intent="success" variant="tinted" icon="layout-grid" label=${ws.title || key} ?fullWidth=${true}
-                                @click=${(e) => {  
-                                    e.stopPropagation(); 
-                                    this.menuOpen = false; 
-                                    if (window.inSetu.sys.executeWorkspaceSwap) {
-                                        window.inSetu.sys.executeWorkspaceSwap(key, ws.title);
-                                    }
-                                }}>
-                            </sutram-btn>
-                        `)}
-                    </sutram-stack>
-
-                    <sutram-stack direction="col" gap="xs">
-                        <sutram-label text="DISPLAY THEME"></sutram-label>
-                        <sutram-stack direction="row" gap="xs">
-                            <sutram-btn intent="${this.currentTheme === 'dark' ? 'warning' : 'neutral'}" variant="tinted" ?active=${this.currentTheme === 'dark'} ?grow=${true} @click=${() => this._setTheme('dark')} .label=${html`<sutram-stack direction="col" align="center" gap="xs"><sutram-icon name="moon" size="md" intent="${this.currentTheme === 'dark' ? 'warning' : 'muted'}"></sutram-icon><span>Dark</span></sutram-stack>`}></sutram-btn>
-                            <sutram-btn intent="${this.currentTheme === 'light' ? 'warning' : 'neutral'}" variant="tinted" ?active=${this.currentTheme === 'light'} ?grow=${true} @click=${() => this._setTheme('light')} .label=${html`<sutram-stack direction="col" align="center" gap="xs"><sutram-icon name="sun" size="md" intent="${this.currentTheme === 'light' ? 'warning' : 'muted'}"></sutram-icon><span>Light</span></sutram-stack>`}></sutram-btn>
-                            <sutram-btn intent="${this.currentTheme === 'e-ink' ? 'warning' : 'neutral'}" variant="tinted" ?active=${this.currentTheme === 'e-ink'} ?grow=${true} @click=${() => this._setTheme('e-ink')} .label=${html`<sutram-stack direction="col" align="center" gap="xs"><sutram-icon name="book-open" size="md" intent="${this.currentTheme === 'e-ink' ? 'warning' : 'muted'}"></sutram-icon><span>E-Ink</span></sutram-stack>`}></sutram-btn>
-                        </sutram-stack>
-                    </sutram-stack>
-
-                    <sutram-stack direction="col" gap="xs">
-                        <sutram-label text="VIEWPORT GRID"></sutram-label>
-                        <sutram-stack direction="row" gap="xs">
-                            <sutram-btn intent="${this.layoutCapacity === 1 ? 'primary' : 'neutral'}" variant="tinted" ?active=${this.layoutCapacity === 1} ?grow=${true} @click=${() => this._setLayoutCapacity(1)} .label=${html`<sutram-stack direction="col" align="center" gap="xs"><sutram-icon name="smartphone" size="md" intent="${this.layoutCapacity === 1 ? 'primary' : 'muted'}"></sutram-icon><span>1-Col</span></sutram-stack>`}></sutram-btn>
-                            <sutram-btn intent="${this.layoutCapacity === 2 ? 'primary' : 'neutral'}" variant="tinted" ?active=${this.layoutCapacity === 2} ?grow=${true} @click=${() => this._setLayoutCapacity(2)} .label=${html`<sutram-stack direction="col" align="center" gap="xs"><sutram-icon name="tablet" size="md" intent="${this.layoutCapacity === 2 ? 'primary' : 'muted'}"></sutram-icon><span>2-Col</span></sutram-stack>`}></sutram-btn>
-                            <sutram-btn intent="${this.layoutCapacity === 3 ? 'primary' : 'neutral'}" variant="tinted" ?active=${this.layoutCapacity === 3} ?grow=${true} @click=${() => this._setLayoutCapacity(3)} .label=${html`<sutram-stack direction="col" align="center" gap="xs"><sutram-icon name="monitor" size="md" intent="${this.layoutCapacity === 3 ? 'primary' : 'muted'}"></sutram-icon><span>3-Col</span></sutram-stack>`}></sutram-btn>
-                        </sutram-stack>
-                    </sutram-stack>
-                </sutram-stack>
             </sutram-dropdown>
 
             ${this.modalOpen ? html`
@@ -1791,7 +1772,7 @@ window.addEventListener('sutram-settings-action', async (e) => {
 });
 window.addEventListener('sutram-settings-save', async (e) => {
     const { extName, formData, repo, btn, origText, resolve, reject } = e.detail || {};
-    const fullSchema = window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas?.[extName] || window.ExtensionRegistry?._manifests?.get(extName)?.settingsSchema || e.detail?.schema || [];
+    const fullSchema = window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas?.[extName] || window.ExtensionRegistry?.getExtension?.(extName)?.settingsSchema || e.detail?.schema || [];
     try {
         const payload = {};
         fullSchema.forEach(f => {

@@ -10,8 +10,8 @@ import {
     FsStore, normalizeVfsURI, isBufferReadOnly, hasMacroSyntax, canPreviewFileMacros,
     resolveLiveBufferPreview, injectTextToBuffer, prepareBufferSavePayload, rebaseConcurrentText,
     saveBufferFile, reconcileBufferWithDisk, flushAllDirtyBuffers, renameFileTracking,
-    hydrateVfsBuffer, extractManifestFiles, resolveFileFetchUrl, getChunks, isMultiPartArtifact, cacheShareText,
-    getCachedShareText, invalidateShareCache, preWarmShareArtifact, syncVirtualBuffer, preCacheFiles,
+    hydrateVfsBuffer, extractManifestFiles, resolveFileFetchUrl, getChunks, isMultiPartArtifact, copyTextFromPromise,
+    cacheShareText, getCachedShareText, invalidateShareCache, preWarmShareArtifact, syncVirtualBuffer, preCacheFiles,
 } from '/static/extensions/fs/fs_store.js';
 import { InSetuEditorProjection, InSetuFrontmatterEditor, InSetuFileDiffProjection } from '/static/extensions/fs/fs_editor_projection.js';
 import {
@@ -24,8 +24,8 @@ export {
     FsStore, normalizeVfsURI, isBufferReadOnly, hasMacroSyntax, canPreviewFileMacros,
     resolveLiveBufferPreview, injectTextToBuffer, prepareBufferSavePayload, rebaseConcurrentText,
     saveBufferFile, reconcileBufferWithDisk, flushAllDirtyBuffers, renameFileTracking,
-    hydrateVfsBuffer, extractManifestFiles, resolveFileFetchUrl, getChunks, isMultiPartArtifact, cacheShareText,
-    getCachedShareText, invalidateShareCache, preWarmShareArtifact, syncVirtualBuffer, preCacheFiles,
+    hydrateVfsBuffer, extractManifestFiles, resolveFileFetchUrl, getChunks, isMultiPartArtifact, copyTextFromPromise,
+    cacheShareText, getCachedShareText, invalidateShareCache, preWarmShareArtifact, syncVirtualBuffer, preCacheFiles,
     InSetuEditorProjection, InSetuFrontmatterEditor, InSetuFileDiffProjection,
     InSetuBrowserProjection, InSetuLinkInsertProjection, InSetuMoveFileProjection,
     InSetuNewFileProjection, InSetuNewFolderProjection,
@@ -206,6 +206,7 @@ export async function ensureFreshContext(filePath) {
         : [window.inSetu?.events?.emitHook?.('insetu:ensure-fresh-artifact', { filepath: filePath, uri: parsedUri })];
     const validPromises = (responses || []).filter(Boolean);
     if (validPromises.length > 0) {
+        invalidateShareCache(normalizeVfsURI(filePath) || filePath); // a recompile started: text cached before it is stale
         await Promise.all(validPromises);
         if (window.inSetu?.sys?.refreshManifest) {
             await window.inSetu.sys.refreshManifest();
@@ -237,8 +238,7 @@ export async function fetchArtifactText(filePath, { isFS = false, explicitUrl = 
 
 export async function fetchAndCopy(filePath, explicitUrl = null) {
     try {
-        const text = await fetchArtifactText(filePath, { isFS: false, explicitUrl });
-        await navigator.clipboard.writeText(text);
+        await copyTextFromPromise(() => fetchArtifactText(filePath, { isFS: false, explicitUrl }));
         window.inSetu.ui.setGlobalStatus("✅ Copied!", 2000);
     } catch (e) {
         window.inSetu.ui.setGlobalStatus("❌ Error: " + e.message, 3000, true);
@@ -1030,7 +1030,8 @@ registerFsExtension({
     resolveEntityExportTarget,
     resolveExpandedExportText,
     ensureFreshContext,
-    fetchAndCopy,
+    copyTextFromPromise,
+    fetchArtifactText,
     shareFiles
 });
 export function getFileExtensionWarning(filename, basePath = '') {
@@ -1336,6 +1337,7 @@ export const VFS_PUBLIC_API = Object.freeze({
     routeToSpatialGrid,
     ensureFreshContext,
     fetchArtifactText,
+    copyTextFromPromise,
     fetchAndCopy,
     fetchAndDownloadState,
     shareFiles,

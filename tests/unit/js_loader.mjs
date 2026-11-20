@@ -159,6 +159,12 @@ if (typeof globalThis.window === 'undefined') {
     globalThis.getComputedStyle = () => ({ tabSize: 4, getPropertyValue() { return ''; } });
     globalThis.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
     globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0);
+    const _origSetInterval = globalThis.setInterval.bind(globalThis);
+    globalThis.setInterval = (...args) => {
+        const timer = _origSetInterval(...args);
+        timer?.unref?.();
+        return timer;
+    };
     globalThis.window = globalThis;
     globalThis.window.addEventListener = et.addEventListener.bind(et);
     globalThis.window.removeEventListener = et.removeEventListener.bind(et);

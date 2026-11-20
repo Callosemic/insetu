@@ -145,7 +145,7 @@ def check_javascript_files():
     print("🔍 Sweeping JavaScript Frontend (Hybrid AST + Regex Analysis)...")
     exported_vfs_symbols = _collect_exported_vfs_symbols()
     vfs_member_call_pattern = re.compile(r'\b(?:this\.vfs|window\.inSetu\.vfs)(?:\?\.)?\.([A-Za-z0-9_]+)\s*\(')
-    private_registry_access_pattern = re.compile(r'\bExtensionRegistry(?:\?\.)?\._[A-Za-z0-9_]+\b')
+    private_registry_access_pattern = re.compile(r'\bExtensionRegistry(?:\?\.|\.)_[A-Za-z0-9_]+\b')
     ad_hoc_chunk_fallback_pattern = re.compile(
         r'\b(?:const|let|var)\s+([A-Za-z0-9_]+)\s*=[^;\n]*?\bgetChunks\s*\([^)]*\)[\s\S]{0,180}?\?\s*\1\s*:\s*[\w.?]*[Cc]hunks\b'
     )
@@ -441,14 +441,40 @@ def check_javascript_files():
                     line_num,
                     f"Manual getChunks() vs inline chunks ternary in '{file}'. Pass the EntityData object or fallbackChunks directly to getChunks(dataOrUri, fallbackChunks) or isMultiPartArtifact(dataOrUri)."
                 )
-        if not is_tier0 and file not in ("insetu_sdk.js", "insetu_element.js"):
+        if not is_tier0:
             for m in private_registry_access_pattern.finditer(full_content):
                 line_num = full_content[:m.start()].count('\n') + 1
                 report_violation(
                     "PRIVATE_REGISTRY_ACCESS_BAN",
                     filepath,
                     line_num,
-                    f"Direct access to private ExtensionRegistry property '{m.group(0)}' in '{file}'. Use public ExtensionRegistry methods (e.g. collectManifestField, getLayoutSlots, getEntityActions)."
+                    f"Direct access to private ExtensionRegistry property '{m.group(0)}' in '{file}'. Use public ExtensionRegistry methods (e.g. getManifestEntries, collectManifestField, getExtensionNames, getExtension, getLayoutSlots, getEntityActions)."
+                )
+        for m in re.finditer(r'\b(?:top-utility-row|mobile-dots-wrapper|desktop-dots-wrapper)\b', full_content):
+            line_num = full_content[:m.start()].count('\n') + 1
+            report_violation(
+                "LEGACY_SHELL_HEADER_SLOT_BAN",
+                filepath,
+                line_num,
+                f"Legacy two-row shell selector '{m.group(0)}' is retired (Sprint U3). Use the single-row '.col-header' and '.position-bar' contracts."
+            )
+        for m in re.finditer(r'\bsetTimeout\s*\([^;]{0,240}\bclearSelection\b|\bclearSelection\s*\(\s*\)[\s\S]{0,220}\bsetTimeout\s*\(', full_content):
+            line_num = full_content[:m.start()].count('\n') + 1
+            report_violation(
+                "PROCEDURAL_SELECTION_CLEAR_TIMER_BAN",
+                filepath,
+                line_num,
+                "Wall-clock setTimeout clearing SelectionStore is banned (Standard 01 §5.1). Delegate post-confirmation clearing to SutramSelectionTray / SutramSubtabMenu (@yenvui-action-confirmed phase: 'settled')."
+            )
+        # ext_notes.js and ext_tracker.js are owed: they move onto the global pin in Lane B (roadmap P20).
+        if file not in ("ui_filter_pills.js", "ext_notes.js", "ext_tracker.js"):
+            for m in re.finditer(r'<insetu-repo-filter\b', full_content):
+                line_num = full_content[:m.start()].count('\n') + 1
+                report_violation(
+                    "DUPLICATE_REPO_FILTER_BAN",
+                    filepath,
+                    line_num,
+                    "Per-view <insetu-repo-filter> is retired (Sprint U3). Global repository pinning lives exclusively in the system gear menu."
                 )
         for folder_match in folder_entity_card_pattern.finditer(full_content):
             entity_data_body = folder_match.group(1)

@@ -196,7 +196,6 @@ export const GATHER_EXTENSION_MANIFEST = {
                 if (window.inSetu.ui?.setGlobalStatus) {
                     window.inSetu.ui.setGlobalStatus("⏳ Compiling Quickpack for Copy...", null);
                 }
-                const canUseClipboardItem = typeof ClipboardItem !== 'undefined' && Boolean(navigator.clipboard?.write);
                 const compileAndRead = async () => {
                     const artifact = await packSelectionPayload(items);
                     if (Array.isArray(artifact?.chunks) && artifact.chunks.length > 1) {
@@ -209,14 +208,12 @@ export const GATHER_EXTENSION_MANIFEST = {
                 };
 
                 try {
-                    if (canUseClipboardItem) {
-                        const blobPromise = compileAndRead().then(text => new Blob([text], { type: 'text/plain' }));
-                        await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blobPromise })]);
+                    if (window.inSetu?.vfs?.copyTextFromPromise) {
+                        await window.inSetu.vfs.copyTextFromPromise(compileAndRead);
                     } else {
                         const text = await compileAndRead();
                         await navigator.clipboard.writeText(text);
                     }
-                    SelectionStore.getState().clearSelection();
                     if (window.inSetu.ui?.setGlobalStatus) {
                         window.inSetu.ui.setGlobalStatus("✅ Copied Quickpack!", 2000);
                     }
@@ -250,7 +247,6 @@ export const GATHER_EXTENSION_MANIFEST = {
             bulkAction: async (items) => {
                 try {
                     const artifact = await packSelectionPayload(items);
-                    SelectionStore.getState().clearSelection();
                     if (artifact.chunks && artifact.chunks.length > 1) {
                         if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading Parts...", 2000);
                         for (const f of artifact.chunks) {
@@ -296,7 +292,6 @@ export const GATHER_EXTENSION_MANIFEST = {
 
                 const { itemsHash } = computePackSelectionPayload(items);
                 if (_lastPackItemsHash === itemsHash && _lastPackSelection) {
-                    SelectionStore.getState().clearSelection();
                     window.inSetu.vfs.shareFiles(_lastPackSelection.base_filename, _lastPackSelection.chunks);
                     return;
                 }
@@ -305,7 +300,6 @@ export const GATHER_EXTENSION_MANIFEST = {
                     window.inSetu.ui.setGlobalStatus("⏳ Compiling Quickpack for Share...", null);
                 }
                 packSelectionPayload(items).then(artifact => {
-                    SelectionStore.getState().clearSelection();
                     window.inSetu.vfs.shareFiles(artifact.base_filename, artifact.chunks);
                 }).catch(err => {
                     alert("Packing failed: " + err.message);
@@ -333,7 +327,6 @@ export const GATHER_EXTENSION_MANIFEST = {
                 try {
                     const { itemsHash } = computePackSelectionPayload(items);
                     if (_lastPackItemsHash === itemsHash && _lastPackSelection) {
-                        SelectionStore.getState().clearSelection();
                         if (window.inSetu.ui?.setGlobalStatus) {
                             window.inSetu.ui.setGlobalStatus("⚡ Quickpack already in Gather!", 2000);
                         }
@@ -343,7 +336,6 @@ export const GATHER_EXTENSION_MANIFEST = {
                         window.inSetu.ui.setGlobalStatus("⏳ Compiling Quickpack...", null);
                     }
                     await packSelectionPayload(items);
-                    SelectionStore.getState().clearSelection();
                     if (window.inSetu.ui?.setGlobalStatus) {
                         window.inSetu.ui.setGlobalStatus("⚡ Quickpack compiled to Gather!", 3000);
                     }

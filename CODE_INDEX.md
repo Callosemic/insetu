@@ -410,11 +410,10 @@ insetu/
 │   │   │   │   ├── def apply_textedit_in_memory(content, block, silent) # Applies a <<<<<<< TEXTEDIT inline prose diff block ({-delete}} / {{+insert}}) using exact or soft-wrap-normalized character span matching.
 │   │   │   │   └── def apply_json_patch_in_memory(filepath, content, block, silent) # Applies a <<<<<<< JSON_PATCH block (either a dotted/selector key-path dict or RFC 6902 array) to .json, .yaml/.yml, or .md (YAML frontmatter...
 │   │   │   ├── bridge_history.js   # Yomama Sync Bridge ledger receipt history projection (InSetuExtBridgeHistory).
-│   │   │   │   └── class InSetuExtBridgeHistory # Ledger receipt history viewer and transaction revert UI component.
-│   │   │   ├── bridge_projections.js # Yomama Sync Bridge auxiliary projections: Diff Viewer, Chunk Editor, and Header Repo Filter.
+│   │   │   │   └── class InSetuExtBridgeHistory # [stale?] Ledger receipt history viewer and transaction revert UI component.
+│   │   │   ├── bridge_projections.js # Yomama Sync Bridge auxiliary projections: Diff Viewer and Chunk Editor.
 │   │   │   │   ├── class InSetuBridgeDiffProjection # Side-by-side anchor and syntax diff inspection projection.
-│   │   │   │   ├── class InSetuBridgeEditProjection # Interactive single-chunk patch editor projection.
-│   │   │   │   └── class InSetuExtBridgeActions # Yomama surface header action toolbar and repository filter control.
+│   │   │   │   └── class InSetuBridgeEditProjection # Interactive single-chunk patch editor projection.
 │   │   │   ├── bridge_sandwich.py  # Extract Tier 2 deterministic sandwich-weighted anchor healer and 3-way overlap rebaser into bridge_sandwich.py per gemini_offline_bridge_fol...
 │   │   │   │   ├── def find_sandwich_fuzzy_anchor(file_lines, block_lines) # [stale?] Tier 2 Deterministic Sandwich-Weighted Anchor Healer: Locates candidate windows in `file_lines` where the top k_top and bottom k_bot lines o...
 │   │   │   │   └── def rebase_overlapping_block(original_content, current_content, block) # Tier 2 Deterministic Overlap Rebaser: 1.
@@ -500,7 +499,7 @@ insetu/
 │   │   │       └── def warn_index_owned_elsewhere(repo_dir, workspace_id, holder) # Says once per process that this workspace is leaving a repository's CODE_INDEX.md to the workspace that holds it.
 │   │   ├── config/                 # Repository and bucket topology configuration UI.
 │   │   │   └── config.js           # UI for managing repository topologies and tracked buckets.
-│   │   │       └── class InSetuExtConfig # Repository topology, sieve rules, and sub-bucket configuration editor component.
+│   │   │       └── class InSetuExtConfig # [stale?] Repository topology, sieve rules, and sub-bucket configuration editor component.
 │   │   ├── directives.py           # directives.py is read by topology, the system routes and the agent, so it lives in core/ beside attestations.py
 │   │   │   ├── def resolve_directive_tier_uri(tier, repo) # Maps a directive tier identifier ('user', 'workspace', 'repo_shared', 'repo_local') to its canonical VFS/CTX URI.
 │   │   │   ├── def ensure_local_settings_gitignored(ctx, repo) # Ensures `settings.local/` is listed in `vfs://<repo>/.insetu-data/.gitignore` when local repo settings are written.
@@ -547,9 +546,9 @@ insetu/
 │   │   │   │   ├── function viewTwoFileDiff(leftFilepath, rightFilepath) # Opens a side-by-side spatial diff projection comparing two VFS files.
 │   │   │   │   ├── function viewFileGitDiff(filepath) # Opens a spatial diff projection comparing a file against its Git HEAD revision.
 │   │   │   │   ├── function routeToSpatialGrid(filepath, label = null, preferre...) # Opens or focuses a document editor projection inside the spatial multi-column layout.
-│   │   │   │   ├── function ensureFreshContext(filePath) # Emits insetu:ensure-fresh-artifact before copying or sharing a context artifact.
+│   │   │   │   ├── function ensureFreshContext(filePath) # [stale?] Emits insetu:ensure-fresh-artifact before copying or sharing a context artifact.
 │   │   │   │   ├── function fetchArtifactText(filePath, { isFS = false, explic...) # Fetches and caches raw text for a file or single-part compiled context artifact.
-│   │   │   │   ├── function fetchAndCopy(filePath, explicitUrl = null) # Copies file or context text to the clipboard using the LRU share cache when warm.
+│   │   │   │   ├── function fetchAndCopy(filePath, explicitUrl = null) # [stale?] Copies file or context text to the clipboard using the LRU share cache when warm.
 │   │   │   │   ├── function fetchAndDownloadState(filePath, explicitUrl = null) # Downloads a file or compiled context artifact as a local attachment.
 │   │   │   │   ├── function shareFiles(baseFile, chunks = null, isFS =...) # [stale?] Shares file or multi-part context chunks via navigator.share with a 0 ms synchronous cache fast-path.
 │   │   │   │   ├── function downloadFile(fetchUrl, fallbackFilename, fetc...) # Streams an authenticated file download to the browser.
@@ -589,7 +588,7 @@ insetu/
 │   │   │   │   ├── function executeDeepLinkSearch(overrideQuery = null) # Queries fs/search for deep full-text Markdown link matches.
 │   │   │   │   └── function executeLinkSearch(query) # Filters workspace manifest URIs by fuzzy filename match for link insertion.
 │   │   │   ├── fs_actions.js       # Extract the declarative 'fs' ExtensionRegistry manifest (variantSets, uiHooks, shortcuts, entityActions, layoutSlots) from fs.js into fs_act...
-│   │   │   │   └── function registerFsExtension({ openNewFolderModal, openNewFil...) # Registers the declarative 'fs' ExtensionRegistry manifest, 'send' variant set, file/folder actions, and Files sub-navigation slot.
+│   │   │   │   └── function registerFsExtension({ openNewFolderModal, openNewFil...) # [stale?] Registers the declarative 'fs' ExtensionRegistry manifest, 'send' variant set, file/folder actions, and Files sub-navigation slot.
 │   │   │   ├── fs_editor_projection.js # Core VFS Editor, Frontmatter Editor, and File Diff Spatial Projections extracted from fs.js (God-Objects Wave 3.1).
 │   │   │   │   ├── class InSetuEditorProjection # Multi-projection VFS document editor supporting CodeMirror 6, frontmatter drawers, macro previews, and Zen mode.
 │   │   │   │   ├── class InSetuFrontmatterEditor # Specialized editor projection with YAML frontmatter mode permanently enabled.
@@ -616,8 +615,9 @@ insetu/
 │   │   │       ├── function hydrateVfsBuffer(filepath, { isFS = null, forceRe...) # Fetches file content and S8 protection status into FsStore.activeBuffers with deduplicated promises.
 │   │   │       ├── function extractManifestFiles(...args) # Delegates manifest file list extraction to window.inSetu.utils.extractManifestFiles.
 │   │   │       ├── function resolveFileFetchUrl(filepath, isFS = false) # Builds the authenticated /api/<ws>/fs/fetch URL for a canonical file URI.
-│   │   │       ├── function getChunks(filepathOrData, explicitChunks =...) # Single Source of Truth resolver for an artifact's constituent chunk URIs.
+│   │   │       ├── function getChunks(filepathOrData, explicitChunks =...) # [stale?] Single Source of Truth resolver for an artifact's constituent chunk URIs.
 │   │   │       ├── function isMultiPartArtifact(filepathOrData, explicitChunks =...) # Returns true when an artifact or EntityData payload resolves to more than one part.
+│   │   │       ├── function copyTextFromPromise(textOrPromiseFactory) # [stale?] Writes text from a synchronous string or asynchronous Promise/factory to the clipboard.
 │   │   │       ├── function cacheShareText(filepath, text) # [comment required]
 │   │   │       ├── function getCachedShareText(filepath) # [comment required]
 │   │   │       ├── function invalidateShareCache(filepath = null) # [comment required]
@@ -876,7 +876,7 @@ insetu/
 │   │   │   │   │   ├── function buildUriFileTree(uris, rootScope = '') # [comment required]
 │   │   │   │   │   └── class InSetuFileTree # [comment required]
 │   │   │   │   ├── ui_filter_pills.js # Repository and tag filtering arrays.
-│   │   │   │   │   └── class InSetuRepoFilter # [comment required]
+│   │   │   │   │   └── class InSetuRepoFilter # Reusable repository filter pill strip emitting repo-filter-changed events.
 │   │   │   │   ├── ui_primitives.js # Base primitives like job trackers and loading spinners.
 │   │   │   │   │   ├── class InSetuJobTracker # [comment required]
 │   │   │   │   │   ├── class InSetuRebootOverlay # [comment required]
@@ -893,7 +893,7 @@ insetu/
 │   │   │   │   │   ├── function cascadeRepeaterIdRename(fullSchema = [], formData = {},...) # Propagates a renamed repeater item ID across dependent options_from and target_binding fields in formData.
 │   │   │   │   │   └── class InSetuSchemaRepeater # Declarative repeater widget for array-of-object settings schemas with bounds, slug sync, and conditional sub-fields.
 │   │   │   │   └── ui_system_settings.js # The 3-Tier Configuration Editor and Settings Hub.
-│   │   │   │       └── class InSetuSystemSettings # [comment required]
+│   │   │   │       └── class InSetuSystemSettings # [stale?] Global header gear menu and unified 3-tier OS Settings Hub component.
 │   │   │   ├── engine_system.py    # System topology, deltas, and lifecycle REST endpoints.
 │   │   │   │   ├── def vault_repeater_secrets_for_schema(ext_name, workspace_id) # [stale?] Universal Repeater Secret Vaulting: Scans any registered settings schema for `type: 'repeater'` fields that contain `secure: True` subfields...
 │   │   │   │   ├── def core_system_settings_updated(workspace_id, **kwargs) # [comment required]
@@ -967,6 +967,8 @@ insetu/
 │   │   │   │   ├── function cleanCodeArtifacts(text) # [comment required]
 │   │   │   │   ├── function createExtensionStore(name, initialState, persistenceS...) # [comment required]
 │   │   │   │   ├── function createIsolatedSlice(store, sliceKey) # [comment required]
+│   │   │   │   ├── function toggleRepoInPinSet(currentSetOrArray, repoId, expli...) # Pure SSOT state transition for 'ALL' vs.
+│   │   │   │   ├── function ensureDefaultWorkspaceLayout({ hasExplicitHashTarget = false...) # [stale?] Seeds the default 3-column workspace layout (Col 1: Prompts [active] + Files, Col 2: Gather, Col 3: Yomama, mobileViewport: 1, focusedColumn...
 │   │   │   │   ├── function copyToClipboard(text) # Preserve clipboard API bindings
 │   │   │   │   └── function copyRawText(text, successMsg = "✅ Copied!") # [comment required]
 │   │   │   ├── legacy.py           # Self-healing database recovery and legacy sandbox migration.

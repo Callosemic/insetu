@@ -20,7 +20,8 @@ Extensions must register their UI topology via `window.ExtensionRegistry.registe
 *   **`variantSets`**: Registers named variant-set split buttons (one level of navigation; cannot be nested inside another set or group).
     *   Schema: `{ id: "send", label: "Send", icon: "send", intent: "primary", group: "share", surfaced: 1, order: 10, sections: ["Raw", "Expanded"], families: { files: ["file", "file:note", "file:prompt"] }, defaults: { files: ["file-copy", "file-share", "file-download"] } }`
 *   **`entityActions`**: Defines contextual and bulk buttons for the `<sutram-entity-actions>` and selection tray brokers.
-    *   Schema: `{ targetEntity: "type", targetEntities: ["type1", "type2"], id: "str", bulkGroupKey: "str", label: "str" | (data) => "str", bulkLabel: "str" | (items) => "str", successLabel: "Copied", set: "send", section: "Raw", group: "file|edit|share|vcs|tools", surfaced: 1, order: 10, icon: "str" | (data) => "str", intent: "primary", variant: "tinted", emphasis: bool, bulkable: bool, bulkOnly: bool, vfsBound: bool, keepDrawerOpen: bool, isActive: bool | (data) => bool, match: (data) => bool, emitEvent: (data) => ({name, detail}), asyncAction: async (data, e) => {...}, onClick: (data, e) => {...}, bulkAction: async (items, e) => {...}, bulkOnClick: (items, e) => {...} }`
+    *   Schema: `{ targetEntity: "type", targetEntities: ["type1", "type2"], id: "str", bulkGroupKey: "str", label: "str" | (data) => "str", bulkLabel: "str" | (items) => "str", successLabel: "Copied", set: "send", section: "Raw", group: "file|edit|share|vcs|tools", surfaced: 1, order: 10, icon: "str" | (data) => "str", intent: "primary", variant: "tinted", emphasis: bool, bulkable: bool, bulkOnly: bool, vfsBound: bool, keepDrawerOpen: bool, keepSelection: bool, isActive: bool | (data) => bool, match: (data) => bool, emitEvent: (data) => ({name, detail}), asyncAction: async (data, e) => {...}, onClick: (data, e) => {...}, bulkAction: async (items, e) => {...}, bulkOnClick: (items, e) => {...} }`
+*   **Who clears the selection:** the selection tray and the view menu clear it when a bulk action settles. An action never clears it itself, except one that hands off to a dialog (move, archive, delete, push): that action declares `keepSelection: true`, so a cancelled dialog keeps the selection, and the dialog clears it on success.
 *   **`settingsActions`**: Injects buttons into the host's settings UI.
     *   Schema: `{ id: "str", label: "str", icon: "str", onClick: async () => {...} }`
 *   **`shortcuts`**: Registers global keybindings.
@@ -31,6 +32,10 @@ Extensions must register their UI topology via `window.ExtensionRegistry.registe
     *   Schema: `{ id: "str", order: 1, component: ({repo/bucket, updateCallback}) => html\`...\` }`
 
 ### Registry Lifecycle & Event Methods
+*   **`ExtensionRegistry.getManifestEntries(field: String, { activeOnly = true })`**: Returns `[{ extName, value }]` in registration order for a manifest key, applying `setFilterPredicate` when `activeOnly` is true.
+*   **`ExtensionRegistry.collectManifestField(field: String, options: Object)`**: Flattens array/scalar values across `getManifestEntries(field, options)`.
+*   **`ExtensionRegistry.getExtensionNames({ activeOnly = false })`**: Returns registered extension identifiers (filtered to active extensions when `activeOnly` is true).
+*   **`ExtensionRegistry.setActionFilter(predicateFn: Function)`**: Installs a pre-collapse host filter `(action, itemData, entityType) => boolean` evaluated before variant sets collapse across both single-entity and every-item bulk paths.
 *   **`ExtensionRegistry.registerVariantSet(setDef: Object)`**: Registers or merges a variant set definition (`id`, `label`, `icon`, `group`, `surfaced`, `sections`, `families`, `defaults`). Refuses nested sets/groups.
 *   **`ExtensionRegistry.registerEntityFamilies(familyMapping: Object)` / `resolveEntityFamily(entityType: String)`**: Maps entity types to family keys for first-use variant preference resolution.
 *   **`ExtensionRegistry.getLastUsedVariant(entityType: String, setId: String)` / `setLastUsedVariant(entityType: String, setId: String, variantId: String)`**: Reads or persists the device-local last-used variant in `VariantDefaultStore`.
@@ -89,7 +94,7 @@ Dynamically generates form controls from backend JSON schemas.
 *   **`<sutram-report-projection>`**: Generalized spatial viewport projection for multi-tab or single-block reports, logs, and dry-run outputs. Properties: `.caption` (String), `.content` (String), `.tabs` (Array of `{ id, label, icon, content }`), `.activeTab` (String), `.actions` (Array of `{ label, icon, intent, primary, asyncAction, onClick, disabled }`), `.extraContent` (TemplateResult), `.suggestedFilename` (String).
 *   **`<sutram-diff-viewer>`**: Side-by-side structural comparison primitive backed by CodeMirror 6 `@codemirror/merge`. Properties: `.diffText` (String), `.searchStr` (String), `.replaceStr` (String), `.leftTitle` (String), `.rightTitle` (String).
 *   **`<sutram-editor>`**: State-aware wrapper for CodeMirror 6. Properties: `.value`, `?readOnly`, `.language`, `?writingMode`, `.customExtensions`, `?enableWordcount`. Methods: `insertAtCursor(text: String)`. Emits `@editor-changed`.
-*   **`<sutram-dropdown>`**: Context menu. Properties: `.items` (Array of `{label, icon, onClick}`), `?open`, `.align`.
+*   **`<sutram-dropdown>`**: Context menu. Properties: `.items` (Array of `{label, icon, onClick}`), `?open`, `?searchable`, `?chipRows`, `.align`, `.direction`.
 *   **`<sutram-tag>`**: Badge label. Properties: `.text`, `.intent`.
 *   **`<sutram-label>`**: Standardized typography label primitive. Properties: `.text`, `intent` (`'primary'` | `'success'` | `'warning'` | `'danger'` | `'highlight'` | `'neutral'`), `?monospace`, `?truncate`.
 *   **`<sutram-spinner>`**: Loading indicator. Properties: `.text`.

@@ -312,11 +312,12 @@ MAX_UNLISTED_MODULE_LINES = 800
 MODULE_LINE_RATCHET: Dict[str, int] = {
     # Ceilings marked "Nov 9" were raised to the files' real sizes after the Nov 9 round added features
     # past the ceilings Gemini had just set. Each is owed back by a split (gemini_offline_bridge_followup.md).
-    "insetu/core/fs/fs.js": 1535,
+    "insetu/core/fs/fs.js": 1529,  # Nov 19: ensureFreshContext drops cached text when a recompile starts
     "insetu/extensions/tracker/ext_tracker.js": 2932,
     "insetu/core/topology/engine_topology.py": 2202,  # Nov 9 (was 2170)
     "insetu/core/agent/agent.js": 1047,  # Nov 18 (was 1043): plan stepper stays visible after session reload; Nov 15 (was 1055): Extracted InSetuAgentContextHud into agent_handoff_and_plan.js
-    "insetu/core/system/components/ui_system_settings.js": 1864,  # Nov 9 (was 1812)
+    "insetu/core/system/components/ui_system_settings.js": 1845,  # Nov 19 (was 1864): gear menu moved to dropdown items
+    "insetu/core/fs/fs_store.js": 802,  # Nov 19: copyTextFromPromise (U3); owed back by the fs split (Wave 3.1)
     "insetu/core/bridge/bridge_vfs.py": 1617,  # Nov 9 (was 1603)
     "insetu/core/llm/engine_llm.py": 815,  # Nov 16 (was 839): Extracted run_audio_transcription into llm_drivers.py
     "insetu/core/utils_core.py": 1495,  # Nov 9 (was 1476): inside-out interpolation that never rescans values
@@ -324,7 +325,7 @@ MODULE_LINE_RATCHET: Dict[str, int] = {
     "insetu/core/system/system.js": 1439,  # Nov 17 (was 1467): Migrated to AkasaBackendAdapter
     "insetu/core/gather/engine_gather.py": 1398,  # Nov 15 (was 1430): Extracted heal_missing_ephemeral_quickpack into context_assemble.py
     "insetu/core/bridge/bridge.js": 1237,  # Nov 15 (was 1275)
-    "insetu/extensions/git/ext_git.js": 1277,
+    "insetu/extensions/git/ext_git.js": 1270,  # Nov 19: git-push keeps the selection for its window
     "insetu/extensions/git/engine_git.py": 1149,
     "insetu/core/config/config.js": 1110,
     "insetu/extensions/update/ext_update.js": 1120,
@@ -335,9 +336,9 @@ MODULE_LINE_RATCHET: Dict[str, int] = {
     "insetu/core/bridge/bridge_fuzzy.py": 754,  # Nov 17 (was 974): Extracted bridge_sandwich.py
     "insetu/core/system/engine_system.py": 814,
     # Ring 1 (akasa) and Ring 2 (sutram) modules currently above 800 lines (shrinking in Wave 2):
-    "sutram/sutram/js/primitives.js": 2853,
-    "sutram/sutram/js/sutram_sdk.js": 2145,
-    "sutram/sutram/js/app_shell.js": 1423,
+    "sutram/sutram/js/primitives.js": 3145,  # U1+U3: SutramVariantBtn, computeFitActionCount, post-render clamping, SutramSubtabMenu 4-part quick bar, SutramSelectionTray confirmation settle
+    "sutram/sutram/js/sutram_sdk.js": 2314,  # U1+U3: VariantDefaultStore, getManifestEntries, collectManifestField, getExtensionNames, setActionFilter, observeAssignedContainer
+    "sutram/sutram/js/app_shell.js": 1525,  # U3: single-row .col-header, .position-bar, _checkInlineTabsOverflow, refreshProjection, chipRows & canonical surface intents
     "akasa/akasa/vfs.py": 1119,  # Nov 18 (was 1117): +2 lines in the 0.11 hardening; Nov 11: the three-way merge moved to akasa/merge.py
     "akasa/akasa/extension.py": 1223,
     "akasa/akasa/workers/__init__.py": 1200,

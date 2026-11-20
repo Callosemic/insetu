@@ -658,6 +658,28 @@ export function isMultiPartArtifact(filepathOrData, explicitChunks = null) {
 const MAX_SHARE_CACHE_ITEMS = 24;
 const SHARE_CACHE_TTL_MS = 3600 * 1000;
 
+/** Writes text from a string or Promise/factory to the clipboard via ClipboardItem (Safari gesture-safe) with writeText fallback. */
+export async function copyTextFromPromise(textOrPromiseFactory) {
+    const startPromise = () => {
+        try {
+            const raw = typeof textOrPromiseFactory === 'function' ? textOrPromiseFactory() : textOrPromiseFactory;
+            return Promise.resolve(raw).then(val => String(val ?? ''));
+        } catch (err) {
+            return Promise.reject(err);
+        }
+    };
+    if (typeof ClipboardItem !== 'undefined' && typeof Blob !== 'undefined' && Boolean(navigator.clipboard?.write)) {
+        const textPromise = startPromise();
+        const blobPromise = textPromise.then(text => new Blob([text], { type: 'text/plain' }));
+        await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blobPromise })]);
+        return await textPromise;
+    }
+    const text = await startPromise();
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable.");
+    await navigator.clipboard.writeText(text);
+    return text;
+}
+
 export function cacheShareText(filepath, text) {
     if (!filepath || typeof text !== 'string') return;
     const { shareTextCache: cache, shareCacheTimestamps: tsMap } = FsStore.getState();

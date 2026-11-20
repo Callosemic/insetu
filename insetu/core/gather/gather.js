@@ -405,15 +405,7 @@ export class InSetuExtGather extends InSetuElement {
                     slot="toolbar"
                     searchPlaceholder="Fuzzy search contexts..."
                     .searchQuery=${this.searchQuery}
-                    @search-changed=${(e) => GatherStore.getState().setSearchQuery(e.detail.value)}
-                    .enableFilterDropdown=${true}
-                    .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
-                    <insetu-repo-filter
-                        slot="filters"
-                        .repos=${this.ecosystem.allRepos}
-                        .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
-                        @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                    </insetu-repo-filter>
+                    @search-changed=${(e) => GatherStore.getState().setSearchQuery(e.detail.value)}>
                 </sutram-toolbar>
                 ${(() => {
                     const groups = {};

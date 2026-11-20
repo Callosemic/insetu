@@ -14,7 +14,6 @@ export const BRIDGE_BASE_LAYOUT_SLOTS = [
         icon: "bridge",
         intent: "highlight",
         order: 1,
-        headerActionComponent: "insetu-ext-bridge-actions",
         component: "insetu-ext-bridge"
     },
     { slot: "slots:yomama-surface", id: "bridge", label: "Bridge", icon: "bridge", intent: "highlight", order: 10, component: null },

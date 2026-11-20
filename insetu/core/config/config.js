@@ -744,12 +744,7 @@ export class InSetuExtConfig extends InSetuElement {
                                     <sutram-stack direction="row" align="center" gap="normal" ?wrap=${true}>
                                         <sutram-toggle label="Apply Ignore Rules" .checked=${repo.apply_ignore !== false} @sutram-input-changed=${(e) => { repo.apply_ignore = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-toggle>
                                         ${(() => {
-                                            const opts = typeof window.ExtensionRegistry?.getRepoConfigOptions === 'function'
-                                                ? window.ExtensionRegistry.getRepoConfigOptions()
-                                                : Array.from(window.ExtensionRegistry?._manifests?.entries() || [])
-                                                    .filter(([extName]) => window.inSetu.isCore(extName) || !window.ACTIVE_EXTENSIONS || window.ACTIVE_EXTENSIONS.includes(extName))
-                                                    .flatMap(([, m]) => m.repoConfigOptions || [])
-                                                    .sort((a, b) => (a.order || 50) - (b.order || 50));
+                                            const opts = window.ExtensionRegistry?.getRepoConfigOptions?.() || [];
                                             return opts
                                                 .filter(opt => typeof opt.component === 'function')
                                                 .map(opt => opt.component({ repo, updateCallback: () => this.requestUpdate() }));

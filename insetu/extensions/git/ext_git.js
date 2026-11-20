@@ -424,15 +424,7 @@ disconnectedCallback() {
                     slot="toolbar"
                     searchPlaceholder="Fuzzy search pending diffs..."
                     .searchQuery=${this.searchQuery}
-                    @search-changed=${(e) => this.searchQuery = e.detail.value}
-                    .enableFilterDropdown=${true}
-                    .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
-                    <insetu-repo-filter
-                        slot="filters"
-                        .repos=${this.ecosystem.allRepos}
-                        .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
-                        @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                    </insetu-repo-filter>
+                    @search-changed=${(e) => this.searchQuery = e.detail.value}>
                 </sutram-toolbar>
                 ${this.diffJobError ? html`<sutram-surface variant="tinted" intent="danger" padding="sm">Error analyzing diffs: ${this.diffJobError}</sutram-surface>` : ''}
                 <sutram-stack direction="col" gap="md">
@@ -1010,6 +1002,7 @@ window.ExtensionRegistry.registerExtension('git', {
             targetEntities: ['diff'],
             id: 'git-push',
             bulkGroupKey: 'git-push',
+            keepSelection: true, // opens the push window, which clears on submit
             label: 'Push',
             bulkLabel: (items) => `Commit & Push (${items.length})`,
             icon: 'send',

@@ -113,17 +113,17 @@ We will extract 3 dedicated modules under `insetu/core/system/` and delete their
    * `akasa/ipc.py`: `_CAPABILITY_REGISTRY`, `get_registered_capabilities`, `_extract_http_request_payload`, `_marshal_http_return`.
    * `akasa/extension.py`: `AkasaExtension`, `ExtensionContext`, `JobManager`, `DatabaseWrapper` + Ring 1 barrel re-exports.
 
-### 3.2 Ring 2: `sutram` Frontend Micro-Kernel
-1. **`sutram/sutram/js/primitives.js` (~1,350 LOC, 20 custom elements) → Split into 4 modules + barrel:**
-   * `sutram/js/chassis_adapter.js`: `REQUIRED_CHASSIS_PRIMITIVES`, `validateChassisContract`, `SutramUIAdapter`, and thin `<sutram-*>` passthrough/event bridges (`SutramView`, `SutramAsyncBtn`, `SutramStatusBar`, `SutramToastContainer`, `SutramCard`, `SutramModal`, `SutramWindow`, `SutramEditor`, `SutramDropdown`).
+### 3.2 Ring 2: `sutram` Frontend Micro-Kernel (Updated 2026-11-19 Post-Sprint-U3)
+1. **`sutram/sutram/js/primitives.js` (~3,145 LOC after Sprints U1 & U3) → Split into 4 modules (< 800 LOC each) + barrel:**
+   * `sutram/js/chassis_adapter.js`: `REQUIRED_CHASSIS_PRIMITIVES`, `validateChassisContract`, `SutramUIAdapter`, `renderAdaptiveLabel`, and thin `<sutram-*>` passthrough/event bridges (`SutramView`, `SutramAsyncBtn`, `SutramStatusBar`, `SutramToastContainer`, `SutramCard`, `SutramModal`, `SutramWindow`, `SutramEditor`, `SutramDropdown`, `SutramDagTree`, `SutramFloatingHud`).
    * `sutram/js/settings_engine.js`: `SutramFieldCard`, `SutramSettingsForm`, `SutramGenericSettingsModal`.
-   * `sutram/js/action_broker.js`: `SutramEntityActions`, `SutramSelectionTray`, `SutramSubtabMenu`.
-   * `sutram/js/composites.js`: `SutramVirtualList`, `SutramFolderBrowser`, `SutramSelectorModal`, `SutramReportProjection`, `SutramDagTree`, `SutramFloatingHud`.
+   * `sutram/js/action_broker.js`: `ACTION_CONFIRM_HOLD_MS`, `computeFitActionCount`, `SutramVariantBtn`, `SutramEntityActions`, `SutramSelectionTray`, `SutramSubtabMenu`.
+   * `sutram/js/composites.js`: `SutramVirtualList`, `SutramCategorizedList`, `SutramFolderBrowser`, `SutramSelectorModal`, `SutramReportProjection`, `SutramProjectionWindowControls`.
    * `sutram/js/primitives.js`: Clean Ring 2 barrel (`export * from ...`).
-2. **`sutram/sutram/js/sutram_sdk.js` (~980 LOC) → Split into 3 modules + barrel:**
-   * `sutram/js/store_kernel.js`: `StoreRegistry`, `createSutramStore`, `bindStoreInput`.
-   * `sutram/js/layout_store.js`: `LayoutStore`, `canUseMultiWindowPopout`, `_layoutBus`.
-   * `sutram/js/sutram_sdk.js`: `SutramContextMixin`, `SutramElement`, `ExtensionRegistry`, core stores + Ring 2 barrel re-exports.
+2. **`sutram/sutram/js/sutram_sdk.js` (~2,308 LOC after Sprints U1 & U3) → Split into 3 modules (< 800 LOC each) + barrel:**
+   * `sutram/js/store_kernel.js`: `StoreRegistry`, `createSutramStore`, `bindStoreInput`, `StatusStore`, `ToastStore`, `SelectionStore`, `EnvironmentStore`, `VariantDefaultStore`.
+   * `sutram/js/layout_store.js`: `LayoutStore`, `canUseMultiWindowPopout`, `_layoutBus`, `SUTRAM_COLUMN_UNIT_PX`, `SUTRAM_WIDE_CARD_MIN_PX`.
+   * `sutram/js/sutram_sdk.js`: `SutramContextMixin` (including `resolveAssignedSpatialContainer` & `observeAssignedContainer`), `SutramElement`, `resolveSelectionEntityType`, `ExtensionRegistry` + Ring 2 barrel re-exports.
 
 ---
 
@@ -164,7 +164,7 @@ Alongside file decomposition, we will eradicate the following legacy compatibili
   - **`insetu/core/offline/offline_ui.js`:** Replace the hand-rolled storage quota progress bar `<div>` and hardcoded `height: 400px` wrapper with a semantic `<sutram-progress-bar>` primitive in `yenVUI`/`sutram` and a `size="normal"` height preset on `<sutram-virtual-list>`.
   - **`insetu/core/fs/fs.js`:** Replace the inline `style="padding: 8px 15px..."` title wrapper in `InSetuEditorProjection` with `<sutram-surface variant="ghost" padding="sm">` and support `mountDynamicSlot(tag, { extName })` natively in `SutramElement` to eliminate `<div style="display: contents;">` wrappers.
   - **`insetu/core/system/system.js`:** Replace the raw `document.body.innerHTML` inline-styled Auth Gate and Access Denied screens with a semantic `<sutram-auth-gate>` component in `sutram`.
-  - **`sutram/js/app_shell.js` & `primitives.js`:** Consolidate remaining inline `style="..."` strings on internal kernel templates (`.top-utility-row`, `.mobile-dots-wrapper`, `.global-launcher-menu`, `.windowed-surfaces`, `SutramSelectionTray`, `SutramEntityActions`) into their `static styles` CSS blocks.
+  - **`sutram/js/app_shell.js` (~1,525 LOC) & `primitives.js`:** Consolidate remaining inline `style="..."` strings on internal kernel HTML elements (`.windowed-surfaces`, popout shell wrappers, `.projection-mount-slot` empty placeholder, `SutramSelectionTray` header/item rows, `SutramEntityActions`) into their `static styles` CSS blocks (note: `.top-utility-row` and `.mobile-dots-wrapper` were retired in Sprint U3).
 
 ---
 
@@ -185,8 +185,8 @@ Each wave is independently executable and verified by the full test and architec
 ### Wave 2 — `akasa` & `sutram` Kernel Decomposition
 * [ ] **2.1** Split `akasa/workers/__init__.py` into `dag.py`, `validation.py`, `metronome.py`, and `immediate.py` (re-exported via `workers/__init__.py`).
 * [ ] **2.2** Split `akasa/extension.py` into `settings.py`, `ipc.py`, and `extension.py`. Run `pytest` in `akasa`.
-* [ ] **2.3** Split `sutram/sutram/js/primitives.js` (`chassis_adapter.js`, `settings_engine.js`, `action_broker.js`, `composites.js`) and `sutram/sutram/js/sutram_sdk.js` (`store_kernel.js`, `layout_store.js`).
-* [ ] **2.4** Add `<yenvui-progress-bar>` / `<sutram-progress-bar>` and `<sutram-auth-gate>`, move inline `style="..."` attributes in `app_shell.js` and `primitives.js` into `static styles`, and strip the remaining inline `style="..."` leaks from `offline_ui.js`, `fs.js`, and `system.js`. Run `sutram` tests, then run `bash insetu/scripts/vendor_sutram.sh`.
+* [ ] **2.3** Split `sutram/sutram/js/primitives.js` (`chassis_adapter.js`, `settings_engine.js`, `action_broker.js`, `composites.js`) and `sutram/sutram/js/sutram_sdk.js` (`store_kernel.js`, `layout_store.js`), and remove/lower the `sutram/sutram/js/primitives.js` and `sutram/sutram/js/sutram_sdk.js` entries in `insetu/tests/fitness/rules_python.py` (`MODULE_LINE_RATCHET`) below `< 800` lines each in the same commit.
+* [ ] **2.4** Add `<yenvui-progress-bar>` / `<sutram-progress-bar>` and `<sutram-auth-gate>`, move inline `style="..."` attributes on internal HTML tags in `app_shell.js` and `primitives.js` into `static styles` (locked by an `INTERNAL_SUTRAM_INLINE_STYLE_RATCHET` rule in `sutram/tests/fitness/rules_sutram.py`), and strip the remaining inline `style="..."` leaks from `offline_ui.js`, `fs.js`, and `system.js`. Run `sutram` tests, then release/vendor `sutram`.
 
 ### Wave 3 — Core Domain Decomposition (`fs`, `agent`, `bridge`, `llm`) & Pre-1.0 Shim Removal
 * [ ] **3.1** Split `insetu/core/fs/fs.js` into `fs_store.js`, `fs_editor_projection.js`, `fs_modals.js`, and `fs.js`.

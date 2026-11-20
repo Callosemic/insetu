@@ -311,6 +311,162 @@ const staleInline = {
 assert.equal(isMultiPartArtifact(staleInline), true);
 assert.equal(getChunks(staleInline).length, 2);
 
+// 9. Sprint U3: Sutram registry helpers, ws:// pre-collapse action filter, copyTextFromPromise (ClipboardItem), post-confirmation tray clear, and default workspace layout
+assert.ok(Array.isArray(window.ExtensionRegistry.getExtensionNames({ activeOnly: false })));
+assert.ok(window.ExtensionRegistry.getExtensionNames({ activeOnly: false }).includes('fs'));
+const corePromptEntries = window.ExtensionRegistry.getManifestEntries('corePrompts');
+assert.ok(corePromptEntries.some(e => e.extName === 'bridge'));
+
+// 9a. Shared ws:// asset hides mutative actions (file-edit, vfs-move, vfs-rename, vfs-archive, vfs-delete) via ExtensionRegistry.setActionFilter
+const wsFileActions = window.ExtensionRegistry.getEntityActions('file', {
+    filepath: 'ws://peer_ws/prompts/shared.md',
+    isFS: true
+});
+assert.ok(!wsFileActions.some(a => a.id === 'file-edit' || a.id === 'vfs-delete'), 'Mutative actions must be filtered out on ws:// items');
+
+// 9b. copyTextFromPromise uses ClipboardItem with a Promise<Blob> when available (Safari gesture rule)
+const { copyTextFromPromise } = window.inSetu.vfs;
+let capturedClipboardItems = null;
+const origClipboard = globalThis.navigator.clipboard;
+const OrigClipboardItem = globalThis.ClipboardItem;
+class MockClipboardItem {
+    constructor(items) { this.items = items; }
+}
+globalThis.ClipboardItem = MockClipboardItem;
+Object.defineProperty(globalThis.navigator, 'clipboard', {
+    value: {
+        write: async (items) => { capturedClipboardItems = items; },
+        writeText: async () => { throw new Error('Should have used ClipboardItem.write'); }
+    },
+    configurable: true
+});
+const resolvedCopyText = await copyTextFromPromise(async () => 'safari-gesture-safe-payload');
+assert.equal(resolvedCopyText, 'safari-gesture-safe-payload');
+assert.equal(capturedClipboardItems?.length, 1);
+const writtenBlob = await capturedClipboardItems[0].items['text/plain'];
+assert.equal(await writtenBlob.text(), 'safari-gesture-safe-payload');
+
+// Single-card Copy Raw on a stale ctx://diffs/* pack triggers insetu:ensure-fresh-artifact inside the ClipboardItem factory
+let freshHookFired = 0;
+const onEnsureFresh = (ev) => {
+    if (ev.detail?.filepath === 'ctx://diffs/alpha_diffs.txt' && Array.isArray(ev.inSetuResponses)) {
+        ev.inSetuResponses.push((async () => {
+            freshHookFired++;
+            await Promise.resolve(); // the recompile writes the file on the server; nothing re-warms the cache
+        })());
+    }
+};
+window.addEventListener('insetu:ensure-fresh-artifact', onEnsureFresh);
+try {
+    const diffCardActions = window.ExtensionRegistry.getEntityActions('file:diff', {
+        filepath: 'ctx://diffs/alpha_diffs.txt',
+        isFS: false,
+        outdated: true
+    });
+    const diffSendSet = diffCardActions.find(a => a.kind === 'variant-set' && a.setId === 'send');
+    cacheShareText('ctx://diffs/alpha_diffs.txt', 'stale-diff-payload-from-before-the-recompile');
+    window.inSetu.api = window.inSetu.api || {};
+    const origApiRequest = window.inSetu.api.request;
+    window.inSetu.api.request = async () => new Response('freshly-compiled-diff-payload', { status: 200 });
+    capturedClipboardItems = null;
+    try {
+        await diffSendSet.defaultVariant.asyncAction({ filepath: 'ctx://diffs/alpha_diffs.txt', isFS: false });
+    } finally {
+        window.inSetu.api.request = origApiRequest;
+    }
+    assert.equal(freshHookFired, 1, 'Single-card Copy Raw must compile stale diff/context artifacts before reading');
+    const diffBlob = await capturedClipboardItems[0].items['text/plain'];
+    assert.equal(await diffBlob.text(), 'freshly-compiled-diff-payload');
+} finally {
+    window.removeEventListener('insetu:ensure-fresh-artifact', onEnsureFresh);
+}
+
+// 9c. Tray bulk Copy Raw delegates selection clearing to SutramSelectionTray (ignores unrelated window events until tray action settles)
+const { SelectionStore } = await import('/static/extensions/system/store.js');
+SelectionStore.getState().clearSelection();
+SelectionStore.getState().toggleSelection('vfs://alpha/README.md', 'file', { filepath: 'vfs://alpha/README.md' });
+assert.equal(SelectionStore.getState().selectedItems.size, 1);
+
+window.inSetu.api = window.inSetu.api || {};
+const origApiPost = window.inSetu.api.post;
+const origPollJob = window.inSetu.utils.pollJob;
+window.inSetu.api.post = async (path) => {
+    if (path === 'gather/pack_selection') {
+        return new Response(JSON.stringify({ job_id: 'job_qp_u3' }), { status: 202 });
+    }
+    return origApiPost ? origApiPost(path) : new Response('{}', { status: 200 });
+};
+window.inSetu.utils.pollJob = (jobId, opts) => {
+    opts.onComplete({
+        artifact: {
+            base_filename: 'ctx://contexts/quickpack_u3_context.txt',
+            chunks: ['ctx://contexts/quickpack_u3_context.txt'],
+            manifest_entry: {
+                files: ['vfs://alpha/README.md'],
+                chunks: ['ctx://contexts/quickpack_u3_context.txt'],
+                meta: { timestamp: 300 }
+            }
+        }
+    });
+};
+cacheShareText('ctx://contexts/quickpack_u3_context.txt', 'packed-quickpack-u3-body');
+
+const bulkActionsForCopy = window.ExtensionRegistry.getAggregatableActions([
+    { entityType: 'file', data: { filepath: 'vfs://alpha/README.md' } }
+], { group: 'share' });
+const sendSetTray = bulkActionsForCopy.find(a => a.kind === 'variant-set' && a.setId === 'send');
+await sendSetTray.defaultVariant.asyncAction({ target: {} });
+assert.equal(SelectionStore.getState().selectedItems.size, 1, 'bulkAction must leave SelectionStore intact while "Copied" confirmation shows');
+window.dispatchEvent(new CustomEvent('yenvui-action-confirmed', { detail: { phase: 'settled' } }));
+assert.equal(SelectionStore.getState().selectedItems.size, 1, 'Unrelated window yenvui-action-confirmed events must not prematurely clear tray selection');
+
+// Selection ownership: the tray or view menu clears after an action settles; actions that hand off to a dialog keep it
+const fsBulkActions = window.ExtensionRegistry.getEntityActions('file', { filepath: 'vfs://alpha/README.md', isFS: true });
+['vfs-move', 'vfs-archive', 'vfs-delete'].forEach(id => {
+    const act = fsBulkActions.find(a => a.id === id) || window.ExtensionRegistry.getAggregatableActions([{ entityType: 'file', data: { filepath: 'vfs://alpha/README.md' } }]).find(a => a.id === id);
+    assert.equal(Boolean(act?.keepSelection), true, `${id} opens a dialog, so it must declare keepSelection and clear on the dialog's success`);
+});
+
+// toggleRepoInPinSet SSOT invariants
+const { toggleRepoInPinSet } = window.inSetu.utils;
+assert.deepEqual(Array.from(toggleRepoInPinSet(['ALL'], 'alpha')), ['alpha']);
+assert.deepEqual(Array.from(toggleRepoInPinSet(['alpha'], 'beta')), ['alpha', 'beta']);
+assert.deepEqual(Array.from(toggleRepoInPinSet(['alpha'], 'alpha')), ['ALL']);
+assert.deepEqual(Array.from(toggleRepoInPinSet(['alpha', 'beta'], 'ALL')), ['ALL']);
+SelectionStore.getState().clearSelection();
+
+window.inSetu.api.post = origApiPost;
+window.inSetu.utils.pollJob = origPollJob;
+globalThis.ClipboardItem = OrigClipboardItem;
+Object.defineProperty(globalThis.navigator, 'clipboard', { value: origClipboard, configurable: true });
+
+// 9d. Default layout for new workspaces: Col 1 Prompts (active) + Files, Col 2 Gather, Col 3 Yomama, mobileViewport = 1; never overwrites a saved layout
+const { ensureDefaultWorkspaceLayout } = await import('/static/extensions/system/system.js');
+const LayoutStore = window.Sutram.stores.Layout;
+LayoutStore.setState({
+    focusedColumn: 'center',
+    mobileViewportIndex: 0,
+    windows: [],
+    columns: {
+        left: { pinned: [], active: null, history: [] },
+        center: { pinned: [], active: null, history: [] },
+        right: { pinned: [], active: null, history: [] }
+    }
+});
+const appliedDefault = ensureDefaultWorkspaceLayout({ hasExplicitHashTarget: false });
+assert.equal(appliedDefault, true);
+const lState = LayoutStore.getState();
+assert.deepEqual(lState.columns.left.pinned.map(p => p.rawId || p.id), ['prompts', 'files']);
+assert.ok(String(lState.columns.left.active).endsWith('prompts'), 'Prompts must be the active tab in Column 1');
+assert.deepEqual(lState.columns.center.pinned.map(p => p.rawId || p.id), ['gather']);
+assert.deepEqual(lState.columns.right.pinned.map(p => p.rawId || p.id), ['bridge']);
+assert.equal(lState.mobileViewportIndex, 1, 'Phone viewport must open on Column 2 (index 1)');
+assert.equal(lState.focusedColumn, 'center');
+
+// Calling ensureDefaultWorkspaceLayout again when a layout is already saved must be a no-op
+const appliedSecondTime = ensureDefaultWorkspaceLayout({ hasExplicitHashTarget: false });
+assert.equal(appliedSecondTime, false, 'Saved layout must never be replaced');
+
 console.log('JS_BEHAVIORAL_UNITS_OK');
 """
         res = execute_binary(

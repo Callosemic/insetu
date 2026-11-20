@@ -40,17 +40,17 @@ import{html as e,css as p}from"lit";import{SutramElement as c}from"./sutram_sdk.
                 `:""}
             </div>
         `}render(){if(Array.isArray(this.stages)&&this.stages.length>0)return e`
-                ${this.stages.map((t,i)=>{const r=Array.isArray(t)?t:[t],n=r.length>1,s=n?"var(--intent-highlight)":i===0?"var(--intent-primary)":"var(--intent-success)";return e`
+                ${this.stages.map((t,i)=>{const r=Array.isArray(t)?t:[t],n=r.length>1,s=n?"highlight":i===0?"primary":"success",o=`var(--intent-${s})`;return e`
                         ${i>0?e`<div class="stage-connector">↓</div>`:""}
-                        <div class="wavefront-stage" style="--stage-accent: ${s};">
+                        <div class="wavefront-stage" style="--stage-accent: ${o};">
                             <div class="wavefront-header">
                                 <span class="wavefront-title">
-                                    <sutram-icon name=${n?"git-branch":"layers"} size="sm" style="color: ${s};"></sutram-icon>
+                                    <sutram-icon name=${n?"git-branch":"layers"} size="sm" intent=${s}></sutram-icon>
                                     <span>Wavefront Stage ${i+1}${i===0?" (Root)":""}</span>
                                 </span>
                                 <sutram-tag text=${n?`\u2225 Parallel Stage (${r.length} branches)`:"Sequential Step"} intent=${n?"highlight":"neutral"}></sutram-tag>
                             </div>
-                            <div class="wavefront-grid">${r.map(o=>this._renderDefaultStageNode(o,i))}</div>
+                            <div class="wavefront-grid">${r.map(a=>this._renderDefaultStageNode(a,i))}</div>
                         </div>
                     `})}
             `;if(this.rootNode){const t=(Array.isArray(this.nodes)?this.nodes:[]).reduce((i,r)=>{const n=r.parentId||r.parent_id;return n&&(i[n]=i[n]||[]).push(r),i},{});return e`${this._renderHierarchyBranch(this.rootNode,t,0,!0)}`}return e`<slot></slot>`}}customElements.get("sutram-dag-tree")||customElements.define("sutram-dag-tree",SutramDagTree);export class SutramFloatingHud extends c{static properties={position:{type:String,reflect:!0},icon:{type:String},badgeText:{type:String},titleText:{type:String},intent:{type:String,reflect:!0},open:{type:Boolean,reflect:!0}};static styles=[d,p`

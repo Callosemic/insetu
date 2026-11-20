@@ -3,7 +3,7 @@ window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
 export const CitationStore = createExtensionStore('Citations', {
     localLibrary: [],
-    pinnedRepos: new Set(['ALL']),
+    showOrphansOnly: false,
     mainLoading: false,
     mainSearchQuery: '',
     exploreSearchQuery: '',
@@ -48,7 +48,7 @@ export class InSetuExtCitations extends InSetuElement {
     static properties = {
         importingIds: { type: Object },
         localLibrary: { type: Array },
-        pinnedRepos: { type: Object },
+        showOrphansOnly: { type: Boolean },
         mainSearchQuery: { type: String },
         exploreSearchQuery: { type: String },
         exploreSource: { type: String },
@@ -59,14 +59,13 @@ export class InSetuExtCitations extends InSetuElement {
         currentExplorePage: { type: Number },
         importJsonInput: { type: String },
         importLog: { type: String },
-        importStrategy: { type: String },
-        allRepos: { type: Array }
+        importStrategy: { type: String }
     };
     static styles = [sharedStyles];
     constructor() {
         super();
         this.localLibrary = [];
-        this.pinnedRepos = new Set(['ALL']);
+        this.showOrphansOnly = false;
         this.mainSearchQuery = '';
         this.exploreSearchQuery = '';
         this.exploreSource = 'openalex';
@@ -78,7 +77,6 @@ export class InSetuExtCitations extends InSetuElement {
         this.importJsonInput = '';
         this.importLog = '';
         this.importStrategy = 'overwrite';
-        this.allRepos = [];
         this.importingIds = new Set();
     }
     get currentViewMode() {
@@ -103,16 +101,9 @@ export class InSetuExtCitations extends InSetuElement {
                 importLog: state.importLog || '',
                 importStrategy: state.importStrategy || 'overwrite',
                 importingIds: state.importingIds || new Set(),
-                pinnedRepos: state.pinnedRepos || new Set(['ALL'])
+                showOrphansOnly: Boolean(state.showOrphansOnly)
             }),
             { autoFetch: 'fetchLibrary' }
-        );
-        this.subscribe(
-            AppStore,
-            state => state.allRepos || [],
-            (allRepos) => {
-                this.allRepos = allRepos;
-            }
         );
         this.registerGlobalListener('sutram-sync-complete', window, () => CitationStore.getState().fetchLibrary());
     }
@@ -247,11 +238,12 @@ export class InSetuExtCitations extends InSetuElement {
         `;
     }
     _renderMain() {
-        const activePins = Array.from(this.pinnedRepos || []);
+        const activePins = Array.from(this.ecosystem?.pinnedRepos || ['ALL']);
         const pinnedSet = this.localLibrary.filter(c => {
             const atts = c._attachments || [];
+            if (this.showOrphansOnly) return atts.length === 0;
             if (activePins.includes('ALL')) return true;
-            return (activePins.includes('ORPHANS') && atts.length === 0) || atts.some(a => activePins.includes(a.repo));
+            return atts.some(a => activePins.includes(a.repo));
         });
         const filtered = this.filterItems(pinnedSet, {
             pinnedRepos: new Set(['ALL']),
@@ -266,15 +258,6 @@ export class InSetuExtCitations extends InSetuElement {
                     .searchQuery=${this.mainSearchQuery}
                     @search-changed=${(e) => CitationStore.setState({ mainSearchQuery: e.detail.value })}
                     ?flush=${true}>
-                    <sutram-surface slot="bottom-row" variant="panel" border="top" padding="xs">
-                        <insetu-repo-filter
-                            label="Repos:"
-                            .repos=${this.allRepos}
-                            .activeRepos=${Array.from(this.pinnedRepos)}
-                            .extraRepos=${[{id: "ORPHANS", label: "Orphans"}]}
-                            @repo-filter-changed=${(e) => CitationStore.setState({ pinnedRepos: new Set(e.detail.activeRepos) })}>
-                        </insetu-repo-filter>
-                    </sutram-surface>
                 </sutram-toolbar>
                 ${this.mainLoading ? html`<sutram-spinner text="Loading library..."></sutram-spinner>` : ''}
                 <sutram-stack direction="col" gap="sm">
@@ -783,7 +766,15 @@ window.ExtensionRegistry.registerExtension('citations', {
     layoutSlots: [
         { slot: "slots:global", component: "insetu-ext-citations-modals" },
         { slot: "slots:primary-navigation", id: "library", label: "Library", icon: "book-open", intent: "highlight", order: 4 },
-        { slot: "slots:sub-navigation", targetParent: "library", id: "lib-main", label: "Main", icon: "book", intent: "primary", order: 1, component: "insetu-ext-citations" },
+        {
+            slot: "slots:sub-navigation", targetParent: "library", id: "lib-main", label: "Main", icon: "book", intent: "primary", order: 1,
+            menuStores: ["Citations"],
+            menuActions: () => {
+                const orphansOnly = Boolean(CitationStore.getState().showOrphansOnly);
+                return [{ label: orphansOnly ? "Show All Citations (Orphans ✓)" : "Filter: Orphans Only", icon: "filter", onClick: () => CitationStore.setState({ showOrphansOnly: !orphansOnly }) }];
+            },
+            component: "insetu-ext-citations"
+        },
         { slot: "slots:sub-navigation", targetParent: "library", id: "lib-explore", label: "Explore", icon: "compass", intent: "highlight", order: 2, component: "insetu-ext-citations" },
         { slot: "slots:sub-navigation", targetParent: "library", id: "lib-import", label: "Import", icon: "download", intent: "neutral", order: 3, component: "insetu-ext-citations" }
     ]
