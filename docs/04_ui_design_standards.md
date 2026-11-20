@@ -17,6 +17,7 @@ Because of this relationship, the baseline visual identity of the OS (the "House
     * **View & Modal Header/Footer Parity**: `<sutram-view>` supports `.titleText`, `.descriptionText`, `slot="header-actions"`, and direct `slot="footer"` buttons that automatically render a top-bordered footer bar with equal-width (`flex: 1`) buttons—matching `<sutram-modal>` 1:1.
     * **Flex & Width Allocation**: `?grow=${true}` (`flex: 1 1 0%`) and `?fullWidth=${true}` (`width: 100%`) on buttons, inputs, selects, and scrub tracks; `width="auto|bubble|full"` and `align-self="start|center|end|stretch"` on `<sutram-surface>` and `<sutram-stack>`.
     * **Typography & Surface Modifiers**: `<sutram-label intent="..." ?monospace=${true} ?truncate=${true} ?preWrap=${true} ?strikethrough=${true}>` and `<sutram-surface ?interactive=${true} min-height="compact|normal|wide">`.
+    * **Column-Band Responsiveness (`docs/models/column_bands.md`, `RAW_BAND_WIDTH_BAN`)**: Responsive layout steps adapt exclusively to the enclosing column band (`narrow` below 720 px, with `compact` below 384 px; `medium` 720 to 1080 px; `wide` 1080 px and up) using Sutram's `BAND_QUERY`, `columnBandOf`, and `observeColumnBand` helpers rather than raw pixel breakpoints.
 
 ## 1. Spatial Layout & The "Single Scroll" Rule
 The interface must feel like a native application, not a nested web document.

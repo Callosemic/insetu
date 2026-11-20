@@ -54,6 +54,11 @@ Extensions must register their UI topology via `window.ExtensionRegistry.registe
     *   `slugify(str: String)`
     *   `copyRawText(text: String)`
     *   `timeAgo(timestamp: Number|String)`: Accepts epoch milliseconds or an ISO date string.
+*   **Column bands (ES exports of `sutram_sdk.js`, from yenVUI's `physics.js`; `docs/models/column_bands.md`)**: the only place layout widths live (`RAW_BAND_WIDTH_BAN`).
+    *   `BAND_QUERY`: container-query conditions for CSS (`compact`, `narrow`, `mediumUp`, `belowWide`, `wide`), measured on the nearest `yv-band` container.
+    *   `columnBandOf(width: Number)`: returns `{ band, capability, compact }` (`narrow` below 720 px, `medium` 720 to 1080 px, `wide` 1080 px and up; `compact` below 384 px).
+    *   `observeColumnBand(el: Element, callback: Function)`: calls back with the band of the element's column container when it changes; returns a stop function.
+    *   `columnCountFor(width: Number, maxColumns?: Number)`: how many shell columns a width holds (unit 360 px, switching at 540 and 900 px).
 
 ## IV. Inversion of Control (IoC) Brokers
 

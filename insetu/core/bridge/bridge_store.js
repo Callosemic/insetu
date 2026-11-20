@@ -24,7 +24,7 @@ export const BRIDGE_GATE_UI_MAP = {
     DESTRUCTIVE_DELETE: { label: 'Confirm Delete', intent: 'danger', icon: 'trash-2' },
     OVERWRITE_EXISTING: { label: 'Confirm Overwrite', intent: 'warning', icon: 'file-warning' },
     EXPANSION_RISK: { label: 'Confirm Expansion', intent: 'warning', icon: 'maximize-2' },
-    SYNTAX_ERROR: { label: 'Ignore Syntax & Commit', intent: 'danger', icon: 'alert-triangle' },
+    SYNTAX_ERROR: { label: 'Ignore Syntax & Apply', intent: 'danger', icon: 'alert-triangle' },
     OUT_OF_SCOPE_TARGET: { label: 'Authorize File Edit', intent: 'warning', icon: 'shield-alert' }
 };
 

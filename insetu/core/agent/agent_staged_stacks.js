@@ -382,7 +382,7 @@ export class InSetuAgentStagedStacks extends InSetuElement {
                             ?grow=${true}
                             intent="success"
                             icon="zap"
-                            label="Commit (${activeCount})"
+                            label="Apply (${activeCount})"
                             ?disabled=${activeCount === 0}
                             .onClick=${async () => {
                                 const bStore = window.inSetu?.stores?.Bridge?.getState();
@@ -418,7 +418,7 @@ export class InSetuAgentStagedStacks extends InSetuElement {
                                             }));
                                             if (recData?.auto_advanced && recData?.next_task) {
                                                 const nt = recData.next_task;
-                                                this.setStatus(`✅ Committed & advancing to [${nt.id}]: ${nt.description}`, 3500);
+                                                this.setStatus(`✅ Applied & advancing to [${nt.id}]: ${nt.description}`, 3500);
                                                 AgentStore.setState(s => ({
                                                     agentMode: 'code',
                                                     agentRoutineId: 'code',
@@ -427,7 +427,7 @@ export class InSetuAgentStagedStacks extends InSetuElement {
                                                 }));
                                                 this.dispatchEvent(new CustomEvent('insetu-start-next-plan-step', { bubbles: true, composed: true }));
                                             } else {
-                                                this.setStatus(`✅ Committed ${activeFiles.length} file(s)!`, 2500);
+                                                this.setStatus(`✅ Applied ${activeFiles.length} file(s)!`, 2500);
                                             }
                                         } else if (isAiAssisted && bStore.repairMode !== 'off') {
                                             this.setStatus('✨ Running dry-run AI repair on failed patch(es) for review...', null);
@@ -448,7 +448,7 @@ export class InSetuAgentStagedStacks extends InSetuElement {
                                                         bStore.parseAndAppendCells(hTel.healed_payload, { stayOnCurrentSurface: true });
                                                     }
                                                     if (hTel?.can_commit) {
-                                                        this.setStatus('✨ AI-repaired staged patch(es) in dry-run — review and click Commit to apply!', 4500);
+                                                        this.setStatus('✨ AI-repaired staged patch(es) in dry-run — review and click Apply!', 4500);
                                                     } else {
                                                         bStore.setTelemetry(hTel || tel);
                                                         bStore.setViewMode('console');
@@ -501,7 +501,7 @@ export class InSetuAgentStagedStacks extends InSetuElement {
                                                 ?compact=${true}
                                                 .titleText=${`Patch ${idx + 1}/${groupCells.length}`}
                                                 .descriptionText=${commentStr}
-                                                icon="git-commit"
+                                                icon="file-diff"
                                                 intent=${c.active ? 'success' : 'neutral'}
                                                 selectionStoreKey="none"
                                                 ?selected=${c.active}

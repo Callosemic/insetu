@@ -86,9 +86,9 @@ AGENT_SETTINGS_SCHEMA = [
         "description": "Amount (+$Y) added to the session budget ceiling (X_new = X_old + Y) each time you confirm Resume Turn or complete a Web-Chat handoff past the watermark."
     },
     {
-        "id": "auto_complete_plan_tasks", "label": "Auto-Complete Plan Step & Advance on Patch Commit",
+        "id": "auto_complete_plan_tasks", "label": "Auto-Complete Plan Step & Advance on Apply",
         "type": "boolean", "scope": "workspace", "default": False,
-        "description": "When enabled, clicking Confirm & Commit on a staged patch stack automatically marks the active plan step complete and starts the next step's turn/handoff."
+        "description": "When enabled, clicking Apply on a staged patch stack automatically marks the active plan step complete and starts the next step's turn/handoff."
     }
 ]
 

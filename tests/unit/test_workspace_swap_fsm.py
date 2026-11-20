@@ -118,7 +118,9 @@ export const subscribeWithSelector = (fn) => (set, get, api) => {
             sdk_src = sdk_src.replace('from"zustand/vanilla"', 'from"./vanilla.mjs"').replace("from 'zustand/vanilla'", "from './vanilla.mjs'")
             sdk_src = sdk_src.replace('from"zustand/middleware"', 'from"./middleware.mjs"').replace("from 'zustand/middleware'", "from './middleware.mjs'")
             (tmp_path / "chassis_stub.mjs").write_text(
-                "export const physics = { getEventPath: () => [], getEventTarget: () => null };\n",
+                "export const physics = { getEventPath: () => [], getEventTarget: () => null, "
+                "columnCountFor: (w, max = 3) => Math.max(1, Math.min(max, Math.floor((Number(w) || 0) / 360 + 0.5))), "
+                "columnBandOf: () => ({ band: 'wide', capability: 3, compact: false }) };\n",
                 encoding="utf-8",
             )
             sdk_src = sdk_src.replace('from"../../yenvui/js/physics.js"', 'from"./physics_stub.mjs"').replace("from '../../yenvui/js/physics.js'", "from './physics_stub.mjs'")

@@ -99,10 +99,6 @@ export class InSetuCoreAgent extends InSetuElement {
         }
     }
 
-    disconnectedCallback() {
-        super.disconnectedCallback();
-    }
-
     _getActiveCommandPillText() {
         if (this.agentMode === 'user' && this.agentRoutineId && this.agentRoutineId !== 'workspace_turn') {
             return `/${this.agentRoutineId}${this.agentScope ? ':' + this.agentScope : ''}`;
@@ -294,9 +290,6 @@ export class InSetuCoreAgent extends InSetuElement {
         const activePill = (effectiveMode === 'user' && effectiveRoutineId && effectiveRoutineId !== 'workspace_turn')
             ? `/${effectiveRoutineId}${effectiveScope ? ':' + effectiveScope : ''}`
             : `/${effectiveMode || 'auto'}`;
-        const displayUserBubble = cleanedInput
-            ? (effectiveMode !== 'auto' ? `${activePill} ${cleanedInput}` : cleanedInput)
-            : activePill;
         const userText = resumeCheckpoint
             ? (this.pendingCheckpoint?.user_prompt || 'Resume from budget checkpoint')
             : (cleanedInput || activePill);
@@ -797,7 +790,7 @@ export class InSetuCoreAgent extends InSetuElement {
                                             @sutram-input-changed=${e => { e.stopPropagation(); AgentStore.getState().updateAgentSetting('run_tests_on_code', e.detail.value); }}>
                                         </sutram-toggle>
                                         <sutram-toggle
-                                            label="Auto-Complete Plan Step & Advance on Commit"
+                                            label="Auto-Complete Plan Step & Advance on Apply"
                                             ?flush=${true}
                                             .checked=${Boolean(this.agentSettings?.auto_complete_plan_tasks)}
                                             @sutram-input-changed=${e => { e.stopPropagation(); AgentStore.getState().updateAgentSetting('auto_complete_plan_tasks', e.detail.value); }}>

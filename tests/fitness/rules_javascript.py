@@ -4,6 +4,12 @@ import json
 from pathlib import Path
 from .core import FRONTEND_DIR, BACKEND_DIR, SUTRAM_DIR, report_violation, collect_unique_files
 
+
+def strip_js_comments(text):
+    """Blanks // and /* */ comments, keeping their newlines so line numbers still match the file."""
+    return re.sub(r'//[^\n]*|/\*[\s\S]*?\*/', lambda m: '\n' * m.group(0).count('\n'), text)
+
+
 def strip_lit_expressions(line):
     """
     Replaces every Lit ${...} expression on a line with an empty '${}' (brace-balanced, so arrow
@@ -96,7 +102,7 @@ def check_tier0_domain_purity():
                         1,
                         "Tier 0 Sutram/yenVUI source or bundle contains upward reference to Tier 2 ('inSetu', 'yomama://', or 'vfs:diff:'). Keep Tier 0 strictly domain-agnostic and run vendor_sutram.sh."
                     )
-                code_only = re.sub(r'//[^\n]*|/\*[\s\S]*?\*/', '', content)
+                code_only = strip_js_comments(content)
                 if is_yenvui_dir and yenvui_upward_leak_pattern.search(code_only):
                     report_violation(
                         "CHASSIS_PROVIDER_ISOLATION",
@@ -146,6 +152,13 @@ def check_javascript_files():
     exported_vfs_symbols = _collect_exported_vfs_symbols()
     vfs_member_call_pattern = re.compile(r'\b(?:this\.vfs|window\.inSetu\.vfs)(?:\?\.)?\.([A-Za-z0-9_]+)\s*\(')
     private_registry_access_pattern = re.compile(r'\bExtensionRegistry(?:\?\.|\.)_[A-Za-z0-9_]+\b')
+    # Column bands (docs/models/column_bands.md): widths live only in sutram's table (BAND_QUERY, columnBandOf).
+    raw_band_width_pattern = re.compile(
+        r'@(?:container|media)\b[^{]*?\d+(?:\.\d+)?(?:px|rem|em)\b'
+        r'|matchMedia\([^)]*width'
+        r'|\b(?:innerWidth|clientWidth|offsetWidth|width|colW|refWidth|w)\s*[<>]=?\s*\d{3,}\b'
+        r'|\b\d{3,}\s*[<>]=?\s*(?:innerWidth|clientWidth|offsetWidth|width|colW|refWidth|w)\b'
+    )
     ad_hoc_chunk_fallback_pattern = re.compile(
         r'\b(?:const|let|var)\s+([A-Za-z0-9_]+)\s*=[^;\n]*?\bgetChunks\s*\([^)]*\)[\s\S]{0,180}?\?\s*\1\s*:\s*[\w.?]*[Cc]hunks\b'
     )
@@ -476,6 +489,14 @@ def check_javascript_files():
                     line_num,
                     "Per-view <insetu-repo-filter> is retired (Sprint U3). Global repository pinning lives exclusively in the system gear menu."
                 )
+        code_without_comments = strip_js_comments(full_content)
+        for m in raw_band_width_pattern.finditer(code_without_comments):
+            report_violation(
+                "RAW_BAND_WIDTH_BAN",
+                filepath,
+                code_without_comments[:m.start()].count('\n') + 1,
+                "Raw width breakpoint detected. Adapt to the column band (BAND_QUERY in CSS, columnBandOf / observeColumnBand in JS); widths live only in sutram's table (docs/models/column_bands.md)."
+            )
         for folder_match in folder_entity_card_pattern.finditer(full_content):
             entity_data_body = folder_match.group(1)
             if "filepath:" not in entity_data_body or "titleText:" not in entity_data_body:

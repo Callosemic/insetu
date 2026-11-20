@@ -1,6 +1,6 @@
 ---
 title: "Mental Model: Cards and Actions"
-description: "Every artifact is a card whose entity type decides its actions: four card zones, width tiers from the card's own width, action rows that fit then overflow, and a registry of actions, variant sets and groups."
+description: "Every artifact is a card whose entity type decides its actions: four card zones, width tiers from the card's column band, action rows that fit then overflow, and a registry of actions, variant sets and groups."
 domain: "Interface Architecture"
 tags: [mental-model, cards, entity-actions, sutram, ui, invariants]
 ---
@@ -20,7 +20,7 @@ Every card has four zones:
 3. **Marks.** Small state indicators in one standard place, at the visual weight of the Files view's "M" for git changes. A mark can be a toggle you tap, such as the favourites star.
 4. **Actions**, on the right (section 2).
 
-**Width tiers come from the card's own width, never the window's.** sutram's column unit is 360 px: the shell fits `floor(window width / 360)` columns, from one to three. A card 720 px wide or more (two units) shows its actions inline. A narrower card keeps them behind the right-side trigger, which opens the drawer. A card in a window spanning two columns is wide even when the shell has two columns, which is why the card measures itself.
+**Width tiers come from the band of the card's column, never the card's own box or the window.** In a medium or wide column (720 px and up, `docs/models/column_bands.md`) a card shows its actions inline. In a narrow column it keeps them behind the right-side trigger, which opens the drawer. A card in a window spanning two columns takes the window's band, so it shows them inline even when the shell has two columns. *(Changed 2026-11-20: cards used to measure themselves, so a card in a 720 px column, about 675 px inside its padding, never went inline.)*
 
 ## 2. Action rows
 
@@ -114,9 +114,11 @@ What goes to an outside chat is **composed by selection**: select the context an
 
 **Each column has one row, and the same rule as an action row: show what fits, then a menu.** There is no separate global header row. *(Settled 2026-11-19.)*
 
-- **Left to right in every column:** the view's menu (three dots), the tab dropdown on the active tab, then the other open tabs inline, as many as fit.
+- **Left to right in every column:** the view's menu (three dots), the tab menu (a fixed chevron that opens the tab dropdown), then the open tabs inline, as many as fit. *(Changed 2026-11-20: the dropdown used to ride on the active tab, so it moved along the row.)*
+- **Tabs keep their place.** Clicking a visible tab only moves the highlight; nothing moves under the cursor. The active tab is always shown: if it becomes active while hidden (chosen from the tab dropdown, opened from a file or a link), it moves to the front of the line and stays there.
+- **The active tab is marked by its highlight alone:** the tinted background and the underline in its intent. Its label and icon stay at full strength, and it is never bold (bold widens it and makes the row re-fit).
 - **The view's menu is always first,** in the same place in every column. Its top row is a compact four-part quick-control bar (`[   ] [ × ] [   ] | ↻`: quick column jump buttons for columns 1–3, a vertical divider, and the active tab's refresh icon button — direct owner decision, 2026-11-19), followed by the active view's own actions and bulk selection actions under section headings.
-- **The tab dropdown and the gear menu** share a two-column chip-table layout with a slight bottom padding after each section to distinguish categories: a fixed-width left column holds the inverted section header slug (`[ Context ]`, `[ Edit ]`, `[ Tasks ]`, etc. in the tab dropdown; `[ System ]`, `[ Repos: ]`, `[ Workspace ]`, `[ Theme ]`, `[ Grid ]` in the gear menu, collapsing to a `30 px` inverted icon rail below `520 px` per section 2's label-to-icon rule), and a separate right column holds the wrapping chip track so wrapped lines never tuck under the header column. At the very top of the tab dropdown—above the `Filter tabs...` input—the tabs open in this column span full-width without a header slug (with the active tab underlined, `×` to close, `*` for unsaved changes, and long-press/drag to pull the spatial HUD), followed by the filter input and the launcher category rows (with monochrome Lucide icons `chevron-left`, `dot`, `chevron-right` indicating tabs already open in the left, center, or right column). Typing filters the launcher chips across rows. The dropdown always lists every open tab; the inline tabs are only a shortcut.
+- **The tab dropdown and the gear menu** share a two-column chip-table layout with a slight bottom padding after each section to distinguish categories: a fixed-width left column holds the inverted section header slug (`[ Context ]`, `[ Edit ]`, `[ Tasks ]`, etc. in the tab dropdown; `[ System ]`, `[ Repos: ]`, `[ Workspace ]`, `[ Theme ]`, `[ Grid ]` in the gear menu, collapsing to a `30 px` inverted icon rail in a compact column (`docs/models/column_bands.md`)), and a separate right column holds the wrapping chip track so wrapped lines never tuck under the header column. At the very top of the tab dropdown—above the `Filter tabs...` input—the tabs open in this column span full-width without a header slug (with the active tab underlined, `×` to close, `*` for unsaved changes, and long-press/drag to pull the spatial HUD), followed by the filter input and the launcher category rows (with monochrome Lucide icons `chevron-left`, `dot`, `chevron-right` indicating tabs already open in the left, center, or right column). Typing filters the launcher chips across rows. The dropdown always lists every open tab; the inline tabs are only a shortcut.
 - **No tab strip scrolls sideways.**
 - **The last column's row ends with the globals:** the selection tray chip, the gear's pinned slot and the gear.
   - The tray chip exists only while something is selected. It reads "2 selected", or the tray icon with the count when room is short.
@@ -146,3 +148,4 @@ What goes to an outside chat is **composed by selection**: select the context an
 - **insetu registers file actions** in `insetu/core/fs/fs.js`. Extensions register theirs in their own manifests.
 - **The R1 slice** (fit-then-overflow rows, width tiers, the variant-set button, confirmation on the button, the Send set, bulk Copy Raw, Core prompts) is specified in `docs/plans/agent-briefs/gemini_card_actions_and_r1_handoff.md`, with the shell's top row as its Sprint U3.
 - **The shell is in sutram** (`sutram/js/app_shell.js`, with `LayoutStore` in `sutram/js/sutram_sdk.js`). The global repo pin is `AppStore.pinnedRepos` in insetu.
+- **Column bands** (which widths count as narrow, medium, wide and compact) are their own model, `docs/models/column_bands.md`.

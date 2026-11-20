@@ -142,7 +142,8 @@ insetu/
 │   ├── models/                     # Human-authored subsystem mental models and state-machine invariant specifications.
 │   │   ├── agent_harness_control_axes.md # Move agent-model-appendix.md from docs/plans/ into docs/models/agent_harness_control_axes.md so it lives alongside agent_orchestrator_and_ra...
 │   │   ├── agent_orchestrator_and_rag.md # Black-box DAG execution contracts, the 6 volatility-ordered context buckets, fork-join holding confinement, and self-contained healing loops...
-│   │   ├── card_and_action_model.md # Mental model for cards and actions: four card zones, width tiers from the card's own width, fit-then-overflow action rows, and the registry...
+│   │   ├── card_and_action_model.md # Mental model for cards and actions: four card zones, width tiers from the card's column band, fit-then-overflow action rows, and the registry...
+│   │   ├── column_bands.md         # One column unit decides how many columns fit and which layout step every element takes; a separate compact threshold only tightens horizonta...
 │   │   ├── mddb_and_tracker.md     # Recursive Markdown-as-a-Database records, heading-scoped sub-record spans, Containment vs. Ur-Record intersection graphs, and zero-hack structural lenses.
 │   │   ├── proximity_filters_and_domain_jumps.md # Composable RAG retrieval algebra unifying AST call graphs, Hebbian affinity, string fuzziness, vector embeddings, custom multiplex schemas,...
 │   │   └── yomama_bridge.md        # Three-phase state machine, canonical ordering, n-1 healing, and content-addressed signature invariants for the Yomama Sync Bridge.
@@ -1512,6 +1513,7 @@ insetu/
     │   ├── rules_css.py            # CSS linter enforcing intent tokens and banning !important.
     │   │   └── def check_css_files() # [comment required]
     │   ├── rules_javascript.py     # JS linter enforcing UDF, declarative UI, and API contracts.
+    │   │   ├── def strip_js_comments(text) # Blanks // and /* */ comments, keeping their newlines so line numbers still match the file.
     │   │   ├── def strip_lit_expressions(line) # Replaces every Lit ${...} expression on a line with an empty '${}' (brace-balanced, so arrow functions and object literals inside bindings a...
     │   │   ├── def check_vendor_manifest_paths() # [comment required]
     │   │   ├── def check_tier0_domain_purity() # [comment required]
@@ -1586,6 +1588,8 @@ insetu/
         │   └── class TestChildEnvAndFetchRules(unittest.TestCase) # [stale?] CHILD_ENV_MANDATE, OUTBOUND_FETCH_MANDATE and REMOTE_CODE_URL_BAN flag the raw patterns outside their homes.
         ├── test_codemirror_bundle.py # Genesis unit test suite verifying the CodeMirror bundle manifest, absence of stale files or CDN specifiers, and Node.js parser execution acr...
         │   └── class TestCodeMirrorBundle(unittest.TestCase) # [stale?] Every file in static/vendor/codemirror/ is accounted for, free of CDN shims, and parses samples in Node.
+        ├── test_column_band_rule.py # Unit coverage for RAW_BAND_WIDTH_BAN (fails against the rule as it was).
+        │   └── class TestColumnBandFitnessRule(unittest.TestCase) # Verifies RAW_BAND_WIDTH_BAN enforces docs/models/column_bands.md without comment false positives.
         ├── test_config_cascade.py  # Unit tests for the 3-tier configuration cascade, secret encryption, and lazy migration.
         │   └── class TestConfigurationCascade(unittest.TestCase) # [comment required]
         ├── test_context_part_packing.py # Tests that a context block too large for one part is split across consecutive parts nothing else interrupts, within the byte limit.

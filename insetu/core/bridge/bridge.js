@@ -207,10 +207,6 @@ export class InSetuExtBridge extends InSetuElement {
             window.inSetu?.stores?.Agent?.getState()?.fetchSessions?.();
         }
     }
-    disconnectedCallback() {
-        super.disconnectedCallback();
-    }
-
     _hasBridgeDirective(text) {
         return Boolean(text && typeof text === 'string' && /^[ \t]*(?:<[ \t]*){3,}(?:FILE:|SEARCH|TEXTEDIT|JSON_PATCH|RELOCATE|RENAME|MOVE_FILE|ARCHIVE_FILE|DELETE_FILE|TASK_?MANAGE|QUERY_CONTEXT)\b/m.test(text));
     }
@@ -247,7 +243,7 @@ export class InSetuExtBridge extends InSetuElement {
             layout.openWindow({
                 id: 'bridge:edit-cell', component: 'insetu-bridge-edit-projection',
                 label: `Edit Patch: ${new window.inSetu.utils.InSetuURI(cell.file).basename}`,
-                icon: 'git-commit', intent: 'highlight', extName: 'bridge', windowOnly: true
+                icon: 'file-diff', intent: 'highlight', extName: 'bridge', windowOnly: true
             }, layout.focusedColumn || 'center', 1);
         }
     }
@@ -394,7 +390,7 @@ export class InSetuExtBridge extends InSetuElement {
                     }));
                     BridgeStore.getState().recomputeOptimisticTelemetry();
                     BridgeStore.getState().fetchHistory();
-                    this.setStatus(`✅ Committed ${cleanFiles.size} clean file(s). Remaining failed patches kept in staging.`, 3000);
+                    this.setStatus(`✅ Applied ${cleanFiles.size} clean file(s). Remaining failed patches kept in staging.`, 3000);
                 }
             }
         });
@@ -572,7 +568,7 @@ export class InSetuExtBridge extends InSetuElement {
                 <sutram-stack direction="col" gap="xs">
                     <sutram-stack direction="row" align="center" gap="sm" ?wrap=${true}>
                         <sutram-icon name=${t.can_commit ? "check-circle-2" : "alert-triangle"} size="lg" intent=${t.can_commit ? "success" : "warning"}></sutram-icon>
-                        <h3>${t.can_commit ? (t.mode === 'live' ? 'Transaction Committed' : 'Verified — Ready to Commit') : 'Action Required'}</h3>
+                        <h3>${t.can_commit ? (t.mode === 'live' ? 'Applied' : 'Verified — Ready to Apply') : 'Action Required'}</h3>
                         ${t.healed_attempts ? html`<sutram-tag text="✨ AI Auto-Repaired (${t.healed_attempts} pass${t.healed_attempts > 1 ? 'es' : ''})" intent="highlight"></sutram-tag>` : ''}
                     </sutram-stack>
                     <sutram-label .text=${`Total: ${t.summary?.total_patches ?? 0} • Resolved: ${t.summary?.resolved ?? 0} • Skipped: ${t.summary?.auto_skipped ?? 0} • Confirm: ${t.summary?.action_required ?? 0} • Failed: ${t.summary?.failed ?? 0}`}></sutram-label>
@@ -604,7 +600,7 @@ export class InSetuExtBridge extends InSetuElement {
                                 <sutram-btn ?compact=${true} data-action="copy-repair-prompt" icon="clipboard" intent="primary" label="Copy Repair Prompt"></sutram-btn>
                                 <sutram-btn ?compact=${true} data-action="skip-all-failed" icon="skip-forward" intent="neutral" label="Skip All Failed (${unresolvedCount})"></sutram-btn>
                                 ${cleanFileCount > 0 ? html`
-                                    <sutram-btn ?compact=${true} data-action="commit-clean-files" icon="zap" intent="success" label="Commit ${cleanFileCount} Clean File${cleanFileCount !== 1 ? 's' : ''} Now"></sutram-btn>
+                                    <sutram-btn ?compact=${true} data-action="commit-clean-files" icon="zap" intent="success" label="Apply ${cleanFileCount} Clean File${cleanFileCount !== 1 ? 's' : ''} Now"></sutram-btn>
                                 ` : ''}
                             </sutram-stack>
                         </sutram-stack>
@@ -841,7 +837,7 @@ export class InSetuExtBridge extends InSetuElement {
                                     <!-- Target File Card (Top of Stack) -->
                                     <sutram-card
                                         .titleText=${"Target File:"}
-                                        .descriptionText=${isMissingTarget ? "⚠️ Target file not found in workspace." : (isCreatedByBatch && this._fileVerificationCache[file] === false ? "✨ New file (will be created on commit)." : "")}
+                                        .descriptionText=${isMissingTarget ? "⚠️ Target file not found in workspace." : (isCreatedByBatch && this._fileVerificationCache[file] === false ? "✨ New file (will be created on apply)." : "")}
                                         .detailText=${""}
                                         icon="file-code-2"
                                         intent=${isMissingTarget ? 'danger' : (isCreatedByBatch && this._fileVerificationCache[file] === false ? 'success' : 'highlight')}
@@ -943,7 +939,7 @@ export class InSetuExtBridge extends InSetuElement {
                                         <sutram-card
                                             .titleText=${typeStr}
                                             .descriptionText=${descStr}
-                                            icon="git-commit"
+                                            icon="file-diff"
                                             ?selected=${c.active}
                                             intent=${c.active ? "success" : "neutral"}
                                             selectionStoreKey="none"
@@ -1000,14 +996,14 @@ export class InSetuExtBridge extends InSetuElement {
                         ` : this.viewMode === 'input' ? html`
                             <sutram-btn intent="danger" icon="trash-2" label="Clear" ?grow=${true} @click=${() => { BridgeStore.getState().clearPayload(); }}></sutram-btn>
                             <sutram-async-btn icon="check-circle" label="Verify (Dry Run)" intent="warning" ?grow=${true} .onClick=${this._getSyncAction(true)}></sutram-async-btn>
-                            <sutram-async-btn icon="zap" label="Commit Patches" intent="success" ?grow=${true} .onClick=${this._getSyncAction(false)}></sutram-async-btn>
+                            <sutram-async-btn icon="zap" label="Apply Patches" intent="success" ?grow=${true} .onClick=${this._getSyncAction(false)}></sutram-async-btn>
                         ` : html`
                             <sutram-btn intent="neutral" icon="arrow-left" label="Back to Staging" ?grow=${true} @click=${() => { BridgeStore.setState({ viewMode: 'input' }); }}></sutram-btn>
                             ${this.telemetry && !this.telemetry.can_commit && this.telemetry.mode !== 'live' ? html`
                                 <sutram-async-btn icon="refresh-cw" label="Re-Verify" intent="warning" ?grow=${true} .onClick=${this._getSyncAction(true)}></sutram-async-btn>
                             ` : ''}
                             ${this.telemetry && this.telemetry.can_commit && this.telemetry.mode !== 'live' ? html`
-                                <sutram-async-btn icon="zap" label="Commit Patches" intent="success" ?grow=${true} .onClick=${this._getSyncAction(false)}></sutram-async-btn>
+                                <sutram-async-btn icon="zap" label="Apply Patches" intent="success" ?grow=${true} .onClick=${this._getSyncAction(false)}></sutram-async-btn>
                             ` : ''}
                         `}
                     </sutram-action-bar>

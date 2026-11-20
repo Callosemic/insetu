@@ -93,10 +93,6 @@ export function createIsolatedSlice(store, sliceKey) {
     };
 }
 
-/**
- * Seeds the default 3-column workspace layout (Col 1: Prompts [active] + Files, Col 2: Gather, Col 3: Yomama,
- * mobileViewport: 1, focusedColumn: 'center') for a new workspace with no saved layout and no explicit hash target.
- */
 /** Pure SSOT state transition for 'ALL' vs. specific repository pin sets. */
 export function toggleRepoInPinSet(currentSetOrArray, repoId, explicitActive = undefined) {
     const next = new Set(Array.from(currentSetOrArray || ['ALL']));
@@ -113,6 +109,10 @@ export function toggleRepoInPinSet(currentSetOrArray, repoId, explicitActive = u
     return next;
 }
 
+/**
+ * Seeds the default 3-column workspace layout (Col 1: Prompts [active] + Files, Col 2: Gather, Col 3: Yomama,
+ * mobileViewport: 1, focusedColumn: 'center') for a new workspace with no saved layout and no explicit hash target.
+ */
 export function ensureDefaultWorkspaceLayout({ hasExplicitHashTarget = false } = {}) {
     if (hasExplicitHashTarget) return false;
     const layout = window.Sutram?.stores?.Layout?.getState?.();
