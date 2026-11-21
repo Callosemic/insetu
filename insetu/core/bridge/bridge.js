@@ -963,7 +963,8 @@ export class InSetuExtBridge extends InSetuElement {
                         <sutram-btn
                             intent="highlight"
                             icon="bridge"
-                            title="Toggle Yomama Menu (Active: Bridge)"
+                            title="Show or hide surfaces"
+                            data-testid="surface-toggle"
                             @click=${() => BridgeStore.getState().toggleDrawer()}>
                         </sutram-btn>
                         ${this.cells.length > 0 && this.viewMode === 'input' ? html`
@@ -971,17 +972,15 @@ export class InSetuExtBridge extends InSetuElement {
                                 intent=${this.repairMode === 'ai_assisted' ? 'highlight' : (this.repairMode === 'algorithmic' ? 'primary' : 'neutral')}
                                 ?active=${this.repairMode !== 'off'}
                                 icon=${this.repairMode === 'ai_assisted' ? 'sparkles' : (this.repairMode === 'algorithmic' ? 'cpu' : 'shield-off')}
-                                label=${this.repairMode === 'ai_assisted'
-                                    ? 'Repair: AI-Assisted'
-                                    : (this.repairMode === 'algorithmic' ? 'Repair: Algorithmic' : 'Repair: OFF')}
-                                title=${`Click to cycle Bridge repair mode (OFF → Algorithmic${this.fastTierStatus?.canAutoHeal ? ' → AI-Assisted' : ' [Fast LLM unavailable for AI-Assisted]'}). ${this.fastTierStatus?.reason || ''}`}
+                                data-testid="repair-mode"
+                                title=${`Repair: ${this.repairMode === 'ai_assisted' ? 'AI-assisted' : (this.repairMode === 'algorithmic' ? 'algorithmic' : 'off')}. Click to cycle (off → algorithmic${this.fastTierStatus?.canAutoHeal ? ' → AI-assisted' : '; AI-assisted needs the fast LLM'}). ${this.fastTierStatus?.reason || ''}`.trim()}
                                 @click=${() => {
                                     BridgeStore.getState().cycleRepairMode();
                                 }}>
                             </sutram-btn>
                         ` : ''}
                         ${this.cells.length === 0 && this.viewMode === 'input' ? html`
-                            <sutram-btn intent="highlight" icon="clipboard-paste" label="Paste from Clipboard" ?grow=${true} @click=${async () => {
+                            <sutram-btn intent="highlight" icon="clipboard-paste" label="Paste from Clipboard" data-testid="bridge-paste" ?grow=${true} @click=${async () => {
                                 if (!navigator.clipboard || !navigator.clipboard.readText) {
                                     alert("Clipboard API requires a secure context (HTTPS or localhost).\\n\\nPlease press Ctrl+V (or Cmd+V) anywhere on this screen to paste.");
                                     return;
@@ -994,16 +993,16 @@ export class InSetuExtBridge extends InSetuElement {
                                 }
                             }}></sutram-btn>
                         ` : this.viewMode === 'input' ? html`
-                            <sutram-btn intent="danger" icon="trash-2" label="Clear" ?grow=${true} @click=${() => { BridgeStore.getState().clearPayload(); }}></sutram-btn>
-                            <sutram-async-btn icon="check-circle" label="Verify (Dry Run)" intent="warning" ?grow=${true} .onClick=${this._getSyncAction(true)}></sutram-async-btn>
-                            <sutram-async-btn icon="zap" label="Apply Patches" intent="success" ?grow=${true} .onClick=${this._getSyncAction(false)}></sutram-async-btn>
+                            <sutram-btn intent="danger" icon="trash-2" label="Clear" data-testid="bridge-clear" ?grow=${true} @click=${() => { BridgeStore.getState().clearPayload(); }}></sutram-btn>
+                            <sutram-async-btn icon="check-circle" label="Verify" title="Verify (dry run)" data-testid="bridge-verify" intent="warning" ?grow=${true} .onClick=${this._getSyncAction(true)}></sutram-async-btn>
+                            <sutram-async-btn icon="zap" label="Apply Patches" data-testid="bridge-apply" intent="success" ?grow=${true} .onClick=${this._getSyncAction(false)}></sutram-async-btn>
                         ` : html`
                             <sutram-btn intent="neutral" icon="arrow-left" label="Back to Staging" ?grow=${true} @click=${() => { BridgeStore.setState({ viewMode: 'input' }); }}></sutram-btn>
                             ${this.telemetry && !this.telemetry.can_commit && this.telemetry.mode !== 'live' ? html`
                                 <sutram-async-btn icon="refresh-cw" label="Re-Verify" intent="warning" ?grow=${true} .onClick=${this._getSyncAction(true)}></sutram-async-btn>
                             ` : ''}
                             ${this.telemetry && this.telemetry.can_commit && this.telemetry.mode !== 'live' ? html`
-                                <sutram-async-btn icon="zap" label="Apply Patches" intent="success" ?grow=${true} .onClick=${this._getSyncAction(false)}></sutram-async-btn>
+                                <sutram-async-btn icon="zap" label="Apply Patches" data-testid="bridge-apply" intent="success" ?grow=${true} .onClick=${this._getSyncAction(false)}></sutram-async-btn>
                             ` : ''}
                         `}
                     </sutram-action-bar>

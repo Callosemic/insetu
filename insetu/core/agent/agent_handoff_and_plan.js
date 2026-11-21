@@ -569,7 +569,8 @@ export class InSetuAgentHandoffPanel extends InSetuElement {
                         intent="warning"
                         icon="message-square"
                         label="Menu"
-                        title="Toggle Conversations & Yomama Surfaces (Bridge, Chat, Routines, Receipts)"
+                        title="Show or hide surfaces"
+                        data-testid="surface-toggle"
                         @click=${() => this.dispatch('insetu:yomama:toggle-drawer')}>
                     </sutram-btn>
                     <sutram-btn

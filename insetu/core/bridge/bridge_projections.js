@@ -167,7 +167,7 @@ export class InSetuBridgeEditProjection extends InSetuElement {
                             <sutram-btn intent="danger" icon="x" label="Cancel" @click=${() => {
                                 if (window.Sutram?.stores?.Layout) window.Sutram.stores.Layout.getState().closeWindow('bridge:edit-cell');
                             }}></sutram-btn>
-                            <sutram-btn intent="highlight" icon="${this._previewDiff ? 'edit-3' : 'columns'}" label="${this._previewDiff ? 'Raw Editor' : 'Diff View'}" @click=${() => {
+                            <sutram-btn intent="highlight" icon="${this._previewDiff ? 'edit-3' : 'columns'}" label="${this._previewDiff ? 'Raw Editor' : 'Diff View'}" data-testid="diff-view-toggle" @click=${() => {
                                 this._previewDiff = !this._previewDiff;
                             }}></sutram-btn>
                             <sutram-btn intent="warning" icon="refresh-cw" label="Swap S/R" @click=${() => {

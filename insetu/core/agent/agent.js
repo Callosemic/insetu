@@ -753,7 +753,8 @@ export class InSetuCoreAgent extends InSetuElement {
                                     intent="primary"
                                     icon="message-square"
                                     label="Conversations"
-                                    title="Toggle Yomama Conversations Drawer"
+                                    title="Show or hide surfaces"
+                                    data-testid="surface-toggle"
                                     @click=${() => this.dispatch('insetu:yomama:toggle-drawer')}>
                                 </sutram-btn>
                                 <sutram-dropdown direction="up" align="left">

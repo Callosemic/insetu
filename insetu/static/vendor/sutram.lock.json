@@ -1,8 +1,8 @@
 {
   "sutram": {
     "repo": "https://github.com/Callosemic/sutram",
-    "version": "2.12.0",
-    "commit": "126aceb8f61f0fa26e27f01a8c40aa791d9d99db",
+    "version": "2.13.0",
+    "commit": "deb75bd5c6045b963cb5fca8b4d31024c5822727",
     "dirty": false,
     "source": "sibling",
     "minified": true,
@@ -12,6 +12,6 @@
       "yenvui/css"
     ],
     "files": 54,
-    "sha256": "f353d7ab1452a278c85c79db2069dc68743220325fc4ba6c6a75ee50ee4eddfa"
+    "sha256": "afc097e2bee50d0c7fa7d38f9c906fe1d16ce5b0e94555b0a61ff43150ad22f8"
   }
 }

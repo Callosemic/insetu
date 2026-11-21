@@ -336,9 +336,9 @@ MODULE_LINE_RATCHET: Dict[str, int] = {
     "insetu/core/bridge/bridge_fuzzy.py": 754,  # Nov 17 (was 974): Extracted bridge_sandwich.py
     "insetu/core/system/engine_system.py": 814,
     # Ring 1 (akasa) and Ring 2 (sutram) modules currently above 800 lines (shrinking in Wave 2):
-    "sutram/sutram/js/primitives.js": 3145,  # U1+U3: SutramVariantBtn, computeFitActionCount, post-render clamping, SutramSubtabMenu 4-part quick bar, SutramSelectionTray confirmation settle
+    "sutram/sutram/js/primitives.js": 3151,  # U1+U3: SutramVariantBtn, computeFitActionCount, post-render clamping, SutramSubtabMenu 4-part quick bar, SutramSelectionTray confirmation settle; R1 reshoot: the deck header, numbered typed items and test handles
     "sutram/sutram/js/sutram_sdk.js": 2314,  # U1+U3: VariantDefaultStore, getManifestEntries, collectManifestField, getExtensionNames, setActionFilter, observeAssignedContainer
-    "sutram/sutram/js/app_shell.js": 1535,  # U3: single-row .col-header, .position-bar, _checkInlineTabsOverflow, refreshProjection, chipRows & canonical surface intents; 2.12.0: column band containers, the drawn divider, the fixed tab menu and tabs that keep their place
+    "sutram/sutram/js/app_shell.js": 1549,  # U3: single-row .col-header, .position-bar, _checkInlineTabsOverflow, refreshProjection, chipRows & canonical surface intents; 2.12.0: column band containers, the drawn divider, the fixed tab menu and tabs that keep their place; R1 reshoot: a tab open off screen moves to the column that asks
     "akasa/akasa/vfs.py": 1119,  # Nov 18 (was 1117): +2 lines in the 0.11 hardening; Nov 11: the three-way merge moved to akasa/merge.py
     "akasa/akasa/extension.py": 1223,
     "akasa/akasa/workers/__init__.py": 1200,

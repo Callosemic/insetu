@@ -1,4 +1,4 @@
-import{html as r,css as l}from"lit";import{YenvuiBase as p}from"./yenvui-base.js";import{YenvuiGestureController as h,observeColumnBand as v,BAND_QUERY as n}from"./physics.js";export class YenvuiCard extends p{static properties={filename:{type:String},titleText:{type:String},detailText:{type:String},detailPrefix:{type:String},detailSuffix:{type:String},descriptionText:{type:String},statusText:{type:String},icon:{type:String},intent:{type:String},selected:{type:Boolean,reflect:!0},disableSelection:{type:Boolean},_overlayActive:{type:Boolean,reflect:!0},_hasActions:{type:Boolean,reflect:!0,attribute:"has-actions"},_wideCard:{type:Boolean,reflect:!0,attribute:"wide-card"},_hasBodySlot:{type:Boolean,state:!0},compact:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0},stale:{type:Boolean,reflect:!0}};static styles=l`
+import{html as r,css as l}from"lit";import{YenvuiBase as p}from"./yenvui-base.js";import{YenvuiGestureController as h,observeColumnBand as v,BAND_QUERY as n}from"./physics.js";export class YenvuiCard extends p{static properties={filename:{type:String},titleText:{type:String},detailText:{type:String},detailPrefix:{type:String},detailSuffix:{type:String},descriptionText:{type:String},statusText:{type:String},icon:{type:String},intent:{type:String},selected:{type:Boolean,reflect:!0},disableSelection:{type:Boolean,reflect:!0},_overlayActive:{type:Boolean,reflect:!0},_hasActions:{type:Boolean,reflect:!0,attribute:"has-actions"},_wideCard:{type:Boolean,reflect:!0,attribute:"wide-card"},_hasBodySlot:{type:Boolean,state:!0},compact:{type:Boolean,reflect:!0},flush:{type:Boolean,reflect:!0},stale:{type:Boolean,reflect:!0}};static styles=l`
         :host {
             display: block;
             margin-bottom: var(--card-margin-bottom, 12px);
@@ -110,7 +110,8 @@ import{html as r,css as l}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
             min-width: 0;
             padding: 12px;
             transform: translateY(var(--peek-content-y, 0px));
-            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            opacity: var(--peek-content-opacity, 1);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
         }
         .card-header {
             display: flex;
@@ -263,9 +264,9 @@ import{html as r,css as l}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
             opacity: 1;
             pointer-events: auto;
             transform: none;
-            flex: 0 1 55%;
+            flex: 0 1 50%; /* the content keeps at least half the row; actions that do not fit go to the three-dot menu */
             min-width: 180px;
-            max-width: 55%;
+            max-width: 50%;
             padding: 6px 12px 6px 0;
             justify-content: center;
             align-items: flex-end;
@@ -425,13 +426,39 @@ import{html as r,css as l}from"lit";import{YenvuiBase as p}from"./yenvui-base.js
             .selection-hit-zone:hover + .selection-strip {
                 border-left-width: 6px;
             }
+            /* Ticking hint: a faint check in the strip while the pointer is on an unselected card. Once selected, the
+               selected check below applies even under the pointer (this rule's selector would otherwise outrank it). */
+            :host(:not([disableselection]):not([selected])) .card-wrapper:hover .selection-strip::after {
+                content: '✓';
+                position: absolute;
+                left: 0;
+                top: 50%;
+                transform: translateY(-50%);
+                font-size: 0.7rem;
+                line-height: 1;
+                color: var(--card-intent, var(--intent-primary));
+                opacity: 0.55;
+                pointer-events: none;
+            }
+        }
+        :host([selected]) .selection-strip::after {
+            content: '✓';
+            position: absolute;
+            left: -11px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 0.7rem;
+            line-height: 1;
+            color: var(--bg, #000);
+            opacity: 0.9;
+            pointer-events: none;
         }
     `;constructor(){super(),this.titleText="",this.detailText="",this.detailPrefix="",this.detailSuffix="",this.descriptionText="",this.statusText="",this.icon="",this.intent="",this.disableSelection=!1,this.compact=!1,this.flush=!1,this.stale=!1,this._overlayActive=!1,this._hasActions=!1,this._wideCard=!1,this._hasBodySlot=!1,this.selected=!1,this._isPanning=!1,this._overlayListener=t=>{t.detail.source!==this&&this._overlayActive&&(this._overlayActive=!1)},this._focusOutListener=t=>{if(!this._overlayActive)return;const i=t.relatedTarget;i&&(this.contains(i)||this.shadowRoot&&this.shadowRoot.contains(i)||(this._overlayActive=!1))}}_initGestureController(){this._gestureController||(this._gestureController=new h(this,{onPanStart:t=>{const i=this.getBoundingClientRect();this._cardWidth=i.width,this._localStartX=t-i.left},onPanEnd:(t,i,e)=>{if(e!=="horizontal")return;const o=this._gestureController.startX-t;if(Math.abs(o)>10&&(this._isPanning=!0,this.registerTimeout(()=>{this._isPanning=!1},150)),this._overlayActive&&!this._wideCard){o<-(this._cardWidth*.15)&&(this._overlayActive=!1);return}if(Math.abs(o)>30){const a=o>30,s=o<-30,d=this._localStartX<this._cardWidth*.3,c=this._localStartX>this._cardWidth*.7;d&&s&&!this.disableSelection?this._toggleSelection():!this._wideCard&&c&&a&&(this._hasActions||this.querySelector('[slot="actions"]'))&&(this._overlayActive=!0)}}}))}get actionsOpen(){return!!this._overlayActive}set actionsOpen(t){this._overlayActive=!!t}get hasActions(){return!!this._hasActions}set hasActions(t){this._hasActions=!!t}_updateCardWidthTier(t){const i=(t?.capability||1)>=2;this._wideCard!==i&&(this._wideCard=i,i&&this._overlayActive&&(this._overlayActive=!1),this.dispatchEvent(new CustomEvent("yenvui-card-tier-changed",{detail:{wideCard:i,width:t?.width??null},bubbles:!0,composed:!0})))}connectedCallback(){super.connectedCallback(),this.setAttribute("data-yv-card",""),this.addEventListener("focusout",this._focusOutListener),document.addEventListener("yenvui-overlay-opened",this._overlayListener),this.registerOutsideClick(()=>{this._overlayActive&&(this._overlayActive=!1)}),this._stopBandObserver=v(this,t=>this._updateCardWidthTier(t))}disconnectedCallback(){super.disconnectedCallback(),this.removeEventListener("focusout",this._focusOutListener),document.removeEventListener("yenvui-overlay-opened",this._overlayListener),this._stopBandObserver&&(this._stopBandObserver(),this._stopBandObserver=null),this._gestureController&&typeof this._gestureController.abort=="function"&&this._gestureController.abort()}updated(t){if(super.updated(t),t.has("_overlayActive")&&this._overlayActive&&(this.dispatchEvent(new CustomEvent("yenvui-overlay-opened",{bubbles:!0,composed:!0,detail:{source:this}})),this.dispatchEvent(new CustomEvent("yenvui-card-actions-opened",{bubbles:!0,composed:!0,detail:{source:this}}))),t.has("entityData")||t.has("filename")||t.has("titleText")){const i=t.get("filename"),e=t.get("titleText"),o=t.has("filename")&&i!==this.filename,a=t.has("titleText")&&e!==this.titleText;this._overlayActive&&(o||a)&&(this._overlayActive=!1)}}_toggleSelection(){this.selected=!this.selected,this.dispatchEvent(new CustomEvent("yenvui-card-select-toggled",{detail:{selected:this.selected},bubbles:!0,composed:!0}))}firstUpdated(){this._checkActions()}_checkActions(){const t=this.shadowRoot.querySelector('slot[name="actions"]');if(t){const i=t.assignedElements({flatten:!0});this._hasActions=i.length>0}else this._hasActions=!!this.querySelector('[slot="actions"]')}_handleSlotChange(t){this._checkActions()}_handleBodySlotChange(t){const i=t.target.assignedNodes({flatten:!0});this._hasBodySlot=i.some(e=>e.nodeType===Node.ELEMENT_NODE||e.nodeType===Node.TEXT_NODE&&e.textContent.trim().length>0)}render(){const t=!this.descriptionText&&!this.detailText&&!this._hasBodySlot,i=this.intent?`var(--intent-${this.intent})`:"var(--intent-neutral)";return r`
             <div class="card-wrapper" style="--card-intent: ${i}"
                 @mouseleave=${()=>{window.matchMedia("(hover: hover)").matches&&(!this._gestureController||!this._gestureController.active)&&(this._overlayActive=!1)}}
                 @pointerdown=${e=>{this._initGestureController(),this._gestureController.start(e)}}>
 
-                ${this.disableSelection?"":r`<div class="selection-hit-zone" title="Select Item" @click=${e=>{e.stopPropagation(),this._toggleSelection()}}></div>`}
+                ${this.disableSelection?"":r`<div class="selection-hit-zone" title="Select" aria-label="Select" role="checkbox" aria-checked=${this.selected?"true":"false"} data-testid="card-tick" @click=${e=>{e.stopPropagation(),this._toggleSelection()}}></div>`}
                 <div class="selection-strip" @click=${e=>{this.disableSelection||(e.stopPropagation(),this._toggleSelection())}}></div>
                 <div class="content-col" @click=${e=>{if(this._isPanning){e.stopPropagation(),e.preventDefault();return}this.dispatchEvent(new CustomEvent("yenvui-card-clicked",{detail:{filename:this.filename,isSource:!0},bubbles:!0,composed:!0}))}} style="cursor: pointer;">
                     <div class="card-header ${t?"single-row":""}">

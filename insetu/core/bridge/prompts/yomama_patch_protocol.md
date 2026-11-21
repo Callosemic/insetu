@@ -1,4 +1,5 @@
 ## Yomama Patch Protocol
+<!-- yomama:examples -->
 
 Provide all workspace file modifications and `QUERY_CONTEXT` probes exclusively inside fenced ```` ```text ```` code blocks (never emit bare `<<<<<<<` or `>>>>>>>` lines outside a code fence, as web-chat Markdown renderers corrupt `>>>>>>>` into nested `> > >` blockquotes). Always use canonical `vfs://<repo>/<path>` or `ctx://<volume>/<path>` URIs in `<<<<<<< FILE:` headers, and escape any literal triple backticks or 7-chevron markers *inside* a patch body using `{{ymm:`x3}}`, `{{ymm:<x7}}`, `{{ymm:=x7}}`, and `{{ymm:>x7}}`.
 
@@ -118,3 +119,4 @@ msg://msg_a1b2c3d4e5f6
 * **Drop Unneeded File (`- vfs://...`):** Evicts an irrelevant non-pinned file from the working set.
 * **Recall Session Turn (`msg://<message_id>`):** Recalls the full verbatim text (or turn dossier) of a Warm or Cold compacted turn receipt.
 * **Active-Step Scoping:** When an `ACTIVE MULTI-STEP EXECUTION PLAN` is present, only request `QUERY_CONTEXT` for files or symbols needed to complete the **currently active step**—never pause to pre-fetch files that belong only to deferred future steps (`T2+`).
+<!-- /yomama:examples -->

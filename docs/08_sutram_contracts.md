@@ -30,6 +30,7 @@ Extensions must register their UI topology via `window.ExtensionRegistry.registe
     *   Schema: `{ id?: "str", component?: "custom-tag", match: (filepath) => bool, onOpen: (filepath) => {...} }`
 *   **`repoConfigOptions` / `bucketConfigOptions`**: Injects form toggles directly into the host's configuration matrix.
     *   Schema: `{ id: "str", order: 1, component: ({repo/bucket, updateCallback}) => html\`...\` }`
+*   **`uiHooks`**: Host callback hooks invoked by Sutram primitives (`sutram:is-projection-dirty`, `sutram:rekey-projection-id`, `sutram:resolve-item-size`, `sutram:resolve-item-kind`, etc.).
 
 ### Registry Lifecycle & Event Methods
 *   **`ExtensionRegistry.getManifestEntries(field: String, { activeOnly = true })`**: Returns `[{ extName, value }]` in registration order for a manifest key, applying `setFilterPredicate` when `activeOnly` is true.
@@ -129,7 +130,7 @@ All Sutram inputs emit the standardized `@sutram-input-changed` event, where `e.
 Sutram provides built-in UI brokers that automatically read from their corresponding global Zustand stores. Host apps only need to interact with the stores.
 
 *   **`ToastStore` & `<sutram-toast-container>`**: Triggers non-blocking alerts. `ToastStore.getState().addToast(message: String, intent: String, durationMs: Number)`.
-*   **`SelectionStore` & `<sutram-selection-tray>`**: Manages multi-item selections and batch actions. Properties: `.trayTitle` (e.g., `'Quickpack Deck'`), `.itemBadge` (e.g., `'PACK'`). Dispatches through `SelectionStore.getState().toggleSelection(id: String, entityType: String, data: Object)`.
+*   **`SelectionStore` & `<sutram-selection-tray>`**: Manages multi-item selections and batch actions. Properties: `.trayTitle` (e.g., `'Quickpack'`), `.itemBadge` (e.g., `'Context'`), `.chipLabel` (e.g., `'Deck'`). Dispatches through `SelectionStore.getState().toggleSelection(id: String, entityType: String, data: Object)`.
 *   **`StatusStore` & `<sutram-status-bar>`**: Triggers the global bottom status bar. `StatusStore.getState().setStatus(msg: String, timeoutMs: Number, isError: Boolean)`.
 
 ## X. The Base HTML CSS Vacuum

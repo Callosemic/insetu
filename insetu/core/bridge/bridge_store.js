@@ -5,6 +5,30 @@ import { createExtensionStore } from '/static/extensions/system/insetu_sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 
+const EXAMPLES_BEGIN_MARKER = '<!-- yomama:examples -->';
+const EXAMPLES_END_MARKER = '<!-- /yomama:examples -->';
+// Parallel logic: tests/parity/patch_block_splitting.json
+/**
+ * Blanks the patch protocol's own examples (between its example markers), keeping line numbers, so a pasted context
+ * pack that carries the protocol never stages them. Markers count only as whole lines. Mirrors
+ * parser.blank_example_regions on the server.
+ */
+export function blankExampleRegions(text) {
+    if (!text || !text.includes(EXAMPLES_BEGIN_MARKER)) return text;
+    // A marker counts only as a whole line, as the protocol writes it; one quoted inside a line is ordinary text.
+    const lines = text.split('\n');
+    const isMarker = (line, marker) => line.trim() === marker;
+    let inside = false;
+    return lines.map((line) => {
+        if (!inside && isMarker(line, EXAMPLES_BEGIN_MARKER)) { inside = true; return ''; }
+        if (inside) {
+            if (isMarker(line, EXAMPLES_END_MARKER)) inside = false;
+            return '';
+        }
+        return line;
+    }).join('\n');
+}
+
 export const BRIDGE_BASE_LAYOUT_SLOTS = [
     {
         slot: "slots:sub-navigation",
@@ -144,7 +168,11 @@ export const BridgeStore = createExtensionStore('Bridge', {
     },
     parseAndAppendCells: (text, options = {}) => {
         const stayOnCurrentSurface = Boolean(options?.stayOnCurrentSurface);
-        const val = (text || '').replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
+        const normalized = (text || '').replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
+        const val = blankExampleRegions(normalized);
+        if (val !== normalized && window.inSetu?.ui?.setGlobalStatus) {
+            window.inSetu.ui.setGlobalStatus("Skipped the patch protocol's own examples.", 3000);
+        }
         const lines = val.split('\n');
         const newCells = [];
         let cellIdx = 0;

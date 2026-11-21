@@ -213,7 +213,8 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                         <sutram-btn
                             intent="success"
                             icon="history"
-                            title="Toggle Yomama Menu (Active: Receipts)"
+                            title="Show or hide surfaces"
+                            data-testid="surface-toggle"
                             @click=${() => BridgeStore.getState().toggleDrawer()}>
                         </sutram-btn>
                         <sutram-btn

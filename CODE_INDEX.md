@@ -228,7 +228,7 @@ insetu/
 │   │   │   ├── agent_routine_studio.js # Declarative Routine Studio and Routine Catalog UI components extracted from agent.js (God-Objects Wave 3.3).
 │   │   │   │   ├── function formatWavefrontBadge(wavefronts) # Formats a compact topological wavefront progression badge string for routine cards.
 │   │   │   │   ├── class InSetuAgentRoutineProjection # Visual DAG step builder and raw Markdown-as-Code routine editor projection.
-│   │   │   │   └── class InSetuCoreAgentRoutines # Categorized catalog surface for browsing, filtering, and launching declarative routines.
+│   │   │   │   └── class InSetuCoreAgentRoutines # [stale?] Categorized catalog surface for browsing, filtering, and launching declarative routines.
 │   │   │   ├── agent_staged_stacks.js # Collapsible DAG Execution Trace ("Thinking") and Staged Patch Stacks components for the Agent Chat view.
 │   │   │   │   ├── function hasYomamaPatchBlocks(text) # [stale?] Returns true when a string contains any Yomama v4 patch or lifecycle directive marker.
 │   │   │   │   ├── class InSetuCoreAgentSessions # [stale?] Sidebar widget listing chat sessions and creating timestamped conversations.
@@ -414,11 +414,12 @@ insetu/
 │   │   │   │   └── class InSetuExtBridgeHistory # [stale?] Ledger receipt history viewer and transaction revert UI component.
 │   │   │   ├── bridge_projections.js # Yomama Sync Bridge auxiliary projections: Diff Viewer and Chunk Editor.
 │   │   │   │   ├── class InSetuBridgeDiffProjection # Side-by-side anchor and syntax diff inspection projection.
-│   │   │   │   └── class InSetuBridgeEditProjection # Interactive single-chunk patch editor projection.
+│   │   │   │   └── class InSetuBridgeEditProjection # [stale?] Interactive single-chunk patch editor projection.
 │   │   │   ├── bridge_sandwich.py  # Extract Tier 2 deterministic sandwich-weighted anchor healer and 3-way overlap rebaser into bridge_sandwich.py per gemini_offline_bridge_fol...
 │   │   │   │   ├── def find_sandwich_fuzzy_anchor(file_lines, block_lines) # [stale?] Tier 2 Deterministic Sandwich-Weighted Anchor Healer: Locates candidate windows in `file_lines` where the top k_top and bottom k_bot lines o...
 │   │   │   │   └── def rebase_overlapping_block(original_content, current_content, block) # Tier 2 Deterministic Overlap Rebaser: 1.
 │   │   │   ├── bridge_store.js     # Yomama Sync Bridge state store (BridgeStore) and declarative gate/flag UI metadata maps.
+│   │   │   │   └── function blankExampleRegions(text) # [stale?] Blanks the patch protocol's own examples (between its example markers), keeping line numbers, so a pasted context pack that carries the prot...
 │   │   │   ├── bridge_telemetry.py # Turn-partitioned session & routine telemetry compiler (`00_session_overview.txt` + `turn_<NNN>_dossier.txt`), `.zip` diagnostic bundle build...
 │   │   │   │   ├── def log_bridge_heal_audit(ctx) # [stale?] Records a structured Yomama Patch Auto-Heal attempt in `bridge_heal_audit`.
 │   │   │   │   ├── def build_session_telemetry_files_map(ctx, session_id, limit, since_ts) # [stale?] Projects a session's telemetry through the `msg://` Lens Contract into a map of `{"00_session_overview.txt": ..., "turn_001_<msg_id>_dossier...
@@ -467,10 +468,11 @@ insetu/
 │   │   │   ├── parser.py           # Create dedicated Yomama Bridge lexer and lookahead parser module (extracted from utils_core.py) with deterministic block content hashing for...
 │   │   │   │   ├── def get_base_step_and_diffs(lines) # Analyzes a block of code to find its true structural base indentation unit (LCD > 1).
 │   │   │   │   ├── def compute_block_signature(block, resolution) # Computes a deterministic SHA-256 content signature for a parsed Yomama block and its user resolution.
-│   │   │   │   ├── def parse_blocks(text) # Compiler-grade two-phase Lexer + Lookahead Parser for Yomama Bridge payloads: - Heals web-chat chevron meltdown (`> > > REPLACE`, `< < < SEA...
+│   │   │   │   ├── def blank_example_regions(text) # Blanks the patch protocol's own examples (between its example markers), keeping line numbers, so a pasted context pack that carries the prot...
+│   │   │   │   ├── def parse_blocks(text) # [stale?] Compiler-grade two-phase Lexer + Lookahead Parser for Yomama Bridge payloads: - Heals web-chat chevron meltdown (`> > > REPLACE`, `< < < SEA...
 │   │   │   │   ├── def flatten_parsed_blocks(parsed_structure) # Returns a flat list of (raw_target_file, block_index_in_file, block_dict) sorted strictly by the canonical 0..n creation order ('order') in...
 │   │   │   │   ├── def serialize_block_chunk(block, filepath, include_file_header, include_id) # Single Source of Truth serializer for a single Yomama block dict.
-│   │   │   │   ├── def strip_yomama_blocks_keep_prose(raw_text) # Strips raw Yomama patch blocks and empty code fences while preserving surrounding conversational prose.
+│   │   │   │   ├── def strip_yomama_blocks_keep_prose(raw_text) # [stale?] Strips raw Yomama patch blocks and empty code fences while preserving surrounding conversational prose.
 │   │   │   │   ├── def collect_live_files_for_patch_healing(ctx, parsed_blocks, readonly_list) # Reads current disk contents of files targeted by a failed Yomama patch so the healing LLM has exact anchors.
 │   │   │   │   └── def serialize_blocks_to_yomama(file_to_blocks) # Serializes a mapping of filepath -> block dicts into canonical Yomama patch text.
 │   │   │   └── prompts/            # Management of global prompt templates and macro inclusions.
@@ -1645,6 +1647,9 @@ insetu/
         │   ├── def differential_inputs(entry) # The seeded random inputs an entry's differential block asks for.
         │   ├── class TestParallelLogicRegistry(unittest.TestCase) # The registry itself: complete entries whose named definitions exist on both sides.
         │   └── class TestParallelLogicCases(unittest.TestCase) # [stale?] The shared cases, run through both implementations.
+        ├── test_patch_text_cleanup.py # Stray fences after lifting patches out of a message, and the protocol's examples.
+        │   ├── class TestStripPatchesKeepProse(unittest.TestCase) # [stale?] A chat message keeps its prose and loses every fence that held only patches, with no stray backticks.
+        │   └── class TestProtocolExamplesAreNotStaged(unittest.TestCase) # [stale?] Pasting a context pack that carries the patch protocol stages none of the protocol's own examples.
         ├── test_perf_check.py      # Checks the performance check's logic: medians per part, budget comparison, a budgeted part that is no longer reported, warm-ups not counted,...
         │   └── class TestPerfCheck(unittest.TestCase) # perf_check compares the median of each reported part to its budget.
         ├── test_preview_exposure.py # S2: preview servers bind loopback, open to the LAN only on a person's lease, and run custom commands only once approved.

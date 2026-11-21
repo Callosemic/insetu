@@ -500,6 +500,11 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
             if not any(InSetuURI(u).path.startswith(f"{d}/") or f"/{d}/" in InSetuURI(u).path for d in hidden_managed)
         ]
         if not filtered_files: return
+        # The index lists itself from its first render, so the render after it exists is the same text (no self-made diff).
+        rel_index_path = InSetuURI(logical_index_path).path
+        index_was_missing = bool(rel_index_path) and rel_index_path not in filtered_files
+        if index_was_missing:
+            filtered_files = sorted([*filtered_files, rel_index_path])
         managed_dirs = config.get("repo_managed_dirs") if config.get("repo_managed_dirs") is not None else cfg.get("managed_dirs", [])
         include_symbols = bool(ctx.settings.get("include_symbols_in_index", True))
         live_vfs_index = ctx.vfs.read(logical_index_path)
@@ -539,6 +544,8 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None, extra_co
             uri: desc for uri, (desc, source) in stored_descriptions.items() if source in restorable_sources and desc
         }
 
+        if index_was_missing and rel_index_path not in comments:
+            comments[rel_index_path] = f"{config.get('title', repo_dir)} Code Index"
         filtered_set = set(filtered_files)
         seen_dirs = set()
         for rel_f in filtered_files:

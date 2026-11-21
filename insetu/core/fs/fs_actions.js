@@ -29,6 +29,45 @@ export function registerFsExtension({
     fetchArtifactText,
     shareFiles
 }) {
+    /** Writes fields into a selected item's data; the selection tray re-renders from the store. */
+    function _patchSelectedItemData(filepath, patch) {
+        const current = SelectionStore.getState().selectedItems;
+        let changed = false;
+        const next = new Map();
+        current.forEach((item, key) => {
+            if (item?.data?.filepath === filepath) {
+                next.set(key, { ...item, data: { ...item.data, ...patch } });
+                changed = true;
+            } else {
+                next.set(key, item);
+            }
+        });
+        if (changed) SelectionStore.setState({ selectedItems: next });
+    }
+
+    /** The deck's item sizes: compiled contexts from the manifest; a prompt once resolved, which is what a pack pastes. */
+    function _resolveSelectionItemSize(data) {
+        const fp = String(data?.filepath || '');
+        if (!fp || fp.endsWith('/')) return null;
+        if (typeof data?.size_bytes === 'number') return data.size_bytes;
+        const meta = AppStore.getState().manifest?.ctx?.[fp]?.meta;
+        if (Array.isArray(meta?.chunk_sizes) && meta.chunk_sizes.length > 0) {
+            return meta.chunk_sizes.reduce((a, b) => a + (Number(b) || 0), 0) || null;
+        }
+        if (meta?.size_bytes) return meta.size_bytes;
+        if (!fp.startsWith('ctx://prompts/') || data?.size_pending) return null;
+        queueMicrotask(() => _patchSelectedItemData(fp, { size_pending: true }));
+        window.inSetu.api.get(`prompts/resolve?file=${encodeURIComponent(fp)}`)
+            .then(res => (res && res.ok ? res.text() : null))
+            .then(text => {
+                if (typeof text === 'string') {
+                    _patchSelectedItemData(fp, { size_bytes: new TextEncoder().encode(text).length, size_pending: false });
+                }
+            })
+            .catch(() => {});
+        return null;
+    }
+
     function _buildVfsExplorerMenuActions(slotCfg = {}) {
         const subKey = slotCfg?.id || 'fs:files';
         const browsePath = AppStore.getState().getBrowsePath ? AppStore.getState().getBrowsePath(subKey) : [];
@@ -112,6 +151,14 @@ export function registerFsExtension({
                     }
                 }
                 return null;
+            },
+            'sutram:resolve-item-size': (data) => _resolveSelectionItemSize(data),
+            'sutram:resolve-item-kind': (item) => {
+                const type = String(item?.entityType || '');
+                if (type === 'file:prompt' || type === 'prompt') return 'Prompt';
+                if (type === 'file:context' || type === 'context') return 'Context';
+                if (type === 'folder' || type === 'repo') return 'Folder';
+                return 'File';
             }
         },
         shortcuts: [

@@ -146,6 +146,19 @@ class TestMapRepositoriesFileFallback(unittest.TestCase):
         text = (self.repo_dir / "CODE_INDEX.md").read_text(encoding="utf-8")
         return next(line for line in text.splitlines() if f"── {name}" in line)
 
+    def test_first_render_lists_the_index_itself_so_the_next_render_is_unchanged(self):
+        (self.repo_dir / "documented.py").write_text('"""Parses widget manifests."""\n', encoding="utf-8")
+        self.assertFalse((self.repo_dir / "CODE_INDEX.md").exists())
+        force_topology_scan(workspace_id="default")
+        map_repositories("default", silent=True)
+        sync_vfs_barrier("default")
+        first = (self.repo_dir / "CODE_INDEX.md").read_text(encoding="utf-8")
+        self.assertIn("# Alpha Code Index", self._index_line("CODE_INDEX.md"))
+        force_topology_scan(workspace_id="default")
+        map_repositories("default", silent=True)
+        sync_vfs_barrier("default")
+        self.assertEqual((self.repo_dir / "CODE_INDEX.md").read_text(encoding="utf-8"), first)
+
     def test_new_file_with_docstring_gets_a_description_and_index_text_still_wins(self):
         (self.repo_dir / "documented.py").write_text('"""Parses widget manifests."""\n', encoding="utf-8")
         (self.repo_dir / "kept.py").write_text('"""Docstring that must not override the index."""\n', encoding="utf-8")

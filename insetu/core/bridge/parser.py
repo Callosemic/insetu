@@ -188,6 +188,26 @@ def compute_block_signature(block: Dict[str, Any], resolution: Optional[Dict[str
     return hashlib.sha256(raw_bytes).hexdigest()
 
 
+EXAMPLES_BEGIN_MARKER = "<!-- yomama:examples -->"
+EXAMPLES_END_MARKER = "<!-- /yomama:examples -->"
+# A marker counts only as a whole line, as the protocol writes it; one quoted inside a line (a string in code, a patch
+# that edits this file) is ordinary text.
+_EXAMPLE_REGION_RE = re.compile(
+    r"^[ \t]*" + re.escape(EXAMPLES_BEGIN_MARKER) + r"[ \t]*$[\s\S]*?(?:^[ \t]*" + re.escape(EXAMPLES_END_MARKER) + r"[ \t]*$|\Z)",
+    re.MULTILINE,
+)
+
+
+# Parallel logic: tests/parity/patch_block_splitting.json
+def blank_example_regions(text: str) -> str:
+    """Blanks the patch protocol's own examples (between its example markers), keeping line numbers, so a pasted
+    context pack that carries the protocol never stages them. Markers count only as whole lines. A begin marker with no
+    end runs to the end of the text."""
+    if not text or EXAMPLES_BEGIN_MARKER not in text:
+        return text
+    return _EXAMPLE_REGION_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+
+
 def parse_blocks(text: str) -> Dict[str, List[Dict[str, Any]]]:
     """
     Compiler-grade two-phase Lexer + Lookahead Parser for Yomama Bridge payloads:
@@ -200,7 +220,7 @@ def parse_blocks(text: str) -> Dict[str, List[Dict[str, Any]]]:
     if not text:
         return {}
 
-    norm_text = _preclean_web_chat_artifacts(text)
+    norm_text = blank_example_regions(_preclean_web_chat_artifacts(text))
     all_lines = norm_text.split('\n')
 
     start_line_idx = 0
@@ -596,11 +616,27 @@ _YOMAMA_BLOCK_STRIP_RE = re.compile(
 )
 
 
+_FENCED_REGION_RE = re.compile(r'^[ \t]*(`{3,}|~{3,})[^\n]*\n([\s\S]*?)^[ \t]*\1[ \t]*$', re.MULTILINE)
+
+
+def _strip_fenced_patch_regions(text: str) -> str:
+    """A code fence whose content is only patch blocks goes whole, fence lines included, whatever its language or fence length."""
+    def _one(match: "re.Match") -> str:
+        inner = match.group(2)
+        if "<<<<<<<" not in inner:
+            return match.group(0)
+        remaining = _YOMAMA_BLOCK_STRIP_RE.sub("\n", inner)
+        remaining = re.sub(r'^[ \t]*<<<<<<< FILE:[^\n]*$', '', remaining, flags=re.MULTILINE)
+        return "" if not remaining.strip() else match.group(0)
+    return _FENCED_REGION_RE.sub(_one, text)
+
+
 def strip_yomama_blocks_keep_prose(raw_text: str) -> str:
     """Strips raw Yomama patch/probe blocks and empty code fences while preserving surrounding conversational prose."""
     if not raw_text or "<<<<<<<" not in raw_text:
         return (raw_text or "").strip()
-    cleaned = _YOMAMA_BLOCK_STRIP_RE.sub("\n", raw_text)
+    cleaned = _strip_fenced_patch_regions(raw_text)
+    cleaned = _YOMAMA_BLOCK_STRIP_RE.sub("\n", cleaned)
     cleaned = re.sub(r'^[ \t]*<<<<<<< FILE:[^\n]*$', '', cleaned, flags=re.MULTILINE)
     cleaned = re.sub(r'```(?:text|python|javascript|js|json|yaml|markdown|md)?\s*```', '', cleaned)
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)

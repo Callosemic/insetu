@@ -1,4 +1,4 @@
-import{html as t,css as o}from"lit";import{YenvuiBase as s}from"./yenvui-base.js";import{BAND_QUERY as d}from"./physics.js";export class YenvuiView extends s{static properties={titleText:{type:String},descriptionText:{type:String},flush:{type:Boolean,reflect:!0},compact:{type:Boolean,reflect:!0},noScroll:{type:Boolean,reflect:!0},zen:{type:Boolean,reflect:!0},size:{type:String,reflect:!0},_hasFooterSlot:{type:Boolean,state:!0}};static styles=o`
+import{html as t,css as o}from"lit";import{YenvuiBase as s}from"./yenvui-base.js";import{BAND_QUERY as c}from"./physics.js";export class YenvuiView extends s{static properties={titleText:{type:String},descriptionText:{type:String},flush:{type:Boolean,reflect:!0},compact:{type:Boolean,reflect:!0},noScroll:{type:Boolean,reflect:!0},zen:{type:Boolean,reflect:!0},size:{type:String,reflect:!0},_hasFooterSlot:{type:Boolean,state:!0}};static styles=o`
         :host {
             display: flex;
             flex-direction: column;
@@ -166,7 +166,7 @@ import{html as t,css as o}from"lit";import{YenvuiBase as s}from"./yenvui-base.js
             height: 100% !important;
             width: 100% !important;
         }
-        @container ${d.compact} {
+        @container ${c.compact} {
             :host(:not([flush])) .view-body {
                 padding: 0;
             }
@@ -487,7 +487,7 @@ import{html as t,css as o}from"lit";import{YenvuiBase as s}from"./yenvui-base.js
         :host([collapsed]) .sidebar-rail {
             display: none;
         }
-        @container ${d.narrow} {
+        @container ${c.narrow} {
             .sidebar-rail,
             :host([collapsed]) .sidebar-rail {
                 display: flex;
@@ -608,6 +608,7 @@ import{html as t,css as o}from"lit";import{YenvuiBase as s}from"./yenvui-base.js
             opacity: 1;
         }
         .stage-pane {
+            container: yv-band / inline-size; /* the other pane of a divided column: its cards follow its own width too */
             flex: 1 1 0%;
             display: flex;
             flex-direction: column;
@@ -631,11 +632,11 @@ import{html as t,css as o}from"lit";import{YenvuiBase as s}from"./yenvui-base.js
                                 <span class="nav-header-dot"></span>
                             </div>
                         `:""}
-                        ${i.map(e=>{const a=e.id||e.rawId||"",r=!!(this.activeNavId&&(this.activeNavId===a||this.activeNavId===e.rawId)),n=e.intent||this.intent||"highlight",c=`var(--intent-${n})`;return t`
+                        ${i.map(e=>{const a=e.id||e.rawId||"",r=!!(this.activeNavId&&(this.activeNavId===a||this.activeNavId===e.rawId)),n=e.intent||this.intent||"highlight",d=`var(--intent-${n})`;return t`
                                 <button
                                     type="button"
                                     class="nav-item ${r?"active":""}"
-                                    style="--item-accent: ${c};"
+                                    style="--item-accent: ${d};"
                                     @click=${()=>{this.dispatchEvent(new CustomEvent("yenvui-nav-selected",{detail:{id:a,item:e},bubbles:!0,composed:!0}))}}>
                                     <span class="nav-item-main">
                                         <yenvui-icon name=${e.icon||"component"} size="sm" intent=${n}></yenvui-icon>
@@ -651,7 +652,7 @@ import{html as t,css as o}from"lit";import{YenvuiBase as s}from"./yenvui-base.js
                     </nav>
                 `:""}
             </aside>
-            <main class="stage-pane">
+            <main class="stage-pane" data-band-container>
                 <slot></slot>
             </main>
         `}}customElements.get("yenvui-sidebar-layout")||customElements.define("yenvui-sidebar-layout",YenvuiSidebarLayout);

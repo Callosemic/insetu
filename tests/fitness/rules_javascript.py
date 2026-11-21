@@ -278,6 +278,7 @@ def check_javascript_files():
         "sutram:resolve-primary-tab-meta",
         "sutram:resolve-route-hash",
         "sutram:resolve-item-size",
+        "sutram:resolve-item-kind",
     }
     ui_hooks_block_pattern = re.compile(r'\buiHooks\s*:\s*\{([\s\S]*?)\n\s*\}', re.MULTILINE)
     uri_raw_split_pattern = re.compile(

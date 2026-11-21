@@ -659,7 +659,8 @@ export class InSetuCoreAgentRoutines extends InSetuElement {
                         <sutram-btn
                             intent="warning"
                             icon="workflow"
-                            title="Toggle Yomama Menu (Active: Routines)"
+                            title="Show or hide surfaces"
+                            data-testid="surface-toggle"
                             @click=${() => this.dispatch('insetu:yomama:toggle-drawer')}>
                         </sutram-btn>
                         <sutram-btn
