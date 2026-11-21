@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.44.0 (2026-11-20)
+
+### Features
+
+- **gather**: The Quickpack deck with sizes and kinds, a labeled bridge bar, and pastes that skip
+  the protocol's examples
+  ([`c0345b1`](https://github.com/Callosemic/insetu/commit/c0345b1a4da3558bcaa6e986d04b19852523a4d3))
+
+
 ## v0.43.0 (2026-11-20)
 
 ### Features
